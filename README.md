@@ -1,0 +1,261 @@
+# VniLink
+
+VniLink is a remote desktop application for controlling your own computers across the internet. It will use a shared Rust library and a native desktop application on each supported platform.
+
+Anyone can install it and use their own devices. Device identity, paired devices, permissions, and relay settings belong to that installation. The owner's three computers are the first validation set.
+
+**Status:** implementation started October 1, 2026. `crates/vnilink` is a shared control library pinned to iroh 1.3.0 (Rust 1.91). It owns process-local identity, public or custom relay selection, signed invitations, directional grants, one control session per host, and keyboard and pointer input. `cargo test -p vnilink` passes, including two cores on loopback. An authorized controller can send key, button, wheel, and pointer events. The host applies them when it calls `enable_os_input`. Pointer positions collapse to the latest sample. Held keys and buttons are released when the session ends. Identity lasts only as long as the host process unless the platform saves `export_identity`. Custom relay mode does not publish through n0 address lookup. There is no desktop capture, native application, binding, trust persistence, reconnect, deployment, or measured remote desktop. The gates in section 11 are not complete. Sections below still describe the product to build except where they name this library.
+
+## 1. Product requirements and decision status
+
+### Confirmed by the owner
+
+- Name: **VniLink**.
+- Three initial devices: a Mac mini at home, a Windows laptop, and a Linux laptop.
+- Every device must be able to control either of the other two: all six directed combinations must work.
+- Access must work across the internet, including different networks, rather than only on a home LAN.
+- The application should be lightweight.
+- The shared Rust part must be a **library**. Native platform applications host it; there is no shared web or cross-platform UI requirement.
+- Follow the structural approach of **VniDrop**, with native platform directories and a shared Rust core.
+- Build a distinct product rather than shipping Tailscale or RustDesk as the application.
+- Each installation uses its own configuration, so other people can install VniLink and point it at their own devices and relays.
+- The default relay is the public n0 relay set from the pinned Iroh release. In iroh 1.3.0 that is `RelayMode::Default`, also applied by `presets::N0`. Installing, pairing, and connecting works with those public relays alone.
+- An installation may replace that default with one or more custom relay URLs. In iroh 1.3.0 that is `RelayMode::Custom`. The override is local configuration.
+
+### Proposed defaults for implementation
+
+These are recommended starting choices, not additional owner-approved requirements:
+
+- Iroh for authenticated encrypted transport, NAT traversal, and relay fallback.
+- SwiftUI on macOS, WinUI 3 on Windows, GTK/libadwaita on Linux, matching the inspected VniDrop layout.
+- Explicit device pairing and per-target authorization for unattended control.
+- One active controlling session per target initially; a device may host a session while controlling another device if resource limits permit.
+- One monitor and keyboard/mouse control for the first end-to-end milestone.
+- H.264 as the initial video codec candidate, with hardware acceleration preferred and a tested fallback.
+- A device directory only if the discovery design requires one. Relay choice is the confirmed default above.
+
+### Resolve before claiming complete support
+
+Record decisions and platform evidence for:
+
+1. Linux distribution, desktop environment, compositor, and Wayland versus X11.
+2. OS versions and CPU/GPU architectures of all three machines.
+3. Whether required access includes locked screens, pre-login access after reboot, elevated Windows applications/UAC, and a monitorless Mac mini.
+4. Desired clipboard, file transfer, audio, multiple-monitor, and wake functionality.
+5. For a custom relay, that operator's traffic accounting, CPU and network throughput, domain/TLS, and existing workloads. VniLink does not provision a relay.
+6. Address refresh after pairing for a custom relay. The library pins iroh 1.3.0: public mode is `RelayMode::Default` via `presets::N0`, and custom mode is `RelayMode::Custom`. Custom mode clears n0 address lookup, so a peer is dialed from the relay URLs and direct addresses in the signed invitation. Refreshing those addresses later, and reaching a credentialed relay, still require each installation to hold that relay in its own configuration. The builder signature has changed across releases.
+
+Progress on independent foundations while these details are unresolved. Report concrete limitations rather than assuming platform capabilities.
+
+## 2. User experience
+
+Each installation has two roles: **controller** (displays another computer and forwards input) and **host** (shares its desktop and applies authorized input). Roles are per session, not separate products or builds.
+
+The main window should show this installation, its permission/setup status, relay mode, and saved devices. A saved device should expose availability, authorization, and a connect action. Distinguish offline, connecting, permission missing, authentication rejected, and unsupported desktop states.
+
+Relay mode is either the public default or the installation's custom relay URLs. Changing it is a local action and applies to later connections. Pairing and address refresh include the current home relay so a peer can dial it.
+
+Pairing must require a deliberate local action and authenticate the exchanged identities. After pairing, the target owner may enable unattended access for that specific controller. Pairing alone should not silently enable remote control or transfer privileges.
+
+During a session show the remote desktop, connection state, direct/relay path when known, display selection when implemented, quality controls, and disconnect. The host must show an active-session indicator and provide a local stop action. Local input should remain usable; exclusive control is a separate future decision.
+
+Closing the visible window and disabling hosting are different actions. When unattended access is enabled, a platform host process must continue running with the authorized configuration. Provide explicit enable/disable hosting and startup controls.
+
+## 3. Repository structure
+
+Present today: `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, and `crates/vnilink`. Library tests live in `crates/vnilink/src/tests` and are included from the crate, the same layout VniDrop uses. The other paths are the proposed layout. Create a directory when it acquires content.
+
+```text
+vnilink/
+  README.md
+  Cargo.toml                    # Rust workspace
+  Cargo.lock
+  rust-toolchain.toml           # Rust 1.91.0
+  crates/
+    vnilink/                    # Shared control library. Input injection; no capture
+    vnilink-protocol/           # Wire types/validation, if a separate crate earns its cost
+    uniffi-bindgen/             # Binding generation tooling, if selected
+  apple/                        # SwiftUI macOS app, platform adapters, host lifecycle
+  windows/                      # WinUI app, platform adapters, host/service lifecycle
+  linux/                        # GTK/libadwaita app, Wayland/X11 adapters, host lifecycle
+  services/
+    relay/                      # Optional custom-relay deployment notes; unused by the public-relay default
+  docs/
+    architecture/              # Decisions, protocol, trust model, media boundaries
+    platforms/                 # Permissions, startup, supported OS/desktop states
+    validation/                # Reproducible test matrix and measured results
+  scripts/                      # Build, bindings, packaging, verification helpers
+  packaging/                    # Platform packaging where not native-project-owned
+```
+
+VniDrop is a structural reference, not a template to copy wholesale. The accessible checkout inspected during planning was `/Users/hammed/Projects/vnidrop`; the owner originally named `/home/hammed/Projects/vnidrop`. Locate the actual checkout in the implementation environment before using it. Its README describes SwiftUI, WinUI, and GTK/libadwaita; its Rust crate supports `rlib`, `staticlib`, and `cdylib` and uses UniFFI. Inspect its real platform bridges before choosing VniLink bindings, particularly Windows. Do not copy mobile targets, transfer-consent rules, dependencies, or build machinery without a VniLink need.
+
+## 4. Component ownership
+
+### Shared Rust library
+
+Own device identities, trusted-device records, authorization policy, protocol negotiation, Iroh endpoints, session state, reconnect logic, stream scheduling, bounded queues, transfer state, and structured errors/events.
+
+The crate currently implements identity, relay selection, invitations, grants, session admission, one incoming and one outgoing control session, a bounded event stream, and keyboard and pointer input. Reconnect, media scheduling, transfer, and persisted trust are not in the crate yet.
+
+Input events use USB HID keyboard usages for keys, separate press and release for buttons, absolute pixels on the one host monitor for the pointer, and wheel detents for scroll. `Core::enable_os_input` injects those events with the operating system's input API (Core Graphics on macOS, SendInput on Windows, X11 on Linux) through the MIT-licensed `enigo` crate. That is the same kind of injection RustDesk uses. VniLink does not use RustDesk's UI, screen-mirroring pipeline, or source code. The host must grant input permission. macOS shows the Accessibility prompt. Wayland, elevated Windows desktops, and the secure login screen are not claimed. Without `enable_os_input`, events are refused and the session stays open. There is still no capture path, so the controller cannot yet see the remote desktop.
+
+Expose semantic operations such as start hosting, pair, authorize device, connect, disconnect, revoke device, update session quality, and query capabilities. Native clients observe state/events rather than reconstructing session rules.
+
+Give the runtime a defined owner. Specify startup/shutdown, callback threading, cancellation, event ordering, and how a native UI marshals updates onto its UI thread. Slow subscribers must not block networking or allocate unbounded event queues.
+
+### Native applications and adapters
+
+Own UI, local permission flows, OS startup integration, capture/input APIs, display enumeration, encoder/decoder integration, rendering, and platform credential-store access.
+
+Define a capability interface so the Rust library can negotiate what the host actually supports. Represent unsupported features explicitly. Platform adapters can themselves contain Rust where practical; native UI does not require all platform logic to be written in the UI language.
+
+### Background hosting
+
+The shared library remains a library. A platform executable, user agent, or service loads it for background operation. Privileged helpers are separate processes only where needed; a privileged process should expose a narrow authenticated local interface rather than parsing all network traffic with broad privileges.
+
+Service installation does not automatically provide access to a user's graphical session. Design and validate the service-to-session relationship separately on each OS. Protect local IPC against unauthorized local clients and validate message sizes and caller identity.
+
+## 5. Native bindings and media boundary
+
+Select bindings after checking actual support for Swift, Windows application language, and Rust Linux callers. UniFFI is a candidate for the high-level control API, not a mandate for every platform.
+
+Document ownership, lifetime, threading, error mapping, and cancellation for each boundary. Do not expose internal async types or networking implementation details as the native API.
+
+Use a dedicated media interface rather than serializing raw full-resolution video frames through ordinary high-level bindings. Keep capture, hardware encoding, decoding, and GPU rendering close to the platform APIs. Send encoded buffers into/out of the transport with explicit ownership and bounded lifetimes; evaluate shared/native surfaces where feasible, but verify rather than promise zero-copy operation.
+
+The host captures and encodes; the controller decodes and renders. A relay forwards ciphertext and never transcodes video.
+
+## 6. Connectivity and relays
+
+Use Iroh endpoints on each device. Prefer direct connections; retain encrypted relay fallback when NAT or firewall conditions prevent a direct path. No router port forwarding should be required for ordinary device operation. Validate restrictive networks instead of claiming universal reachability.
+
+**Default.** Use the public relay set shipped with the pinned Iroh release. In iroh 1.3.0 that is `RelayMode::Default` (production relays from n0, also applied by `presets::N0`). A new installation needs no relay URL, account, or API key. n0 documents these relays as rate-limited and recommends them for development and testing rather than production workloads. That limit is why a custom relay exists. VniLink still defaults to the public relays so a person can install and connect without operating a server. Say so in setup notes. Treat the public relays as a shared, rate-limited fallback, not as an unlimited production service.
+
+**Custom.** Each installation can replace the default with one or more relay URLs. The library passes that list as `RelayMode::Custom` for the pinned release. An empty list is invalid and must be rejected with a clear error. URLs come from installation configuration and are read at startup. A self-hosted `iroh-relay`, or another relay compatible with the pinned release, is a valid override. If a chosen relay requires a credential, store it in the installation config or the platform credential store, and keep it out of logs. Public-relay mode stores no relay credential.
+
+Each installation keeps its own relay setting. Pairing and later address refresh include the current home relay URL so the peer can dial it. Dialing uses that URL from the peer address. An open custom relay can be reached by a peer that remains on the public default, when the URL is reachable. A relay that requires a credential is different: Iroh attaches that credential from the dialer's own relay map. Installations that should fall back through a credentialed relay must each be configured with that relay and its credential. Recheck this against the pinned release. Document how updated relay and address information is authenticated and refreshed. Knowing a relay or an address never authorizes a session.
+
+The library pins iroh 1.3.0. Public mode keeps n0 address lookup. Custom mode clears it, so endpoint identity alone does not make a custom-relay peer dialable. The signed invitation carries that peer's current relay URLs and direct addresses.
+
+Choose either explicit paired-device address publication or a small authenticated directory. Add a directory only when the discovery design requires one. Keep directory trust separate from permission to control.
+
+Running a relay is optional. The default install uses the public relays. Operators who want a private relay configure domain and TLS, required ports, health checks, service startup, logs, updates, and abuse protection themselves. Relay access controls and resource limits must match the pinned release; avoid claiming a configuration option exists without checking it. Deployments, paid services, provider changes, and opening infrastructure access require their own task authorization. This README is not permission to provision or deploy.
+
+The owner's VPS, with 12 GB RAM and a stated 10 TB monthly allowance, is one possible custom relay for that owner. Other installations do not use it.
+
+### Bandwidth budget
+
+Anyone operating a relay can use these planning figures. For a 31-day month (744 hours), a continuous one-direction stream uses approximately:
+
+| Average bitrate | Decimal TB/month |
+| --- | ---: |
+| 2 Mbps | 0.67 |
+| 5 Mbps | 1.67 |
+| 10 Mbps | 3.35 |
+| 20 Mbps | 6.70 |
+| 30 Mbps | 10.04 |
+
+These figures exclude protocol overhead, audio, transfers, and other workloads. Relayed traffic enters and leaves the relay host: double the approximate accounting if the provider counts both ingress and egress. Direct desktop traffic bypasses the relay. Simultaneous streams add together. As an illustration, 10 TB supports about 29.9 Mbps continuously with outbound-only accounting, or 14.9 Mbps with combined accounting, before overhead. Public n0 relays apply their own rate limits. A self-hosted machine's RAM or traffic allowance does not by itself prove it can carry desktop sessions. Actual allowance and utilization belong to that operator and must be verified.
+
+Provide configurable bitrate limits and direct/relayed byte counters.
+
+## 7. Protocol and session lifecycle
+
+Use a versioned application protocol with explicit limits and capability negotiation. Specify messages and invariants before shipping implementations independently on different platforms.
+
+Proposed lifecycle: idle → connecting → authenticated → authorized → negotiating → active → reconnecting or stopping → closed. Include explicit rejection/failure states. Authentication verifies identity; authorization checks the target's local permission for the requested action. Perform authorization before exposing desktop content or applying input.
+
+A session negotiates protocol version, monitor geometry, codec/profile, resolution, frame rate, input support, optional audio, and optional clipboard/transfer permissions. Define incompatible-version behavior and stable errors.
+
+Separate traffic by purpose:
+
+- Reliable ordered control messages, keyboard transitions, and mouse button transitions.
+- Coalesced pointer movement so stale positions do not accumulate.
+- Independently scheduled video with explicit backpressure and stale-frame recovery.
+- Optional audio and bounded file-transfer traffic that cannot starve input/control.
+
+Choose video transport after measuring reliable streams versus datagrams on direct and relayed paths. QUIC datagrams require packet sizing, fragmentation/reassembly limits, loss handling, and decoder recovery. Dropping an arbitrary predicted frame can invalidate later frames; coordinate dropping with codec dependency handling and keyframe requests. Reliable video streams still require bounding queues and recovery from stale data.
+
+Define maximum message and transfer sizes, timeouts, validation, and malformed-peer handling. Use session IDs and connection generations to reject delayed input from an old session. Release all held keys/buttons on disconnect, local stop, permission loss, controller crash, or session takeover. Reauthorization and renegotiation must occur as appropriate after reconnect; do not replay old input.
+
+The implemented input semantics are physical USB HID key usages, press and release for the left, right, and middle buttons, absolute pixels on one monitor, and wheel detents (positive vertical scrolls down). Coordinate mapping for scaling, DPI, rotation, and extra monitors is still open. Text entry that is independent of key position is not a separate message yet.
+
+## 8. Trust and security
+
+Persist an installation identity using the platform credential store: Keychain on macOS, an appropriate Windows-protected store, and Linux Secret Service where available. Handle unavailable/locked stores explicitly. Reinstallation or identity reset should require fresh trust unless an intentional secure recovery design exists.
+
+Pair through an authenticated invitation, verified fingerprint, or a properly designed authenticated pairing exchange. A public endpoint ID is not a secret; a short unauthenticated code is not sufficient proof of identity. Invitations must expire, resist replay, and be excluded from logs.
+
+Trust records are directional: allowing A to control B does not automatically allow B to control A. Support separate control, clipboard, and transfer grants. Revocation on a host must stop active sessions and block reconnect. For three devices, remote revocation propagation is useful but must not be claimed until an authenticated mechanism exists; each target's local allowlist is authoritative.
+
+Use Iroh transport encryption and verify peer identity; avoid inventing another encryption scheme. A relay, public or custom, may observe connection metadata even when payloads are encrypted. Do not send private keys to a relay or log screen content, clipboard content, credentials, pairing secrets, or file contents.
+
+Clipboard and file transfer are privileged session features. Add size limits, clear opt-in behavior, safe destinations, and overwrite/symlink protections. Implement them after basic control unless the owner prioritizes them.
+
+## 9. Platform work and support boundaries
+
+### macOS
+
+Evaluate ScreenCaptureKit, native event injection with accessibility authorization, VideoToolbox encoding/decoding, and SwiftUI rendering integration. Implement local permission onboarding and accurate permission-loss errors. Verify signed-app identity and restart behavior during permission testing.
+
+Test locked sessions, user switching, monitor disconnect, and headless capture on the actual Mac mini. FileVault preboot unlock is outside the initial logged-in-desktop milestone; do not promise that an ordinary app or launch agent can control it.
+
+### Windows
+
+Evaluate Desktop Duplication or Windows Graphics Capture, native input injection, and Media Foundation/hardware codec support. Capture API choice should follow permission, performance, cursor, monitor, and desktop-state requirements.
+
+Ordinary SendInput is restricted by integrity levels. Elevated applications, UAC secure desktop, logon screens, session switching, and service/session isolation need separate validated designs. Do not mark them supported because ordinary desktop control works.
+
+### Linux
+
+Implement separate Wayland and X11 adapters where needed. For Wayland, evaluate RemoteDesktop/ScreenCast portals, PipeWire capture, and supported input mechanisms. Restore tokens and unattended permission behavior depend on backend/compositor/version and require real tests. X11 capture and input use a different integration path and must still respect session access.
+
+Document the supported desktop combinations. Do not claim universal Linux unattended access from a successful portal session on one environment.
+
+### Sleeping and powered-off devices
+
+Connectivity libraries cannot receive connections while the target agent is not running. Awake, sleeping, powered off, locked, and preboot are distinct states. Keeping a host awake is an operational option; add Wake-on-LAN or another wake mechanism only after validating network and hardware support. A relay cannot automatically wake a machine behind a router.
+
+## 10. Lightweight operation and measurement
+
+Capture/encode only when a session requires it. Avoid busy polling. Use bounded queues, frame pacing, idle reduction, adaptive bitrate/resolution, and separately transmitted cursor updates. Prefer hardware codecs with explicit fallback and surface failures clearly.
+
+Measure idle CPU/RAM, host capture/encode cost, controller decode/render cost, startup time, sustained bandwidth, reconnect time, and input-to-display latency. Record hardware, OS, resolution, frame rate, codec, network RTT, loss, direct/relay path, and measurement method with results.
+
+A proposed initial operating profile is 1080p at up to 30 fps with adjustable bitrate, plus idle reduction. This is a baseline to test, not a guaranteed capability or final owner requirement. Derive numerical performance acceptance targets from measurements and owner expectations before asserting the app is lightweight.
+
+## 11. Implementation sequence and completion gates
+
+1. **Platform feasibility:** establish capture, authorized input, codec availability, and permission persistence on all actual devices. Deliver a supported-state matrix with evidence for lock/reboot/headless behavior and blockers.
+2. **Core and binding contract:** establish library lifecycle, capability/event API, trust persistence, session states, bindings, and versioned protocol. Complete when native hosts can start/stop the core and receive ordered bounded state updates safely.
+3. **Networking and pairing:** authenticated pairing, target-local grants, discovery, direct and forced-relay connections, rejection/revocation. Complete when all six directed connections work across distinct networks on the public-relay default, a custom relay URL works without rebuilding, and unauthorized peers are rejected.
+4. **First usable remote desktop:** one monitor, negotiated encoded video, keyboard/mouse, local disconnect, indicator, input cleanup. Complete when all six directions perform real interactive desktop tasks; mock adapters alone do not satisfy this gate.
+5. **Unattended reliability:** platform startup, UI-independent hosting, network changes, crash/restart recovery, sleep/resume, permission loss, display changes. Complete for the documented supported desktop states with reproducible tests.
+6. **Additional features:** clipboard, transfer, audio, multiple monitors, and wake behavior according to owner priority. Each feature needs negotiated permissions and independent completion evidence.
+7. **Packaging and operations:** signed platform packages where applicable, permission/setup guides, pinned bindings/dependencies, repeatable platform builds, an optional custom-relay runbook, compatibility documentation, and measured resource results. The default install uses the public relays and ships without a relay deployment.
+
+Keep implemented, tested, proposed, unsupported, and blocked items distinct in documentation. A compiling shell or passing model test is not a finished remote desktop app.
+
+## 12. Verification matrix
+
+Test Mac→Windows, Mac→Linux, Windows→Mac, Windows→Linux, Linux→Mac, and Linux→Windows. For each, record actual device/OS versions and direct versus forced-relay outcomes. Run the internet cases on the public-relay default, and again with a custom relay configured on the installations under test.
+
+Cover same LAN and distinct internet networks; UDP-restricted/relay fallback; address changes; slow links and loss; multiple-hour sessions; resize/DPI/rotation; keyboard layouts; clipboard/transfer permission boundaries when implemented; local stop and revoke; reconnect input cleanup; host/controller crashes; permission denial; locked/reboot/headless states where claimed.
+
+Use deterministic Rust tests for authorization, protocol validation, state transitions, cancellation, limits, and stale-session fencing. Use platform integration tests for native adapters. Use real-machine manual or automated evidence for capture, rendering, input, startup, and operating-system restrictions. Include malformed input and oversized payload tests. Run platform builds on their actual supported toolchains; do not imply a macOS-only build verifies Windows/Linux.
+
+## 13. References and maintenance
+
+Consult current primary documentation when implementing version-dependent behavior:
+
+- [Iroh Rust API](https://docs.rs/iroh/latest/iroh/)
+- [Iroh `RelayMode`](https://docs.rs/iroh/latest/iroh/endpoint/enum.RelayMode.html)
+- [Iroh: add a relay](https://docs.iroh.computer/add-a-relay) (public n0 relays by default; self-hosted relays use `RelayMode::Custom`)
+- [Apple ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit)
+- [Apple accessibility trust API](https://developer.apple.com/documentation/applicationservices/1459186-axisprocesstrustedwithoptions)
+- [Microsoft Desktop Duplication](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/desktop-duplication-api)
+- [Microsoft SendInput restrictions](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput)
+- [XDG RemoteDesktop portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.RemoteDesktop.html)
+
+Pin selected dependencies and document the actual supported versions. Replace proposed build layout and instructions with verified commands as implementation lands. Put detailed decisions and evidence in the corresponding docs directories, and keep this README as the entry point describing the final product and remaining scope.

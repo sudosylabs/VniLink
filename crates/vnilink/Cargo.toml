@@ -1,0 +1,15 @@
+[package]
+name = "vnilink"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Shared control library for the VniLink remote desktop"
+publish = false
+
+[dependencies]
+enigo = "=0.6.1"
+iroh = "=1.3.0"
+rand = "0.10"
+thiserror = "2"
+tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "sync", "time"] }
