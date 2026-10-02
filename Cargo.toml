@@ -1,5 +1,11 @@
 [workspace]
-members = ["crates/vnilink"]
+members = [
+    "crates/vnilink",
+    "crates/vnilink-media",
+    "crates/vnilink-macos",
+    "crates/vnilink-windows",
+    "crates/vnilink-linux",
+]
 resolver = "2"
 
 [workspace.package]

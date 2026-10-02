@@ -1,16 +1,66 @@
 //! Shared control library for VniLink.
 //!
 //! Native applications host this crate. It owns installation identity, relay
-//! choice, pairing, authorization, the session lifecycle, and keyboard and
-//! pointer input. It does not capture or encode the desktop. Call
-//! [`Core::enable_os_input`] on the host so authorized sessions inject keys
-//! and pointer events into the operating system.
+//! choice, pairing, authorization, the session lifecycle, keyboard and pointer
+//! input, clipboard text, file transfer, and the encoded-frame stream. It does
+//! not capture, encode, or draw the desktop, and it does not read the
+//! operating-system clipboard. Call [`Core::enable_os_input`] on the host so
+//! authorized sessions inject keys and pointer events. Call
+//! [`Core::set_clipboard`] so a granted controller can paste text. Call
+//! [`Core::set_transfer_directory`] so a granted peer can send a file. Call
+//! [`Core::publish_video`] with encoded H.264 frames and
+//! [`Core::subscribe_video`] to receive them. A key is the physical HID
+//! position, so the host's layout produces the character.
+//! [`Core::submit_text`] types a finished string, and
+//! [`Core::set_swap_control_and_command`] exchanges Control and Command.
+//! The keyboard steps are in `crates/vnilink/KEYBOARD.md`.
 //!
 //! # Relay
 //!
 //! [`RelaySettings::public_n0`] is the default and selects Iroh's public n0
 //! relays. [`RelaySettings::custom`] replaces that set with the installation's
 //! own URLs. Custom mode does not publish the endpoint through n0 address lookup.
+//!
+//! # Installation record
+//!
+//! [`Core::open`] loads an opaque record through [`InstallationStore`]. The
+//! record holds the installation secret, paired devices, grants, used
+//! invitation nonces, and the relay setting, including a relay credential.
+//! The host writes those bytes to the platform credential store. [`Core::start`]
+//! keeps the same state only for the process. A locked, unavailable, or invalid
+//! record is returned as an error and is not replaced.
+//!
+//! # Pairing file
+//!
+//! [`Core::export_pairing_file`] returns the bytes of a `.vnl` file. The other
+//! computer opens that file and [`Core::confirm_pairing`] saves the device
+//! when the typed digits match the writer's screen. Control is granted later,
+//! on the writer's computer, when that person types the digits from
+//! [`Core::control_check`]. The session then uses the relays already
+//! configured for this installation. The steps are in `crates/vnilink/PAIRING.md`.
+//!
+//! # Reconnect
+//!
+//! A dropped control session dials that saved device again. The new session
+//! has a new generation, and input queued for the old one is discarded. While
+//! a session is up, each side stores the other's current home relay URLs and
+//! direct addresses. A local disconnect or a host close does not redial.
+//! The rules are in `crates/vnilink/RECONNECT.md`.
+//!
+//! # Clipboard
+//!
+//! Clipboard is a separate grant from control. Text is UTF-8 and at most
+//! 256 KiB. [`Core::submit_clipboard`] sends it to the host.
+//! [`Core::publish_clipboard`] sends the host's text to the controller.
+//! Neither call reads or writes the operating-system clipboard. The steps
+//! are in `crates/vnilink/CLIPBOARD.md`.
+//!
+//! # File transfer
+//!
+//! File transfer is a separate grant from control and from clipboard. A file
+//! is at most 8 MiB. The name is a relative path under the directory from
+//! [`Core::set_transfer_directory`]. An existing file is replaced only when
+//! the sender asks. The steps are in `crates/vnilink/TRANSFER.md`.
 //!
 //! # Threading
 //!
@@ -20,25 +70,37 @@
 
 #![forbid(unsafe_code)]
 
+mod address;
+mod clipboard;
 mod core;
 mod error;
 mod events;
 mod input;
+mod installation;
 mod invitation;
 mod os_input;
+mod pairing;
 mod protocol;
+mod reconnect;
 mod relay;
 mod session;
+mod transfer;
 mod trust;
+mod video;
 
-pub use core::{Core, CoreConfig, DeviceInfo, Listen, Snapshot};
+pub use clipboard::{HostClipboard, MAX_CLIPBOARD_TEXT};
+pub use core::{ControlRequest, Core, CoreConfig, DeviceInfo, Listen, OpenConfig, Snapshot};
 pub use error::Error;
 pub use events::{CoreEvent, EventSubscription};
-pub use input::{usage, HostDesktop, InputEvent, PointerButton};
+pub use input::{usage, HostDesktop, InputEvent, PointerButton, MAX_KEY_TEXT};
+pub use installation::{InstallationStore, MemoryStore};
 pub use os_input::OsInput;
+pub use pairing::{PairingFile, PairingPreview, PAIRING_FILE_EXTENSION};
 pub use protocol::{Capabilities, Quality, PROTOCOL_VERSION};
 pub use relay::{CustomRelay, RelaySettings};
 pub use session::{Grants, SessionInfo, SessionPhase, SessionRole};
+pub use transfer::MAX_FILE_BYTES;
+pub use video::{EncodedFrame, HostCapture, VideoSubscription, MAX_VIDEO_FRAME};
 
 #[cfg(test)]
 #[path = "tests.rs"]

@@ -26,6 +26,21 @@ pub enum CoreEvent {
     DeviceRevoked {
         endpoint_id: String,
     },
+    /// A controller opened this host's pairing file and is connecting.
+    ///
+    /// `check` is the three digits on the controller's screen. Grant control
+    /// with [`crate::Core::confirm_control_request`] only when the person
+    /// types those digits.
+    ControlRequested {
+        endpoint_id: String,
+        check: String,
+    },
+    /// A paired device replaced its saved relay URLs and direct addresses.
+    ///
+    /// Grants are unchanged. The list is what the next dial uses.
+    AddressesUpdated {
+        endpoint_id: String,
+    },
     SessionChanged {
         id: u64,
         generation: u64,
@@ -42,6 +57,24 @@ pub enum CoreEvent {
     InputFailed {
         id: u64,
         message: &'static str,
+    },
+    /// The host should encode a keyframe for this session.
+    ///
+    /// Predicted frames were dropped, or the controller asked for a keyframe.
+    KeyframeRequested {
+        id: u64,
+    },
+    /// The host published clipboard text. Read it with [`crate::Core::clipboard_text`].
+    ///
+    /// The event carries no characters. Clipboard text is not logged.
+    ClipboardReceived {
+        id: u64,
+    },
+    /// A file was written for this session.
+    ///
+    /// The event carries no path and no bytes. File contents are not logged.
+    TransferCompleted {
+        id: u64,
     },
 }
 

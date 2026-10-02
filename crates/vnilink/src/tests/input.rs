@@ -1,5 +1,18 @@
 use crate::error::Error;
-use crate::input::{usage, HeldInput, InputEvent, InputOutbox, PointerButton, INPUT_QUEUE};
+use crate::input::{
+    check_key_text, swap_command_key, usage, HeldInput, InputEvent, InputOutbox, Outbound,
+    PointerButton, INPUT_QUEUE, MAX_KEY_TEXT,
+};
+
+fn only_events(items: Vec<Outbound>) -> Vec<InputEvent> {
+    items
+        .into_iter()
+        .map(|item| match item {
+            Outbound::Event(event) => event,
+            Outbound::Text(_) => panic!("a text item was queued with the keys"),
+        })
+        .collect()
+}
 
 #[test]
 fn pointer_samples_collapse_and_keys_do_not() {
@@ -10,7 +23,7 @@ fn pointer_samples_collapse_and_keys_do_not() {
     outbox.push(InputEvent::pointer(3, 4)).unwrap();
     outbox.push(InputEvent::key_up(usage::A)).unwrap();
     assert_eq!(
-        outbox.drain(),
+        only_events(outbox.drain()),
         vec![
             InputEvent::key_down(usage::A),
             InputEvent::pointer(3, 4),
@@ -46,7 +59,7 @@ fn a_full_queue_keeps_key_transitions_and_folds_pointer_samples() {
         Err(Error::Busy)
     ));
     outbox.push(InputEvent::pointer(1, 2)).unwrap();
-    let drained = outbox.drain();
+    let drained = only_events(outbox.drain());
     assert_eq!(drained.len(), INPUT_QUEUE);
     assert!(drained
         .iter()
@@ -58,7 +71,7 @@ fn a_full_queue_keeps_key_transitions_and_folds_pointer_samples() {
     }
     outbox.push(InputEvent::pointer(1, 1)).unwrap();
     outbox.push(InputEvent::pointer(2, 2)).unwrap();
-    let drained = outbox.drain();
+    let drained = only_events(outbox.drain());
     assert_eq!(drained.len(), INPUT_QUEUE);
     assert!(matches!(
         drained.last(),
@@ -75,7 +88,7 @@ fn a_full_queue_keeps_key_transitions_and_folds_pointer_samples() {
         outbox.push(InputEvent::key_down(usage_code)).unwrap();
     }
     outbox.push(InputEvent::pointer(7, 8)).unwrap();
-    let drained = outbox.drain();
+    let drained = only_events(outbox.drain());
     assert_eq!(drained.len(), INPUT_QUEUE);
     assert!(matches!(drained[0], InputEvent::Key { usage: 1, .. }));
     assert!(matches!(
@@ -147,6 +160,79 @@ fn releasing_a_key_or_button_removes_it_from_the_held_set() {
             InputEvent::key_up(usage::B),
         ]
     );
+}
+
+#[test]
+fn command_swap_exchanges_only_control_and_meta() {
+    assert_eq!(
+        swap_command_key(InputEvent::key_down(usage::LEFT_META)),
+        InputEvent::key_down(usage::LEFT_CONTROL)
+    );
+    assert_eq!(
+        swap_command_key(InputEvent::key_up(usage::LEFT_CONTROL)),
+        InputEvent::key_up(usage::LEFT_META)
+    );
+    assert_eq!(
+        swap_command_key(InputEvent::key_down(usage::RIGHT_CONTROL)),
+        InputEvent::key_down(usage::RIGHT_META)
+    );
+    assert_eq!(
+        swap_command_key(InputEvent::key_up(usage::RIGHT_META)),
+        InputEvent::key_up(usage::RIGHT_CONTROL)
+    );
+    assert_eq!(
+        swap_command_key(InputEvent::key_down(usage::LEFT_SHIFT)),
+        InputEvent::key_down(usage::LEFT_SHIFT)
+    );
+    assert_eq!(
+        swap_command_key(InputEvent::pointer(1, 2)),
+        InputEvent::pointer(1, 2)
+    );
+}
+
+#[test]
+fn finished_text_is_bounded_and_cleared_with_the_queue() {
+    assert!(check_key_text("héllo").is_ok());
+    assert!(check_key_text(&"a".repeat(MAX_KEY_TEXT)).is_ok());
+    assert!(matches!(
+        check_key_text(""),
+        Err(Error::InvalidSetting("text entry is empty"))
+    ));
+    assert!(matches!(
+        check_key_text(&"a".repeat(MAX_KEY_TEXT + 1)),
+        Err(Error::InvalidSetting("text entry is longer than 128 bytes"))
+    ));
+    assert!(matches!(
+        check_key_text("a\0b"),
+        Err(Error::InvalidSetting("text entry contains a null byte"))
+    ));
+
+    let outbox = InputOutbox::new();
+    outbox.push(InputEvent::key_down(usage::A)).unwrap();
+    outbox.push_text("héllo".to_owned()).unwrap();
+    outbox.push(InputEvent::key_up(usage::A)).unwrap();
+    let drained = outbox.drain();
+    assert!(!format!("{drained:?}").contains("héllo"));
+    assert_eq!(
+        drained,
+        vec![
+            Outbound::Event(InputEvent::key_down(usage::A)),
+            Outbound::Text("héllo".to_owned()),
+            Outbound::Event(InputEvent::key_up(usage::A)),
+        ]
+    );
+
+    let outbox = InputOutbox::new();
+    outbox.push_text("gone".to_owned()).unwrap();
+    outbox.clear();
+    assert!(outbox.drain().is_empty());
+    for _ in 0..INPUT_QUEUE {
+        outbox.push(InputEvent::key_down(usage::A)).unwrap();
+    }
+    assert!(matches!(
+        outbox.push_text("late".to_owned()),
+        Err(Error::Busy)
+    ));
 }
 
 #[test]

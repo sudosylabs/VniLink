@@ -45,6 +45,10 @@ impl Trust {
         Ok(())
     }
 
+    pub(crate) fn remove(&mut self, endpoint_id: &[u8; 32]) -> Option<Device> {
+        self.devices.remove(endpoint_id)
+    }
+
     pub(crate) fn get(&self, endpoint_id: &[u8; 32]) -> Option<&Device> {
         self.devices.get(endpoint_id)
     }
@@ -53,6 +57,18 @@ impl Trust {
         self.devices
             .get(endpoint_id)
             .is_some_and(|device| device.grants.control)
+    }
+
+    pub(crate) fn clipboard_granted(&self, endpoint_id: &[u8; 32]) -> bool {
+        self.devices
+            .get(endpoint_id)
+            .is_some_and(|device| device.grants.clipboard)
+    }
+
+    pub(crate) fn transfer_granted(&self, endpoint_id: &[u8; 32]) -> bool {
+        self.devices
+            .get(endpoint_id)
+            .is_some_and(|device| device.grants.transfer)
     }
 
     pub(crate) fn devices(&self) -> impl Iterator<Item = &Device> {

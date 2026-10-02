@@ -1,0 +1,33 @@
+//! Frame pacing and H.264 Annex-B for VniLink platform adapters.
+//!
+//! This crate does not capture the screen and does not inject input. A
+//! platform encoder turns BGRA pictures into Annex-B. [`FramePump`] reads
+//! [`vnilink::Quality`] and drops pictures that arrive faster than the
+//! configured frame rate, except when a keyframe is still owed. Keyframes
+//! carry SPS, PPS, and an IDR so another operating system can start decoding.
+//!
+//! Pixel buffers and bitstreams are screen content. Do not log them.
+
+#![forbid(unsafe_code)]
+
+mod annexb;
+mod desktop;
+mod error;
+mod frame;
+mod nv12;
+mod pump;
+
+pub use annexb::{parse_annex_b, to_annex_b, AvccAccessUnit, NalUnit, ParsedAccessUnit};
+pub use desktop::{CapturePlan, CursorPolicy, DesktopKind, MonitorSize};
+pub use error::{Error, PublishError};
+pub use frame::{encoded_size, scale_bgra, RawFrame};
+pub use nv12::{bgra_to_nv12, Nv12};
+pub use pump::{
+    CoreSink, EncodeParams, EncodedSample, FramePump, FrameSink, HostVideo, PumpOutput,
+    VideoDecoder, VideoEncoder,
+};
+pub use vnilink::Quality;
+
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;

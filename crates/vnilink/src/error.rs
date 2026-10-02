@@ -27,6 +27,12 @@ pub enum Error {
     Busy,
     #[error("the device is not authorized to control this host")]
     Unauthorized,
+    #[error("clipboard is not granted")]
+    ClipboardDenied,
+    #[error("file transfer is not granted")]
+    TransferDenied,
+    #[error("the file already exists")]
+    FileExists,
     #[error("there is no active session")]
     NoSession,
     #[error("the input belongs to an old session")]
@@ -45,6 +51,18 @@ pub enum Error {
     Network(String),
     #[error("at most {0} paired devices are supported")]
     TooManyDevices(usize),
+    #[error("the credential store is unavailable")]
+    StoreUnavailable,
+    #[error("the credential store is locked")]
+    StoreLocked,
+    #[error("the installation record is not valid")]
+    CorruptRecord,
+    #[error("the pairing file is not valid")]
+    InvalidPairingFile,
+    #[error("the pairing check does not match")]
+    PairingCheckMismatch,
+    #[error("there is no control request waiting")]
+    NoControlRequest,
 }
 
 impl Error {

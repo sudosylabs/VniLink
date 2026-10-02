@@ -9,7 +9,8 @@ pub enum SessionRole {
 }
 
 /// Session lifecycle from the README. `Idle` is the absence of a session.
-/// `Reconnecting` is part of the model and is not entered yet.
+/// The controller enters `Reconnecting` after a dropped link, before the next
+/// dial. The host closes the old generation first, then accepts the new one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionPhase {
     Connecting,

@@ -1,7 +1,8 @@
 use crate::error::Error;
 use crate::input::InputEvent;
+use crate::input::MAX_KEY_TEXT;
 use crate::protocol::{
-    error_code, ControlMessage, Quality, RejectCode, MAX_CONTROL_FRAME, PROTOCOL_VERSION,
+    error_code, ControlMessage, KeyText, Quality, RejectCode, MAX_CONTROL_FRAME, PROTOCOL_VERSION,
 };
 
 #[test]
@@ -31,6 +32,15 @@ fn control_messages_round_trip() {
             session_id: 7,
             generation: 3,
             event: InputEvent::wheel(0, -1),
+        },
+        ControlMessage::Keyframe {
+            session_id: 7,
+            generation: 3,
+        },
+        ControlMessage::Text {
+            session_id: 7,
+            generation: 3,
+            text: KeyText("héllo".to_owned()),
         },
     ];
     for message in messages {
@@ -69,6 +79,55 @@ fn oversized_and_unknown_frames_are_malformed() {
         ControlMessage::decode(&[3, 0, 8]),
         Err(Error::Malformed)
     ));
+    assert!(matches!(
+        ControlMessage::decode(&[5, 0]),
+        Err(Error::Malformed)
+    ));
+    assert!(matches!(
+        ControlMessage::decode(&[8, 0]),
+        Err(Error::Malformed)
+    ));
+}
+
+#[test]
+fn finished_text_hides_the_characters_and_rejects_bad_bytes() {
+    let message = ControlMessage::Text {
+        session_id: 4,
+        generation: 9,
+        text: KeyText("vnl-secret-héllo".to_owned()),
+    };
+    assert!(!format!("{message:?}").contains("vnl-secret"));
+    assert_eq!(ControlMessage::decode(&message.encode()).unwrap(), message);
+
+    let mut empty = vec![8];
+    empty.extend_from_slice(&1u64.to_be_bytes());
+    empty.extend_from_slice(&2u64.to_be_bytes());
+    assert_eq!(
+        ControlMessage::decode(&empty).unwrap(),
+        ControlMessage::Text {
+            session_id: 1,
+            generation: 2,
+            text: KeyText(String::new()),
+        }
+    );
+
+    let mut bad = empty.clone();
+    bad.push(0xFF);
+    assert!(matches!(
+        ControlMessage::decode(&bad),
+        Err(Error::Malformed)
+    ));
+
+    let mut long = empty;
+    long.extend(std::iter::repeat_n(b'a', MAX_KEY_TEXT + 1));
+    assert!(long.len() <= MAX_CONTROL_FRAME);
+    match ControlMessage::decode(&long).unwrap() {
+        ControlMessage::Text { text, .. } => {
+            assert_eq!(text.0.len(), MAX_KEY_TEXT + 1);
+            assert!(!format!("{text:?}").contains('a'));
+        }
+        other => panic!("decoded {other:?}"),
+    }
 }
 
 #[test]
@@ -177,4 +236,7 @@ fn unmapped_errors_become_a_malformed_reject() {
         RejectCode::Malformed
     );
     assert_eq!(error_code(&Error::NoSession), RejectCode::Malformed);
+    assert_eq!(error_code(&Error::ClipboardDenied), RejectCode::Malformed);
+    assert_eq!(error_code(&Error::TransferDenied), RejectCode::Malformed);
+    assert_eq!(error_code(&Error::FileExists), RejectCode::Malformed);
 }

@@ -29,6 +29,7 @@ impl std::fmt::Debug for Invitation {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct ReplayCache {
     entries: Vec<([u8; 16], u64)>,
 }
@@ -55,6 +56,24 @@ impl ReplayCache {
         }
         self.entries.push((nonce, expires_at_ms));
         Ok(())
+    }
+
+    pub(crate) fn entries(&self) -> &[([u8; 16], u64)] {
+        &self.entries
+    }
+
+    pub(crate) fn from_entries(entries: Vec<([u8; 16], u64)>) -> Result<Self, Error> {
+        if entries.len() > MAX_REPLAY {
+            return Err(Error::CorruptRecord);
+        }
+        let mut seen = Vec::with_capacity(entries.len());
+        for (nonce, _) in &entries {
+            if seen.contains(nonce) {
+                return Err(Error::CorruptRecord);
+            }
+            seen.push(*nonce);
+        }
+        Ok(Self { entries })
     }
 }
 

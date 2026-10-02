@@ -12,6 +12,7 @@ use crate::invitation;
 use crate::protocol::Quality;
 use crate::relay::RelaySettings;
 use crate::session::{Grants, SessionPhase, SessionRole};
+use crate::video::{EncodedFrame, HostCapture};
 
 fn start_direct() -> Core {
     Core::boot(
@@ -98,6 +99,14 @@ impl HostDesktop for FixedDesktop {
 
     fn monitor(&self) -> (u16, u16) {
         (self.width, self.height)
+    }
+}
+
+struct ShutdownCapture;
+
+impl HostCapture for ShutdownCapture {
+    fn monitor(&self) -> (u16, u16) {
+        (1, 1)
     }
 }
 
@@ -441,6 +450,15 @@ fn shutdown_is_idempotent_and_later_calls_report_it() {
     ));
     assert!(matches!(
         core.update_session_quality(1, Quality::new(1, 1, 1, 1).unwrap()),
+        Err(Error::ShutDown)
+    ));
+    assert!(matches!(
+        core.publish_video(1, EncodedFrame::h264(true, 0, vec![1]).unwrap()),
+        Err(Error::ShutDown)
+    ));
+    assert!(matches!(core.subscribe_video(), Err(Error::ShutDown)));
+    assert!(matches!(
+        core.set_capture(Box::new(ShutdownCapture)),
         Err(Error::ShutDown)
     ));
 }

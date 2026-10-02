@@ -1,5 +1,21 @@
+use std::fmt;
+
+use crate::address;
 use crate::error::Error;
 use crate::input::InputEvent;
+
+/// Finished text carried on the control stream. Debug shows the length only.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct KeyText(pub String);
+
+impl fmt::Debug for KeyText {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("KeyText")
+            .field("len", &self.0.len())
+            .finish()
+    }
+}
 
 /// Application protocol version carried in the control hello.
 pub const PROTOCOL_VERSION: u16 = 1;
@@ -10,10 +26,16 @@ pub const ALPN: &[u8] = b"vnilink/1";
 
 pub(crate) const MAX_CONTROL_FRAME: usize = 256;
 
+/// Address announcements are larger than an input frame and use this cap.
+pub(crate) const MAX_ADDRESS_FRAME: usize = address::MAX_FRAME;
+
 /// What this installation can do today.
 ///
-/// Capture, input, clipboard, transfer, and audio stay unsupported until a
-/// platform adapter reports otherwise. Callers must treat `false` as unavailable.
+/// `desktop_capture` is true once a capture adapter is installed. The library
+/// still does not capture or encode. Keyboard and pointer are true once a
+/// desktop adapter is installed. Clipboard is true once a clipboard adapter
+/// is installed. File transfer is true once a transfer directory is set.
+/// Those grants stay off until `authorize` sets them. Audio stays false.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Capabilities {
     pub desktop_capture: bool,
@@ -43,8 +65,11 @@ impl Default for Capabilities {
     }
 }
 
-/// Preferred limits for a later encoder. Stored with the session. No media
-/// path reads them yet.
+/// Preferred limits for the platform encoder.
+///
+/// The shared library stores them with the session and does not reshape
+/// frames itself. `vnilink-media` reads them when it paces capture: size,
+/// frame rate, and bitrate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Quality {
     pub max_bitrate_kbps: u32,
@@ -137,12 +162,31 @@ pub(crate) enum ControlMessage {
         generation: u64,
         event: InputEvent,
     },
+    /// Asks the host to encode a keyframe. Sent on the control stream, not the video stream.
+    Keyframe {
+        session_id: u64,
+        generation: u64,
+    },
+    /// Home relay URLs and direct sockets for the sender. No credential, no grants.
+    Addresses {
+        relays: Vec<String>,
+        direct: Vec<std::net::SocketAddr>,
+    },
+    /// The host ended the session on purpose. The controller does not redial.
+    Close,
+    /// Finished characters for the host to type. Not a key position and not
+    /// a clipboard paste. The bytes are UTF-8 and are not logged.
+    Text {
+        session_id: u64,
+        generation: u64,
+        text: KeyText,
+    },
 }
 
 impl ControlMessage {
     pub(crate) fn encode(&self) -> Vec<u8> {
-        match *self {
-            Self::Hello { version } => vec![1, (version >> 8) as u8, version as u8],
+        match self {
+            Self::Hello { version } => vec![1, (version >> 8) as u8, *version as u8],
             Self::Accept {
                 session_id,
                 generation,
@@ -158,7 +202,7 @@ impl ControlMessage {
                 bytes
             }
             Self::Reject(code) => {
-                let value = code as u16;
+                let value = *code as u16;
                 vec![3, (value >> 8) as u8, value as u8]
             }
             Self::Input {
@@ -173,11 +217,38 @@ impl ControlMessage {
                 event.encode(&mut bytes);
                 bytes
             }
+            Self::Keyframe {
+                session_id,
+                generation,
+            } => {
+                let mut bytes = Vec::with_capacity(17);
+                bytes.push(5);
+                bytes.extend_from_slice(&session_id.to_be_bytes());
+                bytes.extend_from_slice(&generation.to_be_bytes());
+                bytes
+            }
+            Self::Addresses { relays, direct } => address::encode(relays, direct),
+            Self::Close => vec![7],
+            Self::Text {
+                session_id,
+                generation,
+                text,
+            } => {
+                let mut bytes = Vec::with_capacity(17 + text.0.len());
+                bytes.push(8);
+                bytes.extend_from_slice(&session_id.to_be_bytes());
+                bytes.extend_from_slice(&generation.to_be_bytes());
+                bytes.extend_from_slice(text.0.as_bytes());
+                bytes
+            }
         }
     }
 
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.is_empty() || bytes.len() > MAX_CONTROL_FRAME {
+        if bytes.is_empty() || bytes.len() > MAX_ADDRESS_FRAME {
+            return Err(Error::Malformed);
+        }
+        if bytes[0] != address::TAG && bytes.len() > MAX_CONTROL_FRAME {
             return Err(Error::Malformed);
         }
         match bytes[0] {
@@ -198,6 +269,26 @@ impl ControlMessage {
                 generation: u64::from_be_bytes(bytes[9..17].try_into().expect("8 bytes")),
                 event: InputEvent::decode(&bytes[17..])?,
             }),
+            5 if bytes.len() == 17 => Ok(Self::Keyframe {
+                session_id: u64::from_be_bytes(bytes[1..9].try_into().expect("8 bytes")),
+                generation: u64::from_be_bytes(bytes[9..17].try_into().expect("8 bytes")),
+            }),
+            address::TAG => {
+                let announcement = address::decode(bytes)?;
+                Ok(Self::Addresses {
+                    relays: announcement.relays,
+                    direct: announcement.direct,
+                })
+            }
+            7 if bytes.len() == 1 => Ok(Self::Close),
+            8 if bytes.len() >= 17 => {
+                let text = std::str::from_utf8(&bytes[17..]).map_err(|_| Error::Malformed)?;
+                Ok(Self::Text {
+                    session_id: u64::from_be_bytes(bytes[1..9].try_into().expect("8 bytes")),
+                    generation: u64::from_be_bytes(bytes[9..17].try_into().expect("8 bytes")),
+                    text: KeyText(text.to_owned()),
+                })
+            }
             _ => Err(Error::Malformed),
         }
     }
@@ -211,6 +302,8 @@ pub(crate) fn error_code(error: &Error) -> RejectCode {
         Error::IncompatibleVersion => RejectCode::IncompatibleVersion,
         Error::StaleSession => RejectCode::StaleSession,
         Error::Unsupported(_) => RejectCode::Unsupported,
+        // A paste or file refusal stays on its own stream. Do not reject the
+        // control session for ClipboardDenied, TransferDenied, or FileExists.
         _ => RejectCode::Malformed,
     }
 }

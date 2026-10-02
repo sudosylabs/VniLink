@@ -1,0 +1,77 @@
+//! What the Windows adapter will open, without opening it.
+//!
+//! Desktop Duplication reads the interactive desktop of this session. The
+//! secure UAC desktop is a different desktop and is not supported. Ordinary
+//! input injection does not reach it either.
+
+use vnilink_media::{CapturePlan, Error};
+
+/// The secure credential and UAC desktop is never this adapter.
+pub const SECURE_DESKTOP_SUPPORTED: bool = false;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowsPlan {
+    monitor_index: u32,
+    width: u16,
+    height: u16,
+    frame_rate: u8,
+    bitrate_bps: u32,
+}
+
+impl WindowsPlan {
+    pub fn from_capture(plan: &CapturePlan, bitrate_kbps: u32) -> Result<Self, Error> {
+        if plan.monitor_index() != 0 {
+            return Err(Error::Unsupported("only one monitor is supported"));
+        }
+        let bitrate_bps = bitrate_kbps
+            .checked_mul(1_000)
+            .ok_or(Error::InvalidSetting(
+                "bitrate does not fit in bits per second",
+            ))?;
+        Ok(Self {
+            monitor_index: 0,
+            width: plan.width(),
+            height: plan.height(),
+            frame_rate: plan.frame_rate(),
+            bitrate_bps,
+        })
+    }
+
+    pub fn monitor_index(&self) -> u32 {
+        self.monitor_index
+    }
+
+    pub fn width(&self) -> u16 {
+        self.width
+    }
+
+    pub fn height(&self) -> u16 {
+        self.height
+    }
+
+    pub fn frame_rate(&self) -> u8 {
+        self.frame_rate
+    }
+
+    pub fn bitrate_bps(&self) -> u32 {
+        self.bitrate_bps
+    }
+
+    pub fn secure_desktop_supported(&self) -> bool {
+        SECURE_DESKTOP_SUPPORTED
+    }
+}
+
+/// One captured desktop must fit the frame type the session already uses.
+pub(crate) fn frame_size(width: u32, height: u32) -> Result<(u16, u16), Error> {
+    let width = u16::try_from(width)
+        .map_err(|_| Error::Unsupported("the desktop is larger than one frame"))?;
+    let height = u16::try_from(height)
+        .map_err(|_| Error::Unsupported("the desktop is larger than one frame"))?;
+    if width == 0 || height == 0 {
+        return Err(Error::CaptureRejected(
+            "Desktop Duplication returned an empty frame",
+        ));
+    }
+    Ok((width, height))
+}

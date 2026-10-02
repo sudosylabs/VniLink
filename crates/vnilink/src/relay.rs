@@ -126,6 +126,10 @@ impl CustomRelay {
     pub fn has_auth_token(&self) -> bool {
         self.auth_token.is_some()
     }
+
+    pub(crate) fn auth_token(&self) -> Option<&str> {
+        self.auth_token.as_deref()
+    }
 }
 
 fn canonical_relays(relays: &[CustomRelay]) -> Result<Vec<RelayConfig>, Error> {

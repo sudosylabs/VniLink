@@ -1,0 +1,285 @@
+use std::time::{Duration, SystemTime};
+
+use iroh::RelayMode;
+
+use crate::core::{Core, CoreConfig, Listen};
+use crate::error::Error;
+use crate::events::{CoreEvent, EventSubscription};
+use crate::pairing::{self, PairingFile, PairingPreview, PAIRING_FILE_EXTENSION};
+use crate::session::{SessionPhase, SessionRole};
+
+fn start_direct() -> Core {
+    Core::boot(
+        CoreConfig {
+            listen: Listen::Loopback,
+            ..CoreConfig::default()
+        },
+        RelayMode::Disabled,
+        true,
+    )
+    .expect("loopback core")
+}
+
+fn wait_closed(core: &Core, role: SessionRole) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let snapshot = core.snapshot().unwrap();
+        let session = match role {
+            SessionRole::Host => snapshot.incoming,
+            SessionRole::Controller => snapshot.outgoing,
+        };
+        if session
+            .as_ref()
+            .is_some_and(|session| session.phase == SessionPhase::Closed)
+        {
+            return;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("session did not close: {session:?}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn wait_request(host: &Core) -> crate::ControlRequest {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(request) = host.control_request().unwrap() {
+            return request;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("the host did not report a control request");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn pairing_counts(events: &EventSubscription) -> (usize, usize) {
+    let mut paired = 0;
+    let mut authorized = 0;
+    while let Some(event) = events.try_recv() {
+        match event {
+            CoreEvent::DevicePaired { .. } => paired += 1,
+            CoreEvent::DeviceAuthorized { .. } => authorized += 1,
+            CoreEvent::ControlRequested { .. } => {}
+            // Connect publishes the session lifecycle and address refresh.
+            CoreEvent::SessionChanged { .. }
+            | CoreEvent::AddressesUpdated { .. }
+            | CoreEvent::TransferCompleted { .. } => {}
+            other => panic!("pairing emitted {other:?}"),
+        }
+    }
+    (paired, authorized)
+}
+
+#[test]
+fn file_digits_change_when_the_invitation_changes() {
+    let endpoint = [7u8; 32];
+    let nonce = [9u8; 16];
+    let check = pairing::file_digits(&endpoint, &nonce, 50);
+    assert_eq!(check, pairing::file_digits(&endpoint, &nonce, 50));
+    assert_eq!(check.len(), 3);
+    assert!(check.bytes().all(|byte| byte.is_ascii_digit()));
+    assert_ne!(check, pairing::file_digits(&endpoint, &nonce, 51));
+    assert_ne!(check, pairing::control_digits(&endpoint));
+    assert_eq!(PAIRING_FILE_EXTENSION, "vnl");
+}
+
+#[test]
+fn a_damaged_file_is_rejected_and_debug_hides_the_invitation() {
+    let host = start_direct();
+    let file = host
+        .export_pairing_file(Duration::from_secs(60), true)
+        .unwrap();
+    assert!(file.bytes.starts_with(b"VNLF"));
+    assert!(!format!("{file:?}").contains("vnl1."));
+    let mut damaged = file.bytes.clone();
+    damaged[0] = b'X';
+    let controller = start_direct();
+    assert!(matches!(
+        controller.open_pairing_file(&damaged),
+        Err(Error::InvalidPairingFile)
+    ));
+    assert!(matches!(
+        controller.open_pairing_file(b"VNLF"),
+        Err(Error::InvalidPairingFile)
+    ));
+    assert!(matches!(
+        host.open_pairing_file(&file.bytes),
+        Err(Error::InvalidInvitation(_))
+    ));
+}
+
+#[test]
+fn an_expired_file_is_rejected() {
+    let host = start_direct();
+    let controller = start_direct();
+    let past = SystemTime::now() - Duration::from_secs(20 * 60);
+    let file = host
+        .export_pairing_file_at(Duration::from_secs(60), true, past)
+        .unwrap();
+    assert!(matches!(
+        controller.open_pairing_file(&file.bytes),
+        Err(Error::InvitationExpired)
+    ));
+}
+
+#[test]
+fn opening_a_file_saves_the_writer_and_the_host_grants_on_connect() {
+    let host = start_direct();
+    let controller = start_direct();
+    let file = host
+        .export_pairing_file(Duration::from_secs(60), true)
+        .unwrap();
+    let preview = controller.open_pairing_file(&file.bytes).unwrap();
+    assert_eq!(preview.check, file.check);
+    assert_eq!(preview.endpoint_id, host.endpoint_id());
+    assert!(!format!("{preview:?}").contains("vnl1."));
+    assert!(controller.snapshot().unwrap().devices.is_empty());
+
+    let controller_events = controller.subscribe().unwrap();
+    let saved = controller.confirm_pairing(&preview, &file.check).unwrap();
+    assert_eq!(saved.endpoint_id, host.endpoint_id());
+    assert!(!saved.grants.control);
+    assert!(!saved.grants.clipboard);
+    assert!(!saved.grants.transfer);
+    assert_eq!(pairing_counts(&controller_events), (1, 0));
+    assert!(matches!(
+        controller.confirm_pairing(&preview, &file.check),
+        Err(Error::InvitationReplayed)
+    ));
+
+    host.start_hosting().unwrap();
+    let host_events = host.subscribe().unwrap();
+    let session = std::thread::scope(|scope| {
+        let connecting = scope.spawn(|| controller.connect(&host.endpoint_id()));
+        let request = wait_request(&host);
+        assert_eq!(request.endpoint_id, controller.endpoint_id());
+        assert_eq!(request.check, controller.control_check());
+        let granted = host.confirm_control_request(&request.check).unwrap();
+        assert!(granted.grants.control);
+        assert!(!granted.grants.clipboard);
+        assert!(!granted.grants.transfer);
+        connecting.join().unwrap().unwrap()
+    });
+    assert_eq!(session.role, SessionRole::Controller);
+    assert_eq!(session.phase, SessionPhase::Active);
+    assert_eq!(pairing_counts(&host_events), (1, 1));
+    assert!(host.snapshot().unwrap().devices[0].grants.control);
+    assert!(host.control_request().unwrap().is_none());
+
+    controller.disconnect().unwrap();
+    wait_closed(&host, SessionRole::Host);
+    wait_closed(&controller, SessionRole::Controller);
+    let again = controller.connect(&host.endpoint_id()).unwrap();
+    assert_eq!(again.phase, SessionPhase::Active);
+}
+
+#[test]
+fn a_mismatched_file_check_saves_nothing() {
+    let host = start_direct();
+    let controller = start_direct();
+    let file = host
+        .export_pairing_file(Duration::from_secs(60), true)
+        .unwrap();
+    let preview = controller.open_pairing_file(&file.bytes).unwrap();
+    let events = controller.subscribe().unwrap();
+    let wrong = if file.check == "000" { "001" } else { "000" };
+    assert!(matches!(
+        controller.confirm_pairing(&preview, wrong),
+        Err(Error::PairingCheckMismatch)
+    ));
+    assert!(controller.snapshot().unwrap().devices.is_empty());
+    assert!(events.try_recv().is_none());
+}
+
+#[test]
+fn the_host_rejects_a_control_request_whose_digits_do_not_match() {
+    let host = start_direct();
+    let controller = start_direct();
+    exchange(&host, &controller, true);
+    host.start_hosting().unwrap();
+    let denied = std::thread::scope(|scope| {
+        let connecting = scope.spawn(|| controller.connect(&host.endpoint_id()));
+        let request = wait_request(&host);
+        let wrong = if request.check == "000" { "001" } else { "000" };
+        assert!(matches!(
+            host.confirm_control_request(wrong),
+            Err(Error::PairingCheckMismatch)
+        ));
+        connecting.join().unwrap()
+    });
+    assert!(
+        matches!(denied, Err(Error::Unauthorized)),
+        "mismatched control request returned {denied:?}"
+    );
+    assert!(host.snapshot().unwrap().devices.is_empty());
+    assert_eq!(controller.snapshot().unwrap().devices.len(), 1);
+
+    let session = std::thread::scope(|scope| {
+        let connecting = scope.spawn(|| controller.connect(&host.endpoint_id()));
+        let request = wait_request(&host);
+        host.confirm_control_request(&request.check).unwrap();
+        connecting.join().unwrap().unwrap()
+    });
+    assert_eq!(session.phase, SessionPhase::Active);
+}
+
+#[test]
+fn a_file_without_the_control_switch_does_not_ask_the_host() {
+    let host = start_direct();
+    let controller = start_direct();
+    exchange(&host, &controller, false);
+    host.start_hosting().unwrap();
+    let events = host.subscribe().unwrap();
+    let denied = controller.connect(&host.endpoint_id());
+    assert!(
+        matches!(denied, Err(Error::Unauthorized)),
+        "control switch off returned {denied:?}"
+    );
+    assert!(host.control_request().unwrap().is_none());
+    assert!(host.snapshot().unwrap().devices.is_empty());
+    while let Some(event) = events.try_recv() {
+        assert!(
+            !matches!(event, CoreEvent::ControlRequested { .. }),
+            "the host asked for digits with the switch off"
+        );
+    }
+}
+
+#[test]
+fn rejecting_the_control_request_leaves_the_file_usable() {
+    let host = start_direct();
+    let controller = start_direct();
+    exchange(&host, &controller, true);
+    host.start_hosting().unwrap();
+    let denied = std::thread::scope(|scope| {
+        let connecting = scope.spawn(|| controller.connect(&host.endpoint_id()));
+        let _request = wait_request(&host);
+        host.reject_control_request().unwrap();
+        connecting.join().unwrap()
+    });
+    assert!(matches!(denied, Err(Error::Unauthorized)), "{denied:?}");
+    assert!(matches!(
+        host.reject_control_request(),
+        Err(Error::NoControlRequest)
+    ));
+    let session = std::thread::scope(|scope| {
+        let connecting = scope.spawn(|| controller.connect(&host.endpoint_id()));
+        let request = wait_request(&host);
+        host.confirm_control_request(&controller.control_check())
+            .unwrap();
+        assert_eq!(request.check, controller.control_check());
+        connecting.join().unwrap().unwrap()
+    });
+    assert_eq!(session.phase, SessionPhase::Active);
+}
+
+fn exchange(host: &Core, controller: &Core, allow_control: bool) -> PairingFile {
+    let file = host
+        .export_pairing_file(Duration::from_secs(60), allow_control)
+        .unwrap();
+    let preview: PairingPreview = controller.open_pairing_file(&file.bytes).unwrap();
+    controller.confirm_pairing(&preview, &file.check).unwrap();
+    file
+}

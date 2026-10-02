@@ -1,0 +1,17 @@
+[package]
+name = "vnilink-macos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "VideoToolbox H.264 and ScreenCaptureKit for VniLink"
+publish = false
+
+[dependencies]
+vnilink = { path = "../vnilink" }
+vnilink-media = { path = "../vnilink-media" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-cf = "=0.11.0"
+screencapturekit = "=11.0.0"
+videotoolbox = { version = "=0.21.0", default-features = false, features = ["compression", "decompression"] }

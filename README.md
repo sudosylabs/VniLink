@@ -4,7 +4,7 @@ VniLink is a remote desktop application for controlling your own computers acros
 
 Anyone can install it and use their own devices. Device identity, paired devices, permissions, and relay settings belong to that installation. The owner's three computers are the first validation set.
 
-**Status:** implementation started October 1, 2026. `crates/vnilink` is a shared control library pinned to iroh 1.3.0 (Rust 1.91). It owns process-local identity, public or custom relay selection, signed invitations, directional grants, one control session per host, and keyboard and pointer input. `cargo test -p vnilink` passes, including two cores on loopback. An authorized controller can send key, button, wheel, and pointer events. The host applies them when it calls `enable_os_input`. Pointer positions collapse to the latest sample. Held keys and buttons are released when the session ends. Identity lasts only as long as the host process unless the platform saves `export_identity`. Custom relay mode does not publish through n0 address lookup. There is no desktop capture, native application, binding, trust persistence, reconnect, deployment, or measured remote desktop. The gates in section 11 are not complete. Sections below still describe the product to build except where they name this library.
+**Status:** implementation started October 1, 2026. `crates/vnilink` is a shared control library pinned to iroh 1.3.0 (Rust 1.91). It owns installation identity, public or custom relay selection, signed invitations, directional grants, one control session per host, and keyboard and pointer input. `cargo test -p vnilink` passes, including two cores on loopback. An authorized controller can send key, button, wheel, and pointer events. The host applies them when it calls `enable_os_input`. Pointer positions collapse to the latest sample. Held keys and buttons are released when the session ends. With an `InstallationStore`, a restart keeps the endpoint id, paired devices, grants, used invitations, and relay settings. The library does not open Keychain, DPAPI, or Secret Service. `Core::start` without a store still keeps that state only for the process. Custom relay mode does not publish through n0 address lookup. The library carries encoded H.264 frames on a separate stream and drops predicted frames until the next keyframe. `vnilink-media` paces BGRA pictures and requires an Annex-B keyframe to carry SPS, PPS, and an IDR. `vnilink-macos` encodes and decodes a synthetic picture with VideoToolbox. Its tests build a one-monitor ScreenCaptureKit configuration and do not start capture or record the screen. `vnilink-windows` describes one interactive-desktop monitor and excludes the secure desktop; Desktop Duplication and Media Foundation compile only as Windows code. `vnilink-linux` keeps X11 and the Wayland portal separate, and H.264 encode reports that VA-API is unavailable until a build opens it. A test run on macOS does not execute the Windows or Linux capture paths. Pairing starts from a `.vnl` file one computer writes and the other opens. The file holds a signed invitation. The opener types the three digits shown on the writer's screen, and the writer types the controller's digits when Connect starts. No pairing server is required. A dropped control session dials the saved device again with a new generation and does not replay the old input. While a session is up, each side stores the other's current home relay and direct addresses. Clipboard text is a separate grant, limited to 256 KiB, and the library does not read the operating-system clipboard. File transfer is a separate grant: at most 8 MiB, a relative path inside a directory chosen for that installation, and no replace unless the sender asks. A key is injected as its physical position, so the host layout produces the character. Left and right modifiers stay distinct. The controller can exchange Control and Command, and it can send finished text of at most 128 bytes separately from the clipboard. There is no native application, binding, platform credential store, deployment, or measured remote desktop. The gates in section 11 are not complete. FileVault preboot, the Windows secure desktop, and a universal Wayland session are not claimed. Sections below still describe the product to build except where they name this library or these crates.
 
 ## 1. Product requirements and decision status
 
@@ -57,13 +57,15 @@ Relay mode is either the public default or the installation's custom relay URLs.
 
 Pairing must require a deliberate local action and authenticate the exchanged identities. After pairing, the target owner may enable unattended access for that specific controller. Pairing alone should not silently enable remote control or transfer privileges.
 
+The first pairing can start from a `.vnl` file, moved by AirDrop, a message, email, or a USB stick. The computer that will be controlled writes it and shows three digits. The other computer opens it and types those digits. On Connect, the controlled computer types the three digits shown on the controller before control is granted. Clipboard and file transfer stay off. After that, Connect uses the saved device. `crates/vnilink/PAIRING.md` is the step list.
+
 During a session show the remote desktop, connection state, direct/relay path when known, display selection when implemented, quality controls, and disconnect. The host must show an active-session indicator and provide a local stop action. Local input should remain usable; exclusive control is a separate future decision.
 
 Closing the visible window and disabling hosting are different actions. When unattended access is enabled, a platform host process must continue running with the authorized configuration. Provide explicit enable/disable hosting and startup controls.
 
 ## 3. Repository structure
 
-Present today: `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, and `crates/vnilink`. Library tests live in `crates/vnilink/src/tests` and are included from the crate, the same layout VniDrop uses. The other paths are the proposed layout. Create a directory when it acquires content.
+Present today: `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, and the crates under `crates/`. Library tests live in each crate's `src/tests` and are included from the crate, the same layout VniDrop uses. Pairing steps for the `.vnl` file are in `crates/vnilink/PAIRING.md`. The application directories are still the proposed layout. Create a directory when it acquires content.
 
 ```text
 vnilink/
@@ -72,12 +74,16 @@ vnilink/
   Cargo.lock
   rust-toolchain.toml           # Rust 1.91.0
   crates/
-    vnilink/                    # Shared control library. Input injection; no capture
+    vnilink/                    # Shared control library. Input and encoded frames
+    vnilink-media/              # Annex-B, frame pacing, one-monitor plan
+    vnilink-macos/              # VideoToolbox, ScreenCaptureKit configuration
+    vnilink-windows/            # Desktop Duplication and Media Foundation on Windows
+    vnilink-linux/              # X11 capture, Wayland portal phases, VA-API when opened
     vnilink-protocol/           # Wire types/validation, if a separate crate earns its cost
     uniffi-bindgen/             # Binding generation tooling, if selected
-  apple/                        # SwiftUI macOS app, platform adapters, host lifecycle
-  windows/                      # WinUI app, platform adapters, host/service lifecycle
-  linux/                        # GTK/libadwaita app, Wayland/X11 adapters, host lifecycle
+  apple/                        # SwiftUI macOS app and host lifecycle
+  windows/                      # WinUI app and host/service lifecycle
+  linux/                        # GTK/libadwaita app and host lifecycle
   services/
     relay/                      # Optional custom-relay deployment notes; unused by the public-relay default
   docs/
@@ -96,9 +102,9 @@ VniDrop is a structural reference, not a template to copy wholesale. The accessi
 
 Own device identities, trusted-device records, authorization policy, protocol negotiation, Iroh endpoints, session state, reconnect logic, stream scheduling, bounded queues, transfer state, and structured errors/events.
 
-The crate currently implements identity, relay selection, invitations, grants, session admission, one incoming and one outgoing control session, a bounded event stream, and keyboard and pointer input. Reconnect, media scheduling, transfer, and persisted trust are not in the crate yet.
+The crate currently implements identity, relay selection, invitations, grants, session admission, one incoming and one outgoing control session, a bounded event stream, keyboard and pointer input, and a separate stream of encoded H.264 frames. A full video queue drops predicted frames until the next keyframe. The platform crates pace and encode those frames. When the host provides an `InstallationStore`, the crate saves the installation secret, directional trust, grants, used invitations, and relay settings. A dropped session reconnects with a new generation. Clipboard text is a separate grant, limited to 256 KiB. File transfer is a separate grant, limited to 8 MiB, and writes only under a directory the installation chooses.
 
-Input events use USB HID keyboard usages for keys, separate press and release for buttons, absolute pixels on the one host monitor for the pointer, and wheel detents for scroll. `Core::enable_os_input` injects those events with the operating system's input API (Core Graphics on macOS, SendInput on Windows, X11 on Linux) through the MIT-licensed `enigo` crate. That is the same kind of injection RustDesk uses. VniLink does not use RustDesk's UI, screen-mirroring pipeline, or source code. The host must grant input permission. macOS shows the Accessibility prompt. Wayland, elevated Windows desktops, and the secure login screen are not claimed. Without `enable_os_input`, events are refused and the session stays open. There is still no capture path, so the controller cannot yet see the remote desktop.
+Input events use USB HID keyboard usages for keys, separate press and release for buttons, absolute pixels on the one host monitor for the pointer, and wheel detents for scroll. `Core::enable_os_input` injects those events with the operating system's input API (Core Graphics on macOS, SendInput on Windows, X11 on Linux) through the MIT-licensed `enigo` crate. The injected value is a physical keycode for that system, not the US character for the HID usage. `set_swap_control_and_command` exchanges Control and Command on the controller before the event is sent. `submit_text` types a finished string of at most 128 bytes and is not a clipboard paste. That is the same kind of injection RustDesk uses. VniLink does not use RustDesk's UI, screen-mirroring pipeline, or source code. The host must grant input permission. macOS shows the Accessibility prompt. Wayland, elevated Windows desktops, and the secure login screen are not claimed. Without `enable_os_input`, events are refused and the session stays open. The shared library carries encoded frames and does not capture or draw. `vnilink-macos` can encode and decode a synthetic picture. It has not captured this screen, and there is still no native window that paints a remote desktop.
 
 Expose semantic operations such as start hosting, pair, authorize device, connect, disconnect, revoke device, update session quality, and query capabilities. Native clients observe state/events rather than reconstructing session rules.
 
@@ -134,9 +140,9 @@ Use Iroh endpoints on each device. Prefer direct connections; retain encrypted r
 
 **Custom.** Each installation can replace the default with one or more relay URLs. The library passes that list as `RelayMode::Custom` for the pinned release. An empty list is invalid and must be rejected with a clear error. URLs come from installation configuration and are read at startup. A self-hosted `iroh-relay`, or another relay compatible with the pinned release, is a valid override. If a chosen relay requires a credential, store it in the installation config or the platform credential store, and keep it out of logs. Public-relay mode stores no relay credential.
 
-Each installation keeps its own relay setting. Pairing and later address refresh include the current home relay URL so the peer can dial it. Dialing uses that URL from the peer address. An open custom relay can be reached by a peer that remains on the public default, when the URL is reachable. A relay that requires a credential is different: Iroh attaches that credential from the dialer's own relay map. Installations that should fall back through a credentialed relay must each be configured with that relay and its credential. Recheck this against the pinned release. Document how updated relay and address information is authenticated and refreshed. Knowing a relay or an address never authorizes a session.
+Each installation keeps its own relay setting. Pairing and later address refresh include the current home relay URL so the peer can dial it. Dialing uses that URL from the peer address. An open custom relay can be reached by a peer that remains on the public default, when the URL is reachable. A relay that requires a credential is different: Iroh attaches that credential from the dialer's own relay map. Installations that should fall back through a credentialed relay must each be configured with that relay and its credential. Recheck this against the pinned release. Knowing a relay or an address never authorizes a session.
 
-The library pins iroh 1.3.0. Public mode keeps n0 address lookup. Custom mode clears it, so endpoint identity alone does not make a custom-relay peer dialable. The signed invitation carries that peer's current relay URLs and direct addresses.
+The library pins iroh 1.3.0. Public mode keeps n0 address lookup. Custom mode clears it, so endpoint identity alone does not make a custom-relay peer dialable. The signed invitation carries that peer's current relay URLs and direct addresses. After a session is accepted, each computer sends its current home relay URLs and direct addresses on the authenticated control stream. The receiver stores that list for that peer only. The announcement has no relay credential and does not change grants. A later dial, including a reconnect after a dropped link, uses the stored list. The new session has a new generation and does not send input queued for the old one. `crates/vnilink/RECONNECT.md` is the step list.
 
 Choose either explicit paired-device address publication or a small authenticated directory. Add a directory only when the discovery design requires one. Keep directory trust separate from permission to control.
 
@@ -179,39 +185,41 @@ Choose video transport after measuring reliable streams versus datagrams on dire
 
 Define maximum message and transfer sizes, timeouts, validation, and malformed-peer handling. Use session IDs and connection generations to reject delayed input from an old session. Release all held keys/buttons on disconnect, local stop, permission loss, controller crash, or session takeover. Reauthorization and renegotiation must occur as appropriate after reconnect; do not replay old input.
 
-The implemented input semantics are physical USB HID key usages, press and release for the left, right, and middle buttons, absolute pixels on one monitor, and wheel detents (positive vertical scrolls down). Coordinate mapping for scaling, DPI, rotation, and extra monitors is still open. Text entry that is independent of key position is not a separate message yet.
+The implemented input semantics are physical USB HID key usages, press and release for the left, right, and middle buttons, absolute pixels on one monitor, and wheel detents (positive vertical scrolls down). Coordinate mapping for scaling, DPI, rotation, and extra monitors is still open. Finished text is a separate control message of at most 128 bytes. It does not depend on key position, and it is not a clipboard paste.
 
 ## 8. Trust and security
 
 Persist an installation identity using the platform credential store: Keychain on macOS, an appropriate Windows-protected store, and Linux Secret Service where available. Handle unavailable/locked stores explicitly. Reinstallation or identity reset should require fresh trust unless an intentional secure recovery design exists.
 
-Pair through an authenticated invitation, verified fingerprint, or a properly designed authenticated pairing exchange. A public endpoint ID is not a secret; a short unauthenticated code is not sufficient proof of identity. Invitations must expire, resist replay, and be excluded from logs.
+The shared library defines that record. `Core::open` restores it, and pairing, grants, revocation, and relay changes write it back. The bytes are opaque. They include the installation secret and any relay credential, and they must stay out of logs. Native apps write them to the credential store named above. The library returns a locked, unavailable, or invalid-record error and leaves the previous bytes untouched. Resetting the identity stores a new secret with an empty device list and stops the running endpoint. There is no recovery of the previous identity or its grants. Tests use an in-memory store and do not touch Keychain, DPAPI, or Secret Service.
+
+Pair through an authenticated invitation, verified fingerprint, or a properly designed authenticated pairing exchange. A public endpoint ID is not a secret; a short unauthenticated code is not sufficient proof of identity. Invitations must expire, resist replay, and be excluded from logs. The library can carry one invitation in a `.vnl` file. The person who opens the file types the three digits shown on the computer that wrote it. The computer that will be controlled types the controller's digits when the connection arrives. A file by itself does not grant control.
 
 Trust records are directional: allowing A to control B does not automatically allow B to control A. Support separate control, clipboard, and transfer grants. Revocation on a host must stop active sessions and block reconnect. For three devices, remote revocation propagation is useful but must not be claimed until an authenticated mechanism exists; each target's local allowlist is authoritative.
 
 Use Iroh transport encryption and verify peer identity; avoid inventing another encryption scheme. A relay, public or custom, may observe connection metadata even when payloads are encrypted. Do not send private keys to a relay or log screen content, clipboard content, credentials, pairing secrets, or file contents.
 
-Clipboard and file transfer are privileged session features. Add size limits, clear opt-in behavior, safe destinations, and overwrite/symlink protections. Implement them after basic control unless the owner prioritizes them.
+Clipboard and file transfer are privileged session features. Clipboard text requires its own grant and is capped at 256 KiB. The library carries that text and does not read the operating-system clipboard. File transfer requires its own grant and is capped at 8 MiB. `set_transfer_directory` chooses the only directory writes may use. Names that leave that directory are refused, an existing file stays unless the sender passes replace, and a symlink inside the directory is not a place to write.
 
 ## 9. Platform work and support boundaries
 
 ### macOS
 
-Evaluate ScreenCaptureKit, native event injection with accessibility authorization, VideoToolbox encoding/decoding, and SwiftUI rendering integration. Implement local permission onboarding and accurate permission-loss errors. Verify signed-app identity and restart behavior during permission testing.
+`vnilink-macos` encodes and decodes H.264 with VideoToolbox and builds a ScreenCaptureKit configuration for one BGRA monitor, cursor hidden. Tests use a synthetic picture. They do not call `SCShareableContent::get` or start a stream, and they have not captured the screen. SwiftUI, permission onboarding, and drawing the decoded picture are still open.
 
 Test locked sessions, user switching, monitor disconnect, and headless capture on the actual Mac mini. FileVault preboot unlock is outside the initial logged-in-desktop milestone; do not promise that an ordinary app or launch agent can control it.
 
 ### Windows
 
-Evaluate Desktop Duplication or Windows Graphics Capture, native input injection, and Media Foundation/hardware codec support. Capture API choice should follow permission, performance, cursor, monitor, and desktop-state requirements.
+`vnilink-windows` targets one monitor on the interactive desktop of the current session. Capture is DXGI Desktop Duplication. Encode is the Media Foundation H.264 transform, fed NV12. Its length-prefixed samples are converted to Annex-B, and an IDR is prefixed with the sequence header's SPS and PPS. That conversion is tested here. The DXGI and Media Foundation calls are compiled only on Windows, so a macOS test run does not execute them. Windows Graphics Capture, with its consent picker, is not this path.
 
 Ordinary SendInput is restricted by integrity levels. Elevated applications, UAC secure desktop, logon screens, session switching, and service/session isolation need separate validated designs. Do not mark them supported because ordinary desktop control works.
 
 ### Linux
 
-Implement separate Wayland and X11 adapters where needed. For Wayland, evaluate RemoteDesktop/ScreenCast portals, PipeWire capture, and supported input mechanisms. Restore tokens and unattended permission behavior depend on backend/compositor/version and require real tests. X11 capture and input use a different integration path and must still respect session access.
+X11 and the Wayland ScreenCast portal are separate. X11 reads the current session through x11rb. Tests unpack a 32-bit little-endian image and do not connect to a display. Portal phases are tested without D-Bus. The D-Bus driver is compiled on Linux only. Against ashpd 0.13 it asks for one monitor, a hidden cursor, and no persisted grant, then reads the synchronous portal response and returns a PipeWire file descriptor. That driver was not compiled on this Mac. It does not yet read PipeWire frames. H.264 encode is VA-API and returns unsupported until a build opens that encoder. This tree does not link x264 or a locally compiled OpenH264.
 
-Document the supported desktop combinations. Do not claim universal Linux unattended access from a successful portal session on one environment.
+Document the supported desktop combinations. Do not claim universal Linux unattended access from a successful portal session on one environment. Wayland input is not claimed.
 
 ### Sleeping and powered-off devices
 

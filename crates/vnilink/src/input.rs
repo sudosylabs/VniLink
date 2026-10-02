@@ -1,9 +1,15 @@
 use std::collections::VecDeque;
+use std::fmt;
 use std::sync::Mutex;
 
 use tokio::sync::Notify;
 
 use crate::error::Error;
+
+/// Finished text on the control stream, in bytes. This is a short phrase,
+/// not a clipboard paste. The control frame also carries the tag and the
+/// session ids, and that frame stays within 256 bytes.
+pub const MAX_KEY_TEXT: usize = 128;
 
 /// How many input events may wait to be written. Pointer movement collapses
 /// instead of filling this queue. Key and button transitions do not.
@@ -60,6 +66,9 @@ pub mod usage {
     pub const LEFT_BRACKET: u16 = 0x2F;
     pub const RIGHT_BRACKET: u16 = 0x30;
     pub const BACKSLASH: u16 = 0x31;
+    /// ISO key next to Enter (`#` / `~` on many layouts). Platforms inject
+    /// it at the same position as [`BACKSLASH`].
+    pub const NON_US_HASH: u16 = 0x32;
     pub const SEMICOLON: u16 = 0x33;
     pub const APOSTROPHE: u16 = 0x34;
     pub const GRAVE: u16 = 0x35;
@@ -89,6 +98,8 @@ pub mod usage {
     pub const DOWN: u16 = 0x51;
     pub const UP: u16 = 0x52;
     pub const KEYPAD_ENTER: u16 = 0x58;
+    /// ISO key next to Left Shift.
+    pub const NON_US_BACKSLASH: u16 = 0x64;
     pub const LEFT_CONTROL: u16 = 0xE0;
     pub const LEFT_SHIFT: u16 = 0xE1;
     pub const LEFT_ALT: u16 = 0xE2;
@@ -232,6 +243,46 @@ impl InputEvent {
     }
 }
 
+/// Rejects text the controller must not send. Empty text is not a clear.
+pub(crate) fn check_key_text(text: &str) -> Result<(), Error> {
+    if text.is_empty() {
+        return Err(Error::InvalidSetting("text entry is empty"));
+    }
+    if let Some(message) = key_text_problem(text) {
+        return Err(Error::InvalidSetting(message));
+    }
+    Ok(())
+}
+
+/// A problem in text that already arrived. `None` means the host may type it.
+/// An empty string is not a problem; the host skips it.
+pub(crate) fn key_text_problem(text: &str) -> Option<&'static str> {
+    if text.len() > MAX_KEY_TEXT {
+        Some("text entry is longer than 128 bytes")
+    } else if text.as_bytes().contains(&0) {
+        Some("text entry contains a null byte")
+    } else {
+        None
+    }
+}
+
+/// Exchanges the physical Control and Command keys. Other keys stay put.
+pub(crate) fn swap_command_key(event: InputEvent) -> InputEvent {
+    match event {
+        InputEvent::Key { usage, down } => InputEvent::Key {
+            usage: match usage {
+                usage::LEFT_CONTROL => usage::LEFT_META,
+                usage::RIGHT_CONTROL => usage::RIGHT_META,
+                usage::LEFT_META => usage::LEFT_CONTROL,
+                usage::RIGHT_META => usage::RIGHT_CONTROL,
+                other => other,
+            },
+            down,
+        },
+        other => other,
+    }
+}
+
 /// Keys and buttons this session has pressed and not yet released.
 #[derive(Debug, Default)]
 pub(crate) struct HeldInput {
@@ -317,9 +368,28 @@ impl InputFault {
     }
 }
 
+/// One queued control item. Text is ordered with keys and is not logged.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum Outbound {
+    Event(InputEvent),
+    Text(String),
+}
+
+impl fmt::Debug for Outbound {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Event(event) => formatter.debug_tuple("Event").field(event).finish(),
+            Self::Text(text) => formatter
+                .debug_struct("Text")
+                .field("len", &text.len())
+                .finish(),
+        }
+    }
+}
+
 /// Controller-side queue. Pointer samples replace the pending sample.
 pub(crate) struct InputOutbox {
-    queue: Mutex<VecDeque<InputEvent>>,
+    queue: Mutex<VecDeque<Outbound>>,
     fault: Mutex<Option<InputFault>>,
     notify: Notify,
 }
@@ -334,6 +404,15 @@ impl InputOutbox {
     }
 
     pub(crate) fn push(&self, event: InputEvent) -> Result<(), Error> {
+        self.push_item(Outbound::Event(event))
+    }
+
+    pub(crate) fn push_text(&self, text: String) -> Result<(), Error> {
+        check_key_text(&text)?;
+        self.push_item(Outbound::Text(text))
+    }
+
+    fn push_item(&self, item: Outbound) -> Result<(), Error> {
         if let Some(fault) = self.fault() {
             return Err(fault.error());
         }
@@ -341,21 +420,20 @@ impl InputOutbox {
             .queue
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        if let InputEvent::Pointer { .. } = event {
+        if let Outbound::Event(InputEvent::Pointer { .. }) = item {
             if let Some(last) = queue.back_mut() {
-                if matches!(last, InputEvent::Pointer { .. }) {
-                    *last = event;
+                if matches!(last, Outbound::Event(InputEvent::Pointer { .. })) {
+                    *last = item;
                     self.notify.notify_one();
                     return Ok(());
                 }
             }
         }
         if queue.len() >= INPUT_QUEUE {
-            if matches!(event, InputEvent::Pointer { .. }) {
-                if let Some(index) = queue
-                    .iter()
-                    .position(|queued| matches!(queued, InputEvent::Pointer { .. }))
-                {
+            if matches!(item, Outbound::Event(InputEvent::Pointer { .. })) {
+                if let Some(index) = queue.iter().position(|queued| {
+                    matches!(queued, Outbound::Event(InputEvent::Pointer { .. }))
+                }) {
                     queue.remove(index);
                 } else {
                     return Ok(());
@@ -364,13 +442,25 @@ impl InputOutbox {
                 return Err(Error::Busy);
             }
         }
-        queue.push_back(event);
+        queue.push_back(item);
         drop(queue);
         self.notify.notify_one();
         Ok(())
     }
 
-    pub(crate) fn drain(&self) -> Vec<InputEvent> {
+    /// Drops queued events and any stored fault. Used before a new generation.
+    pub(crate) fn clear(&self) {
+        self.queue
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clear();
+        *self
+            .fault
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = None;
+    }
+
+    pub(crate) fn drain(&self) -> Vec<Outbound> {
         let mut queue = self
             .queue
             .lock()
@@ -405,6 +495,15 @@ impl InputOutbox {
 /// into the operating system.
 pub trait HostDesktop: Send {
     fn apply(&mut self, event: InputEvent) -> Result<(), Error>;
+
+    /// Types finished characters. This is not a key position and not a
+    /// clipboard paste. The default refuses that string and leaves key
+    /// injection available. Returning [`Error::Unsupported`] makes the host
+    /// stop applying later keys for the session.
+    fn type_text(&mut self, text: &str) -> Result<(), Error> {
+        let _ = text;
+        Err(Error::InputFailed("text entry is not available"))
+    }
 
     /// Pixel size of the one monitor this session controls. `(0, 0)` if unknown.
     fn monitor(&self) -> (u16, u16);
