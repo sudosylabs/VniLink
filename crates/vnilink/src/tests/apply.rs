@@ -1,0 +1,287 @@
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use crate::error::Error;
+use crate::events::CoreEvent;
+use crate::input::InputEvent;
+use crate::protocol::Quality;
+use crate::session::{Grants, SessionPhase, SessionRole};
+
+use super::support::*;
+
+#[test]
+fn keyboard_and_pointer_events_are_applied_and_released() {
+    let host = start_direct();
+    let controller = start_direct();
+    let applied = Arc::new(Mutex::new(Vec::new()));
+    host.set_desktop(Box::new(RecordingDesktop {
+        events: Arc::clone(&applied),
+    }))
+    .unwrap();
+    assert!(host.capabilities().keyboard);
+    assert!(host.capabilities().pointer);
+    assert_eq!(host.capabilities().monitors, 1);
+    host.start_hosting().unwrap();
+    let token = host.create_invitation(Duration::from_secs(60)).unwrap();
+    controller.accept_invitation(&token).unwrap();
+    let back = controller
+        .create_invitation(Duration::from_secs(60))
+        .unwrap();
+    host.accept_invitation(&back).unwrap();
+    host.authorize(
+        &controller.endpoint_id(),
+        Grants {
+            control: true,
+            clipboard: false,
+            transfer: false,
+        },
+    )
+    .unwrap();
+    let session = controller.connect(&host.endpoint_id()).unwrap();
+    assert_eq!(session.monitor_width, 1920);
+    assert_eq!(session.monitor_height, 1080);
+    for event in [
+        InputEvent::key_down(crate::input::usage::A),
+        InputEvent::pointer(1, 1),
+        InputEvent::pointer(4, 5),
+        InputEvent::pointer(9, 8),
+        InputEvent::button_down(crate::input::PointerButton::Left),
+        InputEvent::wheel(0, -1),
+    ] {
+        controller
+            .submit_input(session.id, session.generation, event)
+            .unwrap();
+    }
+    wait_applied(
+        &applied,
+        &[
+            InputEvent::key_down(crate::input::usage::A),
+            InputEvent::pointer(9, 8),
+            InputEvent::button_down(crate::input::PointerButton::Left),
+            InputEvent::wheel(0, -1),
+        ],
+    );
+    host.stop_hosted_session().unwrap();
+    wait_applied(
+        &applied,
+        &[
+            InputEvent::key_down(crate::input::usage::A),
+            InputEvent::pointer(9, 8),
+            InputEvent::button_down(crate::input::PointerButton::Left),
+            InputEvent::wheel(0, -1),
+            InputEvent::button_up(crate::input::PointerButton::Left),
+            InputEvent::key_up(crate::input::usage::A),
+        ],
+    );
+}
+
+#[test]
+fn key_up_and_each_button_are_applied_and_not_released_again() {
+    let host = start_direct();
+    let controller = start_direct();
+    let applied = Arc::new(Mutex::new(Vec::new()));
+    host.set_desktop(Box::new(RecordingDesktop {
+        events: Arc::clone(&applied),
+    }))
+    .unwrap();
+    pair_for_control(&host, &controller);
+    let session = controller.connect(&host.endpoint_id()).unwrap();
+    let expected = [
+        InputEvent::key_down(crate::input::usage::A),
+        InputEvent::key_up(crate::input::usage::A),
+        InputEvent::button_down(crate::input::PointerButton::Right),
+        InputEvent::button_up(crate::input::PointerButton::Right),
+        InputEvent::button_down(crate::input::PointerButton::Middle),
+        InputEvent::button_up(crate::input::PointerButton::Middle),
+        InputEvent::wheel(2, -3),
+    ];
+    for event in expected {
+        controller
+            .submit_input(session.id, session.generation, event)
+            .unwrap();
+    }
+    wait_applied(&applied, &expected);
+    host.stop_hosted_session().unwrap();
+    wait_closed(&host, SessionRole::Host);
+    wait_closed(&controller, SessionRole::Controller);
+    let got = applied.lock().unwrap_or_else(|poison| poison.into_inner());
+    assert_eq!(got.as_slice(), expected.as_slice());
+}
+
+#[test]
+fn an_apply_failure_is_reported_and_the_session_stays_open() {
+    let host = start_direct();
+    let controller = start_direct();
+    let applied = Arc::new(Mutex::new(Vec::new()));
+    host.set_desktop(Box::new(FixedDesktop {
+        width: 640,
+        height: 480,
+        events: Arc::clone(&applied),
+        fail_key_down: Some(crate::input::usage::B),
+        fail_release: false,
+    }))
+    .unwrap();
+    let events = host.subscribe().unwrap();
+    pair_for_control(&host, &controller);
+    let session = controller.connect(&host.endpoint_id()).unwrap();
+    assert_eq!(session.monitor_width, 640);
+    assert_eq!(session.monitor_height, 480);
+    controller
+        .submit_input(
+            session.id,
+            session.generation,
+            InputEvent::key_down(crate::input::usage::B),
+        )
+        .unwrap();
+    assert_eq!(
+        take_matching(&events, |event| {
+            matches!(event, CoreEvent::InputFailed { .. })
+        }),
+        CoreEvent::InputFailed {
+            id: session.id,
+            message: "the operating system rejected the event",
+        }
+    );
+    controller
+        .submit_input(
+            session.id,
+            session.generation,
+            InputEvent::key_down(crate::input::usage::A),
+        )
+        .unwrap();
+    controller
+        .submit_input(session.id, session.generation, InputEvent::pointer(3, 4))
+        .unwrap();
+    wait_applied(
+        &applied,
+        &[
+            InputEvent::key_down(crate::input::usage::A),
+            InputEvent::pointer(3, 4),
+        ],
+    );
+    assert_eq!(
+        host.snapshot().unwrap().incoming.unwrap().phase,
+        SessionPhase::Active
+    );
+    controller
+        .submit_input(
+            session.id,
+            session.generation,
+            InputEvent::key_up(crate::input::usage::A),
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_failed_release_is_reported_on_the_hosted_session() {
+    let host = start_direct();
+    let controller = start_direct();
+    let applied = Arc::new(Mutex::new(Vec::new()));
+    host.set_desktop(Box::new(FixedDesktop {
+        width: 800,
+        height: 600,
+        events: Arc::clone(&applied),
+        fail_key_down: None,
+        fail_release: true,
+    }))
+    .unwrap();
+    let events = host.subscribe().unwrap();
+    pair_for_control(&host, &controller);
+    let session = controller.connect(&host.endpoint_id()).unwrap();
+    controller
+        .submit_input(
+            session.id,
+            session.generation,
+            InputEvent::key_down(crate::input::usage::A),
+        )
+        .unwrap();
+    controller
+        .submit_input(
+            session.id,
+            session.generation,
+            InputEvent::button_down(crate::input::PointerButton::Left),
+        )
+        .unwrap();
+    wait_applied(
+        &applied,
+        &[
+            InputEvent::key_down(crate::input::usage::A),
+            InputEvent::button_down(crate::input::PointerButton::Left),
+        ],
+    );
+    host.stop_hosted_session().unwrap();
+    assert_eq!(
+        take_matching(&events, |event| {
+            matches!(event, CoreEvent::InputFailed { .. })
+        }),
+        CoreEvent::InputFailed {
+            id: session.id,
+            message: "a held key or button could not be released",
+        }
+    );
+    wait_closed(&host, SessionRole::Host);
+    let got = applied.lock().unwrap_or_else(|poison| poison.into_inner());
+    assert_eq!(
+        got.as_slice(),
+        &[
+            InputEvent::key_down(crate::input::usage::A),
+            InputEvent::button_down(crate::input::PointerButton::Left),
+        ]
+    );
+}
+
+#[test]
+fn quality_updates_are_local_to_each_side() {
+    let host = start_direct();
+    let controller = start_direct();
+    let host_events = host.subscribe().unwrap();
+    let controller_events = controller.subscribe().unwrap();
+    pair_for_control(&host, &controller);
+    let session = controller.connect(&host.endpoint_id()).unwrap();
+    let quality = Quality::new(1_500, 30, 1280, 720).unwrap();
+    controller
+        .update_session_quality(session.id, quality)
+        .unwrap();
+    assert_eq!(
+        controller.snapshot().unwrap().outgoing.unwrap().quality,
+        Some(quality)
+    );
+    assert!(host.snapshot().unwrap().incoming.unwrap().quality.is_none());
+    let host_quality = Quality::new(800, 15, 640, 480).unwrap();
+    host.update_session_quality(session.id, host_quality)
+        .unwrap();
+    assert_eq!(
+        host.snapshot().unwrap().incoming.unwrap().quality,
+        Some(host_quality)
+    );
+    assert_eq!(
+        controller.snapshot().unwrap().outgoing.unwrap().quality,
+        Some(quality)
+    );
+    assert!(matches!(
+        host.update_session_quality(session.id + 1, quality),
+        Err(Error::NoSession)
+    ));
+    assert!(matches!(
+        controller.update_session_quality(0, quality),
+        Err(Error::NoSession)
+    ));
+    assert_eq!(
+        take_matching(&host_events, |event| {
+            matches!(event, CoreEvent::QualityUpdated { .. })
+        }),
+        CoreEvent::QualityUpdated {
+            id: session.id,
+            quality: host_quality,
+        }
+    );
+    assert_eq!(
+        take_matching(&controller_events, |event| {
+            matches!(event, CoreEvent::QualityUpdated { .. })
+        }),
+        CoreEvent::QualityUpdated {
+            id: session.id,
+            quality,
+        }
+    );
+}

@@ -111,167 +111,6 @@ fn hides(err: &Error, secret: &str) {
 }
 
 #[test]
-fn names_frames_and_the_directory_jail() {
-    let long_name = "a".repeat(transfer::MAX_NAME_BYTES + 1);
-    let long_component = format!("{}/x", "b".repeat(transfer::MAX_COMPONENT_BYTES + 1));
-    let too_many = vec!["c"; transfer::MAX_COMPONENTS + 1].join("/");
-    for name in [
-        "",
-        ".",
-        "..",
-        "foo/../../x",
-        "foo/./x",
-        "foo//x",
-        "/abs",
-        "foo/",
-        "foo\\bar",
-        "C:foo",
-        "a:b",
-        "has\0nul",
-        long_name.as_str(),
-        long_component.as_str(),
-        too_many.as_str(),
-    ] {
-        let err = transfer::check_name(name).unwrap_err();
-        if !name.is_empty() {
-            hides(&err, name);
-        }
-        hides(&err, "secret");
-    }
-    assert!(transfer::check_name("notes/today.txt").is_ok());
-    assert!(transfer::check_name(&"a".repeat(transfer::MAX_COMPONENT_BYTES)).is_ok());
-    assert!(transfer::checked_size(0).is_ok());
-    assert!(transfer::checked_size(MAX_FILE_BYTES as u64).is_ok());
-    assert!(matches!(
-        transfer::checked_size(MAX_FILE_BYTES as u64 + 1),
-        Err(Error::InvalidSetting(_))
-    ));
-    assert!(matches!(
-        transfer::checked_size(u64::MAX),
-        Err(Error::InvalidSetting(_))
-    ));
-    assert!(matches!(
-        transfer::finish_decision(4, 4, true, None),
-        Err(Error::InvalidSetting(_))
-    ));
-    assert!(matches!(
-        transfer::finish_decision(3, 4, false, None),
-        Err(Error::InvalidSetting(_))
-    ));
-    assert!(matches!(
-        transfer::finish_decision(4, 4, false, Some(Error::TransferDenied)),
-        Err(Error::TransferDenied)
-    ));
-    assert!(transfer::finish_decision(0, 0, false, None).is_ok());
-
-    let frame = Frame::Begin {
-        replace: true,
-        name: "vnl-secret-name.txt".to_string(),
-        size: 4,
-    };
-    let chunk = Frame::Chunk(b"vnl-secret-bytes".to_vec());
-    assert!(!format!("{frame:?}").contains("vnl-secret"));
-    assert!(!format!("{chunk:?}").contains("vnl-secret"));
-    assert_eq!(
-        transfer::decode(&transfer::encode(&frame).unwrap()[4..]).unwrap(),
-        frame
-    );
-    assert_eq!(
-        transfer::decode(&transfer::encode(&chunk).unwrap()[4..]).unwrap(),
-        chunk
-    );
-    assert_eq!(
-        transfer::decode(&transfer::encode(&Frame::Ready).unwrap()[4..]).unwrap(),
-        Frame::Ready
-    );
-    assert_eq!(
-        transfer::decode(&transfer::encode(&Frame::Finish).unwrap()[4..]).unwrap(),
-        Frame::Finish
-    );
-    assert_eq!(
-        transfer::decode(&transfer::encode(&Frame::Status(4)).unwrap()[4..]).unwrap(),
-        Frame::Status(4)
-    );
-    assert!(matches!(transfer::check_len(0), Err(Error::Malformed)));
-    assert!(matches!(
-        transfer::check_len(transfer::MAX_FRAME + 1),
-        Err(Error::Malformed)
-    ));
-    assert!(matches!(transfer::decode(&[5, 9]), Err(Error::Malformed)));
-    assert!(matches!(transfer::decode(&[2, 7]), Err(Error::Malformed)));
-    let mut huge = vec![2, 0, 0, 1, b'a'];
-    huge.extend_from_slice(&u64::MAX.to_be_bytes());
-    let decoded = transfer::decode(&huge).unwrap();
-    match decoded {
-        Frame::Begin { size, .. } => assert!(transfer::checked_size(size).is_err()),
-        other => panic!("expected a begin frame, got {other:?}"),
-    }
-    assert!(matches!(
-        transfer::encode(&Frame::Begin {
-            replace: false,
-            name: "..".to_string(),
-            size: 0,
-        }),
-        Err(Error::InvalidSetting(_))
-    ));
-
-    let scratch = Scratch::new();
-    let root = scratch.join("root");
-    std::fs::create_dir(&root).unwrap();
-    let err = transfer::write_file(&root, "foo/../../x", b"vnl-secret-bytes", true).unwrap_err();
-    hides(&err, "vnl-secret");
-    hides(&err, "foo");
-    assert!(!scratch.join("x").exists());
-    assert!(!root.join("x").exists());
-
-    transfer::write_file(&root, "notes/today.txt", b"vnl-secret-bytes", false).unwrap();
-    assert_eq!(read(&root.join("notes/today.txt")), b"vnl-secret-bytes");
-    let err = transfer::write_file(&root, "notes/today.txt", b"new", false).unwrap_err();
-    assert!(matches!(err, Error::FileExists));
-    hides(&err, "today");
-    assert_eq!(read(&root.join("notes/today.txt")), b"vnl-secret-bytes");
-    transfer::write_file(&root, "notes/today.txt", b"replaced", true).unwrap();
-    assert_eq!(read(&root.join("notes/today.txt")), b"replaced");
-    transfer::write_file(&root, "empty.txt", b"", false).unwrap();
-    assert_eq!(read(&root.join("empty.txt")), b"");
-    assert!(transfer::prepare_directory(&scratch.join("missing")).is_ok());
-    assert!(transfer::prepare_directory(&root.join("empty.txt")).is_err());
-
-    for entry in std::fs::read_dir(root.join("notes")).unwrap() {
-        let name = entry.unwrap().file_name();
-        assert!(
-            !name.to_string_lossy().contains("vnlpart"),
-            "{}",
-            name.to_string_lossy()
-        );
-    }
-
-    #[cfg(unix)]
-    {
-        let outside = scratch.join("outside");
-        std::fs::write(&outside, b"outside-secret").unwrap();
-        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
-        let err = transfer::write_file(&root, "link", b"pwned", true).unwrap_err();
-        hides(&err, "outside");
-        hides(&err, "pwned");
-        assert_eq!(read(&outside), b"outside-secret");
-        let outside_dir = scratch.join("out-dir");
-        std::fs::create_dir(&outside_dir).unwrap();
-        std::fs::write(outside_dir.join("kept"), b"kept-secret").unwrap();
-        std::os::unix::fs::symlink(&outside_dir, root.join("dirlink")).unwrap();
-        let err = transfer::write_file(&root, "dirlink/new.txt", b"pwned", true).unwrap_err();
-        hides(&err, "kept");
-        assert_eq!(read(&outside_dir.join("kept")), b"kept-secret");
-        assert!(!outside_dir.join("new.txt").exists());
-        let linked_root = scratch.join("linked-root");
-        std::os::unix::fs::symlink(&root, &linked_root).unwrap();
-        let canonical = transfer::prepare_directory(&linked_root).unwrap();
-        transfer::write_file(&canonical, "via-root.txt", b"inside", false).unwrap();
-        assert_eq!(read(&root.join("via-root.txt")), b"inside");
-    }
-}
-
-#[test]
 fn transfer_requires_the_grant_and_leaves_the_session_up() {
     let scratch = Scratch::new();
     let root = scratch.join("host");
@@ -521,4 +360,165 @@ fn a_dropped_session_does_not_replay_a_file() {
     assert_eq!(read(&root.join("one.txt")), b"changed");
     assert_eq!(read(&root.join("two.txt")), b"two");
     assert!(!root.join("replayed.txt").exists());
+}
+
+#[test]
+fn names_frames_and_the_directory_jail() {
+    let long_name = "a".repeat(transfer::MAX_NAME_BYTES + 1);
+    let long_component = format!("{}/x", "b".repeat(transfer::MAX_COMPONENT_BYTES + 1));
+    let too_many = vec!["c"; transfer::MAX_COMPONENTS + 1].join("/");
+    for name in [
+        "",
+        ".",
+        "..",
+        "foo/../../x",
+        "foo/./x",
+        "foo//x",
+        "/abs",
+        "foo/",
+        "foo\\bar",
+        "C:foo",
+        "a:b",
+        "has\0nul",
+        long_name.as_str(),
+        long_component.as_str(),
+        too_many.as_str(),
+    ] {
+        let err = transfer::check_name(name).unwrap_err();
+        if !name.is_empty() {
+            hides(&err, name);
+        }
+        hides(&err, "secret");
+    }
+    assert!(transfer::check_name("notes/today.txt").is_ok());
+    assert!(transfer::check_name(&"a".repeat(transfer::MAX_COMPONENT_BYTES)).is_ok());
+    assert!(transfer::checked_size(0).is_ok());
+    assert!(transfer::checked_size(MAX_FILE_BYTES as u64).is_ok());
+    assert!(matches!(
+        transfer::checked_size(MAX_FILE_BYTES as u64 + 1),
+        Err(Error::InvalidSetting(_))
+    ));
+    assert!(matches!(
+        transfer::checked_size(u64::MAX),
+        Err(Error::InvalidSetting(_))
+    ));
+    assert!(matches!(
+        transfer::finish_decision(4, 4, true, None),
+        Err(Error::InvalidSetting(_))
+    ));
+    assert!(matches!(
+        transfer::finish_decision(3, 4, false, None),
+        Err(Error::InvalidSetting(_))
+    ));
+    assert!(matches!(
+        transfer::finish_decision(4, 4, false, Some(Error::TransferDenied)),
+        Err(Error::TransferDenied)
+    ));
+    assert!(transfer::finish_decision(0, 0, false, None).is_ok());
+
+    let frame = Frame::Begin {
+        replace: true,
+        name: "vnl-secret-name.txt".to_string(),
+        size: 4,
+    };
+    let chunk = Frame::Chunk(b"vnl-secret-bytes".to_vec());
+    assert!(!format!("{frame:?}").contains("vnl-secret"));
+    assert!(!format!("{chunk:?}").contains("vnl-secret"));
+    assert_eq!(
+        transfer::decode(&transfer::encode(&frame).unwrap()[4..]).unwrap(),
+        frame
+    );
+    assert_eq!(
+        transfer::decode(&transfer::encode(&chunk).unwrap()[4..]).unwrap(),
+        chunk
+    );
+    assert_eq!(
+        transfer::decode(&transfer::encode(&Frame::Ready).unwrap()[4..]).unwrap(),
+        Frame::Ready
+    );
+    assert_eq!(
+        transfer::decode(&transfer::encode(&Frame::Finish).unwrap()[4..]).unwrap(),
+        Frame::Finish
+    );
+    assert_eq!(
+        transfer::decode(&transfer::encode(&Frame::Status(4)).unwrap()[4..]).unwrap(),
+        Frame::Status(4)
+    );
+    assert!(matches!(transfer::check_len(0), Err(Error::Malformed)));
+    assert!(matches!(
+        transfer::check_len(transfer::MAX_FRAME + 1),
+        Err(Error::Malformed)
+    ));
+    assert!(matches!(transfer::decode(&[5, 9]), Err(Error::Malformed)));
+    assert!(matches!(transfer::decode(&[2, 7]), Err(Error::Malformed)));
+    let mut huge = vec![2, 0, 0, 1, b'a'];
+    huge.extend_from_slice(&u64::MAX.to_be_bytes());
+    let decoded = transfer::decode(&huge).unwrap();
+    match decoded {
+        Frame::Begin { size, .. } => assert!(transfer::checked_size(size).is_err()),
+        other => panic!("expected a begin frame, got {other:?}"),
+    }
+    assert!(matches!(
+        transfer::encode(&Frame::Begin {
+            replace: false,
+            name: "..".to_string(),
+            size: 0,
+        }),
+        Err(Error::InvalidSetting(_))
+    ));
+
+    let scratch = Scratch::new();
+    let root = scratch.join("root");
+    std::fs::create_dir(&root).unwrap();
+    let err = transfer::write_file(&root, "foo/../../x", b"vnl-secret-bytes", true).unwrap_err();
+    hides(&err, "vnl-secret");
+    hides(&err, "foo");
+    assert!(!scratch.join("x").exists());
+    assert!(!root.join("x").exists());
+
+    transfer::write_file(&root, "notes/today.txt", b"vnl-secret-bytes", false).unwrap();
+    assert_eq!(read(&root.join("notes/today.txt")), b"vnl-secret-bytes");
+    let err = transfer::write_file(&root, "notes/today.txt", b"new", false).unwrap_err();
+    assert!(matches!(err, Error::FileExists));
+    hides(&err, "today");
+    assert_eq!(read(&root.join("notes/today.txt")), b"vnl-secret-bytes");
+    transfer::write_file(&root, "notes/today.txt", b"replaced", true).unwrap();
+    assert_eq!(read(&root.join("notes/today.txt")), b"replaced");
+    transfer::write_file(&root, "empty.txt", b"", false).unwrap();
+    assert_eq!(read(&root.join("empty.txt")), b"");
+    assert!(transfer::prepare_directory(&scratch.join("missing")).is_ok());
+    assert!(transfer::prepare_directory(&root.join("empty.txt")).is_err());
+
+    for entry in std::fs::read_dir(root.join("notes")).unwrap() {
+        let name = entry.unwrap().file_name();
+        assert!(
+            !name.to_string_lossy().contains("vnlpart"),
+            "{}",
+            name.to_string_lossy()
+        );
+    }
+
+    #[cfg(unix)]
+    {
+        let outside = scratch.join("outside");
+        std::fs::write(&outside, b"outside-secret").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        let err = transfer::write_file(&root, "link", b"pwned", true).unwrap_err();
+        hides(&err, "outside");
+        hides(&err, "pwned");
+        assert_eq!(read(&outside), b"outside-secret");
+        let outside_dir = scratch.join("out-dir");
+        std::fs::create_dir(&outside_dir).unwrap();
+        std::fs::write(outside_dir.join("kept"), b"kept-secret").unwrap();
+        std::os::unix::fs::symlink(&outside_dir, root.join("dirlink")).unwrap();
+        let err = transfer::write_file(&root, "dirlink/new.txt", b"pwned", true).unwrap_err();
+        hides(&err, "kept");
+        assert_eq!(read(&outside_dir.join("kept")), b"kept-secret");
+        assert!(!outside_dir.join("new.txt").exists());
+        let linked_root = scratch.join("linked-root");
+        std::os::unix::fs::symlink(&root, &linked_root).unwrap();
+        let canonical = transfer::prepare_directory(&linked_root).unwrap();
+        transfer::write_file(&canonical, "via-root.txt", b"inside", false).unwrap();
+        assert_eq!(read(&root.join("via-root.txt")), b"inside");
+    }
 }

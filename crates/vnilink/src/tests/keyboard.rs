@@ -1,353 +1,327 @@
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use crate::input::{usage, InputEvent};
+use crate::keyboard::*;
 
-use iroh::RelayMode;
-
-use crate::core::{Core, CoreConfig, Listen};
-use crate::error::Error;
-use crate::events::{CoreEvent, EventSubscription};
-use crate::input::{usage, HostDesktop, InputEvent, MAX_KEY_TEXT};
-use crate::session::{Grants, SessionPhase};
-
-fn start_direct() -> Core {
-    Core::boot(
-        CoreConfig {
-            listen: Listen::Loopback,
-            ..CoreConfig::default()
-        },
-        RelayMode::Disabled,
-        true,
-    )
-    .expect("loopback core")
-}
-
-enum Seen {
-    Event(InputEvent),
-    Text(String),
-}
-
-struct RecordingDesktop {
-    seen: Arc<Mutex<Vec<Seen>>>,
-    fail_text: bool,
-}
-
-impl HostDesktop for RecordingDesktop {
-    fn apply(&mut self, event: InputEvent) -> Result<(), Error> {
-        self.seen
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .push(Seen::Event(event));
-        Ok(())
-    }
-
-    fn type_text(&mut self, text: &str) -> Result<(), Error> {
-        if self.fail_text {
-            return Err(Error::InputFailed(
-                "the operating system rejected the event",
-            ));
-        }
-        self.seen
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .push(Seen::Text(text.to_owned()));
-        Ok(())
-    }
-
-    fn monitor(&self) -> (u16, u16) {
-        (1920, 1080)
+fn down<'a>(usage: u16, text: &'a str) -> LocalKey<'a> {
+    LocalKey {
+        usage,
+        down: true,
+        text,
     }
 }
 
-fn pair(host: &Core, controller: &Core) {
-    host.start_hosting().unwrap();
-    let token = host.create_invitation(Duration::from_secs(60)).unwrap();
-    controller.accept_invitation(&token).unwrap();
-    let back = controller
-        .create_invitation(Duration::from_secs(60))
-        .unwrap();
-    host.accept_invitation(&back).unwrap();
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            control: true,
-            clipboard: false,
-            transfer: false,
-        },
-    )
-    .unwrap();
-}
-
-fn wait_until(mut ready: impl FnMut() -> bool) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if ready() {
-            return;
-        }
-        if std::time::Instant::now() > deadline {
-            panic!("condition was not met");
-        }
-        std::thread::sleep(Duration::from_millis(20));
+fn up(usage: u16) -> LocalKey<'static> {
+    LocalKey {
+        usage,
+        down: false,
+        text: "",
     }
 }
 
-fn seen(slot: &Mutex<Vec<Seen>>) -> Vec<Seen> {
-    slot.lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .clone()
-}
-
-impl Clone for Seen {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Event(event) => Self::Event(*event),
-            Self::Text(text) => Self::Text(text.clone()),
-        }
-    }
-}
-
-impl PartialEq for Seen {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Event(left), Self::Event(right)) => left == right,
-            (Self::Text(left), Self::Text(right)) => left == right,
-            _ => false,
-        }
-    }
-}
-
-fn wait_seen(slot: &Mutex<Vec<Seen>>, expected: &[Seen]) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let got = seen(slot);
-        if got == expected {
-            return;
-        }
-        if std::time::Instant::now() > deadline {
-            panic!(
-                "desktop saw {} items, expected {}",
-                got.len(),
-                expected.len()
-            );
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-fn hides(subscription: &EventSubscription, sample: &str) {
-    let deadline = std::time::Instant::now() + Duration::from_millis(200);
-    while std::time::Instant::now() < deadline {
-        if let Some(event) = subscription.recv_timeout(Duration::from_millis(20)) {
-            assert!(!format!("{event:?}").contains(sample), "{event:?}");
-        }
-    }
+fn events(planned: &[Planned]) -> Vec<InputEvent> {
+    planned
+        .iter()
+        .filter_map(|item| match item {
+            Planned::Event(event) => Some(*event),
+            Planned::Text(_) | Planned::Chord(_) => None,
+        })
+        .collect()
 }
 
 #[test]
-fn the_command_swap_is_process_local_and_off_by_default() {
-    let core = start_direct();
-    assert!(!core.swap_control_and_command().unwrap());
-    core.set_swap_control_and_command(true).unwrap();
-    assert!(core.swap_control_and_command().unwrap());
-    core.set_swap_control_and_command(false).unwrap();
-    assert!(!core.swap_control_and_command().unwrap());
-    core.shutdown();
-    assert!(matches!(
-        core.set_swap_control_and_command(true),
-        Err(Error::ShutDown)
-    ));
-}
+fn character_mode_inserts_at_from_either_chord() {
+    let mut plan = KeyPlan::new();
+    let mac = plan
+        .apply(KeyboardMode::Character, false, down(usage::GRAVE, "@"))
+        .unwrap();
+    assert_eq!(mac, vec![Planned::Text("@".to_owned())]);
+    assert!(plan
+        .apply(KeyboardMode::Character, false, up(usage::GRAVE))
+        .unwrap()
+        .is_empty());
 
-#[test]
-fn a_swapped_command_is_the_key_the_host_releases() {
-    let host = start_direct();
-    let controller = start_direct();
-    let applied = Arc::new(Mutex::new(Vec::new()));
-    host.set_desktop(Box::new(RecordingDesktop {
-        seen: Arc::clone(&applied),
-        fail_text: false,
-    }))
-    .unwrap();
-    pair(&host, &controller);
-    controller.set_swap_control_and_command(true).unwrap();
-    let session = controller.connect(&host.endpoint_id()).unwrap();
-    controller
-        .submit_input(
-            session.id,
-            session.generation,
-            InputEvent::key_down(usage::LEFT_META),
-        )
+    plan.apply(KeyboardMode::Character, false, down(usage::RIGHT_ALT, ""))
         .unwrap();
-    controller
-        .submit_input(
-            session.id,
-            session.generation,
-            InputEvent::key_down(usage::LEFT_SHIFT),
-        )
+    let pc = plan
+        .apply(KeyboardMode::Character, false, down(usage::DIGIT_0, "@"))
         .unwrap();
-    wait_seen(
-        &applied,
-        &[
-            Seen::Event(InputEvent::key_down(usage::LEFT_CONTROL)),
-            Seen::Event(InputEvent::key_down(usage::LEFT_SHIFT)),
-        ],
-    );
-    host.stop_hosted_session().unwrap();
-    wait_seen(
-        &applied,
-        &[
-            Seen::Event(InputEvent::key_down(usage::LEFT_CONTROL)),
-            Seen::Event(InputEvent::key_down(usage::LEFT_SHIFT)),
-            Seen::Event(InputEvent::key_up(usage::LEFT_SHIFT)),
-            Seen::Event(InputEvent::key_up(usage::LEFT_CONTROL)),
-        ],
-    );
-}
-
-#[test]
-fn finished_text_is_typed_in_order_and_is_not_logged() {
-    let host = start_direct();
-    let controller = start_direct();
-    let applied = Arc::new(Mutex::new(Vec::new()));
-    host.set_desktop(Box::new(RecordingDesktop {
-        seen: Arc::clone(&applied),
-        fail_text: false,
-    }))
-    .unwrap();
-    pair(&host, &controller);
-    let session = controller.connect(&host.endpoint_id()).unwrap();
-    let events = controller.subscribe().unwrap();
-    let host_events = host.subscribe().unwrap();
-    assert!(matches!(
-        controller.submit_text(session.id, session.generation, ""),
-        Err(Error::InvalidSetting("text entry is empty"))
-    ));
-    assert!(matches!(
-        controller.submit_text(
-            session.id,
-            session.generation,
-            &"a".repeat(MAX_KEY_TEXT + 1)
-        ),
-        Err(Error::InvalidSetting("text entry is longer than 128 bytes"))
-    ));
-    assert!(matches!(
-        controller.submit_text(session.id, session.generation, "a\0b"),
-        Err(Error::InvalidSetting("text entry contains a null byte"))
-    ));
-    controller
-        .submit_input(
-            session.id,
-            session.generation,
-            InputEvent::key_down(usage::LEFT_META),
-        )
-        .unwrap();
-    controller
-        .submit_text(session.id, session.generation, "café")
-        .unwrap();
-    controller
-        .submit_input(
-            session.id,
-            session.generation,
-            InputEvent::key_down(usage::ENTER),
-        )
-        .unwrap();
-    wait_seen(
-        &applied,
-        &[
-            Seen::Event(InputEvent::key_down(usage::LEFT_META)),
-            Seen::Text("café".to_owned()),
-            Seen::Event(InputEvent::key_down(usage::ENTER)),
-        ],
-    );
-    hides(&events, "café");
-    hides(&host_events, "café");
-    assert_eq!(
-        host.snapshot().unwrap().incoming.unwrap().phase,
-        SessionPhase::Active
-    );
-}
-
-#[test]
-fn a_refused_text_leaves_the_keys_working() {
-    let host = start_direct();
-    let controller = start_direct();
-    let applied = Arc::new(Mutex::new(Vec::new()));
-    host.set_desktop(Box::new(RecordingDesktop {
-        seen: Arc::clone(&applied),
-        fail_text: true,
-    }))
-    .unwrap();
-    pair(&host, &controller);
-    let session = controller.connect(&host.endpoint_id()).unwrap();
-    let events = host.subscribe().unwrap();
-    controller
-        .submit_text(session.id, session.generation, "nope")
-        .unwrap();
-    wait_until(|| {
-        events
-            .recv_timeout(Duration::from_millis(20))
-            .is_some_and(|event| {
-                matches!(
-                    event,
-                    CoreEvent::InputFailed {
-                        message: "the operating system rejected the event",
-                        ..
-                    }
-                )
-            })
-    });
-    controller
-        .submit_input(
-            session.id,
-            session.generation,
-            InputEvent::key_down(usage::A),
-        )
-        .unwrap();
-    wait_seen(&applied, &[Seen::Event(InputEvent::key_down(usage::A))]);
-    assert_eq!(
-        host.snapshot().unwrap().incoming.unwrap().phase,
-        SessionPhase::Active
-    );
-}
-
-#[test]
-fn a_dropped_session_does_not_replay_finished_text() {
-    let host = start_direct();
-    let controller = start_direct();
-    let applied = Arc::new(Mutex::new(Vec::new()));
-    host.set_desktop(Box::new(RecordingDesktop {
-        seen: Arc::clone(&applied),
-        fail_text: false,
-    }))
-    .unwrap();
-    pair(&host, &controller);
-    let session = controller.connect(&host.endpoint_id()).unwrap();
-    controller
-        .submit_text(session.id, session.generation, "one")
-        .unwrap();
-    wait_seen(&applied, &[Seen::Text("one".to_owned())]);
-    controller.drop_link().unwrap();
-    wait_until(|| {
-        controller
-            .snapshot()
+    assert_eq!(pc, vec![Planned::Text("@".to_owned())]);
+    assert!(events(
+        &plan
+            .apply(KeyboardMode::Character, false, up(usage::DIGIT_0))
             .unwrap()
-            .outgoing
-            .as_ref()
-            .is_some_and(|outgoing| outgoing.phase != SessionPhase::Active)
-    });
-    assert!(matches!(
-        controller.submit_text(session.id, session.generation, "replayed"),
-        Err(Error::NoSession | Error::StaleSession)
-    ));
-    wait_until(|| {
-        let outgoing = controller.snapshot().unwrap().outgoing.unwrap();
-        outgoing.phase == SessionPhase::Active && outgoing.generation != session.generation
-    });
-    let again = controller.snapshot().unwrap().outgoing.unwrap();
-    controller
-        .submit_text(again.id, again.generation, "two")
+    )
+    .is_empty());
+    assert!(events(
+        &plan
+            .apply(KeyboardMode::Character, false, up(usage::RIGHT_ALT))
+            .unwrap()
+    )
+    .is_empty());
+}
+
+#[test]
+fn character_mode_inserts_the_french_m_and_keeps_shortcuts() {
+    let mut plan = KeyPlan::new();
+    let typed = plan
+        .apply(KeyboardMode::Character, false, down(usage::SEMICOLON, "m"))
         .unwrap();
-    wait_seen(
-        &applied,
-        &[Seen::Text("one".to_owned()), Seen::Text("two".to_owned())],
+    assert_eq!(typed, vec![Planned::Text("m".to_owned())]);
+
+    let mut plan = KeyPlan::new();
+    let command = plan
+        .apply(KeyboardMode::Character, true, down(usage::LEFT_META, ""))
+        .unwrap();
+    let letter = plan
+        .apply(KeyboardMode::Character, true, down(usage::C, "c"))
+        .unwrap();
+    assert_eq!(
+        events(&[command, letter].concat()),
+        vec![
+            InputEvent::key_down(usage::LEFT_CONTROL),
+            InputEvent::key_down(usage::C),
+        ]
+    );
+}
+
+#[test]
+fn shift_is_a_key_for_selection_and_not_for_a_symbol() {
+    let mut plan = KeyPlan::new();
+    assert!(plan
+        .apply(KeyboardMode::Character, false, down(usage::LEFT_SHIFT, ""))
+        .unwrap()
+        .is_empty());
+    let symbol = plan
+        .apply(KeyboardMode::Character, false, down(usage::GRAVE, "#"))
+        .unwrap();
+    assert_eq!(symbol, vec![Planned::Text("#".to_owned())]);
+    let arrow = plan
+        .apply(KeyboardMode::Character, false, down(usage::LEFT, ""))
+        .unwrap();
+    assert_eq!(
+        arrow,
+        vec![
+            Planned::Event(InputEvent::key_down(usage::LEFT_SHIFT)),
+            Planned::Event(InputEvent::key_down(usage::LEFT)),
+        ]
+    );
+}
+
+#[test]
+fn map_sends_the_position_and_translate_sends_a_chord() {
+    let mut plan = KeyPlan::new();
+    let mapped = plan
+        .apply(KeyboardMode::Map, false, down(usage::GRAVE, "@"))
+        .unwrap();
+    assert_eq!(
+        mapped,
+        vec![Planned::Event(InputEvent::key_down(usage::GRAVE))]
+    );
+
+    let mut plan = KeyPlan::new();
+    let translated = plan
+        .apply(KeyboardMode::Translate, false, down(usage::GRAVE, "@"))
+        .unwrap();
+    assert_eq!(translated, vec![Planned::Chord("@".to_owned())]);
+    let shortcut = plan
+        .apply(
+            KeyboardMode::Translate,
+            false,
+            down(usage::LEFT_CONTROL, ""),
+        )
+        .unwrap();
+    let letter = plan
+        .apply(KeyboardMode::Translate, false, down(usage::C, "c"))
+        .unwrap();
+    assert_eq!(
+        events(&[shortcut, letter].concat()),
+        vec![
+            InputEvent::key_down(usage::LEFT_CONTROL),
+            InputEvent::key_down(usage::C),
+        ]
+    );
+}
+
+#[test]
+fn enter_and_a_missing_character_stay_physical() {
+    let mut plan = KeyPlan::new();
+    let entered = plan
+        .apply(KeyboardMode::Character, false, down(usage::ENTER, "\n"))
+        .unwrap();
+    assert_eq!(
+        entered,
+        vec![Planned::Event(InputEvent::key_down(usage::ENTER))]
+    );
+    let bare = plan
+        .apply(KeyboardMode::Character, false, down(usage::A, ""))
+        .unwrap();
+    assert_eq!(bare, vec![Planned::Event(InputEvent::key_down(usage::A))]);
+}
+
+#[test]
+fn a_pc_french_row_resolves_at_one_and_bracket() {
+    let mut keysyms = vec![0u32; 4 * 4];
+    keysyms[0..4].copy_from_slice(&[0x26, 0x31, 0, 0]);
+    keysyms[8..12].copy_from_slice(&[0xe0, 0x30, 0x40, 0]);
+    keysyms[12..16].copy_from_slice(&[0x29, 0xb0, 0x5d, 0]);
+    let map = HostKeymap {
+        min_keycode: 8,
+        keysyms_per_keycode: 4,
+        keysyms,
+    };
+    assert_eq!(keysym_of('@'), 0x40);
+    assert_eq!(keysym_of('é'), 0xe9);
+    assert_eq!(keysym_of('€'), 0x0100_20ac);
+    assert_eq!(
+        find_chord(&map, keysym_of('@')),
+        Some(LayoutChord {
+            keycode: 10,
+            level: ChordLevel::AltGr,
+        })
+    );
+    assert_eq!(
+        find_chord(&map, keysym_of('1')),
+        Some(LayoutChord {
+            keycode: 8,
+            level: ChordLevel::Shift,
+        })
+    );
+    assert_eq!(
+        find_chord(&map, keysym_of(']')),
+        Some(LayoutChord {
+            keycode: 11,
+            level: ChordLevel::AltGr,
+        })
+    );
+    assert_eq!(
+        find_chord(&map, keysym_of('&')),
+        Some(LayoutChord {
+            keycode: 8,
+            level: ChordLevel::Plain,
+        })
+    );
+    assert_eq!(find_chord(&map, keysym_of('€')), None);
+
+    let mut both = map.keysyms.clone();
+    both.extend_from_slice(&[0x40, 0, 0, 0]);
+    let map = HostKeymap {
+        keysyms: both,
+        ..map
+    };
+    assert_eq!(
+        find_chord(&map, keysym_of('@')),
+        Some(LayoutChord {
+            keycode: 12,
+            level: ChordLevel::Plain,
+        })
+    );
+}
+
+#[test]
+fn a_ten_wide_french_core_map_uses_group_one() {
+    // Live `fr` basic rows, X core width 10. Columns 2 and 3 are the US
+    // group. `@` there is not AltGr. Group 1 level 3 is column 4.
+    let mut keysyms = vec![0u32; 10 * (38 - 11 + 1)];
+    {
+        let mut put = |keycode: u8, syms: [u32; 6]| {
+            let start = usize::from(keycode - 11) * 10;
+            keysyms[start..start + 6].copy_from_slice(&syms);
+        };
+        put(11, [0x00e9, 0x0032, 0x0032, 0x0040, 0x007e, 0x0ac3]);
+        put(19, [0x00e0, 0x0030, 0x0030, 0x0029, 0x0040, 0x00b0]);
+        put(20, [0x0029, 0x00b0, 0x002d, 0x005f, 0x005d, 0x00bf]);
+        put(24, [0x0061, 0x0041, 0x0071, 0x0051, 0x00e6, 0x00c6]);
+        put(38, [0x0071, 0x0051, 0x0061, 0x0041, 0x0040, 0x07d9]);
+    }
+    let map = HostKeymap {
+        min_keycode: 11,
+        keysyms_per_keycode: 10,
+        keysyms,
+    };
+    assert_eq!(
+        find_chord(&map, keysym_of('@')),
+        Some(LayoutChord {
+            keycode: 19,
+            level: ChordLevel::AltGr,
+        })
+    );
+    assert_eq!(
+        find_chord(&map, keysym_of(']')),
+        Some(LayoutChord {
+            keycode: 20,
+            level: ChordLevel::AltGr,
+        })
+    );
+    assert_eq!(
+        find_chord(&map, keysym_of('2')),
+        Some(LayoutChord {
+            keycode: 11,
+            level: ChordLevel::Shift,
+        })
+    );
+    assert_eq!(
+        find_chord(&map, keysym_of('~')),
+        Some(LayoutChord {
+            keycode: 11,
+            level: ChordLevel::AltGr,
+        })
+    );
+    assert_eq!(
+        find_chord(&map, keysym_of('æ')),
+        Some(LayoutChord {
+            keycode: 24,
+            level: ChordLevel::AltGr,
+        })
+    );
+    assert_eq!(
+        find_chord(&map, keysym_of('¿')),
+        Some(LayoutChord {
+            keycode: 20,
+            level: ChordLevel::ShiftAltGr,
+        })
+    );
+    assert_eq!(
+        find_chord(&map, keysym_of('q')),
+        Some(LayoutChord {
+            keycode: 38,
+            level: ChordLevel::Plain,
+        })
+    );
+    assert_eq!(
+        find_chord(&map, keysym_of(')')),
+        Some(LayoutChord {
+            keycode: 20,
+            level: ChordLevel::Plain,
+        })
+    );
+}
+
+#[test]
+fn a_single_group_wide_row_skips_the_copied_columns() {
+    // `XkbGetCoreMap` writes one group of four levels as ABABC D.
+    let map = HostKeymap {
+        min_keycode: 24,
+        keysyms_per_keycode: 6,
+        keysyms: vec![0x61, 0x41, 0x61, 0x41, 0xe6, 0xc6],
+    };
+    assert_eq!(
+        find_chord(&map, keysym_of('a')),
+        Some(LayoutChord {
+            keycode: 24,
+            level: ChordLevel::Plain,
+        })
+    );
+    assert_eq!(
+        find_chord(&map, keysym_of('æ')),
+        Some(LayoutChord {
+            keycode: 24,
+            level: ChordLevel::AltGr,
+        })
+    );
+    assert_eq!(
+        find_chord(&map, keysym_of('Æ')),
+        Some(LayoutChord {
+            keycode: 24,
+            level: ChordLevel::ShiftAltGr,
+        })
     );
 }

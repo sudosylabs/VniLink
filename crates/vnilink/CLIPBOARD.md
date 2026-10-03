@@ -1,6 +1,6 @@
 # Clipboard
 
-Clipboard text is a separate grant from control. A `.vnl` file and the control confirmation do not turn it on. `Core::authorize` does. The rules live in `src/clipboard.rs`. `core.rs` opens the stream and checks the grant.
+Clipboard text is a separate grant from control. A `.vnl` file and the control confirmation do not turn it on. `Core::authorize` does. The rules live in `src/clipboard/`. `src/core/clipboard.rs` opens the stream and checks the grant.
 
 ## What happens
 

@@ -29,10 +29,10 @@ The host has about one minute to type the controller's digits after Connect star
 | `src/pairing/mod.rs` | The steps above |
 | `src/pairing/file.rs` | `.vnl` bytes, `PairingFile`, `PairingPreview` |
 | `src/pairing/check.rs` | The two three-digit checks |
-| `src/core.rs` | `export_pairing_file`, `open_pairing_file`, `confirm_pairing`, `control_check`, `confirm_control_request` |
+| `src/core/pairing.rs` | `export_pairing_file`, `open_pairing_file`, `confirm_pairing`, `control_check`, `confirm_control_request` |
 | `src/tests/pairing.rs` | Loopback tests, included from `src/tests.rs` |
 
-`core.rs` is still one file. The file format and the digits live in `src/pairing/`. The wait for the host's answer sits beside the session handshake because that is the code that accepts or rejects a connection.
+The file format and the digits live in `src/pairing/`. The wait for the host's answer is in `src/core/pairing.rs`, beside the pairing calls.
 
 ## Still open
 

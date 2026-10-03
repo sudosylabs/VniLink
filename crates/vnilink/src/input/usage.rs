@@ -1,0 +1,93 @@
+//! USB HID Keyboard/Keypad usages (page 0x07).
+//!
+//! These name a physical key, not a character. `A` is the key a US keyboard
+//! labels A. The host injects that key into its own layout.
+
+pub const A: u16 = 0x04;
+pub const B: u16 = 0x05;
+pub const C: u16 = 0x06;
+pub const D: u16 = 0x07;
+pub const E: u16 = 0x08;
+pub const F: u16 = 0x09;
+pub const G: u16 = 0x0A;
+pub const H: u16 = 0x0B;
+pub const I: u16 = 0x0C;
+pub const J: u16 = 0x0D;
+pub const K: u16 = 0x0E;
+pub const L: u16 = 0x0F;
+pub const M: u16 = 0x10;
+pub const N: u16 = 0x11;
+pub const O: u16 = 0x12;
+pub const P: u16 = 0x13;
+pub const Q: u16 = 0x14;
+pub const R: u16 = 0x15;
+pub const S: u16 = 0x16;
+pub const T: u16 = 0x17;
+pub const U: u16 = 0x18;
+pub const V: u16 = 0x19;
+pub const W: u16 = 0x1A;
+pub const X: u16 = 0x1B;
+pub const Y: u16 = 0x1C;
+pub const Z: u16 = 0x1D;
+pub const DIGIT_1: u16 = 0x1E;
+pub const DIGIT_2: u16 = 0x1F;
+pub const DIGIT_3: u16 = 0x20;
+pub const DIGIT_4: u16 = 0x21;
+pub const DIGIT_5: u16 = 0x22;
+pub const DIGIT_6: u16 = 0x23;
+pub const DIGIT_7: u16 = 0x24;
+pub const DIGIT_8: u16 = 0x25;
+pub const DIGIT_9: u16 = 0x26;
+pub const DIGIT_0: u16 = 0x27;
+pub const ENTER: u16 = 0x28;
+pub const ESCAPE: u16 = 0x29;
+pub const BACKSPACE: u16 = 0x2A;
+pub const TAB: u16 = 0x2B;
+pub const SPACE: u16 = 0x2C;
+pub const MINUS: u16 = 0x2D;
+pub const EQUAL: u16 = 0x2E;
+pub const LEFT_BRACKET: u16 = 0x2F;
+pub const RIGHT_BRACKET: u16 = 0x30;
+pub const BACKSLASH: u16 = 0x31;
+/// ISO key next to Enter (`#` / `~` on many layouts). Platforms inject
+/// it at the same position as [`BACKSLASH`].
+pub const NON_US_HASH: u16 = 0x32;
+pub const SEMICOLON: u16 = 0x33;
+pub const APOSTROPHE: u16 = 0x34;
+pub const GRAVE: u16 = 0x35;
+pub const COMMA: u16 = 0x36;
+pub const PERIOD: u16 = 0x37;
+pub const SLASH: u16 = 0x38;
+pub const CAPS_LOCK: u16 = 0x39;
+pub const F1: u16 = 0x3A;
+pub const F2: u16 = 0x3B;
+pub const F3: u16 = 0x3C;
+pub const F4: u16 = 0x3D;
+pub const F5: u16 = 0x3E;
+pub const F6: u16 = 0x3F;
+pub const F7: u16 = 0x40;
+pub const F8: u16 = 0x41;
+pub const F9: u16 = 0x42;
+pub const F10: u16 = 0x43;
+pub const F11: u16 = 0x44;
+pub const F12: u16 = 0x45;
+pub const HOME: u16 = 0x4A;
+pub const PAGE_UP: u16 = 0x4B;
+pub const DELETE: u16 = 0x4C;
+pub const END: u16 = 0x4D;
+pub const PAGE_DOWN: u16 = 0x4E;
+pub const RIGHT: u16 = 0x4F;
+pub const LEFT: u16 = 0x50;
+pub const DOWN: u16 = 0x51;
+pub const UP: u16 = 0x52;
+pub const KEYPAD_ENTER: u16 = 0x58;
+/// ISO key next to Left Shift.
+pub const NON_US_BACKSLASH: u16 = 0x64;
+pub const LEFT_CONTROL: u16 = 0xE0;
+pub const LEFT_SHIFT: u16 = 0xE1;
+pub const LEFT_ALT: u16 = 0xE2;
+pub const LEFT_META: u16 = 0xE3;
+pub const RIGHT_CONTROL: u16 = 0xE4;
+pub const RIGHT_SHIFT: u16 = 0xE5;
+pub const RIGHT_ALT: u16 = 0xE6;
+pub const RIGHT_META: u16 = 0xE7;

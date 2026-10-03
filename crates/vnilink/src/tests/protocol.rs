@@ -42,6 +42,11 @@ fn control_messages_round_trip() {
             generation: 3,
             text: KeyText("héllo".to_owned()),
         },
+        ControlMessage::Chord {
+            session_id: 7,
+            generation: 3,
+            text: KeyText("@".to_owned()),
+        },
     ];
     for message in messages {
         assert_eq!(ControlMessage::decode(&message.encode()).unwrap(), message);
@@ -53,6 +58,10 @@ fn oversized_and_unknown_frames_are_malformed() {
     assert!(matches!(ControlMessage::decode(&[]), Err(Error::Malformed)));
     assert!(matches!(
         ControlMessage::decode(&[9, 0]),
+        Err(Error::Malformed)
+    ));
+    assert!(matches!(
+        ControlMessage::decode(&[10, 0]),
         Err(Error::Malformed)
     ));
     assert!(matches!(
@@ -97,7 +106,15 @@ fn finished_text_hides_the_characters_and_rejects_bad_bytes() {
         text: KeyText("vnl-secret-héllo".to_owned()),
     };
     assert!(!format!("{message:?}").contains("vnl-secret"));
+    assert!(!format!("{message:?}").contains("héllo"));
     assert_eq!(ControlMessage::decode(&message.encode()).unwrap(), message);
+    let chord = ControlMessage::Chord {
+        session_id: 4,
+        generation: 9,
+        text: KeyText("@".to_owned()),
+    };
+    assert!(!format!("{chord:?}").contains('@'));
+    assert_eq!(ControlMessage::decode(&chord.encode()).unwrap(), chord);
 
     let mut empty = vec![8];
     empty.extend_from_slice(&1u64.to_be_bytes());

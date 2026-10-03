@@ -9,8 +9,10 @@
 //! [`Core::set_clipboard`] so a granted controller can paste text. Call
 //! [`Core::set_transfer_directory`] so a granted peer can send a file. Call
 //! [`Core::publish_video`] with encoded H.264 frames and
-//! [`Core::subscribe_video`] to receive them. A key is the physical HID
-//! position, so the host's layout produces the character.
+//! [`Core::subscribe_video`] to receive them. [`Core::submit_local_key`] is
+//! the key path. The default mode inserts the character the controller
+//! produced. Map mode sends the physical HID position, and Translate mode
+//! asks the host to press the chord in its own layout.
 //! [`Core::submit_text`] types a finished string, and
 //! [`Core::set_swap_control_and_command`] exchanges Control and Command.
 //! The keyboard steps are in `crates/vnilink/KEYBOARD.md`.
@@ -78,6 +80,7 @@ mod events;
 mod input;
 mod installation;
 mod invitation;
+mod keyboard;
 mod os_input;
 mod pairing;
 mod protocol;
@@ -94,6 +97,7 @@ pub use error::Error;
 pub use events::{CoreEvent, EventSubscription};
 pub use input::{usage, HostDesktop, InputEvent, PointerButton, MAX_KEY_TEXT};
 pub use installation::{InstallationStore, MemoryStore};
+pub use keyboard::{KeyboardMode, LocalKey};
 pub use os_input::OsInput;
 pub use pairing::{PairingFile, PairingPreview, PAIRING_FILE_EXTENSION};
 pub use protocol::{Capabilities, Quality, PROTOCOL_VERSION};

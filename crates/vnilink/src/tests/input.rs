@@ -9,7 +9,9 @@ fn only_events(items: Vec<Outbound>) -> Vec<InputEvent> {
         .into_iter()
         .map(|item| match item {
             Outbound::Event(event) => event,
-            Outbound::Text(_) => panic!("a text item was queued with the keys"),
+            Outbound::Text(_) | Outbound::Chord(_) => {
+                panic!("a text item was queued with the keys")
+            }
         })
         .collect()
 }

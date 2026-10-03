@@ -181,6 +181,13 @@ pub(crate) enum ControlMessage {
         generation: u64,
         text: KeyText,
     },
+    /// Characters the host types by pressing its own layout's chord.
+    /// The bytes are UTF-8 and are not logged.
+    Chord {
+        session_id: u64,
+        generation: u64,
+        text: KeyText,
+    },
 }
 
 impl ControlMessage {
@@ -233,14 +240,12 @@ impl ControlMessage {
                 session_id,
                 generation,
                 text,
-            } => {
-                let mut bytes = Vec::with_capacity(17 + text.0.len());
-                bytes.push(8);
-                bytes.extend_from_slice(&session_id.to_be_bytes());
-                bytes.extend_from_slice(&generation.to_be_bytes());
-                bytes.extend_from_slice(text.0.as_bytes());
-                bytes
-            }
+            } => encode_text(8, *session_id, *generation, text),
+            Self::Chord {
+                session_id,
+                generation,
+                text,
+            } => encode_text(9, *session_id, *generation, text),
         }
     }
 
@@ -281,17 +286,33 @@ impl ControlMessage {
                 })
             }
             7 if bytes.len() == 1 => Ok(Self::Close),
-            8 if bytes.len() >= 17 => {
-                let text = std::str::from_utf8(&bytes[17..]).map_err(|_| Error::Malformed)?;
-                Ok(Self::Text {
-                    session_id: u64::from_be_bytes(bytes[1..9].try_into().expect("8 bytes")),
-                    generation: u64::from_be_bytes(bytes[9..17].try_into().expect("8 bytes")),
-                    text: KeyText(text.to_owned()),
-                })
-            }
+            8 if bytes.len() >= 17 => Ok(Self::Text {
+                session_id: u64::from_be_bytes(bytes[1..9].try_into().expect("8 bytes")),
+                generation: u64::from_be_bytes(bytes[9..17].try_into().expect("8 bytes")),
+                text: decode_text(&bytes[17..])?,
+            }),
+            9 if bytes.len() >= 17 => Ok(Self::Chord {
+                session_id: u64::from_be_bytes(bytes[1..9].try_into().expect("8 bytes")),
+                generation: u64::from_be_bytes(bytes[9..17].try_into().expect("8 bytes")),
+                text: decode_text(&bytes[17..])?,
+            }),
             _ => Err(Error::Malformed),
         }
     }
+}
+
+fn encode_text(tag: u8, session_id: u64, generation: u64, text: &KeyText) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(17 + text.0.len());
+    bytes.push(tag);
+    bytes.extend_from_slice(&session_id.to_be_bytes());
+    bytes.extend_from_slice(&generation.to_be_bytes());
+    bytes.extend_from_slice(text.0.as_bytes());
+    bytes
+}
+
+fn decode_text(bytes: &[u8]) -> Result<KeyText, Error> {
+    let text = std::str::from_utf8(bytes).map_err(|_| Error::Malformed)?;
+    Ok(KeyText(text.to_owned()))
 }
 
 pub(crate) fn error_code(error: &Error) -> RejectCode {

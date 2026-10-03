@@ -1,6 +1,6 @@
 # File transfer
 
-File transfer is a separate grant from control and from clipboard. A `.vnl` file and the control confirmation do not turn it on. `Core::authorize` does. The rules live in `src/transfer.rs`. `core.rs` opens the stream and checks the grant.
+File transfer is a separate grant from control and from clipboard. A `.vnl` file and the control confirmation do not turn it on. `Core::authorize` does. The rules live in `src/transfer/`. `src/core/files.rs` opens the stream and checks the grant.
 
 ## What happens
 

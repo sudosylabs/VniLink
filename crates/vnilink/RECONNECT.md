@@ -1,6 +1,6 @@
 # Reconnect
 
-A dropped control session comes back for the same saved device. No new `.vnl` file is required. The rules live in `src/reconnect.rs` and `src/address.rs`. `core.rs` dials and admits.
+A dropped control session comes back for the same saved device. No new `.vnl` file is required. The rules live in `src/reconnect.rs` and `src/address.rs`. `src/core/connect.rs` dials and admits.
 
 ## What happens
 
@@ -18,7 +18,7 @@ A dropped control session comes back for the same saved device. No new `.vnl` fi
 | --- | --- |
 | `src/address.rs` | The announcement bytes and the rule that grants stay put |
 | `src/reconnect.rs` | Which endings redial, and how many times |
-| `src/core.rs` | The dial loop, the close frame, and storing the list |
+| `src/core/connect.rs` | The dial loop, the close frame, and storing the list |
 | `src/tests/reconnect.rs` | Loopback tests, included from `src/tests.rs` |
 
 ## Still open

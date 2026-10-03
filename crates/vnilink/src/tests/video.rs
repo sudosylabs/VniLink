@@ -13,86 +13,6 @@ use crate::video::{
     MAX_VIDEO_FRAME, VIDEO_QUEUE,
 };
 
-fn frame(keyframe: bool, timestamp_us: u64) -> EncodedFrame {
-    EncodedFrame::h264(keyframe, timestamp_us, vec![1]).unwrap()
-}
-
-#[test]
-fn predicted_frames_drop_until_the_next_keyframe() {
-    let mut queue = VideoQueue::new();
-    assert_eq!(queue.push(frame(true, 1)), VideoPush::Queued);
-    for index in 0..VIDEO_QUEUE - 1 {
-        assert_eq!(
-            queue.push(frame(false, 2 + index as u64)),
-            VideoPush::Queued
-        );
-    }
-    assert_eq!(queue.len(), VIDEO_QUEUE);
-    assert_eq!(queue.push(frame(false, 99)), VideoPush::KeyframeNeeded);
-    assert_eq!(queue.len(), 0);
-    assert!(queue.dropped() >= 1);
-    assert_eq!(queue.push(frame(false, 100)), VideoPush::StillNeedsKeyframe);
-    assert_eq!(queue.push(frame(true, 101)), VideoPush::Queued);
-    assert_eq!(queue.len(), 1);
-    let dropped = queue.dropped();
-    assert_eq!(queue.push(frame(true, 102)), VideoPush::Queued);
-    assert!(queue.dropped() >= dropped + 1);
-    assert_eq!(queue.len(), 1);
-    let only = queue.pop().unwrap();
-    assert!(only.keyframe);
-    assert_eq!(only.timestamp_us, 102);
-    assert!(queue.pop().is_none());
-}
-
-#[test]
-fn h264_frames_round_trip_and_reject_a_bad_payload() {
-    assert!(matches!(
-        EncodedFrame::h264(true, 1, Vec::new()),
-        Err(Error::InvalidSetting("encoded frame is empty"))
-    ));
-    assert!(matches!(
-        EncodedFrame::h264(true, 1, vec![0; MAX_VIDEO_FRAME + 1]),
-        Err(Error::InvalidSetting("encoded frame is larger than 1 MiB"))
-    ));
-    let small = EncodedFrame::h264(false, u64::MAX, vec![0x7F]).unwrap();
-    assert_eq!(
-        decode_video_body(&encode_video_body(&small)).unwrap(),
-        small
-    );
-
-    let mut flags = encode_video_body(&EncodedFrame::h264(true, 7, vec![4]).unwrap());
-    flags[1] = 0xFF;
-    assert!(decode_video_body(&flags).unwrap().keyframe);
-    flags[1] = 0x02;
-    assert!(!decode_video_body(&flags).unwrap().keyframe);
-
-    assert!(matches!(
-        decode_video_body(&[9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-        Err(Error::Unsupported("this video codec"))
-    ));
-    assert!(matches!(decode_video_body(&[1, 0]), Err(Error::Malformed)));
-    assert!(matches!(
-        decode_video_body(&[1, 1, 0, 0, 0, 0, 0, 0, 0, 0]),
-        Err(Error::Malformed)
-    ));
-
-    let mut mutated = EncodedFrame::h264(true, 1, vec![0xAB, 0xCD]).unwrap();
-    let rendered = format!("{mutated:?}");
-    assert!(rendered.contains("payload_len"));
-    assert!(!rendered.contains("171"));
-    assert!(!rendered.contains("205"));
-    mutated.payload.clear();
-    assert!(matches!(
-        mutated.check(),
-        Err(Error::InvalidSetting("encoded frame is empty"))
-    ));
-    mutated.payload.resize(MAX_VIDEO_FRAME + 1, 0);
-    assert!(matches!(
-        mutated.check(),
-        Err(Error::InvalidSetting("encoded frame is larger than 1 MiB"))
-    ));
-}
-
 fn start_direct() -> Core {
     Core::boot(
         CoreConfig {
@@ -368,4 +288,84 @@ fn a_zero_capture_size_falls_back_to_the_desktop() {
     pair_for_control(&host, &controller);
     let session = controller.connect(&host.endpoint_id()).unwrap();
     assert_eq!((session.monitor_width, session.monitor_height), (100, 80));
+}
+
+fn frame(keyframe: bool, timestamp_us: u64) -> EncodedFrame {
+    EncodedFrame::h264(keyframe, timestamp_us, vec![1]).unwrap()
+}
+
+#[test]
+fn predicted_frames_drop_until_the_next_keyframe() {
+    let mut queue = VideoQueue::new();
+    assert_eq!(queue.push(frame(true, 1)), VideoPush::Queued);
+    for index in 0..VIDEO_QUEUE - 1 {
+        assert_eq!(
+            queue.push(frame(false, 2 + index as u64)),
+            VideoPush::Queued
+        );
+    }
+    assert_eq!(queue.len(), VIDEO_QUEUE);
+    assert_eq!(queue.push(frame(false, 99)), VideoPush::KeyframeNeeded);
+    assert_eq!(queue.len(), 0);
+    assert!(queue.dropped() >= 1);
+    assert_eq!(queue.push(frame(false, 100)), VideoPush::StillNeedsKeyframe);
+    assert_eq!(queue.push(frame(true, 101)), VideoPush::Queued);
+    assert_eq!(queue.len(), 1);
+    let dropped = queue.dropped();
+    assert_eq!(queue.push(frame(true, 102)), VideoPush::Queued);
+    assert!(queue.dropped() >= dropped + 1);
+    assert_eq!(queue.len(), 1);
+    let only = queue.pop().unwrap();
+    assert!(only.keyframe);
+    assert_eq!(only.timestamp_us, 102);
+    assert!(queue.pop().is_none());
+}
+
+#[test]
+fn h264_frames_round_trip_and_reject_a_bad_payload() {
+    assert!(matches!(
+        EncodedFrame::h264(true, 1, Vec::new()),
+        Err(Error::InvalidSetting("encoded frame is empty"))
+    ));
+    assert!(matches!(
+        EncodedFrame::h264(true, 1, vec![0; MAX_VIDEO_FRAME + 1]),
+        Err(Error::InvalidSetting("encoded frame is larger than 1 MiB"))
+    ));
+    let small = EncodedFrame::h264(false, u64::MAX, vec![0x7F]).unwrap();
+    assert_eq!(
+        decode_video_body(&encode_video_body(&small)).unwrap(),
+        small
+    );
+
+    let mut flags = encode_video_body(&EncodedFrame::h264(true, 7, vec![4]).unwrap());
+    flags[1] = 0xFF;
+    assert!(decode_video_body(&flags).unwrap().keyframe);
+    flags[1] = 0x02;
+    assert!(!decode_video_body(&flags).unwrap().keyframe);
+
+    assert!(matches!(
+        decode_video_body(&[9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
+        Err(Error::Unsupported("this video codec"))
+    ));
+    assert!(matches!(decode_video_body(&[1, 0]), Err(Error::Malformed)));
+    assert!(matches!(
+        decode_video_body(&[1, 1, 0, 0, 0, 0, 0, 0, 0, 0]),
+        Err(Error::Malformed)
+    ));
+
+    let mut mutated = EncodedFrame::h264(true, 1, vec![0xAB, 0xCD]).unwrap();
+    let rendered = format!("{mutated:?}");
+    assert!(rendered.contains("payload_len"));
+    assert!(!rendered.contains("171"));
+    assert!(!rendered.contains("205"));
+    mutated.payload.clear();
+    assert!(matches!(
+        mutated.check(),
+        Err(Error::InvalidSetting("encoded frame is empty"))
+    ));
+    mutated.payload.resize(MAX_VIDEO_FRAME + 1, 0);
+    assert!(matches!(
+        mutated.check(),
+        Err(Error::InvalidSetting("encoded frame is larger than 1 MiB"))
+    ));
 }
