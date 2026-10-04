@@ -14,6 +14,7 @@ mod dbus;
 #[cfg(target_os = "linux")]
 mod dmabuf;
 mod encode;
+mod host;
 mod parameter_set;
 #[cfg(target_os = "linux")]
 mod pipewire;
@@ -24,6 +25,9 @@ mod vaapi;
 mod x11;
 
 pub use encode::LinuxEncoder;
+#[cfg(target_os = "linux")]
+pub use host::serve_portal;
+pub use host::HostSession;
 pub use pixels::{raw_frame_from_bgra, raw_frame_from_bgrx};
 pub use portal::{PortalPhase, PortalSession, ONE_PORTAL_SESSION_IS_UNIVERSAL};
 pub use x11::{raw_frame_from_ximage, X11Capture, X11Image, X11Plan};

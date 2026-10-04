@@ -1,5 +1,7 @@
 #[path = "tests/encode.rs"]
 mod encode_tests;
+#[path = "tests/host.rs"]
+mod host_tests;
 #[path = "tests/parameter_set.rs"]
 mod parameter_set_tests;
 #[cfg(target_os = "linux")]

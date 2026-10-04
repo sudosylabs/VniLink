@@ -3801,6 +3801,7 @@ dependencies = [
  "libva",
  "pipewire",
  "tokio",
+ "vnilink",
  "vnilink-media",
  "x11rb 0.14.0",
 ]
