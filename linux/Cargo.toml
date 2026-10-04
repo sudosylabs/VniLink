@@ -1,0 +1,16 @@
+[package]
+name = "vnilink-gnome"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "GNOME application for VniLink"
+publish = false
+
+[dependencies]
+vnilink = { path = "../crates/vnilink" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+adw = { package = "libadwaita", version = "0.8", features = ["v1_5"] }
+gtk = { package = "gtk4", version = "0.10", features = ["v4_10"] }
+secret-service = { version = "5.1.0", default-features = false, features = ["rt-tokio-crypto-rust"] }

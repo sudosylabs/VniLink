@@ -5,6 +5,7 @@ members = [
     "crates/vnilink-macos",
     "crates/vnilink-windows",
     "crates/vnilink-linux",
+    "linux",
 ]
 resolver = "2"
 

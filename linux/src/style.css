@@ -1,0 +1,31 @@
+.digits {
+  font-family: monospace;
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+}
+
+.flow-card {
+  padding: 28px 24px;
+}
+
+.flow-card .digits {
+  margin-bottom: 8px;
+}
+
+.endpoint,
+row.identity .subtitle {
+  font-family: monospace;
+}
+
+row.peer .title {
+  font-family: monospace;
+}
+
+.allow-state.yes {
+  color: @success_color;
+}
+
+.allow-state.no {
+  color: alpha(@window_fg_color, 0.55);
+}
