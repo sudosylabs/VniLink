@@ -26,6 +26,8 @@ mod keyboard_support;
 mod keyboard_tests;
 #[path = "tests/keyboard_text.rs"]
 mod keyboard_text_tests;
+#[path = "tests/link.rs"]
+mod link_tests;
 #[path = "tests/os_input.rs"]
 mod os_input_tests;
 #[path = "tests/pairing.rs"]

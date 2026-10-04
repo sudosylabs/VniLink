@@ -211,7 +211,7 @@ Test locked sessions, user switching, monitor disconnect, and headless capture o
 
 ### Windows
 
-`vnilink-windows` targets one monitor on the interactive desktop of the current session. Capture is DXGI Desktop Duplication. Encode is the Media Foundation H.264 transform, fed NV12. Its length-prefixed samples are converted to Annex-B, and an IDR is prefixed with the sequence header's SPS and PPS. That conversion is tested here. The DXGI and Media Foundation calls are compiled only on Windows, so a macOS test run does not execute them. Windows Graphics Capture, with its consent picker, is not this path.
+`vnilink-windows` targets one monitor on the interactive desktop of the current session. Capture is DXGI Desktop Duplication. `WindowsCapture` polls the duplication output without waiting; the host adapter blocks on newer frames through the shared frame-source seam. `HostSession` paces those pictures at the session quality and publishes Annex-B, and `serve_windows` reads a capture that is already open and stops when the session ends. Encode is the Media Foundation H.264 transform, fed NV12. Its length-prefixed samples are converted to Annex-B, and an IDR is prefixed with the sequence header's SPS and PPS. That conversion is tested here. The DXGI and Media Foundation calls are compiled only on Windows, so a macOS test run does not execute them. Windows Graphics Capture, with its consent picker, is not this path.
 
 Ordinary SendInput is restricted by integrity levels. Elevated applications, UAC secure desktop, logon screens, session switching, and service/session isolation need separate validated designs. Do not mark them supported because ordinary desktop control works.
 

@@ -130,6 +130,18 @@ pub struct Snapshot {
     pub capabilities: Capabilities,
 }
 
+/// One open transport path of a live session, for diagnostics and the
+/// measurement hooks. Empty while the session has no connection yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionPath {
+    /// True when this path goes through a relay; false when direct.
+    pub relay: bool,
+    /// True when the connection currently sends application data here.
+    pub selected: bool,
+    /// Round-trip estimate in milliseconds.
+    pub rtt_ms: u64,
+}
+
 struct LiveSession {
     id: u64,
     generation: u64,

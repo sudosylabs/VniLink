@@ -8,19 +8,21 @@
 //! A build on macOS or Linux does not execute the Win32 code.
 
 mod bitstream;
+mod encode;
+mod host;
 mod plan;
 
 #[cfg(windows)]
 mod capture;
-#[cfg(windows)]
-mod encode;
 
+pub use encode::WindowsEncoder;
 pub use plan::{WindowsPlan, SECURE_DESKTOP_SUPPORTED};
 
 #[cfg(windows)]
 pub use capture::WindowsCapture;
 #[cfg(windows)]
-pub use encode::WindowsEncoder;
+pub use host::serve_windows;
+pub use host::HostSession;
 
 #[cfg(test)]
 #[path = "tests.rs"]

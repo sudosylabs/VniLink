@@ -26,6 +26,15 @@ use crate::plan::frame_size;
 pub struct WindowsCapture {
     context: ID3D11DeviceContext,
     duplication: IDXGIOutputDuplication,
+    /// Desktop size validated at open. A resize surfaces as access lost on the
+    /// next acquire, so the size is fixed for the life of one capture.
+    size: (u16, u16),
+}
+
+/// Desktop Duplication handles before the format and size are validated.
+struct UnvalidatedDesktop {
+    context: ID3D11DeviceContext,
+    duplication: IDXGIOutputDuplication,
     format: DXGI_FORMAT,
     width: u32,
     height: u32,
@@ -34,24 +43,29 @@ pub struct WindowsCapture {
 impl WindowsCapture {
     /// Opens the first output of the first adapter. Monitor index is always 0.
     pub fn open() -> Result<Self, Error> {
-        let capture = unsafe { Self::open_desktop() }.map_err(map_error)?;
-        if capture.format != DXGI_FORMAT_B8G8R8A8_UNORM {
+        let desktop = unsafe { Self::open_desktop() }.map_err(map_error)?;
+        if desktop.format != DXGI_FORMAT_B8G8R8A8_UNORM {
             return Err(Error::Unsupported("Desktop Duplication format is not BGRA"));
         }
-        frame_size(capture.width, capture.height)?;
-        Ok(capture)
+        Ok(Self {
+            context: desktop.context,
+            duplication: desktop.duplication,
+            size: frame_size(desktop.width, desktop.height)?,
+        })
     }
 
-    pub fn size(&self) -> Result<(u16, u16), Error> {
-        frame_size(self.width, self.height)
+    pub fn size(&self) -> (u16, u16) {
+        self.size
     }
 
-    /// `Ok(None)` when the desktop has not produced a new frame yet.
-    pub fn next_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
+    /// `Ok(None)` when the desktop has not produced a new frame yet. The call
+    /// itself never waits: blocking until a newer frame arrives lives with
+    /// the host caller behind the frame-source seam.
+    pub fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
         unsafe { self.acquire(timestamp_us) }
     }
 
-    unsafe fn open_desktop() -> windows::core::Result<Self> {
+    unsafe fn open_desktop() -> windows::core::Result<UnvalidatedDesktop> {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         let factory: IDXGIFactory1 = CreateDXGIFactory1()?;
         let adapter: IDXGIAdapter1 = factory.EnumAdapters1(0)?;
@@ -74,7 +88,7 @@ impl WindowsCapture {
         let output: IDXGIOutput1 = output.cast()?;
         let duplication = output.DuplicateOutput(&device)?;
         let desc = duplication.GetDesc();
-        Ok(Self {
+        Ok(UnvalidatedDesktop {
             context,
             duplication,
             format: desc.ModeDesc.Format,

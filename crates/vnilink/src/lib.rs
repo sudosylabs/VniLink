@@ -94,7 +94,9 @@ mod trust;
 mod video;
 
 pub use clipboard::{HostClipboard, MAX_CLIPBOARD_TEXT};
-pub use core::{ControlRequest, Core, CoreConfig, DeviceInfo, Listen, OpenConfig, Snapshot};
+pub use core::{
+    ControlRequest, Core, CoreConfig, DeviceInfo, Listen, OpenConfig, SessionPath, Snapshot,
+};
 pub use error::Error;
 pub use events::{CoreEvent, EventSubscription};
 pub use input::{usage, HostDesktop, InputEvent, PointerButton, MAX_KEY_TEXT};

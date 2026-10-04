@@ -16,7 +16,7 @@ use iroh::{Endpoint, EndpointId, TransportAddr};
 use crate::address::Announcement;
 use crate::error::Error;
 use crate::events::CoreEvent;
-use crate::invitation::{self};
+use crate::invitation::canonicalize_addrs;
 use crate::protocol::ControlMessage;
 
 /// The relay URLs and direct sockets the endpoint currently sees for `peer`.
@@ -47,7 +47,7 @@ pub(super) async fn peer_addresses(
             _ => {}
         }
     }
-    let direct = invitation::canonicalize_addrs(&direct).unwrap_or_default();
+    let direct = canonicalize_addrs(&direct).unwrap_or_default();
     (relays, direct)
 }
 
@@ -95,7 +95,7 @@ pub(super) async fn write_addresses(
     send: &mut iroh::endpoint::SendStream,
 ) -> Result<(), Error> {
     let relays = shared.relay.relay_urls()?;
-    let direct = invitation::canonicalize_addrs(&direct_addresses(&shared.endpoint))?;
+    let direct = canonicalize_addrs(&direct_addresses(&shared.endpoint))?;
     let announcement = crate::address::canonical(&relays, &direct)?;
     write_frame(
         send,
@@ -105,4 +105,41 @@ pub(super) async fn write_addresses(
         },
     )
     .await
+}
+
+impl Core {
+    /// Open transport paths of one live session. Empty while the session has
+    /// no connection yet. Each entry names whether the path goes through a
+    /// relay, whether the connection currently sends there, and the
+    /// round-trip estimate. For diagnostics and the measurement hooks; the
+    /// list is a snapshot taken at call time.
+    pub fn session_paths(&self, session_id: u64) -> Result<Vec<SessionPath>, Error> {
+        let link = {
+            let state = self.alive_state()?;
+            let session = state
+                .incoming
+                .as_ref()
+                .filter(|session| session.id == session_id)
+                .or_else(|| {
+                    state
+                        .outgoing
+                        .as_ref()
+                        .filter(|session| session.id == session_id)
+                })
+                .ok_or(Error::NoSession)?;
+            session.link.clone()
+        };
+        let Some(link) = link else {
+            return Ok(Vec::new());
+        };
+        Ok(link
+            .paths()
+            .iter()
+            .map(|path| SessionPath {
+                relay: path.is_relay(),
+                selected: path.is_selected(),
+                rtt_ms: u64::try_from(path.rtt().as_millis()).unwrap_or(u64::MAX),
+            })
+            .collect())
+    }
 }

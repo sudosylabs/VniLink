@@ -4331,6 +4331,7 @@ dependencies = [
 name = "vnilink-windows"
 version = "0.1.0"
 dependencies = [
+ "vnilink",
  "vnilink-media",
  "windows 0.61.3",
 ]

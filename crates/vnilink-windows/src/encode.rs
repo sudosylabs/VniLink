@@ -5,9 +5,12 @@
 //! keyframe only when those three NAL units are present. Forcing the next
 //! picture to be an IDR through `ICodecAPI` needs a `VARIANT`, which this
 //! crate does not construct. The pump rejects a forced frame that is not a
-//! keyframe.
+//! keyframe. Without Media Foundation H.264 this returns unsupported.
 
-use vnilink_media::{bgra_to_nv12, EncodeParams, EncodedSample, Error, RawFrame, VideoEncoder};
+#[cfg(windows)]
+use vnilink_media::bgra_to_nv12;
+use vnilink_media::{EncodeParams, EncodedSample, Error, RawFrame, VideoEncoder};
+#[cfg(windows)]
 use windows::Win32::Media::MediaFoundation::{
     IMFMediaType, IMFSample, IMFTransform, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample,
     MFMediaType_Video, MFSampleExtension_CleanPoint, MFStartup, MFVideoFormat_H264,
@@ -17,20 +20,26 @@ use windows::Win32::Media::MediaFoundation::{
     MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
     MF_MT_MAX_KEYFRAME_SPACING, MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_SUBTYPE, MF_VERSION,
 };
+#[cfg(windows)]
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 
+#[cfg(windows)]
 use crate::bitstream::h264_access_unit;
 
+#[cfg(windows)]
 const CLSID_MSH264_ENCODER: windows::core::GUID =
     windows::core::GUID::from_u128(0x6ca5_0344_051a_4ded_9779_a433_0516_5e35);
 
 pub struct WindowsEncoder {
+    #[cfg(windows)]
     transform: IMFTransform,
     width: u32,
     height: u32,
+    #[cfg(windows)]
     provides_samples: bool,
+    #[cfg(windows)]
     output_size: u32,
 }
 
@@ -39,10 +48,19 @@ impl WindowsEncoder {
         if width % 2 != 0 || height % 2 != 0 {
             return Err(Error::InvalidFrame("NV12 width and height must be even"));
         }
-        unsafe { Self::open_transform(width, height, frame_rate, bitrate_bps) }
-            .map_err(|_| Error::Unsupported("Media Foundation H.264"))
+        #[cfg(windows)]
+        {
+            return unsafe { Self::open_transform(width, height, frame_rate, bitrate_bps) }
+                .map_err(|_| Error::Unsupported("Media Foundation H.264"));
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (width, height, frame_rate, bitrate_bps);
+            Err(Error::Unsupported("Media Foundation H.264"))
+        }
     }
 
+    #[cfg(windows)]
     unsafe fn open_transform(
         width: u16,
         height: u16,
@@ -89,24 +107,34 @@ impl VideoEncoder for WindowsEncoder {
                 "the frame size does not match the encoder",
             ));
         }
-        let nv12 = bgra_to_nv12(frame)?;
-        let sample = unsafe {
-            self.encode_nv12(
-                nv12.y_plane(),
-                nv12.uv_plane(),
-                frame.timestamp_us(),
-                params,
-            )
-        }?;
-        h264_access_unit(&sample.bytes, &sample.header)
+        #[cfg(windows)]
+        {
+            let nv12 = bgra_to_nv12(frame)?;
+            let sample = unsafe {
+                self.encode_nv12(
+                    nv12.y_plane(),
+                    nv12.uv_plane(),
+                    frame.timestamp_us(),
+                    params,
+                )
+            }?;
+            return h264_access_unit(&sample.bytes, &sample.header);
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = params;
+            Err(Error::Unsupported("Media Foundation H.264"))
+        }
     }
 }
 
+#[cfg(windows)]
 struct MfSample {
     bytes: Vec<u8>,
     header: Vec<u8>,
 }
 
+#[cfg(windows)]
 impl WindowsEncoder {
     unsafe fn encode_nv12(
         &self,
@@ -179,11 +207,13 @@ impl WindowsEncoder {
     }
 }
 
+#[cfg(windows)]
 fn rejected(err: windows::core::Error) -> Error {
     let _ = err;
     Error::EncodeRejected("the encoder rejected the frame")
 }
 
+#[cfg(windows)]
 unsafe fn sample_bytes(sample: &IMFSample) -> windows::core::Result<Vec<u8>> {
     let buffer = sample.GetBufferByIndex(0)?;
     let mut data = std::ptr::null_mut();
@@ -199,6 +229,7 @@ unsafe fn sample_bytes(sample: &IMFSample) -> windows::core::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+#[cfg(windows)]
 unsafe fn sequence_header(transform: &IMFTransform) -> windows::core::Result<Vec<u8>> {
     let media_type = transform.GetOutputCurrentType(0)?;
     let size = media_type.GetBlobSize(&MF_MT_MPEG_SEQUENCE_HEADER)?;
@@ -213,6 +244,7 @@ unsafe fn sequence_header(transform: &IMFTransform) -> windows::core::Result<Vec
     Ok(bytes)
 }
 
+#[cfg(windows)]
 unsafe fn video_type(
     subtype: windows::core::GUID,
     width: u16,
@@ -231,6 +263,7 @@ unsafe fn video_type(
     Ok(media_type)
 }
 
+#[cfg(windows)]
 fn pack_u32(low: u32, high: u32) -> u64 {
     u64::from(low) | (u64::from(high) << 32)
 }

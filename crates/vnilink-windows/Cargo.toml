@@ -8,6 +8,7 @@ description = "Desktop Duplication and Media Foundation H.264 for VniLink"
 publish = false
 
 [dependencies]
+vnilink = { path = "../vnilink" }
 vnilink-media = { path = "../vnilink-media" }
 
 [target.'cfg(windows)'.dependencies]
