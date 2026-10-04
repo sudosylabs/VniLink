@@ -1,16 +1,39 @@
-//! One-monitor ScreenCaptureKit configuration.
+//! One-monitor ScreenCaptureKit configuration and frame delivery.
 //!
 //! [`ScreenPlan`] only builds the stream configuration. [`ScreenCapture::start`]
 //! lists shareable content and starts a stream, which asks for Screen Recording
-//! permission. Tests construct the plan and do not call `start`. FileVault
-//! preboot is not a logged-in display and is not captured.
+//! permission. The stream handler pushes each copied picture into a
+//! [`FrameChannel`]; [`ScreenCapture::next_frame`] receives the newest one it
+//! has not seen yet. Tests construct the plan and do not call `start`.
+//! FileVault preboot is not a logged-in display and is not captured.
 
-use apple_cf::cm::CMTime;
+use vnilink_media::{CapturePlan, ChannelSlot, CursorPolicy, Error, FrameChannel};
+
+#[cfg(target_os = "macos")]
+use std::sync::Arc;
+#[cfg(target_os = "macos")]
+use std::time::Duration;
+
+#[cfg(target_os = "macos")]
+use screencapturekit::cm::{CMSampleBuffer, CMSampleBufferExt};
+#[cfg(target_os = "macos")]
 use screencapturekit::shareable_content::SCShareableContent;
-use screencapturekit::stream::configuration::{PixelFormat, SCStreamConfiguration};
+#[cfg(target_os = "macos")]
 use screencapturekit::stream::content_filter::SCContentFilter;
+#[cfg(target_os = "macos")]
+use screencapturekit::stream::output_trait::SCStreamOutputTrait;
+#[cfg(target_os = "macos")]
+use screencapturekit::stream::output_type::SCStreamOutputType;
+#[cfg(target_os = "macos")]
 use screencapturekit::stream::SCStream;
-use vnilink_media::{CapturePlan, CursorPolicy, Error};
+
+#[cfg(target_os = "macos")]
+use apple_cf::cm::CMTime;
+#[cfg(target_os = "macos")]
+use screencapturekit::stream::configuration::{PixelFormat, SCStreamConfiguration};
+
+#[cfg(target_os = "macos")]
+const FRAME_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// FileVault preboot is not the logged-in display this adapter captures.
 pub const FILEVAULT_PREBOOT_SUPPORTED: bool = false;
@@ -57,6 +80,7 @@ impl ScreenPlan {
     }
 
     /// BGRA, one monitor, cursor hidden unless the plan asks for it.
+    #[cfg(target_os = "macos")]
     pub fn configuration(&self) -> SCStreamConfiguration {
         let interval = CMTime::new(1, i32::from(self.frame_rate));
         SCStreamConfiguration::new()
@@ -68,13 +92,48 @@ impl ScreenPlan {
     }
 }
 
-/// A started ScreenCaptureKit stream. Tests do not construct this.
-pub struct ScreenCapture {
-    _stream: SCStream,
-    width: u16,
-    height: u16,
+#[cfg(target_os = "macos")]
+struct Handler {
+    channel: Arc<FrameChannel>,
 }
 
+#[cfg(target_os = "macos")]
+impl SCStreamOutputTrait for Handler {
+    fn did_output_sample_buffer(&self, sample: CMSampleBuffer, of_type: SCStreamOutputType) {
+        if of_type != SCStreamOutputType::Screen {
+            return;
+        }
+        let Some(pixel_buffer) = sample.pixel_buffer() else {
+            self.channel
+                .fail("ScreenCaptureKit did not deliver a frame");
+            return;
+        };
+        // Timestamp is applied by `next_frame`; the handler only keeps pixels.
+        match crate::pixels::raw_frame_from_pixel_buffer(&pixel_buffer, 0) {
+            Ok(frame) => self.channel.push(ChannelSlot {
+                width: frame.width(),
+                height: frame.height(),
+                stride: usize::from(frame.width()) * 4,
+                bytes: frame.pixels().to_vec(),
+            }),
+            Err(Error::Unsupported(reason)) => self.channel.fail(reason),
+            Err(_) => self
+                .channel
+                .fail("ScreenCaptureKit did not deliver a frame"),
+        }
+    }
+}
+
+/// A started ScreenCaptureKit stream. Tests do not construct this.
+#[cfg(target_os = "macos")]
+pub struct ScreenCapture {
+    stream: SCStream,
+    width: u16,
+    height: u16,
+    channel: Arc<FrameChannel>,
+}
+
+#[cfg(target_os = "macos")]
 impl ScreenCapture {
     /// List displays and start capture. This can prompt for Screen Recording.
     pub fn start(plan: &ScreenPlan) -> Result<Self, Error> {
@@ -89,19 +148,50 @@ impl ScreenCapture {
             .with_excluding_windows(&[])
             .build()
             .map_err(|_| Error::CaptureRejected("the display filter could not be built"))?;
-        let stream = SCStream::new(&filter, &plan.configuration())
+        let mut stream = SCStream::new(&filter, &plan.configuration())
+            .map_err(|_| Error::CaptureRejected("ScreenCaptureKit did not start"))?;
+        let channel = Arc::new(FrameChannel::new());
+        stream
+            .add_output_handler(
+                Handler {
+                    channel: Arc::clone(&channel),
+                },
+                SCStreamOutputType::Screen,
+            )
             .map_err(|_| Error::CaptureRejected("ScreenCaptureKit did not start"))?;
         stream
             .start_capture()
             .map_err(|_| Error::CaptureRejected("ScreenCaptureKit did not start"))?;
         Ok(Self {
-            _stream: stream,
+            stream,
             width: plan.width(),
             height: plan.height(),
+            channel,
         })
     }
 
     pub fn size(&self) -> (u16, u16) {
         (self.width, self.height)
+    }
+
+    /// Block until a frame newer than the last one is copied.
+    pub fn next_frame(&self, timestamp_us: u64) -> Result<vnilink_media::RawFrame, Error> {
+        let slot = self.channel.recv_timeout(FRAME_TIMEOUT, || {
+            std::thread::sleep(Duration::from_millis(10));
+        })?;
+        crate::pixels::raw_frame_from_bgra(
+            slot.width,
+            slot.height,
+            slot.stride,
+            timestamp_us,
+            &slot.bytes,
+        )
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for ScreenCapture {
+    fn drop(&mut self) {
+        let _ = self.stream.stop_capture();
     }
 }

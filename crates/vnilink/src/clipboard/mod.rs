@@ -16,7 +16,7 @@ mod stream;
 #[cfg(test)]
 pub(crate) use frame::{check_len, decode, encode, Frame};
 pub(crate) use frame::{check_text, ClipboardRequest, ClipboardSender};
-pub(crate) use stream::{accept_bi, attach, exchange};
+pub(crate) use stream::{attach, exchange};
 
 /// Applies text on the controlled computer.
 ///

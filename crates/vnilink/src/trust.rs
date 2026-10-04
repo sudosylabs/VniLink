@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
 use crate::error::Error;
-use crate::session::Grants;
+use crate::session::{Grant, Grants};
 
 pub(crate) const MAX_DEVICES: usize = 128;
 
@@ -39,12 +39,6 @@ impl Trust {
         Ok(())
     }
 
-    pub(crate) fn revoke(&mut self, endpoint_id: &[u8; 32]) -> Result<(), Error> {
-        let device = self.devices.get_mut(endpoint_id).ok_or(Error::NotPaired)?;
-        device.grants = Grants::default();
-        Ok(())
-    }
-
     pub(crate) fn remove(&mut self, endpoint_id: &[u8; 32]) -> Option<Device> {
         self.devices.remove(endpoint_id)
     }
@@ -53,22 +47,15 @@ impl Trust {
         self.devices.get(endpoint_id)
     }
 
-    pub(crate) fn control_granted(&self, endpoint_id: &[u8; 32]) -> bool {
-        self.devices
-            .get(endpoint_id)
-            .is_some_and(|device| device.grants.control)
-    }
-
-    pub(crate) fn clipboard_granted(&self, endpoint_id: &[u8; 32]) -> bool {
-        self.devices
-            .get(endpoint_id)
-            .is_some_and(|device| device.grants.clipboard)
-    }
-
-    pub(crate) fn transfer_granted(&self, endpoint_id: &[u8; 32]) -> bool {
-        self.devices
-            .get(endpoint_id)
-            .is_some_and(|device| device.grants.transfer)
+    pub(crate) fn granted(&self, endpoint_id: &[u8; 32], grant: Grant) -> bool {
+        let Some(device) = self.devices.get(endpoint_id) else {
+            return false;
+        };
+        match grant {
+            Grant::Control => device.grants.control,
+            Grant::Clipboard => device.grants.clipboard,
+            Grant::Transfer => device.grants.transfer,
+        }
     }
 
     pub(crate) fn devices(&self) -> impl Iterator<Item = &Device> {

@@ -23,7 +23,6 @@ fn start_direct() -> Core {
             ..CoreConfig::default()
         },
         RelayMode::Disabled,
-        true,
     )
     .expect("loopback core")
 }
@@ -37,7 +36,6 @@ fn start_custom(url: &str) -> Core {
             ..CoreConfig::default()
         },
         RelayMode::Disabled,
-        true,
     )
     .expect("loopback core")
 }

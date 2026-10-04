@@ -173,7 +173,7 @@ fn invitation_lifetimes_and_malformed_tokens_are_rejected() {
 }
 
 #[test]
-fn accepting_a_new_invitation_resets_grants() {
+fn accepting_a_new_invitation_neither_adds_nor_removes_grants() {
     let host = start_direct();
     let controller = start_direct();
     host.start_hosting().unwrap();
@@ -189,7 +189,7 @@ fn accepting_a_new_invitation_resets_grants() {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
-            control: true,
+            control: false,
             clipboard: true,
             transfer: false,
         },
@@ -203,7 +203,7 @@ fn accepting_a_new_invitation_resets_grants() {
         )
         .unwrap();
     assert!(!info.grants.control);
-    assert!(!info.grants.clipboard);
+    assert!(info.grants.clipboard);
     assert!(!info.grants.transfer);
     let device = host
         .snapshot()
@@ -213,6 +213,7 @@ fn accepting_a_new_invitation_resets_grants() {
         .find(|device| device.endpoint_id == controller.endpoint_id())
         .unwrap();
     assert!(!device.grants.control);
+    assert!(device.grants.clipboard);
     assert!(matches!(
         controller.connect(&host.endpoint_id()),
         Err(Error::Unauthorized)

@@ -6,7 +6,7 @@ use crate::core::{Core, CoreConfig, Listen};
 use crate::error::Error;
 use crate::events::{CoreEvent, EventSubscription};
 use crate::pairing::{self, PairingFile, PairingPreview, PAIRING_FILE_EXTENSION};
-use crate::session::{SessionPhase, SessionRole};
+use crate::session::{Grants, SessionPhase, SessionRole};
 
 fn start_direct() -> Core {
     Core::boot(
@@ -15,7 +15,6 @@ fn start_direct() -> Core {
             ..CoreConfig::default()
         },
         RelayMode::Disabled,
-        true,
     )
     .expect("loopback core")
 }
@@ -282,4 +281,91 @@ fn exchange(host: &Core, controller: &Core, allow_control: bool) -> PairingFile 
     let preview: PairingPreview = controller.open_pairing_file(&file.bytes).unwrap();
     controller.confirm_pairing(&preview, &file.check).unwrap();
     file
+}
+
+#[test]
+fn approving_control_after_the_window_expires_is_refused() {
+    let host = start_direct();
+    let controller = start_direct();
+    let file = host
+        .export_pairing_file_at(Duration::from_secs(2), true, SystemTime::now())
+        .unwrap();
+    let preview = controller.open_pairing_file(&file.bytes).unwrap();
+    controller.confirm_pairing(&preview, &file.check).unwrap();
+    host.start_hosting().unwrap();
+    std::thread::scope(|scope| {
+        let connecting = scope.spawn(|| controller.connect(&host.endpoint_id()));
+        let request = wait_request(&host);
+        std::thread::sleep(Duration::from_secs(3));
+        assert!(matches!(
+            host.confirm_control_request(&request.check),
+            Err(Error::InvitationExpired)
+        ));
+        assert!(matches!(
+            connecting.join().unwrap(),
+            Err(Error::Unauthorized)
+        ));
+    });
+    assert!(host.control_request().unwrap().is_none());
+}
+
+#[test]
+fn accepting_a_second_invitation_keeps_authorized_grants() {
+    let host = start_direct();
+    let controller = start_direct();
+    let first = host.create_invitation(Duration::from_secs(60)).unwrap();
+    let saved = controller.accept_invitation(&first).unwrap();
+    assert!(!saved.grants.clipboard);
+    controller
+        .authorize(
+            &host.endpoint_id(),
+            Grants {
+                control: false,
+                clipboard: true,
+                transfer: true,
+            },
+        )
+        .unwrap();
+    let second = host.create_invitation(Duration::from_secs(60)).unwrap();
+    let kept = controller.accept_invitation(&second).unwrap();
+    assert!(!kept.grants.control);
+    assert!(kept.grants.clipboard);
+    assert!(kept.grants.transfer);
+}
+
+#[test]
+fn approving_control_keeps_authorized_clipboard_and_transfer() {
+    let host = start_direct();
+    let controller = start_direct();
+    // The host pairs the controller first so it can authorize side grants.
+    let listing = controller
+        .export_pairing_file(Duration::from_secs(60), false)
+        .unwrap();
+    let preview = host.open_pairing_file(&listing.bytes).unwrap();
+    host.confirm_pairing(&preview, &listing.check).unwrap();
+    host.authorize(
+        &controller.endpoint_id(),
+        Grants {
+            control: false,
+            clipboard: true,
+            transfer: true,
+        },
+    )
+    .unwrap();
+
+    exchange(&host, &controller, true);
+    host.start_hosting().unwrap();
+    let session = std::thread::scope(|scope| {
+        let connecting = scope.spawn(|| controller.connect(&host.endpoint_id()));
+        let request = wait_request(&host);
+        let granted = host.confirm_control_request(&request.check).unwrap();
+        assert!(granted.grants.control);
+        assert!(granted.grants.clipboard);
+        assert!(granted.grants.transfer);
+        connecting.join().unwrap().unwrap()
+    });
+    assert_eq!(session.phase, SessionPhase::Active);
+    controller.disconnect().unwrap();
+    wait_closed(&host, SessionRole::Host);
+    wait_closed(&controller, SessionRole::Controller);
 }

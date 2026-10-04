@@ -7,12 +7,12 @@ Two computers meet by handing each other a file. The signed invitation inside th
 1. On the computer that will be controlled, turn on Allow control and export a pairing file. The screen shows three digits. The app saves the bytes as a file ending in `.vnl`.
 2. Move that file with AirDrop, a message, email, or a USB stick. Iroh cannot carry this first file, because neither computer knows the other's address yet.
 3. On the other computer, open the file. The screen shows the same three digits. Type the digits from the computer that wrote the file. This saves that computer so Connect can dial it. It does not grant control.
-4. Connect. The controller's screen shows a second set of three digits, from `control_check`. The controlled computer shows the same digits and asks for them. Type those digits there. Control is granted for this controller only. Clipboard and file transfer stay off.
+4. Connect. The controller's screen shows a second set of three digits, from `control_check`. The controlled computer shows the same digits and asks for them. Type those digits there. Control is granted for this controller only, added to any clipboard or transfer grants the owner authorized before.
 5. Later, Connect uses the saved device. The file is not asked for again while the saved addresses still work.
 
 Allow control is a switch on the computer that exports the file. It is not stored in the file, so editing the file cannot turn it on. The switch lasts until the invitation expires (at most 15 minutes), until one controller is granted, or until the process stops. A restart needs a new file.
 
-The host has about one minute to type the controller's digits after Connect starts. Reject, or a mismatch, ends that attempt. The file can be used for another attempt until it expires.
+The host has about one minute to type the controller's digits after Connect starts. Reject, a mismatch, or an approval after the switch expired ends that attempt. The file can be used for another attempt until it expires.
 
 ## What the library does
 

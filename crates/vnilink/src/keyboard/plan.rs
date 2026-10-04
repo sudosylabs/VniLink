@@ -1,7 +1,7 @@
 //! Which host action one local key becomes.
 
 use crate::error::Error;
-use crate::input::{self, usage, InputEvent};
+use crate::input::{self, usage, InputEvent, Outbound};
 
 use super::{KeyboardMode, LocalKey};
 
@@ -11,6 +11,18 @@ pub(crate) enum Planned {
     Event(InputEvent),
     Text(String),
     Chord(String),
+}
+
+impl Planned {
+    /// The queue item this plan becomes. The map lives beside the plan so the
+    /// controller only learns one vocabulary for both.
+    pub(crate) fn outbound(self) -> Outbound {
+        match self {
+            Self::Event(event) => Outbound::Event(event),
+            Self::Text(text) => Outbound::Text(text),
+            Self::Chord(text) => Outbound::Chord(text),
+        }
+    }
 }
 
 /// Keys this controller is holding, and which of them were sent as positions.
@@ -64,7 +76,7 @@ impl KeyPlan {
         self.swap = swap;
         let mut planned = Vec::new();
         if key.down {
-            self.note(true, key.usage);
+            self.track_local(true, key.usage);
             if self.sends_character(mode, key.usage, key.text) {
                 self.release_levels(&mut planned);
                 planned.push(if mode == KeyboardMode::Translate {
@@ -81,7 +93,7 @@ impl KeyPlan {
                 self.press(key.usage, &mut planned);
             }
         } else {
-            self.note(false, key.usage);
+            self.track_local(false, key.usage);
             self.release(key.usage, &mut planned);
         }
         Ok(planned)
@@ -132,7 +144,7 @@ impl KeyPlan {
             return;
         }
         self.sent.push(usage);
-        planned.push(Planned::Event(self.wire(usage, true)));
+        planned.push(Planned::Event(self.key_event(usage, true)));
     }
 
     fn release(&mut self, usage: u16, planned: &mut Vec<Planned>) {
@@ -140,10 +152,11 @@ impl KeyPlan {
             return;
         }
         self.sent.retain(|held| *held != usage);
-        planned.push(Planned::Event(self.wire(usage, false)));
+        planned.push(Planned::Event(self.key_event(usage, false)));
     }
 
-    fn wire(&self, usage: u16, down: bool) -> InputEvent {
+    /// The physical key event with the Control/Command swap applied.
+    fn key_event(&self, usage: u16, down: bool) -> InputEvent {
         let event = InputEvent::Key { usage, down };
         if self.swap {
             input::swap_command_key(event)
@@ -152,7 +165,8 @@ impl KeyPlan {
         }
     }
 
-    fn note(&mut self, down: bool, usage: u16) {
+    /// Records a locally held usage for later release.
+    fn track_local(&mut self, down: bool, usage: u16) {
         if down {
             if !self.local.contains(&usage) {
                 self.local.push(usage);

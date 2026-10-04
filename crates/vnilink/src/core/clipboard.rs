@@ -3,12 +3,11 @@
 use super::*;
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::clipboard::{ClipboardRequest, ClipboardSender, HostClipboard};
 use crate::error::Error;
 use crate::events::CoreEvent;
-use crate::session::SessionPhase;
+use crate::session::Grant;
 
 impl Core {
     /// Installs the adapter that receives clipboard text on this host.
@@ -59,11 +58,8 @@ impl Core {
         crate::clipboard::check_text(text)?;
         let tx = {
             let state = self.alive_state()?;
-            let session = state.incoming.as_ref().ok_or(Error::NoSession)?;
-            if session.phase != SessionPhase::Active || session.id != session_id {
-                return Err(Error::NoSession);
-            }
-            if !state.trust.clipboard_granted(&session.peer_key) {
+            let session = live_session(&state, true, session_id)?;
+            if !state.trust.granted(&session.peer_key, Grant::Clipboard) {
                 return Err(Error::ClipboardDenied);
             }
             session
@@ -114,17 +110,13 @@ pub(super) async fn open_controller_clipboard(
         )
         .await;
     });
-    match tokio::time::timeout(Duration::from_secs(10), opened_rx).await {
-        Ok(Ok(Ok(()))) => {}
-        Ok(Ok(Err(error))) => {
-            task.abort();
-            return Err(error);
-        }
-        _ => {
-            task.abort();
-            return Err(Error::network("the clipboard stream did not open"));
-        }
-    }
+    let task =
+        match crate::sidestream::await_opened(task, opened_rx, "the clipboard stream did not open")
+            .await
+        {
+            Ok(task) => task,
+            Err(error) => return Err(error),
+        };
     {
         let mut state = lock(&shared.state);
         if let Some(session) = state.outgoing.as_mut() {
@@ -143,15 +135,7 @@ pub(super) fn clipboard_sender(
     session_id: u64,
     generation: Option<u64>,
 ) -> Result<ClipboardSender, Error> {
-    let session = if incoming {
-        state.incoming.as_ref()
-    } else {
-        state.outgoing.as_ref()
-    }
-    .ok_or(Error::NoSession)?;
-    if session.phase != SessionPhase::Active || session.id != session_id {
-        return Err(Error::NoSession);
-    }
+    let session = live_session(state, incoming, session_id)?;
     if let Some(generation) = generation {
         if session.generation != generation {
             return Err(Error::StaleSession);
@@ -164,25 +148,16 @@ pub(super) fn clipboard_sender(
 }
 
 pub(super) fn clipboard_round_trip(tx: ClipboardSender, text: &str) -> Result<(), Error> {
-    let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
-    match tx.try_send(ClipboardRequest {
-        text: text.to_owned(),
-        reply: reply_tx,
-    }) {
-        Ok(()) => {}
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => return Err(Error::Busy),
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-            return Err(Error::Unsupported("clipboard stream is closed"));
+    round_trip(&tx, "clipboard stream is closed", |reply| {
+        ClipboardRequest {
+            text: text.to_owned(),
+            reply,
         }
-    }
-    match reply_rx.recv_timeout(Duration::from_secs(10)) {
-        Ok(result) => result,
-        Err(_) => Err(Error::Timeout),
-    }
+    })
 }
 
 pub(super) fn apply_clipboard(shared: &Shared, peer: &[u8; 32], text: &str) -> Result<(), Error> {
-    if !lock(&shared.state).trust.clipboard_granted(peer) {
+    if !lock(&shared.state).trust.granted(peer, Grant::Clipboard) {
         return Err(Error::ClipboardDenied);
     }
     let mut slot = lock(&shared.clipboard);

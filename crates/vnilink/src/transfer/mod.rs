@@ -31,4 +31,4 @@ pub(crate) use frame::{TransferRequest, TransferSender};
 pub(crate) use path::{check_name, check_submission, checked_size, prepare_directory, write_file};
 #[cfg(test)]
 pub(crate) use stream::finish_decision;
-pub(crate) use stream::{accept_bi, attach, exchange};
+pub(crate) use stream::{attach, exchange};

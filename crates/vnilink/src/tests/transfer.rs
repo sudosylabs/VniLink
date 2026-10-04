@@ -19,7 +19,6 @@ fn start_direct() -> Core {
             ..CoreConfig::default()
         },
         RelayMode::Disabled,
-        true,
     )
     .expect("loopback core")
 }

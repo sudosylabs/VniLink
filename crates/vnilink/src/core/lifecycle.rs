@@ -22,7 +22,7 @@ use crate::trust::Trust;
 impl Core {
     pub fn start(config: CoreConfig) -> Result<Self, Error> {
         let relay_mode = config.relay.to_relay_mode()?;
-        Self::boot(config, relay_mode, false)
+        Self::boot(config, relay_mode)
     }
 
     /// Loads the installation record and binds an endpoint.
@@ -56,14 +56,15 @@ impl Core {
         )
     }
 
-    pub(crate) fn boot(
-        config: CoreConfig,
-        relay_mode: RelayMode,
-        direct_only: bool,
-    ) -> Result<Self, Error> {
+    /// `direct_only` is loopback-test scaffolding: the product exposes the
+    /// public default and custom relays alone, and always passes false here.
+    pub(crate) fn boot(config: CoreConfig, relay_mode: RelayMode) -> Result<Self, Error> {
+        let direct_only = matches!(&relay_mode, RelayMode::Disabled);
         Self::boot_installed(config, relay_mode, direct_only, None)
     }
 
+    /// `direct_only` is loopback-test scaffolding beside `boot`: the saved
+    /// relay decides the bound mode in the product, which always passes false.
     pub(super) fn open_with(
         store: Arc<dyn InstallationStore>,
         config: OpenConfig,

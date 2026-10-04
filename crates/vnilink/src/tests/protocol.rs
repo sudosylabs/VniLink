@@ -2,7 +2,8 @@ use crate::error::Error;
 use crate::input::InputEvent;
 use crate::input::MAX_KEY_TEXT;
 use crate::protocol::{
-    error_code, ControlMessage, KeyText, Quality, RejectCode, MAX_CONTROL_FRAME, PROTOCOL_VERSION,
+    error_code, ControlMessage, KeyText, Quality, RejectCode, SessionStamp, MAX_CONTROL_FRAME,
+    PROTOCOL_VERSION,
 };
 
 #[test]
@@ -12,39 +13,32 @@ fn control_messages_round_trip() {
             version: PROTOCOL_VERSION,
         },
         ControlMessage::Accept {
-            session_id: 7,
-            generation: 3,
+            stamp: SessionStamp::new(7, 3),
             monitor_width: 1920,
             monitor_height: 1080,
         },
         ControlMessage::Reject(RejectCode::Unauthorized),
         ControlMessage::Input {
-            session_id: 7,
-            generation: 3,
+            stamp: SessionStamp::new(7, 3),
             event: InputEvent::key_down(crate::input::usage::A),
         },
         ControlMessage::Input {
-            session_id: 7,
-            generation: 3,
+            stamp: SessionStamp::new(7, 3),
             event: InputEvent::pointer(15, 20),
         },
         ControlMessage::Input {
-            session_id: 7,
-            generation: 3,
+            stamp: SessionStamp::new(7, 3),
             event: InputEvent::wheel(0, -1),
         },
         ControlMessage::Keyframe {
-            session_id: 7,
-            generation: 3,
+            stamp: SessionStamp::new(7, 3),
         },
         ControlMessage::Text {
-            session_id: 7,
-            generation: 3,
+            stamp: SessionStamp::new(7, 3),
             text: KeyText("héllo".to_owned()),
         },
         ControlMessage::Chord {
-            session_id: 7,
-            generation: 3,
+            stamp: SessionStamp::new(7, 3),
             text: KeyText("@".to_owned()),
         },
     ];
@@ -101,16 +95,14 @@ fn oversized_and_unknown_frames_are_malformed() {
 #[test]
 fn finished_text_hides_the_characters_and_rejects_bad_bytes() {
     let message = ControlMessage::Text {
-        session_id: 4,
-        generation: 9,
+        stamp: SessionStamp::new(4, 9),
         text: KeyText("vnl-secret-héllo".to_owned()),
     };
     assert!(!format!("{message:?}").contains("vnl-secret"));
     assert!(!format!("{message:?}").contains("héllo"));
     assert_eq!(ControlMessage::decode(&message.encode()).unwrap(), message);
     let chord = ControlMessage::Chord {
-        session_id: 4,
-        generation: 9,
+        stamp: SessionStamp::new(4, 9),
         text: KeyText("@".to_owned()),
     };
     assert!(!format!("{chord:?}").contains('@'));
@@ -122,8 +114,7 @@ fn finished_text_hides_the_characters_and_rejects_bad_bytes() {
     assert_eq!(
         ControlMessage::decode(&empty).unwrap(),
         ControlMessage::Text {
-            session_id: 1,
-            generation: 2,
+            stamp: SessionStamp::new(1, 2),
             text: KeyText(String::new()),
         }
     );
@@ -183,8 +174,7 @@ fn every_reject_code_and_input_shape_round_trips() {
     ];
     for event in events {
         let message = ControlMessage::Input {
-            session_id: u64::MAX,
-            generation: 0,
+            stamp: SessionStamp::new(u64::MAX, 0),
             event,
         };
         assert_eq!(ControlMessage::decode(&message.encode()).unwrap(), message);

@@ -151,21 +151,18 @@ pub(crate) enum ControlMessage {
         version: u16,
     },
     Accept {
-        session_id: u64,
-        generation: u64,
+        stamp: SessionStamp,
         monitor_width: u16,
         monitor_height: u16,
     },
     Reject(RejectCode),
     Input {
-        session_id: u64,
-        generation: u64,
+        stamp: SessionStamp,
         event: InputEvent,
     },
     /// Asks the host to encode a keyframe. Sent on the control stream, not the video stream.
     Keyframe {
-        session_id: u64,
-        generation: u64,
+        stamp: SessionStamp,
     },
     /// Home relay URLs and direct sockets for the sender. No credential, no grants.
     Addresses {
@@ -177,17 +174,30 @@ pub(crate) enum ControlMessage {
     /// Finished characters for the host to type. Not a key position and not
     /// a clipboard paste. The bytes are UTF-8 and are not logged.
     Text {
-        session_id: u64,
-        generation: u64,
+        stamp: SessionStamp,
         text: KeyText,
     },
     /// Characters the host types by pressing its own layout's chord.
     /// The bytes are UTF-8 and are not logged.
     Chord {
-        session_id: u64,
-        generation: u64,
+        stamp: SessionStamp,
         text: KeyText,
     },
+}
+
+/// Session identity stamped on every control message that belongs to one.
+/// The id names the session; the generation fences out a previous dial of it.
+/// The wire order is unchanged: id bytes, then generation bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SessionStamp {
+    pub id: u64,
+    pub generation: u64,
+}
+
+impl SessionStamp {
+    pub(crate) fn new(id: u64, generation: u64) -> Self {
+        Self { id, generation }
+    }
 }
 
 impl ControlMessage {
@@ -195,15 +205,13 @@ impl ControlMessage {
         match self {
             Self::Hello { version } => vec![1, (version >> 8) as u8, *version as u8],
             Self::Accept {
-                session_id,
-                generation,
+                stamp,
                 monitor_width,
                 monitor_height,
             } => {
                 let mut bytes = Vec::with_capacity(21);
                 bytes.push(2);
-                bytes.extend_from_slice(&session_id.to_be_bytes());
-                bytes.extend_from_slice(&generation.to_be_bytes());
+                write_stamp(stamp, &mut bytes);
                 bytes.extend_from_slice(&monitor_width.to_be_bytes());
                 bytes.extend_from_slice(&monitor_height.to_be_bytes());
                 bytes
@@ -212,40 +220,23 @@ impl ControlMessage {
                 let value = *code as u16;
                 vec![3, (value >> 8) as u8, value as u8]
             }
-            Self::Input {
-                session_id,
-                generation,
-                event,
-            } => {
+            Self::Input { stamp, event } => {
                 let mut bytes = Vec::with_capacity(22);
                 bytes.push(4);
-                bytes.extend_from_slice(&session_id.to_be_bytes());
-                bytes.extend_from_slice(&generation.to_be_bytes());
+                write_stamp(stamp, &mut bytes);
                 event.encode(&mut bytes);
                 bytes
             }
-            Self::Keyframe {
-                session_id,
-                generation,
-            } => {
+            Self::Keyframe { stamp } => {
                 let mut bytes = Vec::with_capacity(17);
                 bytes.push(5);
-                bytes.extend_from_slice(&session_id.to_be_bytes());
-                bytes.extend_from_slice(&generation.to_be_bytes());
+                write_stamp(stamp, &mut bytes);
                 bytes
             }
             Self::Addresses { relays, direct } => address::encode(relays, direct),
             Self::Close => vec![7],
-            Self::Text {
-                session_id,
-                generation,
-                text,
-            } => encode_text(8, *session_id, *generation, text),
-            Self::Chord {
-                session_id,
-                generation,
-                text,
-            } => encode_text(9, *session_id, *generation, text),
+            Self::Text { stamp, text } => encode_text(8, *stamp, text),
+            Self::Chord { stamp, text } => encode_text(9, *stamp, text),
         }
     }
 
@@ -261,8 +252,7 @@ impl ControlMessage {
                 version: u16::from_be_bytes([bytes[1], bytes[2]]),
             }),
             2 if bytes.len() == 21 => Ok(Self::Accept {
-                session_id: u64::from_be_bytes(bytes[1..9].try_into().expect("8 bytes")),
-                generation: u64::from_be_bytes(bytes[9..17].try_into().expect("8 bytes")),
+                stamp: decode_stamp(bytes),
                 monitor_width: u16::from_be_bytes([bytes[17], bytes[18]]),
                 monitor_height: u16::from_be_bytes([bytes[19], bytes[20]]),
             }),
@@ -270,13 +260,11 @@ impl ControlMessage {
                 bytes[1], bytes[2],
             ]))?)),
             4 if bytes.len() > 17 => Ok(Self::Input {
-                session_id: u64::from_be_bytes(bytes[1..9].try_into().expect("8 bytes")),
-                generation: u64::from_be_bytes(bytes[9..17].try_into().expect("8 bytes")),
+                stamp: decode_stamp(bytes),
                 event: InputEvent::decode(&bytes[17..])?,
             }),
             5 if bytes.len() == 17 => Ok(Self::Keyframe {
-                session_id: u64::from_be_bytes(bytes[1..9].try_into().expect("8 bytes")),
-                generation: u64::from_be_bytes(bytes[9..17].try_into().expect("8 bytes")),
+                stamp: decode_stamp(bytes),
             }),
             address::TAG => {
                 let announcement = address::decode(bytes)?;
@@ -287,13 +275,11 @@ impl ControlMessage {
             }
             7 if bytes.len() == 1 => Ok(Self::Close),
             8 if bytes.len() >= 17 => Ok(Self::Text {
-                session_id: u64::from_be_bytes(bytes[1..9].try_into().expect("8 bytes")),
-                generation: u64::from_be_bytes(bytes[9..17].try_into().expect("8 bytes")),
+                stamp: decode_stamp(bytes),
                 text: decode_text(&bytes[17..])?,
             }),
             9 if bytes.len() >= 17 => Ok(Self::Chord {
-                session_id: u64::from_be_bytes(bytes[1..9].try_into().expect("8 bytes")),
-                generation: u64::from_be_bytes(bytes[9..17].try_into().expect("8 bytes")),
+                stamp: decode_stamp(bytes),
                 text: decode_text(&bytes[17..])?,
             }),
             _ => Err(Error::Malformed),
@@ -301,11 +287,22 @@ impl ControlMessage {
     }
 }
 
-fn encode_text(tag: u8, session_id: u64, generation: u64, text: &KeyText) -> Vec<u8> {
+fn write_stamp(stamp: &SessionStamp, bytes: &mut Vec<u8>) {
+    bytes.extend_from_slice(&stamp.id.to_be_bytes());
+    bytes.extend_from_slice(&stamp.generation.to_be_bytes());
+}
+
+fn decode_stamp(bytes: &[u8]) -> SessionStamp {
+    SessionStamp::new(
+        u64::from_be_bytes(bytes[1..9].try_into().expect("8 bytes")),
+        u64::from_be_bytes(bytes[9..17].try_into().expect("8 bytes")),
+    )
+}
+
+fn encode_text(tag: u8, stamp: SessionStamp, text: &KeyText) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(17 + text.0.len());
     bytes.push(tag);
-    bytes.extend_from_slice(&session_id.to_be_bytes());
-    bytes.extend_from_slice(&generation.to_be_bytes());
+    write_stamp(&stamp, &mut bytes);
     bytes.extend_from_slice(text.0.as_bytes());
     bytes
 }

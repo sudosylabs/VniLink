@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::session::Grants;
+use crate::session::{Grant, Grants};
 use crate::trust::{Device, Trust};
 
 fn device(byte: u8) -> Device {
@@ -21,7 +21,7 @@ fn grants_are_directional_records_on_the_host_that_stores_them() {
     trust.pair(paired).unwrap();
     let mut id = [0u8; 32];
     id[0] = 1;
-    assert!(!trust.control_granted(&id));
+    assert!(!trust.granted(&id, Grant::Control));
     trust
         .authorize(
             &id,
@@ -32,16 +32,19 @@ fn grants_are_directional_records_on_the_host_that_stores_them() {
             },
         )
         .unwrap();
-    assert!(trust.control_granted(&id));
-    trust.revoke(&id).unwrap();
-    assert!(!trust.control_granted(&id));
+    assert!(trust.granted(&id, Grant::Control));
+    trust.authorize(&id, Grants::default()).unwrap();
+    assert!(!trust.granted(&id, Grant::Control));
     let mut other = [0u8; 32];
     other[0] = 2;
     assert!(matches!(
         trust.authorize(&other, Grants::default()),
         Err(Error::NotPaired)
     ));
-    assert!(matches!(trust.revoke(&other), Err(Error::NotPaired)));
+    assert!(matches!(
+        trust.authorize(&other, Grants::default()),
+        Err(Error::NotPaired)
+    ));
     assert!(trust.get(&id).is_some());
 }
 
@@ -73,10 +76,10 @@ fn the_directory_holds_128_devices_and_replacing_one_does_not_grow_it() {
             },
         )
         .unwrap();
-    assert!(!trust.control_granted(&id));
-    trust.revoke(&id).unwrap();
+    assert!(!trust.granted(&id, Grant::Control));
+    trust.authorize(&id, Grants::default()).unwrap();
     assert!(trust.get(&id).is_some());
-    assert!(!trust.control_granted(&id));
+    assert!(!trust.granted(&id, Grant::Control));
     trust
         .authorize(
             &id,
@@ -87,5 +90,5 @@ fn the_directory_holds_128_devices_and_replacing_one_does_not_grow_it() {
             },
         )
         .unwrap();
-    assert!(trust.control_granted(&id));
+    assert!(trust.granted(&id, Grant::Control));
 }

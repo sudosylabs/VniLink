@@ -20,7 +20,6 @@ fn start_direct() -> Core {
             ..CoreConfig::default()
         },
         RelayMode::Disabled,
-        true,
     )
     .expect("loopback core")
 }
@@ -306,7 +305,10 @@ fn predicted_frames_drop_until_the_next_keyframe() {
     }
     assert_eq!(queue.len(), VIDEO_QUEUE);
     assert_eq!(queue.push(frame(false, 99)), VideoPush::KeyframeNeeded);
-    assert_eq!(queue.len(), 0);
+    assert_eq!(queue.len(), 1);
+    let kept = queue.pop().unwrap();
+    assert!(kept.keyframe);
+    assert_eq!(kept.timestamp_us, 1);
     assert!(queue.dropped() >= 1);
     assert_eq!(queue.push(frame(false, 100)), VideoPush::StillNeedsKeyframe);
     assert_eq!(queue.push(frame(true, 101)), VideoPush::Queued);

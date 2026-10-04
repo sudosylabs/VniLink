@@ -7,8 +7,9 @@
 //! connection already names the sender. A later reconnect dials this stored
 //! list instead of the addresses from the original invitation.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 
+use crate::codec::{read_array, read_sockaddr, read_u8, write_sockaddr};
 use crate::error::Error;
 use crate::invitation::{self, MAX_DIRECT_ADDRS};
 use crate::relay::{self, MAX_CUSTOM_RELAYS};
@@ -71,18 +72,7 @@ pub(crate) fn encode(relays: &[String], direct: &[SocketAddr]) -> Vec<u8> {
     }
     bytes.push(direct.len() as u8);
     for addr in direct {
-        match addr {
-            SocketAddr::V4(addr) => {
-                bytes.push(4);
-                bytes.extend_from_slice(&addr.ip().octets());
-                bytes.extend_from_slice(&addr.port().to_be_bytes());
-            }
-            SocketAddr::V6(addr) => {
-                bytes.push(6);
-                bytes.extend_from_slice(&addr.ip().octets());
-                bytes.extend_from_slice(&addr.port().to_be_bytes());
-            }
-        }
+        write_sockaddr(&mut bytes, addr);
     }
     bytes
 }
@@ -92,13 +82,15 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Announcement, Error> {
         return Err(Error::Malformed);
     }
     let mut cursor = 1;
-    let relay_count = read_u8(bytes, &mut cursor)?;
+    let relay_count = read_u8(bytes, &mut cursor).ok_or(Error::Malformed)?;
     if relay_count as usize > MAX_CUSTOM_RELAYS {
         return Err(Error::Malformed);
     }
     let mut relays = Vec::with_capacity(relay_count as usize);
     for _ in 0..relay_count {
-        let length = u16::from_be_bytes(read_array::<2>(bytes, &mut cursor)?) as usize;
+        let length =
+            u16::from_be_bytes(read_array::<2>(bytes, &mut cursor).ok_or(Error::Malformed)?)
+                as usize;
         let end = cursor.checked_add(length).ok_or(Error::Malformed)?;
         if end > bytes.len() {
             return Err(Error::Malformed);
@@ -107,47 +99,16 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Announcement, Error> {
         relays.push(text.to_owned());
         cursor = end;
     }
-    let addr_count = read_u8(bytes, &mut cursor)?;
+    let addr_count = read_u8(bytes, &mut cursor).ok_or(Error::Malformed)?;
     if addr_count as usize > MAX_DIRECT_ADDRS {
         return Err(Error::Malformed);
     }
     let mut direct = Vec::with_capacity(addr_count as usize);
     for _ in 0..addr_count {
-        let family = read_u8(bytes, &mut cursor)?;
-        let addr = match family {
-            4 => {
-                let octets = read_array::<4>(bytes, &mut cursor)?;
-                let port = u16::from_be_bytes(read_array::<2>(bytes, &mut cursor)?);
-                SocketAddr::new(IpAddr::V4(Ipv4Addr::from(octets)), port)
-            }
-            6 => {
-                let octets = read_array::<16>(bytes, &mut cursor)?;
-                let port = u16::from_be_bytes(read_array::<2>(bytes, &mut cursor)?);
-                SocketAddr::new(IpAddr::V6(Ipv6Addr::from(octets)), port)
-            }
-            _ => return Err(Error::Malformed),
-        };
-        direct.push(addr);
+        direct.push(read_sockaddr(bytes, &mut cursor).ok_or(Error::Malformed)?);
     }
     if cursor != bytes.len() {
         return Err(Error::Malformed);
     }
     canonical(&relays, &direct)
-}
-
-fn read_u8(bytes: &[u8], cursor: &mut usize) -> Result<u8, Error> {
-    let value = *bytes.get(*cursor).ok_or(Error::Malformed)?;
-    *cursor += 1;
-    Ok(value)
-}
-
-fn read_array<const N: usize>(bytes: &[u8], cursor: &mut usize) -> Result<[u8; N], Error> {
-    let end = cursor.checked_add(N).ok_or(Error::Malformed)?;
-    if end > bytes.len() {
-        return Err(Error::Malformed);
-    }
-    let mut array = [0u8; N];
-    array.copy_from_slice(&bytes[*cursor..end]);
-    *cursor = end;
-    Ok(array)
 }

@@ -24,6 +24,34 @@ fn the_command_swap_is_process_local_and_off_by_default() {
 }
 
 #[test]
+fn the_swap_waits_for_held_keys_like_the_mode_switch() {
+    let host = start_direct();
+    let controller = start_direct();
+    pair(&host, &controller);
+    let session = controller.connect(&host.endpoint_id()).unwrap();
+    controller
+        .submit_local_key(
+            session.id,
+            session.generation,
+            local(crate::input::usage::A, true, "a"),
+        )
+        .unwrap();
+    assert!(matches!(
+        controller.set_swap_control_and_command(true),
+        Err(Error::InvalidSetting(_))
+    ));
+    controller
+        .submit_local_key(
+            session.id,
+            session.generation,
+            local(crate::input::usage::A, false, "a"),
+        )
+        .unwrap();
+    controller.set_swap_control_and_command(true).unwrap();
+    assert!(controller.swap_control_and_command().unwrap());
+}
+
+#[test]
 fn a_swapped_command_is_the_key_the_host_releases() {
     let host = start_direct();
     let controller = start_direct();

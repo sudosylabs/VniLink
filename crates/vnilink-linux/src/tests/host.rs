@@ -1,34 +1,30 @@
-use vnilink::CoreEvent;
-use vnilink_media::{parse_annex_b, Error, FrameSink, PumpOutput, Quality, RawFrame};
+use vnilink_media::Quality;
 
+#[cfg(not(target_os = "linux"))]
+use vnilink_media::Error;
+#[cfg(target_os = "linux")]
+use vnilink_media::{parse_annex_b, FrameSink, PumpOutput, RawFrame};
+
+use crate::encode::LinuxEncoder;
 use crate::host::HostSession;
-
-#[test]
-fn a_quality_below_two_pixels_is_rejected() {
-    let quality = Quality::new(500, 30, 1, 1).unwrap();
-    assert!(matches!(
-        HostSession::open(64, 64, quality),
-        Err(Error::InvalidSetting(
-            "encoded size must be at least 2 by 2"
-        ))
-    ));
-}
 
 #[cfg(not(target_os = "linux"))]
 #[test]
 fn the_host_encoder_is_unavailable() {
     let quality = Quality::new(500, 30, 64, 64).unwrap();
     assert!(matches!(
-        HostSession::open(64, 64, quality),
+        HostSession::open(64, 64, quality, LinuxEncoder::open),
         Err(Error::Unsupported("VA-API H.264"))
     ));
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn a_paced_picture_is_published_and_a_fast_one_is_skipped() {
+fn the_platform_encoder_plugs_into_the_generic_session() {
+    use vnilink::CoreEvent;
+
     let quality = Quality::new(500, 30, 32, 32).unwrap();
-    let mut session = match HostSession::open(64, 64, quality) {
+    let mut session = match HostSession::open(64, 64, quality, LinuxEncoder::open) {
         Ok(session) => session,
         Err(Error::Unsupported("VA-API H.264")) => return,
         Err(err) => panic!("VA-API failed to open: {err}"),
@@ -56,12 +52,6 @@ fn a_paced_picture_is_published_and_a_fast_one_is_skipped() {
         .unwrap();
     assert!(matches!(forced, PumpOutput::Encoded(_)));
     assert!(sink.frames[1].keyframe);
-    assert!(matches!(
-        session.publish(&solid(32, 32, 50_000), &mut sink, 7),
-        Err(vnilink_media::PublishError::Media(Error::InvalidFrame(
-            "the frame size does not match the encoder"
-        )))
-    ));
 }
 
 #[cfg(target_os = "linux")]

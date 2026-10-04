@@ -48,8 +48,12 @@ impl VideoQueue {
             return VideoPush::StillNeedsKeyframe;
         }
         if self.frames.len() >= VIDEO_QUEUE {
-            self.dropped = self.dropped.saturating_add((self.frames.len() + 1) as u64);
-            self.frames.clear();
+            // A full queue drops predicted frames until the next keyframe. A
+            // buffered keyframe stays: the network task may not have sent it,
+            // and it is what the decoder restarts from.
+            let dropped = self.frames.iter().filter(|frame| !frame.keyframe).count();
+            self.dropped = self.dropped.saturating_add((dropped + 1) as u64);
+            self.frames.retain(|frame| frame.keyframe);
             self.needs_keyframe = true;
             return VideoPush::KeyframeNeeded;
         }
@@ -81,6 +85,10 @@ pub(crate) struct VideoOutbox {
     notify: Notify,
 }
 
+fn lock(queue: &Mutex<VideoQueue>) -> std::sync::MutexGuard<'_, VideoQueue> {
+    queue.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
 impl VideoOutbox {
     pub(crate) fn new() -> Self {
         Self {
@@ -90,13 +98,7 @@ impl VideoOutbox {
     }
 
     pub(crate) fn push(&self, frame: EncodedFrame) -> VideoPush {
-        let result = {
-            let mut queue = self
-                .queue
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            queue.push(frame)
-        };
+        let result = lock(&self.queue).push(frame);
         if matches!(result, VideoPush::Queued) {
             self.notify.notify_one();
         }
@@ -104,10 +106,7 @@ impl VideoOutbox {
     }
 
     pub(crate) fn drain(&self) -> Vec<EncodedFrame> {
-        self.queue
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .drain()
+        lock(&self.queue).drain()
     }
 
     pub(crate) fn notified(&self) -> tokio::sync::futures::Notified<'_> {
@@ -130,11 +129,7 @@ impl VideoInbox {
     }
 
     pub(crate) fn push(&self, frame: EncodedFrame) -> VideoPush {
-        let mut queue = self
-            .queue
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        let result = queue.push(frame);
+        let result = lock(&self.queue).push(frame);
         if matches!(result, VideoPush::Queued) {
             self.wake.notify_one();
         }
@@ -142,25 +137,15 @@ impl VideoInbox {
     }
 
     pub(crate) fn reset(&self) {
-        let mut queue = self
-            .queue
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        *queue = VideoQueue::new();
+        *lock(&self.queue) = VideoQueue::new();
     }
 
     pub(crate) fn try_pop(&self) -> Option<EncodedFrame> {
-        self.queue
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .pop()
+        lock(&self.queue).pop()
     }
 
     pub(crate) fn pop_timeout(&self, timeout: Duration) -> Option<EncodedFrame> {
-        let mut queue = self
-            .queue
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+        let mut queue = lock(&self.queue);
         let deadline = Instant::now() + timeout;
         loop {
             if let Some(frame) = queue.pop() {
@@ -182,10 +167,7 @@ impl VideoInbox {
     }
 
     pub(crate) fn dropped(&self) -> u64 {
-        self.queue
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .dropped()
+        lock(&self.queue).dropped()
     }
 }
 

@@ -6,6 +6,7 @@
 //! - [`pairing`] — invitations, pairing files, control approval
 //! - [`connect`] — authorize, connect, disconnect, redial
 //! - [`keys`] — key, pointer, and keyboard mode
+//! - [`link`] — the live link and the address refresh both roles share
 //! - [`clipboard`] — clipboard stream
 //! - [`files`] — file transfer stream
 //! - [`video`] — encoded frames
@@ -40,6 +41,7 @@ mod files;
 mod host;
 mod keys;
 mod lifecycle;
+mod link;
 mod pairing;
 mod video;
 mod wire;
@@ -371,6 +373,28 @@ fn parse_endpoint_id(value: &str) -> Result<[u8; 32], Error> {
     Ok(*key.as_bytes())
 }
 
+/// Rewrites one device's grants with persist-or-rollback. Returns the previous
+/// grants. Both authorize and revoke funnel through here so a failed save
+/// never leaves memory ahead of the store.
+fn store_grants(
+    shared: &Shared,
+    state: &mut State,
+    key: &[u8; 32],
+    grants: Grants,
+) -> Result<Grants, Error> {
+    let previous = state
+        .trust
+        .get(key)
+        .map(|device| device.grants)
+        .ok_or(Error::NotPaired)?;
+    state.trust.authorize(key, grants)?;
+    if let Err(error) = persist(shared, state) {
+        let _ = state.trust.authorize(key, previous);
+        return Err(error);
+    }
+    Ok(previous)
+}
+
 struct Installed {
     trust: Trust,
     replay: ReplayCache,
@@ -393,4 +417,40 @@ fn persist(shared: &Shared, state: &State) -> Result<(), Error> {
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
+/// The live session on one side. Lookup, active phase, and id match live here
+/// so the clipboard, transfer, and control paths share one rule.
+fn live_session(state: &State, incoming: bool, session_id: u64) -> Result<&LiveSession, Error> {
+    let session = if incoming {
+        state.incoming.as_ref()
+    } else {
+        state.outgoing.as_ref()
+    }
+    .ok_or(Error::NoSession)?;
+    if session.phase != SessionPhase::Active || session.id != session_id {
+        return Err(Error::NoSession);
+    }
+    Ok(session)
+}
+
+/// Sends one side-stream request and waits for its reply. A full queue is
+/// busy; a gone stream and a silent one end the wait.
+fn round_trip<R>(
+    tx: &tokio::sync::mpsc::Sender<R>,
+    closed: &'static str,
+    request: impl FnOnce(std::sync::mpsc::SyncSender<Result<(), Error>>) -> R,
+) -> Result<(), Error> {
+    let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+    match tx.try_send(request(reply_tx)) {
+        Ok(()) => {}
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => return Err(Error::Busy),
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+            return Err(Error::Unsupported(closed));
+        }
+    }
+    match reply_rx.recv_timeout(Duration::from_secs(10)) {
+        Ok(result) => result,
+        Err(_) => Err(Error::Timeout),
+    }
 }

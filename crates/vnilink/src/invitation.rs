@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use iroh::{PublicKey, SecretKey, Signature};
 use rand::RngExt;
 
+use crate::codec::{read_array, read_u8, write_sockaddr};
 use crate::error::Error;
 use crate::relay::parse_relay_url;
 
@@ -134,12 +135,15 @@ fn parse(bytes: &[u8]) -> Result<(Invitation, [u8; 16], Signature), Error> {
         return Err(Error::InvalidInvitation("truncated invitation"));
     }
     let mut cursor = 0;
-    let endpoint_id = read_array::<32>(bytes, &mut cursor)?;
-    let nonce = read_array::<16>(bytes, &mut cursor)?;
-    let expires_at_ms = u64::from_be_bytes(read_array::<8>(bytes, &mut cursor)?);
+    let truncated = || Error::InvalidInvitation("truncated invitation");
+    let endpoint_id = read_array::<32>(bytes, &mut cursor).ok_or_else(truncated)?;
+    let nonce = read_array::<16>(bytes, &mut cursor).ok_or_else(truncated)?;
+    let expires_at_ms =
+        u64::from_be_bytes(read_array::<8>(bytes, &mut cursor).ok_or_else(truncated)?);
     let relays = read_relays(bytes, &mut cursor)?;
     let direct = read_addrs(bytes, &mut cursor)?;
-    let signature = Signature::from_bytes(&read_array::<64>(bytes, &mut cursor)?);
+    let signature =
+        Signature::from_bytes(&read_array::<64>(bytes, &mut cursor).ok_or_else(truncated)?);
     if cursor != bytes.len() {
         return Err(Error::InvalidInvitation("trailing bytes"));
     }
@@ -183,16 +187,17 @@ fn write_relays(bytes: &mut Vec<u8>, relays: &[String]) -> Result<(), Error> {
 }
 
 fn read_relays(bytes: &[u8], cursor: &mut usize) -> Result<Vec<String>, Error> {
-    let count = *bytes
-        .get(*cursor)
-        .ok_or(Error::InvalidInvitation("truncated invitation"))? as usize;
-    *cursor += 1;
+    let count =
+        read_u8(bytes, cursor).ok_or(Error::InvalidInvitation("truncated invitation"))? as usize;
     if count > crate::relay::MAX_CUSTOM_RELAYS {
         return Err(Error::InvalidInvitation("too many relay URLs"));
     }
     let mut relays = Vec::with_capacity(count);
     for _ in 0..count {
-        let length = u16::from_be_bytes(read_array::<2>(bytes, cursor)?) as usize;
+        let length = u16::from_be_bytes(
+            read_array::<2>(bytes, cursor)
+                .ok_or(Error::InvalidInvitation("truncated invitation"))?,
+        ) as usize;
         let end = cursor
             .checked_add(length)
             .ok_or(Error::InvalidInvitation("truncated invitation"))?;
@@ -214,45 +219,38 @@ fn write_addrs(bytes: &mut Vec<u8>, addrs: &[SocketAddr]) -> Result<(), Error> {
     }
     bytes.push(addrs.len() as u8);
     for addr in addrs {
-        match addr {
-            SocketAddr::V4(addr) => {
-                bytes.push(4);
-                bytes.extend_from_slice(&addr.ip().octets());
-                bytes.extend_from_slice(&addr.port().to_be_bytes());
-            }
-            SocketAddr::V6(addr) => {
-                bytes.push(6);
-                bytes.extend_from_slice(&addr.ip().octets());
-                bytes.extend_from_slice(&addr.port().to_be_bytes());
-            }
-        }
+        write_sockaddr(bytes, addr);
     }
     Ok(())
 }
 
 fn read_addrs(bytes: &[u8], cursor: &mut usize) -> Result<Vec<SocketAddr>, Error> {
-    let count = *bytes
-        .get(*cursor)
-        .ok_or(Error::InvalidInvitation("truncated invitation"))? as usize;
-    *cursor += 1;
+    let count =
+        read_u8(bytes, cursor).ok_or(Error::InvalidInvitation("truncated invitation"))? as usize;
     if count > MAX_DIRECT_ADDRS {
         return Err(Error::InvalidInvitation("too many direct addresses"));
     }
     let mut addrs = Vec::with_capacity(count);
     for _ in 0..count {
-        let family = *bytes
-            .get(*cursor)
-            .ok_or(Error::InvalidInvitation("truncated invitation"))?;
-        *cursor += 1;
+        let family =
+            read_u8(bytes, cursor).ok_or(Error::InvalidInvitation("truncated invitation"))?;
         let addr = match family {
             4 => {
-                let octets = read_array::<4>(bytes, cursor)?;
-                let port = u16::from_be_bytes(read_array::<2>(bytes, cursor)?);
+                let octets = read_array::<4>(bytes, cursor)
+                    .ok_or(Error::InvalidInvitation("truncated invitation"))?;
+                let port = u16::from_be_bytes(
+                    read_array::<2>(bytes, cursor)
+                        .ok_or(Error::InvalidInvitation("truncated invitation"))?,
+                );
                 SocketAddr::new(IpAddr::V4(Ipv4Addr::from(octets)), port)
             }
             6 => {
-                let octets = read_array::<16>(bytes, cursor)?;
-                let port = u16::from_be_bytes(read_array::<2>(bytes, cursor)?);
+                let octets = read_array::<16>(bytes, cursor)
+                    .ok_or(Error::InvalidInvitation("truncated invitation"))?;
+                let port = u16::from_be_bytes(
+                    read_array::<2>(bytes, cursor)
+                        .ok_or(Error::InvalidInvitation("truncated invitation"))?,
+                );
                 SocketAddr::new(IpAddr::V6(Ipv6Addr::from(octets)), port)
             }
             _ => return Err(Error::InvalidInvitation("unknown address family")),
@@ -285,19 +283,6 @@ pub(crate) fn unix_ms(time: SystemTime) -> Result<u64, Error> {
         .as_millis()
         .try_into()
         .map_err(|_| Error::InvalidInvitation("system clock is out of range"))
-}
-
-fn read_array<const N: usize>(bytes: &[u8], cursor: &mut usize) -> Result<[u8; N], Error> {
-    let end = cursor
-        .checked_add(N)
-        .ok_or(Error::InvalidInvitation("truncated invitation"))?;
-    if end > bytes.len() {
-        return Err(Error::InvalidInvitation("truncated invitation"));
-    }
-    let mut array = [0u8; N];
-    array.copy_from_slice(&bytes[*cursor..end]);
-    *cursor = end;
-    Ok(array)
 }
 
 pub(crate) fn encode_hex(bytes: &[u8]) -> String {

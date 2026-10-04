@@ -1,5 +1,6 @@
 use crate::error::Error;
-use crate::protocol::{Capabilities, Quality, PROTOCOL_VERSION};
+use crate::events::{CoreEvent, EventHub};
+use crate::protocol::{Quality, SessionStamp, PROTOCOL_VERSION};
 
 /// Which side of a session this installation is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +46,15 @@ pub struct Grants {
     pub transfer: bool,
 }
 
+/// One named grant. [`crate::trust::Trust::granted`] answers all three
+/// through this so the mapping lives in one method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Grant {
+    Control,
+    Clipboard,
+    Transfer,
+}
+
 /// Host admission. Iroh has already authenticated the peer key.
 pub(crate) fn admit(
     hosting: bool,
@@ -68,20 +78,41 @@ pub(crate) fn admit(
 }
 
 /// Input is accepted only for the generation that owns the active session.
-pub(crate) fn check_input(
-    active: Option<(u64, u64)>,
-    session_id: u64,
-    generation: u64,
-) -> Result<(), Error> {
+pub(crate) fn check_input(active: Option<SessionStamp>, stamp: SessionStamp) -> Result<(), Error> {
     match active {
-        Some((id, current)) if id == session_id && current == generation => Ok(()),
+        Some(current) if current == stamp => Ok(()),
         Some(_) | None => Err(Error::StaleSession),
     }
 }
 
 pub(crate) fn phase_after_admit() -> SessionPhase {
-    // Capture and codecs are still unsupported, so negotiation has nothing to
-    // agree beyond the control channel itself.
-    let _capabilities = Capabilities::UNSUPPORTED;
+    // Negotiation has nothing to agree beyond the control channel itself
+    // until capture and codecs are negotiated, so admission lands active.
     SessionPhase::Active
+}
+
+/// Emit the progression both roles synthesize after admission. The phases are
+/// identical on host and controller today; when negotiation becomes real, the
+/// agreed version, monitor, codec, and grants land here instead of beside it.
+pub(crate) fn announce_progression(
+    events: &EventHub,
+    id: u64,
+    generation: u64,
+    role: SessionRole,
+    peer_id: &str,
+) {
+    for phase in [
+        SessionPhase::Authenticated,
+        SessionPhase::Authorized,
+        SessionPhase::Negotiating,
+        SessionPhase::Active,
+    ] {
+        events.publish(CoreEvent::SessionChanged {
+            id,
+            generation,
+            role,
+            phase,
+            peer_id: peer_id.to_owned(),
+        });
+    }
 }

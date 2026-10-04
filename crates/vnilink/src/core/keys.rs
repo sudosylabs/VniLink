@@ -2,21 +2,22 @@
 
 use super::*;
 
-use super::connect::remember_peer_addresses;
+use super::link::remember_peer_addresses;
 use super::wire::{read_session_frame, write_frame};
 
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use iroh::EndpointId;
 
 use crate::address::Announcement;
 use crate::error::Error;
 use crate::events::CoreEvent;
-use crate::input::{self, HeldInput, HostDesktop, InputEvent, Outbound};
+use crate::input::{self, HeldInput, HostDesktop, InputEvent, InputOutbox};
 use crate::keyboard::{self, KeyboardMode, LocalKey};
 use crate::os_input::OsInput;
-use crate::protocol::{error_code, ControlMessage};
-use crate::session::{self, SessionPhase};
+use crate::protocol::{error_code, ControlMessage, SessionStamp};
+use crate::session::{self, Grant, SessionPhase};
 
 impl Core {
     /// Installs the adapter that applies keyboard and pointer events on this host.
@@ -56,17 +57,7 @@ impl Core {
         generation: u64,
         event: InputEvent,
     ) -> Result<(), Error> {
-        let outbox = {
-            let state = self.alive_state()?;
-            let session = state.outgoing.as_ref().ok_or(Error::NoSession)?;
-            if session.phase != SessionPhase::Active || session.id != session_id {
-                return Err(Error::NoSession);
-            }
-            if session.generation != generation {
-                return Err(Error::StaleSession);
-            }
-            session.outbox.clone().ok_or(Error::NoSession)?
-        };
+        let outbox = self.live_outbox(session_id, generation)?;
         let event = if self.shared.swap_control_command.load(Ordering::Relaxed) {
             input::swap_command_key(event)
         } else {
@@ -83,7 +74,15 @@ impl Core {
     /// Release held modifiers before changing it, so the key that goes down
     /// is the key that comes up.
     pub fn set_swap_control_and_command(&self, enabled: bool) -> Result<(), Error> {
-        drop(self.alive_state()?);
+        let generation = self.controller_generation()?;
+        let mut plan = lock(&self.shared.keyboard);
+        plan.reset_if_generation(generation);
+        if plan.is_held() {
+            return Err(Error::InvalidSetting(
+                "release held keys before changing the Control/Command swap",
+            ));
+        }
+        drop(plan);
         self.shared
             .swap_control_command
             .store(enabled, Ordering::Relaxed);
@@ -139,17 +138,7 @@ impl Core {
         generation: u64,
         key: LocalKey<'_>,
     ) -> Result<(), Error> {
-        let outbox = {
-            let state = self.alive_state()?;
-            let session = state.outgoing.as_ref().ok_or(Error::NoSession)?;
-            if session.phase != SessionPhase::Active || session.id != session_id {
-                return Err(Error::NoSession);
-            }
-            if session.generation != generation {
-                return Err(Error::StaleSession);
-            }
-            session.outbox.clone().ok_or(Error::NoSession)?
-        };
+        let outbox = self.live_outbox(session_id, generation)?;
         let mode = KeyboardMode::from_u8(self.shared.keyboard_mode.load(Ordering::Relaxed));
         let swap = self.shared.swap_control_command.load(Ordering::Relaxed);
         let mut plan = lock(&self.shared.keyboard);
@@ -158,11 +147,7 @@ impl Core {
         let planned = trial.apply(mode, swap, key)?;
         let items = planned
             .into_iter()
-            .map(|item| match item {
-                keyboard::Planned::Event(event) => Outbound::Event(event),
-                keyboard::Planned::Text(text) => Outbound::Text(text),
-                keyboard::Planned::Chord(text) => Outbound::Chord(text),
-            })
+            .map(keyboard::Planned::outbound)
             .collect::<Vec<_>>();
         outbox.push_batch(&items)?;
         *plan = trial;
@@ -189,31 +174,38 @@ impl Core {
     /// A dropped session does not send it again.
     pub fn submit_text(&self, session_id: u64, generation: u64, text: &str) -> Result<(), Error> {
         input::check_key_text(text)?;
-        let outbox = {
-            let state = self.alive_state()?;
-            let session = state.outgoing.as_ref().ok_or(Error::NoSession)?;
-            if session.phase != SessionPhase::Active || session.id != session_id {
-                return Err(Error::NoSession);
-            }
-            if session.generation != generation {
-                return Err(Error::StaleSession);
-            }
-            session.outbox.clone().ok_or(Error::NoSession)?
-        };
+        let outbox = self.live_outbox(session_id, generation)?;
         outbox.push_text(text.to_owned())
+    }
+
+    /// The queue of the active controlling session. Planning, mode, and swap
+    /// all read the same liveness check.
+    fn live_outbox(&self, session_id: u64, generation: u64) -> Result<Arc<InputOutbox>, Error> {
+        let state = self.alive_state()?;
+        let session = state.outgoing.as_ref().ok_or(Error::NoSession)?;
+        if session.phase != SessionPhase::Active || session.id != session_id {
+            return Err(Error::NoSession);
+        }
+        if session.generation != generation {
+            return Err(Error::StaleSession);
+        }
+        session.outbox.clone().ok_or(Error::NoSession)
     }
 }
 
-pub(super) fn check_live_input(
-    shared: &Shared,
-    session_id: u64,
-    generation: u64,
-) -> Result<(), Error> {
+/// A control message belongs to the live session only while its generation is
+/// current, the session is active, and the owner still grants control.
+/// Clipboard and transfer re-check their grants per message; control does the
+/// same here, so `authorize` during the session takes effect on the next
+/// message and held keys release when the loop ends.
+pub(super) fn check_input_allowed(shared: &Shared, stamp: SessionStamp) -> Result<(), Error> {
     let state = lock(&shared.state);
     let active = state.incoming.as_ref().and_then(|session| {
-        (session.phase == SessionPhase::Active).then_some((session.id, session.generation))
+        (session.phase == SessionPhase::Active
+            && state.trust.granted(&session.peer_key, Grant::Control))
+        .then(|| SessionStamp::new(session.id, session.generation))
     });
-    session::check_input(active, session_id, generation)
+    session::check_input(active, stamp)
 }
 
 pub(super) async fn host_input_loop(
@@ -254,88 +246,47 @@ pub(super) async fn host_input_loop(
                         );
                     }
                     ControlMessage::Close => break false,
-                    ControlMessage::Keyframe {
-                        session_id: event_session,
-                        generation,
-                    } => {
-                        if let Err(error) = check_live_input(shared, event_session, generation) {
-                            let _ = write_frame(send, &ControlMessage::Reject(error_code(&error))).await;
+                    ControlMessage::Keyframe { stamp } => {
+                        if !check_authorized(shared, send, stamp).await {
                             break false;
                         }
                         shared
                             .events
                             .publish(CoreEvent::KeyframeRequested { id: session_id });
                     }
-                    ControlMessage::Input {
-                        session_id: event_session,
-                        generation,
-                        event,
-                    } => {
-                        if let Err(error) = check_live_input(shared, event_session, generation) {
-                            let _ = write_frame(send, &ControlMessage::Reject(error_code(&error))).await;
+                    ControlMessage::Input { stamp, event } => {
+                        if !check_authorized(shared, send, stamp).await {
                             break false;
                         }
-                        if !input_open {
-                            continue;
-                        }
-                        let applied = {
+                        if apply_host_input(shared, session_id, send, &mut input_open, || {
                             let mut desktop = lock(&shared.desktop);
                             match desktop.as_mut() {
                                 None => Err(Error::Unsupported("no desktop adapter is installed")),
                                 Some(desktop) => desktop.apply(event),
                             }
-                        };
-                        match applied {
-                            Ok(()) if input_open => held.observe(event),
-                            Ok(()) => {}
-                            Err(error) => {
-                                note_input_failure(shared, session_id, &error);
-                                if input_open && matches!(error, Error::Unsupported(_)) {
-                                    input_open = false;
-                                    let _ = write_frame(send, &ControlMessage::Reject(error_code(&error))).await;
-                                }
-                            }
+                        })
+                        .await
+                        {
+                            held.observe(event);
                         }
                     }
-                    ControlMessage::Text {
-                        session_id: event_session,
-                        generation,
-                        text,
-                    } => {
-                        if let Err(error) = check_live_input(shared, event_session, generation) {
-                            let _ = write_frame(send, &ControlMessage::Reject(error_code(&error))).await;
+                    ControlMessage::Text { stamp, text } => {
+                        if !check_authorized(shared, send, stamp).await {
                             break false;
                         }
-                        if !input_open {
-                            continue;
-                        }
-                        if let Err(error) = apply_key_text(shared, &text.0, false) {
-                            note_input_failure(shared, session_id, &error);
-                            if input_open && matches!(error, Error::Unsupported(_)) {
-                                input_open = false;
-                                let _ = write_frame(send, &ControlMessage::Reject(error_code(&error))).await;
-                            }
-                        }
+                        apply_host_input(shared, session_id, send, &mut input_open, || {
+                            apply_key_text(shared, &text.0, false)
+                        })
+                        .await;
                     }
-                    ControlMessage::Chord {
-                        session_id: event_session,
-                        generation,
-                        text,
-                    } => {
-                        if let Err(error) = check_live_input(shared, event_session, generation) {
-                            let _ = write_frame(send, &ControlMessage::Reject(error_code(&error))).await;
+                    ControlMessage::Chord { stamp, text } => {
+                        if !check_authorized(shared, send, stamp).await {
                             break false;
                         }
-                        if !input_open {
-                            continue;
-                        }
-                        if let Err(error) = apply_key_text(shared, &text.0, true) {
-                            note_input_failure(shared, session_id, &error);
-                            if input_open && matches!(error, Error::Unsupported(_)) {
-                                input_open = false;
-                                let _ = write_frame(send, &ControlMessage::Reject(error_code(&error))).await;
-                            }
-                        }
+                        apply_host_input(shared, session_id, send, &mut input_open, || {
+                            apply_key_text(shared, &text.0, true)
+                        })
+                        .await;
                     }
                     _ => {
                         let _ = write_frame(send, &ControlMessage::Reject(error_code(&Error::Malformed))).await;
@@ -354,6 +305,47 @@ pub(super) fn note_input_failure(shared: &Shared, session_id: u64, error: &Error
         id: session_id,
         message: input::InputFault::from_error(error).message(),
     });
+}
+
+/// Generation-check one control message. Every keyframe, input, text, and
+/// chord frame passes here before it is applied. Returns false when the loop
+/// must end.
+async fn check_authorized(
+    shared: &Shared,
+    send: &mut iroh::endpoint::SendStream,
+    stamp: SessionStamp,
+) -> bool {
+    if let Err(error) = check_input_allowed(shared, stamp) {
+        let _ = write_frame(send, &ControlMessage::Reject(error_code(&error))).await;
+        return false;
+    }
+    true
+}
+
+/// Gate, apply, and failure note for one host message. The first
+/// [`Error::Unsupported`] from the adapter closes input with a reject; later
+/// messages are only noted. Returns whether the message was applied.
+async fn apply_host_input(
+    shared: &Shared,
+    session_id: u64,
+    send: &mut iroh::endpoint::SendStream,
+    input_open: &mut bool,
+    apply: impl FnOnce() -> Result<(), Error>,
+) -> bool {
+    if !*input_open {
+        return false;
+    }
+    match apply() {
+        Ok(()) => true,
+        Err(error) => {
+            note_input_failure(shared, session_id, &error);
+            if matches!(error, Error::Unsupported(_)) {
+                *input_open = false;
+                let _ = write_frame(send, &ControlMessage::Reject(error_code(&error))).await;
+            }
+            false
+        }
+    }
 }
 
 pub(super) fn apply_key_text(shared: &Shared, text: &str, chord: bool) -> Result<(), Error> {

@@ -8,7 +8,7 @@
 //! node is that compositor's permission, not universal unattended access.
 
 use std::os::fd::OwnedFd;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -20,7 +20,7 @@ use pw::spa::pod::serialize::PodSerializer;
 use pw::spa::pod::Pod;
 use pw::spa::utils::{Choice, ChoiceEnum, ChoiceFlags};
 use pw::stream::StreamFlags;
-use vnilink_media::{Error, RawFrame};
+use vnilink_media::{ChannelSlot, Error, FrameChannel, RawFrame};
 
 use crate::dmabuf::{
     Importer, Plane, DRM_FORMAT_ARGB8888, DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR,
@@ -33,14 +33,11 @@ const FRAME_TIMEOUT: Duration = Duration::from_secs(2);
 
 struct Shared {
     size: Mutex<Option<(u16, u16)>>,
-    frame: Mutex<Option<Vec<u8>>>,
-    stride: Mutex<usize>,
+    channel: FrameChannel,
     format: Mutex<Option<VideoFormat>>,
     modifier: Mutex<u64>,
     modifier_explicit: AtomicBool,
-    generation: AtomicU64,
     delivery: Mutex<Option<PortalDelivery>>,
-    failure: Mutex<Option<&'static str>>,
 }
 
 struct ListenerState {
@@ -50,9 +47,8 @@ struct ListenerState {
 
 enum Command {
     Frame {
-        seen: u64,
         timestamp_us: u64,
-        reply: Sender<Result<(RawFrame, u64, PortalDelivery), Error>>,
+        reply: Sender<Result<(RawFrame, PortalDelivery), Error>>,
     },
     Stop,
 }
@@ -86,7 +82,6 @@ pub enum PortalBuffer {
 pub struct PortalCapture {
     width: u16,
     height: u16,
-    seen: AtomicU64,
     delivery: Mutex<Option<PortalDelivery>>,
     tx: Sender<Command>,
     thread: Option<JoinHandle<()>>,
@@ -101,14 +96,11 @@ impl PortalCapture {
     pub fn open(remote: OwnedFd, node_id: u32) -> Result<Self, Error> {
         let shared = Arc::new(Shared {
             size: Mutex::new(None),
-            frame: Mutex::new(None),
-            stride: Mutex::new(0),
+            channel: FrameChannel::new(),
             format: Mutex::new(None),
             modifier: Mutex::new(0),
             modifier_explicit: AtomicBool::new(false),
-            generation: AtomicU64::new(0),
             delivery: Mutex::new(None),
-            failure: Mutex::new(None),
         });
         let (tx, rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::channel();
@@ -120,7 +112,6 @@ impl PortalCapture {
             Ok(Ok((width, height))) => Ok(Self {
                 width,
                 height,
-                seen: AtomicU64::new(0),
                 delivery: Mutex::new(None),
                 tx,
                 thread: Some(thread),
@@ -152,14 +143,12 @@ impl PortalCapture {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.tx
             .send(Command::Frame {
-                seen: self.seen.load(Ordering::Relaxed),
                 timestamp_us,
                 reply: reply_tx,
             })
             .map_err(|_| Error::CaptureRejected("the screen cast portal did not start"))?;
         match reply_rx.recv_timeout(FRAME_TIMEOUT + Duration::from_secs(1)) {
-            Ok(Ok((frame, generation, delivery))) => {
-                self.seen.store(generation, Ordering::Relaxed);
+            Ok(Ok((frame, delivery))) => {
                 *self.delivery.lock().expect("portal delivery") = Some(delivery);
                 Ok(frame)
             }
@@ -235,7 +224,7 @@ fn run(
         .add_local_listener_with_user_data(listener_state)
         .state_changed(|_, state, _old, new| {
             if matches!(new, pw::stream::StreamState::Error(_)) {
-                reject(&state.shared, "this PipeWire pixel format");
+                state.shared.channel.fail("this PipeWire pixel format");
             }
         })
         .param_changed(|_, state, id, param| remember_format(&state.shared, id, param))
@@ -253,7 +242,7 @@ fn run(
 
     let started = Instant::now();
     let size = loop {
-        if let Some(reason) = rejected(shared) {
+        if let Some(reason) = shared.channel.failure() {
             return Err(Error::Unsupported(reason));
         }
         if let Some(size) = *shared.size.lock().expect("portal size") {
@@ -279,11 +268,10 @@ fn run(
                     .iterate(pw::loop_::Timeout::Finite(Duration::from_millis(50)));
             }
             Ok(Command::Frame {
-                seen,
                 timestamp_us,
                 reply,
             }) => {
-                let _ = reply.send(wait_frame(&mainloop, shared, seen, timestamp_us));
+                let _ = reply.send(wait_frame(&mainloop, shared, timestamp_us));
             }
         }
     }
@@ -293,71 +281,32 @@ fn run(
 fn wait_frame(
     mainloop: &pw::main_loop::MainLoopRc,
     shared: &Shared,
-    seen: u64,
     timestamp_us: u64,
-) -> Result<(RawFrame, u64, PortalDelivery), Error> {
-    let deadline = Instant::now() + FRAME_TIMEOUT;
-    loop {
-        if let Some(reason) = rejected(shared) {
-            return Err(Error::Unsupported(reason));
-        }
-        let generation = shared.generation.load(Ordering::Relaxed);
-        if generation > seen {
-            let frame = take_frame(shared, timestamp_us)?;
-            let delivery = shared
-                .delivery
-                .lock()
-                .expect("portal delivery")
-                .ok_or(Error::Unsupported("this PipeWire pixel format"))?;
-            return Ok((frame, generation, delivery));
-        }
-        if Instant::now() >= deadline {
-            return Err(Error::CaptureRejected(
-                "the screen cast portal did not start",
-            ));
-        }
+) -> Result<(RawFrame, PortalDelivery), Error> {
+    let slot = shared.channel.recv_timeout(FRAME_TIMEOUT, || {
         let _ = mainloop
             .loop_()
             .iterate(pw::loop_::Timeout::Finite(Duration::from_millis(50)));
-    }
-}
-
-fn take_frame(shared: &Shared, timestamp_us: u64) -> Result<RawFrame, Error> {
-    let (width, height) =
-        shared
-            .size
-            .lock()
-            .expect("portal size")
-            .ok_or(Error::CaptureRejected(
-                "the screen cast portal did not start",
-            ))?;
-    let bytes =
-        shared
-            .frame
-            .lock()
-            .expect("portal frame")
-            .clone()
-            .ok_or(Error::CaptureRejected(
-                "the screen cast portal did not start",
-            ))?;
-    let stride = *shared.stride.lock().expect("portal stride");
+    })?;
+    let delivery = shared
+        .delivery
+        .lock()
+        .expect("portal delivery")
+        .ok_or(Error::Unsupported("this PipeWire pixel format"))?;
     let format = shared
         .format
         .lock()
         .expect("portal format")
         .ok_or(Error::Unsupported("this PipeWire pixel format"))?;
-    frame_from_bytes(format, width, height, stride, timestamp_us, &bytes)
-}
-
-fn reject(shared: &Shared, reason: &'static str) {
-    let mut failure = shared.failure.lock().expect("portal format");
-    if failure.is_none() {
-        *failure = Some(reason);
-    }
-}
-
-fn rejected(shared: &Shared) -> Option<&'static str> {
-    *shared.failure.lock().expect("portal format")
+    let frame = frame_from_bytes(
+        format,
+        slot.width,
+        slot.height,
+        slot.stride,
+        timestamp_us,
+        &slot.bytes,
+    )?;
+    Ok((frame, delivery))
 }
 
 fn remember_format(shared: &Shared, id: u32, param: Option<&Pod>) {
@@ -377,7 +326,7 @@ fn remember_format(shared: &Shared, id: u32, param: Option<&Pod>) {
     }
     let mut info = pw::spa::param::video::VideoInfoRaw::default();
     if info.parse(param).is_err() {
-        reject(shared, "this PipeWire pixel format");
+        shared.channel.fail("this PipeWire pixel format");
         return;
     }
     if info
@@ -389,12 +338,12 @@ fn remember_format(shared: &Shared, id: u32, param: Option<&Pod>) {
     let width = u16::try_from(info.size().width).unwrap_or(0);
     let height = u16::try_from(info.size().height).unwrap_or(0);
     if width == 0 || height == 0 {
-        reject(shared, "this PipeWire pixel format");
+        shared.channel.fail("this PipeWire pixel format");
         return;
     }
     let format = info.format();
     if !matches!(format, VideoFormat::BGRA | VideoFormat::BGRx) {
-        reject(shared, "this PipeWire pixel format");
+        shared.channel.fail("this PipeWire pixel format");
         return;
     }
     let explicit = info
@@ -584,21 +533,28 @@ fn copy_buffer(stream: &pw::stream::Stream, shared: &Shared, importer: &mut Impo
         )
     };
     let Some(bytes) = data.data() else {
-        reject(shared, "this PipeWire pixel format");
+        shared.channel.fail("this PipeWire pixel format");
         return;
     };
     let end = offset.saturating_add(size);
     if size == 0 || end > bytes.len() {
         return;
     }
-    *shared.stride.lock().expect("portal stride") = if stride == 0 {
+    let Some((width, height)) = *shared.size.lock().expect("portal size") else {
+        return;
+    };
+    let stride = if stride == 0 {
         bytes[offset..end].len()
     } else {
         stride
     };
-    *shared.frame.lock().expect("portal frame") = Some(bytes[offset..end].to_vec());
+    shared.channel.push(ChannelSlot {
+        width,
+        height,
+        stride,
+        bytes: bytes[offset..end].to_vec(),
+    });
     record_delivery(shared, false);
-    shared.generation.fetch_add(1, Ordering::Relaxed);
 }
 
 fn copy_dmabuf(datas: &mut [pw::spa::buffer::Data], shared: &Shared, importer: &mut Importer) {
@@ -609,7 +565,7 @@ fn copy_dmabuf(datas: &mut [pw::spa::buffer::Data], shared: &Shared, importer: &
         }
         let chunk = data.chunk();
         let Ok(offset) = i32::try_from(chunk.offset()) else {
-            reject(shared, "this DMA-BUF modifier");
+            shared.channel.fail("this DMA-BUF modifier");
             return;
         };
         planes.push(Plane {
@@ -622,11 +578,11 @@ fn copy_dmabuf(datas: &mut [pw::spa::buffer::Data], shared: &Shared, importer: &
         return;
     };
     let Some(format) = *shared.format.lock().expect("portal format") else {
-        reject(shared, "this PipeWire pixel format");
+        shared.channel.fail("this PipeWire pixel format");
         return;
     };
     let Some(drm_format) = drm_format(format) else {
-        reject(shared, "this PipeWire pixel format");
+        shared.channel.fail("this PipeWire pixel format");
         return;
     };
     let modifier = *shared.modifier.lock().expect("portal format");
@@ -639,11 +595,14 @@ fn copy_dmabuf(datas: &mut [pw::spa::buffer::Data], shared: &Shared, importer: &
         explicit,
         &planes,
     ) else {
-        reject(shared, "this DMA-BUF modifier");
+        shared.channel.fail("this DMA-BUF modifier");
         return;
     };
-    *shared.stride.lock().expect("portal stride") = stride;
-    *shared.frame.lock().expect("portal frame") = Some(bytes);
+    shared.channel.push(ChannelSlot {
+        width,
+        height,
+        stride,
+        bytes,
+    });
     record_delivery(shared, true);
-    shared.generation.fetch_add(1, Ordering::Relaxed);
 }

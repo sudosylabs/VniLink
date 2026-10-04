@@ -74,6 +74,7 @@
 
 mod address;
 mod clipboard;
+mod codec;
 mod core;
 mod error;
 mod events;
@@ -87,6 +88,7 @@ mod protocol;
 mod reconnect;
 mod relay;
 mod session;
+mod sidestream;
 mod transfer;
 mod trust;
 mod video;

@@ -3,9 +3,9 @@
 use super::*;
 
 use super::clipboard::apply_clipboard;
-use super::connect::{remember_link, write_addresses};
 use super::files::apply_transfer;
 use super::keys::host_input_loop;
+use super::link::{remember_link, write_addresses};
 use super::pairing::{wait_for_control_approval, ControlAnswer};
 use super::video::host_video_loop;
 use super::wire::{read_frame, write_frame};
@@ -18,8 +18,8 @@ use iroh::{Endpoint, EndpointId, RelayMode, SecretKey};
 
 use crate::error::Error;
 use crate::events::CoreEvent;
-use crate::protocol::{error_code, ControlMessage, ALPN};
-use crate::session::{self, SessionInfo, SessionPhase, SessionRole};
+use crate::protocol::{error_code, ControlMessage, SessionStamp, ALPN};
+use crate::session::{self, Grant, SessionInfo, SessionPhase, SessionRole};
 use crate::transfer::{self};
 use crate::video::VideoOutbox;
 
@@ -182,6 +182,21 @@ pub(super) enum HostTurn {
     Done,
 }
 
+/// One admission check for every Hello: before approval, after approval, and
+/// after the session gate. The rule lives in [`session::admit`]; this only
+/// reads the state it needs.
+fn admission(state: &State, peer: EndpointId, version: u16) -> Result<(), Error> {
+    session::admit(
+        state.hosting,
+        state
+            .incoming
+            .as_ref()
+            .is_some_and(|session| !finished(&session.phase)),
+        state.trust.granted(peer.as_bytes(), Grant::Control),
+        version,
+    )
+}
+
 pub(super) async fn handle_host_request(
     shared: &Arc<Shared>,
     connection: &iroh::endpoint::Connection,
@@ -205,36 +220,14 @@ pub(super) async fn handle_host_request(
     };
     match message {
         ControlMessage::Hello { version } => {
-            let decision = {
-                let state = lock(&shared.state);
-                session::admit(
-                    state.hosting,
-                    state
-                        .incoming
-                        .as_ref()
-                        .is_some_and(|session| !finished(&session.phase)),
-                    state.trust.control_granted(peer.as_bytes()),
-                    version,
-                )
-            };
+            let decision = admission(&lock(&shared.state), peer, version);
             let decision = match decision {
                 // The file already told the controller who this host is. The
                 // digits typed here tell the host who the controller is.
                 // Without an open allow switch the reject stays immediate.
                 Err(Error::Unauthorized) => {
                     match wait_for_control_approval(shared, connection, peer, stop_rx).await {
-                        ControlAnswer::Approved => {
-                            let state = lock(&shared.state);
-                            session::admit(
-                                state.hosting,
-                                state
-                                    .incoming
-                                    .as_ref()
-                                    .is_some_and(|session| !finished(&session.phase)),
-                                state.trust.control_granted(peer.as_bytes()),
-                                version,
-                            )
-                        }
+                        ControlAnswer::Approved => admission(&lock(&shared.state), peer, version),
                         ControlAnswer::Rejected(error) => Err(error),
                     }
                 }
@@ -250,18 +243,7 @@ pub(super) async fn handle_host_request(
                     // The previous session, if this peer just dropped, releases
                     // held keys before this Hello is admitted.
                     let _gate = shared.session_gate.lock().await;
-                    let decision = {
-                        let state = lock(&shared.state);
-                        session::admit(
-                            state.hosting,
-                            state
-                                .incoming
-                                .as_ref()
-                                .is_some_and(|session| !finished(&session.phase)),
-                            state.trust.control_granted(peer.as_bytes()),
-                            version,
-                        )
-                    };
+                    let decision = admission(&lock(&shared.state), peer, version);
                     if let Err(error) = decision {
                         let _ = write_frame(&mut send, &ControlMessage::Reject(error_code(&error)))
                             .await;
@@ -274,8 +256,7 @@ pub(super) async fn handle_host_request(
                             let wrote = write_frame(
                                 &mut send,
                                 &ControlMessage::Accept {
-                                    session_id: info.id,
-                                    generation: info.generation,
+                                    stamp: SessionStamp::new(info.id, info.generation),
                                     monitor_width: info.monitor_width,
                                     monitor_height: info.monitor_height,
                                 },
@@ -397,20 +378,7 @@ pub(super) fn register_incoming(
         transfer: None,
     });
     drop(state);
-    for phase in [
-        SessionPhase::Authenticated,
-        SessionPhase::Authorized,
-        SessionPhase::Negotiating,
-        SessionPhase::Active,
-    ] {
-        shared.events.publish(CoreEvent::SessionChanged {
-            id,
-            generation,
-            role: SessionRole::Host,
-            phase,
-            peer_id: peer_id.clone(),
-        });
-    }
+    session::announce_progression(&shared.events, id, generation, SessionRole::Host, &peer_id);
     Ok(info)
 }
 
@@ -467,7 +435,7 @@ pub(super) fn spawn_host_streams(
     let shared_apply = Arc::clone(shared);
     let shared_allow = Arc::clone(shared);
     let clipboard_task = tokio::spawn(async move {
-        let opened = crate::clipboard::accept_bi(&clipboard_connection, &mut clipboard_stop).await;
+        let opened = crate::sidestream::accept_bi(&clipboard_connection, &mut clipboard_stop).await;
         let _ = gate_tx.send(opened.is_ok());
         if let Ok((send, recv)) = opened {
             crate::clipboard::exchange(
@@ -477,7 +445,10 @@ pub(super) fn spawn_host_streams(
                 clipboard_stop,
                 move |text| apply_clipboard(&shared_apply, &peer, text),
                 move || {
-                    if lock(&shared_allow.state).trust.clipboard_granted(&peer) {
+                    if lock(&shared_allow.state)
+                        .trust
+                        .granted(&peer, Grant::Clipboard)
+                    {
                         Ok(())
                     } else {
                         Err(Error::ClipboardDenied)
@@ -495,7 +466,8 @@ pub(super) fn spawn_host_streams(
         if !matches!(gate_rx.await, Ok(true)) {
             return;
         }
-        let Ok((send, recv)) = transfer::accept_bi(&transfer_connection, &mut transfer_stop).await
+        let Ok((send, recv)) =
+            crate::sidestream::accept_bi(&transfer_connection, &mut transfer_stop).await
         else {
             return;
         };
@@ -507,7 +479,10 @@ pub(super) fn spawn_host_streams(
             move |name, size, _replace| {
                 transfer::check_name(name)?;
                 transfer::checked_size(size)?;
-                if !lock(&shared_inspect.state).trust.transfer_granted(&peer) {
+                if !lock(&shared_inspect.state)
+                    .trust
+                    .granted(&peer, Grant::Transfer)
+                {
                     return Err(Error::TransferDenied);
                 }
                 if lock(&shared_inspect.transfer_dir).is_none() {
@@ -525,7 +500,7 @@ pub(super) fn spawn_host_streams(
             move || {
                 if lock(&shared_allow_files.state)
                     .trust
-                    .transfer_granted(&peer)
+                    .granted(&peer, Grant::Transfer)
                 {
                     Ok(())
                 } else {

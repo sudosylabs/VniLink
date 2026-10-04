@@ -17,7 +17,6 @@ pub(super) fn start_direct() -> Core {
             ..CoreConfig::default()
         },
         RelayMode::Disabled,
-        true,
     )
     .expect("loopback core")
 }
@@ -150,7 +149,6 @@ pub(super) fn boot_capacity(event_capacity: usize) -> Result<Core, Error> {
             ..CoreConfig::default()
         },
         RelayMode::Disabled,
-        true,
     )
 }
 

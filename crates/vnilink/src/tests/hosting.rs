@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::error::Error;
 use crate::input::InputEvent;
-use crate::session::{SessionPhase, SessionRole};
+use crate::session::{Grants, SessionPhase, SessionRole};
 
 use super::support::*;
 
@@ -120,7 +120,6 @@ fn stopping_hosting_ends_the_active_session_and_releases_keys() {
     let again = controller.connect(&host.endpoint_id()).unwrap();
     assert_eq!(again.phase, SessionPhase::Active);
 }
-
 #[test]
 fn disconnect_closes_both_sides_and_releases_held_input() {
     let host = start_direct();
@@ -239,4 +238,90 @@ fn revoke_stops_the_session_releases_input_and_blocks_reconnect() {
         ),
         Err(Error::NoSession)
     ));
+}
+
+#[test]
+fn removing_control_mid_session_stops_applying_input() {
+    let host = start_direct();
+    let controller = start_direct();
+    let applied = Arc::new(Mutex::new(Vec::new()));
+    host.set_desktop(Box::new(RecordingDesktop {
+        events: Arc::clone(&applied),
+    }))
+    .unwrap();
+    pair_for_control(&host, &controller);
+    let session = controller.connect(&host.endpoint_id()).unwrap();
+    controller
+        .submit_input(
+            session.id,
+            session.generation,
+            InputEvent::key_down(crate::input::usage::A),
+        )
+        .unwrap();
+    wait_applied(&applied, &[InputEvent::key_down(crate::input::usage::A)]);
+    host.authorize(
+        &controller.endpoint_id(),
+        Grants {
+            control: false,
+            clipboard: true,
+            transfer: false,
+        },
+    )
+    .unwrap();
+    controller
+        .submit_input(
+            session.id,
+            session.generation,
+            InputEvent::key_down(crate::input::usage::B),
+        )
+        .unwrap();
+    // The downgraded key is refused, the loop ends, and the held key releases.
+    wait_applied(
+        &applied,
+        &[
+            InputEvent::key_down(crate::input::usage::A),
+            InputEvent::key_up(crate::input::usage::A),
+        ],
+    );
+    wait_closed(&host, SessionRole::Host);
+    // The controller learns through the reject frame, so its side fails
+    // instead of closing cleanly.
+    wait_finished(&controller);
+    assert!(matches!(
+        controller
+            .snapshot()
+            .unwrap()
+            .outgoing
+            .as_ref()
+            .map(|session| &session.phase),
+        Some(SessionPhase::Failed(_))
+    ));
+    assert!(matches!(
+        controller.connect(&host.endpoint_id()),
+        Err(Error::Unauthorized)
+    ));
+}
+
+fn wait_finished(controller: &crate::core::Core) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let done = controller
+            .snapshot()
+            .unwrap()
+            .outgoing
+            .as_ref()
+            .is_some_and(|session| {
+                matches!(
+                    session.phase,
+                    SessionPhase::Closed | SessionPhase::Failed(_)
+                )
+            });
+        if done {
+            return;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("controller session did not finish");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }

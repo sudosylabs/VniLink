@@ -40,6 +40,8 @@ mod reconnect_tests;
 mod relay_tests;
 #[path = "tests/session.rs"]
 mod session_tests;
+#[path = "tests/sidestream.rs"]
+mod sidestream_tests;
 #[path = "tests/support.rs"]
 mod support;
 #[path = "tests/transfer.rs"]

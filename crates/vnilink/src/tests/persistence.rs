@@ -20,7 +20,6 @@ fn peer() -> Core {
             ..CoreConfig::default()
         },
         RelayMode::Disabled,
-        true,
     )
     .expect("loopback core")
 }
@@ -113,7 +112,7 @@ fn a_used_invitation_cannot_be_replayed_after_restart() {
 }
 
 #[test]
-fn reaccepting_an_invitation_resets_saved_grants() {
+fn reaccepting_an_invitation_keeps_saved_grants() {
     let store = MemoryStore::empty();
     let host = open_loop(&store, RelaySettings::public_n0());
     let controller = peer();
@@ -127,13 +126,13 @@ fn reaccepting_an_invitation_resets_saved_grants() {
         .create_invitation(Duration::from_secs(60))
         .unwrap();
     let paired = host.accept_invitation(&second).unwrap();
-    assert_eq!(paired.grants, Grants::default());
+    assert_eq!(paired.grants, all_grants());
     drop(host);
 
     let host = open_loop(&store, RelaySettings::public_n0());
     let device = &host.snapshot().unwrap().devices[0];
     assert_eq!(device.endpoint_id, controller.endpoint_id());
-    assert_eq!(device.grants, Grants::default());
+    assert_eq!(device.grants, all_grants());
 }
 
 #[test]
@@ -321,10 +320,7 @@ fn a_failed_save_keeps_the_previous_record() {
     ));
     assert_eq!(host.snapshot().unwrap().devices[0].grants, all_grants());
     host.accept_invitation(&again).unwrap();
-    assert_eq!(
-        host.snapshot().unwrap().devices[0].grants,
-        Grants::default()
-    );
+    assert_eq!(host.snapshot().unwrap().devices[0].grants, all_grants());
     host.authorize(
         &controller.endpoint_id(),
         Grants {

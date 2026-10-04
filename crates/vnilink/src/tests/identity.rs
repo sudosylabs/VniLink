@@ -135,7 +135,6 @@ fn restored_identity_keeps_the_same_endpoint_id() {
             ..CoreConfig::default()
         },
         RelayMode::Disabled,
-        true,
     )
     .unwrap();
     assert_eq!(restored.export_identity(), bytes);
@@ -234,7 +233,6 @@ fn a_custom_relay_url_is_advertised_without_contacting_it() {
             ..CoreConfig::default()
         },
         RelayMode::Disabled,
-        true,
     )
     .unwrap();
     let snapshot = host.snapshot().unwrap();

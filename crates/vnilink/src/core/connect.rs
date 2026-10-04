@@ -4,21 +4,18 @@ use super::*;
 
 use super::clipboard::open_controller_clipboard;
 use super::files::open_controller_transfer;
+use super::link::{remember_peer_addresses, write_addresses};
 use super::video::{video_inbox, video_recv_loop};
 use super::wire::{read_frame, read_session_frame, write_frame};
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-
-use iroh::{Endpoint, EndpointId, TransportAddr};
 
 use crate::address::Announcement;
 use crate::error::Error;
 use crate::events::CoreEvent;
 use crate::input::{InputOutbox, Outbound};
-use crate::invitation::{self};
-use crate::protocol::{ControlMessage, KeyText, ALPN, PROTOCOL_VERSION};
+use crate::protocol::{ControlMessage, KeyText, SessionStamp, ALPN, PROTOCOL_VERSION};
 use crate::reconnect::{self, LinkEnd};
 use crate::session::{Grants, SessionInfo, SessionPhase, SessionRole};
 use crate::trust::Device;
@@ -29,16 +26,7 @@ impl Core {
         let key = parse_endpoint_id(endpoint_id)?;
         {
             let mut state = self.alive_state()?;
-            let previous = state
-                .trust
-                .get(&key)
-                .map(|device| device.grants)
-                .ok_or(Error::NotPaired)?;
-            state.trust.authorize(&key, grants)?;
-            if let Err(error) = persist(&self.shared, &state) {
-                let _ = state.trust.authorize(&key, previous);
-                return Err(error);
-            }
+            store_grants(&self.shared, &mut state, &key, grants)?;
         }
         self.shared.events.publish(CoreEvent::DeviceAuthorized {
             endpoint_id: endpoint_id.to_owned(),
@@ -51,16 +39,7 @@ impl Core {
         let mut stopped = None;
         {
             let mut state = self.alive_state()?;
-            let previous = state
-                .trust
-                .get(&key)
-                .map(|device| device.grants)
-                .ok_or(Error::NotPaired)?;
-            state.trust.revoke(&key)?;
-            if let Err(error) = persist(&self.shared, &state) {
-                let _ = state.trust.authorize(&key, previous);
-                return Err(error);
-            }
+            store_grants(&self.shared, &mut state, &key, Grants::default())?;
             if state
                 .incoming
                 .as_ref()
@@ -174,37 +153,6 @@ impl Core {
     }
 }
 
-pub(super) async fn peer_addresses(
-    endpoint: &Endpoint,
-    peer: EndpointId,
-) -> (Vec<String>, Vec<SocketAddr>) {
-    let Some(info) = endpoint.remote_info(peer).await else {
-        return (Vec::new(), Vec::new());
-    };
-    let mut relays = Vec::new();
-    let mut direct = Vec::new();
-    for addr in info.addrs() {
-        match addr.addr() {
-            TransportAddr::Relay(url) => {
-                if relays.len() >= crate::relay::MAX_CUSTOM_RELAYS {
-                    continue;
-                }
-                let Ok(parsed) = crate::relay::parse_relay_url(url.as_str()) else {
-                    continue;
-                };
-                let text = parsed.to_string();
-                if !relays.contains(&text) {
-                    relays.push(text);
-                }
-            }
-            TransportAddr::Ip(socket) => direct.push(*socket),
-            _ => {}
-        }
-    }
-    let direct = invitation::canonicalize_addrs(&direct).unwrap_or_default();
-    (relays, direct)
-}
-
 pub(super) async fn run_controller(
     shared: Arc<Shared>,
     peer_key: [u8; 32],
@@ -305,8 +253,7 @@ pub(super) async fn establish(
     let response = read_frame(&mut recv).await?;
     let info = match response {
         ControlMessage::Accept {
-            session_id,
-            generation,
+            stamp,
             monitor_width,
             monitor_height,
         } => {
@@ -314,31 +261,24 @@ pub(super) async fn establish(
             {
                 let mut state = lock(&shared.state);
                 if let Some(session) = state.outgoing.as_mut() {
-                    session.id = session_id;
-                    session.generation = generation;
+                    session.id = stamp.id;
+                    session.generation = stamp.generation;
                     session.phase = SessionPhase::Active;
                     session.monitor_width = monitor_width;
                     session.monitor_height = monitor_height;
                     session.link = Some(connection.clone());
                 }
             }
-            for phase in [
-                SessionPhase::Authenticated,
-                SessionPhase::Authorized,
-                SessionPhase::Negotiating,
-                SessionPhase::Active,
-            ] {
-                shared.events.publish(CoreEvent::SessionChanged {
-                    id: session_id,
-                    generation,
-                    role: SessionRole::Controller,
-                    phase,
-                    peer_id: peer_id.clone(),
-                });
-            }
+            crate::session::announce_progression(
+                &shared.events,
+                stamp.id,
+                stamp.generation,
+                SessionRole::Controller,
+                &peer_id,
+            );
             SessionInfo {
-                id: session_id,
-                generation,
+                id: stamp.id,
+                generation: stamp.generation,
                 role: SessionRole::Controller,
                 phase: SessionPhase::Active,
                 peer_id,
@@ -391,8 +331,7 @@ pub(super) async fn establish(
         send,
         recv,
         Arc::clone(outbox),
-        session_id,
-        generation,
+        SessionStamp::new(session_id, generation),
         device.endpoint_id,
         keyframe,
         shared,
@@ -410,8 +349,7 @@ pub(super) async fn command_loop(
     mut send: iroh::endpoint::SendStream,
     mut recv: iroh::endpoint::RecvStream,
     outbox: Arc<InputOutbox>,
-    session_id: u64,
-    generation: u64,
+    stamp: SessionStamp,
     peer_key: [u8; 32],
     keyframe: Arc<KeyframeFlag>,
     shared: &Shared,
@@ -439,14 +377,7 @@ pub(super) async fn command_loop(
             break;
         }
         if keyframe.take() {
-            let wrote = write_frame(
-                &mut send,
-                &ControlMessage::Keyframe {
-                    session_id,
-                    generation,
-                },
-            )
-            .await;
+            let wrote = write_frame(&mut send, &ControlMessage::Keyframe { stamp }).await;
             if wrote.is_err() {
                 break;
             }
@@ -482,7 +413,7 @@ pub(super) async fn command_loop(
                             let error = code.to_error();
                             outbox.fail(&error);
                             shared.events.publish(CoreEvent::InputFailed {
-                                id: session_id,
+                                id: stamp.id,
                                 message: crate::input::InputFault::from_error(&error).message(),
                             });
                             if !matches!(error, Error::Unsupported(_)) {
@@ -498,19 +429,13 @@ pub(super) async fn command_loop(
             let mut failed = false;
             for item in batch {
                 let message = match item {
-                    Outbound::Event(event) => ControlMessage::Input {
-                        session_id,
-                        generation,
-                        event,
-                    },
+                    Outbound::Event(event) => ControlMessage::Input { stamp, event },
                     Outbound::Text(text) => ControlMessage::Text {
-                        session_id,
-                        generation,
+                        stamp,
                         text: KeyText(text),
                     },
                     Outbound::Chord(text) => ControlMessage::Chord {
-                        session_id,
-                        generation,
+                        stamp,
                         text: KeyText(text),
                     },
                 };
@@ -546,14 +471,7 @@ pub(super) fn finish_outgoing(shared: &Shared) {
     let info = session_info(session);
     session.phase = SessionPhase::Closed;
     drop(state);
-    *lock(&shared.clipboard_inbox) = None;
-    shared.events.publish(CoreEvent::SessionChanged {
-        id: info.id,
-        generation: info.generation,
-        role: SessionRole::Controller,
-        phase: SessionPhase::Closed,
-        peer_id: info.peer_id,
-    });
+    settle_outgoing(shared, &info, SessionPhase::Closed);
 }
 
 pub(super) fn fail_outgoing(shared: &Shared, error: &Error) {
@@ -564,14 +482,7 @@ pub(super) fn fail_outgoing(shared: &Shared, error: &Error) {
     let info = session_info(session);
     session.phase = SessionPhase::Failed(error.to_string());
     drop(state);
-    *lock(&shared.clipboard_inbox) = None;
-    shared.events.publish(CoreEvent::SessionChanged {
-        id: info.id,
-        generation: info.generation,
-        role: SessionRole::Controller,
-        phase: SessionPhase::Failed(error.to_string()),
-        peer_id: info.peer_id,
-    });
+    settle_outgoing(shared, &info, SessionPhase::Failed(error.to_string()));
 }
 
 pub(super) fn mark_reconnecting(shared: &Shared) {
@@ -585,68 +496,19 @@ pub(super) fn mark_reconnecting(shared: &Shared) {
     session.phase = SessionPhase::Reconnecting;
     let info = session_info(session);
     drop(state);
+    settle_outgoing(shared, &info, SessionPhase::Reconnecting);
+}
+
+/// Clears the clipboard inbox and emits the terminal phase. The guards and
+/// the phase assignment stay with each caller: only a finished session
+/// closes, while a failure records even over one.
+fn settle_outgoing(shared: &Shared, info: &SessionInfo, phase: SessionPhase) {
     *lock(&shared.clipboard_inbox) = None;
     shared.events.publish(CoreEvent::SessionChanged {
         id: info.id,
         generation: info.generation,
         role: info.role,
-        phase: SessionPhase::Reconnecting,
-        peer_id: info.peer_id,
+        phase,
+        peer_id: info.peer_id.clone(),
     });
-}
-
-pub(super) fn remember_link(shared: &Shared, incoming: bool, link: iroh::endpoint::Connection) {
-    let mut state = lock(&shared.state);
-    let session = if incoming {
-        state.incoming.as_mut()
-    } else {
-        state.outgoing.as_mut()
-    };
-    if let Some(session) = session {
-        session.link = Some(link);
-    }
-}
-
-pub(super) fn remember_peer_addresses(
-    shared: &Shared,
-    peer_key: &[u8; 32],
-    announcement: Announcement,
-) -> Result<(), Error> {
-    let mut state = lock(&shared.state);
-    let Some(mut device) = state.trust.get(peer_key).cloned() else {
-        return Ok(());
-    };
-    if crate::address::unchanged(&device, &announcement) {
-        return Ok(());
-    }
-    let previous = device.clone();
-    crate::address::install(&mut device, &announcement)?;
-    let endpoint_id = device.display_id.clone();
-    state.trust.pair(device)?;
-    if let Err(error) = persist(shared, &state) {
-        let _ = state.trust.pair(previous);
-        return Err(error);
-    }
-    drop(state);
-    shared
-        .events
-        .publish(CoreEvent::AddressesUpdated { endpoint_id });
-    Ok(())
-}
-
-pub(super) async fn write_addresses(
-    shared: &Shared,
-    send: &mut iroh::endpoint::SendStream,
-) -> Result<(), Error> {
-    let relays = shared.relay.relay_urls()?;
-    let direct = invitation::canonicalize_addrs(&direct_addresses(&shared.endpoint))?;
-    let announcement = crate::address::canonical(&relays, &direct)?;
-    write_frame(
-        send,
-        &ControlMessage::Addresses {
-            relays: announcement.relays,
-            direct: announcement.direct,
-        },
-    )
-    .await
 }
