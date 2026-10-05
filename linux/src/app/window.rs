@@ -115,6 +115,15 @@ impl Home {
         );
         breakpoint.add_setter(&split, "collapsed", Some(&true.to_value()));
         home.window.add_breakpoint(breakpoint);
+        // Keep both titlebar actions available whichever narrow pane is visible.
+        for id in ["settings_sidebar", "open_file_detail"] {
+            let button: gtk::Button = widgets::widget(builder, id);
+            split
+                .bind_property("collapsed", &button, "visible")
+                .sync_create()
+                .build();
+        }
+
         home.banner.set_use_markup(false);
         let weak = Rc::downgrade(&home);
         home.banner.connect_button_clicked(move |_| {

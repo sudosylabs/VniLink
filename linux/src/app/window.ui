@@ -35,6 +35,20 @@
               <property name="title">Computers</property>
               <property name="child"><object class="AdwToolbarView">
                 <child type="top"><object class="AdwHeaderBar">
+                  <child type="start"><object class="GtkButton" id="open_file">
+                    <property name="name">open_file</property>
+                    <property name="icon-name">list-add-symbolic</property>
+                    <property name="tooltip-text">Add computer</property>
+                    <property name="visible">true</property>
+                    <accessibility><property name="label">Add computer</property></accessibility>
+                  </object></child>
+                  <child type="end"><object class="GtkButton" id="settings_sidebar">
+                    <property name="name">settings_sidebar</property>
+                    <property name="icon-name">emblem-system-symbolic</property>
+                    <property name="tooltip-text">Settings</property>
+                    <property name="visible">false</property>
+                    <accessibility><property name="label">Settings</property></accessibility>
+                  </object></child>
                   <property name="title-widget"><object class="AdwWindowTitle">
                     <property name="title">VniLink</property>
                   </object></property>
@@ -73,26 +87,6 @@
                       </object></child>
                     </object></property>
                   </object></child>
-                  <child><object class="GtkBox">
-                    <property name="orientation">vertical</property>
-                    <property name="margin-start">12</property><property name="margin-end">12</property>
-                    <property name="margin-top">12</property><property name="margin-bottom">12</property>
-                    <child><object class="GtkButton" id="open_file">
-                      <property name="tooltip-text">Open a pairing file from another computer</property>
-                      <property name="child"><object class="AdwButtonContent">
-                        <property name="icon-name">list-add-symbolic</property>
-                        <property name="label">Add computer</property>
-                      </object></property>
-                      <style><class name="flat"/></style>
-                    </object></child>
-                    <child><object class="GtkButton" id="settings">
-                      <property name="child"><object class="AdwButtonContent">
-                        <property name="icon-name">emblem-system-symbolic</property>
-                        <property name="label">Settings</property>
-                      </object></property>
-                      <style><class name="flat"/></style>
-                    </object></child>
-                  </object></child>
                 </object></property>
               </object></property>
             </object></property>
@@ -100,6 +94,20 @@
               <property name="title">This computer</property>
               <property name="child"><object class="AdwToolbarView">
                 <child type="top"><object class="AdwHeaderBar">
+                  <child type="end"><object class="GtkButton" id="settings">
+                    <property name="name">settings</property>
+                    <property name="icon-name">emblem-system-symbolic</property>
+                    <property name="tooltip-text">Settings</property>
+                    <property name="visible">true</property>
+                    <accessibility><property name="label">Settings</property></accessibility>
+                  </object></child>
+                  <child type="end"><object class="GtkButton" id="open_file_detail">
+                    <property name="name">open_file_detail</property>
+                    <property name="icon-name">list-add-symbolic</property>
+                    <property name="tooltip-text">Add computer</property>
+                    <property name="visible">false</property>
+                    <accessibility><property name="label">Add computer</property></accessibility>
+                  </object></child>
                   <property name="title-widget"><object class="AdwWindowTitle" id="title">
                     <property name="title">This computer</property>
                   </object></property>

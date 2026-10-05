@@ -62,8 +62,11 @@ impl Sidebar {
                 sidebar.root.set_show_content(true);
             }
         });
-        let open_file: gtk::Button = widgets::widget(builder, "open_file");
-        open_file.connect_clicked(move |_| on_open_file());
+        for id in ["open_file", "open_file_detail"] {
+            let open_file: gtk::Button = widgets::widget(builder, id);
+            let on_open_file = on_open_file.clone();
+            open_file.connect_clicked(move |_| on_open_file());
+        }
         sidebar.rows.set_header_func(|row, before| {
             let paired = row.widget_name().starts_with("peer-")
                 && before.is_none_or(|previous| previous.widget_name() == "self");

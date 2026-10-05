@@ -142,7 +142,12 @@ fn an_unpaired_computer_shows_the_empty_state_and_this_computer() {
     assert!(home.empty_visible());
     assert_eq!(calls.get(), 0);
     let text = labels(home.window());
-    assert!(text.iter().any(|label| label == "Add computer"));
+    let add = named::<gtk::Button>(home.window(), "open_file");
+    assert_eq!(add.tooltip_text().as_deref(), Some("Add computer"));
+    assert!(add.ancestor(adw::HeaderBar::static_type()).is_some());
+    assert!(named::<gtk::Button>(home.window(), "settings")
+        .ancestor(adw::HeaderBar::static_type())
+        .is_some());
     assert!(text.iter().any(|label| label == "VniLink"));
     assert!(!text
         .iter()
@@ -307,6 +312,8 @@ fn screenshot_tour() {
     home.show(&state);
     home.window().present();
     capture(&home, "01-this-computer");
+    assert!(!named::<gtk::Button>(home.window(), "settings_sidebar").is_visible());
+    assert!(!named::<gtk::Button>(home.window(), "open_file_detail").is_visible());
     home.show_offer("042");
     capture(&home, "02-pairing-code");
     home.show_file(id, "042");
@@ -357,6 +364,8 @@ fn screenshot_tour() {
     home.root.set_show_content(true);
     capture(&home, "07-narrow-content");
     assert!(home.root.is_collapsed());
+    assert!(named::<gtk::Button>(home.window(), "settings_sidebar").is_visible());
+    assert!(named::<gtk::Button>(home.window(), "open_file_detail").is_visible());
     home.root.set_show_content(false);
     capture(&home, "08-narrow-sidebar");
     home.window().set_default_size(1000, 720);

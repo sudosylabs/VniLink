@@ -74,7 +74,7 @@ fn present(application: &adw::Application) {
     let closed = Rc::new(Cell::new(false));
     let home_slot: Rc<RefCell<Option<Rc<Home>>>> = Rc::new(RefCell::new(None));
     let core_slot: Rc<RefCell<Option<Arc<Core>>>> = Rc::new(RefCell::new(None));
-    for id in ["settings"] {
+    for id in ["settings", "settings_sidebar"] {
         let settings_button: gtk::Button = widgets::widget(&builder, id);
         settings_button.connect_clicked({
             let core_slot = core_slot.clone();
