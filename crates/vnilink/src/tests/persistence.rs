@@ -222,6 +222,8 @@ fn reset_identity_forgets_trust_and_keeps_the_saved_relay() {
         .unwrap();
     let settings = credentialed_relay();
     host.set_relay(settings.clone()).unwrap();
+    assert_eq!(host.relay_configuration().unwrap(), settings);
+    assert!(!format!("{:?}", host.relay_configuration().unwrap()).contains(TOKEN));
     assert_eq!(host.snapshot().unwrap().devices.len(), 1);
     assert!(host.snapshot().unwrap().public_relay);
     let issued = host.create_invitation(Duration::from_secs(60)).unwrap();

@@ -243,6 +243,13 @@ impl Core {
         self.shared.secret.to_bytes()
     }
 
+    /// Saved relay configuration for the next open. Unlike the snapshot, this
+    /// includes pending changes. Credentials remain opaque inside CustomRelay:
+    /// callers can preserve or replace them but cannot read the token string.
+    pub fn relay_configuration(&self) -> Result<RelaySettings, Error> {
+        Ok(self.alive_state()?.record_relay.clone())
+    }
+
     /// Saves the relay the next [`Core::open`] binds.
     ///
     /// The running endpoint, [`Core::snapshot`], and new invitations keep the
