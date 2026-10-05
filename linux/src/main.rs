@@ -6,6 +6,7 @@ mod pairing;
 mod presentation;
 mod settings;
 mod storage;
+mod viewer;
 
 #[cfg(target_os = "linux")]
 mod app;

@@ -4663,8 +4663,10 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "secret-service",
+ "tokio",
  "vnilink",
  "vnilink-linux",
+ "vnilink-media",
 ]
 
 [[package]]

@@ -5,13 +5,19 @@
 //! turn. A later save from the window thread is also outside that runtime.
 
 use adw::prelude::*;
+mod capture;
+mod clipboard;
 mod dialogs;
+mod files;
 mod notifications;
 mod pages;
+mod preferences;
 mod sidebar;
+mod tasks;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+mod viewer;
 mod widgets;
 mod window;
 
@@ -68,6 +74,18 @@ fn present(application: &adw::Application) {
     let closed = Rc::new(Cell::new(false));
     let home_slot: Rc<RefCell<Option<Rc<Home>>>> = Rc::new(RefCell::new(None));
     let core_slot: Rc<RefCell<Option<Arc<Core>>>> = Rc::new(RefCell::new(None));
+    for id in ["settings"] {
+        let settings_button: gtk::Button = widgets::widget(&builder, id);
+        settings_button.connect_clicked({
+            let core_slot = core_slot.clone();
+            let window = window.clone();
+            move |_| {
+                if let Some(core) = core_slot.borrow().clone() {
+                    preferences::open(&window, core);
+                }
+            }
+        });
+    }
     let pending: Rc<RefCell<Option<PairingPreview>>> = Rc::new(RefCell::new(None));
     let saving = Rc::new(Cell::new(false));
     let tick: Rc<RefCell<Option<gtk::glib::SourceId>>> = Rc::new(RefCell::new(None));
@@ -129,6 +147,8 @@ fn present(application: &adw::Application) {
                     Ok(core) => {
                         let core = Arc::new(core);
                         core_slot.borrow_mut().replace(Arc::clone(&core));
+                        viewer::watch(&window, core.clone());
+                        clipboard::install(&window, core.clone());
                         if home_slot.borrow().is_none() {
                             let flow = Rc::new(RefCell::new(PairingFlow::default()));
                             let live = Rc::new(RefCell::new(LiveState::default()));
@@ -165,6 +185,9 @@ fn present(application: &adw::Application) {
                                         while events.try_recv().is_some() {}
                                     }
                                     paint(&core_watch, &home_watch, &toasts_watch);
+                                    if let Some(error) = capture::take_error() {
+                                        notifications::note(&toasts_watch, &error);
+                                    }
                                     ControlFlow::Continue
                                 },
                             ));

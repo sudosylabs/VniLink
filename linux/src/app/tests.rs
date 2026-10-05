@@ -375,6 +375,7 @@ fn screenshot_tour() {
     });
     home.show(&state);
     capture(&home, "10-connected");
+    settings_and_desktop_capture_tour(&home, &state);
     home.window().close();
 }
 
@@ -439,6 +440,172 @@ fn pump_until(mut ready: impl FnMut() -> bool) {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert!(ready(), "GTK operation did not complete");
+}
+
+fn settings_and_desktop_capture_tour(home: &Home, state: &Snapshot) {
+    use std::sync::Arc;
+    let core = Arc::new(
+        vnilink::Core::open(
+            Arc::new(vnilink::MemoryStore::empty()),
+            vnilink::OpenConfig {
+                listen: vnilink::Listen::Loopback,
+                initial_relay: vnilink::RelaySettings::custom(vec![vnilink::CustomRelay::new(
+                    "http://127.0.0.1:9",
+                )
+                .unwrap()])
+                .unwrap(),
+                ..vnilink::OpenConfig::default()
+            },
+        )
+        .unwrap(),
+    );
+    let saved =
+        vnilink::RelaySettings::custom(vec![vnilink::CustomRelay::new("https://relay.example/")
+            .unwrap()
+            .with_auth_token("fixture-token")
+            .unwrap()])
+        .unwrap();
+    core.set_relay(saved.clone()).unwrap();
+    let settings = super::preferences::shell(home.window());
+    super::preferences::populate(
+        &settings,
+        core.clone(),
+        state,
+        core.relay_configuration().unwrap(),
+    );
+    settings.present();
+    capture_widget(&settings, "11-settings-relays");
+    settings.set_default_size(640, 760);
+    capture_widget(&settings, "11b-settings-narrow");
+    let sections = named::<gtk::ListBox>(&settings, "settings_sections");
+    let pages = named::<gtk::Stack>(&settings, "settings_pages");
+    let sidebar_bounds = sections.compute_bounds(&settings).unwrap();
+    let page_bounds = pages.compute_bounds(&settings).unwrap();
+    assert!(sidebar_bounds.x() + sidebar_bounds.width() <= page_bounds.x());
+    assert!(sections.width() >= 160);
+    settings.set_default_size(900, 760);
+    let token = named::<adw::PasswordEntryRow>(&settings, "relay_token_0");
+    assert!(token.text().is_empty(), "saved tokens must stay opaque");
+    let save = named::<gtk::Button>(&settings, "save_relays");
+    save.emit_clicked();
+    pump_until(|| save.is_sensitive());
+    assert_eq!(
+        core.relay_configuration().unwrap(),
+        saved,
+        "saving an unchanged form must preserve the token"
+    );
+    token.set_text("updated-fixture-token");
+    save.emit_clicked();
+    pump_until(|| save.is_sensitive());
+    let updated = core.relay_configuration().unwrap();
+    token.set_text("");
+    save.emit_clicked();
+    pump_until(|| save.is_sensitive());
+    assert_eq!(
+        core.relay_configuration().unwrap(),
+        updated,
+        "empty replacement preserves the latest saved token"
+    );
+    named::<adw::SwitchRow>(&settings, "relay_auth_0").set_active(false);
+    save.emit_clicked();
+    pump_until(|| save.is_sensitive());
+    match core.relay_configuration().unwrap() {
+        vnilink::RelaySettings::Custom(relays) => assert!(!relays[0].has_auth_token()),
+        _ => panic!("custom relay expected"),
+    }
+    for (page, name) in [
+        ("keyboard", "12-settings-keyboard"),
+        ("computers", "13-settings-computers"),
+        ("files", "14-settings-files"),
+        ("pairing", "15-settings-pairing"),
+    ] {
+        super::preferences::show_page(&settings, page);
+        capture_widget(&settings, name);
+    }
+    let other = vnilink::Core::open(
+        Arc::new(vnilink::MemoryStore::empty()),
+        vnilink::OpenConfig {
+            listen: vnilink::Listen::Loopback,
+            initial_relay: saved.clone(),
+            ..vnilink::OpenConfig::default()
+        },
+    )
+    .unwrap();
+    let invitation = other
+        .create_invitation(std::time::Duration::from_secs(60))
+        .unwrap();
+    let device = core.accept_invitation(&invitation).unwrap();
+    let row = adw::ActionRow::builder()
+        .title(crate::presentation::device_name(&device))
+        .build();
+    let manage =
+        super::preferences::manage_computer(&settings, core.clone(), device.clone(), row.clone());
+    let name = named::<adw::EntryRow>(&manage, "peer_pet_name");
+    let save_name = named::<gtk::Button>(&manage, "save_peer_name");
+    name.set_text("My Linux laptop");
+    save_name.emit_clicked();
+    pump_until(|| save_name.is_sensitive());
+    assert_eq!(row.title().as_str(), "My Linux laptop");
+    let renamed = core
+        .snapshot()
+        .unwrap()
+        .devices
+        .into_iter()
+        .find(|d| d.endpoint_id == device.endpoint_id)
+        .unwrap();
+    assert_eq!(renamed.pet_name.as_deref(), Some("My Linux laptop"));
+    assert_eq!(renamed.grants, device.grants);
+    capture_widget(&manage, "18-computer-name");
+    name.set_text("");
+    save_name.emit_clicked();
+    pump_until(|| save_name.is_sensitive());
+    assert_eq!(
+        row.title().as_str(),
+        crate::presentation::device_name(&device)
+    );
+    manage.close();
+    other.shutdown();
+    settings.close();
+    let session = SessionInfo {
+        id: 42,
+        generation: 1,
+        role: SessionRole::Controller,
+        phase: SessionPhase::Active,
+        peer_id: state.devices[0].endpoint_id.clone(),
+        quality: Some(vnilink::Quality::new(8000, 30, 1920, 1080).unwrap()),
+        monitor_width: 1920,
+        monitor_height: 1080,
+    };
+    let viewer = super::viewer::Viewer::build(home.window(), core.clone(), session);
+    viewer.window.present();
+    capture_widget(&viewer.window, "16-desktop-waiting");
+    // Synthetic pixels exercise the real texture upload; this is not a remote session.
+    let mut pixels = Vec::with_capacity(960 * 540 * 4);
+    for y in 0..540 {
+        for x in 0..960 {
+            let value = if (x / 80 + y / 80) % 2 == 0 { 56 } else { 72 };
+            pixels.extend_from_slice(&[value, value, value, 0]);
+        }
+    }
+    let frame = vnilink_media::RawFrame::bgra(960, 540, 0, pixels).unwrap();
+    viewer.show_frame(&frame);
+    viewer.status.set_label("Synthetic test frame · 960 × 540");
+    let texture = viewer
+        .picture
+        .paintable()
+        .unwrap()
+        .downcast::<gtk::gdk::Texture>()
+        .unwrap();
+    let mut uploaded = vec![0; 960 * 540 * 4];
+    texture.download(&mut uploaded, 960 * 4);
+    assert_eq!(&uploaded[0..4], &[56, 56, 56, 255]);
+    capture_widget(&viewer.window, "17-desktop-pixels");
+    viewer.window.close();
+    assert!(
+        viewer.picture.paintable().is_none(),
+        "closing clears screen pixels"
+    );
+    core.shutdown();
 }
 
 fn computer_names_refresh_without_changing_selection() {
