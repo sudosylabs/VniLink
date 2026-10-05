@@ -1,0 +1,14 @@
+# VniLink Linux build environment: Rust 1.91 + VA-API, DRM, and PipeWire
+# development libraries matching Ubuntu 24.04 (PipeWire 1.x).
+FROM rust:1.91-trixie
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang \
+    libva-dev \
+    libdrm-dev \
+    libgbm-dev \
+    libegl-dev \
+    pkg-config \
+    libpipewire-0.3-dev \
+    mingw-w64 \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /work

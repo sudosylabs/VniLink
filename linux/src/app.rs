@@ -210,7 +210,17 @@ struct Notice {
 
 fn open_core() -> Result<Core, Notice> {
     let store = SecretStore::connect().map_err(|err| notice(&err))?;
-    Core::open(Arc::new(store), OpenConfig::default()).map_err(|err| notice(&err))
+    let core = Core::open(Arc::new(store), OpenConfig::default()).map_err(|err| notice(&err))?;
+    // Report VA-API availability explicitly. Without this a machine without a
+    // render node would admit a session that can never carry video.
+    #[cfg(target_os = "linux")]
+    let _ = core.set_h264_support(
+        vnilink_linux::h264_encode_available(),
+        vnilink_linux::h264_decode_available(),
+    );
+    #[cfg(not(target_os = "linux"))]
+    let _ = core.set_h264_support(false, false);
+    Ok(core)
 }
 
 fn notice(error: &vnilink::Error) -> Notice {
@@ -561,6 +571,9 @@ fn say(error: &vnilink::Error) -> String {
         vnilink::Error::Unauthorized => "That computer did not allow control.".to_string(),
         vnilink::Error::Busy => "A connection is already in progress.".to_string(),
         vnilink::Error::Network(_) => "Could not reach that computer.".to_string(),
+        vnilink::Error::Unsupported(reason) => {
+            format!("That computer cannot share its desktop ({reason}).")
+        }
         other => other.to_string(),
     }
 }

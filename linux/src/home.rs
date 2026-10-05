@@ -248,7 +248,7 @@ impl Home {
                 .unwrap_or_default()
         };
         format!(
-            "{}\n{:?}\n{:?}\n{:?}\n{}\n{}\n{}\n{}\n{}\n{}",
+            "{}\n{:?}\n{:?}\n{:?}\n{}\n{}\n{}\n{}\n{}\n{}\n{}{}{}",
             self.selected.borrow().clone().unwrap_or_default(),
             self.offer.borrow().clone(),
             self.request.borrow().as_ref().map(|ask| ask.check.clone()),
@@ -259,6 +259,9 @@ impl Home {
             devices,
             session(&snapshot.incoming),
             session(&snapshot.outgoing),
+            u8::from(snapshot.capabilities.desktop_capture),
+            u8::from(snapshot.capabilities.h264_encode),
+            u8::from(snapshot.capabilities.h264_decode),
         )
     }
 
@@ -416,6 +419,15 @@ impl Home {
     }
 
     fn fill_computer(&self, snapshot: &Snapshot) {
+        if snapshot.capabilities.desktop_capture && !snapshot.capabilities.h264_encode {
+            // The host admits no video session in this state; name it here so
+            // the owner knows before anyone connects.
+            let card = flow_card();
+            card.append(&card_copy(
+                "Video unavailable: no H.264 encoder on this computer.",
+            ));
+            self.detail.append(&card);
+        }
         let offer = self.offer.borrow().clone();
         if let Some(check) = offer.as_deref() {
             let card = flow_card();
@@ -505,6 +517,13 @@ impl Home {
         let block = heading("Connect", peer_sentence(device.grants));
         block.append(&connect);
         self.detail.append(&block);
+        if !snapshot.capabilities.h264_decode {
+            let card = flow_card();
+            card.append(&card_copy(
+                "This computer cannot decode video: no H.264 decoder.",
+            ));
+            self.detail.append(&card);
+        }
         self.detail
             .append(&address_group(&device.endpoint_id, None));
     }

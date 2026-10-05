@@ -17,6 +17,8 @@ fn the_software_encoder_is_not_linked() {
         LinuxEncoder::open(64, 64, 30, 500_000),
         Err(Error::Unsupported("VA-API H.264"))
     ));
+    assert!(!crate::h264_encode_available());
+    assert!(!crate::h264_decode_available());
 }
 
 #[cfg(target_os = "linux")]

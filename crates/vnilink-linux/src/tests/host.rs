@@ -3,7 +3,7 @@ use vnilink_media::Quality;
 #[cfg(not(target_os = "linux"))]
 use vnilink_media::Error;
 #[cfg(target_os = "linux")]
-use vnilink_media::{parse_annex_b, FrameSink, PumpOutput, RawFrame};
+use vnilink_media::{parse_annex_b, Error, FrameSink, PumpOutput, RawFrame};
 
 use crate::encode::LinuxEncoder;
 use crate::host::HostSession;

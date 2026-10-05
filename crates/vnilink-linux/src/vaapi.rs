@@ -448,7 +448,7 @@ fn invalid_pictures<const N: usize>() -> [PictureH264; N] {
     std::array::from_fn(|_| PictureH264::new(VA_INVALID_ID, 0, VA_INVALID_SURFACE, 0, 0))
 }
 
-fn render_nodes() -> Vec<std::path::PathBuf> {
+pub(crate) fn render_nodes() -> Vec<std::path::PathBuf> {
     let Ok(entries) = std::fs::read_dir("/dev/dri") else {
         return Vec::new();
     };
@@ -464,6 +464,68 @@ fn render_nodes() -> Vec<std::path::PathBuf> {
     }
     paths.sort();
     paths
+}
+
+/// True when a DRM render node offers VA-API H.264 Constrained Baseline
+/// slice encode. No encoder session is opened. Used to report an explicit
+/// unsupported state instead of admitting a session that can never carry video.
+pub fn h264_encode_available() -> bool {
+    #[cfg(not(target_os = "linux"))]
+    {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        for path in render_nodes() {
+            let Ok(display) = Display::open_drm_display(&path) else {
+                continue;
+            };
+            let Ok(entrypoints) = display
+                .query_config_entrypoints(libva::VAProfile::VAProfileH264ConstrainedBaseline)
+            else {
+                continue;
+            };
+            if choose_h264_entrypoint(&entrypoints).is_some() {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// True when a DRM render node offers VA-API H.264 VLD decode. No decode
+/// session is opened. A machine without this entrypoint reports unsupported
+/// instead of silently showing no video.
+pub fn h264_decode_available() -> bool {
+    #[cfg(not(target_os = "linux"))]
+    {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        const PROFILES: [libva::VAProfile::Type; 3] = [
+            libva::VAProfile::VAProfileH264ConstrainedBaseline,
+            libva::VAProfile::VAProfileH264Main,
+            libva::VAProfile::VAProfileH264High,
+        ];
+        for path in render_nodes() {
+            let Ok(display) = Display::open_drm_display(&path) else {
+                continue;
+            };
+            for profile in PROFILES {
+                let Ok(entrypoints) = display.query_config_entrypoints(profile) else {
+                    continue;
+                };
+                if entrypoints
+                    .iter()
+                    .any(|entry| *entry == libva::VAEntrypoint::VAEntrypointVLD)
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 pub(crate) fn is_render_node_name(name: &str) -> bool {

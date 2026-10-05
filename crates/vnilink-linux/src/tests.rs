@@ -1,3 +1,5 @@
+#[path = "tests/decode.rs"]
+mod decode_tests;
 #[path = "tests/encode.rs"]
 mod encode_tests;
 #[path = "tests/host.rs"]

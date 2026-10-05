@@ -233,7 +233,7 @@ fn query_modifiers(device: *mut c_void, found: &mut Vec<u64>) {
         if eglInitialize(display, ptr::null_mut(), ptr::null_mut()) == 0 {
             return;
         }
-        let query = eglGetProcAddress(c"eglQueryDmaBufModifiersEXT".as_ptr());
+        let query = eglGetProcAddress(c"eglQueryDmaBufModifiersEXT".as_ptr().cast::<i8>());
         if !query.is_null() {
             let query: QueryModifiers = std::mem::transmute(query);
             for format in [DRM_FORMAT_ARGB8888, DRM_FORMAT_XRGB8888] {

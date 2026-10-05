@@ -106,6 +106,19 @@ pub fn allowed_name(allowed: bool) -> &'static str {
     }
 }
 
+/// Explicit video state for this installation. Returns a sentence when video
+/// cannot work, so the window names the missing codec instead of showing a
+/// black screen. `capture` is whether a capture adapter is installed.
+pub fn video_status(capture: bool, h264_encode: bool, h264_decode: bool) -> Option<&'static str> {
+    if capture && !h264_encode {
+        return Some("Video unavailable: no H.264 encoder on this computer.");
+    }
+    if !h264_decode {
+        return Some("This computer cannot decode video: no H.264 decoder.");
+    }
+    None
+}
+
 pub fn phase_name(phase: &SessionPhase) -> &'static str {
     match phase {
         SessionPhase::Connecting => "Connecting",
@@ -226,5 +239,17 @@ mod tests {
         assert!(hosting_subtitle(true, false).contains("pairing file"));
         assert!(hosting_subtitle(true, true).contains("expires"));
         let _ = role_name(SessionRole::Host);
+    }
+
+    #[test]
+    fn video_status_names_the_missing_codec() {
+        assert_eq!(video_status(false, false, true), None);
+        assert_eq!(video_status(true, true, true), None);
+        assert!(video_status(true, false, true)
+            .unwrap()
+            .contains("no H.264 encoder"));
+        assert!(video_status(false, false, false)
+            .unwrap()
+            .contains("no H.264 decoder"));
     }
 }
