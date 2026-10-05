@@ -274,3 +274,11 @@ Consult current primary documentation when implementing version-dependent behavi
 - [XDG RemoteDesktop portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.RemoteDesktop.html)
 
 Pin selected dependencies and document the actual supported versions. Replace proposed build layout and instructions with verified commands as implementation lands. Put detailed decisions and evidence in the corresponding docs directories, and keep this README as the entry point describing the final product and remaining scope.
+
+The native Linux and macOS apps now provide background window-close behavior,
+tray/menu-bar Open, Settings, Stop remote access and Quit actions, and opt-in
+launch at login. Startup sharing is opt-in: macOS requires existing Screen
+Recording/Accessibility permissions; Linux can resume X11 sharing, while Wayland
+still requires its portal selection. See [Linux background setup](linux/README.md#background-and-login-startup)
+and [macOS implementation](apple/README.md). Actual login cycles and unattended
+real-machine desktop operation remain validation work.

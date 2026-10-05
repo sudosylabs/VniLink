@@ -2,7 +2,7 @@
 //! distinct; one portal grant is never treated as unattended desktop control.
 use super::{preferences, tasks};
 use adw::prelude::*;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use vnilink_media::{FrameSource, RawFrame};
@@ -11,7 +11,15 @@ static ERROR: Mutex<Option<String>> = Mutex::new(None);
 pub(crate) fn take_error() -> Option<String> {
     ERROR.lock().unwrap().take()
 }
+static GENERATION: AtomicU64 = AtomicU64::new(0);
 static CURRENT: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
+pub(crate) fn stop() {
+    let mut current = CURRENT.lock().unwrap();
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+    if let Some(stop) = current.take() {
+        stop.store(true, Ordering::Relaxed);
+    }
+}
 struct Monitor(u16, u16);
 impl vnilink::HostCapture for Monitor {
     fn monitor(&self) -> (u16, u16) {
@@ -37,10 +45,29 @@ impl FrameSource for Source {
     }
 }
 
-pub(crate) fn choose(parent: &adw::Window, core: Arc<vnilink::Core>, button: &gtk::Button) {
+pub(crate) fn choose(
+    parent: &impl IsA<gtk::Window>,
+    core: Arc<vnilink::Core>,
+    button: &gtk::Button,
+) {
+    choose_inner(parent, core, button, false);
+}
+pub(crate) fn resume(parent: &impl IsA<gtk::Window>, core: Arc<vnilink::Core>) {
+    // An unattended launch must never request a Wayland portal grant.
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        choose_inner(parent, core, &gtk::Button::new(), true);
+    }
+}
+fn choose_inner(
+    parent: &impl IsA<gtk::Window>,
+    core: Arc<vnilink::Core>,
+    button: &gtk::Button,
+    resume_hosting: bool,
+) {
+    let generation = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
     button.set_sensitive(false);
     let button = button.clone();
-    let parent = parent.clone();
+    let parent = parent.as_ref().clone();
     tasks::run(
         move || {
             let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
@@ -66,15 +93,31 @@ pub(crate) fn choose(parent: &adw::Window, core: Arc<vnilink::Core>, button: &gt
                 )
             };
             let (width, height) = source.size();
+            // Fence a pending portal/source selection against Stop and newer selections.
+            let mut current = CURRENT.lock().unwrap();
+            if GENERATION.load(Ordering::Relaxed) != generation {
+                return Err("Screen selection was cancelled.".to_string());
+            }
             core.set_capture(Box::new(Monitor(width, height)))
                 .map_err(|e| e.to_string())?;
             if !wayland {
                 core.enable_os_input().map_err(|e| e.to_string())?;
             }
+            let decode = core
+                .snapshot()
+                .map_err(|e| e.to_string())?
+                .capabilities
+                .h264_decode;
+            core.set_h264_support(vnilink_linux::h264_encode_available(), decode)
+                .map_err(|e| e.to_string())?;
+            if resume_hosting {
+                core.start_hosting().map_err(|e| e.to_string())?;
+            }
             let stop = Arc::new(AtomicBool::new(false));
-            if let Some(previous) = CURRENT.lock().unwrap().replace(stop.clone()) {
+            if let Some(previous) = current.replace(stop.clone()) {
                 previous.store(true, Ordering::Relaxed);
             }
+            drop(current);
             std::thread::spawn(move || {
                 let mut served = None;
                 while !stop.load(Ordering::Relaxed) {
@@ -123,13 +166,15 @@ pub(crate) fn choose(parent: &adw::Window, core: Arc<vnilink::Core>, button: &gt
             button.set_sensitive(true);
             match result {
                 Ok((width, height, wayland)) => {
-                    preferences::toast(
-                        &parent,
-                        adw::Toast::new(&format!(
-                            "Screen selected: {width} × {height}{}",
-                            if wayland { " (viewing only)" } else { "" }
-                        )),
-                    );
+                    if let Some(settings) = parent.downcast_ref::<adw::Window>() {
+                        preferences::toast(
+                            settings,
+                            adw::Toast::new(&format!(
+                                "Screen selected: {width} × {height}{}",
+                                if wayland { " (viewing only)" } else { "" }
+                            )),
+                        );
+                    }
                 }
                 Err(error) => preferences::report(&parent, &error),
             }

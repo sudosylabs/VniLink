@@ -635,3 +635,79 @@ fn computer_names_refresh_without_changing_selection() {
     home.show(&state);
     assert_eq!(home.title().title().as_str(), "renamed-mini");
 }
+
+/// Run the actual application lifecycle in an isolated desktop session/config.
+#[test]
+fn background_close_reopen_and_quit() {
+    if std::env::var_os("VNILINK_BACKGROUND_CHILD").is_none() {
+        let config =
+            std::env::temp_dir().join(format!("vnilink-background-{}", std::process::id()));
+        std::fs::create_dir_all(&config).unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "app::tests::background_close_reopen_and_quit",
+                "--test-threads=1",
+            ])
+            .env("VNILINK_BACKGROUND_CHILD", "1")
+            .env("XDG_CONFIG_HOME", &config)
+            .env("GTK_IM_MODULE", "gtk-im-context-simple")
+            .status()
+            .unwrap();
+        std::fs::remove_dir_all(config).unwrap();
+        assert!(status.success());
+        return;
+    }
+    let app = super::application();
+    let stopped = Rc::new(Cell::new(false));
+    let flag = stopped.clone();
+    app.connect_shutdown(move |_| flag.set(true));
+    let weak = app.downgrade();
+    gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(250), move || {
+        let app = weak.upgrade().unwrap();
+        let main = app
+            .windows()
+            .into_iter()
+            .find(|w| w.widget_name() == "vnilink-main")
+            .unwrap();
+        assert!(main.is_visible());
+        super::background::set_keep_running(true).unwrap();
+        main.close();
+        assert!(!main.is_visible());
+        assert_eq!(app.windows().len(), 1);
+        app.activate();
+        assert!(main.is_visible());
+        assert_eq!(
+            app.windows().len(),
+            1,
+            "reopening must reuse the existing core/window"
+        );
+        super::background::set_login(true).unwrap();
+        assert!(super::background::login_enabled());
+        let path = gtk::glib::user_config_dir().join("autostart/com.vnilink.VniLink.desktop");
+        let entry = gtk::gio::DesktopAppInfo::from_filename(path).expect("valid desktop entry");
+        let args = gtk::glib::shell_parse_argv(entry.commandline().unwrap().to_str().unwrap()).unwrap();
+        assert_eq!(std::path::Path::new(&args[0]), std::env::current_exe().unwrap());
+        assert_eq!(args[1], "--background");
+        assert!(
+            entry
+                .commandline()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with(" --background")
+        );
+        super::background::set_login(false).unwrap();
+        assert!(!super::background::login_enabled());
+        super::background::set_keep_running(false).unwrap();
+        assert!(!super::background::keep_running());
+        main.close();
+    });
+    assert_eq!(
+        app.run_with_args(&["vnilink", "--background"]),
+        gtk::glib::ExitCode::SUCCESS
+    );
+    assert!(
+        stopped.get(),
+        "closing with background mode off must shut down the app"
+    );
+}

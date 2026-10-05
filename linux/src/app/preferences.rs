@@ -43,6 +43,7 @@ pub(crate) fn populate(
     let sections = widgets::named::<gtk::ListBox>(window, "settings_sections");
     for page in [
         connection_page(window, core.clone(), snapshot, saved),
+        super::background::page(window),
         keyboard_page(window, core.clone()),
         computers_page(window, core.clone(), snapshot),
         super::files::page(window, core.clone()),

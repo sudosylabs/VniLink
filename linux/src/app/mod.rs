@@ -5,6 +5,7 @@
 //! turn. A later save from the window thread is also outside that runtime.
 
 use adw::prelude::*;
+mod background;
 mod capture;
 mod clipboard;
 mod dialogs;
@@ -37,12 +38,62 @@ use crate::pairing::PairingFlow;
 use crate::storage::SecretStore;
 
 pub fn run() -> gtk::glib::ExitCode {
+    application().run()
+}
+
+fn application() -> adw::Application {
     let application = adw::Application::builder()
         .application_id("com.vnilink.VniLink")
+        .flags(gtk::gio::ApplicationFlags::HANDLES_COMMAND_LINE)
         .build();
-    application.connect_startup(|_| install_style());
+    application.add_main_option(
+        "background",
+        0u8.into(),
+        gtk::glib::OptionFlags::NONE,
+        gtk::glib::OptionArg::None,
+        "Start without opening the main window",
+        None,
+    );
+    application.connect_startup(|app| {
+        install_style();
+        let hold = Rc::new(RefCell::new(Some(app.hold())));
+        app.connect_shutdown(move |_| {
+            hold.borrow_mut().take();
+        });
+        for name in ["open", "quit", "tray-unavailable"] {
+            let action = gtk::gio::SimpleAction::new(name, None);
+            let weak = app.downgrade();
+            action.connect_activate(move |action, _| {
+                if let Some(app) = weak.upgrade() {
+                    match action.name().as_str() {
+                        "quit" => app.quit(),
+                        // A login launch must stay reachable when no tray host exists.
+                        _ => app.activate(),
+                    }
+                }
+            });
+            app.add_action(&action);
+        }
+        background::install(app);
+    });
+    application.connect_command_line(|app, command| {
+        let hidden = command
+            .options_dict()
+            .lookup::<bool>("background")
+            .ok()
+            .flatten()
+            .unwrap_or(false);
+        let first = app.windows().is_empty();
+        app.activate();
+        if first && hidden && background::keep_running() {
+            for window in app.windows() {
+                window.set_visible(false);
+            }
+        }
+        0.into()
+    });
     application.connect_activate(present);
-    application.run()
+    application
 }
 
 fn install_style() {
@@ -60,9 +111,18 @@ fn install_style() {
 }
 
 fn present(application: &adw::Application) {
+    if let Some(window) = application
+        .windows()
+        .into_iter()
+        .find(|w| w.widget_name() == "vnilink-main")
+    {
+        window.present();
+        return;
+    }
     let builder = gtk::Builder::from_string(include_str!("window.ui"));
     let window: adw::ApplicationWindow = widgets::widget(&builder, "window");
     window.set_application(Some(application));
+    window.set_widget_name("vnilink-main");
 
     let stack: gtk::Stack = widgets::widget(&builder, "root");
     let spinner: gtk::Spinner = widgets::widget(&builder, "spinner");
@@ -147,6 +207,10 @@ fn present(application: &adw::Application) {
                     Ok(core) => {
                         let core = Arc::new(core);
                         core_slot.borrow_mut().replace(Arc::clone(&core));
+                        if background::resume_x11() && std::env::var_os("WAYLAND_DISPLAY").is_none()
+                        {
+                            capture::resume(&window, core.clone());
+                        }
                         viewer::watch(&window, core.clone());
                         clipboard::install(&window, core.clone());
                         if home_slot.borrow().is_none() {
@@ -184,6 +248,9 @@ fn present(application: &adw::Application) {
                                     if let Some(events) = events.as_ref() {
                                         while events.try_recv().is_some() {}
                                     }
+                                    if let Ok(snapshot) = core_watch.snapshot() {
+                                        background::update_status(&snapshot);
+                                    }
                                     paint(&core_watch, &home_watch, &toasts_watch);
                                     if let Some(error) = capture::take_error() {
                                         notifications::note(&toasts_watch, &error);
@@ -210,8 +277,60 @@ fn present(application: &adw::Application) {
         move |_| begin()
     });
 
+    for name in ["settings", "stop-hosting"] {
+        let action = gtk::gio::SimpleAction::new(name, None);
+        let slot = core_slot.clone();
+        let win = window.clone();
+        action.connect_activate(move |action, _| {
+            if let Some(core) = slot.borrow().clone() {
+                if action.name() == "settings" {
+                    win.present();
+                    preferences::open(&win, core);
+                } else {
+                    capture::stop();
+                    let win = win.clone();
+                    tasks::run(
+                        move || {
+                            core.stop_hosting().map_err(|e| e.to_string())?;
+                            let decode = core
+                                .snapshot()
+                                .map_err(|e| e.to_string())?
+                                .capabilities
+                                .h264_decode;
+                            core.set_h264_support(false, decode)
+                                .map_err(|e| e.to_string())
+                        },
+                        move |result| {
+                            if let Err(error) = result {
+                                preferences::report(&win, &error);
+                            }
+                        },
+                    );
+                }
+            }
+        });
+        application.add_action(&action);
+    }
+    let shutdown_slot = core_slot.clone();
+    let shutdown_tick = tick.clone();
+    let shutting_down = closed.clone();
+    application.connect_shutdown(move |_| {
+        shutting_down.set(true);
+        capture::stop();
+        if let Some(source) = shutdown_tick.borrow_mut().take() {
+            source.remove();
+        }
+        if let Some(core) = shutdown_slot.borrow_mut().take() {
+            core.shutdown();
+        }
+    });
+    let app = application.clone();
     let window_close = window.clone();
-    window_close.connect_close_request(move |_| {
+    window_close.connect_close_request(move |window| {
+        if background::keep_running() {
+            window.set_visible(false);
+            return gtk::glib::Propagation::Stop;
+        }
         closed.set(true);
         if let Some(source) = tick.borrow_mut().take() {
             source.remove();
@@ -219,6 +338,7 @@ fn present(application: &adw::Application) {
         if let Some(core) = core_slot.borrow().clone() {
             core.shutdown();
         }
+        app.quit();
         gtk::glib::Propagation::Proceed
     });
     stack.set_visible_child_name("startup");

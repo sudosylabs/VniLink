@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=VniLink
+Comment=Remote access to your paired computers
+Exec=vnilink-gnome
+Icon=computer
+Terminal=false
+Categories=Network;RemoteAccess;
+StartupNotify=true
+DBusActivatable=false

@@ -58,3 +58,42 @@ Choose a screen before hosting video. X11 reads the current desktop and installs
 The visual tour includes the settings pages and a synthetic pixel-upload test for the remote desktop window. It verifies geometry, alpha, and cleanup, and relay saves against a memory installation store. This does not establish a real two-machine remote desktop result.
 
 Paired computers display a local name when set, otherwise the hostname learned from their invitation (refreshed on connection), with an endpoint fragment as fallback. Settings → Computers → Manage lets you save a local name or clear it to use the hostname. Names persist in the keyring record and do not change permissions.
+
+## Background and login startup
+
+Settings → Background contains **Keep running when the window closes** (on by
+default), **Launch at login** (off by default), and **Share X11 desktop and allow
+connections on launch** (off by default). Closing the window in background mode
+retains the same core and current capture; reopening reuses that window. Quit
+stops capture and shuts down the core. The tray provides Open, Settings, Stop
+remote access and Quit, with a status title for hosting/active incoming sessions.
+
+The tray uses StatusNotifierItem/D-Bus menus through `ksni`. KDE and desktops
+with an AppIndicator/StatusNotifier host can show it. GNOME needs a compatible
+tray extension. If no tray host is available the app shows its window; background
+mode is still available, and launching VniLink again reopens the existing process.
+
+Launch at login writes only this user's
+`$XDG_CONFIG_HOME/autostart/com.vnilink.VniLink.desktop` (normally under
+`~/.config`), pointing to the current executable with `--background`. Disabling
+it removes that entry. Keep the installed binary at the registered path; turn
+launch at login off/on after moving it. X11 sharing can resume explicitly;
+Wayland still needs a fresh portal screen selection and supports viewing only.
+Startup preferences contain no credentials; identity and relay tokens remain in
+Secret Service. An unlocked desktop session and codec hardware are required.
+
+For a local installation, build the executable and install the launcher before
+enabling launch at login:
+
+```sh
+cargo build --release --locked -p vnilink-gnome
+install -Dm755 target/release/vnilink-gnome ~/.local/bin/vnilink-gnome
+install -Dm644 linux/data/com.vnilink.VniLink.desktop ~/.local/share/applications/com.vnilink.VniLink.desktop
+```
+
+Ensure `~/.local/bin` is on the desktop session's PATH. The background lifecycle
+test uses an isolated configuration directory and covers close/reopen, login
+entry creation/removal and quitting with background mode disabled. It needs
+D-Bus and a display (`dbus-run-session -- xvfb-run -a cargo test --locked
+-p vnilink-gnome -- --test-threads=1`). A real desktop tray and login cycle still
+need manual validation.
