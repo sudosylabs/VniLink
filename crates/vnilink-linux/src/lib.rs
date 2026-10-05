@@ -3,7 +3,7 @@
 //! X11 and the Wayland portal are separate. [`X11Capture`] reads the current
 //! X session. [`PortalSession`] is the ScreenCast permission sequence, and
 //! [`PortalCapture`] reads BGRA or BGRx from the PipeWire node that sequence
-//! starts, including a DMA-BUF mapped through GBM. One started session is
+//! starts using shared-memory buffers. One started session is
 //! not universal unattended access. [`LinuxEncoder`] encodes H.264 with
 //! VA-API on the first DRM render node that offers Constrained Baseline,
 //! and [`LinuxDecoder`] decodes it back on the first node that offers
@@ -15,7 +15,8 @@
 mod dbus;
 #[cfg(target_os = "linux")]
 mod decode;
-#[cfg(target_os = "linux")]
+// GBM import remains an isolated hardware experiment, not live portal capture.
+#[cfg(all(target_os = "linux", test))]
 mod dmabuf;
 mod encode;
 mod host;

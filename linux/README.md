@@ -97,3 +97,10 @@ entry creation/removal and quitting with background mode disabled. It needs
 D-Bus and a display (`dbus-run-session -- xvfb-run -a cargo test --locked
 -p vnilink-gnome -- --test-threads=1`). A real desktop tray and login cycle still
 need manual validation.
+
+Wayland capture currently requests CPU-mappable MemFd/MemPtr buffers and rejects
+DMA-BUF delivery. A real-machine backtrace showed a Mesa heap-corruption abort
+inside `gbm_bo_unmap`; the production portal no longer probes or maps through
+GBM. This is a capture-path mitigation, not evidence that the original driver
+corruption is repaired. The producer must support shared-memory delivery; live
+capture with the changed negotiation still needs validation on that desktop.

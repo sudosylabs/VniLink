@@ -3,9 +3,10 @@
 //! [`crate::dbus::open_monitor`] returns the remote file descriptor and stores
 //! the node id. This thread connects to that node and copies BGRA or BGRx
 //! into a [`vnilink_media::RawFrame`]. Memory buffers are copied directly.
-//! DMA-BUF buffers are imported through GBM. A modifier GBM cannot map is
-//! refused. The bytes are screen content: do not log them. One connected
-//! node is that compositor's permission, not universal unattended access.
+//! The live portal negotiates MemFd/MemPtr buffers. DMA-BUF import is not used:
+//! a Mesa GBM unmap abort was observed on a real Wayland desktop.
+//! The bytes are screen content: do not log them. One connected node is that
+//! compositor's permission, not universal unattended access.
 
 use std::os::fd::OwnedFd;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,17 +17,16 @@ use std::time::{Duration, Instant};
 
 use pipewire as pw;
 use pw::spa::param::video::VideoFormat;
-use pw::spa::pod::serialize::PodSerializer;
 use pw::spa::pod::Pod;
+use pw::spa::pod::serialize::PodSerializer;
 use pw::spa::utils::{Choice, ChoiceEnum, ChoiceFlags};
 use pw::stream::StreamFlags;
 use vnilink_media::{ChannelSlot, Error, FrameChannel, RawFrame};
 
-use crate::dmabuf::{
-    Importer, Plane, DRM_FORMAT_ARGB8888, DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR,
-    DRM_FORMAT_XRGB8888,
-};
 use crate::pixels::{raw_frame_from_bgra, raw_frame_from_bgrx};
+
+// drm_fourcc.h: sentinel retained for delivery metadata. No GBM calls in this path.
+const DRM_FORMAT_MOD_INVALID: u64 = 0x00ff_ffff_ffff_ffff;
 
 const OPEN_TIMEOUT: Duration = Duration::from_secs(3);
 const FRAME_TIMEOUT: Duration = Duration::from_secs(2);
@@ -42,7 +42,6 @@ struct Shared {
 
 struct ListenerState {
     shared: Arc<Shared>,
-    importer: Importer,
 }
 
 enum Command {
@@ -207,9 +206,8 @@ fn run(
     )
     .map_err(|_| Error::CaptureRejected("the screen cast portal did not start"))?;
 
-    let mut importer = Importer::new();
-    let modifiers = importer.modifiers();
-    let blobs = enum_formats(&modifiers)?;
+    // Do not probe EGL/GBM or offer modifiers on the production portal path.
+    let blobs = enum_formats(&[])?;
     let mut params = Vec::with_capacity(blobs.len());
     for blob in &blobs {
         params.push(Pod::from_bytes(blob).ok_or(Error::CaptureRejected(
@@ -218,7 +216,6 @@ fn run(
     }
     let listener_state = ListenerState {
         shared: Arc::clone(shared),
-        importer,
     };
     let _listener = stream
         .add_local_listener_with_user_data(listener_state)
@@ -227,8 +224,26 @@ fn run(
                 state.shared.channel.fail("this PipeWire pixel format");
             }
         })
-        .param_changed(|_, state, id, param| remember_format(&state.shared, id, param))
-        .process(|stream, state| copy_buffer(stream, &state.shared, &mut state.importer))
+        .param_changed(|stream, state, id, param| {
+            remember_format(&state.shared, id, param);
+            if param.is_some() && id == pw::spa::param::ParamType::Format.as_raw() {
+                let updated = (|| {
+                    let bytes = serialize_object(memory_buffer_object())?;
+                    let pod = Pod::from_bytes(&bytes)
+                        .ok_or(Error::Unsupported("memory buffer negotiation"))?;
+                    stream
+                        .update_params(&mut [pod])
+                        .map_err(|_| Error::Unsupported("memory buffer negotiation"))
+                })();
+                if updated.is_err() {
+                    state
+                        .shared
+                        .channel
+                        .fail("PipeWire shared-memory buffer negotiation failed");
+                }
+            }
+        })
+        .process(|stream, state| copy_buffer(stream, &state.shared))
         .register()
         .map_err(|_| Error::CaptureRejected("the screen cast portal did not start"))?;
     stream
@@ -384,14 +399,6 @@ fn record_delivery(shared: &Shared, dma_buf: bool) {
         delivery_of(format, dma_buf, modifier, explicit);
 }
 
-fn drm_format(format: VideoFormat) -> Option<u32> {
-    match format {
-        VideoFormat::BGRA => Some(DRM_FORMAT_ARGB8888),
-        VideoFormat::BGRx => Some(DRM_FORMAT_XRGB8888),
-        _ => None,
-    }
-}
-
 pub(crate) fn enum_formats(modifiers: &[u64]) -> Result<Vec<Vec<u8>>, Error> {
     format_objects(modifiers)
         .into_iter()
@@ -399,33 +406,35 @@ pub(crate) fn enum_formats(modifiers: &[u64]) -> Result<Vec<Vec<u8>>, Error> {
         .collect()
 }
 
-pub(crate) fn format_objects(modifiers: &[u64]) -> Vec<pw::spa::pod::Object> {
-    let mut offered: Vec<i64> = modifiers
-        .iter()
-        .take(126)
-        .map(|modifier| *modifier as i64)
-        .collect();
-    let linear = DRM_FORMAT_MOD_LINEAR as i64;
-    let invalid = DRM_FORMAT_MOD_INVALID as i64;
-    if !offered.contains(&linear) {
-        offered.push(linear);
+pub(crate) fn format_objects(_modifiers: &[u64]) -> Vec<pw::spa::pod::Object> {
+    vec![object_from(video_properties())]
+}
+
+pub(crate) fn memory_buffer_object() -> pw::spa::pod::Object {
+    let mask = (1 << pw::spa::buffer::DataType::MemPtr.as_raw())
+        | (1 << pw::spa::buffer::DataType::MemFd.as_raw());
+    pw::spa::pod::Object {
+        type_: pw::spa::utils::SpaTypes::ObjectParamBuffers.as_raw(),
+        id: pw::spa::param::ParamType::Buffers.as_raw(),
+        properties: vec![pw::spa::pod::Property {
+            key: pw::spa::sys::SPA_PARAM_BUFFERS_dataType,
+            flags: pw::spa::pod::PropertyFlags::MANDATORY,
+            value: pw::spa::pod::Value::Choice(pw::spa::pod::ChoiceValue::Int(Choice(
+                ChoiceFlags::empty(),
+                ChoiceEnum::Flags {
+                    default: mask,
+                    flags: vec![],
+                },
+            ))),
+        }],
     }
-    if !offered.contains(&invalid) {
-        offered.push(invalid);
-    }
-    let mut with_modifier = video_properties();
-    with_modifier.push(pw::spa::pod::Property {
-        key: pw::spa::param::format::FormatProperties::VideoModifier.as_raw(),
-        flags: pw::spa::pod::PropertyFlags::MANDATORY | pw::spa::pod::PropertyFlags::DONT_FIXATE,
-        value: pw::spa::pod::Value::Choice(pw::spa::pod::ChoiceValue::Long(Choice(
-            ChoiceFlags::empty(),
-            ChoiceEnum::Enum {
-                default: offered[0],
-                alternatives: offered,
-            },
-        ))),
-    });
-    vec![object_from(with_modifier), object_from(video_properties())]
+}
+
+pub(crate) fn accepts_memory_type(kind: pw::spa::buffer::DataType) -> bool {
+    matches!(
+        kind,
+        pw::spa::buffer::DataType::MemPtr | pw::spa::buffer::DataType::MemFd
+    )
 }
 
 fn video_properties() -> Vec<pw::spa::pod::Property> {
@@ -511,7 +520,7 @@ fn frame_from_bytes(
     }
 }
 
-fn copy_buffer(stream: &pw::stream::Stream, shared: &Shared, importer: &mut Importer) {
+fn copy_buffer(stream: &pw::stream::Stream, shared: &Shared) {
     let Some(mut buffer) = stream.dequeue_buffer() else {
         return;
     };
@@ -519,8 +528,10 @@ fn copy_buffer(stream: &pw::stream::Stream, shared: &Shared, importer: &mut Impo
     if datas.is_empty() {
         return;
     }
-    if datas[0].type_() == pw::spa::buffer::DataType::DmaBuf {
-        copy_dmabuf(datas, shared, importer);
+    if !accepts_memory_type(datas[0].type_()) {
+        shared
+            .channel
+            .fail("PipeWire delivered a GPU buffer instead of shared memory");
         return;
     }
     let data = &mut datas[0];
@@ -555,54 +566,4 @@ fn copy_buffer(stream: &pw::stream::Stream, shared: &Shared, importer: &mut Impo
         bytes: bytes[offset..end].to_vec(),
     });
     record_delivery(shared, false);
-}
-
-fn copy_dmabuf(datas: &mut [pw::spa::buffer::Data], shared: &Shared, importer: &mut Importer) {
-    let mut planes = Vec::new();
-    for data in datas.iter() {
-        if data.type_() != pw::spa::buffer::DataType::DmaBuf {
-            break;
-        }
-        let chunk = data.chunk();
-        let Ok(offset) = i32::try_from(chunk.offset()) else {
-            shared.channel.fail("this DMA-BUF modifier");
-            return;
-        };
-        planes.push(Plane {
-            fd: data.fd(),
-            stride: chunk.stride(),
-            offset,
-        });
-    }
-    let Some((width, height)) = *shared.size.lock().expect("portal size") else {
-        return;
-    };
-    let Some(format) = *shared.format.lock().expect("portal format") else {
-        shared.channel.fail("this PipeWire pixel format");
-        return;
-    };
-    let Some(drm_format) = drm_format(format) else {
-        shared.channel.fail("this PipeWire pixel format");
-        return;
-    };
-    let modifier = *shared.modifier.lock().expect("portal format");
-    let explicit = shared.modifier_explicit.load(Ordering::Relaxed);
-    let Some((bytes, stride)) = importer.map(
-        u32::from(width),
-        u32::from(height),
-        drm_format,
-        modifier,
-        explicit,
-        &planes,
-    ) else {
-        shared.channel.fail("this DMA-BUF modifier");
-        return;
-    };
-    shared.channel.push(ChannelSlot {
-        width,
-        height,
-        stride,
-        bytes,
-    });
-    record_delivery(shared, true);
 }
