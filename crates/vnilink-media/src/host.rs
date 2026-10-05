@@ -120,6 +120,21 @@ impl<E: VideoEncoder> HostSession<E> {
     }
 }
 
+/// The session an event belongs to, when it belongs to one. Events without
+/// an owner (hosting changes, pairing, address updates) are observed by
+/// every serve loop.
+pub(crate) fn event_session(event: &CoreEvent) -> Option<u64> {
+    match event {
+        CoreEvent::QualityUpdated { id, .. }
+        | CoreEvent::KeyframeRequested { id }
+        | CoreEvent::InputFailed { id, .. }
+        | CoreEvent::ClipboardReceived { id }
+        | CoreEvent::TransferCompleted { id } => Some(*id),
+        CoreEvent::SessionChanged { id, .. } => Some(*id),
+        _ => None,
+    }
+}
+
 /// Copy capture frames into `core` until `stop` is set or the hosted session ends.
 ///
 /// The caller has already started `capture`. This function does not open a
@@ -146,6 +161,12 @@ where
             return Ok(());
         }
         while let Some(event) = events.try_recv() {
+            // One installation can host while it controls another: a quality
+            // or keyframe event for the outgoing session must not reconfigure
+            // this hosted one.
+            if event_session(&event).is_some_and(|id| id != session_id) {
+                continue;
+            }
             session.observe(&event)?;
         }
         let timestamp_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);

@@ -149,3 +149,40 @@ impl FrameSink for MemorySink {
         Ok(())
     }
 }
+
+#[test]
+fn only_matching_sessions_reach_the_serve_loop() {
+    use crate::host::event_session;
+
+    // Ownerless events are observed by every serve loop.
+    assert_eq!(
+        event_session(&CoreEvent::HostingChanged { hosting: true }),
+        None
+    );
+    assert_eq!(
+        event_session(&CoreEvent::DevicePaired {
+            endpoint_id: "peer".to_string(),
+        }),
+        None
+    );
+    // Owned events carry their session.
+    let quality = Quality::new(500, 30, 32, 32).unwrap();
+    assert_eq!(
+        event_session(&CoreEvent::QualityUpdated { id: 7, quality }),
+        Some(7)
+    );
+    assert_eq!(
+        event_session(&CoreEvent::KeyframeRequested { id: 9 }),
+        Some(9)
+    );
+    assert_eq!(
+        event_session(&CoreEvent::SessionChanged {
+            id: 3,
+            generation: 1,
+            role: vnilink::SessionRole::Host,
+            phase: vnilink::SessionPhase::Active,
+            peer_id: "peer".to_string(),
+        }),
+        Some(3)
+    );
+}

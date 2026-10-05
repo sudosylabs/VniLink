@@ -12,6 +12,7 @@
 
 mod annexb;
 mod channel;
+mod controller;
 mod desktop;
 mod error;
 mod frame;
@@ -22,11 +23,12 @@ mod rate;
 
 pub use annexb::{parse_annex_b, to_annex_b, AvccAccessUnit, NalUnit, ParsedAccessUnit};
 pub use channel::{ChannelSlot, FrameChannel};
+pub use controller::{serve_controller, ControllerOutput, ControllerVideo};
 pub use desktop::{CapturePlan, CursorPolicy, DesktopKind, MonitorSize};
 pub use error::{Error, PublishError};
 pub use frame::{encoded_size, scale_bgra, RawFrame};
 pub use host::{serve_capture, FrameSource, HostSession, OpenEncoder};
-pub use nv12::{bgra_to_nv12, Nv12};
+pub use nv12::{bgra_to_nv12, nv12_to_bgra, Nv12};
 pub use pump::{
     CoreSink, EncodeParams, EncodedSample, FramePump, FrameSink, HostVideo, PumpOutput,
     VideoDecoder, VideoEncoder,

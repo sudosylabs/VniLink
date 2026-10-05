@@ -2,6 +2,8 @@
 mod annexb_tests;
 #[path = "tests/channel.rs"]
 mod channel_tests;
+#[path = "tests/controller.rs"]
+mod controller_tests;
 #[path = "tests/desktop.rs"]
 mod desktop_tests;
 #[path = "tests/frame.rs"]

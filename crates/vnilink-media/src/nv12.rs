@@ -44,6 +44,44 @@ impl fmt::Debug for Nv12 {
     }
 }
 
+/// Convert limited-range NV12 to tightly packed BGRA.
+///
+/// Inverse of [`bgra_to_nv12`] within integer rounding: each channel lands
+/// within 2 of the original. Width and height must be even.
+pub fn nv12_to_bgra(
+    width: u16,
+    height: u16,
+    timestamp_us: u64,
+    y: &[u8],
+    uv: &[u8],
+) -> Result<RawFrame, Error> {
+    if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
+        return Err(Error::InvalidFrame("NV12 width and height must be even"));
+    }
+    let (width_usize, height_usize) = (usize::from(width), usize::from(height));
+    if y.len() < width_usize * height_usize || uv.len() < width_usize * height_usize / 2 {
+        return Err(Error::InvalidFrame("frame is missing pixels"));
+    }
+    let mut bgra = vec![0u8; width_usize * height_usize * 4];
+    for row in 0..height_usize {
+        for col in 0..width_usize {
+            let c = i32::from(y[row * width_usize + col]) - 16;
+            let uv_row = (row / 2) * width_usize + (col / 2) * 2;
+            let d = i32::from(uv[uv_row]) - 128;
+            let e = i32::from(uv[uv_row + 1]) - 128;
+            let red = (298 * c + 409 * e + 128) >> 8;
+            let green = (298 * c - 100 * d - 208 * e + 128) >> 8;
+            let blue = (298 * c + 516 * d + 128) >> 8;
+            let pixel = &mut bgra[(row * width_usize + col) * 4..][..4];
+            pixel[0] = clamp(blue);
+            pixel[1] = clamp(green);
+            pixel[2] = clamp(red);
+            pixel[3] = 255;
+        }
+    }
+    RawFrame::bgra(width, height, timestamp_us, bgra)
+}
+
 /// Convert BGRA to BT.601 limited-range NV12.
 ///
 /// Width and height must be even. Chroma is the average of each 2 by 2 block.
