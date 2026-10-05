@@ -9,8 +9,6 @@ mod storage;
 
 #[cfg(target_os = "linux")]
 mod app;
-#[cfg(target_os = "linux")]
-mod home;
 
 #[cfg(target_os = "linux")]
 fn main() -> gtk::glib::ExitCode {

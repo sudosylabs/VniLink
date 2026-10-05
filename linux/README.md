@@ -16,3 +16,26 @@ cargo run -p vnilink-gnome
 ```
 
 The record is not printed.
+
+## Layout
+
+Domain modules own state and unit tests; the GTK layer only renders:
+
+- `error.rs` — user-facing sentences for core and keyring errors.
+- `capabilities.rs` — capability state to explicit video cards.
+- `devices.rs` — paired-computer rows and selection.
+- `pairing.rs` — pairing flow steps (offer, open file, waiting digits).
+- `settings.rs` — settings state read off a snapshot.
+- `events.rs` — live UI state: control request, connecting flag, toasts.
+- `presentation.rs` — user-facing words.
+- `storage.rs` — the installation record in the session keyring.
+- `app/` — GTK shell: `window` composes `sidebar` and `pages`;
+  `dialogs`, `notifications`, and `widgets` support them.
+
+Unit tests run anywhere (`cargo test -p vnilink-gnome`). The GTK widget
+suite needs a display; headless:
+
+```sh
+sudo apt install xvfb adwaita-icon-theme
+xvfb-run -a cargo test -p vnilink-gnome
+```

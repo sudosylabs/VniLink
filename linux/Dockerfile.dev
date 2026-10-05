@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libegl-dev \
     pkg-config \
     libpipewire-0.3-dev \
+    libgtk-4-dev \
+    libadwaita-1-dev \
     mingw-w64 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /work
