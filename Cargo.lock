@@ -4654,6 +4654,8 @@ dependencies = [
  "thiserror 2.0.21",
  "uniffi",
  "vnilink",
+ "vnilink-macos",
+ "vnilink-media",
 ]
 
 [[package]]

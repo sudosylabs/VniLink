@@ -24,12 +24,18 @@
 //! Adapter installation (`set_desktop`, `set_capture`, `enable_os_input`,
 //! clipboard/transfer adapters) stays in platform Rust. The persistent
 //! installation store (`Core::open`) needs the platform credential store
-//! first, so v1 opens process-local cores only. Relay credentials are not
-//! settable here yet.
+//! first. `open_persistent` delegates opaque record storage to the native
+//! credential-store callback; saved relay credentials are never read back.
 
 mod error;
 mod events;
+#[cfg(target_os = "macos")]
+mod macos;
+mod storage;
 mod types;
+#[cfg(target_os = "macos")]
+pub use macos::{MacFrame, MacHost, MacViewer};
+pub use storage::{CredentialStore, FfiRelay, FfiRelayInput};
 
 pub use error::FfiError;
 pub use events::{EventPoller, VideoPoller};
@@ -51,7 +57,7 @@ use error::map_error;
 /// Owned core for one installation. See the module docs for threading.
 #[derive(uniffi::Object)]
 pub struct VnilinkCore {
-    inner: Core,
+    inner: std::sync::Arc<Core>,
     previews: Mutex<HashMap<u64, vnilink::PairingPreview>>,
     next_preview: AtomicU64,
 }
@@ -79,10 +85,70 @@ impl VnilinkCore {
         })
         .map_err(map_error)?;
         Ok(Self {
-            inner: core,
+            inner: std::sync::Arc::new(core),
             previews: Mutex::new(HashMap::new()),
             next_preview: AtomicU64::new(1),
         })
+    }
+
+    /// Opens the persistent installation using a native credential store.
+    #[uniffi::constructor]
+    pub fn open_persistent(store: Box<dyn CredentialStore>) -> Result<Self, FfiError> {
+        let core = Core::open(
+            std::sync::Arc::new(storage::NativeStore(store.into())),
+            vnilink::OpenConfig::default(),
+        )
+        .map_err(map_error)?;
+        Ok(Self {
+            inner: std::sync::Arc::new(core),
+            previews: Mutex::new(HashMap::new()),
+            next_preview: AtomicU64::new(1),
+        })
+    }
+
+    /// Saved relays for the next launch. An empty list means public relays.
+    pub fn saved_relays(&self) -> Result<Vec<FfiRelay>, FfiError> {
+        Ok(match self.inner.relay_configuration().map_err(map_error)? {
+            RelaySettings::Public => Vec::new(),
+            RelaySettings::Custom(relays) => relays
+                .into_iter()
+                .map(|r| FfiRelay {
+                    url: r.url().to_string(),
+                    authenticated: r.has_auth_token(),
+                })
+                .collect(),
+        })
+    }
+
+    pub fn save_custom_relays(&self, inputs: Vec<FfiRelayInput>) -> Result<(), FfiError> {
+        let saved = self.inner.relay_configuration().map_err(map_error)?;
+        let old = match saved {
+            RelaySettings::Custom(relays) => relays,
+            _ => Vec::new(),
+        };
+        let mut relays = Vec::new();
+        for input in inputs {
+            let mut relay = CustomRelay::new(&input.url).map_err(map_error)?;
+            if input.authenticated {
+                if input.replacement_token.is_empty() {
+                    relay = old
+                        .iter()
+                        .find(|r| r.url() == relay.url() && r.has_auth_token())
+                        .cloned()
+                        .ok_or(FfiError::InvalidSetting {
+                            message: "Enter a token for this relay".into(),
+                        })?;
+                } else {
+                    relay = relay
+                        .with_auth_token(&input.replacement_token)
+                        .map_err(map_error)?;
+                }
+            }
+            relays.push(relay);
+        }
+        self.inner
+            .set_relay(RelaySettings::custom(relays).map_err(map_error)?)
+            .map_err(map_error)
     }
 
     pub fn shutdown(&self) {
@@ -138,8 +204,8 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
-    /// Replaces the relay set. Credentialed relays are not settable here
-    /// yet; see the module docs.
+    /// Replaces the relay set with unauthenticated URLs. Use
+    /// `save_custom_relays` to configure or preserve credentials.
     pub fn set_relay_custom(&self, urls: Vec<String>) -> Result<(), FfiError> {
         let relays = urls
             .into_iter()

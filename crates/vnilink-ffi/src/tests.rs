@@ -218,3 +218,59 @@ fn local_names_are_exposed_in_snapshots_and_can_be_cleared() {
         Err(FfiError::NotPaired)
     ));
 }
+
+#[derive(Clone, Default)]
+struct TestCredentialStore(std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>);
+impl crate::CredentialStore for TestCredentialStore {
+    fn load(&self) -> Result<Option<Vec<u8>>, FfiError> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+    fn save(&self, record: Vec<u8>) -> Result<(), FfiError> {
+        *self.0.lock().unwrap() = Some(record);
+        Ok(())
+    }
+}
+#[test]
+fn native_store_keeps_identity_names_and_opaque_relay_credentials() {
+    let store = TestCredentialStore::default();
+    let core = VnilinkCore::open_persistent(Box::new(store.clone())).unwrap();
+    let id = core.endpoint_id();
+    let peer = open_core();
+    let device = core
+        .accept_invitation(peer.create_invitation(60).unwrap())
+        .unwrap();
+    core.set_peer_pet_name(device.endpoint_id.clone(), Some("Work Mac".into()))
+        .unwrap();
+    core.save_custom_relays(vec![crate::FfiRelayInput {
+        url: "https://relay.example/".into(),
+        authenticated: true,
+        replacement_token: "test-token".into(),
+    }])
+    .unwrap();
+    let relays = core.saved_relays().unwrap();
+    assert!(relays[0].authenticated);
+    assert!(!format!("{relays:?}").contains("test-token"));
+    core.save_custom_relays(vec![crate::FfiRelayInput {
+        url: relays[0].url.clone(),
+        authenticated: true,
+        replacement_token: String::new(),
+    }])
+    .unwrap();
+    core.shutdown();
+    let reopened = VnilinkCore::open_persistent(Box::new(store)).unwrap();
+    assert_eq!(reopened.endpoint_id(), id);
+    assert_eq!(
+        reopened.snapshot().unwrap().devices[0].pet_name.as_deref(),
+        Some("Work Mac")
+    );
+    assert!(reopened.saved_relays().unwrap()[0].authenticated);
+    reopened
+        .save_custom_relays(vec![crate::FfiRelayInput {
+            url: relays[0].url.clone(),
+            authenticated: false,
+            replacement_token: String::new(),
+        }])
+        .unwrap();
+    assert!(!reopened.saved_relays().unwrap()[0].authenticated);
+    reopened.shutdown();
+}
