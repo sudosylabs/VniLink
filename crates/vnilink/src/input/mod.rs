@@ -1,11 +1,13 @@
 use crate::error::Error;
 
 mod events;
+mod map;
 mod queue;
 pub mod usage;
 
 pub(crate) use events::{check_key_text, key_text_problem, swap_command_key};
 pub use events::{InputEvent, PointerButton};
+pub use map::map_point;
 pub(crate) use queue::{HeldInput, InputFault, InputOutbox, Outbound};
 
 /// Finished text on the control stream, in bytes. This is a short phrase,

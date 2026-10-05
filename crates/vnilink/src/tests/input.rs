@@ -1,7 +1,7 @@
 use crate::error::Error;
 use crate::input::{
-    check_key_text, swap_command_key, usage, HeldInput, InputEvent, InputOutbox, Outbound,
-    PointerButton, INPUT_QUEUE, MAX_KEY_TEXT,
+    check_key_text, map_point, swap_command_key, usage, HeldInput, InputEvent, InputOutbox,
+    Outbound, PointerButton, INPUT_QUEUE, MAX_KEY_TEXT,
 };
 
 fn only_events(items: Vec<Outbound>) -> Vec<InputEvent> {
@@ -9,7 +9,7 @@ fn only_events(items: Vec<Outbound>) -> Vec<InputEvent> {
         .into_iter()
         .map(|item| match item {
             Outbound::Event(event) => event,
-            Outbound::Text(_) | Outbound::Chord(_) => {
+            Outbound::Text(_) | Outbound::Chord(_) | Outbound::Quality(_) => {
                 panic!("a text item was queued with the keys")
             }
         })
@@ -279,4 +279,31 @@ fn malformed_input_bytes_are_rejected() {
         InputEvent::decode(&[4, 0, 1]),
         Err(Error::Malformed)
     ));
+}
+
+#[test]
+fn pointer_positions_scale_between_window_and_monitor() {
+    // Identity and origin.
+    assert_eq!(map_point(0, 0, (1920, 1080), (1920, 1080)), (0, 0));
+    assert_eq!(
+        map_point(1919, 1079, (1920, 1080), (1920, 1080)),
+        (1919, 1079)
+    );
+    // Downscale by exactly two rounds to the nearest host pixel.
+    assert_eq!(map_point(0, 0, (1920, 1080), (960, 540)), (0, 0));
+    assert_eq!(map_point(960, 540, (1920, 1080), (960, 540)), (480, 270));
+    assert_eq!(map_point(1, 1, (1920, 1080), (960, 540)), (1, 1));
+    // Upscale and the far edge clamps onto the host instead of past it.
+    assert_eq!(
+        map_point(960, 540, (960, 540), (1920, 1080)),
+        (1920 - 1, 1080 - 1)
+    );
+    assert_eq!(
+        map_point(u16::MAX, u16::MAX, (960, 540), (1920, 1080)),
+        (1919, 1079)
+    );
+    // A zero side has no scale to read or no pixels to name; axes are
+    // independent, so only the zero side collapses.
+    assert_eq!(map_point(50, 60, (0, 1080), (1920, 1080)), (0, 60));
+    assert_eq!(map_point(50, 60, (1920, 1080), (0, 0)), (0, 0));
 }

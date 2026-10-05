@@ -61,6 +61,9 @@ pub(crate) fn admit(
     session_open: bool,
     control_granted: bool,
     version: u16,
+    video_unsupported: bool,
+    codec_supported: bool,
+    peer_decode_unsupported: bool,
 ) -> Result<(), Error> {
     if !hosting {
         return Err(Error::NotHosting);
@@ -74,7 +77,43 @@ pub(crate) fn admit(
     if !control_granted {
         return Err(Error::Unauthorized);
     }
+    if video_unsupported {
+        return Err(Error::Unsupported("no H.264 encoder is available"));
+    }
+    if !codec_supported {
+        return Err(Error::IncompatibleVersion);
+    }
+    if peer_decode_unsupported {
+        return Err(Error::Unsupported("the controller cannot decode video"));
+    }
     Ok(())
+}
+
+/// Default encoder limits the controller offers when it dials.
+pub(crate) fn controller_offer() -> Quality {
+    Quality::new(2_000, 30, 1920, 1080).expect("default offer is valid")
+}
+
+/// Agreed limits for the live session: the offer clamped to the host monitor.
+/// A zero monitor side is unknown, so that axis keeps the offered value.
+pub(crate) fn agree_quality(offered: &Quality, monitor: (u16, u16)) -> Quality {
+    let width = if monitor.0 > 0 {
+        offered.max_width.min(monitor.0)
+    } else {
+        offered.max_width
+    };
+    let height = if monitor.1 > 0 {
+        offered.max_height.min(monitor.1)
+    } else {
+        offered.max_height
+    };
+    Quality::new(
+        offered.max_bitrate_kbps,
+        offered.max_frame_rate,
+        width.max(1),
+        height.max(1),
+    )
+    .unwrap_or(*offered)
 }
 
 /// Input is accepted only for the generation that owns the active session.
@@ -86,14 +125,14 @@ pub(crate) fn check_input(active: Option<SessionStamp>, stamp: SessionStamp) -> 
 }
 
 pub(crate) fn phase_after_admit() -> SessionPhase {
-    // Negotiation has nothing to agree beyond the control channel itself
-    // until capture and codecs are negotiated, so admission lands active.
+    // Admission agrees version, monitor, codec, and encoder limits, so the
+    // session lands active with the negotiated quality already stored.
     SessionPhase::Active
 }
 
 /// Emit the progression both roles synthesize after admission. The phases are
-/// identical on host and controller today; when negotiation becomes real, the
-/// agreed version, monitor, codec, and grants land here instead of beside it.
+/// identical on host and controller today; the agreed version, monitor,
+/// codec, and quality land in the session beside it.
 pub(crate) fn announce_progression(
     events: &EventHub,
     id: u64,

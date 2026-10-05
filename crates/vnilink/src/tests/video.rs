@@ -14,17 +14,21 @@ use crate::video::{
 };
 
 fn start_direct() -> Core {
-    Core::boot(
+    let core = Core::boot(
         CoreConfig {
             listen: Listen::Loopback,
             ..CoreConfig::default()
         },
         RelayMode::Disabled,
     )
-    .expect("loopback core")
+    .expect("loopback core");
+    core.set_h264_support(true, true).expect("flags");
+    core
 }
 
 fn pair_for_control(host: &Core, controller: &Core) {
+    host.set_h264_support(true, true).unwrap();
+    controller.set_h264_support(true, true).unwrap();
     host.start_hosting().unwrap();
     let token = host.create_invitation(Duration::from_secs(60)).unwrap();
     controller.accept_invitation(&token).unwrap();
@@ -135,6 +139,7 @@ fn encoded_frames_reach_the_controller_without_blocking_input() {
         height: 720,
     }))
     .unwrap();
+    host.set_h264_support(true, false).unwrap();
     let capture_only = host.capabilities();
     assert!(capture_only.desktop_capture);
     assert!(!capture_only.keyboard);
@@ -274,6 +279,7 @@ fn a_zero_capture_size_falls_back_to_the_desktop() {
         height: 0,
     }))
     .unwrap();
+    host.set_h264_support(true, false).unwrap();
     host.set_desktop(Box::new(SizeDesktop {
         width: 100,
         height: 80,
@@ -291,6 +297,30 @@ fn a_zero_capture_size_falls_back_to_the_desktop() {
 
 fn frame(keyframe: bool, timestamp_us: u64) -> EncodedFrame {
     EncodedFrame::h264(keyframe, timestamp_us, vec![1]).unwrap()
+}
+
+#[test]
+fn an_overflow_episode_requests_one_keyframe_until_it_arrives() {
+    let mut queue = VideoQueue::new();
+    assert_eq!(queue.push(frame(true, 1)), VideoPush::Queued);
+    // Fill to the bound with predicted frames.
+    for index in 0..VIDEO_QUEUE - 1 {
+        assert_eq!(
+            queue.push(frame(false, 2 + index as u64)),
+            VideoPush::Queued
+        );
+    }
+    // The next predicted frame overflows: exactly one keyframe request for
+    // the whole episode, then silence until the keyframe arrives.
+    assert_eq!(queue.push(frame(false, 99)), VideoPush::KeyframeNeeded);
+    for timestamp in 100..110u64 {
+        assert_eq!(
+            queue.push(frame(false, timestamp)),
+            VideoPush::StillNeedsKeyframe
+        );
+    }
+    assert_eq!(queue.push(frame(true, 110)), VideoPush::Queued);
+    assert_eq!(queue.pop().unwrap().timestamp_us, 110);
 }
 
 #[test]

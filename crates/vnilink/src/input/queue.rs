@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use tokio::sync::Notify;
 
 use crate::error::Error;
+use crate::protocol::Quality;
 
 use super::events::{check_key_text, InputEvent, PointerButton};
 use super::INPUT_QUEUE;
@@ -103,6 +104,9 @@ pub(crate) enum Outbound {
     Text(String),
     /// Character the host must type with its own layout's chord.
     Chord(String),
+    /// Encoder limits the host must apply. Ordered with input so the host
+    /// applies it in the sequence the controller intended.
+    Quality(Quality),
 }
 
 impl fmt::Debug for Outbound {
@@ -117,6 +121,7 @@ impl fmt::Debug for Outbound {
                 .debug_struct("Chord")
                 .field("len", &text.len())
                 .finish(),
+            Self::Quality(quality) => formatter.debug_tuple("Quality").field(quality).finish(),
         }
     }
 }
@@ -144,6 +149,10 @@ impl InputOutbox {
     pub(crate) fn push_text(&self, text: String) -> Result<(), Error> {
         check_key_text(&text)?;
         self.push_item(Outbound::Text(text))
+    }
+
+    pub(crate) fn push_quality(&self, quality: Quality) -> Result<(), Error> {
+        self.push_item(Outbound::Quality(quality))
     }
 
     /// Queues every item, or none of them. A full queue returns [`Error::Busy`].

@@ -17,19 +17,21 @@ use crate::session::{Grants, SessionPhase, SessionRole};
 use crate::trust::Device;
 
 fn start_direct() -> Core {
-    Core::boot(
+    let core = Core::boot(
         CoreConfig {
             listen: Listen::Loopback,
             ..CoreConfig::default()
         },
         RelayMode::Disabled,
     )
-    .expect("loopback core")
+    .expect("loopback core");
+    core.set_h264_support(true, true).expect("flags");
+    core
 }
 
 fn start_custom(url: &str) -> Core {
     let relay = RelaySettings::custom(vec![CustomRelay::new(url).unwrap()]).unwrap();
-    Core::boot(
+    let core = Core::boot(
         CoreConfig {
             listen: Listen::Loopback,
             relay,
@@ -37,11 +39,16 @@ fn start_custom(url: &str) -> Core {
         },
         RelayMode::Disabled,
     )
-    .expect("loopback core")
+    .expect("loopback core");
+    core.set_h264_support(true, true).expect("flags");
+    core
 }
 
 fn open_stored(store: &MemoryStore) -> Core {
-    Core::open_direct(Arc::new(store.clone()), RelaySettings::public_n0()).expect("store opens")
+    let core = Core::open_direct(Arc::new(store.clone()), RelaySettings::public_n0())
+        .expect("store opens");
+    core.set_h264_support(true, true).expect("flags");
+    core
 }
 
 struct RecordingDesktop {

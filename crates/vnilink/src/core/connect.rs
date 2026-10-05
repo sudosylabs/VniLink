@@ -61,6 +61,56 @@ impl Core {
         Ok(())
     }
 
+    /// Forgets a paired device entirely.
+    ///
+    /// Unlike [`Core::revoke`], which keeps the device with empty grants, the
+    /// device is removed: later dials fail with [`Error::NotPaired`], and an
+    /// unknown device reports that without touching any session. A live
+    /// session with that peer ends on either role and releases held input
+    /// like any local stop; the controller does not redial. This is local
+    /// only and is not propagated to the peer. A failed save restores the
+    /// device and reports the store error.
+    pub fn unpair(&self, endpoint_id: &str) -> Result<(), Error> {
+        let key = parse_endpoint_id(endpoint_id)?;
+        let mut incoming_stop = None;
+        let mut outgoing_stop = None;
+        {
+            let mut state = self.alive_state()?;
+            forget_device(&self.shared, &mut state, &key)?;
+            if state
+                .incoming
+                .as_ref()
+                .is_some_and(|session| session.peer_key == key && !finished(&session.phase))
+            {
+                state.generation = state.generation.saturating_add(1);
+                if let Some(session) = state.incoming.as_mut() {
+                    session.phase = SessionPhase::Stopping;
+                    incoming_stop = Some(session.stop.clone());
+                }
+            }
+            if state
+                .outgoing
+                .as_ref()
+                .is_some_and(|session| session.peer_key == key && !finished(&session.phase))
+            {
+                if let Some(session) = state.outgoing.as_mut() {
+                    session.phase = SessionPhase::Stopping;
+                    outgoing_stop = Some(session.stop.clone());
+                }
+            }
+        }
+        if let Some(stop) = incoming_stop {
+            let _ = stop.send(true);
+        }
+        if let Some(stop) = outgoing_stop {
+            let _ = stop.send(true);
+        }
+        self.shared.events.publish(CoreEvent::DeviceUnpaired {
+            endpoint_id: endpoint_id.to_owned(),
+        });
+        Ok(())
+    }
+
     pub fn connect(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
         let key = parse_endpoint_id(endpoint_id)?;
         let device = {
@@ -74,6 +124,15 @@ impl Core {
             }
             state.trust.get(&key).cloned().ok_or(Error::NotPaired)?
         };
+        // The controller must decode what the host encodes. Fail here with an
+        // explicit unsupported error instead of connecting to a black screen.
+        if !self
+            .shared
+            .h264_decode
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(Error::Unsupported("no H.264 decoder is available"));
+        }
         let (stop, stop_rx) = tokio::sync::watch::channel(false);
         let outbox = Arc::new(InputOutbox::new());
         {
@@ -85,7 +144,7 @@ impl Core {
                 phase: SessionPhase::Connecting,
                 peer_id: device.display_id.clone(),
                 peer_key: device.endpoint_id,
-                quality: None,
+                quality: Some(crate::session::controller_offer()),
                 monitor_width: 0,
                 monitor_height: 0,
                 stop: stop.clone(),
@@ -243,10 +302,17 @@ pub(super) async fn establish(
         return Err(Error::NoSession);
     }
     let (mut send, mut recv) = connection.open_bi().await.map_err(Error::network_debug)?;
+    let offer = crate::session::controller_offer();
+    let decode = shared
+        .h264_decode
+        .load(std::sync::atomic::Ordering::Relaxed);
     write_frame(
         &mut send,
         &ControlMessage::Hello {
             version: PROTOCOL_VERSION,
+            codec: crate::protocol::CODEC_H264,
+            quality: offer,
+            decode,
         },
     )
     .await?;
@@ -256,7 +322,12 @@ pub(super) async fn establish(
             stamp,
             monitor_width,
             monitor_height,
+            codec,
+            quality,
         } => {
+            if codec != crate::protocol::CODEC_H264 {
+                return Err(Error::IncompatibleVersion);
+            }
             let peer_id = device.display_id.clone();
             {
                 let mut state = lock(&shared.state);
@@ -267,6 +338,7 @@ pub(super) async fn establish(
                     session.monitor_width = monitor_width;
                     session.monitor_height = monitor_height;
                     session.link = Some(connection.clone());
+                    session.quality = Some(quality);
                 }
             }
             crate::session::announce_progression(
@@ -282,7 +354,7 @@ pub(super) async fn establish(
                 role: SessionRole::Controller,
                 phase: SessionPhase::Active,
                 peer_id,
-                quality: None,
+                quality: Some(quality),
                 monitor_width,
                 monitor_height,
             }
@@ -409,6 +481,28 @@ pub(super) async fn command_loop(
                             remote_close = true;
                             break;
                         }
+                        Some(Ok(ControlMessage::Quality {
+                            stamp: msg_stamp,
+                            quality,
+                        })) => {
+                            if msg_stamp != stamp {
+                                break;
+                            }
+                            {
+                                let mut state = lock(&shared.state);
+                                if let Some(session) = state.outgoing.as_mut() {
+                                    if session.id == stamp.id
+                                        && session.phase == SessionPhase::Active
+                                    {
+                                        session.quality = Some(quality);
+                                    }
+                                }
+                            }
+                            shared.events.publish(CoreEvent::QualityUpdated {
+                                id: stamp.id,
+                                quality,
+                            });
+                        }
                         Some(Ok(ControlMessage::Reject(code))) => {
                             let error = code.to_error();
                             outbox.fail(&error);
@@ -438,6 +532,7 @@ pub(super) async fn command_loop(
                         stamp,
                         text: KeyText(text),
                     },
+                    Outbound::Quality(quality) => ControlMessage::Quality { stamp, quality },
                 };
                 let wrote = write_frame(&mut send, &message).await;
                 if wrote.is_err() {

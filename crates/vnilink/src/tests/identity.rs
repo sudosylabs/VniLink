@@ -11,7 +11,7 @@ use crate::input::InputEvent;
 use crate::invitation;
 use crate::protocol::Quality;
 use crate::relay::RelaySettings;
-use crate::session::Grants;
+use crate::session::{Grants, SessionRole};
 use crate::video::EncodedFrame;
 
 use super::support::*;
@@ -85,7 +85,7 @@ fn shutdown_is_idempotent_and_later_calls_report_it() {
         Err(Error::ShutDown)
     ));
     assert!(matches!(
-        core.update_session_quality(1, Quality::new(1, 1, 1, 1).unwrap()),
+        core.update_session_quality(1, SessionRole::Host, Quality::new(1, 1, 1, 1).unwrap()),
         Err(Error::ShutDown)
     ));
     assert!(matches!(

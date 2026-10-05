@@ -198,6 +198,8 @@ impl Core {
             video_subscriber: Mutex::new(Weak::new()),
             session_gate: tokio::sync::Mutex::new(()),
             swap_control_command: AtomicBool::new(false),
+            h264_encode: AtomicBool::new(false),
+            h264_decode: AtomicBool::new(false),
             keyboard_mode: AtomicU8::new(KeyboardMode::Character as u8),
             keyboard: Mutex::new(keyboard::KeyPlan::new()),
         });

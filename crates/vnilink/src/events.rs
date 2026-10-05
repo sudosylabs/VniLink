@@ -26,6 +26,15 @@ pub enum CoreEvent {
     DeviceRevoked {
         endpoint_id: String,
     },
+    /// A paired device was forgotten with [`crate::Core::unpair`].
+    ///
+    /// Unlike revocation, which keeps the device with empty grants, the
+    /// device is gone: later dials fail with `NotPaired`. Any live session
+    /// with that peer ends. This is local only; the peer learns nothing
+    /// until its next dial.
+    DeviceUnpaired {
+        endpoint_id: String,
+    },
     /// A controller opened this host's pairing file and is connecting.
     ///
     /// `check` is the three digits on the controller's screen. Grant control

@@ -48,6 +48,23 @@ impl Core {
         Ok(())
     }
 
+    /// Records the platform's H.264 codec availability.
+    ///
+    /// The library never probes hardware itself. The native host calls this
+    /// after asking its adapters (VA-API on Linux) so `capabilities()` and
+    /// host admission report an explicit unsupported state instead of
+    /// admitting a session that can never carry video.
+    pub fn set_h264_support(&self, encode: bool, decode: bool) -> Result<(), Error> {
+        self.ensure_alive()?;
+        self.shared
+            .h264_encode
+            .store(encode, std::sync::atomic::Ordering::Relaxed);
+        self.shared
+            .h264_decode
+            .store(decode, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
     /// Queues one encoded frame for the active hosted session.
     ///
     /// A full queue drops predicted frames until the next keyframe and still returns
@@ -71,30 +88,61 @@ impl Core {
         Ok(())
     }
 
-    pub fn update_session_quality(&self, session_id: u64, quality: Quality) -> Result<(), Error> {
+    /// Changes the encoder limits for one live session.
+    ///
+    /// The role selects which side changes: a host call applies to the
+    /// incoming session, a controller call queues the change for the host
+    /// and applies it locally. Session ids alone cannot select the side:
+    /// both roles number their sessions from the same counter, so an
+    /// incoming and an outgoing session routinely share one id.
+    pub fn update_session_quality(
+        &self,
+        session_id: u64,
+        role: SessionRole,
+        quality: Quality,
+    ) -> Result<(), Error> {
         let mut state = self.alive_state()?;
-        let on_incoming = state.incoming.as_ref().is_some_and(|session| {
-            session.id == session_id && session.phase == SessionPhase::Active
-        });
-        let session = if on_incoming {
-            state.incoming.as_mut()
-        } else if state.outgoing.as_ref().is_some_and(|session| {
-            session.id == session_id && session.phase == SessionPhase::Active
-        }) {
-            state.outgoing.as_mut()
-        } else {
-            None
-        };
-        let Some(session) = session else {
-            return Err(Error::NoSession);
-        };
-        session.quality = Some(quality);
-        drop(state);
-        self.shared.events.publish(CoreEvent::QualityUpdated {
-            id: session_id,
-            quality,
-        });
-        Ok(())
+        match role {
+            SessionRole::Host => {
+                let session = state
+                    .incoming
+                    .as_mut()
+                    .filter(|session| {
+                        session.id == session_id && session.phase == SessionPhase::Active
+                    })
+                    .ok_or(Error::NoSession)?;
+                session.quality = Some(quality);
+                drop(state);
+                self.shared.events.publish(CoreEvent::QualityUpdated {
+                    id: session_id,
+                    quality,
+                });
+                Ok(())
+            }
+            SessionRole::Controller => {
+                let outbox = state
+                    .outgoing
+                    .as_ref()
+                    .filter(|session| {
+                        session.id == session_id && session.phase == SessionPhase::Active
+                    })
+                    .and_then(|session| session.outbox.clone())
+                    .ok_or(Error::NoSession)?;
+                let session = state.outgoing.as_mut().expect("checked");
+                session.quality = Some(quality);
+                drop(state);
+                // The controller queues the change so the host applies the same
+                // limits. A full queue reports Busy without changing local state
+                // back: the local session keeps the new limits and the caller
+                // retries the send.
+                outbox.push_quality(quality)?;
+                self.shared.events.publish(CoreEvent::QualityUpdated {
+                    id: session_id,
+                    quality,
+                });
+                Ok(())
+            }
+        }
     }
 }
 

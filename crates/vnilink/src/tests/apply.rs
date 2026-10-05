@@ -231,39 +231,51 @@ fn a_failed_release_is_reported_on_the_hosted_session() {
 }
 
 #[test]
-fn quality_updates_are_local_to_each_side() {
+fn quality_updates_propagate_from_controller_to_host() {
     let host = start_direct();
     let controller = start_direct();
     let host_events = host.subscribe().unwrap();
     let controller_events = controller.subscribe().unwrap();
     pair_for_control(&host, &controller);
     let session = controller.connect(&host.endpoint_id()).unwrap();
+    // Negotiation stores the agreed limits on both sides at connect.
+    assert!(session.quality.is_some());
+    assert_eq!(
+        host.snapshot().unwrap().incoming.unwrap().quality,
+        session.quality
+    );
     let quality = Quality::new(1_500, 30, 1280, 720).unwrap();
     controller
-        .update_session_quality(session.id, quality)
+        .update_session_quality(session.id, SessionRole::Controller, quality)
         .unwrap();
     assert_eq!(
         controller.snapshot().unwrap().outgoing.unwrap().quality,
         Some(quality)
     );
-    assert!(host.snapshot().unwrap().incoming.unwrap().quality.is_none());
+    // The controller queues the change; the host applies it on receipt.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if host.snapshot().unwrap().incoming.unwrap().quality == Some(quality) {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("host did not apply the propagated quality");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     let host_quality = Quality::new(800, 15, 640, 480).unwrap();
-    host.update_session_quality(session.id, host_quality)
+    host.update_session_quality(session.id, SessionRole::Host, host_quality)
         .unwrap();
     assert_eq!(
         host.snapshot().unwrap().incoming.unwrap().quality,
         Some(host_quality)
     );
-    assert_eq!(
-        controller.snapshot().unwrap().outgoing.unwrap().quality,
-        Some(quality)
-    );
     assert!(matches!(
-        host.update_session_quality(session.id + 1, quality),
+        host.update_session_quality(session.id + 1, SessionRole::Host, quality),
         Err(Error::NoSession)
     ));
     assert!(matches!(
-        controller.update_session_quality(0, quality),
+        controller.update_session_quality(0, SessionRole::Controller, quality),
         Err(Error::NoSession)
     ));
     assert_eq!(
@@ -272,7 +284,7 @@ fn quality_updates_are_local_to_each_side() {
         }),
         CoreEvent::QualityUpdated {
             id: session.id,
-            quality: host_quality,
+            quality,
         }
     );
     assert_eq!(

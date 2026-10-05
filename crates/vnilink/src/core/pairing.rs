@@ -163,8 +163,10 @@ impl Core {
             .map_err(|_| Error::InvalidInvitation("endpoint id is not a valid key"))?
             .to_string();
         // Re-pairing refreshes addresses without silently revoking grants the
-        // owner authorized earlier. Pairing alone never adds a grant.
-        let kept = {
+        // owner authorized earlier. Pairing alone never adds a grant. The
+        // grants are re-read inside the write section below, so a revoke
+        // that lands between the two cannot be overwritten here.
+        let fallback = {
             let state = self.alive_state()?;
             state
                 .trust
@@ -172,16 +174,15 @@ impl Core {
                 .map(|device| device.grants)
                 .unwrap_or_default()
         };
-        let info = DeviceInfo {
-            endpoint_id: display.clone(),
-            relays: opened.relays.clone(),
-            direct: opened.direct.clone(),
-            grants: kept,
-        };
-        {
+        let info = {
             let mut state = self.alive_state()?;
             let previous_device = state.trust.get(&opened.endpoint_id).cloned();
             let previous_replay = state.replay.clone();
+            let kept = state
+                .trust
+                .get(&opened.endpoint_id)
+                .map(|device| device.grants)
+                .unwrap_or(fallback);
             if let Err(error) = state.replay.remember(nonce, opened.expires_at_ms, now_ms) {
                 state.replay = previous_replay;
                 return Err(error);
@@ -189,8 +190,8 @@ impl Core {
             if let Err(error) = state.trust.pair(Device {
                 endpoint_id: opened.endpoint_id,
                 display_id: display.clone(),
-                relays: opened.relays,
-                direct: opened.direct,
+                relays: opened.relays.clone(),
+                direct: opened.direct.clone(),
                 grants: kept,
             }) {
                 state.replay = previous_replay;
@@ -205,7 +206,13 @@ impl Core {
                 state.replay = previous_replay;
                 return Err(error);
             }
-        }
+            DeviceInfo {
+                endpoint_id: display.clone(),
+                relays: opened.relays.clone(),
+                direct: opened.direct.clone(),
+                grants: kept,
+            }
+        };
         self.shared.events.publish(CoreEvent::DevicePaired {
             endpoint_id: display,
         });

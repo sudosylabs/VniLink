@@ -254,6 +254,25 @@ pub(super) async fn host_input_loop(
                             .events
                             .publish(CoreEvent::KeyframeRequested { id: session_id });
                     }
+                    ControlMessage::Quality { stamp, quality } => {
+                        if !check_authorized(shared, send, stamp).await {
+                            break false;
+                        }
+                        {
+                            let mut state = lock(&shared.state);
+                            if let Some(session) = state.incoming.as_mut() {
+                                if session.id == session_id
+                                    && session.phase == SessionPhase::Active
+                                {
+                                    session.quality = Some(quality);
+                                }
+                            }
+                        }
+                        shared.events.publish(CoreEvent::QualityUpdated {
+                            id: session_id,
+                            quality,
+                        });
+                    }
                     ControlMessage::Input { stamp, event } => {
                         if !check_authorized(shared, send, stamp).await {
                             break false;

@@ -8,14 +8,20 @@ use crate::protocol::{
 
 #[test]
 fn control_messages_round_trip() {
+    let quality = Quality::new(2_000, 30, 1920, 1080).unwrap();
     let messages = [
         ControlMessage::Hello {
             version: PROTOCOL_VERSION,
+            codec: crate::protocol::CODEC_H264,
+            quality,
+            decode: true,
         },
         ControlMessage::Accept {
             stamp: SessionStamp::new(7, 3),
             monitor_width: 1920,
             monitor_height: 1080,
+            codec: crate::protocol::CODEC_H264,
+            quality,
         },
         ControlMessage::Reject(RejectCode::Unauthorized),
         ControlMessage::Input {
@@ -41,10 +47,58 @@ fn control_messages_round_trip() {
             stamp: SessionStamp::new(7, 3),
             text: KeyText("@".to_owned()),
         },
+        ControlMessage::Quality {
+            stamp: SessionStamp::new(7, 3),
+            quality: Quality::new(2_000, 30, 1920, 1080).unwrap(),
+        },
     ];
     for message in messages {
         assert_eq!(ControlMessage::decode(&message.encode()).unwrap(), message);
     }
+}
+
+#[test]
+fn hello_accept_and_quality_shapes_are_validated() {
+    // New Hello/Accept lengths with out-of-range quality are malformed.
+    let mut bad_hello = ControlMessage::Hello {
+        version: PROTOCOL_VERSION,
+        codec: crate::protocol::CODEC_H264,
+        quality: Quality::new(2_000, 30, 1920, 1080).unwrap(),
+        decode: true,
+    }
+    .encode();
+    // Corrupt the frame rate to 0.
+    bad_hello[8] = 0;
+    assert!(matches!(
+        ControlMessage::decode(&bad_hello),
+        Err(Error::Malformed)
+    ));
+    let mut bad_decode = ControlMessage::Hello {
+        version: PROTOCOL_VERSION,
+        codec: crate::protocol::CODEC_H264,
+        quality: Quality::new(2_000, 30, 1920, 1080).unwrap(),
+        decode: true,
+    }
+    .encode();
+    bad_decode[13] = 2;
+    assert!(matches!(
+        ControlMessage::decode(&bad_decode),
+        Err(Error::Malformed)
+    ));
+    let mut bad_quality = ControlMessage::Quality {
+        stamp: SessionStamp::new(1, 1),
+        quality: Quality::new(2_000, 30, 1920, 1080).unwrap(),
+    }
+    .encode();
+    bad_quality[21] = 0;
+    assert!(matches!(
+        ControlMessage::decode(&bad_quality),
+        Err(Error::Malformed)
+    ));
+    assert!(matches!(
+        ControlMessage::decode(&[10, 0]),
+        Err(Error::Malformed)
+    ));
 }
 
 #[test]
@@ -71,7 +125,11 @@ fn oversized_and_unknown_frames_are_malformed() {
         Err(Error::Malformed)
     ));
     assert!(matches!(
-        ControlMessage::decode(&[2, 0, 0]),
+        ControlMessage::decode(&[1, 0, 1]),
+        Err(Error::Malformed)
+    ));
+    assert!(matches!(
+        ControlMessage::decode(&[2, 0]),
         Err(Error::Malformed)
     ));
     assert!(matches!(
@@ -156,7 +214,7 @@ fn every_reject_code_and_input_shape_round_trips() {
     }
     assert!(matches!(
         RejectCode::Unsupported.to_error(),
-        Error::Unsupported("no desktop adapter is installed")
+        Error::Unsupported("the host cannot share its desktop")
     ));
 
     let events = [

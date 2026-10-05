@@ -14,18 +14,22 @@ use crate::session::{Grants, SessionPhase};
 const TOKEN: &str = "relay-credential-alpha";
 
 fn peer() -> Core {
-    Core::boot(
+    let core = Core::boot(
         CoreConfig {
             listen: Listen::Loopback,
             ..CoreConfig::default()
         },
         RelayMode::Disabled,
     )
-    .expect("loopback core")
+    .expect("loopback core");
+    core.set_h264_support(true, true).expect("flags");
+    core
 }
 
 fn open_loop(store: &MemoryStore, relay: RelaySettings) -> Core {
-    Core::open_direct(Arc::new(store.clone()), relay).expect("installation opens")
+    let core = Core::open_direct(Arc::new(store.clone()), relay).expect("installation opens");
+    core.set_h264_support(true, true).expect("flags");
+    core
 }
 
 fn credentialed_relay() -> RelaySettings {
@@ -388,4 +392,42 @@ fn a_core_without_a_store_does_not_save() {
     assert_eq!(core.endpoint_id(), id);
     assert!(core.snapshot().is_ok());
     assert!(core.snapshot().unwrap().devices.is_empty());
+}
+
+#[test]
+fn unpair_removal_and_rollback_persist() {
+    let store = MemoryStore::empty();
+    let host = open_loop(&store, RelaySettings::public_n0());
+    let controller = peer();
+    let events = host.subscribe().unwrap();
+    host.start_hosting().unwrap();
+    let invitation = controller
+        .create_invitation(Duration::from_secs(60))
+        .unwrap();
+    host.accept_invitation(&invitation).unwrap();
+    assert_eq!(host.snapshot().unwrap().devices.len(), 1);
+
+    // A failed save restores the device and emits nothing.
+    store.fail_next_save(Error::StoreLocked);
+    drain(&events);
+    assert!(matches!(
+        host.unpair(&controller.endpoint_id()),
+        Err(Error::StoreLocked)
+    ));
+    assert_eq!(host.snapshot().unwrap().devices.len(), 1);
+    assert!(!saw(&events, |event| {
+        matches!(event, CoreEvent::DeviceUnpaired { .. })
+    }));
+
+    // Removal survives a reopen.
+    host.unpair(&controller.endpoint_id()).unwrap();
+    assert!(saw(&events, |event| {
+        matches!(event, CoreEvent::DeviceUnpaired { .. })
+    }));
+    let reopened = open_loop(&store, RelaySettings::public_n0());
+    assert!(reopened.snapshot().unwrap().devices.is_empty());
+    assert!(matches!(
+        reopened.unpair(&controller.endpoint_id()),
+        Err(Error::NotPaired)
+    ));
 }

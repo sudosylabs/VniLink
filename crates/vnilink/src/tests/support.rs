@@ -11,14 +11,17 @@ use crate::session::{Grants, SessionPhase, SessionRole};
 use crate::video::HostCapture;
 
 pub(super) fn start_direct() -> Core {
-    Core::boot(
+    let core = Core::boot(
         CoreConfig {
             listen: Listen::Loopback,
             ..CoreConfig::default()
         },
         RelayMode::Disabled,
     )
-    .expect("loopback core")
+    .expect("loopback core");
+    // Test cores are capable machines; unsupported-path tests reset these.
+    core.set_h264_support(true, true).expect("flags");
+    core
 }
 
 pub(super) fn wait_closed(core: &Core, role: SessionRole) {
@@ -106,6 +109,10 @@ impl HostCapture for ShutdownCapture {
 }
 
 pub(super) fn pair_for_control(host: &Core, controller: &Core) {
+    // Negotiation needs an encoder on the host and a decoder on the
+    // controller. Tests that cover the unsupported paths set their own flags.
+    host.set_h264_support(true, true).unwrap();
+    controller.set_h264_support(true, true).unwrap();
     host.start_hosting().unwrap();
     let token = host.create_invitation(Duration::from_secs(60)).unwrap();
     controller.accept_invitation(&token).unwrap();

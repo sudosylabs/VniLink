@@ -20,6 +20,9 @@ impl fmt::Debug for KeyText {
 /// Application protocol version carried in the control hello.
 pub const PROTOCOL_VERSION: u16 = 1;
 
+/// H.264 video codec identifier carried in Hello/Accept negotiation.
+pub const CODEC_H264: u8 = 1;
+
 /// QUIC ALPN for the VniLink control channel. Bytes, not a string type, so the
 /// value matches what Iroh negotiates.
 pub const ALPN: &[u8] = b"vnilink/1";
@@ -35,7 +38,9 @@ pub(crate) const MAX_ADDRESS_FRAME: usize = address::MAX_FRAME;
 /// still does not capture or encode. Keyboard and pointer are true once a
 /// desktop adapter is installed. Clipboard is true once a clipboard adapter
 /// is installed. File transfer is true once a transfer directory is set.
-/// Those grants stay off until `authorize` sets them. Audio stays false.
+/// `h264_encode` is true once the platform reports a usable H.264 encoder
+/// (VA-API on Linux); `h264_decode` is true once it reports a usable H.264
+/// decoder. Those grants stay off until `authorize` sets them. Audio stays false.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Capabilities {
     pub desktop_capture: bool,
@@ -45,6 +50,8 @@ pub struct Capabilities {
     pub file_transfer: bool,
     pub audio: bool,
     pub monitors: u8,
+    pub h264_encode: bool,
+    pub h264_decode: bool,
 }
 
 impl Capabilities {
@@ -56,6 +63,8 @@ impl Capabilities {
         file_transfer: false,
         audio: false,
         monitors: 0,
+        h264_encode: false,
+        h264_decode: false,
     };
 }
 
@@ -139,7 +148,7 @@ impl RejectCode {
             Self::Busy => Error::Busy,
             Self::IncompatibleVersion => Error::IncompatibleVersion,
             Self::StaleSession => Error::StaleSession,
-            Self::Unsupported => Error::Unsupported("no desktop adapter is installed"),
+            Self::Unsupported => Error::Unsupported("the host cannot share its desktop"),
             Self::Malformed => Error::Malformed,
         }
     }
@@ -149,11 +158,19 @@ impl RejectCode {
 pub(crate) enum ControlMessage {
     Hello {
         version: u16,
+        codec: u8,
+        quality: Quality,
+        /// Whether the dialing controller can decode H.264. The host rejects
+        /// with `Unsupported` instead of admitting a session the peer could
+        /// never display.
+        decode: bool,
     },
     Accept {
         stamp: SessionStamp,
         monitor_width: u16,
         monitor_height: u16,
+        codec: u8,
+        quality: Quality,
     },
     Reject(RejectCode),
     Input {
@@ -183,6 +200,13 @@ pub(crate) enum ControlMessage {
         stamp: SessionStamp,
         text: KeyText,
     },
+    /// Agreed encoder limits for the live session. The controller sends this
+    /// when the quality changes; the host applies it and re-emits
+    /// `QualityUpdated` for its media layer.
+    Quality {
+        stamp: SessionStamp,
+        quality: Quality,
+    },
 }
 
 /// Session identity stamped on every control message that belongs to one.
@@ -203,17 +227,40 @@ impl SessionStamp {
 impl ControlMessage {
     pub(crate) fn encode(&self) -> Vec<u8> {
         match self {
-            Self::Hello { version } => vec![1, (version >> 8) as u8, *version as u8],
+            Self::Hello {
+                version,
+                codec,
+                quality,
+                decode,
+            } => {
+                let mut bytes = Vec::with_capacity(14);
+                bytes.push(1);
+                bytes.extend_from_slice(&version.to_be_bytes());
+                bytes.push(*codec);
+                bytes.extend_from_slice(&quality.max_width.to_be_bytes());
+                bytes.extend_from_slice(&quality.max_height.to_be_bytes());
+                bytes.push(quality.max_frame_rate);
+                bytes.extend_from_slice(&quality.max_bitrate_kbps.to_be_bytes());
+                bytes.push(u8::from(*decode));
+                bytes
+            }
             Self::Accept {
                 stamp,
                 monitor_width,
                 monitor_height,
+                codec,
+                quality,
             } => {
-                let mut bytes = Vec::with_capacity(21);
+                let mut bytes = Vec::with_capacity(31);
                 bytes.push(2);
                 write_stamp(stamp, &mut bytes);
                 bytes.extend_from_slice(&monitor_width.to_be_bytes());
                 bytes.extend_from_slice(&monitor_height.to_be_bytes());
+                bytes.push(*codec);
+                bytes.extend_from_slice(&quality.max_width.to_be_bytes());
+                bytes.extend_from_slice(&quality.max_height.to_be_bytes());
+                bytes.push(quality.max_frame_rate);
+                bytes.extend_from_slice(&quality.max_bitrate_kbps.to_be_bytes());
                 bytes
             }
             Self::Reject(code) => {
@@ -237,6 +284,16 @@ impl ControlMessage {
             Self::Close => vec![7],
             Self::Text { stamp, text } => encode_text(8, *stamp, text),
             Self::Chord { stamp, text } => encode_text(9, *stamp, text),
+            Self::Quality { stamp, quality } => {
+                let mut bytes = Vec::with_capacity(26);
+                bytes.push(10);
+                write_stamp(stamp, &mut bytes);
+                bytes.extend_from_slice(&quality.max_bitrate_kbps.to_be_bytes());
+                bytes.push(quality.max_frame_rate);
+                bytes.extend_from_slice(&quality.max_width.to_be_bytes());
+                bytes.extend_from_slice(&quality.max_height.to_be_bytes());
+                bytes
+            }
         }
     }
 
@@ -248,14 +305,41 @@ impl ControlMessage {
             return Err(Error::Malformed);
         }
         match bytes[0] {
-            1 if bytes.len() == 3 => Ok(Self::Hello {
-                version: u16::from_be_bytes([bytes[1], bytes[2]]),
-            }),
-            2 if bytes.len() == 21 => Ok(Self::Accept {
-                stamp: decode_stamp(bytes),
-                monitor_width: u16::from_be_bytes([bytes[17], bytes[18]]),
-                monitor_height: u16::from_be_bytes([bytes[19], bytes[20]]),
-            }),
+            1 if bytes.len() == 14 => {
+                let quality = Quality::new(
+                    u32::from_be_bytes([bytes[9], bytes[10], bytes[11], bytes[12]]),
+                    bytes[8],
+                    u16::from_be_bytes([bytes[4], bytes[5]]),
+                    u16::from_be_bytes([bytes[6], bytes[7]]),
+                )
+                .map_err(|_| Error::Malformed)?;
+                Ok(Self::Hello {
+                    version: u16::from_be_bytes([bytes[1], bytes[2]]),
+                    codec: bytes[3],
+                    quality,
+                    decode: match bytes[13] {
+                        0 => false,
+                        1 => true,
+                        _ => return Err(Error::Malformed),
+                    },
+                })
+            }
+            2 if bytes.len() == 31 => {
+                let quality = Quality::new(
+                    u32::from_be_bytes([bytes[27], bytes[28], bytes[29], bytes[30]]),
+                    bytes[26],
+                    u16::from_be_bytes([bytes[22], bytes[23]]),
+                    u16::from_be_bytes([bytes[24], bytes[25]]),
+                )
+                .map_err(|_| Error::Malformed)?;
+                Ok(Self::Accept {
+                    stamp: decode_stamp(bytes),
+                    monitor_width: u16::from_be_bytes([bytes[17], bytes[18]]),
+                    monitor_height: u16::from_be_bytes([bytes[19], bytes[20]]),
+                    codec: bytes[21],
+                    quality,
+                })
+            }
             3 if bytes.len() == 3 => Ok(Self::Reject(RejectCode::from_u16(u16::from_be_bytes([
                 bytes[1], bytes[2],
             ]))?)),
@@ -282,6 +366,19 @@ impl ControlMessage {
                 stamp: decode_stamp(bytes),
                 text: decode_text(&bytes[17..])?,
             }),
+            10 if bytes.len() == 26 => {
+                let quality = Quality::new(
+                    u32::from_be_bytes([bytes[17], bytes[18], bytes[19], bytes[20]]),
+                    bytes[21],
+                    u16::from_be_bytes([bytes[22], bytes[23]]),
+                    u16::from_be_bytes([bytes[24], bytes[25]]),
+                )
+                .map_err(|_| Error::Malformed)?;
+                Ok(Self::Quality {
+                    stamp: decode_stamp(bytes),
+                    quality,
+                })
+            }
             _ => Err(Error::Malformed),
         }
     }

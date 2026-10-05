@@ -140,6 +140,10 @@ pub struct SessionPath {
     pub selected: bool,
     /// Round-trip estimate in milliseconds.
     pub rtt_ms: u64,
+    /// UDP payload bytes sent on this path, cumulative.
+    pub tx_bytes: u64,
+    /// UDP payload bytes received on this path, cumulative.
+    pub rx_bytes: u64,
 }
 
 struct LiveSession {
@@ -224,6 +228,12 @@ struct Shared {
     /// Controller-only. Exchanges Control and Command before an event is queued.
     /// Not written into the installation record.
     swap_control_command: AtomicBool,
+    /// Platform-reported H.264 codec availability. The library does not probe
+    /// hardware itself; the native host sets these after asking its adapters
+    /// (VA-API on Linux). Both default to false so a missing probe reads as
+    /// unsupported, never as silent success.
+    h264_encode: AtomicBool,
+    h264_decode: AtomicBool,
     /// Controller-only. How a local key becomes host input. Not saved.
     keyboard_mode: AtomicU8,
     /// Physical keys this controller has seen and not yet released.
@@ -366,7 +376,24 @@ fn desktop_capabilities(shared: &Shared) -> Capabilities {
         file_transfer: lock(&shared.transfer_dir).is_some(),
         audio: false,
         monitors: u8::from(width > 0 && height > 0),
+        h264_encode: capture.is_some()
+            && shared
+                .h264_encode
+                .load(std::sync::atomic::Ordering::Relaxed),
+        h264_decode: shared
+            .h264_decode
+            .load(std::sync::atomic::Ordering::Relaxed),
     }
+}
+
+/// True when this host captures but has no usable H.264 encoder. The caller
+/// maps this to `Error::Unsupported` so the controller sees an explicit
+/// unsupported-desktop reject instead of an admitted session with no video.
+pub(super) fn video_unsupported(shared: &Shared) -> bool {
+    lock(&shared.capture).is_some()
+        && !shared
+            .h264_encode
+            .load(std::sync::atomic::Ordering::Relaxed)
 }
 
 fn finished(phase: &SessionPhase) -> bool {
@@ -405,6 +432,17 @@ fn store_grants(
         return Err(error);
     }
     Ok(previous)
+}
+
+/// Removes one device with persist-or-rollback. Returns the removed device.
+/// A failed save restores it and never leaves memory ahead of the store.
+fn forget_device(shared: &Shared, state: &mut State, key: &[u8; 32]) -> Result<Device, Error> {
+    let removed = state.trust.remove(key).ok_or(Error::NotPaired)?;
+    if let Err(error) = persist(shared, state) {
+        let _ = state.trust.pair(removed.clone());
+        return Err(error);
+    }
+    Ok(removed)
 }
 
 struct Installed {

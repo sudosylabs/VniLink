@@ -88,7 +88,8 @@ fn pairing_does_not_grant_control_and_a_grant_is_directional() {
         std::thread::sleep(Duration::from_millis(20));
     }
     let quality = Quality::new(2_000, 30, 1920, 1080).unwrap();
-    host.update_session_quality(session.id, quality).unwrap();
+    host.update_session_quality(session.id, SessionRole::Host, quality)
+        .unwrap();
     assert_eq!(
         host.snapshot().unwrap().incoming.unwrap().quality,
         Some(quality)
@@ -214,6 +215,36 @@ fn accepting_a_new_invitation_neither_adds_nor_removes_grants() {
         .unwrap();
     assert!(!device.grants.control);
     assert!(device.grants.clipboard);
+    assert!(matches!(
+        controller.connect(&host.endpoint_id()),
+        Err(Error::Unauthorized)
+    ));
+}
+
+#[test]
+fn re_pairing_after_revoke_keeps_the_empty_grants() {
+    let host = start_direct();
+    let controller = start_direct();
+    pair_for_control(&host, &controller);
+    host.revoke(&controller.endpoint_id()).unwrap();
+    // A later pairing file from the same peer refreshes addresses. The
+    // revoked grants stay revoked; the write path re-reads them instead of
+    // restoring what the first read saw.
+    let back = controller
+        .create_invitation(Duration::from_secs(60))
+        .unwrap();
+    let info = host.accept_invitation(&back).unwrap();
+    assert!(!info.grants.control);
+    assert!(!info.grants.clipboard);
+    assert!(!info.grants.transfer);
+    let device = host
+        .snapshot()
+        .unwrap()
+        .devices
+        .into_iter()
+        .find(|device| device.endpoint_id == controller.endpoint_id())
+        .unwrap();
+    assert!(!device.grants.control);
     assert!(matches!(
         controller.connect(&host.endpoint_id()),
         Err(Error::Unauthorized)
@@ -435,5 +466,90 @@ fn admission_publishes_the_session_lifecycle() {
         other => panic!("revoked event was {other:?}"),
     }
     wait_closed(&host, SessionRole::Host);
+    wait_closed(&controller, SessionRole::Controller);
+}
+
+#[test]
+fn a_host_without_an_encoder_reports_unsupported_instead_of_admitting() {
+    let host = start_direct();
+    let controller = start_direct();
+    // A capture adapter without a usable encoder is an explicit unsupported
+    // host, not a silent session with no video.
+    host.set_capture(Box::new(ShutdownCapture)).unwrap();
+    host.set_h264_support(false, false).unwrap();
+    assert!(host.capabilities().desktop_capture);
+    assert!(!host.capabilities().h264_encode);
+    pair_for_control(&host, &controller);
+    // Pairing for control restores capable flags; clear the encoder again so
+    // this connect exercises the unsupported path.
+    host.set_h264_support(false, false).unwrap();
+    assert!(matches!(
+        controller.connect(&host.endpoint_id()),
+        Err(Error::Unsupported(_))
+    ));
+    // Reporting the platform encoder makes the same host admittable.
+    host.set_h264_support(true, false).unwrap();
+    assert!(host.capabilities().h264_encode);
+    assert!(!host.capabilities().h264_decode);
+    let session = controller.connect(&host.endpoint_id()).unwrap();
+    assert_eq!(session.phase, SessionPhase::Active);
+    controller.disconnect().unwrap();
+    wait_closed(&controller, SessionRole::Controller);
+}
+
+#[test]
+fn controller_decode_availability_is_visible_in_capabilities() {
+    let controller = start_direct();
+    controller.set_h264_support(false, false).unwrap();
+    assert!(!controller.capabilities().h264_decode);
+    controller.set_h264_support(false, true).unwrap();
+    assert!(controller.capabilities().h264_decode);
+    assert!(!controller.capabilities().h264_encode);
+}
+
+#[test]
+fn a_controller_without_a_decoder_is_rejected_before_dialing() {
+    let host = start_direct();
+    let controller = start_direct();
+    pair_for_control(&host, &controller);
+    controller.set_h264_support(false, false).unwrap();
+    assert!(matches!(
+        controller.connect(&host.endpoint_id()),
+        Err(Error::Unsupported(_))
+    ));
+}
+
+#[test]
+fn the_offer_and_agreed_quality_travel_with_the_session() {
+    use crate::protocol::Quality;
+
+    let host = start_direct();
+    let controller = start_direct();
+    host.set_capture(Box::new(ShutdownCapture)).unwrap();
+    pair_for_control(&host, &controller);
+    let session = controller.connect(&host.endpoint_id()).unwrap();
+    // The 1x1 shutdown capture clamps the 1920x1080 offer.
+    let agreed = Quality::new(2_000, 30, 1, 1).unwrap();
+    assert_eq!(session.quality, Some(agreed));
+    assert_eq!(
+        host.snapshot().unwrap().incoming.unwrap().quality,
+        Some(agreed)
+    );
+    let updated = Quality::new(1_000, 15, 640, 480).unwrap();
+    controller
+        .update_session_quality(session.id, SessionRole::Controller, updated)
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let current = host.snapshot().unwrap().incoming.map(|info| info.quality);
+        if current == Some(Some(updated)) {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("host did not apply the propagated quality: {current:?}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    controller.disconnect().unwrap();
     wait_closed(&controller, SessionRole::Controller);
 }

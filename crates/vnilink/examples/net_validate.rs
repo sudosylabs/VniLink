@@ -52,12 +52,18 @@ fn main() {
     }
 
     let host = Core::start(host_config(&relay)).expect("host starts");
+    // Synthetic frames bypass capture and encode, but admission still
+    // requires the negotiated codec flags.
+    host.set_h264_support(true, true).expect("host flags");
     let controller_store: Arc<dyn vnilink::InstallationStore> = Arc::new(MemoryStore::empty());
     let mut controller = Core::open(
         Arc::clone(&controller_store),
         controller_open_config(&relay),
     )
     .expect("controller opens");
+    controller
+        .set_h264_support(true, true)
+        .expect("controller flags");
 
     let ttl = Duration::from_secs(15 * 60);
     let token = host.create_invitation(ttl).expect("invitation");
@@ -90,6 +96,8 @@ fn main() {
     let mut direct_selected = false;
     let mut rtts: Vec<u64> = Vec::new();
     let mut timeline: Vec<(u64, Vec<SessionPath>)> = Vec::new();
+    let mut first_bytes: Option<(u64, u64)> = None;
+    let mut last_bytes = (0u64, 0u64);
     let mut restarted = restart_at == 0;
     let mut reconnect_ms = 0u128;
     let mut generations = (0u64, 0u64);
@@ -118,6 +126,9 @@ fn main() {
                 controller_open_config(&relay),
             )
             .expect("controller reopens");
+            controller
+                .set_h264_support(true, true)
+                .expect("controller flags");
             let identity_preserved = controller.endpoint_id() == controller_id;
             println!("identity_preserved={identity_preserved}");
             let again = Instant::now();
@@ -174,6 +185,13 @@ fn main() {
                     direct_selected |= path.selected && !path.relay;
                     rtts.push(path.rtt_ms);
                 }
+                let totals = paths.iter().fold((0u64, 0u64), |(tx, rx), path| {
+                    (tx + path.tx_bytes, rx + path.rx_bytes)
+                });
+                if first_bytes.is_none() {
+                    first_bytes = Some(totals);
+                }
+                last_bytes = totals;
                 timeline.push((started.elapsed().as_secs(), paths));
             }
         }
@@ -198,6 +216,18 @@ fn main() {
         100.0 * (published.saturating_sub(received)) as f64 / published.max(1) as f64
     );
     println!("relay_path_seen={relay_seen} direct_selected={direct_selected}");
+    if let Some((first_tx, first_rx)) = first_bytes {
+        let secs = started.elapsed().as_secs_f64().max(1.0);
+        println!(
+            "net_bytes_tx={} net_bytes_rx={} net_mbps={:.1}",
+            last_bytes.0.saturating_sub(first_tx),
+            last_bytes.1.saturating_sub(first_rx),
+            8.0 * (last_bytes.0.saturating_sub(first_tx) + last_bytes.1.saturating_sub(first_rx))
+                as f64
+                / secs
+                / 1_000_000.0
+        );
+    }
     if restarted && restart_at != 0 {
         println!("reconnect_ms={reconnect_ms}");
         println!(

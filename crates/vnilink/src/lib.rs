@@ -99,7 +99,7 @@ pub use core::{
 };
 pub use error::Error;
 pub use events::{CoreEvent, EventSubscription};
-pub use input::{usage, HostDesktop, InputEvent, PointerButton, MAX_KEY_TEXT};
+pub use input::{map_point, usage, HostDesktop, InputEvent, PointerButton, MAX_KEY_TEXT};
 pub use installation::{InstallationStore, MemoryStore};
 pub use keyboard::{KeyboardMode, LocalKey};
 pub use os_input::OsInput;

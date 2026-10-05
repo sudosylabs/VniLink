@@ -11,14 +11,16 @@ use crate::keyboard::LocalKey;
 use crate::session::Grants;
 
 pub(super) fn start_direct() -> Core {
-    Core::boot(
+    let core = Core::boot(
         CoreConfig {
             listen: Listen::Loopback,
             ..CoreConfig::default()
         },
         RelayMode::Disabled,
     )
-    .expect("loopback core")
+    .expect("loopback core");
+    core.set_h264_support(true, true).expect("flags");
+    core
 }
 
 pub(super) enum Seen {

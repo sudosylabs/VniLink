@@ -135,10 +135,15 @@ impl Core {
         Ok(link
             .paths()
             .iter()
-            .map(|path| SessionPath {
-                relay: path.is_relay(),
-                selected: path.is_selected(),
-                rtt_ms: u64::try_from(path.rtt().as_millis()).unwrap_or(u64::MAX),
+            .map(|path| {
+                let stats = path.stats();
+                SessionPath {
+                    relay: path.is_relay(),
+                    selected: path.is_selected(),
+                    rtt_ms: u64::try_from(path.rtt().as_millis()).unwrap_or(u64::MAX),
+                    tx_bytes: stats.udp_tx.bytes,
+                    rx_bytes: stats.udp_rx.bytes,
+                }
             })
             .collect())
     }

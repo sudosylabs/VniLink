@@ -241,6 +241,93 @@ fn revoke_stops_the_session_releases_input_and_blocks_reconnect() {
 }
 
 #[test]
+fn unpair_forgets_the_device_stops_the_session_and_blocks_reconnect() {
+    let host = start_direct();
+    let controller = start_direct();
+    let applied = Arc::new(Mutex::new(Vec::new()));
+    host.set_desktop(Box::new(RecordingDesktop {
+        events: Arc::clone(&applied),
+    }))
+    .unwrap();
+    pair_for_control(&host, &controller);
+    let session = controller.connect(&host.endpoint_id()).unwrap();
+    controller
+        .submit_input(
+            session.id,
+            session.generation,
+            InputEvent::key_down(crate::input::usage::LEFT_SHIFT),
+        )
+        .unwrap();
+    wait_applied(
+        &applied,
+        &[InputEvent::key_down(crate::input::usage::LEFT_SHIFT)],
+    );
+    host.unpair(&controller.endpoint_id()).unwrap();
+    // Held input releases like any local stop.
+    wait_applied(
+        &applied,
+        &[
+            InputEvent::key_down(crate::input::usage::LEFT_SHIFT),
+            InputEvent::key_up(crate::input::usage::LEFT_SHIFT),
+        ],
+    );
+    wait_closed(&host, SessionRole::Host);
+    wait_closed(&controller, SessionRole::Controller);
+    // The device is gone, not kept with empty grants. This side forgot, so
+    // the controller still dials — and the host rejects a peer it no longer
+    // knows with Unauthorized instead of admitting it.
+    assert!(host.snapshot().unwrap().devices.is_empty());
+    assert!(matches!(
+        controller.connect(&host.endpoint_id()),
+        Err(Error::Unauthorized)
+    ));
+    assert!(matches!(
+        controller.submit_input(
+            session.id,
+            session.generation,
+            InputEvent::key_down(crate::input::usage::A),
+        ),
+        Err(Error::NoSession)
+    ));
+}
+
+#[test]
+fn unpairing_an_unknown_device_reports_not_paired() {
+    let host = start_direct();
+    let controller = start_direct();
+    assert!(matches!(
+        host.unpair(&controller.endpoint_id()),
+        Err(Error::NotPaired)
+    ));
+    // Pairing still works afterwards; nothing was disturbed.
+    pair_for_control(&host, &controller);
+    let session = controller.connect(&host.endpoint_id()).unwrap();
+    assert_eq!(session.phase, SessionPhase::Active);
+    // The caller forgetting its peer fails before dialing.
+    controller.unpair(&host.endpoint_id()).unwrap();
+    wait_closed(&controller, SessionRole::Controller);
+    assert!(matches!(
+        controller.connect(&host.endpoint_id()),
+        Err(Error::NotPaired)
+    ));
+}
+
+#[test]
+fn a_controller_unpair_ends_its_outgoing_session() {
+    let host = start_direct();
+    let controller = start_direct();
+    pair_for_control(&host, &controller);
+    controller.connect(&host.endpoint_id()).unwrap();
+    controller.unpair(&host.endpoint_id()).unwrap();
+    assert!(controller.snapshot().unwrap().devices.is_empty());
+    wait_closed(&controller, SessionRole::Controller);
+    // Unpairing is local only: the host still lists the controller, and its
+    // side closes because the control stream ended.
+    wait_closed(&host, SessionRole::Host);
+    assert_eq!(host.snapshot().unwrap().devices.len(), 1);
+}
+
+#[test]
 fn removing_control_mid_session_stops_applying_input() {
     let host = start_direct();
     let controller = start_direct();
@@ -324,4 +411,44 @@ fn wait_finished(controller: &crate::core::Core) {
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
+}
+
+#[test]
+fn quality_updates_select_the_role_when_session_ids_collide() {
+    use crate::protocol::Quality;
+
+    let a = start_direct();
+    let b = start_direct();
+    // Each core hosts the other. Both first sessions take the same id on
+    // each core, so the id alone cannot select a side.
+    pair_for_control(&a, &b);
+    pair_for_control(&b, &a);
+    let b_out = b.connect(&a.endpoint_id()).unwrap();
+    let a_out = a.connect(&b.endpoint_id()).unwrap();
+    assert_eq!(b_out.id, a_out.id);
+
+    let controller_quality = Quality::new(1_500, 30, 1280, 720).unwrap();
+    a.update_session_quality(a_out.id, SessionRole::Controller, controller_quality)
+        .unwrap();
+    assert_eq!(
+        a.snapshot().unwrap().outgoing.unwrap().quality,
+        Some(controller_quality)
+    );
+    // The hosted session keeps the negotiated limits, not the controller's.
+    assert_ne!(
+        a.snapshot().unwrap().incoming.unwrap().quality,
+        Some(controller_quality)
+    );
+
+    let host_quality = Quality::new(800, 15, 640, 480).unwrap();
+    a.update_session_quality(a_out.id, SessionRole::Host, host_quality)
+        .unwrap();
+    assert_eq!(
+        a.snapshot().unwrap().incoming.unwrap().quality,
+        Some(host_quality)
+    );
+    assert_eq!(
+        a.snapshot().unwrap().outgoing.unwrap().quality,
+        Some(controller_quality)
+    );
 }

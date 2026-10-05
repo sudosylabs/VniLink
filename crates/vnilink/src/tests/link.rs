@@ -11,6 +11,14 @@ fn a_live_session_reports_its_selected_direct_path() {
         paths.iter().any(|path| path.selected && !path.relay),
         "expected a selected direct path, got {paths:?}"
     );
+    assert!(
+        paths
+            .iter()
+            .map(|path| path.tx_bytes + path.rx_bytes)
+            .sum::<u64>()
+            > 0,
+        "expected handshake bytes on the paths, got {paths:?}"
+    );
     let host_session = host.snapshot().unwrap().incoming.unwrap();
     let host_paths = host.session_paths(host_session.id).unwrap();
     assert!(

@@ -18,7 +18,7 @@ use iroh::{Endpoint, EndpointId, RelayMode, SecretKey};
 
 use crate::error::Error;
 use crate::events::CoreEvent;
-use crate::protocol::{error_code, ControlMessage, SessionStamp, ALPN};
+use crate::protocol::{error_code, ControlMessage, Quality, SessionStamp, ALPN};
 use crate::session::{self, Grant, SessionInfo, SessionPhase, SessionRole};
 use crate::transfer::{self};
 use crate::video::VideoOutbox;
@@ -185,7 +185,14 @@ pub(super) enum HostTurn {
 /// One admission check for every Hello: before approval, after approval, and
 /// after the session gate. The rule lives in [`session::admit`]; this only
 /// reads the state it needs.
-fn admission(state: &State, peer: EndpointId, version: u16) -> Result<(), Error> {
+fn admission(
+    state: &State,
+    peer: EndpointId,
+    version: u16,
+    video_unsupported: bool,
+    codec_supported: bool,
+    peer_decode_unsupported: bool,
+) -> Result<(), Error> {
     session::admit(
         state.hosting,
         state
@@ -194,6 +201,9 @@ fn admission(state: &State, peer: EndpointId, version: u16) -> Result<(), Error>
             .is_some_and(|session| !finished(&session.phase)),
         state.trust.granted(peer.as_bytes(), Grant::Control),
         version,
+        video_unsupported,
+        codec_supported,
+        peer_decode_unsupported,
     )
 }
 
@@ -219,15 +229,41 @@ pub(super) async fn handle_host_request(
         }
     };
     match message {
-        ControlMessage::Hello { version } => {
-            let decision = admission(&lock(&shared.state), peer, version);
+        ControlMessage::Hello {
+            version,
+            codec,
+            quality,
+            decode,
+        } => {
+            let codec_supported = codec == crate::protocol::CODEC_H264;
+            // The controller names its decoder in Hello. A peer that cannot
+            // decode gets an explicit reject, not a session with no
+            // displayable video.
+            let peer_decode_unsupported = !decode && lock(&shared.capture).is_some();
+            let decision = admission(
+                &lock(&shared.state),
+                peer,
+                version,
+                super::video_unsupported(&shared),
+                codec_supported,
+                peer_decode_unsupported,
+            );
             let decision = match decision {
                 // The file already told the controller who this host is. The
                 // digits typed here tell the host who the controller is.
                 // Without an open allow switch the reject stays immediate.
                 Err(Error::Unauthorized) => {
                     match wait_for_control_approval(shared, connection, peer, stop_rx).await {
-                        ControlAnswer::Approved => admission(&lock(&shared.state), peer, version),
+                        ControlAnswer::Approved => admission(
+                            &lock(&shared.state),
+                            peer,
+                            version,
+                            super::video_unsupported(&shared),
+                            codec_supported,
+                            // Re-read: the platform could report an encoder
+                            // while the approval was parked.
+                            !decode && lock(&shared.capture).is_some(),
+                        ),
                         ControlAnswer::Rejected(error) => Err(error),
                     }
                 }
@@ -243,13 +279,24 @@ pub(super) async fn handle_host_request(
                     // The previous session, if this peer just dropped, releases
                     // held keys before this Hello is admitted.
                     let _gate = shared.session_gate.lock().await;
-                    let decision = admission(&lock(&shared.state), peer, version);
+                    let decision = admission(
+                        &lock(&shared.state),
+                        peer,
+                        version,
+                        super::video_unsupported(&shared),
+                        codec_supported,
+                        !decode && lock(&shared.capture).is_some(),
+                    );
                     if let Err(error) = decision {
                         let _ = write_frame(&mut send, &ControlMessage::Reject(error_code(&error)))
                             .await;
                         return HostTurn::PeerShouldClose;
                     }
-                    match register_incoming(shared, peer, stop) {
+                    // Agree the encoder limits before admitting: the offer
+                    // clamped to this host's monitor.
+                    let monitor = monitor_size(shared);
+                    let agreed = session::agree_quality(&quality, monitor);
+                    match register_incoming(shared, peer, stop, Some(agreed)) {
                         Ok(info) => {
                             *owned_session = Some(info.id);
                             remember_link(shared, true, connection.clone());
@@ -259,6 +306,8 @@ pub(super) async fn handle_host_request(
                                     stamp: SessionStamp::new(info.id, info.generation),
                                     monitor_width: info.monitor_width,
                                     monitor_height: info.monitor_height,
+                                    codec: crate::protocol::CODEC_H264,
+                                    quality: info.quality.expect("admission agrees quality"),
                                 },
                             )
                             .await;
@@ -332,6 +381,7 @@ pub(super) fn register_incoming(
     shared: &Shared,
     peer: EndpointId,
     stop: &tokio::sync::watch::Sender<bool>,
+    quality: Option<Quality>,
 ) -> Result<SessionInfo, Error> {
     let (monitor_width, monitor_height) = monitor_size(shared);
     let mut state = lock(&shared.state);
@@ -356,7 +406,7 @@ pub(super) fn register_incoming(
         role: SessionRole::Host,
         phase: session::phase_after_admit(),
         peer_id: peer_id.clone(),
-        quality: None,
+        quality,
         monitor_width,
         monitor_height,
     };
@@ -367,7 +417,7 @@ pub(super) fn register_incoming(
         phase: session::phase_after_admit(),
         peer_id: peer_id.clone(),
         peer_key: *peer.as_bytes(),
-        quality: None,
+        quality,
         monitor_width,
         monitor_height,
         stop: stop.clone(),
