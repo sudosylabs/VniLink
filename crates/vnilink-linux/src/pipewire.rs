@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 
 use pipewire as pw;
 use pw::spa::param::video::VideoFormat;
-use pw::spa::pod::Pod;
 use pw::spa::pod::serialize::PodSerializer;
+use pw::spa::pod::Pod;
 use pw::spa::utils::{Choice, ChoiceEnum, ChoiceFlags};
 use pw::stream::StreamFlags;
 use vnilink_media::{ChannelSlot, Error, FrameChannel, RawFrame};
@@ -90,8 +90,8 @@ impl PortalCapture {
     /// Connect `remote` to `node_id` and wait until the node names its size.
     ///
     /// PipeWire closes `remote`. The call fails when the node does not offer
-    /// BGRA or BGRx, or when no format arrives before the timeout. A DMA-BUF
-    /// whose modifier GBM cannot map fails when the first frame is read.
+    /// BGRA or BGRx, or when no format arrives before the timeout. Unexpected
+    /// GPU buffers are refused before import.
     pub fn open(remote: OwnedFd, node_id: u32) -> Result<Self, Error> {
         let shared = Arc::new(Shared {
             size: Mutex::new(None),
@@ -137,7 +137,7 @@ impl PortalCapture {
         *self.delivery.lock().expect("portal delivery")
     }
 
-    /// Block until a frame newer than the last one is copied.
+    /// Return the latest picture, retaining it while the desktop is idle.
     pub fn next_frame(&self, timestamp_us: u64) -> Result<RawFrame, Error> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.tx
@@ -298,7 +298,7 @@ fn wait_frame(
     shared: &Shared,
     timestamp_us: u64,
 ) -> Result<(RawFrame, PortalDelivery), Error> {
-    let slot = shared.channel.recv_timeout(FRAME_TIMEOUT, || {
+    let slot = shared.channel.recv_latest(FRAME_TIMEOUT, || {
         let _ = mainloop
             .loop_()
             .iterate(pw::loop_::Timeout::Finite(Duration::from_millis(50)));
@@ -567,3 +567,7 @@ fn copy_buffer(stream: &pw::stream::Stream, shared: &Shared) {
     });
     record_delivery(shared, false);
 }
+
+#[cfg(test)]
+#[path = "tests/pipewire_idle.rs"]
+mod idle_tests;

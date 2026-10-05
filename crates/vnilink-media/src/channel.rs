@@ -61,6 +61,26 @@ impl FrameChannel {
         *self.failure.lock().expect("frame channel")
     }
 
+    /// Pump capture events and return the current picture, even if unchanged.
+    /// Damage-driven compositors need not send a new frame for an idle desktop.
+    /// Still wait for the first picture and propagate permanent failures.
+    pub fn recv_latest(
+        &self,
+        timeout: Duration,
+        mut wait: impl FnMut(),
+    ) -> Result<ChannelSlot, Error> {
+        // Always pump events so cached pixels cannot hide a failed capture or
+        // prevent the next changed picture from reaching the slot.
+        wait();
+        if let Some(reason) = self.failure() {
+            return Err(Error::Unsupported(reason));
+        }
+        if let Some(slot) = self.slot.lock().expect("frame channel").clone() {
+            return Ok(slot);
+        }
+        self.recv_timeout(timeout, wait)
+    }
+
     /// Block until a picture newer than the last returned one arrives.
     ///
     /// `wait` runs between checks: the PipeWire capture pumps its main loop

@@ -142,6 +142,9 @@ fn choose_inner(
                                 &stop,
                                 vnilink_linux::LinuxEncoder::open,
                             ) {
+                                // Host errors otherwise disappear into a short-lived
+                                // toast while the controller receives a generic refusal.
+                                eprintln!("VniLink desktop hosting stopped: {error}");
                                 *ERROR.lock().unwrap() = Some(error.to_string());
                                 if core
                                     .snapshot()

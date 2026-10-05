@@ -51,3 +51,23 @@ fn an_empty_channel_times_out() {
         ))
     ));
 }
+
+#[test]
+fn cached_receives_pump_changes_and_do_not_hide_failures() {
+    let channel = FrameChannel::new();
+    assert!(matches!(
+        channel.recv_latest(Duration::ZERO, || {}),
+        Err(Error::CaptureRejected(
+            "the capture did not deliver a frame"
+        ))
+    ));
+    channel.push(slot(2, 2));
+    let changed = channel
+        .recv_latest(Duration::ZERO, || channel.push(slot(4, 4)))
+        .unwrap();
+    assert_eq!((changed.width, changed.height), (4, 4));
+    assert!(matches!(
+        channel.recv_latest(Duration::ZERO, || channel.fail("stream closed")),
+        Err(Error::Unsupported("stream closed"))
+    ));
+}

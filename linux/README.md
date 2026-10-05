@@ -55,6 +55,15 @@ Settings contains Connection (public/custom relays, up to eight URLs, optional m
 
 Choose a screen before hosting video. X11 reads the current desktop and installs native input. Wayland asks through the ScreenCast portal and opens PipeWire capture; its grant provides viewing only because the current input adapter does not inject Wayland input. VA-API encode/decode hardware is required. Capture failures stop the hosted session and show an error.
 
+Screen selection currently starts local capture immediately. GNOME's sharing
+indicator therefore appears before a remote connection; it reports the local
+portal capture, not an established VniLink connection. The application does not
+yet defer portal setup until a connection request or restore prior screen grants.
+An unchanged Wayland desktop reuses its latest captured picture instead of
+ending the hosted session after a two-second frame timeout. Genuine capture
+failures still end the session; the Linux terminal prints the underlying reason
+as well as showing it in a toast.
+
 The visual tour includes the settings pages and a synthetic pixel-upload test for the remote desktop window. It verifies geometry, alpha, and cleanup, and relay saves against a memory installation store. This does not establish a real two-machine remote desktop result.
 
 Paired computers display a local name when set, otherwise the hostname learned from their invitation (refreshed on connection), with an endpoint fragment as fallback. Settings → Computers → Manage lets you save a local name or clear it to use the hostname. Names persist in the keyring record and do not change permissions.
