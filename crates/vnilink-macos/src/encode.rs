@@ -10,7 +10,7 @@ use apple_cf::cm::CMTime;
 #[cfg(target_os = "macos")]
 use apple_cf::iosurface::IOSurface;
 #[cfg(target_os = "macos")]
-use videotoolbox::compression::{CompressionSession, FrameProperties};
+use videotoolbox::compression::{CompressionSession, FrameProperties, ProfileLevel};
 #[cfg(target_os = "macos")]
 use videotoolbox::session::Codec;
 use vnilink_media::{
@@ -56,6 +56,9 @@ impl MacEncoder {
         {
             let session =
                 CompressionSession::builder(i32::from(width), i32::from(height), Codec::H264)
+                    // Linux's parser does not support High-profile 8x8 transforms.
+                    // Match its encoder's interoperable Constrained Baseline stream.
+                    .with_profile_level(ProfileLevel::H264ConstrainedBaselineAutoLevel)
                     .with_real_time(true)
                     .with_allow_frame_reordering(false)
                     .with_average_bit_rate(bitrate)

@@ -19,3 +19,6 @@ pipewire = { version = "=0.10.1", features = ["v1_0_0"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 tokio = { version = "=1.53.1", features = ["rt", "time", "net", "io-util", "sync"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+vnilink-macos = { path = "../vnilink-macos" }

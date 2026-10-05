@@ -3,6 +3,70 @@
 
 use crate::syntax::{Pps, Slice, Sps};
 
+/// Real Mac encoder output must pass the Linux parser, including PPS tools
+/// and both IDR and predictive slice headers. No Linux GPU is needed here.
+#[cfg(target_os = "macos")]
+#[test]
+fn mac_encoder_output_is_accepted_by_linux_syntax() {
+    use vnilink_macos::MacEncoder;
+    use vnilink_media::{parse_annex_b, EncodeParams, RawFrame, VideoEncoder};
+
+    for (width, height) in [(64, 64), (1920, 1080)] {
+        let mut encoder = MacEncoder::open(width, height, 30, 2_000_000).unwrap();
+        let mut sps = None;
+        let mut pps = None;
+        let mut predictive_slices = 0;
+        for index in 0..3 {
+            let frame = RawFrame::bgra(
+                width,
+                height,
+                index * 33_333,
+                [index as u8 * 30, 60, 180, 255].repeat(usize::from(width) * usize::from(height)),
+            )
+            .unwrap();
+            let sample = encoder
+                .encode(
+                    &frame,
+                    &EncodeParams {
+                        force_keyframe: index == 0,
+                        bitrate_bps: 2_000_000,
+                        frame_rate: 30,
+                    },
+                )
+                .unwrap();
+            let parsed = parse_annex_b(sample.bytes()).unwrap();
+            if index == 0 {
+                assert!(parsed.has_sps() && parsed.has_pps() && parsed.has_idr());
+            }
+            let mut slices = 0;
+            for nal in parsed.units() {
+                match nal.nal_type {
+                    7 => sps = Some(Sps::parse(nal.bytes()).unwrap()),
+                    8 => pps = Some(Pps::parse(nal.bytes(), sps.as_ref().unwrap()).unwrap()),
+                    1 | 5 => {
+                        Slice::parse(
+                            nal.bytes(),
+                            sps.as_ref().unwrap(),
+                            pps.as_ref().unwrap(),
+                            nal.nal_type == 5,
+                            (nal.bytes()[0] >> 5) & 3,
+                        )
+                        .unwrap();
+                        slices += 1;
+                        predictive_slices += usize::from(nal.nal_type == 1);
+                    }
+                    _ => {}
+                }
+            }
+            assert!(slices > 0);
+        }
+        assert!(
+            predictive_slices > 0,
+            "the test must exercise predictive frames"
+        );
+    }
+}
+
 /// Bit writer for synthetic parameter sets and slice headers. NAL payload
 /// only: the caller prepends the real header bytes.
 #[derive(Default)]

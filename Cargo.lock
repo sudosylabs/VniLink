@@ -4700,6 +4700,7 @@ dependencies = [
  "pipewire",
  "tokio",
  "vnilink",
+ "vnilink-macos",
  "vnilink-media",
  "x11rb 0.14.0",
 ]

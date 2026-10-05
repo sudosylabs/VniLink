@@ -66,6 +66,12 @@ loopback session, VideoToolbox decoding and the FFI frame poller; the test also
 checks decoder subscription release. Capture idle-frame reuse has a regression
 check. Tests do not request Screen Recording or inject system input.
 
+The Mac encoder explicitly requests H.264 Constrained Baseline for compatibility
+with the Linux decoder. A macOS test feeds real VideoToolbox output at 64×64 and
+1920×1080 through Linux's SPS, PPS and IDR/predictive slice parsers. This guards
+against the default encoder enabling the unsupported High-profile 8×8 transform;
+it does not replace a real Linux GPU decode or two-machine session test.
+
 Real-machine capture, input, reconnect and cross-platform desktop operation
 still need validation with OS permissions granted. Clipboard receiving needs
 its native pasteboard adapter; the send action uses the remote host's adapter
