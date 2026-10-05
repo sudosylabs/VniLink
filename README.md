@@ -4,6 +4,8 @@ VniLink is a remote desktop application for controlling your own computers acros
 
 Anyone can install it and use their own devices. Device identity, paired devices, permissions, and relay settings belong to that installation. The owner's three computers are the first validation set.
 
+The native [macOS app](apple/README.md) has a computer browser, Keychain-backed pairing, settings, a separate VideoToolbox desktop viewer, and explicit ScreenCaptureKit/input setup. Synthetic video over a paired loopback session is verified; real-machine Mac capture and control still need validation.
+
 See [Contributing](CONTRIBUTING.md) to work on VniLink,
 [Security](SECURITY.md) to report a vulnerability privately, and the
 [Code of Conduct](CODE_OF_CONDUCT.md) for community expectations and incident reporting.

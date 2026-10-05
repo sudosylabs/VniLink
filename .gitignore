@@ -1,2 +1,9 @@
 /target
 assets/**
+/apple/.generated/
+/apple/.build/
+/apple/VnilinkCore/.build/
+/apple/VnilinkCore/.swiftpm/
+/apple/*.xcodeproj/
+/apple/VnilinkCore/vnilink_ffiFFI.xcframework/
+/apple/VnilinkCore/Sources/VnilinkCore/vnilink_ffi.swift

@@ -1,0 +1,10 @@
+// swift-tools-version:5.9
+import PackageDescription
+let package = Package(
+    name: "VnilinkCore", platforms: [.macOS("15.0")],
+    products: [.library(name: "VnilinkCore", targets: ["VnilinkCore"])],
+    targets: [
+        .binaryTarget(name: "vnilink_ffiFFI", path: "vnilink_ffiFFI.xcframework"),
+        .target(name: "VnilinkCore", dependencies: ["vnilink_ffiFFI"])
+    ]
+)
