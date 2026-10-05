@@ -3,6 +3,14 @@ use enigo::{Axis, Coordinate, Direction, Enigo, Keyboard, Mouse, NewConError, Se
 use crate::error::Error;
 use crate::input::{HostDesktop, InputEvent};
 
+/// Linux evdev keycode for a USB HID keyboard usage. Portals take evdev
+/// codes, unlike X11's evdev-plus-eight keycodes. Does not inject input.
+pub fn linux_evdev_keycode(usage: u16) -> Option<i32> {
+    key_for_usage(usage)
+        .and_then(|code| code.linux.checked_sub(8))
+        .map(i32::from)
+}
+
 /// Injects key and pointer events with the operating system's input API.
 ///
 /// macOS uses Core Graphics and needs Accessibility permission. The first call

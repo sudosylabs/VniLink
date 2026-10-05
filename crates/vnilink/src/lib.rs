@@ -104,7 +104,7 @@ pub use hostname::{clean_hostname, local_hostname};
 pub use input::{map_point, usage, HostDesktop, InputEvent, PointerButton, MAX_KEY_TEXT};
 pub use installation::{InstallationStore, MemoryStore};
 pub use keyboard::{KeyboardMode, LocalKey};
-pub use os_input::OsInput;
+pub use os_input::{linux_evdev_keycode, OsInput};
 pub use pairing::{PairingFile, PairingPreview, PAIRING_FILE_EXTENSION};
 pub use protocol::{Capabilities, Quality, PROTOCOL_VERSION};
 pub use relay::{CustomRelay, RelaySettings};

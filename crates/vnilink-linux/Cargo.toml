@@ -13,12 +13,15 @@ vnilink-media = { path = "../vnilink-media" }
 x11rb = "=0.14.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ashpd = { version = "=0.13.13", default-features = false, features = ["screencast", "tokio"] }
+ashpd = { version = "=0.13.13", default-features = false, features = ["screencast", "remote_desktop", "tokio"] }
+tokio = { version = "=1.53.1", features = ["rt", "time", "net", "io-util", "sync"] }
+futures-util = "=0.3.34"
 libva = "=0.1.4"
 pipewire = { version = "=0.10.1", features = ["v1_0_0"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 tokio = { version = "=1.53.1", features = ["rt", "time", "net", "io-util", "sync"] }
+zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 vnilink-macos = { path = "../vnilink-macos" }

@@ -4696,6 +4696,7 @@ name = "vnilink-linux"
 version = "0.1.0"
 dependencies = [
  "ashpd",
+ "futures-util",
  "libva",
  "pipewire",
  "tokio",
@@ -4703,6 +4704,7 @@ dependencies = [
  "vnilink-macos",
  "vnilink-media",
  "x11rb 0.14.0",
+ "zbus",
 ]
 
 [[package]]

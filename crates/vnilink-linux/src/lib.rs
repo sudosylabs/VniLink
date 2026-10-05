@@ -28,6 +28,8 @@ mod portal;
 mod syntax;
 #[cfg(target_os = "linux")]
 mod vaapi;
+#[cfg(target_os = "linux")]
+mod wayland;
 mod x11;
 
 #[cfg(target_os = "linux")]
@@ -57,6 +59,8 @@ pub use x11::{raw_frame_from_ximage, X11Capture, X11Image, X11Plan};
 pub use dbus::open_monitor;
 #[cfg(target_os = "linux")]
 pub use pipewire::{PortalBuffer, PortalCapture, PortalDelivery, PortalFormat};
+#[cfg(target_os = "linux")]
+pub use wayland::{WaylandCapture, WaylandInput};
 
 #[cfg(test)]
 #[path = "tests.rs"]

@@ -28,7 +28,7 @@ impl vnilink::HostCapture for Monitor {
 }
 enum Source {
     X11(vnilink_linux::X11Capture),
-    Portal(vnilink_linux::PortalCapture),
+    Portal(vnilink_linux::WaylandCapture),
 }
 impl FrameSource for Source {
     fn size(&self) -> (u16, u16) {
@@ -72,20 +72,7 @@ fn choose_inner(
         move || {
             let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
             let source = if wayland {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|_| "Could not open the screen permission portal.".to_string())?;
-                let mut session = vnilink_linux::PortalSession::new();
-                let remote = runtime
-                    .block_on(vnilink_linux::open_monitor(&mut session))
-                    .map_err(|e| e.to_string())?;
-                let node = session
-                    .pipewire_node()
-                    .ok_or("The portal did not select a monitor.")?;
-                Source::Portal(
-                    vnilink_linux::PortalCapture::open(remote, node).map_err(|e| e.to_string())?,
-                )
+                Source::Portal(vnilink_linux::WaylandCapture::open().map_err(|e| e.to_string())?)
             } else {
                 Source::X11(
                     vnilink_linux::X11Capture::open(&vnilink_linux::X11Plan::current_session())
@@ -100,8 +87,11 @@ fn choose_inner(
             }
             core.set_capture(Box::new(Monitor(width, height)))
                 .map_err(|e| e.to_string())?;
-            if !wayland {
-                core.enable_os_input().map_err(|e| e.to_string())?;
+            match &source {
+                Source::Portal(capture) => core
+                    .set_desktop(Box::new(capture.desktop()))
+                    .map_err(|e| e.to_string())?,
+                Source::X11(_) => core.enable_os_input().map_err(|e| e.to_string())?,
             }
             let decode = core
                 .snapshot()
@@ -163,18 +153,17 @@ fn choose_inner(
                     std::thread::sleep(Duration::from_millis(100));
                 }
             });
-            Ok((width, height, wayland))
+            Ok((width, height))
         },
         move |result| {
             button.set_sensitive(true);
             match result {
-                Ok((width, height, wayland)) => {
+                Ok((width, height)) => {
                     if let Some(settings) = parent.downcast_ref::<adw::Window>() {
                         preferences::toast(
                             settings,
                             adw::Toast::new(&format!(
-                                "Screen selected: {width} × {height}{}",
-                                if wayland { " (viewing only)" } else { "" }
+                                "Desktop sharing and control ready: {width} × {height}"
                             )),
                         );
                     }

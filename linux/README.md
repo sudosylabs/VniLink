@@ -53,7 +53,7 @@ These captures verify presentation, not an end-to-end remote connection.
 
 Settings contains Connection (public/custom relays, up to eight URLs, optional masked authentication tokens, screen selection and identity reset), Keyboard (character, physical and translated modes, Control/Command swap), Computers (directional control/clipboard/file grants, revoke and forget), Files (receive folder for this launch), and Pairing (one-time invitation tokens). Relay settings persist in Secret Service and apply after restart. Existing credentials remain opaque and are preserved when their URL is unchanged; turning authentication off removes them.
 
-Choose a screen before hosting video. X11 reads the current desktop and installs native input. Wayland asks through the ScreenCast portal and opens PipeWire capture; its grant provides viewing only because the current input adapter does not inject Wayland input. VA-API encode/decode hardware is required. Capture failures stop the hosted session and show an error.
+Choose a screen before hosting video. X11 reads the current desktop and installs native input. Wayland uses one RemoteDesktop portal session for its screen, keyboard and pointer grant, with PipeWire providing capture. Both keyboard and pointer must be granted; a refused or partial grant is closed and does not install input. VA-API encode/decode hardware is required. Capture failures stop the hosted session and show an error.
 
 Screen selection currently starts local capture immediately. GNOME's sharing
 indicator therefore appears before a remote connection; it reports the local
@@ -87,7 +87,7 @@ Launch at login writes only this user's
 `~/.config`), pointing to the current executable with `--background`. Disabling
 it removes that entry. Keep the installed binary at the registered path; turn
 launch at login off/on after moving it. X11 sharing can resume explicitly;
-Wayland still needs a fresh portal screen selection and supports viewing only.
+Wayland still needs a fresh RemoteDesktop portal grant after restarting.
 Startup preferences contain no credentials; identity and relay tokens remain in
 Secret Service. An unlocked desktop session and codec hardware are required.
 
@@ -113,3 +113,34 @@ inside `gbm_bo_unmap`; the production portal no longer probes or maps through
 GBM. This is a capture-path mitigation, not evidence that the original driver
 corruption is repaired. The producer must support shared-memory delivery; live
 capture with the changed negotiation still needs validation on that desktop.
+
+## Wayland control
+
+The desktop must implement both RemoteDesktop and ScreenCast portals. In
+Settings → This computer, choose **Enable desktop sharing and control**, then
+approve one monitor, keyboard and pointer in the compositor's dialog. GNOME
+shows local capture as active immediately; setup is still required before a
+connection. Portal permissions are not saved or resumed silently. VniLink's
+paired-device grants continue to authorize each remote connection.
+
+Keyboard HID usages map to Linux evdev codes; buttons, absolute pointer and
+wheel detents use the portal's D-Bus Notify methods. Pointer pixels scale to the
+selected stream's compositor coordinates, including scaled displays. Character
+mode and explicit short text use keysyms; physical-key mode uses evdev codes.
+Translate mode remains the X11-layout implementation and is refused on Wayland.
+The cursor is embedded in the capture. A dedicated worker owns the portal and
+serializes input without nesting Tokio runtimes. Stop remote access and Quit
+close the grant; cancellation and failed capture setup close it too. Closing a
+window with background mode enabled keeps the current sharing session alive.
+
+Tests cover input mapping, revocation and a fake portal on a private D-Bus bus,
+including combined session creation, partial-grant rejection and close. Run the
+transport test without affecting a real desktop:
+
+```sh
+VNILINK_TEST_PORTAL_BUS=private dbus-run-session -- \
+  cargo test --locked -p vnilink-linux real_portal_notify_transport_preserves_all_events -- --ignored
+```
+
+The app compiles on Linux; actual GNOME/Wayland capture and input still require
+a real-machine retest. The isolated service does not verify compositor behavior.

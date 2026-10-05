@@ -210,8 +210,8 @@ fn connection_page(
         );
     });
     let screen = adw::PreferencesGroup::builder().title("Screen sharing")
-        .description("Choose the screen to share for this launch. Wayland uses the desktop permission portal and supports viewing only; X11 also supports keyboard and pointer control.").build();
-    let choose = gtk::Button::with_label("Choose screen to share");
+        .description("Enable desktop sharing and control for this launch. On Wayland, approve a screen, keyboard and pointer in the desktop permission dialog. This starts local capture; paired computers still need permission to connect.").build();
+    let choose = gtk::Button::with_label("Enable desktop sharing and control");
     choose.set_halign(gtk::Align::Start);
     screen.add(&action_group(&[&choose]));
     let win = window.clone();
