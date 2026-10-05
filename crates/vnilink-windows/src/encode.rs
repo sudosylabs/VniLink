@@ -3,18 +3,23 @@
 //! The Microsoft transform writes 4-byte length prefixes. SPS and PPS are
 //! read from the output media type and prefixed onto an IDR. A sample is a
 //! keyframe only when those three NAL units are present. Forcing the next
-//! picture to be an IDR through `ICodecAPI` needs a `VARIANT`, which this
-//! crate does not construct. The pump rejects a forced frame that is not a
-//! keyframe. Without Media Foundation H.264 this returns unsupported.
+//! picture to an IDR goes through `ICodecAPI` (`AVEncVideoForceKeyframe`)
+//! before the input sample is processed. The pump rejects a forced frame
+//! that is not a keyframe. Without Media Foundation H.264 this returns
+//! unsupported.
 
 #[cfg(windows)]
 use vnilink_media::bgra_to_nv12;
 use vnilink_media::{EncodeParams, EncodedSample, Error, RawFrame, VideoEncoder};
 #[cfg(windows)]
+use windows::core::Interface;
+#[cfg(windows)]
+use windows::Win32::Foundation::VARIANT_TRUE;
+#[cfg(windows)]
 use windows::Win32::Media::MediaFoundation::{
-    IMFMediaType, IMFSample, IMFTransform, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample,
-    MFMediaType_Video, MFSampleExtension_CleanPoint, MFStartup, MFVideoFormat_H264,
-    MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFSTARTUP_NOSOCKET,
+    CODECAPI_AVEncVideoForceKeyFrame, ICodecAPI, IMFMediaType, IMFSample, IMFTransform,
+    MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Video, MFStartup,
+    MFVideoFormat_H264, MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFSTARTUP_NOSOCKET,
     MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER,
     MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MF_E_TRANSFORM_NEED_MORE_INPUT, MF_LOW_LATENCY,
     MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
@@ -24,6 +29,8 @@ use windows::Win32::Media::MediaFoundation::{
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
+#[cfg(windows)]
+use windows::Win32::System::Variant::{VARIANT, VT_BOOL};
 
 #[cfg(windows)]
 use crate::bitstream::h264_access_unit;
@@ -42,6 +49,12 @@ pub struct WindowsEncoder {
     #[cfg(windows)]
     output_size: u32,
 }
+
+// The transform is a COM pointer used through `&mut self` only, from the
+// thread that opened it after `CoInitializeEx(COINIT_MULTITHREADED)`. Moving
+// it between threads is safe; sharing it is refused by the borrow checker.
+#[cfg(windows)]
+unsafe impl Send for WindowsEncoder {}
 
 impl WindowsEncoder {
     pub fn open(width: u16, height: u16, frame_rate: u8, bitrate_bps: u32) -> Result<Self, Error> {
@@ -166,7 +179,7 @@ impl WindowsEncoder {
             let duration = 10_000_000i64 / i64::from(params.frame_rate.max(1));
             sample.SetSampleDuration(duration)?;
             if params.force_keyframe {
-                sample.SetUINT32(&MFSampleExtension_CleanPoint, 1)?;
+                force_idr(&self.transform)?;
             }
             self.transform.ProcessInput(0, &sample, 0)?;
             Ok::<_, windows::core::Error>(sample)
@@ -213,8 +226,21 @@ fn rejected(err: windows::core::Error) -> Error {
     Error::EncodeRejected("the encoder rejected the frame")
 }
 
+/// Asks the encoder to make its next output picture an IDR, before the input
+/// sample is processed. A default (zeroed) variant with a boolean true is
+/// all the codec API takes.
 #[cfg(windows)]
-unsafe fn sample_bytes(sample: &IMFSample) -> windows::core::Result<Vec<u8>> {
+unsafe fn force_idr(transform: &IMFTransform) -> windows::core::Result<()> {
+    let api: ICodecAPI = transform.cast()?;
+    let mut value = VARIANT::default();
+    (*value.Anonymous.Anonymous).vt = VT_BOOL;
+    (*value.Anonymous.Anonymous).Anonymous.boolVal = VARIANT_TRUE;
+    api.SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &value)
+}
+
+#[cfg(windows)]
+#[cfg(windows)]
+pub(crate) unsafe fn sample_bytes(sample: &IMFSample) -> windows::core::Result<Vec<u8>> {
     let buffer = sample.GetBufferByIndex(0)?;
     let mut data = std::ptr::null_mut();
     let mut max_length = 0u32;
@@ -245,7 +271,7 @@ unsafe fn sequence_header(transform: &IMFTransform) -> windows::core::Result<Vec
 }
 
 #[cfg(windows)]
-unsafe fn video_type(
+pub(crate) unsafe fn video_type(
     subtype: windows::core::GUID,
     width: u16,
     height: u16,
@@ -257,13 +283,18 @@ unsafe fn video_type(
     media_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
     media_type.SetUINT64(
         &MF_MT_FRAME_SIZE,
-        pack_u32(u32::from(width), u32::from(height)),
+        // Width travels in the high word, height in the low word.
+        pack_hi_lo(u32::from(width), u32::from(height)),
     )?;
-    media_type.SetUINT64(&MF_MT_FRAME_RATE, pack_u32(frame_rate, 1))?;
+    media_type.SetUINT64(
+        &MF_MT_FRAME_RATE,
+        // Numerator travels in the high word, denominator in the low word.
+        pack_hi_lo(frame_rate, 1),
+    )?;
     Ok(media_type)
 }
 
 #[cfg(windows)]
-fn pack_u32(low: u32, high: u32) -> u64 {
+fn pack_hi_lo(high: u32, low: u32) -> u64 {
     u64::from(low) | (u64::from(high) << 32)
 }

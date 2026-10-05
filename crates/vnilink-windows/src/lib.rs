@@ -8,6 +8,7 @@
 //! A build on macOS or Linux does not execute the Win32 code.
 
 mod bitstream;
+mod decode;
 mod encode;
 mod host;
 mod plan;
@@ -15,6 +16,7 @@ mod plan;
 #[cfg(windows)]
 mod capture;
 
+pub use decode::WindowsDecoder;
 pub use encode::WindowsEncoder;
 pub use plan::{WindowsPlan, SECURE_DESKTOP_SUPPORTED};
 
