@@ -7,7 +7,6 @@ use std::rc::Rc;
 use vnilink::Snapshot;
 
 use crate::devices;
-use crate::presentation::peer_status;
 
 use super::widgets::{self, peer_id};
 
@@ -17,9 +16,10 @@ pub(crate) struct Sidebar {
     rows: gtk::ListBox,
     sidebar_stack: gtk::Stack,
     root: adw::NavigationSplitView,
-    empty_action: gtk::Button,
+    empty_hint: gtk::Box,
     selected: Rc<RefCell<Option<String>>>,
     painting: Rc<Cell<bool>>,
+    row_data: RefCell<Vec<devices::DeviceRow>>,
 }
 
 impl Sidebar {
@@ -33,9 +33,10 @@ impl Sidebar {
             rows: widgets::widget(builder, "rows"),
             sidebar_stack: widgets::widget(builder, "sidebar_stack"),
             root: widgets::widget(builder, "split"),
-            empty_action: widgets::widget(builder, "show_computer"),
+            empty_hint: widgets::widget(builder, "empty"),
             selected: Rc::new(RefCell::new(None)),
             painting,
+            row_data: RefCell::new(Vec::new()),
         });
         let rows = sidebar.rows.clone();
         let weak = Rc::downgrade(&sidebar);
@@ -47,36 +48,22 @@ impl Sidebar {
             if sidebar.painting.get() {
                 return;
             }
-            *sidebar.selected.borrow_mut() = peer_id(row);
+            let next = peer_id(row);
+            if *sidebar.selected.borrow() == next {
+                return;
+            }
+            *sidebar.selected.borrow_mut() = next;
             selected();
         });
         let weak = Rc::downgrade(&sidebar);
         rows.connect_row_activated(move |_, _| {
+            on_select();
             if let Some(sidebar) = weak.upgrade() {
                 sidebar.root.set_show_content(true);
-            }
-        });
-        let weak = Rc::downgrade(&sidebar);
-        let on_empty = Rc::clone(&on_select);
-        sidebar.empty_action.connect_clicked(move |_| {
-            if let Some(sidebar) = weak.upgrade() {
-                *sidebar.selected.borrow_mut() = None;
-                on_empty();
-                sidebar.root.set_show_content(true);
-            }
-        });
-        let weak = Rc::downgrade(&sidebar);
-        sidebar.root.connect_collapsed_notify(move |_| {
-            if let Some(sidebar) = weak.upgrade() {
-                sidebar.update_empty_action();
             }
         });
         let open_file: gtk::Button = widgets::widget(builder, "open_file");
-        let open_header: gtk::Button = widgets::widget(builder, "open_file_header");
-        let open = Rc::clone(&on_open_file);
-        open_file.connect_clicked(move |_| open());
-        let open = Rc::clone(&on_open_file);
-        open_header.connect_clicked(move |_| open());
+        open_file.connect_clicked(move |_| on_open_file());
         sidebar.rows.set_header_func(|row, before| {
             let paired = row.widget_name().starts_with("peer-")
                 && before.is_none_or(|previous| previous.widget_name() == "self");
@@ -85,7 +72,7 @@ impl Sidebar {
                 return;
             }
             let label = gtk::Label::builder()
-                .label("Paired")
+                .label("Your computers")
                 .xalign(0.0)
                 .margin_top(18)
                 .margin_bottom(6)
@@ -106,36 +93,38 @@ impl Sidebar {
         *self.selected.borrow_mut() = endpoint_id;
     }
 
-    /// Rebuilds rows from the snapshot, keeping the selection when its
-    /// computer is still paired. The empty/list switch is owned by the
-    /// window, which knows the full snapshot before delegating here.
+    /// Keep existing widgets when only the main page changes. Recreating
+    /// focused rows makes GTK select them again after the paint guard ends.
     pub(crate) fn rebuild(&self, snapshot: &Snapshot) {
-        while let Some(child) = self.rows.first_child() {
-            self.rows.remove(&child);
-        }
-        let wanted = crate::devices::retain_selection(&self.selected.borrow(), &snapshot.devices);
-        *self.selected.borrow_mut() = wanted.clone();
-        let mut matched = None;
-        for row in devices::rows(&snapshot.devices, snapshot.hosting, peer_status) {
-            let widget = if row.name == "self" {
-                widgets::self_row(&row)
-            } else {
-                widgets::peer_row(&row)
-            };
-            let is_match = match &wanted {
-                None => row.name == "self",
-                Some(id) => row.name == format!("peer-{id}"),
-            };
-            let list_row: gtk::ListBoxRow = widget.upcast();
-            self.rows.append(&list_row);
-            if is_match {
-                matched = Some(list_row);
+        let data = devices::rows(&snapshot.devices, snapshot.hosting, |_| "Paired");
+        if *self.row_data.borrow() != data {
+            while let Some(child) = self.rows.first_child() {
+                self.rows.remove(&child);
             }
+            for row in &data {
+                let widget = if row.name == "self" {
+                    widgets::self_row(row)
+                } else {
+                    widgets::peer_row(row)
+                };
+                self.rows.append(&widget);
+            }
+            self.row_data.replace(data);
         }
-        if let Some(row) = &matched {
-            self.rows.select_row(Some(row));
+        let wanted = devices::retain_selection(&self.selected.borrow(), &snapshot.devices);
+        *self.selected.borrow_mut() = wanted.clone();
+        let name = wanted
+            .map(|id| format!("peer-{id}"))
+            .unwrap_or_else(|| "self".into());
+        let mut index = 0;
+        while let Some(row) = self.rows.row_at_index(index) {
+            if row.widget_name() == name {
+                self.rows.select_row(Some(&row));
+                break;
+            }
+            index += 1;
         }
-        self.update_empty_action();
+        self.empty_hint.set_visible(snapshot.devices.is_empty());
     }
 
     pub(crate) fn stack(&self) -> gtk::Stack {
@@ -147,12 +136,6 @@ impl Sidebar {
     }
 
     pub(crate) fn empty_visible(&self) -> bool {
-        self.empty_action.is_visible()
-    }
-
-    fn update_empty_action(&self) {
-        let empty = self.sidebar_stack.visible_child_name().as_deref() == Some("empty");
-        self.empty_action
-            .set_visible(empty && self.root.is_collapsed());
+        self.empty_hint.get_visible()
     }
 }

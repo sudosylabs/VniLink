@@ -20,13 +20,15 @@ fn open_home(actions: Actions) -> Rc<Home> {
     use std::sync::Once;
     static STARTED: Once = Once::new();
     STARTED.call_once(|| {
-        gtk::init().expect("gtk");
+        adw::init().expect("libadwaita");
+        super::install_style();
     });
     let builder = gtk::Builder::from_string(include_str!("window.ui"));
     let root: gtk::Stack = super::widgets::widget(&builder, "root");
     assert!(root.child_by_name("startup").is_some());
     assert!(root.child_by_name("home").is_some());
     assert!(root.child_by_name("failure").is_some());
+    root.set_visible_child_name("home");
     Home::from_builder(
         &builder,
         actions,
@@ -58,7 +60,10 @@ fn snapshot(devices: Vec<DeviceInfo>, hosting: bool) -> Snapshot {
         devices,
         incoming: None,
         outgoing: None,
-        capabilities: Capabilities::UNSUPPORTED,
+        capabilities: Capabilities {
+            h264_decode: true,
+            ..Capabilities::UNSUPPORTED
+        },
     }
 }
 
@@ -113,6 +118,8 @@ fn the_window_matches_the_computer_and_the_paired_list() {
     a_control_request_asks_for_the_digits_on_the_other_screen();
     an_active_session_is_a_banner_with_stop();
     a_removed_computer_returns_to_this_computer();
+    a_missing_decoder_disables_connect();
+    computer_names_refresh_without_changing_selection();
 }
 
 fn an_unpaired_computer_shows_the_empty_state_and_this_computer() {
@@ -129,24 +136,24 @@ fn an_unpaired_computer_shows_the_empty_state_and_this_computer() {
     });
     let home = open_home(actions);
     home.show(&snapshot(Vec::new(), true));
-    assert_eq!(home.stack().visible_child_name().as_deref(), Some("empty"));
+    assert_eq!(home.stack().visible_child_name().as_deref(), Some("list"));
     assert_eq!(home.title().title().as_str(), "This computer");
     assert!(!home.banner().is_revealed());
-    assert!(!home.empty_visible());
+    assert!(home.empty_visible());
     assert_eq!(calls.get(), 0);
     let text = labels(home.window());
-    assert!(text.iter().any(|label| label == "Open a pairing file"));
-    assert!(text.iter().any(|label| label == "Reach another computer"));
+    assert!(text.iter().any(|label| label == "Add computer"));
+    assert!(text.iter().any(|label| label == "VniLink"));
     assert!(!text
         .iter()
         .any(|label| label.contains("Pairing starts here")));
     let page = labels(home.detail());
     assert!(page.iter().any(|label| label == "this-computer"));
-    assert!(page.iter().any(|label| label == "Allow control"));
+    assert!(page.iter().any(|label| label == "Allow connections"));
     assert!(page
         .iter()
-        .any(|label| label == "Let another computer control this one"));
-    assert!(page.iter().any(|label| label == "Create a pairing file"));
+        .any(|label| label == "Let your other computers connect to this desktop."));
+    assert!(page.iter().any(|label| label == "Pair another computer"));
     click(home.detail(), "create_file");
     assert_eq!(created.get(), 1);
     home.show_offer("042");
@@ -172,12 +179,12 @@ fn choosing_a_paired_computer_offers_connect() {
     let row = home.rows().row_at_index(1).expect("peer row");
     assert_eq!(row.widget_name().as_str(), "peer-other-computer");
     home.rows().select_row(Some(&row));
-    assert_eq!(home.title().title().as_str(), "other-computer");
+    assert_eq!(home.title().title().as_str(), "Computer OTHER-");
     let text = labels(home.detail());
     assert!(text.iter().any(|label| label == "Connect"));
-    assert!(text.iter().any(|label| {
-        label == "Control is allowed. Connect when that computer is on. The clipboard and files stay off."
-    }));
+    assert!(text
+        .iter()
+        .any(|label| { label.contains("It may ask you to approve access.") }));
     click(home.detail(), "connect");
     assert_eq!(connected.borrow().as_deref(), Some("other-computer"));
 }
@@ -192,10 +199,10 @@ fn a_pairing_file_asks_for_the_digits_on_the_other_screen() {
     let home = open_home(actions);
     home.show(&snapshot(Vec::new(), false));
     home.show_file("other-computer", "042");
-    assert_eq!(home.title().title().as_str(), "Pairing file");
+    assert_eq!(home.title().title().as_str(), "Add computer");
     let text = labels(home.detail());
-    assert!(text.iter().any(|label| label == "042"));
-    assert!(text.iter().any(|label| label == "Check the file"));
+    assert!(!text.iter().any(|label| label == "042"));
+    assert!(text.iter().any(|label| label == "Add a computer"));
     let entry = named::<gtk::Entry>(home.detail(), "digits_entry");
     entry.set_text("042");
     click(home.detail(), "save_computer");
@@ -217,13 +224,15 @@ fn a_control_request_asks_for_the_digits_on_the_other_screen() {
         check: "847".to_string(),
     }));
     home.show(&snapshot(vec![peer(Grants::default())], true));
-    assert_eq!(home.title().title().as_str(), "This computer");
+    assert_eq!(home.title().title().as_str(), "Access request");
     let text = labels(home.detail());
-    assert!(text.iter().any(|label| label == "847"));
+    assert!(!text.iter().any(|label| label == "847"));
     assert!(text
         .iter()
-        .any(|label| label.contains("wants to control this desktop")));
+        .any(|label| label.contains("asking to control this desktop")));
     let entry = named::<gtk::Entry>(home.detail(), "digits_entry");
+    entry.set_text("abc");
+    assert!(!named::<gtk::Button>(home.detail(), "allow_control").is_sensitive());
     entry.set_text("847");
     click(home.detail(), "allow_control");
     assert_eq!(allowed.borrow().as_deref(), Some("847"));
@@ -249,6 +258,15 @@ fn an_active_session_is_a_banner_with_stop() {
         "abcdefgh…012345 is connected to this desktop"
     );
     assert_eq!(home.banner().button_label().as_deref(), Some("Stop"));
+    picture.incoming.as_mut().unwrap().phase = SessionPhase::Closed;
+    home.show(&picture);
+    assert!(!home.banner().is_revealed());
+    picture.outgoing = picture.incoming.clone();
+    picture.outgoing.as_mut().unwrap().role = SessionRole::Controller;
+    picture.outgoing.as_mut().unwrap().phase = SessionPhase::Active;
+    home.show(&picture);
+    assert!(home.banner().is_revealed());
+    assert!(home.banner().title().starts_with("Connected to"));
 }
 
 fn a_removed_computer_returns_to_this_computer() {
@@ -257,5 +275,187 @@ fn a_removed_computer_returns_to_this_computer() {
     home.rows().select_row(home.rows().row_at_index(1).as_ref());
     home.show(&snapshot(Vec::new(), false));
     assert_eq!(home.title().title().as_str(), "This computer");
-    assert_eq!(home.stack().visible_child_name().as_deref(), Some("empty"));
+    assert_eq!(home.stack().visible_child_name().as_deref(), Some("list"));
+}
+
+/// Render the actual GTK widgets and stylesheet for manual visual inspection.
+#[test]
+#[ignore = "requires a display and VNILINK_UI_SCREENSHOTS output directory"]
+fn screenshot_tour() {
+    if std::env::var_os("VNILINK_GTK_CHILD").is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "app::tests::screenshot_tour",
+                "--ignored",
+                "--test-threads=1",
+            ])
+            .env("VNILINK_GTK_CHILD", "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    let home = open_home(quiet());
+    let id = "a3d290cfa22e883f191b235917361ffaeabb872c11fbe54e4d9a12d667c882031";
+    let device = DeviceInfo {
+        endpoint_id: id.into(),
+        ..peer(Grants::default())
+    };
+    let mut state = snapshot(vec![], true);
+    state.endpoint_id = "bd8849156333295135190454381482920165151273221246639597e630138e49".into();
+    home.show(&state);
+    home.window().present();
+    capture(&home, "01-this-computer");
+    home.show_offer("042");
+    capture(&home, "02-pairing-code");
+    home.show_file(id, "042");
+    capture(&home, "03-add-computer");
+    assert_eq!(
+        home.title().title().as_str(),
+        "Add computer",
+        "pairing page must survive GTK selection events"
+    );
+    home.clear_file();
+    state.devices.push(device);
+    home.show(&state);
+    home.rows().select_row(home.rows().row_at_index(1).as_ref());
+    capture(&home, "04-paired-computer");
+    home.show_file(id, "042");
+    capture(&home, "04b-add-from-paired-list");
+    assert_eq!(home.title().title().as_str(), "Add computer");
+    home.clear_file();
+    state.outgoing = Some(SessionInfo {
+        id: 9,
+        generation: 1,
+        role: SessionRole::Controller,
+        phase: SessionPhase::Connecting,
+        peer_id: id.into(),
+        quality: None,
+        monitor_width: 0,
+        monitor_height: 0,
+    });
+    home.set_waiting(Some("847".into()));
+    home.show(&state);
+    capture(&home, "05-waiting");
+    home.set_waiting(None);
+    state.outgoing = None;
+    home.set_request(Some(ControlRequest {
+        endpoint_id: id.into(),
+        check: "847".into(),
+    }));
+    home.show(&state);
+    capture(&home, "06-approval");
+    let entry = named::<gtk::Entry>(home.detail(), "digits_entry");
+    entry.set_text("847");
+    capture(&home, "06b-approval-ready");
+    home.window().set_default_size(360, 720);
+    capture(&home, "06c-narrow-approval");
+    home.set_request(None);
+    home.show(&state);
+    home.window().set_default_size(360, 720);
+    home.root.set_show_content(true);
+    capture(&home, "07-narrow-content");
+    assert!(home.root.is_collapsed());
+    home.root.set_show_content(false);
+    capture(&home, "08-narrow-sidebar");
+    home.window().set_default_size(1000, 720);
+    adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
+    capture(&home, "09-dark");
+    adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceLight);
+    state.incoming = Some(SessionInfo {
+        id: 12,
+        generation: 1,
+        role: SessionRole::Host,
+        phase: SessionPhase::Active,
+        peer_id: id.into(),
+        quality: None,
+        monitor_width: 0,
+        monitor_height: 0,
+    });
+    home.show(&state);
+    capture(&home, "10-connected");
+    home.window().close();
+}
+
+fn capture(home: &Home, name: &str) {
+    capture_widget(home.window(), name);
+}
+
+fn capture_widget(window: &impl IsA<gtk::Widget>, name: &str) {
+    let window: &gtk::Widget = window.as_ref();
+    let frames = Rc::new(Cell::new(0));
+    let ticks = frames.clone();
+    window.add_tick_callback(move |_, _| {
+        ticks.set(ticks.get() + 1);
+        if ticks.get() >= 12 {
+            gtk::glib::ControlFlow::Break
+        } else {
+            gtk::glib::ControlFlow::Continue
+        }
+    });
+    window.queue_draw();
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let context = gtk::glib::MainContext::default();
+    while frames.get() < 12 && std::time::Instant::now() < until {
+        context.iteration(false);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(frames.get() >= 12, "window did not render");
+    let paintable = gtk::WidgetPaintable::new(Some(window));
+    let snapshot = gtk::Snapshot::new();
+    paintable.snapshot(&snapshot, window.width() as f64, window.height() as f64);
+    let node = snapshot.to_node().expect("render node");
+    let renderer = gtk::gsk::CairoRenderer::new();
+    renderer.realize(None::<&gtk::gdk::Surface>).unwrap();
+    let texture = renderer.render_texture(&node, None);
+    renderer.unrealize();
+    let directory = std::path::PathBuf::from(
+        std::env::var_os("VNILINK_UI_SCREENSHOTS").expect("output directory"),
+    );
+    std::fs::create_dir_all(&directory).unwrap();
+    texture
+        .save_to_png(directory.join(format!("{name}.png")))
+        .unwrap();
+}
+
+fn a_missing_decoder_disables_connect() {
+    let home = open_home(quiet());
+    let mut state = snapshot(vec![peer(Grants::default())], false);
+    state.capabilities.h264_decode = false;
+    home.show(&state);
+    home.rows().select_row(home.rows().row_at_index(1).as_ref());
+    assert!(!named::<gtk::Button>(home.detail(), "connect").is_sensitive());
+    assert!(labels(home.detail())
+        .iter()
+        .any(|text| text == "Desktop viewing unavailable"));
+}
+
+fn pump_until(mut ready: impl FnMut() -> bool) {
+    let context = gtk::glib::MainContext::default();
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    while !ready() && std::time::Instant::now() < until {
+        context.iteration(false);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(ready(), "GTK operation did not complete");
+}
+
+fn computer_names_refresh_without_changing_selection() {
+    let home = open_home(quiet());
+    let mut state = snapshot(vec![peer(Grants::default())], true);
+    state.devices[0].hostname = Some("home-mini".into());
+    home.show(&state);
+    home.rows().select_row(home.rows().row_at_index(1).as_ref());
+    assert_eq!(home.title().title().as_str(), "home-mini");
+    state.devices[0].pet_name = Some("My desk".into());
+    home.show(&state);
+    assert_eq!(home.title().title().as_str(), "My desk");
+    assert!(labels(&home.rows()).iter().any(|s| s == "My desk"));
+    state.devices[0].hostname = Some("renamed-mini".into());
+    home.show(&state);
+    assert_eq!(home.title().title().as_str(), "My desk");
+    state.devices[0].pet_name = None;
+    home.show(&state);
+    assert_eq!(home.title().title().as_str(), "renamed-mini");
 }

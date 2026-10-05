@@ -28,7 +28,9 @@ pub(crate) fn self_row(row: &DeviceRow) -> adw::ActionRow {
         .build();
     widget.set_widget_name(&row.name);
     widget.set_hexpand(true);
-    widget.add_prefix(&gtk::Image::from_icon_name("computer-symbolic"));
+    let icon = gtk::Image::from_icon_name("computer-symbolic");
+    icon.set_pixel_size(24);
+    widget.add_prefix(&icon);
     widget
 }
 
@@ -36,41 +38,56 @@ pub(crate) fn peer_row(row: &DeviceRow) -> adw::ActionRow {
     let widget = adw::ActionRow::builder()
         .title(&row.title)
         .subtitle(&row.subtitle)
-        .title_lines(2)
+        .title_lines(1)
         .subtitle_lines(2)
         .activatable(true)
         .build();
     widget.set_widget_name(&row.name);
     widget.set_hexpand(true);
     widget.add_css_class("peer");
-    widget.add_prefix(&gtk::Image::from_icon_name("computer-symbolic"));
+    let icon = gtk::Image::from_icon_name("computer-symbolic");
+    icon.set_pixel_size(24);
+    widget.add_prefix(&icon);
     widget
 }
 
-pub(crate) fn heading(title: &str, sentence: &str) -> gtk::Box {
+pub(crate) fn introduction(title: &str, sentence: &str) -> gtk::Box {
     let block = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    block.set_hexpand(true);
     let name = gtk::Label::builder()
         .label(title)
         .xalign(0.0)
         .wrap(true)
-        .hexpand(true)
         .build();
     name.add_css_class("title-1");
     block.append(&name);
-    block.append(&body(sentence));
-    block
-}
-
-pub(crate) fn body(sentence: &str) -> gtk::Label {
-    let label = gtk::Label::builder()
+    let copy = gtk::Label::builder()
         .label(sentence)
         .xalign(0.0)
         .wrap(true)
         .hexpand(true)
-        .max_width_chars(52)
         .build();
-    label
+    copy.add_css_class("dim-label");
+    block.append(&copy);
+    block
+}
+
+pub(crate) fn status_label(title: &str, available: bool) -> gtk::Box {
+    let status = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    status.set_margin_top(4);
+    if available {
+        status.add_css_class("success");
+    }
+    let icon = gtk::Image::from_icon_name(if available {
+        "object-select-symbolic"
+    } else {
+        "media-playback-pause-symbolic"
+    });
+    icon.set_pixel_size(12);
+    status.append(&icon);
+    let label = gtk::Label::new(Some(title));
+    label.add_css_class("caption");
+    status.append(&label);
+    status
 }
 
 pub(crate) fn center_label(sentence: &str) -> gtk::Label {
@@ -107,13 +124,17 @@ pub(crate) fn digits_label(value: &str) -> gtk::Label {
         .hexpand(true)
         .build();
     label.add_css_class("digits");
+    let attributes = gtk::pango::AttrList::new();
+    attributes.insert(gtk::pango::AttrInt::new_letter_spacing(
+        8 * gtk::pango::SCALE,
+    ));
+    label.set_attributes(Some(&attributes));
     label.set_widget_name("check_digits");
     label
 }
 
-pub(crate) fn pill(label: &str, suggested: bool) -> gtk::Button {
+pub(crate) fn action_button(label: &str, suggested: bool) -> gtk::Button {
     let button = gtk::Button::builder().label(label).build();
-    button.add_css_class("pill");
     if suggested {
         button.add_css_class("suggested-action");
     }
@@ -122,13 +143,19 @@ pub(crate) fn pill(label: &str, suggested: bool) -> gtk::Button {
 
 pub(crate) fn digit_entry() -> gtk::Entry {
     let entry = gtk::Entry::builder()
-        .placeholder_text("Three digits")
+        .placeholder_text("000")
         .max_length(3)
         .input_purpose(gtk::InputPurpose::Digits)
-        .halign(Align::Start)
-        .width_chars(8)
+        .halign(Align::Center)
+        .xalign(0.5)
+        .width_chars(5)
+        .max_width_chars(5)
         .build();
     entry.set_widget_name("digits_entry");
+    entry.add_css_class("code-entry");
+    entry.update_property(&[gtk::accessible::Property::Label(
+        "Three-digit verification code",
+    )]);
     entry
 }
 
@@ -136,19 +163,26 @@ pub(crate) fn watch_digits(entry: &gtk::Entry, gate: &gtk::Button) -> Rc<RefCell
     let typed = Rc::new(RefCell::new(String::new()));
     let remember = Rc::clone(&typed);
     let gate = gate.clone();
+    let submit = gate.clone();
     entry.connect_changed(move |entry| {
         let text = entry.text().to_string();
-        gate.set_sensitive(text.len() == 3);
+        gate.set_sensitive(text.len() == 3 && text.bytes().all(|byte| byte.is_ascii_digit()));
         *remember.borrow_mut() = text;
+    });
+    entry.connect_activate(move |_| {
+        if submit.is_sensitive() {
+            submit.emit_clicked();
+        }
     });
     typed
 }
 
 pub(crate) fn address_group(endpoint: &str, relay: Option<(&str, &str)>) -> adw::PreferencesGroup {
     let identity = adw::ExpanderRow::builder()
-        .title("Address")
+        .title("Connection details")
         .subtitle(crate::presentation::short_id(endpoint))
         .use_markup(false)
+        .subtitle_lines(1)
         .build();
     identity.set_widget_name("endpoint");
     identity.add_css_class("identity");

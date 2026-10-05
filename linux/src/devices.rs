@@ -26,7 +26,7 @@ pub fn self_row(hosting: bool) -> DeviceRow {
 pub fn peer_row(device: &DeviceInfo, status: &str) -> DeviceRow {
     DeviceRow {
         name: format!("peer-{}", device.endpoint_id),
-        title: crate::presentation::short_id(&device.endpoint_id),
+        title: crate::presentation::device_name(device),
         subtitle: status.to_string(),
     }
 }

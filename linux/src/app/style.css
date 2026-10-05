@@ -1,31 +1,29 @@
+.flow-card {
+  padding: 24px;
+}
+
 .digits {
   font-family: monospace;
-  font-size: 40px;
+  font-size: 42px;
   font-weight: 700;
-  letter-spacing: 0.28em;
+  color: @accent_color;
 }
 
-.flow-card {
-  padding: 28px 24px;
-}
-
-.flow-card .digits {
-  margin-bottom: 8px;
-}
-
-.endpoint,
-row.identity .subtitle {
+.code-entry {
   font-family: monospace;
+  font-size: 24px;
+  padding: 8px 12px;
+}
+
+.endpoint {
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.navigation-sidebar row {
+  margin-bottom: 4px;
 }
 
 row.peer .title {
-  font-family: monospace;
-}
-
-.allow-state.yes {
-  color: @success_color;
-}
-
-.allow-state.no {
-  color: alpha(@window_fg_color, 0.55);
+  font-weight: 600;
 }

@@ -5,6 +5,7 @@
 //! Connect shows a second set of digits for the first computer to type.
 //! A wide window shows both sides. A narrow window shows one at a time.
 
+use adw::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -108,6 +109,12 @@ impl Home {
                 actions,
             }
         });
+        let split: adw::NavigationSplitView = widgets::widget(&builder, "split");
+        let breakpoint = adw::Breakpoint::new(
+            adw::BreakpointCondition::parse("max-width: 700sp").expect("breakpoint"),
+        );
+        breakpoint.add_setter(&split, "collapsed", Some(&true.to_value()));
+        home.window.add_breakpoint(breakpoint);
         home.banner.set_use_markup(false);
         let weak = Rc::downgrade(&home);
         home.banner.connect_button_clicked(move |_| {
@@ -119,11 +126,14 @@ impl Home {
     }
 
     pub(crate) fn show_offer(&self, check: &str) {
+        self.sidebar.select(None);
+        self.root.set_show_content(true);
         self.flow.borrow_mut().offer(check.to_string());
         self.refresh();
     }
 
     pub(crate) fn show_file(&self, endpoint_id: &str, check: &str) {
+        self.root.set_show_content(true);
         self.flow
             .borrow_mut()
             .open_file(endpoint_id.to_string(), check.to_string());
@@ -185,12 +195,8 @@ impl Home {
         self.painting.set(false);
     }
 
-    fn sidebar_stack_of(&self, snapshot: &Snapshot) {
-        self.stack().set_visible_child_name(if snapshot.devices.is_empty() {
-            "empty"
-        } else {
-            "list"
-        });
+    fn sidebar_stack_of(&self, _snapshot: &Snapshot) {
+        self.stack().set_visible_child_name("list");
     }
 
     fn refresh(&self) {
@@ -207,8 +213,10 @@ impl Home {
             .iter()
             .map(|device| {
                 format!(
-                    "{}:{}{}{}",
+                    "{}:{:?}:{:?}:{}{}{}",
                     device.endpoint_id,
+                    device.hostname,
+                    device.pet_name,
                     u8::from(device.grants.control),
                     u8::from(device.grants.clipboard),
                     u8::from(device.grants.transfer)
@@ -259,9 +267,34 @@ impl Home {
     }
 
     fn render_pages(&self, snapshot: &Snapshot) {
-        if let Some(session) = snapshot.incoming.as_ref().or(snapshot.outgoing.as_ref()) {
-            self.banner
-                .set_title(&presentation::session_banner(session));
+        if let Some(session) = snapshot
+            .incoming
+            .as_ref()
+            .filter(|session| {
+                !matches!(
+                    session.phase,
+                    vnilink::SessionPhase::Closed | vnilink::SessionPhase::Failed(_)
+                )
+            })
+            .or_else(|| {
+                snapshot.outgoing.as_ref().filter(|session| {
+                    !matches!(
+                        session.phase,
+                        vnilink::SessionPhase::Closed | vnilink::SessionPhase::Failed(_)
+                    )
+                })
+            })
+        {
+            let title = snapshot
+                .devices
+                .iter()
+                .find(|d| d.endpoint_id == session.peer_id)
+                .map(presentation::device_name);
+            self.banner.set_title(
+                &title
+                    .map(|name| presentation::session_banner_named(session, &name))
+                    .unwrap_or_else(|| presentation::session_banner(session)),
+            );
             self.banner.set_revealed(true);
         } else {
             self.banner.set_revealed(false);

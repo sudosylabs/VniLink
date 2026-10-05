@@ -57,12 +57,6 @@ fn present(application: &adw::Application) {
     let builder = gtk::Builder::from_string(include_str!("window.ui"));
     let window: adw::ApplicationWindow = widgets::widget(&builder, "window");
     window.set_application(Some(application));
-    let split: adw::NavigationSplitView = widgets::widget(&builder, "split");
-    let breakpoint = adw::Breakpoint::new(
-        adw::BreakpointCondition::parse("max-width: 700sp").expect("breakpoint"),
-    );
-    breakpoint.add_setter(&split, "collapsed", Some(&true.to_value()));
-    window.add_breakpoint(breakpoint);
 
     let stack: gtk::Stack = widgets::widget(&builder, "root");
     let spinner: gtk::Spinner = widgets::widget(&builder, "spinner");
@@ -164,24 +158,13 @@ fn present(application: &adw::Application) {
                             let core_watch = Arc::clone(&core);
                             let home_watch = Rc::clone(&home_slot);
                             let toasts_watch = toasts.clone();
-                            let lagged = Cell::new(0);
                             *tick.borrow_mut() = Some(gtk::glib::timeout_add_local(
                                 Duration::from_millis(400),
                                 move || {
-                                    let mut changed = false;
                                     if let Some(events) = events.as_ref() {
-                                        while events.try_recv().is_some() {
-                                            changed = true;
-                                        }
-                                        let behind = events.lagged();
-                                        if behind != lagged.get() {
-                                            lagged.set(behind);
-                                            changed = true;
-                                        }
+                                        while events.try_recv().is_some() {}
                                     }
-                                    if changed {
-                                        paint(&core_watch, &home_watch, &toasts_watch);
-                                    }
+                                    paint(&core_watch, &home_watch, &toasts_watch);
                                     ControlFlow::Continue
                                 },
                             ));
@@ -298,7 +281,16 @@ fn actions(
             let toasts = toasts.clone();
             Rc::new(move || {
                 let result = match core.snapshot() {
-                    Ok(snapshot) if snapshot.incoming.is_some() => core.stop_hosted_session(),
+                    Ok(snapshot)
+                        if snapshot.incoming.as_ref().is_some_and(|session| {
+                            !matches!(
+                                session.phase,
+                                vnilink::SessionPhase::Closed | vnilink::SessionPhase::Failed(_)
+                            )
+                        }) =>
+                    {
+                        core.stop_hosted_session()
+                    }
                     Ok(_) => core.disconnect(),
                     Err(err) => Err(err),
                 };
@@ -362,10 +354,8 @@ fn actions(
                         let pending = Rc::clone(&pending);
                         let flow = Rc::clone(&flow);
                         move |preview: PairingPreview| {
-                            flow.borrow_mut().open_file(
-                                preview.endpoint_id.clone(),
-                                preview.check.clone(),
-                            );
+                            flow.borrow_mut()
+                                .open_file(preview.endpoint_id.clone(), preview.check.clone());
                             if let Some(home) = home_slot.borrow().clone() {
                                 home.show_file(&preview.endpoint_id, &preview.check);
                                 home.root.set_show_content(true);

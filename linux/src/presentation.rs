@@ -12,6 +12,21 @@ pub fn short_id(id: &str) -> String {
     format!("{head}…{tail}")
 }
 
+/// A stable, readable label until the peer supplies a computer name.
+pub fn device_name(device: &vnilink::DeviceInfo) -> String {
+    device
+        .pet_name
+        .as_ref()
+        .or(device.hostname.as_ref())
+        .cloned()
+        .unwrap_or_else(|| computer_name(&device.endpoint_id))
+}
+
+pub fn computer_name(id: &str) -> String {
+    let suffix: String = id.chars().take(6).collect();
+    format!("Computer {}", suffix.to_uppercase())
+}
+
 pub fn relay_summary(public_relay: bool, urls: &[String]) -> String {
     if public_relay {
         return "Public relays".to_string();
@@ -98,7 +113,6 @@ pub fn grant_prose(grants: Grants) -> &'static str {
     }
 }
 
-
 /// Explicit video state for this installation. Returns a sentence when video
 /// cannot work, so the window names the missing codec instead of showing a
 /// black screen. `capture` is whether a capture adapter is installed.
@@ -134,7 +148,10 @@ pub fn role_name(role: SessionRole) -> &'static str {
 }
 
 pub fn session_banner(session: &SessionInfo) -> String {
-    let who = short_id(&session.peer_id);
+    session_banner_named(session, &short_id(&session.peer_id))
+}
+
+pub fn session_banner_named(session: &SessionInfo, who: &str) -> String {
     match (&session.role, &session.phase) {
         (SessionRole::Host, SessionPhase::Active) => {
             format!("{who} is connected to this desktop")
