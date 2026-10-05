@@ -113,6 +113,8 @@ impl std::fmt::Debug for CoreConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceInfo {
     pub endpoint_id: String,
+    pub hostname: Option<String>,
+    pub pet_name: Option<String>,
     pub relays: Vec<String>,
     pub direct: Vec<SocketAddr>,
     pub grants: Grants,

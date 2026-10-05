@@ -65,6 +65,7 @@ fn pairing_counts(events: &EventSubscription) -> (usize, usize) {
             CoreEvent::ControlRequested { .. } => {}
             // Connect publishes the session lifecycle and address refresh.
             CoreEvent::SessionChanged { .. }
+            | CoreEvent::PeerRenamed { .. }
             | CoreEvent::AddressesUpdated { .. }
             | CoreEvent::TransferCompleted { .. } => {}
             other => panic!("pairing emitted {other:?}"),

@@ -78,6 +78,7 @@ mod codec;
 mod core;
 mod error;
 mod events;
+mod hostname;
 mod input;
 mod installation;
 mod invitation;
@@ -99,6 +100,7 @@ pub use core::{
 };
 pub use error::Error;
 pub use events::{CoreEvent, EventSubscription};
+pub use hostname::{clean_hostname, local_hostname};
 pub use input::{map_point, usage, HostDesktop, InputEvent, PointerButton, MAX_KEY_TEXT};
 pub use installation::{InstallationStore, MemoryStore};
 pub use keyboard::{KeyboardMode, LocalKey};

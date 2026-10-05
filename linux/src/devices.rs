@@ -32,7 +32,11 @@ pub fn peer_row(device: &DeviceInfo, status: &str) -> DeviceRow {
 }
 
 /// Rows for the sidebar: this computer first, then paired peers.
-pub fn rows(devices: &[DeviceInfo], hosting: bool, status: impl Fn(Grants) -> &'static str) -> Vec<DeviceRow> {
+pub fn rows(
+    devices: &[DeviceInfo],
+    hosting: bool,
+    status: impl Fn(Grants) -> &'static str,
+) -> Vec<DeviceRow> {
     std::iter::once(self_row(hosting))
         .chain(
             devices
@@ -45,11 +49,9 @@ pub fn rows(devices: &[DeviceInfo], hosting: bool, status: impl Fn(Grants) -> &'
 /// Selection that survives a device list change. Drops the selection when
 /// its computer is gone.
 pub fn retain_selection(selected: &Option<String>, devices: &[DeviceInfo]) -> Option<String> {
-    selected.clone().filter(|id| {
-        devices
-            .iter()
-            .any(|device| &device.endpoint_id == id)
-    })
+    selected
+        .clone()
+        .filter(|id| devices.iter().any(|device| &device.endpoint_id == id))
 }
 
 #[cfg(test)]
@@ -58,6 +60,8 @@ mod tests {
 
     fn peer(id: &str, control: bool) -> DeviceInfo {
         DeviceInfo {
+            hostname: None,
+            pet_name: None,
             endpoint_id: id.to_string(),
             relays: Vec::new(),
             direct: Vec::new(),

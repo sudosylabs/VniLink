@@ -12,7 +12,9 @@ use crate::session::Grants;
 use crate::trust::{Device, Trust, MAX_DEVICES};
 
 const MAGIC: &[u8; 4] = b"VNLK";
-const VERSION: u8 = 1;
+/// Version 2 appends the peer hostname section after the devices. Version 1
+/// records still decode, with no names.
+const VERSION: u8 = 2;
 const MAX_RECORD_BYTES: usize = 1024 * 1024;
 const MAX_TEXT: usize = 512;
 
@@ -46,6 +48,7 @@ pub(crate) fn encode(
     body.extend_from_slice(secret);
     write_relay(&mut body, relay)?;
     write_devices(&mut body, trust)?;
+    write_names(&mut body, trust)?;
     write_replay(&mut body, replay)?;
     if body.len() + 4 > MAX_RECORD_BYTES {
         return Err(Error::InvalidSetting(
@@ -70,17 +73,18 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Record, Error> {
     if crc32(signed) != checksum
         || signed.len() < 5
         || signed[..4] != *MAGIC
-        || signed[4] != VERSION
+        || (signed[4] != 1 && signed[4] != VERSION)
     {
         return Err(Error::CorruptRecord);
     }
+    let version = signed[4];
     let mut reader = Reader {
         bytes: &signed[5..],
         cursor: 0,
     };
     let secret = reader.array::<32>()?;
     let relay = read_relay(&mut reader)?;
-    let trust = read_devices(&mut reader, &secret)?;
+    let trust = read_devices(&mut reader, &secret, version)?;
     let replay = read_replay(&mut reader)?;
     reader.finish()?;
     Ok(Record {
@@ -138,6 +142,37 @@ fn write_devices(out: &mut Vec<u8>, trust: &Trust) -> Result<(), Error> {
             write_addr(out, *addr);
         }
         out.push(grant_bits(device.grants));
+    }
+    Ok(())
+}
+
+/// Reported and pet display names ride beside the devices. Spaces are
+/// legal here, unlike relay URLs: only control characters are refused.
+fn write_names(out: &mut Vec<u8>, trust: &Trust) -> Result<(), Error> {
+    write_name_map(out, trust.hostnames())?;
+    write_name_map(out, trust.pet_names())?;
+    Ok(())
+}
+
+fn write_name_map<'a>(
+    out: &mut Vec<u8>,
+    names: impl Iterator<Item = (&'a [u8; 32], &'a String)>,
+) -> Result<(), Error> {
+    let names: Vec<(&[u8; 32], &String)> = names.collect();
+    let count = u16::try_from(names.len())
+        .map_err(|_| Error::InvalidSetting("installation record field is too long"))?;
+    out.extend_from_slice(&count.to_be_bytes());
+    for (endpoint_id, name) in names {
+        if name.len() > crate::hostname::MAX_HOSTNAME_BYTES {
+            return Err(Error::InvalidSetting(
+                "installation record field is too long",
+            ));
+        }
+        out.extend_from_slice(endpoint_id);
+        let len = u16::try_from(name.len())
+            .map_err(|_| Error::InvalidSetting("installation record field is too long"))?;
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(name.as_bytes());
     }
     Ok(())
 }
@@ -207,7 +242,7 @@ fn read_relay(reader: &mut Reader<'_>) -> Result<RelaySettings, Error> {
     }
 }
 
-fn read_devices(reader: &mut Reader<'_>, secret: &[u8; 32]) -> Result<Trust, Error> {
+fn read_devices(reader: &mut Reader<'_>, secret: &[u8; 32], version: u8) -> Result<Trust, Error> {
     let count = reader.u16()? as usize;
     if count > MAX_DEVICES {
         return Err(Error::CorruptRecord);
@@ -266,7 +301,59 @@ fn read_devices(reader: &mut Reader<'_>, secret: &[u8; 32]) -> Result<Trust, Err
             })
             .map_err(|_| Error::CorruptRecord)?;
     }
+    if version >= 2 {
+        read_names(reader, &mut trust)?;
+    }
     Ok(trust)
+}
+
+fn read_names(reader: &mut Reader<'_>, trust: &mut Trust) -> Result<(), Error> {
+    read_name_map(reader, trust, true)?;
+    read_name_map(reader, trust, false)?;
+    Ok(())
+}
+
+fn read_name_map(reader: &mut Reader<'_>, trust: &mut Trust, reported: bool) -> Result<(), Error> {
+    let count = reader.u16()? as usize;
+    if count > MAX_DEVICES {
+        return Err(Error::CorruptRecord);
+    }
+    for _ in 0..count {
+        let endpoint_id = reader.array::<32>()?;
+        let len = reader.u16()? as usize;
+        if len > crate::hostname::MAX_HOSTNAME_BYTES {
+            return Err(Error::CorruptRecord);
+        }
+        let slice = reader.take(len)?;
+        let text = std::str::from_utf8(slice).map_err(|_| Error::CorruptRecord)?;
+        match crate::hostname::clean_hostname(text) {
+            Some(name) if name == text => {}
+            _ => return Err(Error::CorruptRecord),
+        }
+        // A name without its device is inconsistent, not forward-compatible
+        // data: our writer never emits orphans.
+        if trust.get(&endpoint_id).is_none() {
+            return Err(Error::CorruptRecord);
+        }
+        let present = if reported {
+            trust.hostname_of(&endpoint_id).is_some()
+        } else {
+            trust.pet_name_of(&endpoint_id).is_some()
+        };
+        if present {
+            return Err(Error::CorruptRecord);
+        }
+        if reported {
+            trust
+                .set_hostname(&endpoint_id, text.to_string())
+                .map_err(|_| Error::CorruptRecord)?;
+        } else {
+            trust
+                .set_pet_name(&endpoint_id, text.to_string())
+                .map_err(|_| Error::CorruptRecord)?;
+        }
+    }
+    Ok(())
 }
 
 fn read_replay(reader: &mut Reader<'_>) -> Result<ReplayCache, Error> {
@@ -419,7 +506,8 @@ fn crc32(bytes: &[u8]) -> u32 {
 pub(crate) fn frame(payload: &[u8]) -> Vec<u8> {
     let mut body = Vec::with_capacity(5 + payload.len() + 4);
     body.extend_from_slice(MAGIC);
-    body.push(VERSION);
+    // Hand-built malformed-record fixtures use the original v1 payload shape.
+    body.push(1);
     body.extend_from_slice(payload);
     let checksum = crc32(&body);
     body.extend_from_slice(&checksum.to_be_bytes());

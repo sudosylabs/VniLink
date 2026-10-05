@@ -243,6 +243,22 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
+    /// Display name a paired peer reported on connect, if any.
+    /// Set a local name, or clear it to show the peer's hostname again.
+    pub fn set_peer_pet_name(
+        &self,
+        endpoint_id: String,
+        name: Option<String>,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .set_peer_pet_name(&endpoint_id, name.as_deref())
+            .map_err(map_error)
+    }
+
+    pub fn peer_hostname(&self, endpoint_id: String) -> Result<Option<String>, FfiError> {
+        self.inner.peer_hostname(&endpoint_id).map_err(map_error)
+    }
+
     pub fn confirm_control_request(&self, digits: String) -> Result<FfiDeviceInfo, FfiError> {
         self.inner
             .confirm_control_request(&digits)

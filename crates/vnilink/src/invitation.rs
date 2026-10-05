@@ -16,12 +16,17 @@ pub(crate) const MAX_TTL: Duration = Duration::from_secs(15 * 60);
 pub(crate) const MAX_REPLAY: usize = 64;
 
 /// Signed pairing payload. Possession is not logged. Pairing does not grant control.
+///
+/// `hostname` is the writer's display name for the reader's device list, so
+/// a paired computer is named before the first session. Display-only: it
+/// never affects grants, addresses, or admission.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Invitation {
     pub endpoint_id: [u8; 32],
     pub relays: Vec<String>,
     pub direct: Vec<SocketAddr>,
     pub expires_at_ms: u64,
+    pub hostname: Option<String>,
 }
 
 impl std::fmt::Debug for Invitation {
@@ -84,6 +89,7 @@ pub(crate) fn issue(
     direct: &[SocketAddr],
     ttl: Duration,
     now: SystemTime,
+    hostname: Option<String>,
 ) -> Result<(String, Invitation), Error> {
     if ttl < Duration::from_secs(1) || ttl > MAX_TTL {
         return Err(Error::InvalidInvitation(
@@ -97,6 +103,8 @@ pub(crate) fn issue(
         relays: relays.to_vec(),
         direct: canonicalize_addrs(direct)?,
         expires_at_ms,
+        hostname: hostname
+            .filter(|name| crate::hostname::clean_hostname(name).as_deref() == Some(name.as_str())),
     };
     let token = seal(secret, &invitation, nonce)?;
     Ok((token, invitation))
@@ -107,13 +115,17 @@ pub(crate) fn open(token: &str, now: SystemTime) -> Result<(Invitation, [u8; 16]
         return Err(Error::InvalidInvitation("unrecognized invitation"));
     }
     let bytes = decode_hex(&token[PREFIX.len()..])?;
-    let (invitation, nonce, signature) = parse(&bytes)?;
+    let (invitation, nonce, signature, legacy) = parse(&bytes)?;
     if unix_ms(now)? >= invitation.expires_at_ms {
         return Err(Error::InvitationExpired);
     }
     let key = PublicKey::from_bytes(&invitation.endpoint_id)
         .map_err(|_| Error::InvalidInvitation("endpoint id is not a valid key"))?;
-    key.verify(&signing_bytes(&invitation, nonce), &signature)
+    let mut signed = signing_bytes(&invitation, nonce);
+    if legacy {
+        signed.pop();
+    }
+    key.verify(&signed, &signature)
         .map_err(|_| Error::InvalidInvitation("signature does not match"))?;
     Ok((invitation, nonce))
 }
@@ -126,11 +138,12 @@ fn seal(secret: &SecretKey, invitation: &Invitation, nonce: [u8; 16]) -> Result<
     bytes.extend_from_slice(&invitation.expires_at_ms.to_be_bytes());
     write_relays(&mut bytes, &invitation.relays)?;
     write_addrs(&mut bytes, &invitation.direct)?;
+    write_hostname(&mut bytes, &invitation.hostname);
     bytes.extend_from_slice(&signature.to_bytes());
     Ok(format!("{PREFIX}{}", encode_hex(&bytes)))
 }
 
-fn parse(bytes: &[u8]) -> Result<(Invitation, [u8; 16], Signature), Error> {
+fn parse(bytes: &[u8]) -> Result<(Invitation, [u8; 16], Signature, bool), Error> {
     if bytes.len() < 32 + 16 + 8 + 1 + 1 + 64 {
         return Err(Error::InvalidInvitation("truncated invitation"));
     }
@@ -142,6 +155,12 @@ fn parse(bytes: &[u8]) -> Result<(Invitation, [u8; 16], Signature), Error> {
         u64::from_be_bytes(read_array::<8>(bytes, &mut cursor).ok_or_else(truncated)?);
     let relays = read_relays(bytes, &mut cursor)?;
     let direct = read_addrs(bytes, &mut cursor)?;
+    let legacy = bytes.len() - cursor == 64;
+    let hostname = if legacy {
+        None
+    } else {
+        read_hostname(bytes, &mut cursor)?
+    };
     let signature =
         Signature::from_bytes(&read_array::<64>(bytes, &mut cursor).ok_or_else(truncated)?);
     if cursor != bytes.len() {
@@ -153,10 +172,50 @@ fn parse(bytes: &[u8]) -> Result<(Invitation, [u8; 16], Signature), Error> {
             relays,
             direct,
             expires_at_ms,
+            hostname,
         },
         nonce,
         signature,
+        legacy,
     ))
+}
+
+/// Appends the writer's display name. Only a valid name is written;
+/// anything else encodes as absent, so issuance never fails over a label.
+fn write_hostname(bytes: &mut Vec<u8>, hostname: &Option<String>) {
+    let valid = hostname.as_deref().filter(|name| {
+        name.len() <= crate::hostname::MAX_HOSTNAME_BYTES
+            && crate::hostname::clean_hostname(name).as_deref() == Some(*name)
+    });
+    match valid {
+        Some(name) => {
+            bytes.push(name.len() as u8);
+            bytes.extend_from_slice(name.as_bytes());
+        }
+        None => bytes.push(0),
+    }
+}
+
+/// Reads the writer's display name. Structure stays strict, content stays
+/// lenient: a name that fails display validation becomes absent rather than
+/// failing a pairing two humans are mid-flow through.
+fn read_hostname(bytes: &[u8], cursor: &mut usize) -> Result<Option<String>, Error> {
+    let truncated = || Error::InvalidInvitation("truncated invitation");
+    let length = read_u8(bytes, cursor).ok_or_else(truncated)? as usize;
+    if length > crate::hostname::MAX_HOSTNAME_BYTES {
+        return Err(Error::InvalidInvitation("hostname is too long"));
+    }
+    let end = cursor.checked_add(length).ok_or_else(truncated)?;
+    if end > bytes.len() {
+        return Err(Error::InvalidInvitation("truncated invitation"));
+    }
+    let text = std::str::from_utf8(&bytes[*cursor..end])
+        .map_err(|_| Error::InvalidInvitation("hostname is not utf-8"))?;
+    *cursor = end;
+    match crate::hostname::clean_hostname(text) {
+        Some(name) if name == text => Ok(Some(name)),
+        _ => Ok(None),
+    }
 }
 
 fn signing_bytes(invitation: &Invitation, nonce: [u8; 16]) -> Vec<u8> {
@@ -168,6 +227,9 @@ fn signing_bytes(invitation: &Invitation, nonce: [u8; 16]) -> Vec<u8> {
     bytes.extend_from_slice(&invitation.expires_at_ms.to_be_bytes());
     let _ = write_relays(&mut bytes, &invitation.relays);
     let _ = write_addrs(&mut bytes, &invitation.direct);
+    // The display name is signed too: a holder of the file cannot rename
+    // the writer without invalidating the invitation.
+    let _ = write_hostname(&mut bytes, &invitation.hostname);
     bytes
 }
 
@@ -317,5 +379,43 @@ fn hex_value(byte: u8) -> Result<u8, Error> {
         b'a'..=b'f' => Ok(byte - b'a' + 10),
         b'A'..=b'F' => Ok(byte - b'A' + 10),
         _ => Err(Error::InvalidInvitation("unrecognized invitation")),
+    }
+}
+
+#[cfg(test)]
+mod hostname_tests {
+    use super::*;
+    #[test]
+    fn names_are_signed_and_legacy_invitations_still_open() {
+        let secret = SecretKey::generate();
+        let now = SystemTime::now();
+        let (token, _) = issue(
+            &secret,
+            &[],
+            &[],
+            Duration::from_secs(60),
+            now,
+            Some("desktop".into()),
+        )
+        .unwrap();
+        let mut bytes = decode_hex(&token[PREFIX.len()..]).unwrap();
+        let position = bytes.windows(7).position(|w| w == b"desktop").unwrap();
+        bytes[position] = b'l';
+        assert!(open(&format!("{PREFIX}{}", encode_hex(&bytes)), now).is_err());
+        let (_, invitation) = issue(&secret, &[], &[], Duration::from_secs(60), now, None).unwrap();
+        let nonce = [42; 16];
+        let mut signed = signing_bytes(&invitation, nonce);
+        signed.pop();
+        let signature = secret.sign(&signed);
+        let mut legacy = Vec::new();
+        legacy.extend_from_slice(&invitation.endpoint_id);
+        legacy.extend_from_slice(&nonce);
+        legacy.extend_from_slice(&invitation.expires_at_ms.to_be_bytes());
+        write_relays(&mut legacy, &[]).unwrap();
+        write_addrs(&mut legacy, &[]).unwrap();
+        legacy.extend_from_slice(&signature.to_bytes());
+        let (opened, _) = open(&format!("{PREFIX}{}", encode_hex(&legacy)), now).unwrap();
+        assert!(opened.hostname.is_none());
+        assert_eq!(opened.endpoint_id, invitation.endpoint_id);
     }
 }

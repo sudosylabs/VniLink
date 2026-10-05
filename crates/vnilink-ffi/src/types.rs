@@ -85,6 +85,8 @@ pub struct FfiSessionInfo {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct FfiDeviceInfo {
     pub endpoint_id: String,
+    pub hostname: Option<String>,
+    pub pet_name: Option<String>,
     pub relays: Vec<String>,
     pub direct: Vec<String>,
     pub grants: FfiGrants,
@@ -179,6 +181,10 @@ pub enum FfiEvent {
     },
     AddressesUpdated {
         endpoint_id: String,
+    },
+    PeerRenamed {
+        endpoint_id: String,
+        hostname: Option<String>,
     },
     SessionChanged {
         id: u64,
@@ -293,6 +299,8 @@ pub(crate) fn session_info(info: vnilink::SessionInfo) -> FfiSessionInfo {
 pub(crate) fn device_info(info: vnilink::DeviceInfo) -> FfiDeviceInfo {
     FfiDeviceInfo {
         endpoint_id: info.endpoint_id,
+        hostname: info.hostname,
+        pet_name: info.pet_name,
         relays: info.relays,
         direct: info.direct.iter().map(|addr| addr.to_string()).collect(),
         grants: grants(&info.grants),
@@ -381,6 +389,13 @@ pub(crate) fn event(event: vnilink::CoreEvent) -> FfiEvent {
         vnilink::CoreEvent::AddressesUpdated { endpoint_id } => {
             FfiEvent::AddressesUpdated { endpoint_id }
         }
+        vnilink::CoreEvent::PeerRenamed {
+            endpoint_id,
+            hostname,
+        } => FfiEvent::PeerRenamed {
+            endpoint_id,
+            hostname,
+        },
         vnilink::CoreEvent::SessionChanged {
             id,
             generation,

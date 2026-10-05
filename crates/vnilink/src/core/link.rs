@@ -90,6 +90,44 @@ pub(super) fn remember_peer_addresses(
     Ok(())
 }
 
+/// Stores a peer-reported display name for a paired device. Unknown peers
+/// are ignored, like unknown address announcements: a name never creates
+/// trust. An absent name keeps the previous one; unpairing drops it with
+/// the device. Persist-or-rollback, like the address refresh.
+pub(super) fn remember_peer_hostname(
+    shared: &Shared,
+    peer_key: &[u8; 32],
+    hostname: Option<String>,
+) -> Result<(), Error> {
+    let Some(name) = hostname else {
+        return Ok(());
+    };
+    let mut state = lock(&shared.state);
+    let Some(device) = state.trust.get(peer_key).cloned() else {
+        return Ok(());
+    };
+    if state.trust.hostname_of(peer_key).as_deref() == Some(name.as_str()) {
+        return Ok(());
+    }
+    let previous = state.trust.hostname_of(peer_key);
+    state.trust.set_hostname(peer_key, name.clone())?;
+    if let Err(error) = persist(shared, &state) {
+        match previous {
+            Some(previous) => {
+                let _ = state.trust.set_hostname(peer_key, previous);
+            }
+            None => state.trust.clear_hostname(peer_key),
+        }
+        return Err(error);
+    }
+    drop(state);
+    shared.events.publish(CoreEvent::PeerRenamed {
+        endpoint_id: device.display_id,
+        hostname: Some(name),
+    });
+    Ok(())
+}
+
 pub(super) async fn write_addresses(
     shared: &Shared,
     send: &mut iroh::endpoint::SendStream,
@@ -108,6 +146,53 @@ pub(super) async fn write_addresses(
 }
 
 impl Core {
+    /// Local display override. Never sent to the peer and never changes trust.
+    /// Pass None to return to the reported hostname.
+    pub fn set_peer_pet_name(&self, endpoint_id: &str, name: Option<&str>) -> Result<(), Error> {
+        let key = parse_endpoint_id(endpoint_id)?;
+        let name = name
+            .map(|name| {
+                crate::clean_hostname(name).ok_or(Error::InvalidSetting("invalid computer name"))
+            })
+            .transpose()?;
+        let mut state = self.alive_state()?;
+        state.trust.get(&key).ok_or(Error::NotPaired)?;
+        let previous = state.trust.pet_name_of(&key);
+        if previous == name {
+            return Ok(());
+        }
+        match name {
+            Some(name) => state.trust.set_pet_name(&key, name)?,
+            None => state.trust.clear_pet_name(&key),
+        }
+        if let Err(error) = persist(&self.shared, &state) {
+            match previous {
+                Some(name) => {
+                    let _ = state.trust.set_pet_name(&key, name);
+                }
+                None => state.trust.clear_pet_name(&key),
+            }
+            return Err(error);
+        }
+        let hostname = state.trust.hostname_of(&key);
+        drop(state);
+        self.shared.events.publish(CoreEvent::PeerRenamed {
+            endpoint_id: endpoint_id.to_string(),
+            hostname,
+        });
+        Ok(())
+    }
+
+    /// Display name learned during pairing or refreshed on connect, if any. The UI
+    /// falls back to the key fragment when this is `None`. Unknown devices
+    /// report `NotPaired`: a name never implies trust.
+    pub fn peer_hostname(&self, endpoint_id: &str) -> Result<Option<String>, Error> {
+        let key = parse_endpoint_id(endpoint_id)?;
+        let state = self.alive_state()?;
+        state.trust.get(&key).cloned().ok_or(Error::NotPaired)?;
+        Ok(state.trust.hostname_of(&key))
+    }
+
     /// Open transport paths of one live session. Empty while the session has
     /// no connection yet. Each entry names whether the path goes through a
     /// relay, whether the connection currently sends there, and the

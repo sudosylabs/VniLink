@@ -313,6 +313,7 @@ pub(super) async fn establish(
             codec: crate::protocol::CODEC_H264,
             quality: offer,
             decode,
+            hostname: crate::hostname::local_hostname(),
         },
     )
     .await?;
@@ -324,11 +325,17 @@ pub(super) async fn establish(
             monitor_height,
             codec,
             quality,
+            hostname: accept_hostname,
         } => {
             if codec != crate::protocol::CODEC_H264 {
                 return Err(Error::IncompatibleVersion);
             }
             let peer_id = device.display_id.clone();
+            // The host admitted us: keep its display name for this
+            // controller's device list. Persist failures stay local; the
+            // next dial refreshes the name.
+            let _ =
+                super::link::remember_peer_hostname(shared, &device.endpoint_id, accept_hostname);
             {
                 let mut state = lock(&shared.state);
                 if let Some(session) = state.outgoing.as_mut() {

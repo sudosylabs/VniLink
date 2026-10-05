@@ -164,6 +164,9 @@ pub(crate) enum ControlMessage {
         /// with `Unsupported` instead of admitting a session the peer could
         /// never display.
         decode: bool,
+        /// The controller's display name, if it has one. Stored on the peer
+        /// record so the host's device list can name it. Display-only.
+        hostname: Option<String>,
     },
     Accept {
         stamp: SessionStamp,
@@ -171,6 +174,9 @@ pub(crate) enum ControlMessage {
         monitor_height: u16,
         codec: u8,
         quality: Quality,
+        /// The host's display name, if it has one. Stored on the peer record
+        /// so the controller's device list can name it. Display-only.
+        hostname: Option<String>,
     },
     Reject(RejectCode),
     Input {
@@ -232,8 +238,9 @@ impl ControlMessage {
                 codec,
                 quality,
                 decode,
+                hostname,
             } => {
-                let mut bytes = Vec::with_capacity(14);
+                let mut bytes = Vec::with_capacity(15);
                 bytes.push(1);
                 bytes.extend_from_slice(&version.to_be_bytes());
                 bytes.push(*codec);
@@ -242,6 +249,7 @@ impl ControlMessage {
                 bytes.push(quality.max_frame_rate);
                 bytes.extend_from_slice(&quality.max_bitrate_kbps.to_be_bytes());
                 bytes.push(u8::from(*decode));
+                write_hostname(&mut bytes, hostname);
                 bytes
             }
             Self::Accept {
@@ -250,8 +258,9 @@ impl ControlMessage {
                 monitor_height,
                 codec,
                 quality,
+                hostname,
             } => {
-                let mut bytes = Vec::with_capacity(31);
+                let mut bytes = Vec::with_capacity(32);
                 bytes.push(2);
                 write_stamp(stamp, &mut bytes);
                 bytes.extend_from_slice(&monitor_width.to_be_bytes());
@@ -261,6 +270,7 @@ impl ControlMessage {
                 bytes.extend_from_slice(&quality.max_height.to_be_bytes());
                 bytes.push(quality.max_frame_rate);
                 bytes.extend_from_slice(&quality.max_bitrate_kbps.to_be_bytes());
+                write_hostname(&mut bytes, hostname);
                 bytes
             }
             Self::Reject(code) => {
@@ -305,7 +315,7 @@ impl ControlMessage {
             return Err(Error::Malformed);
         }
         match bytes[0] {
-            1 if bytes.len() == 14 => {
+            1 if bytes.len() >= 15 => {
                 let quality = Quality::new(
                     u32::from_be_bytes([bytes[9], bytes[10], bytes[11], bytes[12]]),
                     bytes[8],
@@ -322,9 +332,10 @@ impl ControlMessage {
                         1 => true,
                         _ => return Err(Error::Malformed),
                     },
+                    hostname: read_hostname(&bytes[14..])?,
                 })
             }
-            2 if bytes.len() == 31 => {
+            2 if bytes.len() >= 32 => {
                 let quality = Quality::new(
                     u32::from_be_bytes([bytes[27], bytes[28], bytes[29], bytes[30]]),
                     bytes[26],
@@ -338,6 +349,7 @@ impl ControlMessage {
                     monitor_height: u16::from_be_bytes([bytes[19], bytes[20]]),
                     codec: bytes[21],
                     quality,
+                    hostname: read_hostname(&bytes[31..])?,
                 })
             }
             3 if bytes.len() == 3 => Ok(Self::Reject(RejectCode::from_u16(u16::from_be_bytes([
@@ -387,6 +399,44 @@ impl ControlMessage {
 fn write_stamp(stamp: &SessionStamp, bytes: &mut Vec<u8>) {
     bytes.extend_from_slice(&stamp.id.to_be_bytes());
     bytes.extend_from_slice(&stamp.generation.to_be_bytes());
+}
+
+/// Appends a display name as one length byte plus UTF-8. An absent or
+/// invalid name encodes as zero length, so a display name never breaks a
+/// session; the reader stays strict and rejects malformed bytes.
+fn write_hostname(bytes: &mut Vec<u8>, hostname: &Option<String>) {
+    let valid = hostname
+        .as_deref()
+        .and_then(|name| {
+            (crate::hostname::clean_hostname(name).as_deref() == Some(name)).then_some(name)
+        })
+        .filter(|name| name.len() <= crate::hostname::MAX_HOSTNAME_BYTES);
+    match valid {
+        Some(name) => {
+            bytes.push(name.len() as u8);
+            bytes.extend_from_slice(name.as_bytes());
+        }
+        None => bytes.push(0),
+    }
+}
+
+/// Reads the trailing display name. The length must consume the frame
+/// exactly; the text must be canonical or the frame is malformed.
+fn read_hostname(bytes: &[u8]) -> Result<Option<String>, Error> {
+    let Some((&length, rest)) = bytes.split_first() else {
+        return Err(Error::Malformed);
+    };
+    if rest.len() != usize::from(length) {
+        return Err(Error::Malformed);
+    }
+    if rest.is_empty() {
+        return Ok(None);
+    }
+    let text = std::str::from_utf8(rest).map_err(|_| Error::Malformed)?;
+    match crate::hostname::clean_hostname(text) {
+        Some(name) if name == text => Ok(Some(name)),
+        _ => Err(Error::Malformed),
+    }
 }
 
 fn decode_stamp(bytes: &[u8]) -> SessionStamp {

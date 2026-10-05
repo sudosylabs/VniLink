@@ -187,3 +187,34 @@ fn transfer_directory_and_events_flow() {
         .any(|event| matches!(event, FfiEvent::HostingChanged { hosting: true })));
     core.shutdown();
 }
+
+#[test]
+fn local_names_are_exposed_in_snapshots_and_can_be_cleared() {
+    let core = open_core();
+    let other = open_core();
+    let token = other.create_invitation(60).unwrap();
+    let device = core.accept_invitation(token).unwrap();
+    core.set_peer_pet_name(device.endpoint_id.clone(), Some("My laptop".into()))
+        .unwrap();
+    let named = core
+        .snapshot()
+        .unwrap()
+        .devices
+        .into_iter()
+        .find(|d| d.endpoint_id == device.endpoint_id)
+        .unwrap();
+    assert_eq!(named.pet_name.as_deref(), Some("My laptop"));
+    assert_eq!(
+        named.hostname,
+        core.peer_hostname(device.endpoint_id.clone()).unwrap()
+    );
+    assert_eq!(named.grants, device.grants);
+    core.set_peer_pet_name(device.endpoint_id.clone(), None)
+        .unwrap();
+    assert!(core.snapshot().unwrap().devices[0].pet_name.is_none());
+    core.unpair(device.endpoint_id.clone()).unwrap();
+    assert!(matches!(
+        core.set_peer_pet_name(device.endpoint_id, Some("gone".into())),
+        Err(FfiError::NotPaired)
+    ));
+}

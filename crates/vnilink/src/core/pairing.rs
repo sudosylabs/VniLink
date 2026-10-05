@@ -25,6 +25,7 @@ impl Core {
             &direct,
             ttl,
             SystemTime::now(),
+            crate::hostname::local_hostname(),
         )?;
         Ok(token)
     }
@@ -55,8 +56,14 @@ impl Core {
         self.ensure_alive()?;
         let relays = self.shared.relay.relay_urls()?;
         let direct = direct_addresses(&self.shared.endpoint);
-        let (token, invitation) =
-            invitation::issue(&self.shared.secret, &relays, &direct, ttl, now)?;
+        let (token, invitation) = invitation::issue(
+            &self.shared.secret,
+            &relays,
+            &direct,
+            ttl,
+            now,
+            crate::hostname::local_hostname(),
+        )?;
         let (_, nonce) = invitation::open(&token, now)?;
         let bytes = crate::pairing::enclose(&token)?;
         let check =
@@ -197,6 +204,16 @@ impl Core {
                 state.replay = previous_replay;
                 return Err(error);
             }
+            // The writer named itself in the invitation: keep it for this
+            // computer's device list, before the first session. An absent
+            // name keeps whatever a previous pairing stored.
+            let previous_name = state.trust.hostname_of(&opened.endpoint_id);
+            if let Some(name) = opened.hostname.clone() {
+                if let Err(error) = state.trust.set_hostname(&opened.endpoint_id, name) {
+                    state.replay = previous_replay;
+                    return Err(error);
+                }
+            }
             if let Err(error) = persist_paired(
                 &self.shared,
                 &mut state,
@@ -204,10 +221,18 @@ impl Core {
                 previous_device,
             ) {
                 state.replay = previous_replay;
+                match previous_name {
+                    Some(previous) => {
+                        let _ = state.trust.set_hostname(&opened.endpoint_id, previous);
+                    }
+                    None => state.trust.clear_hostname(&opened.endpoint_id),
+                }
                 return Err(error);
             }
             DeviceInfo {
                 endpoint_id: display.clone(),
+                hostname: state.trust.hostname_of(&opened.endpoint_id),
+                pet_name: state.trust.pet_name_of(&opened.endpoint_id),
                 relays: opened.relays.clone(),
                 direct: opened.direct.clone(),
                 grants: kept,
@@ -257,6 +282,8 @@ impl Core {
         grants.control = true;
         let info = DeviceInfo {
             endpoint_id: pending.display_id.clone(),
+            hostname: state.trust.hostname_of(&pending.endpoint_id),
+            pet_name: state.trust.pet_name_of(&pending.endpoint_id),
             relays: pending.relays.clone(),
             direct: pending.direct.clone(),
             grants,

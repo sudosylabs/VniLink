@@ -50,6 +50,13 @@ pub enum CoreEvent {
     AddressesUpdated {
         endpoint_id: String,
     },
+    /// A paired device's displayed name changed, through a peer hostname
+    /// refresh or a local pet-name edit. Read the snapshot for both names;
+    /// grants are unchanged.
+    PeerRenamed {
+        endpoint_id: String,
+        hostname: Option<String>,
+    },
     SessionChanged {
         id: u64,
         generation: u64,

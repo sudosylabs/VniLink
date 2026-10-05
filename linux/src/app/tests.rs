@@ -6,12 +6,15 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::glib::object::IsA;
-use vnilink::{Capabilities, ControlRequest, DeviceInfo, Grants, SessionInfo, SessionPhase, SessionRole, Snapshot};
+use vnilink::{
+    Capabilities, ControlRequest, DeviceInfo, Grants, SessionInfo, SessionPhase, SessionRole,
+    Snapshot,
+};
 
 use super::widgets::{click, named};
 use super::window::{Actions, Home};
-use crate::pairing::PairingFlow;
 use crate::events::LiveState;
+use crate::pairing::PairingFlow;
 
 fn open_home(actions: Actions) -> Rc<Home> {
     use std::sync::Once;
@@ -61,6 +64,8 @@ fn snapshot(devices: Vec<DeviceInfo>, hosting: bool) -> Snapshot {
 
 fn peer(grants: Grants) -> DeviceInfo {
     DeviceInfo {
+        hostname: None,
+        pet_name: None,
         endpoint_id: "other-computer".to_string(),
         relays: Vec::new(),
         direct: Vec::new(),
@@ -124,10 +129,7 @@ fn an_unpaired_computer_shows_the_empty_state_and_this_computer() {
     });
     let home = open_home(actions);
     home.show(&snapshot(Vec::new(), true));
-    assert_eq!(
-        home.stack().visible_child_name().as_deref(),
-        Some("empty")
-    );
+    assert_eq!(home.stack().visible_child_name().as_deref(), Some("empty"));
     assert_eq!(home.title().title().as_str(), "This computer");
     assert!(!home.banner().is_revealed());
     assert!(!home.empty_visible());
@@ -166,10 +168,7 @@ fn choosing_a_paired_computer_offers_connect() {
         transfer: false,
     };
     home.show(&snapshot(vec![peer(grants)], false));
-    assert_eq!(
-        home.stack().visible_child_name().as_deref(),
-        Some("list")
-    );
+    assert_eq!(home.stack().visible_child_name().as_deref(), Some("list"));
     let row = home.rows().row_at_index(1).expect("peer row");
     assert_eq!(row.widget_name().as_str(), "peer-other-computer");
     home.rows().select_row(Some(&row));
@@ -258,8 +257,5 @@ fn a_removed_computer_returns_to_this_computer() {
     home.rows().select_row(home.rows().row_at_index(1).as_ref());
     home.show(&snapshot(Vec::new(), false));
     assert_eq!(home.title().title().as_str(), "This computer");
-    assert_eq!(
-        home.stack().visible_child_name().as_deref(),
-        Some("empty")
-    );
+    assert_eq!(home.stack().visible_child_name().as_deref(), Some("empty"));
 }

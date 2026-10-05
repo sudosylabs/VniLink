@@ -15,6 +15,14 @@ fn control_messages_round_trip() {
             codec: crate::protocol::CODEC_H264,
             quality,
             decode: true,
+            hostname: Some("mac-mini".to_string()),
+        },
+        ControlMessage::Hello {
+            version: PROTOCOL_VERSION,
+            codec: crate::protocol::CODEC_H264,
+            quality,
+            decode: false,
+            hostname: None,
         },
         ControlMessage::Accept {
             stamp: SessionStamp::new(7, 3),
@@ -22,6 +30,15 @@ fn control_messages_round_trip() {
             monitor_height: 1080,
             codec: crate::protocol::CODEC_H264,
             quality,
+            hostname: Some("linux-laptop".to_string()),
+        },
+        ControlMessage::Accept {
+            stamp: SessionStamp::new(7, 3),
+            monitor_width: 1920,
+            monitor_height: 1080,
+            codec: crate::protocol::CODEC_H264,
+            quality,
+            hostname: None,
         },
         ControlMessage::Reject(RejectCode::Unauthorized),
         ControlMessage::Input {
@@ -65,6 +82,7 @@ fn hello_accept_and_quality_shapes_are_validated() {
         codec: crate::protocol::CODEC_H264,
         quality: Quality::new(2_000, 30, 1920, 1080).unwrap(),
         decode: true,
+        hostname: None,
     }
     .encode();
     // Corrupt the frame rate to 0.
@@ -78,6 +96,7 @@ fn hello_accept_and_quality_shapes_are_validated() {
         codec: crate::protocol::CODEC_H264,
         quality: Quality::new(2_000, 30, 1920, 1080).unwrap(),
         decode: true,
+        hostname: None,
     }
     .encode();
     bad_decode[13] = 2;
@@ -97,6 +116,50 @@ fn hello_accept_and_quality_shapes_are_validated() {
     ));
     assert!(matches!(
         ControlMessage::decode(&[10, 0]),
+        Err(Error::Malformed)
+    ));
+}
+
+#[test]
+fn hostname_shapes_are_validated() {
+    let quality = Quality::new(2_000, 30, 1920, 1080).unwrap();
+    let hello = |hostname: Option<String>| ControlMessage::Hello {
+        version: PROTOCOL_VERSION,
+        codec: crate::protocol::CODEC_H264,
+        quality,
+        decode: true,
+        hostname,
+    };
+    // An invalid name encodes as absent; it never breaks the session.
+    let encoded = hello(Some("  ".to_string())).encode();
+    assert_eq!(encoded.len(), 15);
+    assert_eq!(ControlMessage::decode(&encoded).unwrap(), hello(None));
+    // Truncated, overlong, and non-canonical names are malformed.
+    let mut truncated = hello(Some("mac-mini".to_string())).encode();
+    truncated.pop();
+    assert!(matches!(
+        ControlMessage::decode(&truncated),
+        Err(Error::Malformed)
+    ));
+    let mut trailing = hello(Some("mac-mini".to_string())).encode();
+    trailing.push(0);
+    assert!(matches!(
+        ControlMessage::decode(&trailing),
+        Err(Error::Malformed)
+    ));
+    let mut padded = hello(Some("mac-mini".to_string())).encode();
+    // Rewrite the name bytes with a trailing space: not canonical.
+    let end = padded.len();
+    padded[end - 1] = b' ';
+    assert!(matches!(
+        ControlMessage::decode(&padded),
+        Err(Error::Malformed)
+    ));
+    let mut bad_utf8 = hello(Some("mac-mini".to_string())).encode();
+    let end = bad_utf8.len();
+    bad_utf8[end - 1] = 0xFF;
+    assert!(matches!(
+        ControlMessage::decode(&bad_utf8),
         Err(Error::Malformed)
     ));
 }

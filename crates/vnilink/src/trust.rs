@@ -18,6 +18,13 @@ pub(crate) struct Device {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Trust {
     devices: BTreeMap<[u8; 32], Device>,
+    /// Display names peers reported, by endpoint id. Display-only metadata
+    /// beside the security-critical record: renaming never affects grants,
+    /// and unpairing drops the name with the device.
+    hostnames: BTreeMap<[u8; 32], String>,
+    /// Local pet names the owner set, by endpoint id. Shown instead of the
+    /// reported name. Same lifetime rules as reported names.
+    pet_names: BTreeMap<[u8; 32], String>,
 }
 
 impl Trust {
@@ -40,7 +47,61 @@ impl Trust {
     }
 
     pub(crate) fn remove(&mut self, endpoint_id: &[u8; 32]) -> Option<Device> {
+        self.hostnames.remove(endpoint_id);
+        self.pet_names.remove(endpoint_id);
         self.devices.remove(endpoint_id)
+    }
+
+    /// Stores a peer-reported display name. Fails for unknown devices so a
+    /// name never creates a trust entry on its own.
+    pub(crate) fn set_hostname(
+        &mut self,
+        endpoint_id: &[u8; 32],
+        hostname: String,
+    ) -> Result<(), Error> {
+        if !self.devices.contains_key(endpoint_id) {
+            return Err(Error::NotPaired);
+        }
+        self.hostnames.insert(*endpoint_id, hostname);
+        Ok(())
+    }
+
+    pub(crate) fn hostname_of(&self, endpoint_id: &[u8; 32]) -> Option<String> {
+        self.hostnames.get(endpoint_id).cloned()
+    }
+
+    pub(crate) fn clear_hostname(&mut self, endpoint_id: &[u8; 32]) {
+        self.hostnames.remove(endpoint_id);
+    }
+
+    /// Stores the owner's pet name. Fails for unknown devices so a name
+    /// never creates a trust entry on its own.
+    pub(crate) fn set_pet_name(
+        &mut self,
+        endpoint_id: &[u8; 32],
+        pet_name: String,
+    ) -> Result<(), Error> {
+        if !self.devices.contains_key(endpoint_id) {
+            return Err(Error::NotPaired);
+        }
+        self.pet_names.insert(*endpoint_id, pet_name);
+        Ok(())
+    }
+
+    pub(crate) fn pet_name_of(&self, endpoint_id: &[u8; 32]) -> Option<String> {
+        self.pet_names.get(endpoint_id).cloned()
+    }
+
+    pub(crate) fn clear_pet_name(&mut self, endpoint_id: &[u8; 32]) {
+        self.pet_names.remove(endpoint_id);
+    }
+
+    pub(crate) fn pet_names(&self) -> impl Iterator<Item = (&[u8; 32], &String)> {
+        self.pet_names.iter()
+    }
+
+    pub(crate) fn hostnames(&self) -> impl Iterator<Item = (&[u8; 32], &String)> {
+        self.hostnames.iter()
     }
 
     pub(crate) fn get(&self, endpoint_id: &[u8; 32]) -> Option<&Device> {

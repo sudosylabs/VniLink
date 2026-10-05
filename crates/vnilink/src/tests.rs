@@ -10,6 +10,8 @@ mod error_tests;
 mod events_tests;
 #[path = "tests/hosting.rs"]
 mod hosting_tests;
+#[path = "tests/hostname.rs"]
+mod hostname_tests;
 #[path = "tests/identity.rs"]
 mod identity_tests;
 #[path = "tests/input.rs"]

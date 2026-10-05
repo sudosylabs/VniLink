@@ -234,6 +234,7 @@ pub(super) async fn handle_host_request(
             codec,
             quality,
             decode,
+            hostname: hello_hostname,
         } => {
             let codec_supported = codec == crate::protocol::CODEC_H264;
             // The controller names its decoder in Hello. A peer that cannot
@@ -300,6 +301,14 @@ pub(super) async fn handle_host_request(
                         Ok(info) => {
                             *owned_session = Some(info.id);
                             remember_link(shared, true, connection.clone());
+                            // The peer is admitted: keep its display name for
+                            // this host's device list. Persist failures stay
+                            // local; the next dial refreshes the name.
+                            let _ = super::link::remember_peer_hostname(
+                                shared,
+                                peer.as_bytes(),
+                                hello_hostname,
+                            );
                             let wrote = write_frame(
                                 &mut send,
                                 &ControlMessage::Accept {
@@ -308,6 +317,7 @@ pub(super) async fn handle_host_request(
                                     monitor_height: info.monitor_height,
                                     codec: crate::protocol::CODEC_H264,
                                     quality: info.quality.expect("admission agrees quality"),
+                                    hostname: crate::hostname::local_hostname(),
                                 },
                             )
                             .await;

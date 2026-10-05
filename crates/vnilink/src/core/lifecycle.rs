@@ -311,6 +311,8 @@ impl Core {
                 .devices()
                 .map(|device| DeviceInfo {
                     endpoint_id: device.display_id.clone(),
+                    hostname: state.trust.hostname_of(&device.endpoint_id),
+                    pet_name: state.trust.pet_name_of(&device.endpoint_id),
                     relays: device.relays.clone(),
                     direct: device.direct.clone(),
                     grants: device.grants,

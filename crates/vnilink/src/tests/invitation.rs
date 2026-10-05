@@ -20,6 +20,7 @@ fn a_signed_invitation_opens_and_a_tampered_one_does_not() {
         &direct,
         Duration::from_secs(60),
         SystemTime::now(),
+        None,
     )
     .unwrap();
     let (opened, _) = open(&token, SystemTime::now()).unwrap();
@@ -41,11 +42,11 @@ fn a_signed_invitation_opens_and_a_tampered_one_does_not() {
 fn expired_and_replayed_invitations_are_rejected() {
     let secret = SecretKey::generate();
     let now = SystemTime::now();
-    let (token, _) = issue(&secret, &[], &[], Duration::from_secs(1), now).unwrap();
+    let (token, _) = issue(&secret, &[], &[], Duration::from_secs(1), now, None).unwrap();
     let later = now + Duration::from_secs(2);
     assert!(matches!(open(&token, later), Err(Error::InvitationExpired)));
 
-    let (token, invitation) = issue(&secret, &[], &[], Duration::from_secs(60), now).unwrap();
+    let (token, invitation) = issue(&secret, &[], &[], Duration::from_secs(60), now, None).unwrap();
     let (_, nonce) = open(&token, now).unwrap();
     let mut cache = ReplayCache::new();
     cache
@@ -62,28 +63,35 @@ fn lifetime_must_be_between_one_second_and_fifteen_minutes() {
     let secret = SecretKey::generate();
     let now = SystemTime::now();
     assert!(matches!(
-        issue(&secret, &[], &[], Duration::ZERO, now),
+        issue(&secret, &[], &[], Duration::ZERO, now, None),
         Err(Error::InvalidInvitation(
             "lifetime must be between 1 second and 15 minutes"
         ))
     ));
     assert!(matches!(
-        issue(&secret, &[], &[], Duration::from_millis(999), now),
+        issue(&secret, &[], &[], Duration::from_millis(999), now, None),
         Err(Error::InvalidInvitation(
             "lifetime must be between 1 second and 15 minutes"
         ))
     ));
-    assert!(issue(&secret, &[], &[], Duration::from_secs(1), now).is_ok());
-    assert!(issue(&secret, &[], &[], MAX_TTL, now).is_ok());
+    assert!(issue(&secret, &[], &[], Duration::from_secs(1), now, None).is_ok());
+    assert!(issue(&secret, &[], &[], MAX_TTL, now, None).is_ok());
     assert!(matches!(
-        issue(&secret, &[], &[], MAX_TTL + Duration::from_secs(1), now,),
+        issue(
+            &secret,
+            &[],
+            &[],
+            MAX_TTL + Duration::from_secs(1),
+            now,
+            None
+        ),
         Err(Error::InvalidInvitation(
             "lifetime must be between 1 second and 15 minutes"
         ))
     ));
     let before = UNIX_EPOCH.checked_sub(Duration::from_secs(1)).unwrap();
     assert!(matches!(
-        issue(&secret, &[], &[], Duration::from_secs(60), before),
+        issue(&secret, &[], &[], Duration::from_secs(60), before, None),
         Err(Error::InvalidInvitation(
             "system clock is before the unix epoch"
         ))
@@ -100,6 +108,7 @@ fn uppercase_hex_opens_and_broken_tokens_do_not() {
         &["[::1]:9".parse().unwrap()],
         Duration::from_secs(60),
         now,
+        None,
     )
     .unwrap();
     let upper = format!("{PREFIX}{}", token[PREFIX.len()..].to_ascii_uppercase());
@@ -184,7 +193,7 @@ fn direct_addresses_are_canonicalized_and_extra_relays_are_rejected() {
     let many: Vec<SocketAddr> = (1..=9)
         .map(|octet| SocketAddr::from(([10, 0, 0, octet], 9)))
         .collect();
-    let (_, invitation) = issue(&secret, &[], &many, Duration::from_secs(60), now).unwrap();
+    let (_, invitation) = issue(&secret, &[], &many, Duration::from_secs(60), now, None).unwrap();
     assert_eq!(invitation.direct.len(), MAX_DIRECT_ADDRS);
     assert!(!invitation
         .direct
@@ -195,7 +204,7 @@ fn direct_addresses_are_canonicalized_and_extra_relays_are_rejected() {
         .map(|index| format!("https://relay{index}.example.com"))
         .collect();
     assert!(matches!(
-        issue(&secret, &relays, &[], Duration::from_secs(60), now),
+        issue(&secret, &relays, &[], Duration::from_secs(60), now, None),
         Err(Error::InvalidInvitation("too many relay URLs"))
     ));
     assert!(issue(
@@ -204,6 +213,7 @@ fn direct_addresses_are_canonicalized_and_extra_relays_are_rejected() {
         &[],
         Duration::from_secs(60),
         now,
+        None
     )
     .is_err());
 }

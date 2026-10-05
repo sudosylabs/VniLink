@@ -88,6 +88,7 @@ fn invitation_with(core: &Core, extra: Option<SocketAddr>) -> (String, Vec<Socke
         &direct,
         Duration::from_secs(60),
         SystemTime::now(),
+        opened.hostname,
     )
     .unwrap();
     (token, real)
