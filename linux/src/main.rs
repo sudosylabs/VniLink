@@ -1,5 +1,11 @@
-mod present;
-mod secret;
+mod capabilities;
+mod devices;
+mod error;
+mod events;
+mod pairing;
+mod presentation;
+mod settings;
+mod storage;
 
 #[cfg(target_os = "linux")]
 mod app;

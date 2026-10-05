@@ -17,7 +17,7 @@ use gtk::glib::{self, ControlFlow};
 use vnilink::{Core, OpenConfig, PairingPreview, SessionPhase, PAIRING_FILE_EXTENSION};
 
 use crate::home::{self, Home};
-use crate::secret::SecretStore;
+use crate::storage::SecretStore;
 
 pub fn run() -> glib::ExitCode {
     let application = adw::Application::builder()

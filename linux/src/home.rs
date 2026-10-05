@@ -13,7 +13,7 @@ use gtk::glib::object::IsA;
 use gtk::Align;
 use vnilink::{ControlRequest, DeviceInfo, Snapshot};
 
-use crate::present::{
+use crate::presentation::{
     hosting_name, hosting_subtitle, peer_sentence, peer_status, relay_description, relay_summary,
     session_banner, short_id,
 };
@@ -241,8 +241,8 @@ impl Home {
                     format!(
                         "{}:{}:{}",
                         info.peer_id,
-                        crate::present::role_name(info.role),
-                        crate::present::phase_name(&info.phase)
+                        crate::presentation::role_name(info.role),
+                        crate::presentation::phase_name(&info.phase)
                     )
                 })
                 .unwrap_or_default()
