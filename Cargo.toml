@@ -5,6 +5,8 @@ members = [
     "crates/vnilink-macos",
     "crates/vnilink-windows",
     "crates/vnilink-linux",
+    "crates/vnilink-ffi",
+    "crates/uniffi-bindgen",
     "linux",
 ]
 resolver = "2"
