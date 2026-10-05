@@ -104,8 +104,7 @@ impl SCStreamOutputTrait for Handler {
             return;
         }
         let Some(pixel_buffer) = sample.pixel_buffer() else {
-            self.channel
-                .fail("ScreenCaptureKit did not deliver a frame");
+            // Idle/status samples have no picture. They do not end capture.
             return;
         };
         // Timestamp is applied by `next_frame`; the handler only keeps pixels.
@@ -131,17 +130,24 @@ pub struct ScreenCapture {
     width: u16,
     height: u16,
     channel: Arc<FrameChannel>,
+    last: std::sync::Mutex<Option<ChannelSlot>>,
 }
 
 #[cfg(target_os = "macos")]
 impl ScreenCapture {
     /// List displays and start capture. This can prompt for Screen Recording.
     pub fn start(plan: &ScreenPlan) -> Result<Self, Error> {
+        Self::start_display(plan, None)
+    }
+
+    /// Capture the selected main display rather than assuming enumeration order.
+    pub fn start_display(plan: &ScreenPlan, display_id: Option<u32>) -> Result<Self, Error> {
         let content = SCShareableContent::get()
             .map_err(|_| Error::CaptureRejected("Screen Recording permission was not granted"))?;
         let displays = content.displays();
         let display = displays
-            .first()
+            .iter()
+            .find(|display| display_id.is_none_or(|id| display.display_id() == id))
             .ok_or(Error::CaptureRejected("no display is available"))?;
         let filter = SCContentFilter::create()
             .with_display(display)
@@ -167,6 +173,7 @@ impl ScreenCapture {
             width: plan.width(),
             height: plan.height(),
             channel,
+            last: std::sync::Mutex::new(None),
         })
     }
 
@@ -176,9 +183,12 @@ impl ScreenCapture {
 
     /// Block until a frame newer than the last one is copied.
     pub fn next_frame(&self, timestamp_us: u64) -> Result<vnilink_media::RawFrame, Error> {
-        let slot = self.channel.recv_timeout(FRAME_TIMEOUT, || {
+        let received = self.channel.recv_timeout(FRAME_TIMEOUT, || {
             std::thread::sleep(Duration::from_millis(10));
-        })?;
+        });
+        // ScreenCaptureKit may stop producing pictures while the desktop is idle.
+        // Keep the last picture available for keyframe requests and new sessions.
+        let slot = repeat_idle_frame(received, &self.last)?;
         crate::pixels::raw_frame_from_bgra(
             slot.width,
             slot.height,
@@ -186,6 +196,45 @@ impl ScreenCapture {
             timestamp_us,
             &slot.bytes,
         )
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn repeat_idle_frame(
+    received: Result<ChannelSlot, Error>,
+    last: &std::sync::Mutex<Option<ChannelSlot>>,
+) -> Result<ChannelSlot, Error> {
+    let mut last = last.lock().unwrap_or_else(|e| e.into_inner());
+    match received {
+        Ok(slot) => {
+            *last = Some(slot.clone());
+            Ok(slot)
+        }
+        Err(Error::CaptureRejected(reason)) => last.clone().ok_or(Error::CaptureRejected(reason)),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod idle_tests {
+    use super::*;
+    #[test]
+    fn idle_repeats_the_last_picture_but_failure_does_not() {
+        let last = std::sync::Mutex::new(None);
+        assert!(repeat_idle_frame(Err(Error::CaptureRejected("timeout")), &last).is_err());
+        repeat_idle_frame(
+            Ok(ChannelSlot {
+                width: 2,
+                height: 2,
+                stride: 8,
+                bytes: vec![19; 16],
+            }),
+            &last,
+        )
+        .unwrap();
+        let repeated = repeat_idle_frame(Err(Error::CaptureRejected("timeout")), &last).unwrap();
+        assert_eq!(repeated.bytes, vec![19; 16]);
+        assert!(repeat_idle_frame(Err(Error::Unsupported("capture failed")), &last).is_err());
     }
 }
 

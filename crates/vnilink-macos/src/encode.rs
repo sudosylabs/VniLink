@@ -40,7 +40,7 @@ impl MacEncoder {
                 "frame width and height must be non-zero",
             ));
         }
-        if width % 2 != 0 || height % 2 != 0 {
+        if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
             return Err(Error::InvalidFrame("H.264 width and height must be even"));
         }
         if frame_rate == 0 {
@@ -65,14 +65,14 @@ impl MacEncoder {
                     .map_err(|_| Error::Unsupported("VideoToolbox H.264"))?;
             let surface = IOSurface::create(usize::from(width), usize::from(height), BGRA, 4)
                 .ok_or(Error::Unsupported("VideoToolbox H.264"))?;
-            return Ok(Self {
+            Ok(Self {
                 session,
                 surface,
                 width,
                 height,
                 frame_rate: i32::from(frame_rate),
                 frame_index: 0,
-            });
+            })
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -124,7 +124,7 @@ impl VideoEncoder for MacEncoder {
                 keyframe,
             })?;
             self.frame_index = self.frame_index.saturating_add(1);
-            return EncodedSample::annex_b(keyframe, annex_b);
+            EncodedSample::annex_b(keyframe, annex_b)
         }
         #[cfg(not(target_os = "macos"))]
         {

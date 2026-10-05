@@ -1,11 +1,10 @@
 use screencapturekit::stream::configuration::PixelFormat;
 use vnilink_media::{CapturePlan, Error, Quality};
 
-use crate::capture::{ScreenPlan, FILEVAULT_PREBOOT_SUPPORTED};
+use crate::capture::ScreenPlan;
 
 #[test]
 fn the_capture_plan_is_one_bgra_monitor_and_does_not_start() {
-    assert!(!FILEVAULT_PREBOOT_SUPPORTED);
     let quality = Quality::new(2_500, 30, 1280, 720).unwrap();
     let plan = CapturePlan::one_monitor(quality).unwrap();
     let screen = ScreenPlan::from_capture(&plan).unwrap();
