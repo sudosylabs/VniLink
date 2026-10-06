@@ -1,5 +1,9 @@
 # File transfer
 
+This document describes the current single-file implementation. The planned
+`iroh-blobs` engine, two-pane Files window, folder transfers and filesystem
+renaming are specified in [File transfer window and engine](../../docs/architecture/file-transfer.md).
+
 File transfer is a separate grant from control and from clipboard. A `.vnl` file and the control confirmation do not turn it on. `Core::authorize` does. The rules live in `src/transfer/`. `src/core/files.rs` opens the stream and checks the grant.
 
 ## What happens
@@ -11,6 +15,9 @@ File transfer is a separate grant from control and from clipboard. A `.vnl` file
 5. The host calls `publish_file` to send its own file to the controller. The same grant is required. The controller writes it under its own transfer directory. The event `TransferCompleted` names the session and does not carry the path or the bytes.
 6. A dropped session does not send the old file again. The new generation needs a new `submit_file`. Disconnect and a host close do not keep the stream.
 
-## Still open
+## Next direction
 
-- Keyboard positions, the Control/Command swap, and finished text are `KEYBOARD.md`. A native window and one-monitor capture are still open. README section 11 is not complete.
+The current API carries a complete byte buffer and does not offer remote
+directory listings, remote rename, folder jobs or resume. The linked
+specification records their intended behavior and the decisions still required
+before implementation. Keyboard behavior remains documented in `KEYBOARD.md`.
