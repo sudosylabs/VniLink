@@ -34,7 +34,13 @@ pub struct MacEncoder {
 }
 
 impl MacEncoder {
-    pub fn open(width: u16, height: u16, frame_rate: u8, bitrate_bps: u32) -> Result<Self, Error> {
+    pub fn open(
+        width: u16,
+        height: u16,
+        frame_rate: u8,
+        bitrate_bps: u32,
+        high: bool,
+    ) -> Result<Self, Error> {
         if width == 0 || height == 0 {
             return Err(Error::InvalidFrame(
                 "frame width and height must be non-zero",
@@ -54,16 +60,22 @@ impl MacEncoder {
             ))?;
         #[cfg(target_os = "macos")]
         {
+            // High when the session negotiates it; the Linux parser decodes
+            // High, and VideoToolbox decodes both. Baseline stays the
+            // fallback for older peers.
+            let profile = if high {
+                ProfileLevel::H264HighAutoLevel
+            } else {
+                ProfileLevel::H264ConstrainedBaselineAutoLevel
+            };
             let session =
                 CompressionSession::builder(i32::from(width), i32::from(height), Codec::H264)
-                    // Linux's parser does not support High-profile 8x8 transforms.
-                    // Match its encoder's interoperable Constrained Baseline stream.
-                    .with_profile_level(ProfileLevel::H264ConstrainedBaselineAutoLevel)
+                    .with_profile_level(profile)
                     .with_real_time(true)
                     .with_allow_frame_reordering(false)
                     .with_average_bit_rate(bitrate)
                     .with_expected_frame_rate(f64::from(frame_rate))
-                    .with_max_keyframe_interval(300)
+                    .with_max_keyframe_interval(120)
                     .build()
                     .map_err(|_| Error::Unsupported("VideoToolbox H.264"))?;
             let surface = IOSurface::create(usize::from(width), usize::from(height), BGRA, 4)
@@ -79,7 +91,7 @@ impl MacEncoder {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = bitrate;
+            let _ = (bitrate, high);
             Err(Error::Unsupported("VideoToolbox H.264"))
         }
     }

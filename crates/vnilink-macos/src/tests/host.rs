@@ -13,7 +13,9 @@ use crate::host::HostSession;
 fn the_host_encoder_is_unavailable() {
     let quality = Quality::new(500, 30, 64, 64).unwrap();
     assert!(matches!(
-        HostSession::open(64, 64, quality, MacEncoder::open),
+        HostSession::open(64, 64, quality, |w, h, fps, bps| MacEncoder::open(
+            w, h, fps, bps, false
+        )),
         Err(Error::Unsupported("VideoToolbox H.264"))
     ));
 }
@@ -24,7 +26,10 @@ fn the_platform_encoder_plugs_into_the_generic_session() {
     use vnilink::CoreEvent;
 
     let quality = Quality::new(500, 30, 32, 32).unwrap();
-    let mut session = HostSession::open(64, 64, quality, MacEncoder::open).unwrap();
+    let mut session = HostSession::open(64, 64, quality, |w, h, fps, bps| {
+        MacEncoder::open(w, h, fps, bps, false)
+    })
+    .unwrap();
     assert_eq!(session.capture_size(), (64, 64));
     assert_eq!(session.encoded_size(), (32, 32));
     let mut sink = MemorySink::default();

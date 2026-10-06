@@ -5,7 +5,8 @@
 //! [`PortalCapture`] reads BGRA or BGRx from the PipeWire node that sequence
 //! starts using shared-memory buffers. One started session is
 //! not universal unattended access. [`LinuxEncoder`] encodes H.264 with
-//! VA-API on the first DRM render node that offers Constrained Baseline,
+//! VA-API on the first DRM render node that offers the negotiated profile
+//! (High when the session agrees it, else Constrained Baseline),
 //! and [`LinuxDecoder`] decodes it back on the first node that offers
 //! variable-length decode. Tests do not connect to an X server or a session
 //! bus. The encoder test and the DMA-BUF test open a render node when one
@@ -36,11 +37,16 @@ mod x11;
 pub use decode::LinuxDecoder;
 pub use encode::LinuxEncoder;
 #[cfg(target_os = "linux")]
-pub use vaapi::{h264_decode_available, h264_encode_available};
+pub use vaapi::{h264_decode_available, h264_encode_available, h264_high_available};
 /// Availability probes report false where VA-API cannot exist. The Linux build
 /// above replaces these with the render-node check.
 #[cfg(not(target_os = "linux"))]
 pub fn h264_encode_available() -> bool {
+    false
+}
+/// See [`h264_encode_available`].
+#[cfg(not(target_os = "linux"))]
+pub fn h264_high_available() -> bool {
     false
 }
 /// See [`h264_encode_available`].
@@ -65,3 +71,5 @@ pub use wayland::{WaylandCapture, WaylandInput};
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+mod cursor;

@@ -1,12 +1,15 @@
 //! Linux H.264 encode.
 //!
-//! The hardware path is VA-API Constrained Baseline. This build does not link
-//! a software encoder. Cisco's OpenH264 patent grant covers Cisco's binary,
-//! not a source build compiled here, and x264 is GPL. A machine where no DRM
-//! render node offers the VA-API entrypoint reports that the hardware encoder
-//! is unavailable.
+//! The hardware path is VA-API, High profile when the session negotiates it
+//! and the render node offers the entrypoint, else Constrained Baseline.
+//! This build does not link a software encoder. Cisco's OpenH264 patent grant
+//! covers Cisco's binary, not a source build compiled here, and x264 is GPL.
+//! A machine where no DRM render node offers the VA-API entrypoint reports
+//! that the hardware encoder is unavailable.
 
-use vnilink_media::{bgra_to_nv12, EncodeParams, EncodedSample, Error, RawFrame, VideoEncoder};
+#[cfg(target_os = "linux")]
+use vnilink_media::bgra_to_nv12;
+use vnilink_media::{EncodeParams, EncodedSample, Error, RawFrame, VideoEncoder};
 
 #[cfg(target_os = "linux")]
 use crate::vaapi::Session;
@@ -19,7 +22,13 @@ pub struct LinuxEncoder {
 }
 
 impl LinuxEncoder {
-    pub fn open(width: u16, height: u16, frame_rate: u8, bitrate_bps: u32) -> Result<Self, Error> {
+    pub fn open(
+        width: u16,
+        height: u16,
+        frame_rate: u8,
+        bitrate_bps: u32,
+        high: bool,
+    ) -> Result<Self, Error> {
         if width == 0 || height == 0 {
             return Err(Error::InvalidFrame(
                 "frame width and height must be non-zero",
@@ -38,7 +47,7 @@ impl LinuxEncoder {
         }
         #[cfg(target_os = "linux")]
         {
-            let session = Session::open(width, height, frame_rate, bitrate_bps)?;
+            let session = Session::open(width, height, frame_rate, bitrate_bps, high)?;
             return Ok(Self {
                 width,
                 height,
@@ -47,7 +56,7 @@ impl LinuxEncoder {
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = (width, height, frame_rate, bitrate_bps);
+            let _ = (width, height, frame_rate, bitrate_bps, high);
             Err(Error::Unsupported("VA-API H.264"))
         }
     }
@@ -63,11 +72,8 @@ impl VideoEncoder for LinuxEncoder {
         #[cfg(target_os = "linux")]
         {
             let nv12 = bgra_to_nv12(frame)?;
-            return self.session.encode(
-                nv12.y_plane().to_vec(),
-                nv12.uv_plane().to_vec(),
-                params.force_keyframe,
-            );
+            let (y, uv) = nv12.into_planes();
+            return self.session.encode(y, uv, params.force_keyframe);
         }
         #[cfg(not(target_os = "linux"))]
         {

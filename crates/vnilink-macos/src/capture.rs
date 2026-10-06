@@ -127,6 +127,7 @@ impl SCStreamOutputTrait for Handler {
 #[cfg(target_os = "macos")]
 pub struct ScreenCapture {
     stream: SCStream,
+    plan: ScreenPlan,
     width: u16,
     height: u16,
     channel: Arc<FrameChannel>,
@@ -170,11 +171,22 @@ impl ScreenCapture {
             .map_err(|_| Error::CaptureRejected("ScreenCaptureKit did not start"))?;
         Ok(Self {
             stream,
+            plan: *plan,
             width: plan.width(),
             height: plan.height(),
             channel,
             last: std::sync::Mutex::new(None),
         })
+    }
+
+    /// Switch only the cursor policy at session admission. Legacy viewers keep
+    /// ScreenCaptureKit's embedded cursor; metadata-aware viewers draw locally.
+    pub fn set_shows_cursor(&self, shows_cursor: bool) -> Result<(), Error> {
+        let mut plan = self.plan;
+        plan.shows_cursor = shows_cursor;
+        self.stream
+            .update_configuration(&plan.configuration())
+            .map_err(|_| Error::CaptureRejected("the cursor capture policy could not be updated"))
     }
 
     pub fn size(&self) -> (u16, u16) {

@@ -61,6 +61,15 @@ impl FrameChannel {
         *self.failure.lock().expect("frame channel")
     }
 
+    /// Return cached pixels without waiting. The caller must pump its native
+    /// capture events first so a cached picture cannot hide newer pixels or errors.
+    pub fn try_latest(&self) -> Result<Option<ChannelSlot>, Error> {
+        if let Some(reason) = self.failure() {
+            return Err(Error::Unsupported(reason));
+        }
+        Ok(self.slot.lock().expect("frame channel").clone())
+    }
+
     /// Pump capture events and return the current picture, even if unchanged.
     /// Damage-driven compositors need not send a new frame for an idle desktop.
     /// Still wait for the first picture and propagate permanent failures.
@@ -72,10 +81,7 @@ impl FrameChannel {
         // Always pump events so cached pixels cannot hide a failed capture or
         // prevent the next changed picture from reaching the slot.
         wait();
-        if let Some(reason) = self.failure() {
-            return Err(Error::Unsupported(reason));
-        }
-        if let Some(slot) = self.slot.lock().expect("frame channel").clone() {
+        if let Some(slot) = self.try_latest()? {
             return Ok(slot);
         }
         self.recv_timeout(timeout, wait)

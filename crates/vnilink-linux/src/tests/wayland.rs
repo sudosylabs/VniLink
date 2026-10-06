@@ -100,7 +100,7 @@ struct FakePortal(
 );
 #[zbus::interface(name = "org.freedesktop.portal.RemoteDesktop")]
 impl FakePortal {
-    #[zbus(property)]
+    #[zbus(property, name = "version")]
     fn version(&self) -> u32 {
         2
     }
@@ -289,10 +289,14 @@ async fn response(
         .unwrap();
     Ok(OwnedObjectPath::try_from(request).unwrap())
 }
-struct FakeCast;
+struct FakeCast(Arc<std::sync::atomic::AtomicU32>);
 #[zbus::interface(name = "org.freedesktop.portal.ScreenCast")]
 impl FakeCast {
     #[zbus(property)]
+    fn available_cursor_modes(&self) -> u32 {
+        self.0.load(Ordering::Relaxed)
+    }
+    #[zbus(property, name = "version")]
     fn version(&self) -> u32 {
         4
     }
@@ -304,6 +308,14 @@ impl FakeCast {
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<OwnedObjectPath> {
         assert!(!options.contains_key("persist_mode") && !options.contains_key("restore_token"));
+        assert_eq!(
+            u32::try_from(options["cursor_mode"].try_clone().unwrap()).unwrap(),
+            if self.0.load(Ordering::Relaxed) & 4 != 0 {
+                4
+            } else {
+                2
+            }
+        );
         assert_eq!(
             u32::try_from(options["types"].try_clone().unwrap()).unwrap(),
             1
@@ -343,6 +355,7 @@ fn real_portal_notify_transport_preserves_all_events() {
             let recorded = Arc::new(Mutex::new(Vec::new()));
             let granted = Arc::new(AtomicBool::new(true));
             let closed = Arc::new(std::sync::atomic::AtomicU32::new(0));
+            let cursor_modes = Arc::new(std::sync::atomic::AtomicU32::new(6));
             let _service = zbus::connection::Builder::session()
                 .unwrap()
                 .name("org.freedesktop.portal.Desktop")
@@ -352,7 +365,10 @@ fn real_portal_notify_transport_preserves_all_events() {
                     FakePortal(recorded.clone(), granted.clone(), closed.clone()),
                 )
                 .unwrap()
-                .serve_at("/org/freedesktop/portal/desktop", FakeCast)
+                .serve_at(
+                    "/org/freedesktop/portal/desktop",
+                    FakeCast(cursor_modes.clone()),
+                )
                 .unwrap()
                 .build()
                 .await
@@ -376,6 +392,7 @@ fn real_portal_notify_transport_preserves_all_events() {
                 .unwrap();
             assert_eq!(*recorded.lock().unwrap(), expected);
             let grant = open_grant().await.unwrap();
+            assert!(grant.cursor_metadata);
             assert_eq!(grant.logical, (1920, 1080));
             assert_eq!(grant.node, 42);
             grant.session.close().await.unwrap();
@@ -391,7 +408,7 @@ fn real_portal_notify_transport_preserves_all_events() {
                     let worker = connection.clone();
                     let (ready_tx, ready_rx) = mpsc::channel();
                     let thread = std::thread::spawn(move || worker_main(worker, rx, ready_tx));
-                    let (_fd, node, logical) = ready_rx
+                    let (_fd, node, logical, _) = ready_rx
                         .recv_timeout(Duration::from_secs(2))
                         .unwrap()
                         .unwrap();
@@ -430,6 +447,12 @@ fn real_portal_notify_transport_preserves_all_events() {
                 4,
                 "partial grants must be closed"
             );
+            granted.store(true, Ordering::Relaxed);
+            cursor_modes.store(2, Ordering::Relaxed);
+            let embedded = open_grant().await.unwrap();
+            assert!(!embedded.cursor_metadata);
+            embedded.session.close().await.unwrap();
+            assert_eq!(closed.load(Ordering::Relaxed), 5);
         })
         .await
         .unwrap();

@@ -23,7 +23,7 @@ fn solid(
 
 #[test]
 fn videotoolbox_encodes_and_decodes_a_synthetic_picture() {
-    let mut encoder = MacEncoder::open(64, 64, 30, 500_000).unwrap();
+    let mut encoder = MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
     let params = EncodeParams {
         force_keyframe: true,
         bitrate_bps: 500_000,
@@ -67,11 +67,43 @@ fn videotoolbox_encodes_and_decodes_a_synthetic_picture() {
 #[test]
 fn the_pump_accepts_a_videotoolbox_keyframe() {
     let quality = Quality::new(500, 30, 64, 64).unwrap();
-    let encoder = MacEncoder::open(64, 64, 30, 500_000).unwrap();
+    let encoder = MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
     let mut video = HostVideo::new(quality, encoder);
     let output = video.push(&solid(64, 64, 0, 0, 255, 0)).unwrap();
     match output {
         PumpOutput::Encoded(frame) => assert!(frame.keyframe),
         PumpOutput::Skipped => panic!("the first picture must be encoded"),
     }
+}
+
+#[test]
+fn videotoolbox_high_decodes_and_marks_profile_100() {
+    let mut encoder = MacEncoder::open(64, 64, 30, 500_000, true).unwrap();
+    let sample = encoder
+        .encode(
+            &solid(64, 64, 0, 0, 0, 255),
+            &EncodeParams {
+                force_keyframe: true,
+                bitrate_bps: 500_000,
+                frame_rate: 30,
+            },
+        )
+        .unwrap();
+    assert!(sample.keyframe());
+    let parsed = parse_annex_b(sample.bytes()).unwrap();
+    assert!(parsed.has_sps() && parsed.has_pps() && parsed.has_idr());
+    let sps = parsed
+        .units()
+        .iter()
+        .find(|unit| unit.nal_type == 7)
+        .expect("SPS");
+    assert_eq!(sps.bytes()[1], 100);
+    let encoded = EncodedFrame::h264(true, 0, sample.bytes().to_vec()).unwrap();
+    let picture = MacDecoder::new().decode(&encoded).unwrap();
+    assert_eq!((picture.width(), picture.height()), (64, 64));
+    let pixel = &picture.row(32)[32 * 4..32 * 4 + 4];
+    assert!(
+        pixel[2] > pixel[0] && pixel[2] > pixel[1] && pixel[2] > 128,
+        "decoded picture is not the encoded color"
+    );
 }

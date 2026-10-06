@@ -5,6 +5,7 @@ fn idle_portal_keeps_the_picture_and_propagates_capture_failure() {
     pw::init();
     let mainloop = pw::main_loop::MainLoopRc::new(None).unwrap();
     let shared = Shared {
+        cursor: Mutex::new(None),
         size: Mutex::new(Some((2, 2))),
         channel: FrameChannel::new(),
         format: Mutex::new(Some(VideoFormat::BGRx)),

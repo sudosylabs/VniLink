@@ -41,8 +41,8 @@ use libva::VA_RT_FORMAT_YUV420;
 use vnilink_media::{parse_annex_b, EncodedSample, Error};
 
 use crate::parameter_set::{
-    level_idc, parameter_sets, LOG2_MAX_FRAME_NUM_MINUS4, LOG2_MAX_POC_LSB_MINUS4, MAX_FRAME_NUM,
-    MAX_POC_LSB,
+    level_idc, parameter_sets, EncodeProfile, LOG2_MAX_FRAME_NUM_MINUS4, LOG2_MAX_POC_LSB_MINUS4,
+    MAX_FRAME_NUM, MAX_POC_LSB,
 };
 
 const QP: u8 = 26;
@@ -68,12 +68,13 @@ impl Session {
         height: u16,
         frame_rate: u8,
         bitrate_bps: u32,
+        high: bool,
     ) -> Result<Self, Error> {
         let (tx, rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::channel();
         let thread = thread::Builder::new()
             .name("vnilink-vaapi".to_string())
-            .spawn(move || worker(width, height, frame_rate, bitrate_bps, rx, ready_tx))
+            .spawn(move || worker(width, height, frame_rate, bitrate_bps, high, rx, ready_tx))
             .map_err(|_| Error::Unsupported("VA-API H.264"))?;
         match ready_rx.recv_timeout(Duration::from_secs(5)) {
             Ok(Ok(())) => Ok(Self {
@@ -126,10 +127,11 @@ fn worker(
     height: u16,
     frame_rate: u8,
     bitrate_bps: u32,
+    high: bool,
     jobs: Receiver<Job>,
     ready: Sender<Result<(), Error>>,
 ) {
-    let mut encoder = match Encoder::open(width, height, frame_rate, bitrate_bps) {
+    let mut encoder = match Encoder::open(width, height, frame_rate, bitrate_bps, high) {
         Ok(encoder) => {
             let _ = ready.send(Ok(()));
             encoder
@@ -160,6 +162,7 @@ struct Encoder {
     surfaces: [Option<Surface<()>>; 2],
     format: libva::VAImageFormat,
     header: Vec<u8>,
+    profile: EncodeProfile,
     visible_width: u32,
     visible_height: u32,
     coded_width: u32,
@@ -172,6 +175,7 @@ struct Encoder {
     idr_id: u16,
     previous: Option<Reference>,
     poisoned: bool,
+    frames_since_idr: u32,
 }
 
 struct Reference {
@@ -181,11 +185,29 @@ struct Reference {
 }
 
 impl Encoder {
-    fn open(width: u16, height: u16, frame_rate: u8, bitrate_bps: u32) -> Result<Self, Error> {
-        let header = parameter_sets(width, height, frame_rate)?;
+    fn open(
+        width: u16,
+        height: u16,
+        frame_rate: u8,
+        bitrate_bps: u32,
+        high: bool,
+    ) -> Result<Self, Error> {
+        let profile = if high {
+            EncodeProfile::High
+        } else {
+            EncodeProfile::Baseline
+        };
+        let header = parameter_sets(profile, width, height, frame_rate)?;
         for path in render_nodes() {
-            if let Some(encoder) = try_open(&path, width, height, frame_rate, bitrate_bps, &header)
-            {
+            if let Some(encoder) = try_open(
+                &path,
+                width,
+                height,
+                frame_rate,
+                bitrate_bps,
+                &header,
+                profile,
+            ) {
                 return Ok(encoder);
             }
         }
@@ -201,7 +223,12 @@ impl Encoder {
         if self.poisoned {
             return Err(Error::EncodeRejected("VA-API rejected the frame"));
         }
-        let idr = force_keyframe || self.previous.is_none();
+        // Bound recovery time after loss: periodic IDR matches the macOS
+        // encoder's keyframe interval so a dropped keyframe does not freeze
+        // video for the whole session.
+        const MAX_P_FRAMES: u32 = 120;
+        let idr =
+            force_keyframe || self.previous.is_none() || self.frames_since_idr >= MAX_P_FRAMES;
         let index = self.cursor;
         let surface = self.surfaces[index]
             .as_ref()
@@ -240,6 +267,7 @@ impl Encoder {
                 poc,
                 idr,
                 idr_id: self.idr_id,
+                high: self.profile == EncodeProfile::High,
                 visible_width: self.visible_width,
                 visible_height: self.visible_height,
                 coded_width: self.coded_width,
@@ -266,9 +294,11 @@ impl Encoder {
             self.frame_num = 1 % MAX_FRAME_NUM;
             self.poc = 2 % MAX_POC_LSB;
             self.idr_id = self.idr_id.wrapping_add(1);
+            self.frames_since_idr = 0;
         } else {
             self.frame_num = (frame_num + 1) % MAX_FRAME_NUM;
             self.poc = (poc + 2) % MAX_POC_LSB;
+            self.frames_since_idr = self.frames_since_idr.saturating_add(1);
         }
         self.cursor ^= 1;
         Ok(sample)
@@ -282,6 +312,7 @@ struct EncodeJob<'a> {
     poc: i32,
     idr: bool,
     idr_id: u16,
+    high: bool,
     visible_width: u32,
     visible_height: u32,
     coded_width: u32,
@@ -383,23 +414,16 @@ fn try_open(
     frame_rate: u8,
     bitrate_bps: u32,
     header: &[u8],
+    profile: EncodeProfile,
 ) -> Option<Encoder> {
     let display = Display::open_drm_display(path).ok()?;
-    let profile = VAProfile::VAProfileH264ConstrainedBaseline;
-    let entrypoints = display.query_config_entrypoints(profile).ok()?;
+    let va_profile = match profile {
+        EncodeProfile::Baseline => VAProfile::VAProfileH264ConstrainedBaseline,
+        EncodeProfile::High => VAProfile::VAProfileH264High,
+    };
+    let entrypoints = display.query_config_entrypoints(va_profile).ok()?;
     let entrypoint = choose_h264_entrypoint(&entrypoints)?;
-    let mut attrs = vec![VAConfigAttrib {
-        type_: VAConfigAttribType::VAConfigAttribRTFormat,
-        value: 0,
-    }];
-    display
-        .get_config_attributes(profile, entrypoint, &mut attrs)
-        .ok()?;
-    if attrs[0].value & VA_RT_FORMAT_YUV420 == 0 {
-        return None;
-    }
-    attrs[0].value = VA_RT_FORMAT_YUV420;
-    let config = display.create_config(attrs, profile, entrypoint).ok()?;
+    let config = bitrate_config(&display, va_profile, entrypoint)?;
     let coded_width = u32::from(crate::parameter_set::round_up_16(width));
     let coded_height = u32::from(crate::parameter_set::round_up_16(height));
     let surfaces = display
@@ -429,6 +453,7 @@ fn try_open(
         surfaces: stored,
         format,
         header: header.to_vec(),
+        profile,
         visible_width: u32::from(width),
         visible_height: u32::from(height),
         coded_width,
@@ -441,11 +466,50 @@ fn try_open(
         idr_id: 0,
         previous: None,
         poisoned: false,
+        frames_since_idr: 0,
     })
 }
 
 fn invalid_pictures<const N: usize>() -> [PictureH264; N] {
     std::array::from_fn(|_| PictureH264::new(VA_INVALID_ID, 0, VA_INVALID_SURFACE, 0, 0))
+}
+
+fn bitrate_config(
+    display: &std::sync::Arc<Display>,
+    profile: libva::VAProfile::Type,
+    entrypoint: libva::VAEntrypoint::Type,
+) -> Option<libva::Config> {
+    let mut attrs = vec![
+        VAConfigAttrib {
+            type_: VAConfigAttribType::VAConfigAttribRTFormat,
+            value: 0,
+        },
+        VAConfigAttrib {
+            type_: VAConfigAttribType::VAConfigAttribRateControl,
+            value: 0,
+        },
+    ];
+    display
+        .get_config_attributes(profile, entrypoint, &mut attrs)
+        .ok()?;
+    if attrs[0].value & VA_RT_FORMAT_YUV420 == 0 {
+        return None;
+    }
+    let mode = choose_bitrate_control(attrs[1].value)?;
+    attrs[0].value = VA_RT_FORMAT_YUV420;
+    attrs[1].value = mode;
+    display.create_config(attrs, profile, entrypoint).ok()
+}
+
+pub(crate) fn choose_bitrate_control(supported: u32) -> Option<u32> {
+    if supported == libva::VA_ATTRIB_NOT_SUPPORTED {
+        return None;
+    }
+    // Leaving this attribute unset selects CQP on Intel: bitrate settings
+    // then have no effect and every picture uses the fixed initial quantizer.
+    [libva::VA_RC_VBR, libva::VA_RC_CBR]
+        .into_iter()
+        .find(|mode| supported & mode != 0)
 }
 
 pub(crate) fn render_nodes() -> Vec<std::path::PathBuf> {
@@ -485,7 +549,42 @@ pub fn h264_encode_available() -> bool {
             else {
                 continue;
             };
-            if choose_h264_entrypoint(&entrypoints).is_some() {
+            if choose_h264_entrypoint(&entrypoints).is_some_and(|entrypoint| {
+                bitrate_config(
+                    &display,
+                    VAProfile::VAProfileH264ConstrainedBaseline,
+                    entrypoint,
+                )
+                .is_some()
+            }) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// True when a DRM render node offers VA-API H.264 High slice encode. The
+/// session negotiates High only then; otherwise it stays on Baseline.
+pub fn h264_high_available() -> bool {
+    #[cfg(not(target_os = "linux"))]
+    {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        for path in render_nodes() {
+            let Ok(display) = Display::open_drm_display(&path) else {
+                continue;
+            };
+            let Ok(entrypoints) =
+                display.query_config_entrypoints(libva::VAProfile::VAProfileH264High)
+            else {
+                continue;
+            };
+            if choose_h264_entrypoint(&entrypoints).is_some_and(|entrypoint| {
+                bitrate_config(&display, VAProfile::VAProfileH264High, entrypoint).is_some()
+            }) {
                 return true;
             }
         }
@@ -608,7 +707,19 @@ fn picture_buffer(job: &EncodeJob<'_>, coded_buf: u32) -> libva::EncPictureParam
             poc,
         );
     }
-    let fields = libva::H264EncPicFields::new(u32::from(job.idr), 1, 0, 0, 0, 0, 0, 1, 0, 0, 0);
+    let fields = libva::H264EncPicFields::new(
+        u32::from(job.idr),
+        1,
+        u32::from(job.high),
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+    );
     libva::EncPictureParameterBufferH264::new(
         current,
         references,

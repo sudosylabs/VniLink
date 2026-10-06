@@ -1,6 +1,6 @@
 use vnilink::CoreEvent;
 
-use crate::{Error, Quality, RateController};
+use crate::{suggest_quality, Congestion, Error, Quality, RateController};
 
 fn updated(quality: Quality) -> CoreEvent {
     CoreEvent::QualityUpdated { id: 7, quality }
@@ -71,4 +71,81 @@ fn events_beside_quality_never_reopen() {
             message: "input was rejected",
         })
         .unwrap());
+}
+
+#[test]
+fn congestion_steps_down_on_queue_drops_or_high_rtt() {
+    let current = Quality::new(5_000, 30, 1920, 1080).unwrap();
+    let down = Quality::new(2_000, 30, 1920, 1080).unwrap();
+    for congestion in [
+        Congestion {
+            rtt_ms: 20,
+            relay: false,
+            queued: 6,
+            dropped_delta: 0,
+        },
+        Congestion {
+            rtt_ms: 20,
+            relay: false,
+            queued: 0,
+            dropped_delta: 3,
+        },
+        Congestion {
+            rtt_ms: 200,
+            relay: false,
+            queued: 0,
+            dropped_delta: 0,
+        },
+        Congestion {
+            rtt_ms: 90,
+            relay: true,
+            queued: 0,
+            dropped_delta: 0,
+        },
+    ] {
+        assert_eq!(suggest_quality(current, congestion), Some(down));
+    }
+}
+
+#[test]
+fn clean_direct_path_steps_up_and_mid_path_holds() {
+    let mid = Quality::new(2_000, 30, 1920, 1080).unwrap();
+    let up = Quality::new(5_000, 30, 1920, 1080).unwrap();
+    assert_eq!(
+        suggest_quality(
+            mid,
+            Congestion {
+                rtt_ms: 20,
+                relay: false,
+                queued: 0,
+                dropped_delta: 0
+            }
+        ),
+        Some(up)
+    );
+    assert_eq!(
+        suggest_quality(
+            mid,
+            Congestion {
+                rtt_ms: 60,
+                relay: false,
+                queued: 0,
+                dropped_delta: 0
+            }
+        ),
+        None
+    );
+    let floor = Quality::new(800, 10, 854, 480).unwrap();
+    assert_eq!(
+        suggest_quality(
+            floor,
+            Congestion {
+                rtt_ms: 300,
+                relay: true,
+                queued: 8,
+                dropped_delta: 9
+            }
+        ),
+        None
+    );
 }

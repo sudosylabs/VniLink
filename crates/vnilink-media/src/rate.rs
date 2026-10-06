@@ -76,6 +76,35 @@ impl RateController {
     }
 }
 
+/// Ordered quality ladder for adaptive mode, low to high. Matches the
+/// manual presets plus a floor for poor paths. Single source of truth lives
+/// in `vnilink::suggest_quality`; this wrapper keeps the media-facing
+/// `Congestion` struct beside the encoder.
+
+/// Congestion snapshot the transport reports. `rtt_ms` comes from
+/// `Core::session_paths`, `relay` from the selected path, `queued` and
+/// `dropped_delta` from `Core::video_backpressure` (host) or
+/// `VideoSubscription::lagged` delta (controller).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Congestion {
+    pub rtt_ms: u64,
+    pub relay: bool,
+    pub queued: usize,
+    pub dropped_delta: u64,
+}
+
+/// Suggest one ladder step down when the path struggles, one step up when it
+/// is clean, else `None`. Single policy lives in `vnilink::suggest_quality`.
+pub fn suggest_quality(current: Quality, congestion: Congestion) -> Option<Quality> {
+    vnilink::suggest_quality(
+        &current,
+        congestion.rtt_ms,
+        congestion.relay,
+        congestion.queued,
+        congestion.dropped_delta,
+    )
+}
+
 fn settings_for(
     capture_width: u16,
     capture_height: u16,

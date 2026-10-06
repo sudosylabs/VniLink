@@ -1,7 +1,11 @@
-//! Constrained Baseline SPS and PPS for the VA-API encoder.
+//! H.264 SPS and PPS for the VA-API encoder.
 //!
 //! The driver writes the slice header from the same numbers. A keyframe that
 //! arrives without parameter sets is prefixed with this Annex-B header.
+//! Baseline (profile 66) is the interoperable default; High (profile 100)
+//! enables CABAC entropy coding for ~10-15% better detail at the same
+//! bitrate. This encoder configuration leaves the 8x8 transform off,
+//! although the decoder supports it in streams from other encoders.
 
 use vnilink_media::Error;
 
@@ -10,10 +14,31 @@ pub(crate) const LOG2_MAX_POC_LSB_MINUS4: u32 = 4;
 pub(crate) const MAX_FRAME_NUM: u32 = 1 << (LOG2_MAX_FRAME_NUM_MINUS4 + 4);
 pub(crate) const MAX_POC_LSB: i32 = 1 << (LOG2_MAX_POC_LSB_MINUS4 + 4);
 
+/// Encoder profile selected by session negotiation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EncodeProfile {
+    Baseline,
+    High,
+}
+
+impl EncodeProfile {
+    pub(crate) fn idc(self) -> u8 {
+        match self {
+            EncodeProfile::Baseline => 66,
+            EncodeProfile::High => 100,
+        }
+    }
+}
+
 /// Annex-B SPS and PPS for a visible picture. Dimensions are even.
 /// The coded size rounds each edge up to a multiple of 16, and the SPS crops
 /// the padding back off.
-pub(crate) fn parameter_sets(width: u16, height: u16, frame_rate: u8) -> Result<Vec<u8>, Error> {
+pub(crate) fn parameter_sets(
+    profile: EncodeProfile,
+    width: u16,
+    height: u16,
+    frame_rate: u8,
+) -> Result<Vec<u8>, Error> {
     if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
         return Err(Error::InvalidFrame("H.264 width and height must be even"));
     }
@@ -23,10 +48,21 @@ pub(crate) fn parameter_sets(width: u16, height: u16, frame_rate: u8) -> Result<
     let coded_width = u32::from(round_up_16(width));
     let coded_height = u32::from(round_up_16(height));
     let mut sps = Bits::default();
-    sps.u8(66);
-    sps.u8(0xC0);
+    sps.u8(profile.idc());
+    match profile {
+        EncodeProfile::Baseline => sps.u8(0xC0),
+        EncodeProfile::High => sps.u8(0x00),
+    }
     sps.u8(level_idc(coded_width / 16 * (coded_height / 16)));
     sps.ue(0);
+    if profile == EncodeProfile::High {
+        // chroma_format_idc = 1 (4:2:0), 8-bit luma/chroma, no scaling matrix.
+        sps.ue(1);
+        sps.ue(0);
+        sps.ue(0);
+        sps.bit(0);
+        sps.bit(0);
+    }
     sps.ue(LOG2_MAX_FRAME_NUM_MINUS4);
     sps.ue(0);
     sps.ue(LOG2_MAX_POC_LSB_MINUS4);
@@ -72,7 +108,9 @@ pub(crate) fn parameter_sets(width: u16, height: u16, frame_rate: u8) -> Result<
     let mut pps = Bits::default();
     pps.ue(0);
     pps.ue(0);
-    pps.bit(0);
+    // CABAC for High, CAVLC for Baseline. The driver is told the same mode
+    // through the VA-API picture parameters, so slices match this header.
+    pps.bit(u32::from(profile == EncodeProfile::High));
     pps.bit(0);
     pps.ue(0);
     pps.ue(0);
@@ -82,9 +120,16 @@ pub(crate) fn parameter_sets(width: u16, height: u16, frame_rate: u8) -> Result<
     pps.se(0);
     pps.se(0);
     pps.se(0);
-    pps.bit(1);
-    pps.bit(0);
-    pps.bit(0);
+    pps.bit(1); // deblocking_filter_control_present_flag
+    pps.bit(0); // constrained_intra_pred_flag
+    pps.bit(0); // redundant_pic_cnt_present_flag
+    if profile == EncodeProfile::High {
+        // CABAC entropy coding and neutral second chroma offset. The 8x8
+        // transform flag stays 0 for this encoder configuration.
+        pps.bit(0);
+        pps.bit(0);
+        pps.se(0);
+    }
     pps.trailing();
 
     let mut out = Vec::new();

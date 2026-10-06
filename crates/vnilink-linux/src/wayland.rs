@@ -105,6 +105,7 @@ impl HostDesktop for WaylandInput {
 pub struct WaylandCapture {
     capture: PortalCapture,
     input: WaylandInput,
+    cursor_metadata: bool,
 }
 impl WaylandCapture {
     pub fn open() -> Result<Self, Error> {
@@ -121,7 +122,7 @@ impl WaylandCapture {
             .map_err(|_| Error::CaptureRejected("the Wayland input worker could not start"))?;
         // Consent may need human interaction. Cancellation in the GTK layer
         // fences installation; a lost receiver makes the worker close its grant.
-        let (fd, node, logical) = ready_rx
+        let (fd, node, logical, cursor_metadata) = ready_rx
             .recv()
             .map_err(|_| Error::CaptureRejected("the Wayland permission worker stopped"))??;
         let capture = match PortalCapture::open(fd, node) {
@@ -136,7 +137,21 @@ impl WaylandCapture {
             pixels: capture.size(),
             logical,
         };
-        Ok(Self { capture, input })
+        Ok(Self {
+            capture,
+            input,
+            cursor_metadata,
+        })
+    }
+    pub fn separate_cursor(&self) -> bool {
+        self.cursor_metadata
+    }
+    pub fn cursor(&self) -> Option<vnilink::CursorState> {
+        if self.cursor_metadata {
+            self.capture.cursor()
+        } else {
+            None
+        }
     }
     pub fn desktop(&self) -> WaylandInput {
         self.input.clone()
@@ -161,13 +176,14 @@ impl Drop for WaylandCapture {
     }
 }
 
-type Ready = Result<(OwnedFd, u32, (i32, i32)), Error>;
+type Ready = Result<(OwnedFd, u32, (i32, i32), bool), Error>;
 struct Grant {
     proxy: RemoteDesktop,
     session: Session<RemoteDesktop>,
     fd: OwnedFd,
     node: u32,
     logical: (i32, i32),
+    cursor_metadata: bool,
 }
 async fn open_grant() -> Result<Grant, Error> {
     let proxy = RemoteDesktop::new()
@@ -190,12 +206,20 @@ async fn open_grant() -> Result<Grant, Error> {
             .await?
             .response()?;
         let cast = Screencast::new().await?;
+        let cursor_metadata = cast
+            .available_cursor_modes()
+            .await
+            .is_ok_and(|modes| modes.contains(CursorMode::Metadata));
         // Persistence for a combined session belongs to RemoteDesktop only.
         cast.select_sources(
             &session,
             SelectSourcesOptions::default()
                 .set_sources(ashpd::enumflags2::BitFlags::from(SourceType::Monitor))
-                .set_cursor_mode(CursorMode::Embedded)
+                .set_cursor_mode(if cursor_metadata {
+                    CursorMode::Metadata
+                } else {
+                    CursorMode::Embedded
+                })
                 .set_multiple(false),
         )
         .await?
@@ -228,16 +252,17 @@ async fn open_grant() -> Result<Grant, Error> {
         let fd = cast
             .open_pipe_wire_remote(&session, Default::default())
             .await?;
-        Ok::<_, ashpd::Error>((fd, node, logical))
+        Ok::<_, ashpd::Error>((fd, node, logical, cursor_metadata))
     }
     .await;
     match result {
-        Ok((fd, node, logical)) => Ok(Grant {
+        Ok((fd, node, logical, cursor_metadata)) => Ok(Grant {
             proxy,
             session,
             fd,
             node,
             logical,
+            cursor_metadata,
         }),
         Err(_) => {
             let _ = session.close().await;
@@ -277,6 +302,7 @@ fn worker_main(
         fd,
         node,
         logical,
+        cursor_metadata,
     } = grant;
     let mut closed = match runtime.block_on(session.receive_closed()) {
         Ok(closed) => Box::pin(closed),
@@ -288,7 +314,7 @@ fn worker_main(
             return;
         }
     };
-    if ready.send(Ok((fd, node, logical))).is_ok() {
+    if ready.send(Ok((fd, node, logical, cursor_metadata))).is_ok() {
         while !connection.closed.load(Ordering::Acquire) {
             // Pump D-Bus even with no input queued, and notice compositor-side
             // revocation instead of keeping a cached picture alive indefinitely.

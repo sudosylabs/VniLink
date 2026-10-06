@@ -13,6 +13,7 @@
 mod annexb;
 mod channel;
 mod controller;
+mod cursor;
 mod desktop;
 mod error;
 mod frame;
@@ -33,7 +34,7 @@ pub use pump::{
     CoreSink, EncodeParams, EncodedSample, FramePump, FrameSink, HostVideo, PumpOutput,
     VideoDecoder, VideoEncoder,
 };
-pub use rate::{EncoderSettings, RateController};
+pub use rate::{suggest_quality, Congestion, EncoderSettings, RateController};
 pub use vnilink::Quality;
 
 #[cfg(test)]

@@ -11,8 +11,13 @@ fn mac_encoder_output_is_accepted_by_linux_syntax() {
     use vnilink_macos::MacEncoder;
     use vnilink_media::{parse_annex_b, EncodeParams, RawFrame, VideoEncoder};
 
-    for (width, height) in [(64, 64), (1920, 1080)] {
-        let mut encoder = MacEncoder::open(width, height, 30, 2_000_000).unwrap();
+    for (width, height, high) in [
+        (64, 64, false),
+        (1920, 1080, false),
+        (64, 64, true),
+        (1920, 1080, true),
+    ] {
+        let mut encoder = MacEncoder::open(width, height, 30, 2_000_000, high).unwrap();
         let mut sps = None;
         let mut pps = None;
         let mut predictive_slices = 0;
@@ -209,9 +214,8 @@ fn baseline_parameter_sets_parse() {
     assert!(!pps.entropy_cabac);
     assert_eq!(pps.pic_init_qp, 26);
     assert_eq!(pps.chroma_qp_offset, [0, 0]);
-    // Absent scaling lists fall back to the specification defaults.
-    assert_eq!(pps.scaling4[0][0], 6);
-    assert_eq!(pps.scaling4[3][0], 10);
+    // No scaling matrix was signalled: every coefficient is flat 16.
+    assert_eq!(pps.scaling4, [[16; 16]; 6]);
 }
 
 #[test]
@@ -229,6 +233,60 @@ fn p_slice_header_parses() {
         slice.header_bits,
         8 + 1 + 1 + 1 + 8 + 8 + 1 + 1 + 1 + 1 + 1 + 1 + 1
     );
+}
+
+#[test]
+fn idr_consumes_frame_num_and_intra_cabac_has_no_init_field() {
+    use crate::parameter_set::{parameter_sets, EncodeProfile};
+    for profile in [EncodeProfile::Baseline, EncodeProfile::High] {
+        let sets = parameter_sets(profile, 64, 64, 30).unwrap();
+        let parsed = vnilink_media::parse_annex_b(&sets).unwrap();
+        let sps = Sps::parse(
+            parsed
+                .units()
+                .iter()
+                .find(|nal| nal.nal_type == 7)
+                .unwrap()
+                .bytes(),
+        )
+        .unwrap();
+        let pps = Pps::parse(
+            parsed
+                .units()
+                .iter()
+                .find(|nal| nal.nal_type == 8)
+                .unwrap()
+                .bytes(),
+            &sps,
+        )
+        .unwrap();
+        let mut fields = Writer::default();
+        fields.ue(0); // first_mb_in_slice
+        fields.ue(2); // I slice
+        fields.ue(0); // PPS id
+        fields.bits(0, 8); // frame_num is present even for IDR
+        fields.ue(3); // idr_pic_id
+        fields.bits(6, 8); // POC lsb
+        fields.bit(0); // no_output_of_prior_pics_flag
+        fields.bit(0); // long_term_reference_flag
+                       // cabac_init_idc is absent in I slices, even with CABAC enabled.
+        fields.se(-2);
+        fields.ue(0); // deblocking enabled
+        fields.se(2);
+        fields.se(-2);
+        let mut nal = vec![0x65];
+        nal.extend_from_slice(&fields.payload());
+        let slice = Slice::parse(&nal, &sps, &pps, true, 3).unwrap();
+        assert_eq!(
+            (slice.frame_num, slice.idr_pic_id, slice.poc_lsb),
+            (0, 3, 6)
+        );
+        assert_eq!((slice.cabac_init, slice.qp_delta), (0, -2));
+        assert_eq!(
+            (slice.deblocking_idc, slice.alpha_offset, slice.beta_offset),
+            (0, 2, -2)
+        );
+    }
 }
 
 #[test]
@@ -344,7 +402,7 @@ fn vaapi_decodes_what_it_encoded() {
 
     use crate::encode::LinuxEncoder;
 
-    let mut encoder = match LinuxEncoder::open(64, 64, 30, 500_000) {
+    let mut encoder = match LinuxEncoder::open(64, 64, 30, 500_000, false) {
         Ok(encoder) => encoder,
         Err(vnilink_media::Error::Unsupported(_)) => return,
         Err(error) => panic!("VA-API failed to open: {error}"),
@@ -379,7 +437,7 @@ fn vaapi_decodes_what_it_encoded() {
         .unwrap();
     assert_green(&picture);
     // A cropped size decodes at the visible size, not the coded size.
-    let mut small_encoder = match LinuxEncoder::open(62, 30, 30, 500_000) {
+    let mut small_encoder = match LinuxEncoder::open(62, 30, 30, 500_000, false) {
         Ok(encoder) => encoder,
         Err(vnilink_media::Error::Unsupported(_)) => return,
         Err(error) => panic!("VA-API failed to open: {error}"),
@@ -392,6 +450,43 @@ fn vaapi_decodes_what_it_encoded() {
         .decode(&EncodedFrame::h264(true, 66_666, small.bytes().to_vec()).unwrap())
         .unwrap();
     assert_eq!((picture.width(), picture.height()), (62, 30));
+    assert_red(&picture);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn vaapi_high_round_trips_where_the_entrypoint_exists() {
+    use vnilink::EncodedFrame;
+    use vnilink_media::{EncodeParams, VideoDecoder, VideoEncoder};
+
+    use crate::encode::LinuxEncoder;
+
+    if !crate::h264_high_available() {
+        return;
+    }
+    let mut encoder = match LinuxEncoder::open(64, 64, 30, 500_000, true) {
+        Ok(encoder) => encoder,
+        Err(vnilink_media::Error::Unsupported(_)) => return,
+        Err(error) => panic!("VA-API High failed to open: {error}"),
+    };
+    let mut decoder = crate::decode::LinuxDecoder::new();
+    let sample = encoder
+        .encode(
+            &solid(64, 64, 0, 0, 0, 255),
+            &EncodeParams {
+                force_keyframe: true,
+                bitrate_bps: 500_000,
+                frame_rate: 30,
+            },
+        )
+        .unwrap();
+    assert!(sample.keyframe());
+    let parsed = vnilink_media::parse_annex_b(sample.bytes()).unwrap();
+    assert!(parsed.has_sps() && parsed.has_pps() && parsed.has_idr());
+    let picture = decoder
+        .decode(&EncodedFrame::h264(true, 0, sample.bytes().to_vec()).unwrap())
+        .unwrap();
+    assert_eq!((picture.width(), picture.height()), (64, 64));
     assert_red(&picture);
 }
 
@@ -430,7 +525,12 @@ fn assert_red(picture: &vnilink_media::RawFrame) {
         channel_mean(picture, 2) > 128.0
             && channel_mean(picture, 2) > channel_mean(picture, 0)
             && channel_mean(picture, 2) > channel_mean(picture, 1),
-        "decoded picture is not the encoded color"
+        "decoded {}x{} picture is not red: B={:.1} G={:.1} R={:.1}",
+        picture.width(),
+        picture.height(),
+        channel_mean(picture, 0),
+        channel_mean(picture, 1),
+        channel_mean(picture, 2)
     );
 }
 
@@ -442,4 +542,146 @@ fn assert_green(picture: &vnilink_media::RawFrame) {
             && channel_mean(picture, 1) > channel_mean(picture, 2),
         "decoded picture is not the encoded color"
     );
+}
+
+#[test]
+fn high_8x8_lists_keep_sequence_fallback_default_and_custom_raster_values() {
+    use crate::syntax::{DEFAULT_INTER_8X8, DEFAULT_INTRA_8X8};
+    for sequence_matrix in [false, true] {
+        for custom in [false, true] {
+            let mut sps = Sps::parse(&baseline_sps()).unwrap();
+            sps.profile = 100;
+            sps.constraints = 0;
+            sps.scaling_matrix_present = sequence_matrix;
+            if sequence_matrix {
+                sps.scaling8 = [[42; 64], [43; 64]];
+            }
+            let mut fields = Writer::default();
+            fields.ue(0);
+            fields.ue(0);
+            fields.bit(1);
+            fields.bit(0);
+            fields.ue(0);
+            fields.ue(0);
+            fields.ue(0);
+            fields.bit(0);
+            fields.bits(0, 2);
+            fields.se(0);
+            fields.se(0);
+            fields.se(0);
+            fields.bit(1);
+            fields.bit(0);
+            fields.bit(0);
+            fields.bit(1); // transform_8x8_mode_flag
+            fields.bit(1); // pic_scaling_matrix_present_flag
+            for _ in 0..6 {
+                fields.bit(0);
+            }
+            fields.bit(0); // intra 8x8 inherits the sequence or JVT default
+            fields.bit(1); // inter 8x8 explicitly present
+            if custom {
+                fields.se(-7); // first coefficient = 1
+                for _ in 1..64 {
+                    fields.se(1);
+                }
+            } else {
+                fields.se(-8);
+            } // use default scaling matrix
+            fields.se(2); // second chroma offset follows both 8x8 lists
+            let mut nal = vec![0x68];
+            nal.extend(fields.payload());
+            let pps = Pps::parse(&nal, &sps).unwrap();
+            assert!(pps.transform_8x8);
+            assert_eq!(pps.chroma_qp_offset, [0, 2]);
+            assert_eq!(
+                pps.scaling8[0],
+                if sequence_matrix {
+                    [42; 64]
+                } else {
+                    DEFAULT_INTRA_8X8
+                }
+            );
+            if custom {
+                assert_eq!(&pps.scaling8[1][..8], &[1, 2, 6, 7, 15, 16, 28, 29]);
+                assert_eq!(&pps.scaling8[1][56..], &[36, 37, 49, 50, 58, 59, 63, 64]);
+                let mut sorted = pps.scaling8[1];
+                sorted.sort_unstable();
+                assert_eq!(sorted, std::array::from_fn(|i| (i + 1) as u8));
+            } else {
+                assert_eq!(pps.scaling8[1], DEFAULT_INTER_8X8);
+            }
+        }
+    }
+}
+
+#[test]
+fn mac_high_fixture_reaches_the_8x8_decode_path() {
+    let parsed =
+        vnilink_media::parse_annex_b(include_bytes!("fixtures/mac-high-64-0.h264")).unwrap();
+    let sps = Sps::parse(
+        parsed
+            .units()
+            .iter()
+            .find(|n| n.nal_type == 7)
+            .unwrap()
+            .bytes(),
+    )
+    .unwrap();
+    let pps = Pps::parse(
+        parsed
+            .units()
+            .iter()
+            .find(|n| n.nal_type == 8)
+            .unwrap()
+            .bytes(),
+        &sps,
+    )
+    .unwrap();
+    assert_eq!(sps.profile, 100);
+    assert!(
+        pps.transform_8x8,
+        "fixture must exercise the reported rejection"
+    );
+    assert_eq!(pps.scaling8, [[16; 64]; 2]);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn vaapi_decodes_mac_high_keyframe_and_predictions_like_ffmpeg() {
+    use vnilink_media::VideoDecoder;
+    let frames: [&[u8]; 3] = [
+        include_bytes!("fixtures/mac-high-64-0.h264"),
+        include_bytes!("fixtures/mac-high-64-1.h264"),
+        include_bytes!("fixtures/mac-high-64-2.h264"),
+    ];
+    let reference: [&[u8]; 3] = [
+        include_bytes!("fixtures/reference-64-0.bgra"),
+        include_bytes!("fixtures/reference-64-1.bgra"),
+        include_bytes!("fixtures/reference-64-2.bgra"),
+    ];
+    let mut decoder = crate::decode::LinuxDecoder::new();
+    for (i, (bytes, reference)) in frames.into_iter().zip(reference).enumerate() {
+        let frame = vnilink::EncodedFrame::h264(i == 0, i as u64 * 33_333, bytes.to_vec()).unwrap();
+        let picture = match decoder.decode(&frame) {
+            Err(vnilink_media::Error::Unsupported("VA-API H.264")) if i == 0 => return,
+            result => result.unwrap(),
+        };
+        assert_eq!((picture.width(), picture.height()), (64, 64));
+        let mut error = 0u64;
+        for (pixel, expected) in picture
+            .pixels()
+            .chunks_exact(4)
+            .zip(reference.chunks_exact(4))
+        {
+            for channel in 0..3 {
+                let delta = i32::from(pixel[channel]) - i32::from(expected[channel]);
+                error += (delta * delta) as u64;
+            }
+        }
+        let mse = error as f64 / (64. * 64. * 3.);
+        assert!(
+            mse < 6.5,
+            "frame {i}: GPU differs from FFmpeg by more than 40dB PSNR: {mse}"
+        );
+    }
 }

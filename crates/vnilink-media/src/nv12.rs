@@ -30,6 +30,12 @@ impl Nv12 {
     pub fn uv_plane(&self) -> &[u8] {
         &self.uv
     }
+
+    /// Move the planes out without a second copy. Host encoders should use
+    /// this instead of `y_plane().to_vec()` + `uv_plane().to_vec()`.
+    pub fn into_planes(self) -> (Vec<u8>, Vec<u8>) {
+        (self.y, self.uv)
+    }
 }
 
 impl fmt::Debug for Nv12 {
@@ -63,20 +69,40 @@ pub fn nv12_to_bgra(
         return Err(Error::InvalidFrame("frame is missing pixels"));
     }
     let mut bgra = vec![0u8; width_usize * height_usize * 4];
-    for row in 0..height_usize {
-        for col in 0..width_usize {
-            let c = i32::from(y[row * width_usize + col]) - 16;
-            let uv_row = (row / 2) * width_usize + (col / 2) * 2;
-            let d = i32::from(uv[uv_row]) - 128;
-            let e = i32::from(uv[uv_row + 1]) - 128;
-            let red = (298 * c + 409 * e + 128) >> 8;
-            let green = (298 * c - 100 * d - 208 * e + 128) >> 8;
-            let blue = (298 * c + 516 * d + 128) >> 8;
-            let pixel = &mut bgra[(row * width_usize + col) * 4..][..4];
-            pixel[0] = clamp(blue);
-            pixel[1] = clamp(green);
-            pixel[2] = clamp(red);
-            pixel[3] = 255;
+    // Chroma is shared by a 2x2 block. Derive its RGB contributions once
+    // and walk bounded row chunks instead of indexing every pixel separately.
+    for ((luma, chroma), output) in y[..width_usize * height_usize]
+        .chunks_exact(width_usize * 2)
+        .zip(uv[..width_usize * height_usize / 2].chunks_exact(width_usize))
+        .zip(bgra.chunks_exact_mut(width_usize * 8))
+    {
+        let (top, bottom) = luma.split_at(width_usize);
+        let (out_top, out_bottom) = output.split_at_mut(width_usize * 4);
+        for ((((top, bottom), out_top), out_bottom), uv) in top
+            .chunks_exact(2)
+            .zip(bottom.chunks_exact(2))
+            .zip(out_top.chunks_exact_mut(8))
+            .zip(out_bottom.chunks_exact_mut(8))
+            .zip(chroma.chunks_exact(2))
+        {
+            let d = i32::from(uv[0]) - 128;
+            let e = i32::from(uv[1]) - 128;
+            let red = 409 * e + 128;
+            let green = -100 * d - 208 * e + 128;
+            let blue = 516 * d + 128;
+            let rgb = |luma: u8| {
+                let c = 298 * (i32::from(luma) - 16);
+                [
+                    clamp((c + blue) >> 8),
+                    clamp((c + green) >> 8),
+                    clamp((c + red) >> 8),
+                    255,
+                ]
+            };
+            out_top[..4].copy_from_slice(&rgb(top[0]));
+            out_top[4..].copy_from_slice(&rgb(top[1]));
+            out_bottom[..4].copy_from_slice(&rgb(bottom[0]));
+            out_bottom[4..].copy_from_slice(&rgb(bottom[1]));
         }
     }
     RawFrame::bgra(width, height, timestamp_us, bgra)
@@ -93,26 +119,26 @@ pub fn bgra_to_nv12(frame: &RawFrame) -> Result<Nv12, Error> {
     let height = usize::from(frame.height());
     let mut y_plane = vec![0u8; width * height];
     let mut uv_plane = vec![0u8; width * height / 2];
-    for row in 0..height {
-        let src = frame.row(row as u16);
-        for col in 0..width {
-            let px = &src[col * 4..col * 4 + 4];
-            let (y, u, v) = yuv(px[2], px[1], px[0]);
-            y_plane[row * width + col] = y;
-            if row % 2 == 0 && col % 2 == 0 {
-                let mut u_sum = i32::from(u);
-                let mut v_sum = i32::from(v);
-                for (dy, dx) in [(0, 1), (1, 0), (1, 1)] {
-                    let other = frame.row((row + dy) as u16);
-                    let sample = &other[(col + dx) * 4..(col + dx) * 4 + 4];
-                    let (_, ou, ov) = yuv(sample[2], sample[1], sample[0]);
-                    u_sum += i32::from(ou);
-                    v_sum += i32::from(ov);
-                }
-                let uv_index = (row / 2) * width + col;
-                uv_plane[uv_index] = (u_sum / 4) as u8;
-                uv_plane[uv_index + 1] = (v_sum / 4) as u8;
-            }
+    // Visit each 2x2 block once. Previously three of its pixels were
+    // converted twice: once for their luma, then again for averaged chroma.
+    for row in (0..height).step_by(2) {
+        let top = frame.row(row as u16);
+        let bottom = frame.row((row + 1) as u16);
+        let (y_top, y_bottom) = y_plane[row * width..(row + 2) * width].split_at_mut(width);
+        let uv_row = &mut uv_plane[row / 2 * width..(row / 2 + 1) * width];
+        let sources = top.chunks_exact(8).zip(bottom.chunks_exact(8));
+        let luma = y_top.chunks_exact_mut(2).zip(y_bottom.chunks_exact_mut(2));
+        for (((top, bottom), (y_top, y_bottom)), uv) in
+            sources.zip(luma).zip(uv_row.chunks_exact_mut(2))
+        {
+            let a = yuv(top[2], top[1], top[0]);
+            let b = yuv(top[6], top[5], top[4]);
+            let c = yuv(bottom[2], bottom[1], bottom[0]);
+            let d = yuv(bottom[6], bottom[5], bottom[4]);
+            y_top.copy_from_slice(&[a.0, b.0]);
+            y_bottom.copy_from_slice(&[c.0, d.0]);
+            uv[0] = ((u16::from(a.1) + u16::from(b.1) + u16::from(c.1) + u16::from(d.1)) / 4) as u8;
+            uv[1] = ((u16::from(a.2) + u16::from(b.2) + u16::from(c.2) + u16::from(d.2)) / 4) as u8;
         }
     }
     Ok(Nv12 {
@@ -130,7 +156,9 @@ fn yuv(red: u8, green: u8, blue: u8) -> (u8, u8, u8) {
     let y = ((66 * red + 129 * green + 25 * blue + 128) >> 8) + 16;
     let u = ((-38 * red - 74 * green + 112 * blue + 128) >> 8) + 128;
     let v = ((112 * red - 94 * green - 18 * blue + 128) >> 8) + 128;
-    (clamp(y), clamp(u), clamp(v))
+    // With eight-bit RGB these coefficients bound Y to 16..=235 and
+    // U/V to 16..=240; clamping here repeats work without changing output.
+    (y as u8, u as u8, v as u8)
 }
 
 fn clamp(value: i32) -> u8 {

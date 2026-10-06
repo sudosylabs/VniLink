@@ -22,6 +22,9 @@ use crate::Quality;
 pub trait FrameSource {
     fn size(&self) -> (u16, u16);
     fn next_frame(&self, timestamp_us: u64) -> Result<RawFrame, Error>;
+    fn cursor(&self) -> Option<vnilink::CursorState> {
+        None
+    }
 }
 
 /// Platform encoder constructor, kept so a later quality change can reopen the
@@ -155,6 +158,13 @@ where
     let mut session = HostSession::open(capture.size().0, capture.size().1, quality, open_encoder)?;
     let events = core.subscribe()?;
     let mut sink = CoreSink::new(core);
+    let separate_cursor = core.separate_cursor(session_id, vnilink::SessionRole::Host)?;
+    let generation = core
+        .snapshot()?
+        .incoming
+        .filter(|s| s.id == session_id)
+        .ok_or(vnilink::Error::NoSession)?
+        .generation;
     let started = std::time::Instant::now();
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -169,12 +179,32 @@ where
             }
             session.observe(&event)?;
         }
+        let capture_started = std::time::Instant::now();
+        let frame_period = std::time::Duration::from_micros(
+            1_000_000 / u64::from(session.control.settings().frame_rate),
+        );
         let timestamp_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
-        let frame = capture.next_frame(timestamp_us)?;
+        let mut frame = capture.next_frame(timestamp_us)?;
+        if let Some(cursor) = capture.cursor() {
+            if separate_cursor {
+                match core.publish_cursor(session_id, generation, cursor) {
+                    Ok(()) => {}
+                    Err(vnilink::Error::NoSession) => return Ok(()),
+                    Err(error) => return Err(error.into()),
+                }
+            } else {
+                frame = crate::cursor::composite(&frame, &cursor)?;
+            }
+        }
         match session.publish(&frame, &mut sink, session_id) {
             Ok(_) => {}
             Err(PublishError::Session(vnilink::Error::NoSession)) => return Ok(()),
             Err(err) => return Err(err),
+        }
+        // A cached idle picture can be returned immediately. Pace requests,
+        // rather than copying and discarding that picture in a busy loop.
+        if let Some(remaining) = frame_period.checked_sub(capture_started.elapsed()) {
+            std::thread::sleep(remaining);
         }
     }
 }

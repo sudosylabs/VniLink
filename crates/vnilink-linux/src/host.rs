@@ -31,7 +31,8 @@ impl FrameSource for crate::pipewire::PortalCapture {
 ///
 /// The caller has already started `capture`. This function does not open a
 /// portal. `stop` is read between frames, so a frame already being copied is
-/// finished first.
+/// finished first. The encoder profile follows the negotiated session codec:
+/// High when Hello/Accept agreed it, else Constrained Baseline.
 #[cfg(target_os = "linux")]
 pub fn serve_portal(
     capture: &crate::pipewire::PortalCapture,
@@ -40,5 +41,15 @@ pub fn serve_portal(
     quality: Quality,
     stop: &AtomicBool,
 ) -> Result<(), PublishError> {
-    vnilink_media::serve_capture(capture, core, session_id, quality, stop, LinuxEncoder::open)
+    let high = core
+        .host_codec(session_id)
+        .is_ok_and(|codec| codec == vnilink::CODEC_H264_HIGH);
+    vnilink_media::serve_capture(
+        capture,
+        core,
+        session_id,
+        quality,
+        stop,
+        move |w, h, fps, bps| LinuxEncoder::open(w, h, fps, bps, high),
+    )
 }

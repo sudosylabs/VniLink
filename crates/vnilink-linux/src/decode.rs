@@ -38,7 +38,7 @@ use libva::VA_RT_FORMAT_YUV420;
 use vnilink::EncodedFrame;
 use vnilink_media::{nv12_to_bgra, parse_annex_b, Error, RawFrame, VideoDecoder};
 
-use crate::syntax::{Marking, Pps, Slice, SliceKind, Sps, DEFAULT_INTER_8X8, DEFAULT_INTRA_8X8};
+use crate::syntax::{Marking, Pps, Slice, SliceKind, Sps};
 use crate::vaapi::render_nodes;
 
 /// Decoded BGRA picture with its size, moved back to the caller thread.
@@ -588,7 +588,7 @@ impl OpenDecoder {
             u32::from(pps.entropy_cabac),
             u32::from(pps.weighted_pred),
             u32::from(pps.weighted_bipred),
-            0,
+            u32::from(pps.transform_8x8),
             0,
             u32::from(pps.constrained_intra),
             u32::from(pps.bottom_field_order_present),
@@ -605,8 +605,8 @@ impl OpenDecoder {
         let picture = PictureParameterBufferH264::new(
             PictureH264::new(current_id, parsed[0].0.frame_num, current_flags, poc, poc),
             reference_frames,
-            (sps.pic_width_mbs - 1) as u16,
-            (sps.pic_height_map - 1) as u16,
+            sps.pic_width_mbs_minus1 as u16,
+            sps.pic_height_map_minus1 as u16,
             0,
             0,
             sps.num_ref_frames as u8,
@@ -621,7 +621,7 @@ impl OpenDecoder {
             &pic_fields,
             parsed[0].0.frame_num as u16,
         );
-        let iq = IQMatrixBufferH264::new(pps.scaling4, [DEFAULT_INTRA_8X8, DEFAULT_INTER_8X8]);
+        let iq = IQMatrixBufferH264::new(pps.scaling4, pps.scaling8);
         let mut slice_params = SliceParameterBufferH264::new_array();
         let mut slice_data = Vec::new();
         for (slice, _, _, nal) in parsed {

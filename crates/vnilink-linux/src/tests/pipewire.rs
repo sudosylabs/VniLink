@@ -3,7 +3,7 @@ use pw::spa::param::video::VideoFormat;
 
 use crate::dmabuf::{DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR};
 use crate::pipewire::{
-    PortalBuffer, PortalDelivery, PortalFormat, delivery_of, enum_formats, format_objects,
+    delivery_of, enum_formats, format_objects, PortalBuffer, PortalDelivery, PortalFormat,
 };
 
 #[test]
@@ -54,11 +54,9 @@ fn portal_buffer_policy_excludes_dmabuf_and_rejects_unexpected_gpu_buffers() {
     );
     let property = &object.properties[0];
     assert_eq!(property.key, pw::spa::sys::SPA_PARAM_BUFFERS_dataType);
-    assert!(
-        property
-            .flags
-            .contains(pw::spa::pod::PropertyFlags::MANDATORY)
-    );
+    assert!(property
+        .flags
+        .contains(pw::spa::pod::PropertyFlags::MANDATORY));
     let pw::spa::pod::Value::Choice(pw::spa::pod::ChoiceValue::Int(Choice(
         _,
         ChoiceEnum::Flags { default, flags },

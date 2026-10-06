@@ -13,7 +13,9 @@ use crate::host::HostSession;
 fn the_host_encoder_is_unavailable() {
     let quality = Quality::new(500, 30, 64, 64).unwrap();
     assert!(matches!(
-        HostSession::open(64, 64, quality, LinuxEncoder::open),
+        HostSession::open(64, 64, quality, |w, h, fps, bps| LinuxEncoder::open(
+            w, h, fps, bps, false
+        )),
         Err(Error::Unsupported("VA-API H.264"))
     ));
 }
@@ -24,7 +26,9 @@ fn the_platform_encoder_plugs_into_the_generic_session() {
     use vnilink::CoreEvent;
 
     let quality = Quality::new(500, 30, 32, 32).unwrap();
-    let mut session = match HostSession::open(64, 64, quality, LinuxEncoder::open) {
+    let mut session = match HostSession::open(64, 64, quality, |w, h, fps, bps| {
+        LinuxEncoder::open(w, h, fps, bps, false)
+    }) {
         Ok(session) => session,
         Err(Error::Unsupported("VA-API H.264")) => return,
         Err(err) => panic!("VA-API failed to open: {err}"),

@@ -5,7 +5,11 @@ use crate::encode::LinuxEncoder;
 #[test]
 fn an_odd_encoder_size_is_rejected() {
     assert!(matches!(
-        LinuxEncoder::open(63, 64, 30, 500_000),
+        LinuxEncoder::open(63, 64, 30, 500_000, false),
+        Err(Error::InvalidFrame("H.264 width and height must be even"))
+    ));
+    assert!(matches!(
+        LinuxEncoder::open(64, 63, 30, 500_000, true),
         Err(Error::InvalidFrame("H.264 width and height must be even"))
     ));
 }
@@ -14,17 +18,18 @@ fn an_odd_encoder_size_is_rejected() {
 #[test]
 fn the_software_encoder_is_not_linked() {
     assert!(matches!(
-        LinuxEncoder::open(64, 64, 30, 500_000),
+        LinuxEncoder::open(64, 64, 30, 500_000, false),
         Err(Error::Unsupported("VA-API H.264"))
     ));
     assert!(!crate::h264_encode_available());
+    assert!(!crate::h264_high_available());
     assert!(!crate::h264_decode_available());
 }
 
 #[cfg(target_os = "linux")]
 #[test]
 fn vaapi_encodes_a_synthetic_picture_when_a_render_node_is_open() {
-    let mut encoder = match LinuxEncoder::open(64, 64, 30, 500_000) {
+    let mut encoder = match LinuxEncoder::open(64, 64, 30, 500_000, false) {
         Ok(encoder) => encoder,
         Err(Error::Unsupported("VA-API H.264")) => return,
         Err(err) => panic!("VA-API failed to open: {err}"),
@@ -106,5 +111,57 @@ fn assert_red_picture(annex_b: &[u8], width: u16, height: u16) {
     assert!(
         pixel[2] > pixel[0] && pixel[2] > pixel[1] && pixel[2] > 128,
         "decoded picture is not the encoded color"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn higher_bitrate_changes_the_hardware_output_budget() {
+    fn encoded_bytes(bitrate: u32) -> Option<usize> {
+        let (width, height) = (1280u16, 720u16);
+        let mut encoder = match LinuxEncoder::open(width, height, 60, bitrate, true) {
+            Ok(encoder) => encoder,
+            Err(Error::Unsupported("VA-API H.264")) => return None,
+            Err(error) => panic!("encoder failed: {error}"),
+        };
+        let mut total = 0;
+        for index in 0..30u64 {
+            let mut pixels = vec![255; usize::from(width) * usize::from(height) * 4];
+            for y in 0..usize::from(height) {
+                for x in 0..usize::from(width) {
+                    let value = if ((x + index as usize) % 19 < 2 && y % 23 < 17)
+                        || (y % 23 < 2 && x % 19 < 13)
+                    {
+                        32
+                    } else {
+                        224
+                    };
+                    let offset = (y * usize::from(width) + x) * 4;
+                    pixels[offset..offset + 3].fill(value);
+                }
+            }
+            let frame =
+                vnilink_media::RawFrame::bgra(width, height, index * 16_667, pixels).unwrap();
+            let sample = encoder
+                .encode(
+                    &frame,
+                    &vnilink_media::EncodeParams {
+                        force_keyframe: index == 0,
+                        bitrate_bps: bitrate,
+                        frame_rate: 60,
+                    },
+                )
+                .unwrap();
+            total += sample.bytes().len();
+        }
+        Some(total)
+    }
+    let Some(low) = encoded_bytes(300_000) else {
+        return;
+    };
+    let high = encoded_bytes(12_000_000).unwrap();
+    assert!(
+        high > low,
+        "bitrate control had no effect on detailed pictures: low={low}, high={high}"
     );
 }

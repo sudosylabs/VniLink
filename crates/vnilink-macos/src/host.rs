@@ -32,7 +32,8 @@ impl FrameSource for crate::capture::ScreenCapture {
 ///
 /// The caller has already started `capture`. This function does not ask for
 /// Screen Recording permission. `stop` is read between frames, so a frame
-/// already being copied is finished first.
+/// already being copied is finished first. The encoder profile follows the
+/// negotiated session codec.
 #[cfg(target_os = "macos")]
 pub fn serve_stream(
     capture: &crate::capture::ScreenCapture,
@@ -41,5 +42,15 @@ pub fn serve_stream(
     quality: Quality,
     stop: &AtomicBool,
 ) -> Result<(), PublishError> {
-    vnilink_media::serve_capture(capture, core, session_id, quality, stop, MacEncoder::open)
+    let high = core
+        .host_codec(session_id)
+        .is_ok_and(|codec| codec == vnilink::CODEC_H264_HIGH);
+    vnilink_media::serve_capture(
+        capture,
+        core,
+        session_id,
+        quality,
+        stop,
+        move |w, h, fps, bps| MacEncoder::open(w, h, fps, bps, high),
+    )
 }

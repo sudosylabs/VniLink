@@ -5,15 +5,13 @@
 //! `pic_order_cnt_type` 0, sliding-window reference marking, and 4:2:0
 //! eight-bit video. Anything outside that subset is refused with an explicit
 //! `Unsupported` error at parse time, never misdecoded. Field pictures,
-//! MBAFF, FMO, B slices, long-term references, the 8x8 transform, and
+//! MBAFF, FMO, B slices, long-term references, and
 //! monochrome or wide-gamut formats are not attempted.
 //!
 //! Scaling-list storage follows the VA-API layout: six 4x4 lists in raster
 //! order (Intra Y, Intra Cr, Intra Cb, Inter Y, Inter Cr, Inter Cb). The
 //! default tables are the specification defaults also shipped by FFmpeg.
-//! Custom 4x4 lists are parsed; custom 8x8 lists are skipped (the 8x8
-//! transform itself is refused), and a present 8x8 list never reaches the
-//! driver.
+//! Both 4x4 and 8x8 lists are parsed with sequence/picture fallback rules.
 
 use vnilink_media::Error;
 
@@ -28,9 +26,7 @@ const DEFAULT_INTER_4X4: [u8; 16] = [
     10, 14, 20, 24, 14, 20, 24, 27, 20, 24, 27, 30, 24, 27, 30, 34,
 ];
 
-/// Default 8x8 scaling lists in raster order. Sent to the driver unchanged;
-/// the decoder refuses the 8x8 transform, so these entries are never used
-/// for output pixels.
+/// Specification default 8x8 scaling lists in raster order.
 pub(crate) const DEFAULT_INTRA_8X8: [u8; 64] = [
     6, 10, 13, 16, 18, 23, 25, 27, 10, 11, 16, 18, 23, 25, 27, 29, 13, 16, 18, 23, 25, 27, 29, 31,
     16, 18, 23, 25, 27, 29, 31, 33, 18, 23, 25, 27, 29, 31, 33, 36, 23, 25, 27, 29, 31, 33, 36, 38,
@@ -158,12 +154,14 @@ pub(crate) struct Sps {
     pub log2_max_poc_lsb_minus4: u32,
     pub num_ref_frames: u32,
     pub gaps_flag: bool,
-    pub pic_width_mbs: u32,
-    pub pic_height_map: u32,
+    pub pic_width_mbs_minus1: u32,
+    pub pic_height_map_minus1: u32,
     pub direct_8x8: bool,
     pub coded: (u16, u16),
     pub visible: (u16, u16),
     pub scaling4: [[u8; 16]; 6],
+    pub scaling8: [[u8; 64]; 2],
+    pub scaling_matrix_present: bool,
 }
 
 fn truncated() -> Error {
@@ -207,25 +205,38 @@ fn scaling_list_4x4(
     Ok(true)
 }
 
-/// Skips one 8x8 scaling list without storing it.
-fn skip_scaling_list_8x8(bits: &mut Bits<'_>) -> Result<(), Error> {
+/// Parses an 8x8 list into the raster layout expected by VA-API.
+fn scaling_list_8x8(
+    bits: &mut Bits<'_>,
+    jvt: &[u8; 64],
+    fallback: &[u8; 64],
+    out: &mut [u8; 64],
+) -> Result<(), Error> {
     if bits.bit().ok_or_else(truncated)? == 0 {
+        *out = *fallback;
         return Ok(());
     }
+    let scan = [
+        0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27,
+        20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
+        58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
+    ];
     let mut last = 8i32;
     let mut next = 8i32;
-    for i in 0..64 {
+    for (i, raster) in scan.into_iter().enumerate() {
         if next != 0 {
             let delta = bits.se().ok_or_else(truncated)?;
             if !(-128..=127).contains(&delta) {
                 return Err(Error::InvalidFrame("H.264 scaling list is out of range"));
             }
-            next = (last + delta) & 0xff;
+            next = (last + delta) & 255;
         }
         if i == 0 && next == 0 {
-            break;
+            *out = *jvt;
+            return Ok(());
         }
         last = if next != 0 { next } else { last };
+        out[raster] = last as u8;
     }
     Ok(())
 }
@@ -248,14 +259,11 @@ impl Sps {
         if id > 31 {
             return Err(Error::InvalidFrame("H.264 SPS id is out of range"));
         }
-        let mut scaling4 = [
-            DEFAULT_INTRA_4X4,
-            DEFAULT_INTRA_4X4,
-            DEFAULT_INTRA_4X4,
-            DEFAULT_INTER_4X4,
-            DEFAULT_INTER_4X4,
-            DEFAULT_INTER_4X4,
-        ];
+        // Absent sequence scaling matrices imply flat weights, not JVT
+        // defaults (those apply to explicit default/fallback scaling lists).
+        let mut scaling4 = [[16; 16]; 6];
+        let mut scaling8 = [[16; 64]; 2];
+        let mut scaling_matrix_present = false;
         if matches!(
             profile,
             100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134
@@ -273,7 +281,8 @@ impl Sps {
             if transform_bypass != 0 {
                 return Err(Error::Unsupported("lossless H.264 is not supported"));
             }
-            if bits.bit().ok_or_else(truncated)? == 1 {
+            scaling_matrix_present = bits.bit().ok_or_else(truncated)? == 1;
+            if scaling_matrix_present {
                 let mut previous = DEFAULT_INTRA_4X4;
                 for (index, slot) in scaling4.iter_mut().enumerate() {
                     let jvt = if index < 3 {
@@ -291,10 +300,14 @@ impl Sps {
                     previous = out;
                     *slot = out;
                 }
-                // 8x8 lists are parsed only to advance the reader; the
-                // decoder refuses the 8x8 transform that would use them.
-                skip_scaling_list_8x8(&mut bits)?;
-                skip_scaling_list_8x8(&mut bits)?;
+                for (index, slot) in scaling8.iter_mut().enumerate() {
+                    let default = if index == 0 {
+                        &DEFAULT_INTRA_8X8
+                    } else {
+                        &DEFAULT_INTER_8X8
+                    };
+                    scaling_list_8x8(&mut bits, default, default, slot)?;
+                }
             }
         }
         let log2_max_frame_num_minus4 = bits.ue().ok_or_else(truncated)?;
@@ -320,8 +333,8 @@ impl Sps {
             return Err(Error::InvalidFrame("H.264 reference count is out of range"));
         }
         let gaps_flag = bits.bit().ok_or_else(truncated)? != 0;
-        let pic_width_mbs = bits.ue().ok_or_else(truncated)?;
-        let pic_height_map = bits.ue().ok_or_else(truncated)?;
+        let pic_width_mbs_minus1 = bits.ue().ok_or_else(truncated)?;
+        let pic_height_map_minus1 = bits.ue().ok_or_else(truncated)?;
         let frame_mbs_only = bits.bit().ok_or_else(truncated)?;
         if frame_mbs_only == 0 {
             return Err(Error::Unsupported("interlaced H.264 is not supported"));
@@ -339,16 +352,17 @@ impl Sps {
         } else {
             [0, 0, 0, 0]
         };
-        let coded_width = (pic_width_mbs + 1)
+        let coded_width = (pic_width_mbs_minus1 + 1)
             .checked_mul(16)
             .ok_or(Error::InvalidFrame(
                 "H.264 SPS picture size is out of range",
             ))?;
-        let coded_height = (pic_height_map + 1)
-            .checked_mul(16)
-            .ok_or(Error::InvalidFrame(
-                "H.264 SPS picture size is out of range",
-            ))?;
+        let coded_height =
+            (pic_height_map_minus1 + 1)
+                .checked_mul(16)
+                .ok_or(Error::InvalidFrame(
+                    "H.264 SPS picture size is out of range",
+                ))?;
         // 4:2:0 frame pictures crop in two-pixel units.
         let visible_width = coded_width.saturating_sub((crop[0] + crop[1]) * 2);
         let visible_height = coded_height.saturating_sub((crop[2] + crop[3]) * 2);
@@ -377,12 +391,14 @@ impl Sps {
             log2_max_poc_lsb_minus4,
             num_ref_frames,
             gaps_flag,
-            pic_width_mbs,
-            pic_height_map,
+            pic_width_mbs_minus1,
+            pic_height_map_minus1,
             direct_8x8: direct_8x8 != 0,
             coded,
             visible,
             scaling4,
+            scaling8,
+            scaling_matrix_present,
         })
     }
 }
@@ -406,6 +422,8 @@ pub(crate) struct Pps {
     pub constrained_intra: bool,
     pub redundant_present: bool,
     pub scaling4: [[u8; 16]; 6],
+    pub scaling8: [[u8; 64]; 2],
+    pub transform_8x8: bool,
 }
 
 impl Pps {
@@ -463,24 +481,46 @@ impl Pps {
         };
         let mut chroma_qp_offset_1 = chroma_qp_offset_0;
         let mut scaling4 = sps.scaling4;
+        let mut scaling8 = sps.scaling8;
+        let mut transform_8x8 = false;
         if more_rbsp {
-            if bits.bit().ok_or_else(truncated)? != 0 {
-                return Err(Error::Unsupported(
-                    "the H.264 8x8 transform is not supported",
-                ));
-            }
+            transform_8x8 = bits.bit().ok_or_else(truncated)? != 0;
             if bits.bit().ok_or_else(truncated)? == 1 {
                 let mut previous = sps.scaling4;
                 for (index, slot) in scaling4.iter_mut().enumerate() {
+                    let default = if index < 3 {
+                        &DEFAULT_INTRA_4X4
+                    } else {
+                        &DEFAULT_INTER_4X4
+                    };
                     let fallback = if index == 0 || index == 3 {
-                        sps.scaling4[index]
+                        if sps.scaling_matrix_present {
+                            sps.scaling4[index]
+                        } else {
+                            *default
+                        }
                     } else {
                         previous[index - 1]
                     };
                     let mut out = fallback;
-                    scaling_list_4x4(&mut bits, &sps.scaling4[index], &fallback, &mut out)?;
+                    scaling_list_4x4(&mut bits, default, &fallback, &mut out)?;
                     previous[index] = out;
                     *slot = out;
+                }
+                if transform_8x8 {
+                    for (index, slot) in scaling8.iter_mut().enumerate() {
+                        let default = if index == 0 {
+                            &DEFAULT_INTRA_8X8
+                        } else {
+                            &DEFAULT_INTER_8X8
+                        };
+                        let fallback = if sps.scaling_matrix_present {
+                            sps.scaling8[index]
+                        } else {
+                            *default
+                        };
+                        scaling_list_8x8(&mut bits, default, &fallback, slot)?;
+                    }
                 }
             }
             chroma_qp_offset_1 = bits.se().ok_or_else(truncated)?;
@@ -506,6 +546,8 @@ impl Pps {
             constrained_intra,
             redundant_present,
             scaling4,
+            scaling8,
+            transform_8x8,
         })
     }
 }
@@ -575,7 +617,6 @@ impl Slice {
         is_idr: bool,
         nal_ref_idc: u8,
     ) -> Result<Self, Error> {
-        let _ = nal_ref_idc;
         let payload = rbsp(&nal[1..]);
         let mut bits = Bits::new(&payload);
         let first_mb = bits.ue().ok_or_else(truncated)?;
@@ -596,12 +637,10 @@ impl Slice {
         if pps_id != pps.id {
             return Err(Error::InvalidFrame("H.264 slice names an unknown PPS"));
         }
-        let frame_num = if is_idr {
-            0
-        } else {
-            bits.bits(sps.log2_max_frame_num_minus4 + 4)
-                .ok_or_else(truncated)?
-        };
+        // IDR requires frame_num = 0, but those bits are still on the wire.
+        let frame_num = bits
+            .bits(sps.log2_max_frame_num_minus4 + 4)
+            .ok_or_else(truncated)?;
         let idr_pic_id = if is_idr {
             let id = bits.ue().ok_or_else(truncated)?;
             if id > 65535 {
@@ -667,8 +706,16 @@ impl Slice {
         } else {
             None
         };
-        let (marking, no_output_prior) = if is_idr {
-            (Marking::Sliding, bits.bit().ok_or_else(truncated)? != 0)
+        let (marking, no_output_prior) = if nal_ref_idc == 0 {
+            (Marking::Sliding, false)
+        } else if is_idr {
+            let no_output_prior = bits.bit().ok_or_else(truncated)? != 0;
+            if bits.bit().ok_or_else(truncated)? != 0 {
+                return Err(Error::Unsupported(
+                    "H.264 long-term references are not supported",
+                ));
+            }
+            (Marking::Sliding, no_output_prior)
         } else if bits.bit().ok_or_else(truncated)? == 0 {
             (Marking::Sliding, false)
         } else {
@@ -712,7 +759,7 @@ impl Slice {
                 false,
             )
         };
-        let cabac_init = if pps.entropy_cabac {
+        let cabac_init = if pps.entropy_cabac && kind != SliceKind::I {
             let idc = bits.ue().ok_or_else(truncated)?;
             if idc > 2 {
                 return Err(Error::InvalidFrame("H.264 CABAC init is out of range"));

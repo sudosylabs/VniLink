@@ -1,6 +1,20 @@
 use libva::VAEntrypoint;
 
-use crate::vaapi::{choose_h264_entrypoint, is_render_node_name};
+use crate::vaapi::{choose_bitrate_control, choose_h264_entrypoint, is_render_node_name};
+
+#[test]
+fn bitrate_control_selects_supported_modes_and_rejects_fixed_quantization() {
+    assert_eq!(
+        choose_bitrate_control(libva::VA_RC_VBR | libva::VA_RC_CBR),
+        Some(libva::VA_RC_VBR)
+    );
+    assert_eq!(
+        choose_bitrate_control(libva::VA_RC_CBR),
+        Some(libva::VA_RC_CBR)
+    );
+    assert_eq!(choose_bitrate_control(libva::VA_RC_CQP), None);
+    assert_eq!(choose_bitrate_control(libva::VA_ATTRIB_NOT_SUPPORTED), None);
+}
 
 #[test]
 fn render_node_names_keep_numbered_nodes_in_order() {

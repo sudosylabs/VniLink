@@ -9,6 +9,7 @@
 //! compositor's permission, not universal unattended access.
 
 use std::os::fd::OwnedFd;
+use std::os::unix::net::UnixDatagram;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -32,6 +33,7 @@ const OPEN_TIMEOUT: Duration = Duration::from_secs(3);
 const FRAME_TIMEOUT: Duration = Duration::from_secs(2);
 
 struct Shared {
+    cursor: Mutex<Option<vnilink::CursorState>>,
     size: Mutex<Option<(u16, u16)>>,
     channel: FrameChannel,
     format: Mutex<Option<VideoFormat>>,
@@ -83,7 +85,9 @@ pub struct PortalCapture {
     height: u16,
     delivery: Mutex<Option<PortalDelivery>>,
     tx: Sender<Command>,
+    wake: UnixDatagram,
     thread: Option<JoinHandle<()>>,
+    shared: Arc<Shared>,
 }
 
 impl PortalCapture {
@@ -94,6 +98,7 @@ impl PortalCapture {
     /// GPU buffers are refused before import.
     pub fn open(remote: OwnedFd, node_id: u32) -> Result<Self, Error> {
         let shared = Arc::new(Shared {
+            cursor: Mutex::new(None),
             size: Mutex::new(None),
             channel: FrameChannel::new(),
             format: Mutex::new(None),
@@ -102,10 +107,12 @@ impl PortalCapture {
             delivery: Mutex::new(None),
         });
         let (tx, rx) = mpsc::channel();
+        let (wake, wake_rx) = command_wakeup()?;
         let (ready_tx, ready_rx) = mpsc::channel();
+        let worker_shared = Arc::clone(&shared);
         let thread = thread::Builder::new()
             .name("vnilink-pipewire".to_string())
-            .spawn(move || capture_thread(remote, node_id, shared, rx, ready_tx))
+            .spawn(move || capture_thread(remote, node_id, worker_shared, rx, wake_rx, ready_tx))
             .map_err(|_| Error::CaptureRejected("the screen cast portal did not start"))?;
         match ready_rx.recv_timeout(OPEN_TIMEOUT + Duration::from_secs(5)) {
             Ok(Ok((width, height))) => Ok(Self {
@@ -113,7 +120,9 @@ impl PortalCapture {
                 height,
                 delivery: Mutex::new(None),
                 tx,
+                wake,
                 thread: Some(thread),
+                shared,
             }),
             Ok(Err(err)) => {
                 let _ = thread.join();
@@ -126,6 +135,14 @@ impl PortalCapture {
                 ))
             }
         }
+    }
+
+    pub fn cursor(&self) -> Option<vnilink::CursorState> {
+        self.shared
+            .cursor
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn size(&self) -> (u16, u16) {
@@ -146,6 +163,7 @@ impl PortalCapture {
                 reply: reply_tx,
             })
             .map_err(|_| Error::CaptureRejected("the screen cast portal did not start"))?;
+        let _ = self.wake.send(&[1]);
         match reply_rx.recv_timeout(FRAME_TIMEOUT + Duration::from_secs(1)) {
             Ok(Ok((frame, delivery))) => {
                 *self.delivery.lock().expect("portal delivery") = Some(delivery);
@@ -162,6 +180,7 @@ impl PortalCapture {
 impl Drop for PortalCapture {
     fn drop(&mut self) {
         let _ = self.tx.send(Command::Stop);
+        let _ = self.wake.send(&[1]);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -173,10 +192,11 @@ fn capture_thread(
     node_id: u32,
     shared: Arc<Shared>,
     commands: Receiver<Command>,
+    wake: UnixDatagram,
     ready: Sender<Result<(u16, u16), Error>>,
 ) {
     pw::init();
-    if let Err(err) = run(remote, node_id, &shared, &commands, &ready) {
+    if let Err(err) = run(remote, node_id, &shared, &commands, wake, &ready) {
         let _ = ready.send(Err(err));
     }
 }
@@ -186,6 +206,7 @@ fn run(
     node_id: u32,
     shared: &Arc<Shared>,
     commands: &Receiver<Command>,
+    wake: UnixDatagram,
     ready: &Sender<Result<(u16, u16), Error>>,
 ) -> Result<(), Error> {
     let mainloop = pw::main_loop::MainLoopRc::new(None)
@@ -229,10 +250,15 @@ fn run(
             if param.is_some() && id == pw::spa::param::ParamType::Format.as_raw() {
                 let updated = (|| {
                     let bytes = serialize_object(memory_buffer_object())?;
+                    let cursor_bytes = serialize_object(cursor_meta_object())?;
                     let pod = Pod::from_bytes(&bytes)
                         .ok_or(Error::Unsupported("memory buffer negotiation"))?;
                     stream
-                        .update_params(&mut [pod])
+                        .update_params(&mut [
+                            pod,
+                            Pod::from_bytes(&cursor_bytes)
+                                .ok_or(Error::Unsupported("cursor metadata negotiation"))?,
+                        ])
                         .map_err(|_| Error::Unsupported("memory buffer negotiation"))
                 })();
                 if updated.is_err() {
@@ -274,6 +300,34 @@ fn run(
     };
     let _ = ready.send(Ok(size));
 
+    dispatch_commands(&mainloop, shared, commands, wake)
+}
+
+fn command_wakeup() -> Result<(UnixDatagram, UnixDatagram), Error> {
+    let (sender, receiver) = UnixDatagram::pair()
+        .map_err(|_| Error::CaptureRejected("the capture command wakeup did not start"))?;
+    sender
+        .set_nonblocking(true)
+        .and_then(|()| receiver.set_nonblocking(true))
+        .map_err(|_| Error::CaptureRejected("the capture command wakeup did not start"))?;
+    Ok((sender, receiver))
+}
+
+fn dispatch_commands(
+    mainloop: &pw::main_loop::MainLoopRc,
+    shared: &Shared,
+    commands: &Receiver<Command>,
+    wake: UnixDatagram,
+) -> Result<(), Error> {
+    // Wake an idle PipeWire poll as soon as capture or Stop is requested.
+    // The socket only carries notifications; commands and pixels stay separate.
+    let _wake_source =
+        mainloop
+            .loop_()
+            .add_io(wake, pw::spa::support::system::IoFlags::IN, |socket| {
+                let mut bytes = [0; 64];
+                while socket.recv(&mut bytes).is_ok() {}
+            });
     loop {
         match commands.try_recv() {
             Ok(Command::Stop) | Err(TryRecvError::Disconnected) => break,
@@ -298,11 +352,19 @@ fn wait_frame(
     shared: &Shared,
     timestamp_us: u64,
 ) -> Result<(RawFrame, PortalDelivery), Error> {
-    let slot = shared.channel.recv_latest(FRAME_TIMEOUT, || {
-        let _ = mainloop
-            .loop_()
-            .iterate(pw::loop_::Timeout::Finite(Duration::from_millis(50)));
-    })?;
+    // Drain ready compositor events without sleeping before using cached pixels.
+    // Waiting 50ms here and again in dispatch caps even idle capture at ~10fps.
+    let _ = mainloop
+        .loop_()
+        .iterate(pw::loop_::Timeout::Finite(Duration::ZERO));
+    let slot = match shared.channel.try_latest()? {
+        Some(slot) => slot,
+        None => shared.channel.recv_timeout(FRAME_TIMEOUT, || {
+            let _ = mainloop
+                .loop_()
+                .iterate(pw::loop_::Timeout::Finite(Duration::from_millis(50)));
+        })?,
+    };
     let delivery = shared
         .delivery
         .lock()
@@ -520,10 +582,78 @@ fn frame_from_bytes(
     }
 }
 
+/// Owns one dequeued buffer until every borrowed pixel/metadata slice is gone.
+/// The high-level wrapper exposes only fixed-size metadata, whereas compositor
+/// cursor allocations vary. Read the actual SPA metadata size before parsing.
+struct CaptureBuffer<'a> {
+    raw: std::ptr::NonNull<pw::sys::pw_buffer>,
+    stream: &'a pw::stream::Stream,
+}
+impl<'a> CaptureBuffer<'a> {
+    fn dequeue(stream: &'a pw::stream::Stream) -> Option<Self> {
+        // SAFETY: dequeue is called only from this stream's process callback.
+        std::ptr::NonNull::new(unsafe { stream.dequeue_raw_buffer() })
+            .map(|raw| Self { raw, stream })
+    }
+    fn cursor_bytes(&self) -> Option<&[u8]> {
+        // SAFETY: the dequeued buffer and its metadata remain owned until Drop.
+        let buffer = unsafe { self.raw.as_ref().buffer.as_ref()? };
+        unsafe { cursor_metadata(buffer) }
+    }
+    fn datas_mut(&mut self) -> &mut [pw::spa::buffer::Data] {
+        // SAFETY: like pipewire::Buffer::datas_mut, borrow the stream-owned SPA
+        // array exclusively; Data is repr(transparent) over spa_data.
+        let Some(buffer) = (unsafe { self.raw.as_ref().buffer.as_ref() }) else {
+            return &mut [];
+        };
+        if buffer.n_datas == 0 || buffer.datas.is_null() {
+            return &mut [];
+        }
+        unsafe { std::slice::from_raw_parts_mut(buffer.datas.cast(), buffer.n_datas as usize) }
+    }
+}
+impl Drop for CaptureBuffer<'_> {
+    fn drop(&mut self) {
+        // SAFETY: this exact pointer was dequeued from this stream; return once.
+        unsafe {
+            self.stream.queue_raw_buffer(self.raw.as_ptr());
+        }
+    }
+}
+
+/// Safety: the SPA descriptor arrays and every advertised allocation must stay
+/// readable for the borrowed buffer's lifetime, as guaranteed while dequeued.
+unsafe fn cursor_metadata(buffer: &pw::spa::sys::spa_buffer) -> Option<&[u8]> {
+    if buffer.n_metas == 0 || buffer.metas.is_null() {
+        return None;
+    }
+    let metas = unsafe { std::slice::from_raw_parts(buffer.metas, buffer.n_metas as usize) };
+    let meta = metas
+        .iter()
+        .find(|meta| meta.type_ == pw::spa::sys::SPA_META_Cursor)?;
+    if meta.data.is_null() || !(28..=crate::cursor::META_SIZE).contains(&(meta.size as usize)) {
+        return None;
+    }
+    // SAFETY: SPA owns `size` readable bytes. The parser checks every offset
+    // against this allocation, including the trailing bitmap and stride.
+    Some(unsafe { std::slice::from_raw_parts(meta.data.cast::<u8>(), meta.size as usize) })
+}
+
 fn copy_buffer(stream: &pw::stream::Stream, shared: &Shared) {
-    let Some(mut buffer) = stream.dequeue_buffer() else {
+    let Some(mut buffer) = CaptureBuffer::dequeue(stream) else {
         return;
     };
+    if let Some(meta) = buffer.cursor_bytes() {
+        let mut cursor = shared.cursor.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(update) = crate::cursor::parse(
+            meta,
+            cursor.as_ref(),
+            VideoFormat::BGRA.as_raw(),
+            VideoFormat::RGBA.as_raw(),
+        ) {
+            *cursor = Some(update);
+        }
+    }
     let datas = buffer.datas_mut();
     if datas.is_empty() {
         return;
@@ -571,3 +701,123 @@ fn copy_buffer(stream: &pw::stream::Stream, shared: &Shared) {
 #[cfg(test)]
 #[path = "tests/pipewire_idle.rs"]
 mod idle_tests;
+
+#[cfg(test)]
+mod timing_tests {
+    use super::*;
+
+    #[test]
+    fn cached_capture_commands_meet_a_60fps_frame_budget() {
+        let (tx, rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (wake, wake_rx) = command_wakeup().unwrap();
+        let worker = thread::spawn(move || {
+            pw::init();
+            let mainloop = pw::main_loop::MainLoopRc::new(None).unwrap();
+            let shared = Shared {
+                cursor: Mutex::new(None),
+                size: Mutex::new(Some((8, 8))),
+                channel: FrameChannel::new(),
+                format: Mutex::new(Some(VideoFormat::BGRA)),
+                modifier: Mutex::new(0),
+                modifier_explicit: AtomicBool::new(false),
+                delivery: Mutex::new(Some(PortalDelivery {
+                    format: PortalFormat::Bgra,
+                    buffer: PortalBuffer::Memory,
+                })),
+            };
+            shared.channel.push(ChannelSlot {
+                width: 8,
+                height: 8,
+                stride: 32,
+                bytes: vec![255; 256],
+            });
+            ready_tx.send(()).unwrap();
+            dispatch_commands(&mainloop, &shared, &rx, wake_rx).unwrap();
+        });
+        ready_rx.recv().unwrap();
+        let started = Instant::now();
+        for timestamp_us in 0..20 {
+            let (reply, result) = mpsc::channel();
+            tx.send(Command::Frame {
+                timestamp_us,
+                reply,
+            })
+            .unwrap();
+            wake.send(&[1]).unwrap();
+            let (frame, _) = result
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap();
+            assert_eq!((frame.width(), frame.height()), (8, 8));
+        }
+        let elapsed = started.elapsed();
+        tx.send(Command::Stop).unwrap();
+        wake.send(&[1]).unwrap();
+        worker.join().unwrap();
+        assert!(
+            elapsed < Duration::from_micros(20 * 16_667),
+            "20 cached capture requests took {elapsed:?}; blocking event polling caps frame delivery below 60fps"
+        );
+    }
+}
+
+fn cursor_meta_object() -> pw::spa::pod::Object {
+    pw::spa::pod::Object {
+        type_: pw::spa::utils::SpaTypes::ObjectParamMeta.as_raw(),
+        id: pw::spa::param::ParamType::Meta.as_raw(),
+        properties: vec![
+            pw::spa::pod::Property {
+                key: pw::spa::sys::SPA_PARAM_META_type,
+                flags: pw::spa::pod::PropertyFlags::empty(),
+                value: pw::spa::pod::Value::Id(pw::spa::utils::Id(pw::spa::sys::SPA_META_Cursor)),
+            },
+            pw::spa::pod::Property {
+                key: pw::spa::sys::SPA_PARAM_META_size,
+                flags: pw::spa::pod::PropertyFlags::empty(),
+                value: pw::spa::pod::Value::Choice(pw::spa::pod::ChoiceValue::Int(Choice(
+                    ChoiceFlags::empty(),
+                    ChoiceEnum::Range {
+                        default: 28 + 20 + 64 * 64 * 4,
+                        min: 28,
+                        max: crate::cursor::META_SIZE as i32,
+                    },
+                ))),
+            },
+        ],
+    }
+}
+
+#[cfg(test)]
+mod cursor_buffer_tests {
+    use super::*;
+    #[test]
+    fn metadata_uses_actual_allocation_instead_of_requiring_the_maximum() {
+        let mut bytes = [0u8; 64];
+        let mut meta = pw::spa::sys::spa_meta {
+            type_: pw::spa::sys::SPA_META_Cursor,
+            size: bytes.len() as u32,
+            data: bytes.as_mut_ptr().cast(),
+        };
+        let mut buffer = pw::spa::sys::spa_buffer {
+            n_metas: 1,
+            n_datas: 0,
+            metas: &mut meta,
+            datas: std::ptr::null_mut(),
+        };
+        // Each advertised valid size is within `bytes`; rejected sizes must
+        // never create a slice or touch the pointer.
+        assert_eq!(unsafe { cursor_metadata(&buffer) }.unwrap().len(), 64);
+        meta.size = 28;
+        assert_eq!(unsafe { cursor_metadata(&buffer) }.unwrap().len(), 28);
+        for size in [0, 27, crate::cursor::META_SIZE as u32 + 1, u32::MAX] {
+            meta.size = size;
+            assert!(unsafe { cursor_metadata(&buffer) }.is_none());
+        }
+        meta.size = 64;
+        meta.data = std::ptr::null_mut();
+        assert!(unsafe { cursor_metadata(&buffer) }.is_none());
+        buffer.metas = std::ptr::null_mut();
+        assert!(unsafe { cursor_metadata(&buffer) }.is_none());
+    }
+}
