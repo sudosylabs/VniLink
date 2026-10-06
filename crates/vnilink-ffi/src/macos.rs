@@ -11,15 +11,55 @@ use vnilink_media::{
 };
 
 #[derive(uniffi::Record)]
-pub struct MacFrame {
+pub struct MacFrameBuffer {
     pub width: u16,
     pub height: u16,
     pub stride: u32,
+    pub address: u64,
+    pub byte_count: u64,
+}
+
+/// Immutable decoded pixels owned by this in-process object. The native image
+/// provider retains the object until it finishes drawing; pixels never travel
+/// through UniFFI's byte-by-byte record serialization.
+#[derive(uniffi::Object)]
+pub struct MacFrame {
+    picture: RawFrame,
+}
+
+#[uniffi::export]
+impl MacFrame {
+    /// Read-only BGRA memory, valid for as long as this frame is retained.
+    /// Only the native macOS adapter may use this process-local address.
+    pub fn buffer(&self) -> MacFrameBuffer {
+        MacFrameBuffer {
+            width: self.picture.width(),
+            height: self.picture.height(),
+            stride: self.picture.stride() as u32,
+            address: self.picture.pixels().as_ptr() as usize as u64,
+            byte_count: self.picture.pixels().len() as u64,
+        }
+    }
+}
+
+#[derive(uniffi::Record)]
+pub struct MacCursorImage {
+    pub width: u16,
+    pub height: u16,
+    pub hotspot_x: u16,
+    pub hotspot_y: u16,
     pub bgra: Vec<u8>,
+}
+#[derive(uniffi::Record)]
+pub struct MacCursorUpdate {
+    pub x: i32,
+    pub y: i32,
+    pub visible: bool,
+    pub image: Option<MacCursorImage>,
 }
 
 struct ViewerState {
-    frame: Option<MacFrame>,
+    frame: Option<Arc<MacFrame>>,
     error: Option<String>,
 }
 
@@ -28,12 +68,50 @@ pub struct MacViewer {
     stop: Arc<AtomicBool>,
     state: Arc<Mutex<ViewerState>>,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
+    core: Arc<Core>,
+    session_id: u64,
+    generation: u64,
+    cursor: Mutex<Option<Arc<vnilink::CursorState>>>,
 }
 
 #[uniffi::export]
 impl MacViewer {
+    pub fn separate_cursor(&self) -> bool {
+        self.core
+            .separate_cursor(self.session_id, vnilink::SessionRole::Controller)
+            .unwrap_or(false)
+    }
+    pub fn poll_cursor(&self) -> Option<MacCursorUpdate> {
+        let current = self.core.cursor(self.session_id, self.generation).ok()??;
+        let mut previous = self.cursor.lock().unwrap_or_else(|e| e.into_inner());
+        if previous
+            .as_ref()
+            .is_some_and(|old| Arc::ptr_eq(old, &current))
+        {
+            return None;
+        }
+        let image = current
+            .image
+            .as_ref()
+            .filter(|image| previous.as_ref().and_then(|old| old.image.as_ref()) != Some(image));
+        let update = MacCursorUpdate {
+            x: current.position.0,
+            y: current.position.1,
+            visible: current.visible,
+            image: image.map(|image| MacCursorImage {
+                width: image.width(),
+                height: image.height(),
+                hotspot_x: image.hotspot().0,
+                hotspot_y: image.hotspot().1,
+                bgra: image.pixels().to_vec(),
+            }),
+        };
+        *previous = Some(current);
+        Some(update)
+    }
+
     /// Takes the latest frame; old pictures never accumulate behind the UI.
-    pub fn poll(&self) -> Option<MacFrame> {
+    pub fn poll(&self) -> Option<Arc<MacFrame>> {
         self.state
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -73,7 +151,7 @@ fn current(core: &Core, id: u64, generation: u64) -> bool {
 /// Probe real encode/decode with synthetic pixels; no screen permission needed.
 fn probe() -> Result<(), FfiError> {
     let result = (|| -> Result<(), vnilink_media::Error> {
-        let mut encoder = vnilink_macos::MacEncoder::open(64, 64, 30, 500_000)?;
+        let mut encoder = vnilink_macos::MacEncoder::open(64, 64, 30, 500_000, false)?;
         let raw = RawFrame::bgra(64, 64, 0, vec![255; 64 * 64 * 4])?;
         let sample = encoder.encode(
             &raw,
@@ -103,6 +181,9 @@ impl VnilinkCore {
     pub fn prepare_mac_video(&self) -> Result<(), FfiError> {
         probe()?;
         self.inner
+            .set_cursor_receiver(true)
+            .map_err(crate::error::map_error)?;
+        self.inner
             .set_h264_support(true, true)
             .map_err(crate::error::map_error)
     }
@@ -126,27 +207,28 @@ impl VnilinkCore {
         let worker_state = Arc::clone(&state);
         let worker = std::thread::spawn(move || {
             let mut decoder = ControllerVideo::new(vnilink_macos::MacDecoder::new());
+            let mut ticks = 0u32;
             while !worker_stop.load(Ordering::Acquire) && current(&core, session_id, generation) {
                 let Some(frame) = subscription.recv_timeout(Duration::from_millis(100)) else {
+                    // Keep adapting on idle too: a silent path still reports RTT.
+                    ticks = ticks.saturating_add(1);
+                    if ticks % 20 == 0 {
+                        let _ = core.auto_quality_tick(session_id);
+                    }
                     continue;
                 };
-                match decoder.push(&frame) {
+                ticks = ticks.saturating_add(1);
+                if ticks % 20 == 0 {
+                    let _ = core.auto_quality_tick(session_id);
+                }
+                let result = decoder.push(&frame);
+                match result {
                     Ok(ControllerOutput::Decoded(picture)) => {
                         if !current(&core, session_id, generation) {
                             break;
                         }
-                        let mut bgra = picture.pixels().to_vec();
-                        // Desktop buffers are opaque even when the capture source leaves alpha zero.
-                        for pixel in bgra.chunks_exact_mut(4) {
-                            pixel[3] = 255;
-                        }
                         worker_state.lock().unwrap_or_else(|e| e.into_inner()).frame =
-                            Some(MacFrame {
-                                width: picture.width(),
-                                height: picture.height(),
-                                stride: picture.stride() as u32,
-                                bgra,
-                            });
+                            Some(Arc::new(MacFrame { picture }));
                     }
                     Ok(ControllerOutput::Skipped) => {}
                     Err(_) => {
@@ -162,12 +244,47 @@ impl VnilinkCore {
             stop,
             state,
             worker: Mutex::new(Some(worker)),
+            core: Arc::clone(&self.inner),
+            session_id,
+            generation,
+            cursor: Mutex::new(None),
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn a_retained_frame_keeps_its_pixel_buffer_alive() {
+        let frame = Arc::new(MacFrame {
+            picture: RawFrame::bgra(8, 8, 0, vec![42; 256]).unwrap(),
+        });
+        let provider_owner = Arc::clone(&frame);
+        let weak = Arc::downgrade(&frame);
+        let buffer = frame.buffer();
+        assert_eq!(
+            (
+                buffer.width,
+                buffer.height,
+                buffer.stride,
+                buffer.byte_count
+            ),
+            (8, 8, 32, 256)
+        );
+        assert_eq!(
+            buffer.address,
+            frame.picture.pixels().as_ptr() as usize as u64
+        );
+        drop(frame);
+        assert_eq!(provider_owner.buffer().address, buffer.address);
+        assert_eq!(provider_owner.picture.pixels(), &[42; 256]);
+        assert!(weak.upgrade().is_some());
+        drop(provider_owner);
+        assert!(weak.upgrade().is_none());
+    }
+
     #[test]
     fn mac_video_probe_uses_synthetic_pixels() {
         super::probe().unwrap();
@@ -181,9 +298,69 @@ pub struct MacHost {
     stop: Arc<AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
+    cursor: Mutex<HostCursorState>,
 }
+
+#[derive(Default)]
+struct HostCursorState {
+    state: Option<vnilink::CursorState>,
+    session: Option<(u64, u64)>,
+}
+
+struct MacCaptureDescriptor {
+    width: u16,
+    height: u16,
+    cursor: bool,
+}
+impl vnilink::HostCapture for MacCaptureDescriptor {
+    fn monitor(&self) -> (u16, u16) {
+        (self.width, self.height)
+    }
+    fn separate_cursor(&self) -> bool {
+        self.cursor
+    }
+}
+
 #[uniffi::export]
 impl MacHost {
+    /// Cursor updates never inject input. Retain a shape across position-only
+    /// samples and resend it when a new hosted generation negotiates metadata.
+    pub fn update_cursor(&self, update: MacCursorUpdate) -> Result<(), FfiError> {
+        if self.stop.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let active = self
+            .core
+            .snapshot()
+            .map_err(crate::error::map_error)?
+            .incoming
+            .filter(|s| s.phase == SessionPhase::Active);
+        let stamp = active.as_ref().map(|s| (s.id, s.generation));
+        let mut cache = self.cursor.lock().unwrap_or_else(|e| e.into_inner());
+        let current = merge_host_cursor(cache.state.as_ref(), update)?;
+        let changed = cache.state.as_ref() != Some(&current) || cache.session != stamp;
+        cache.state = Some(current.clone());
+        cache.session = stamp;
+        drop(cache);
+        if changed {
+            if let Some(session) = active {
+                if self
+                    .core
+                    .separate_cursor(session.id, vnilink::SessionRole::Host)
+                    .unwrap_or(false)
+                {
+                    match self
+                        .core
+                        .publish_cursor(session.id, session.generation, current)
+                    {
+                        Ok(()) | Err(vnilink::Error::NoSession) => {}
+                        Err(error) => return Err(crate::error::map_error(error)),
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
     pub fn error(&self) -> Option<String> {
         self.error.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
@@ -207,9 +384,18 @@ impl Drop for MacHost {
 #[uniffi::export]
 impl VnilinkCore {
     /// Call only after the user enables sharing and grants Screen Recording.
-    /// Coordinates are main-display logical points, matching macOS input.
-    pub fn mac_host(&self, display_id: u32, width: u16, height: u16) -> Result<MacHost, FfiError> {
-        if width < 2 || height < 2 {
+    /// Input coordinates use main-display logical points. Capture dimensions
+    /// use backing pixels so Retina detail is preserved before encoding.
+    pub fn mac_host(
+        &self,
+        display_id: u32,
+        width: u16,
+        height: u16,
+        pixel_width: u16,
+        pixel_height: u16,
+        cursor_supported: bool,
+    ) -> Result<MacHost, FfiError> {
+        if width < 2 || height < 2 || pixel_width < 2 || pixel_height < 2 {
             return Err(FfiError::InvalidSetting {
                 message: "No main display is available".into(),
             });
@@ -223,13 +409,7 @@ impl VnilinkCore {
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
         let worker = std::thread::spawn(move || {
             let opened = (|| {
-                let quality = vnilink::Quality::new(8_000, 30, width, height)
-                    .map_err(crate::error::map_error)?;
-                let plan = vnilink_media::CapturePlan::one_monitor(quality)
-                    .map_err(|_| FfiError::Unsupported {
-                        message: "This display cannot be captured".into(),
-                    })?
-                    .with_cursor(vnilink_media::CursorPolicy::InFrame);
+                let plan = mac_capture_plan(pixel_width, pixel_height)?;
                 let plan = vnilink_macos::ScreenPlan::from_capture(&plan).map_err(|_| {
                     FfiError::Unsupported {
                         message: "This display cannot be captured".into(),
@@ -238,10 +418,19 @@ impl VnilinkCore {
                 let capture = vnilink_macos::ScreenCapture::start_display(&plan, Some(display_id))
                     .map_err(|_| FfiError::Unsupported { message: "Screen sharing could not start. Check Screen Recording in System Settings.".into() })?;
                 worker_core
-                    .set_capture(Box::new(vnilink_media::MonitorSize::new(width, height)))
+                    .set_capture(Box::new(MacCaptureDescriptor {
+                        width,
+                        height,
+                        cursor: cursor_supported,
+                    }))
                     .map_err(crate::error::map_error)?;
                 worker_core
                     .set_h264_support(true, true)
+                    .map_err(crate::error::map_error)?;
+                // VideoToolbox encodes High profile, so this host negotiates
+                // it when the controller offers it.
+                worker_core
+                    .set_h264_high(true)
                     .map_err(crate::error::map_error)?;
                 Ok::<_, FfiError>(capture)
             })();
@@ -266,6 +455,17 @@ impl VnilinkCore {
                     .filter(|s| s.phase == SessionPhase::Active)
                 {
                     if let Some(quality) = session.quality {
+                        let separate = worker_core
+                            .separate_cursor(session.id, vnilink::SessionRole::Host)
+                            .unwrap_or(false);
+                        if capture.set_shows_cursor(!separate).is_err() {
+                            *worker_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
+                                "The desktop cursor could not be configured. Restart sharing."
+                                    .into(),
+                            );
+                            let _ = worker_core.stop_hosted_session();
+                            break;
+                        }
                         if vnilink_macos::serve_stream(
                             &capture,
                             &worker_core,
@@ -294,6 +494,7 @@ impl VnilinkCore {
                 stop,
                 error,
                 worker: Mutex::new(Some(worker)),
+                cursor: Mutex::new(HostCursorState::default()),
             }),
             result => {
                 stop.store(true, Ordering::Release);
@@ -377,7 +578,7 @@ mod viewer_tests {
             pixel[3] = 255;
         }
         let raw = RawFrame::bgra(64, 64, 0, pixels).unwrap();
-        let mut encoder = vnilink_macos::MacEncoder::open(64, 64, 30, 500_000).unwrap();
+        let mut encoder = vnilink_macos::MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
         let sample = encoder
             .encode(
                 &raw,
@@ -402,8 +603,9 @@ mod viewer_tests {
             );
             std::thread::sleep(Duration::from_millis(20));
         };
-        assert_eq!((frame.width, frame.height), (64, 64));
-        let pixel = &frame.bgra[32 * frame.stride as usize + 32 * 4..][..4];
+        let buffer = frame.buffer();
+        assert_eq!((buffer.width, buffer.height), (64, 64));
+        let pixel = &frame.picture.pixels()[32 * buffer.stride as usize + 32 * 4..][..4];
         assert!(pixel[2] > 128 && pixel[2] > pixel[0] && pixel[2] > pixel[1]);
         assert_eq!(pixel[3], 255);
         viewer.stop();
@@ -418,5 +620,120 @@ mod viewer_tests {
             .is_err());
         controller.shutdown();
         host.shutdown();
+    }
+}
+
+// Capture supports the highest negotiated rate; the session encoder still
+// applies its own quality limits. Starting at 30 here otherwise caps every
+// later 60fps quality update at the source.
+fn mac_capture_plan(width: u16, height: u16) -> Result<vnilink_media::CapturePlan, FfiError> {
+    let quality =
+        vnilink::Quality::new(8_000, 60, width, height).map_err(crate::error::map_error)?;
+    let plan = vnilink_media::CapturePlan::one_monitor(quality)
+        .map_err(|_| FfiError::Unsupported {
+            message: "This display cannot be captured".into(),
+        })?
+        .with_cursor(vnilink_media::CursorPolicy::InFrame);
+    Ok(plan)
+}
+
+#[cfg(test)]
+mod capture_rate_tests {
+    #[test]
+    fn mac_capture_can_supply_the_highest_session_rate() {
+        let plan = super::mac_capture_plan(3840, 2160).unwrap();
+        assert_eq!(plan.frame_rate(), 60);
+        assert_eq!((plan.width(), plan.height()), (3840, 2160));
+        assert_eq!(plan.cursor(), vnilink_media::CursorPolicy::InFrame);
+    }
+}
+
+fn merge_host_cursor(
+    previous: Option<&vnilink::CursorState>,
+    update: MacCursorUpdate,
+) -> Result<vnilink::CursorState, FfiError> {
+    let image = match update.image {
+        Some(image) => Some(Arc::new(
+            vnilink::CursorImage::new(
+                image.width,
+                image.height,
+                (image.hotspot_x, image.hotspot_y),
+                image.bgra,
+            )
+            .map_err(crate::error::map_error)?,
+        )),
+        None => previous.and_then(|state| state.image.clone()),
+    };
+    Ok(vnilink::CursorState {
+        position: (update.x, update.y),
+        visible: update.visible,
+        image,
+    })
+}
+
+#[cfg(test)]
+mod host_cursor_tests {
+    use super::*;
+    #[test]
+    fn host_cursor_retains_shape_for_motion_and_validates_replacements() {
+        let first = merge_host_cursor(
+            None,
+            MacCursorUpdate {
+                x: 10,
+                y: 20,
+                visible: true,
+                image: Some(MacCursorImage {
+                    width: 2,
+                    height: 2,
+                    hotspot_x: 1,
+                    hotspot_y: 0,
+                    bgra: vec![64; 16],
+                }),
+            },
+        )
+        .unwrap();
+        let moved = merge_host_cursor(
+            Some(&first),
+            MacCursorUpdate {
+                x: 30,
+                y: 40,
+                visible: true,
+                image: None,
+            },
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(
+            first.image.as_ref().unwrap(),
+            moved.image.as_ref().unwrap()
+        ));
+        assert_eq!(moved.position, (30, 40));
+        let hidden = merge_host_cursor(
+            Some(&moved),
+            MacCursorUpdate {
+                x: 30,
+                y: 40,
+                visible: false,
+                image: None,
+            },
+        )
+        .unwrap();
+        assert!(!hidden.visible);
+        assert!(merge_host_cursor(
+            Some(&first),
+            MacCursorUpdate {
+                x: 0,
+                y: 0,
+                visible: true,
+                image: Some(MacCursorImage {
+                    width: 2,
+                    height: 2,
+                    hotspot_x: 2,
+                    hotspot_y: 0,
+                    bgra: vec![64; 16]
+                })
+            }
+        )
+        .is_err());
+        assert_eq!(first.image.unwrap().pixels(), &[64; 16]);
     }
 }

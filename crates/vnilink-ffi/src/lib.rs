@@ -21,12 +21,16 @@
 //!
 //! # Out of scope for v1
 //!
-//! Adapter installation (`set_desktop`, `set_capture`, `enable_os_input`,
-//! clipboard/transfer adapters) stays in platform Rust. The persistent
+//! Desktop/capture adapter installation stays in platform Rust. Native UI
+//! pasteboards implement `ClipboardWriter`; `install_clipboard` installs that
+//! callback before hosting, while received files use `set_transfer_directory`.
+//! The persistent
 //! installation store (`Core::open`) needs the platform credential store
 //! first. `open_persistent` delegates opaque record storage to the native
 //! credential-store callback; saved relay credentials are never read back.
 
+mod clipboard;
+pub use clipboard::ClipboardWriter;
 mod error;
 mod events;
 #[cfg(target_os = "macos")]
@@ -494,6 +498,15 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
+    /// One adaptive step for the controlling session. Returns the applied
+    /// quality, or `None` to hold. Call every ~2s from the viewer.
+    pub fn auto_quality_tick(&self, session_id: u64) -> Result<Option<FfiQuality>, FfiError> {
+        self.inner
+            .auto_quality_tick(session_id)
+            .map(|opt| opt.as_ref().map(types::quality_record))
+            .map_err(map_error)
+    }
+
     pub fn submit_clipboard(
         &self,
         session_id: u64,
@@ -568,3 +581,6 @@ uniffi::setup_scaffolding!();
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod desktop_tests;
