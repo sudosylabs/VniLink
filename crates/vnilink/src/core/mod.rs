@@ -37,6 +37,7 @@ use crate::video::{HostCapture, VideoInbox, VideoOutbox};
 
 mod clipboard;
 mod connect;
+mod cursor;
 mod files;
 mod host;
 mod keys;
@@ -156,6 +157,10 @@ struct LiveSession {
     peer_id: String,
     peer_key: [u8; 32],
     quality: Option<Quality>,
+    /// Agreed H.264 codec id (`CODEC_H264` or `CODEC_H264_HIGH`). Decided in
+    /// Hello/Accept; the serve path opens the matching encoder profile.
+    codec: u8,
+    separate_cursor: bool,
     monitor_width: u16,
     monitor_height: u16,
     stop: tokio::sync::watch::Sender<bool>,
@@ -219,6 +224,9 @@ struct Shared {
     desktop: Mutex<Option<Box<dyn HostDesktop>>>,
     capture: Mutex<Option<Box<dyn HostCapture>>>,
     clipboard: Mutex<Option<Box<dyn HostClipboard>>>,
+    // A native write can wait for the UI thread while holding the adapter
+    // lock. UI snapshots must never acquire that lock to query availability.
+    clipboard_available: AtomicBool,
     /// Latest text published by the controlled computer. Not logged.
     clipboard_inbox: Mutex<Option<String>>,
     /// Canonical directory for files this installation accepts. Not logged.
@@ -240,6 +248,25 @@ struct Shared {
     keyboard_mode: AtomicU8,
     /// Physical keys this controller has seen and not yet released.
     keyboard: Mutex<keyboard::KeyPlan>,
+    /// This host encodes H.264 High profile. Set by the platform after
+    /// probing (VA-API High entrypoint on Linux, VideoToolbox on macOS).
+    /// Defaults to false so a missing probe negotiates Baseline.
+    h264_high_encode: AtomicBool,
+    /// Controller auto-quality state: last inbox drops seen and last change.
+    /// Guards flapping: at most one adaptive step per cooldown.
+    auto: Mutex<AutoState>,
+    cursor_receiver: AtomicBool,
+    cursor_outbox: tokio::sync::watch::Sender<
+        Option<(crate::protocol::SessionStamp, Arc<crate::CursorState>)>,
+    >,
+    cursor_inbox: cursor::CursorInbox,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct AutoState {
+    last_dropped: u64,
+    last_change_ms: u64,
+    manual_session: Option<(u64, u64)>,
 }
 
 /// Owns the Iroh endpoint and the session rules.
@@ -374,7 +401,9 @@ fn desktop_capabilities(shared: &Shared) -> Capabilities {
         desktop_capture: capture.is_some(),
         keyboard: desktop.is_some(),
         pointer: desktop.is_some(),
-        clipboard: lock(&shared.clipboard).is_some(),
+        clipboard: shared
+            .clipboard_available
+            .load(std::sync::atomic::Ordering::Acquire),
         file_transfer: lock(&shared.transfer_dir).is_some(),
         audio: false,
         monitors: u8::from(width > 0 && height > 0),

@@ -1,11 +1,36 @@
 use crate::error::Error;
 use crate::events::{CoreEvent, EventHub};
 use crate::protocol::SessionStamp;
-use crate::protocol::{Quality, PROTOCOL_VERSION};
-use crate::session::{
-    admit, agree_quality, announce_progression, check_input, controller_offer, phase_after_admit,
-    SessionPhase, SessionRole,
+use crate::protocol::{
+    Quality, CODEC_H264, CODEC_H264_HIGH, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION,
 };
+use crate::session::{
+    admit, agree_quality, announce_progression, check_input, controller_offer, negotiate_codec,
+    phase_after_admit, SessionPhase, SessionRole,
+};
+
+#[test]
+fn automatic_quality_can_reach_retina_detail_and_handles_clamped_monitors() {
+    let clamped = Quality::new(5_000, 30, 800, 600).unwrap();
+    assert_eq!(
+        crate::session::suggest_quality(&clamped, 10, false, 0, 0),
+        Some(Quality::new(12_000, 60, 2560, 1440).unwrap())
+    );
+    let high = Quality::new(12_000, 60, 2560, 1440).unwrap();
+    let best = Quality::new(24_000, 60, 3840, 2160).unwrap();
+    assert_eq!(
+        crate::session::suggest_quality(&high, 10, false, 0, 0),
+        Some(best)
+    );
+    assert_eq!(
+        crate::session::suggest_quality(&best, 10, false, 0, 0),
+        None
+    );
+    assert_eq!(
+        crate::session::suggest_quality(&best, 180, false, 6, 1),
+        Some(high)
+    );
+}
 
 #[test]
 fn admission_checks_hosting_version_capacity_and_grant() {
@@ -17,6 +42,19 @@ fn admission_checks_hosting_version_capacity_and_grant() {
         admit(true, false, true, PROTOCOL_VERSION + 1, false, true, false),
         Err(Error::IncompatibleVersion)
     ));
+    assert!(matches!(
+        admit(
+            true,
+            false,
+            true,
+            MIN_PROTOCOL_VERSION - 1,
+            false,
+            true,
+            false
+        ),
+        Err(Error::IncompatibleVersion)
+    ));
+    assert!(admit(true, false, true, MIN_PROTOCOL_VERSION, false, true, false).is_ok());
     assert!(matches!(
         admit(true, true, true, PROTOCOL_VERSION, false, true, false),
         Err(Error::Busy)
@@ -38,6 +76,19 @@ fn admission_checks_hosting_version_capacity_and_grant() {
         Err(Error::IncompatibleVersion)
     ));
     assert!(admit(true, false, true, PROTOCOL_VERSION, false, true, false).is_ok());
+}
+
+#[test]
+fn codec_negotiation_prefers_high_and_falls_back_to_baseline() {
+    assert_eq!(negotiate_codec(CODEC_H264, false), Some(CODEC_H264));
+    assert_eq!(negotiate_codec(CODEC_H264, true), Some(CODEC_H264));
+    assert_eq!(
+        negotiate_codec(CODEC_H264_HIGH, true),
+        Some(CODEC_H264_HIGH)
+    );
+    // Silent safe downgrade: every High decoder also decodes Baseline.
+    assert_eq!(negotiate_codec(CODEC_H264_HIGH, false), Some(CODEC_H264));
+    assert_eq!(negotiate_codec(9, true), None);
 }
 
 #[test]

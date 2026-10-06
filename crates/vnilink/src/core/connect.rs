@@ -15,7 +15,7 @@ use crate::address::Announcement;
 use crate::error::Error;
 use crate::events::CoreEvent;
 use crate::input::{InputOutbox, Outbound};
-use crate::protocol::{ControlMessage, KeyText, SessionStamp, ALPN, PROTOCOL_VERSION};
+use crate::protocol::{ControlMessage, KeyText, SessionStamp, ALPN};
 use crate::reconnect::{self, LinkEnd};
 use crate::session::{Grants, SessionInfo, SessionPhase, SessionRole};
 use crate::trust::Device;
@@ -145,6 +145,8 @@ impl Core {
                 peer_id: device.display_id.clone(),
                 peer_key: device.endpoint_id,
                 quality: Some(crate::session::controller_offer()),
+                codec: crate::protocol::CODEC_H264,
+                separate_cursor: false,
                 monitor_width: 0,
                 monitor_height: 0,
                 stop: stop.clone(),
@@ -293,81 +295,125 @@ pub(super) async fn establish(
     ready: &mut Option<std::sync::mpsc::SyncSender<Result<SessionInfo, Error>>>,
 ) -> Result<(bool, LinkEnd), Error> {
     let addr = device_addr(&device)?;
-    let connect = shared.endpoint.connect(addr, ALPN);
-    let connection = tokio::time::timeout(Duration::from_secs(10), connect)
-        .await
-        .map_err(|_| Error::Timeout)?
-        .map_err(Error::network_debug)?;
-    if *stop_rx.borrow() {
-        return Err(Error::NoSession);
-    }
-    let (mut send, mut recv) = connection.open_bi().await.map_err(Error::network_debug)?;
     let offer = crate::session::controller_offer();
     let decode = shared
         .h264_decode
         .load(std::sync::atomic::Ordering::Relaxed);
-    write_frame(
-        &mut send,
-        &ControlMessage::Hello {
-            version: PROTOCOL_VERSION,
-            codec: crate::protocol::CODEC_H264,
-            quality: offer,
-            decode,
-            hostname: crate::hostname::local_hostname(),
-        },
-    )
-    .await?;
-    let response = read_frame(&mut recv).await?;
-    let info = match response {
-        ControlMessage::Accept {
-            stamp,
-            monitor_width,
-            monitor_height,
-            codec,
-            quality,
-            hostname: accept_hostname,
-        } => {
-            if codec != crate::protocol::CODEC_H264 {
-                return Err(Error::IncompatibleVersion);
-            }
-            let peer_id = device.display_id.clone();
-            // The host admitted us: keep its display name for this
-            // controller's device list. Persist failures stay local; the
-            // next dial refreshes the name.
-            let _ =
-                super::link::remember_peer_hostname(shared, &device.endpoint_id, accept_hostname);
-            {
-                let mut state = lock(&shared.state);
-                if let Some(session) = state.outgoing.as_mut() {
-                    session.id = stamp.id;
-                    session.generation = stamp.generation;
-                    session.phase = SessionPhase::Active;
-                    session.monitor_width = monitor_width;
-                    session.monitor_height = monitor_height;
-                    session.link = Some(connection.clone());
-                    session.quality = Some(quality);
-                }
-            }
-            crate::session::announce_progression(
-                &shared.events,
-                stamp.id,
-                stamp.generation,
-                SessionRole::Controller,
-                &peer_id,
-            );
-            SessionInfo {
-                id: stamp.id,
-                generation: stamp.generation,
-                role: SessionRole::Controller,
-                phase: SessionPhase::Active,
-                peer_id,
-                quality: Some(quality),
+    // Offer High on the current protocol first for sharper video at the same
+    // bitrate; fall back to a version-1 Baseline hello on a FRESH connection
+    // so older hosts still connect. A fresh dial is required because a host
+    // that rejects never reads a second hello on the same streams.
+    let mut hellos = vec![
+        (2, crate::protocol::CODEC_H264_HIGH),
+        (
+            crate::protocol::MIN_PROTOCOL_VERSION,
+            crate::protocol::CODEC_H264,
+        ),
+    ];
+    if shared
+        .cursor_receiver
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        hellos.insert(
+            0,
+            (
+                crate::protocol::PROTOCOL_VERSION,
+                crate::protocol::CODEC_H264_HIGH,
+            ),
+        );
+    }
+    let mut hellos = hellos.iter();
+    let (connection, mut send, mut recv, info) = loop {
+        let &(version, codec) = hellos.next().ok_or(Error::IncompatibleVersion)?;
+        let connect = shared.endpoint.connect(addr.clone(), ALPN);
+        let connection = tokio::time::timeout(Duration::from_secs(10), connect)
+            .await
+            .map_err(|_| Error::Timeout)?
+            .map_err(Error::network_debug)?;
+        if *stop_rx.borrow() {
+            return Err(Error::NoSession);
+        }
+        let (mut send, mut recv) = connection.open_bi().await.map_err(Error::network_debug)?;
+        write_frame(
+            &mut send,
+            &ControlMessage::Hello {
+                version,
+                codec,
+                quality: offer,
+                decode,
+                hostname: crate::hostname::local_hostname(),
+            },
+        )
+        .await?;
+        match read_frame(&mut recv).await? {
+            ControlMessage::Accept {
+                stamp,
                 monitor_width,
                 monitor_height,
+                codec: agreed,
+                quality,
+                hostname: accept_hostname,
+            } => {
+                let separate_cursor =
+                    version >= 3 && agreed & crate::protocol::SEPARATE_CURSOR != 0;
+                let agreed = if version >= 3 {
+                    agreed & !crate::protocol::SEPARATE_CURSOR
+                } else {
+                    agreed
+                };
+                if agreed != crate::protocol::CODEC_H264
+                    && agreed != crate::protocol::CODEC_H264_HIGH
+                {
+                    return Err(Error::IncompatibleVersion);
+                }
+                let peer_id = device.display_id.clone();
+                // The host admitted us: keep its display name for this
+                // controller's device list. Persist failures stay local; the
+                // next dial refreshes the name.
+                let _ = super::link::remember_peer_hostname(
+                    shared,
+                    &device.endpoint_id,
+                    accept_hostname,
+                );
+                {
+                    let mut state = lock(&shared.state);
+                    if let Some(session) = state.outgoing.as_mut() {
+                        session.id = stamp.id;
+                        session.generation = stamp.generation;
+                        session.monitor_width = monitor_width;
+                        session.monitor_height = monitor_height;
+                        session.link = Some(connection.clone());
+                        session.quality = Some(quality);
+                        session.codec = agreed;
+                        session.separate_cursor = separate_cursor;
+                    }
+                }
+                break (
+                    connection,
+                    send,
+                    recv,
+                    SessionInfo {
+                        id: stamp.id,
+                        generation: stamp.generation,
+                        role: SessionRole::Controller,
+                        phase: SessionPhase::Active,
+                        peer_id,
+                        quality: Some(quality),
+                        monitor_width,
+                        monitor_height,
+                    },
+                );
             }
+            ControlMessage::Reject(code) => {
+                let error = code.to_error();
+                if matches!(error, Error::IncompatibleVersion) {
+                    connection.close(0u8.into(), b"version fallback");
+                    continue;
+                }
+                return Err(error);
+            }
+            _ => return Err(Error::Malformed),
         }
-        ControlMessage::Reject(code) => return Err(code.to_error()),
-        _ => return Err(Error::Malformed),
     };
     if write_addresses(shared, &mut send).await.is_err() {
         return Err(Error::network("the address announcement was not written"));
@@ -383,11 +429,40 @@ pub(super) async fn establish(
             return Err(error);
         }
     };
+    let inbox = video_inbox(shared);
+    inbox.reset();
+    // A reconnect must not expose Active with senders from the previous
+    // connection. Both side streams are usable before the UI can act on it.
+    {
+        let mut state = lock(&shared.state);
+        let stopped = state.shut_down || *stop_rx.borrow();
+        let Some(session) = state.outgoing.as_mut().filter(|s| {
+            s.id == info.id
+                && s.generation == info.generation
+                && !matches!(s.phase, SessionPhase::Stopping)
+                && !finished(&s.phase)
+        }) else {
+            clipboard.abort();
+            transfer.abort();
+            return Err(Error::NoSession);
+        };
+        if stopped {
+            clipboard.abort();
+            transfer.abort();
+            return Err(Error::NoSession);
+        }
+        session.phase = SessionPhase::Active;
+    }
+    crate::session::announce_progression(
+        &shared.events,
+        info.id,
+        info.generation,
+        SessionRole::Controller,
+        &info.peer_id,
+    );
     if let Some(ready) = ready.take() {
         let _ = ready.send(Ok(info.clone()));
     }
-    let inbox = video_inbox(shared);
-    inbox.reset();
     let keyframe = Arc::new(KeyframeFlag::new());
     let session_id = info.id;
     let generation = info.generation;
@@ -395,12 +470,26 @@ pub(super) async fn establish(
     let video_connection = connection.clone();
     let video_inbox = Arc::clone(&inbox);
     let video_keyframe = Arc::clone(&keyframe);
+    let cursor = {
+        let state = lock(&shared.state);
+        state
+            .outgoing
+            .as_ref()
+            .filter(|s| s.separate_cursor)
+            .map(|s| {
+                (
+                    SessionStamp::new(s.id, s.generation),
+                    Arc::clone(&shared.cursor_inbox),
+                )
+            })
+    };
     let reader = tokio::spawn(async move {
         video_recv_loop(
             video_connection,
             video_inbox,
             video_keyframe,
             &mut video_stop,
+            cursor,
         )
         .await;
     });

@@ -9,8 +9,11 @@ use tokio::sync::Notify;
 
 use super::frame::EncodedFrame;
 
-/// Keyframe plus two predicted frames. The next predicted frame is dropped.
-pub(crate) const VIDEO_QUEUE: usize = 3;
+/// Keyframe plus seven predicted frames. The next predicted frame is dropped.
+/// Sized to absorb encode/network jitter (~130ms at 60fps, ~260ms at 30fps)
+/// without a keyframe request on every hiccup; sustained overload still drops
+/// P-frames until the next keyframe to bound latency.
+pub(crate) const VIDEO_QUEUE: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VideoPush {
@@ -69,7 +72,6 @@ impl VideoQueue {
         self.frames.drain(..).collect()
     }
 
-    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.frames.len()
     }
@@ -109,6 +111,18 @@ impl VideoOutbox {
         lock(&self.queue).drain()
     }
 
+    /// Queued frames waiting for the network task. Poll with
+    /// `session_paths` RTT/relay to drive adaptive quality.
+    pub(crate) fn queued(&self) -> usize {
+        lock(&self.queue).len()
+    }
+
+    /// Cumulative P-frames dropped on full queue. Rising fast means the
+    /// encoder outruns the path: lower bitrate/fps via quality update.
+    pub(crate) fn dropped(&self) -> u64 {
+        lock(&self.queue).dropped()
+    }
+
     pub(crate) fn notified(&self) -> tokio::sync::futures::Notified<'_> {
         self.notify.notified()
     }
@@ -142,6 +156,12 @@ impl VideoInbox {
 
     pub(crate) fn try_pop(&self) -> Option<EncodedFrame> {
         lock(&self.queue).pop()
+    }
+
+    /// Frames waiting for the UI. Rising means the UI drains slower than the
+    /// network delivers: used as the controller-side `queued` signal.
+    pub(crate) fn len(&self) -> usize {
+        lock(&self.queue).len()
     }
 
     pub(crate) fn pop_timeout(&self, timeout: Duration) -> Option<EncodedFrame> {

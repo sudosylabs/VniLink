@@ -25,6 +25,9 @@ impl Core {
         }
         drop(state);
         *lock(&self.shared.clipboard) = Some(clipboard);
+        self.shared
+            .clipboard_available
+            .store(true, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 
@@ -165,4 +168,74 @@ pub(super) fn apply_clipboard(shared: &Shared, peer: &[u8; 32], text: &str) -> R
         return Err(Error::Unsupported("no clipboard adapter is installed"));
     };
     adapter.set_text(text)
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    struct WaitingClipboard {
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    }
+    impl HostClipboard for WaitingClipboard {
+        fn set_text(&mut self, _: &str) -> Result<(), Error> {
+            self.entered.send(()).unwrap();
+            self.release.recv().unwrap();
+            Ok(())
+        }
+    }
+    #[test]
+    fn snapshot_does_not_wait_for_a_native_clipboard_callback() {
+        let config = || CoreConfig {
+            listen: Listen::Loopback,
+            relay: RelaySettings::custom(vec![
+                crate::CustomRelay::new("http://127.0.0.1:9").unwrap()
+            ])
+            .unwrap(),
+            ..CoreConfig::default()
+        };
+        let host = Arc::new(Core::start(config()).unwrap());
+        let peer = Core::start(config()).unwrap();
+        assert!(!host.snapshot().unwrap().capabilities.clipboard);
+        host.accept_invitation(&peer.create_invitation(Duration::from_secs(60)).unwrap())
+            .unwrap();
+        host.authorize(
+            &peer.endpoint_id(),
+            Grants {
+                clipboard: true,
+                ..Grants::default()
+            },
+        )
+        .unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        host.set_clipboard(Box::new(WaitingClipboard {
+            entered: entered_tx,
+            release: release_rx,
+        }))
+        .unwrap();
+        let writer = host.clone();
+        let key = parse_endpoint_id(&peer.endpoint_id()).unwrap();
+        let write = std::thread::spawn(move || apply_clipboard(&writer.shared, &key, "fixture"));
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let observer = host.clone();
+        let (done_tx, done_rx) = mpsc::channel();
+        let read = std::thread::spawn(move || {
+            let _ = done_tx.send(observer.snapshot().unwrap().capabilities.clipboard);
+        });
+        let available = done_rx.recv_timeout(Duration::from_millis(200));
+        // Always release the adapter, including the failing implementation.
+        release_tx.send(()).unwrap();
+        write.join().unwrap().unwrap();
+        read.join().unwrap();
+        peer.shutdown();
+        host.shutdown();
+        assert_eq!(
+            available,
+            Ok(true),
+            "the UI snapshot blocked the native clipboard writer"
+        );
+    }
 }

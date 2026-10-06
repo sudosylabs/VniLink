@@ -18,10 +18,27 @@ impl fmt::Debug for KeyText {
 }
 
 /// Application protocol version carried in the control hello.
-pub const PROTOCOL_VERSION: u16 = 1;
+/// Version 2 adds H.264 High profile negotiation (`CODEC_H264_HIGH`).
+/// Version 3 negotiates an independent cursor stream in the Accept codec byte.
+/// Hosts admit 1 through 3; newer controllers fall back to a version-1
+/// Baseline hello when an older host rejects it as incompatible.
+pub const PROTOCOL_VERSION: u16 = 3;
+
+/// Version-3 Accept codec bit: independent cursor stream is available.
+pub(crate) const SEPARATE_CURSOR: u8 = 0x80;
+
+/// Oldest hello a version-2 host still admits. Version-1 sessions are
+/// Baseline-only.
+pub const MIN_PROTOCOL_VERSION: u16 = 1;
 
 /// H.264 video codec identifier carried in Hello/Accept negotiation.
+/// Baseline decodes everywhere; every decoder we ship also decodes High.
 pub const CODEC_H264: u8 = 1;
+
+/// H.264 High profile. Offered by version-2 controllers whose decoder
+/// handles it; the host replies with the lower of offered and locally
+/// encodable, so a Baseline-only host answers `CODEC_H264`.
+pub const CODEC_H264_HIGH: u8 = 2;
 
 /// QUIC ALPN for the VniLink control channel. Bytes, not a string type, so the
 /// value matches what Iroh negotiates.

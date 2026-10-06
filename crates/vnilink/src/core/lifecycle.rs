@@ -192,6 +192,7 @@ impl Core {
             desktop: Mutex::new(None),
             capture: Mutex::new(None),
             clipboard: Mutex::new(None),
+            clipboard_available: AtomicBool::new(false),
             clipboard_inbox: Mutex::new(None),
             transfer_dir: Mutex::new(None),
             video_inbox: Mutex::new(None),
@@ -202,6 +203,11 @@ impl Core {
             h264_decode: AtomicBool::new(false),
             keyboard_mode: AtomicU8::new(KeyboardMode::Character as u8),
             keyboard: Mutex::new(keyboard::KeyPlan::new()),
+            h264_high_encode: AtomicBool::new(false),
+            auto: Mutex::new(AutoState::default()),
+            cursor_receiver: AtomicBool::new(false),
+            cursor_outbox: tokio::sync::watch::channel(None).0,
+            cursor_inbox: Arc::new(Mutex::new(None)),
         });
         let accept = Arc::clone(&shared);
         runtime.spawn(async move { accept_loop(accept).await });

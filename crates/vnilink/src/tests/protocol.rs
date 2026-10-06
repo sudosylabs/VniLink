@@ -24,6 +24,21 @@ fn control_messages_round_trip() {
             decode: false,
             hostname: None,
         },
+        ControlMessage::Hello {
+            version: PROTOCOL_VERSION,
+            codec: crate::protocol::CODEC_H264_HIGH,
+            quality,
+            decode: true,
+            hostname: Some("mac-mini".to_string()),
+        },
+        ControlMessage::Accept {
+            stamp: SessionStamp::new(7, 3),
+            monitor_width: 1920,
+            monitor_height: 1080,
+            codec: crate::protocol::CODEC_H264_HIGH,
+            quality,
+            hostname: None,
+        },
         ControlMessage::Accept {
             stamp: SessionStamp::new(7, 3),
             monitor_width: 1920,

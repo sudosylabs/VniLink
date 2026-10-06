@@ -4,6 +4,8 @@ mod admission_tests;
 mod apply_tests;
 #[path = "tests/clipboard.rs"]
 mod clipboard_tests;
+#[path = "tests/datagram.rs"]
+mod datagram_tests;
 #[path = "tests/error.rs"]
 mod error_tests;
 #[path = "tests/events.rs"]

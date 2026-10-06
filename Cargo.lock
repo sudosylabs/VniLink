@@ -4655,6 +4655,7 @@ dependencies = [
 name = "vnilink"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "enigo",
  "iroh",
  "rand",

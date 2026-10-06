@@ -236,7 +236,11 @@ pub(super) async fn handle_host_request(
             decode,
             hostname: hello_hostname,
         } => {
-            let codec_supported = codec == crate::protocol::CODEC_H264;
+            let host_high = shared
+                .h264_high_encode
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let agreed_codec = crate::session::negotiate_codec(codec, host_high);
+            let codec_supported = agreed_codec.is_some();
             // The controller names its decoder in Hello. A peer that cannot
             // decode gets an explicit reject, not a session with no
             // displayable video.
@@ -297,7 +301,19 @@ pub(super) async fn handle_host_request(
                     // clamped to this host's monitor.
                     let monitor = monitor_size(shared);
                     let agreed = session::agree_quality(&quality, monitor);
-                    match register_incoming(shared, peer, stop, Some(agreed)) {
+                    let codec_id = agreed_codec.unwrap_or(crate::protocol::CODEC_H264);
+                    let separate_cursor = version >= 3
+                        && lock(&shared.capture)
+                            .as_ref()
+                            .is_some_and(|capture| capture.separate_cursor());
+                    match register_incoming(
+                        shared,
+                        peer,
+                        stop,
+                        Some(agreed),
+                        codec_id,
+                        separate_cursor,
+                    ) {
                         Ok(info) => {
                             *owned_session = Some(info.id);
                             remember_link(shared, true, connection.clone());
@@ -309,19 +325,35 @@ pub(super) async fn handle_host_request(
                                 peer.as_bytes(),
                                 hello_hostname,
                             );
+                            let cursor_task = separate_cursor.then(|| {
+                                tokio::spawn(super::cursor::send_cursor(
+                                    connection.clone(),
+                                    SessionStamp::new(info.id, info.generation),
+                                    shared.cursor_outbox.subscribe(),
+                                    stop_rx.clone(),
+                                ))
+                            });
                             let wrote = write_frame(
                                 &mut send,
                                 &ControlMessage::Accept {
                                     stamp: SessionStamp::new(info.id, info.generation),
                                     monitor_width: info.monitor_width,
                                     monitor_height: info.monitor_height,
-                                    codec: crate::protocol::CODEC_H264,
+                                    codec: codec_id
+                                        | if separate_cursor {
+                                            crate::protocol::SEPARATE_CURSOR
+                                        } else {
+                                            0
+                                        },
                                     quality: info.quality.expect("admission agrees quality"),
                                     hostname: crate::hostname::local_hostname(),
                                 },
                             )
                             .await;
                             if wrote.is_err() || write_addresses(shared, &mut send).await.is_err() {
+                                if let Some(task) = cursor_task {
+                                    task.abort();
+                                }
                                 finish_incoming(shared, info.id);
                                 return HostTurn::PeerShouldClose;
                             }
@@ -352,6 +384,9 @@ pub(super) async fn handle_host_request(
                             .await;
                             transfer.abort();
                             clipboard.abort();
+                            if let Some(task) = cursor_task {
+                                task.abort();
+                            }
                             if let Some(video) = video {
                                 video.abort();
                             }
@@ -392,6 +427,8 @@ pub(super) fn register_incoming(
     peer: EndpointId,
     stop: &tokio::sync::watch::Sender<bool>,
     quality: Option<Quality>,
+    codec: u8,
+    separate_cursor: bool,
 ) -> Result<SessionInfo, Error> {
     let (monitor_width, monitor_height) = monitor_size(shared);
     let mut state = lock(&shared.state);
@@ -428,6 +465,8 @@ pub(super) fn register_incoming(
         peer_id: peer_id.clone(),
         peer_key: *peer.as_bytes(),
         quality,
+        codec,
+        separate_cursor,
         monitor_width,
         monitor_height,
         stop: stop.clone(),

@@ -331,6 +331,7 @@ fn a_dropped_session_does_not_replay_a_file() {
         .submit_file(session.id, session.generation, "one.txt", b"one", false)
         .unwrap();
     std::fs::write(root.join("one.txt"), b"changed").unwrap();
+    let events = controller.subscribe().unwrap();
     controller.drop_link().unwrap();
     wait_until(|| {
         controller
@@ -350,10 +351,19 @@ fn a_dropped_session_does_not_replay_a_file() {
         ),
         Err(Error::NoSession | Error::StaleSession)
     ));
-    wait_until(|| {
-        let outgoing = controller.snapshot().unwrap().outgoing.unwrap();
-        outgoing.phase == SessionPhase::Active && outgoing.generation != session.generation
-    });
+    // The native UI acts on Active immediately, rather than waiting for a
+    // later polling tick that can hide an incompletely reopened side stream.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "reconnect did not become active"
+        );
+        if matches!(events.recv_timeout(Duration::from_millis(50)), Some(CoreEvent::SessionChanged { generation, phase: SessionPhase::Active, .. }) if generation != session.generation)
+        {
+            break;
+        }
+    }
     let again = controller.snapshot().unwrap().outgoing.unwrap();
     controller
         .submit_file(again.id, again.generation, "two.txt", b"two", false)

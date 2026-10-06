@@ -1,6 +1,6 @@
 use crate::error::Error;
 use crate::events::{CoreEvent, EventHub};
-use crate::protocol::{Quality, SessionStamp, PROTOCOL_VERSION};
+use crate::protocol::{Quality, SessionStamp};
 
 /// Which side of a session this installation is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +68,9 @@ pub(crate) fn admit(
     if !hosting {
         return Err(Error::NotHosting);
     }
-    if version != PROTOCOL_VERSION {
+    if !(crate::protocol::MIN_PROTOCOL_VERSION..=crate::protocol::PROTOCOL_VERSION)
+        .contains(&version)
+    {
         return Err(Error::IncompatibleVersion);
     }
     if session_open {
@@ -89,9 +91,65 @@ pub(crate) fn admit(
     Ok(())
 }
 
+/// Agreed H.264 codec for the live session: the lower of offered and locally
+/// encodable. A Baseline offer always agrees Baseline; a High offer agrees
+/// High only when this host encodes it. Downgrade is silent and safe because
+/// every High decoder also decodes Baseline. Returns `None` for an unknown
+/// codec id, which the host rejects.
+pub fn negotiate_codec(offered: u8, host_high: bool) -> Option<u8> {
+    match offered {
+        crate::protocol::CODEC_H264 => Some(crate::protocol::CODEC_H264),
+        crate::protocol::CODEC_H264_HIGH if host_high => Some(crate::protocol::CODEC_H264_HIGH),
+        crate::protocol::CODEC_H264_HIGH => Some(crate::protocol::CODEC_H264),
+        _ => None,
+    }
+}
 /// Default encoder limits the controller offers when it dials.
 pub(crate) fn controller_offer() -> Quality {
     Quality::new(2_000, 30, 1920, 1080).expect("default offer is valid")
+}
+
+/// Ordered quality ladder for automatic mode, low to high. Clear paths can
+/// reach Retina detail without a manual override; congestion steps back down.
+const LADDER: [(u32, u8, u16, u16); 6] = [
+    (800, 10, 854, 480),
+    (1_500, 15, 1280, 720),
+    (2_000, 30, 1920, 1080),
+    (5_000, 30, 1920, 1080),
+    (12_000, 60, 2560, 1440),
+    (24_000, 60, 3840, 2160),
+];
+
+/// One adaptive step based on transport congestion. Downshift is eager
+/// (queue, drops, high RTT/relay); upshift needs all-clear. Returns `None`
+/// to hold. Pure function so hosts, controllers, and tests share one policy.
+pub fn suggest_quality(
+    current: &Quality,
+    rtt_ms: u64,
+    relay: bool,
+    queued: usize,
+    dropped_delta: u64,
+) -> Option<Quality> {
+    let index = LADDER
+        .iter()
+        .position(|&(bitrate, fps, _, _)| {
+            current.max_bitrate_kbps == bitrate && current.max_frame_rate == fps
+        })
+        .unwrap_or(2);
+    let strained = queued >= 6 || dropped_delta > 0 || rtt_ms >= 150 || (relay && rtt_ms >= 80);
+    if strained {
+        if index == 0 {
+            return None;
+        }
+        let (bitrate, fps, width, height) = LADDER[index - 1];
+        return Quality::new(bitrate, fps, width, height).ok();
+    }
+    let clear = queued == 0 && dropped_delta == 0 && rtt_ms < 50 && !relay;
+    if clear && index + 1 < LADDER.len() {
+        let (bitrate, fps, width, height) = LADDER[index + 1];
+        return Quality::new(bitrate, fps, width, height).ok();
+    }
+    None
 }
 
 /// Agreed limits for the live session: the offer clamped to the host monitor.

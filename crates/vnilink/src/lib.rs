@@ -106,12 +106,19 @@ pub use installation::{InstallationStore, MemoryStore};
 pub use keyboard::{KeyboardMode, LocalKey};
 pub use os_input::{linux_evdev_keycode, OsInput};
 pub use pairing::{PairingFile, PairingPreview, PAIRING_FILE_EXTENSION};
-pub use protocol::{Capabilities, Quality, PROTOCOL_VERSION};
+pub use protocol::{
+    Capabilities, Quality, CODEC_H264, CODEC_H264_HIGH, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION,
+};
 pub use relay::{CustomRelay, RelaySettings};
-pub use session::{Grants, SessionInfo, SessionPhase, SessionRole};
+pub use session::{
+    negotiate_codec, suggest_quality, Grants, SessionInfo, SessionPhase, SessionRole,
+};
 pub use transfer::MAX_FILE_BYTES;
 pub use video::{EncodedFrame, HostCapture, VideoSubscription, MAX_VIDEO_FRAME};
 
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+mod cursor;
+pub use cursor::{CursorImage, CursorState, MAX_CURSOR_EDGE};
