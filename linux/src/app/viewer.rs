@@ -61,12 +61,17 @@ impl Viewer {
         let view = adw::ToolbarView::new();
         let header = adw::HeaderBar::new();
         header.set_title_widget(Some(&adw::WindowTitle::new(&title, "Remote desktop")));
-        let quality = gtk::MenuButton::builder().label("Quality").build();
-        quality.set_popover(Some(&quality_popover(&window, core.clone(), &session)));
-        header.pack_start(&quality);
         let tools = gtk::MenuButton::builder().label("Session").build();
         tools.set_popover(Some(&session_popover(&window, core.clone(), &session)));
         header.pack_start(&tools);
+        let send_file = gtk::Button::with_label("Send file…");
+        send_file.set_tooltip_text(Some("Send a file, or drop one onto the remote desktop"));
+        let win = window.clone();
+        let worker = core.clone();
+        let (id, generation) = (session.id, session.generation);
+        send_file
+            .connect_clicked(move |_| super::files::send(&win, worker.clone(), id, generation));
+        header.pack_start(&send_file);
         let fullscreen = gtk::ToggleButton::builder()
             .icon_name("view-fullscreen-symbolic")
             .tooltip_text("Full screen")
@@ -112,7 +117,7 @@ impl Viewer {
             .build();
         picture.set_widget_name("remote_desktop");
         picture.update_property(&[gtk::accessible::Property::Label(
-            "Remote desktop; click to send keyboard and pointer input",
+            "Remote desktop; move to control the pointer, click to send keyboard input",
         )]);
         stack.add_named(&picture, Some("desktop"));
         stack.set_visible_child_name("waiting");
@@ -128,7 +133,17 @@ impl Viewer {
             .build();
         status.add_css_class("caption");
         view.add_bottom_bar(&status);
-        window.set_content(Some(&view));
+        let toasts = adw::ToastOverlay::new();
+        toasts.set_child(Some(&view));
+        window.set_content(Some(&toasts));
+        super::files::install_drop(
+            &picture,
+            &window,
+            core.clone(),
+            session.id,
+            session.generation,
+        );
+
         let viewer = Rc::new(Self {
             window,
             picture,
@@ -140,6 +155,22 @@ impl Viewer {
             size: Rc::new(Cell::new((0, 0))),
         });
         viewer.install_input(core.clone());
+        let transfer_events = core.subscribe().ok();
+        let owner = Rc::downgrade(&viewer);
+        glib::timeout_add_local(Duration::from_millis(200), move || {
+            let Some(viewer) = owner.upgrade().filter(|v| !v.stop.load(Ordering::Relaxed)) else {
+                return ControlFlow::Break;
+            };
+            if let Some(events) = &transfer_events {
+                while let Some(event) = events.try_recv() {
+                    if matches!(event, vnilink::CoreEvent::TransferCompleted { id } if id == viewer.session.id)
+                    {
+                        toasts.add_toast(adw::Toast::new("File saved in your receive folder."));
+                    }
+                }
+            }
+            ControlFlow::Continue
+        });
         let weak = Rc::downgrade(&viewer);
         disconnect.connect_clicked(move |_| {
             if let Some(viewer) = weak.upgrade() {
@@ -237,6 +268,7 @@ impl Viewer {
                 let subscription =
                     subscription.ok_or("The previous video session is still closing.")?;
                 let mut controller = ControllerVideo::new(vnilink_linux::LinuxDecoder::new());
+                let mut ticks = 0u32;
                 while !stop.load(Ordering::Relaxed) {
                     let snapshot = worker.snapshot().map_err(|e| e.to_string())?;
                     if !snapshot.outgoing.is_some_and(|s| {
@@ -247,8 +279,16 @@ impl Viewer {
                         return Err("The session ended or is reconnecting.".into());
                     }
                     let Some(frame) = subscription.recv_timeout(Duration::from_millis(100)) else {
+                        ticks = ticks.saturating_add(1);
+                        if ticks % 20 == 0 {
+                            let _ = worker.auto_quality_tick(session.id);
+                        }
                         continue;
                     };
+                    ticks = ticks.saturating_add(1);
+                    if ticks % 20 == 0 {
+                        let _ = worker.auto_quality_tick(session.id);
+                    }
                     match controller.push(&frame).map_err(|e| e.to_string())? {
                         ControllerOutput::Decoded(frame) => {
                             *delivery.lock().unwrap() = Some(Ok(frame))
@@ -263,6 +303,7 @@ impl Viewer {
             }
         });
         let weak = Rc::downgrade(self);
+        let mut cursor_image: Option<Arc<vnilink::CursorImage>> = None;
         glib::timeout_add_local(Duration::from_millis(16), move || {
             let Some(viewer) = weak.upgrade() else {
                 return ControlFlow::Break;
@@ -270,12 +311,42 @@ impl Viewer {
             if viewer.stop.load(Ordering::Relaxed) {
                 return ControlFlow::Break;
             }
+            if let Ok(Some(cursor)) = core.cursor(viewer.session.id, viewer.session.generation) {
+                if !cursor.visible {
+                    viewer.picture.set_cursor_from_name(Some("none"));
+                } else if let Some(image) = cursor.image.as_ref() {
+                    if cursor_image.as_ref() != Some(image) {
+                        let texture = gtk::gdk::MemoryTexture::new(
+                            i32::from(image.width()),
+                            i32::from(image.height()),
+                            gtk::gdk::MemoryFormat::B8g8r8a8Premultiplied,
+                            &glib::Bytes::from_owned(image.pixels().to_vec()),
+                            usize::from(image.width()) * 4,
+                        );
+                        let native = gtk::gdk::Cursor::from_texture(
+                            &texture,
+                            i32::from(image.hotspot().0),
+                            i32::from(image.hotspot().1),
+                            None,
+                        );
+                        viewer.picture.set_cursor(Some(&native));
+                        cursor_image = Some(Arc::clone(image));
+                    } else if viewer
+                        .picture
+                        .cursor()
+                        .is_some_and(|cursor| cursor.name().as_deref() == Some("none"))
+                    {
+                        // Recreate the cached shape after an invisible update.
+                        cursor_image = None;
+                    }
+                }
+            }
             if let Some(result) = latest.lock().unwrap().take() {
                 match result {
                     Ok(frame) => {
                         viewer.show_frame(&frame);
                         viewer.status.set_label(&format!(
-                            "{} × {} · Click the desktop to control it",
+                            "{} × {} · Click to send keyboard input",
                             frame.width(),
                             frame.height()
                         ));
@@ -296,8 +367,21 @@ impl Viewer {
         enum Command {
             Event(InputEvent),
             Key(u16, bool, String),
+            Paste(u16, String, std::sync::mpsc::Receiver<Option<String>>),
         }
         let (sender, receiver) = std::sync::mpsc::sync_channel::<Command>(128);
+        let (notices, feedback) = std::sync::mpsc::sync_channel::<String>(1);
+        let window = self.window.downgrade();
+        let alive = self.stop.clone();
+        glib::timeout_add_local(Duration::from_millis(100), move || {
+            let Some(window) = window.upgrade().filter(|_| !alive.load(Ordering::Relaxed)) else {
+                return ControlFlow::Break;
+            };
+            if let Ok(message) = feedback.try_recv() {
+                super::files::feedback(window.upcast_ref(), &message);
+            }
+            ControlFlow::Continue
+        });
         let id = self.session.id;
         let generation = self.session.generation;
         let stop = self.stop.clone();
@@ -311,6 +395,25 @@ impl Viewer {
                 };
                 let result = match command {
                     Command::Event(event) => worker.submit_input(id, generation, event),
+                    Command::Paste(usage, text, clipboard) => {
+                        if let Ok(Some(copy)) = clipboard.recv_timeout(Duration::from_millis(500)) {
+                            // Apply the clipboard before the shortcut, on the same
+                            // ordered input worker; UI and video remain responsive.
+                            if let Err(e) = worker.submit_clipboard(id, generation, &copy) {
+                                let _ = notices
+                                    .try_send(format!("Clipboard paste could not sync: {e}"));
+                            }
+                        }
+                        worker.submit_local_key(
+                            id,
+                            generation,
+                            LocalKey {
+                                usage,
+                                down: true,
+                                text: &text,
+                            },
+                        )
+                    }
                     Command::Key(usage, down, text) => worker.submit_local_key(
                         id,
                         generation,
@@ -349,28 +452,14 @@ impl Viewer {
                 );
             }
         });
-        let motion = gtk::EventControllerMotion::new();
-        let picture = self.picture.downgrade();
-        let size = self.size.clone();
-        let host = (self.session.monitor_width, self.session.monitor_height);
         let send = enqueue.clone();
-        motion.connect_motion(move |_, x, y| {
-            let Some(picture) = picture.upgrade() else {
-                return;
-            };
-            if picture.has_focus() {
-                if let Some((x, y)) = crate::viewer::pointer(
-                    x,
-                    y,
-                    (f64::from(picture.width()), f64::from(picture.height())),
-                    size.get(),
-                    host,
-                ) {
-                    send(Command::Event(InputEvent::pointer(x, y)));
-                }
-            }
-        });
-        self.picture.add_controller(motion);
+        install_pointer_motion(
+            &self.picture,
+            self.size.clone(),
+            (self.session.monitor_width, self.session.monitor_height),
+            move |x, y| send(Command::Event(InputEvent::pointer(x, y))),
+        );
+        let host = (self.session.monitor_width, self.session.monitor_height);
         let held_buttons = Rc::new(RefCell::new(BTreeSet::new()));
         let click = gtk::GestureClick::new();
         click.set_button(0);
@@ -428,32 +517,77 @@ impl Viewer {
         });
         self.picture.add_controller(scroll);
         let held_keys = Rc::new(RefCell::new(BTreeSet::new()));
+        let synthetic_modifiers = Rc::new(RefCell::new(BTreeSet::new()));
+        let synthetic = synthetic_modifiers.clone();
         let keys = gtk::EventControllerKey::new();
         let send = enqueue.clone();
         let held = held_keys.clone();
-        keys.connect_key_pressed(move |_, key, keycode, _| {
+        let board = self.window.clipboard();
+        keys.connect_key_pressed(move |_, key, keycode, state| {
             let Some(usage) = crate::viewer::key_usage(keycode) else {
                 return Propagation::Proceed;
             };
+            if !(224..=231).contains(&usage) {
+                synchronize_modifiers(&mut held.borrow_mut(), state, |usage, down| {
+                    if down {
+                        synthetic.borrow_mut().insert(usage);
+                    } else {
+                        synthetic.borrow_mut().remove(&usage);
+                    }
+                    send(Command::Key(usage, down, String::new()))
+                });
+            }
             held.borrow_mut().insert(usage);
             let text = key
                 .to_unicode()
                 .filter(|c| !c.is_control())
                 .map(|c| c.to_string())
                 .unwrap_or_default();
-            send(Command::Key(usage, true, text));
+            if usage == 25
+                && state.intersects(
+                    gtk::gdk::ModifierType::CONTROL_MASK
+                        | gtk::gdk::ModifierType::META_MASK
+                        | gtk::gdk::ModifierType::SUPER_MASK,
+                )
+            {
+                let (reply, clipboard) = std::sync::mpsc::channel();
+                send(Command::Paste(usage, text, clipboard));
+                board.read_text_async(None::<&gtk::gio::Cancellable>, move |result| {
+                    let _ = reply.send(
+                        result
+                            .ok()
+                            .flatten()
+                            .map(|text| text.to_string())
+                            .filter(|text| text.len() <= vnilink::MAX_CLIPBOARD_TEXT),
+                    );
+                });
+            } else {
+                send(Command::Key(usage, true, text));
+            }
             Propagation::Stop
         });
         let send = enqueue.clone();
         let held = held_keys.clone();
+        let synthetic = synthetic_modifiers.clone();
         keys.connect_key_released(move |_, _, keycode, _| {
             if let Some(usage) = crate::viewer::key_usage(keycode) {
-                held.borrow_mut().remove(&usage);
+                let counterpart = if usage < 228 { usage + 4 } else { usage - 4 };
+                let usage = if !held.borrow_mut().remove(&usage)
+                    && (224..=231).contains(&usage)
+                    && synthetic.borrow_mut().remove(&counterpart)
+                {
+                    held.borrow_mut().remove(&counterpart);
+                    counterpart
+                } else {
+                    synthetic.borrow_mut().remove(&usage);
+                    usage
+                };
                 send(Command::Key(usage, false, String::new()));
             }
         });
         self.picture.add_controller(keys);
         let release: Rc<dyn Fn()> = Rc::new(move || {
+            synthetic_modifiers.borrow_mut().clear();
             for usage in std::mem::take(&mut *held_keys.borrow_mut()) {
                 enqueue(Command::Key(usage, false, String::new()));
             }
@@ -489,82 +623,6 @@ fn pointer_button(button: u32) -> Option<PointerButton> {
     }
 }
 
-fn quality_popover(
-    window: &adw::ApplicationWindow,
-    core: Arc<Core>,
-    session: &SessionInfo,
-) -> gtk::Popover {
-    let popover = gtk::Popover::new();
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    let group = adw::PreferencesGroup::builder()
-        .title("Video quality")
-        .build();
-    let quality = session
-        .quality
-        .unwrap_or(vnilink::Quality::new(8000, 30, 1920, 1080).unwrap());
-    let bitrate = adw::SpinRow::with_range(1., 50000., 500.);
-    bitrate.set_title("Bitrate (kbps)");
-    bitrate.set_value(f64::from(quality.max_bitrate_kbps));
-    let fps = adw::SpinRow::with_range(1., 60., 1.);
-    fps.set_title("Frames per second");
-    fps.set_value(f64::from(quality.max_frame_rate));
-    let width = adw::SpinRow::with_range(2., 7680., 2.);
-    width.set_title("Maximum width");
-    width.set_value(f64::from(quality.max_width));
-    let height = adw::SpinRow::with_range(2., 7680., 2.);
-    height.set_title("Maximum height");
-    height.set_value(f64::from(quality.max_height));
-    group.add(&bitrate);
-    group.add(&fps);
-    group.add(&width);
-    group.add(&height);
-    content.append(&group);
-    let apply = gtk::Button::with_label("Apply");
-    apply.add_css_class("suggested-action");
-    content.append(&apply);
-    let win = window.clone();
-    let id = session.id;
-    let generation = session.generation;
-    apply.connect_clicked(move |button| {
-        let quality = vnilink::Quality::new(
-            bitrate.value() as u32,
-            fps.value() as u8,
-            width.value() as u16,
-            height.value() as u16,
-        )
-        .unwrap();
-        let worker = core.clone();
-        let win = win.clone();
-        button.set_sensitive(false);
-        let button = button.clone();
-        tasks::run(
-            move || {
-                if !worker
-                    .snapshot()
-                    .map_err(|e| e.to_string())?
-                    .outgoing
-                    .is_some_and(|s| {
-                        s.id == id && s.generation == generation && s.phase == SessionPhase::Active
-                    })
-                {
-                    return Err("The session changed. Reopen the quality controls.".into());
-                }
-                worker
-                    .update_session_quality(id, vnilink::SessionRole::Controller, quality)
-                    .map_err(|e| e.to_string())
-            },
-            move |r| {
-                button.set_sensitive(true);
-                if let Err(e) = r {
-                    preferences::report(&win, &e);
-                }
-            },
-        );
-    });
-    popover.set_child(Some(&content));
-    popover
-}
-
 fn session_popover(
     window: &adw::ApplicationWindow,
     core: Arc<Core>,
@@ -572,6 +630,10 @@ fn session_popover(
 ) -> gtk::Popover {
     let popover = gtk::Popover::new();
     let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
     let diagnostics = gtk::Button::with_label("Connection details");
     content.append(&diagnostics);
     let worker = core.clone();
@@ -614,23 +676,12 @@ fn session_popover(
             },
         );
     });
-    let send_clipboard = gtk::Button::with_label("Send clipboard text");
-    content.append(&send_clipboard);
-    let worker = core.clone();
-    let win = window.clone();
+    let automatic = gtk::Label::new(Some("Video quality adjusts automatically.\nClipboard text syncs while connected, with permission."));
+    automatic.set_wrap(true);
+    automatic.set_max_width_chars(36);
+    automatic.set_xalign(0.0);
+    content.append(&automatic);
     let generation = session.generation;
-    send_clipboard
-        .connect_clicked(move |_| super::clipboard::send(&win, worker.clone(), id, generation));
-    let receive = gtk::Button::with_label("Copy remote clipboard");
-    content.append(&receive);
-    let worker = core.clone();
-    let win = window.clone();
-    receive.connect_clicked(move |_| super::clipboard::receive(&win, worker.clone()));
-    let send_file = gtk::Button::with_label("Send file…");
-    content.append(&send_file);
-    let worker = core.clone();
-    let win = window.clone();
-    send_file.connect_clicked(move |_| super::files::send(&win, worker.clone(), id, generation));
     let text = gtk::Button::with_label("Send text…");
     content.append(&text);
     let worker = core.clone();
@@ -709,4 +760,90 @@ pub(crate) fn watch(parent: &adw::ApplicationWindow, core: Arc<Core>) {
         }
         ControlFlow::Continue
     });
+}
+
+/// Mouse motion belongs to the image under the pointer; keyboard focus is
+/// acquired by clicking and is handled separately by the key controller.
+pub(super) fn install_pointer_motion(
+    picture: &gtk::Picture,
+    size: Rc<Cell<(u16, u16)>>,
+    host: (u16, u16),
+    send: impl Fn(u16, u16) + 'static,
+) -> gtk::EventControllerMotion {
+    let picture_for_controller = picture;
+    let motion = gtk::EventControllerMotion::new();
+    let picture = picture.downgrade();
+    let last_position = Cell::new(None);
+    motion.connect_motion(move |_, x, y| {
+        let Some(picture) = picture.upgrade() else {
+            return;
+        };
+        if let Some((x, y)) = crate::viewer::pointer(
+            x,
+            y,
+            (f64::from(picture.width()), f64::from(picture.height())),
+            size.get(),
+            host,
+        ) {
+            // Replacing the paintable can cause GTK to emit motion without
+            // hardware movement. Resending it fights the host's local mouse.
+            if last_position.replace(Some((x, y))) != Some((x, y)) {
+                send(x, y);
+            }
+        }
+    });
+    picture_for_controller.add_controller(motion.clone());
+    motion
+}
+
+/// Recover modifiers pressed before the remote image acquired keyboard focus.
+fn synchronize_modifiers(
+    held: &mut BTreeSet<u16>,
+    flags: gtk::gdk::ModifierType,
+    mut send: impl FnMut(u16, bool),
+) {
+    for (flag, left, right) in [
+        (gtk::gdk::ModifierType::CONTROL_MASK, 224, 228),
+        (gtk::gdk::ModifierType::SHIFT_MASK, 225, 229),
+        (gtk::gdk::ModifierType::ALT_MASK, 226, 230),
+        (
+            gtk::gdk::ModifierType::META_MASK | gtk::gdk::ModifierType::SUPER_MASK,
+            227,
+            231,
+        ),
+    ] {
+        if flags.intersects(flag) {
+            if !held.contains(&left) && !held.contains(&right) {
+                held.insert(left);
+                send(left, true);
+            }
+        } else {
+            for usage in [left, right] {
+                if held.remove(&usage) {
+                    send(usage, false);
+                }
+            }
+        }
+    }
+}
+#[cfg(test)]
+mod keyboard_tests {
+    use super::*;
+    #[test]
+    fn shortcuts_recover_held_modifiers_without_duplicate_or_stuck_keys() {
+        let mut held = BTreeSet::from([228]);
+        let mut events = Vec::new();
+        synchronize_modifiers(
+            &mut held,
+            gtk::gdk::ModifierType::CONTROL_MASK | gtk::gdk::ModifierType::SHIFT_MASK,
+            |u, d| events.push((u, d)),
+        );
+        assert_eq!(events, [(225, true)]);
+        events.clear();
+        synchronize_modifiers(&mut held, gtk::gdk::ModifierType::empty(), |u, d| {
+            events.push((u, d))
+        });
+        assert_eq!(events, [(228, false), (225, false)]);
+        assert!(held.is_empty());
+    }
 }

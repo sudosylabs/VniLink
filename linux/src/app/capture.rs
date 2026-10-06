@@ -20,17 +20,31 @@ pub(crate) fn stop() {
         stop.store(true, Ordering::Relaxed);
     }
 }
-struct Monitor(u16, u16);
+struct Monitor(u16, u16, bool);
 impl vnilink::HostCapture for Monitor {
     fn monitor(&self) -> (u16, u16) {
         (self.0, self.1)
+    }
+    fn separate_cursor(&self) -> bool {
+        self.2
     }
 }
 enum Source {
     X11(vnilink_linux::X11Capture),
     Portal(vnilink_linux::WaylandCapture),
 }
+impl Source {
+    fn separate_cursor(&self) -> bool {
+        matches!(self, Self::Portal(capture) if capture.separate_cursor())
+    }
+}
 impl FrameSource for Source {
+    fn cursor(&self) -> Option<vnilink::CursorState> {
+        match self {
+            Self::Portal(capture) => capture.cursor(),
+            Self::X11(_) => None,
+        }
+    }
     fn size(&self) -> (u16, u16) {
         match self {
             Self::X11(s) => s.size(),
@@ -85,7 +99,7 @@ fn choose_inner(
             if GENERATION.load(Ordering::Relaxed) != generation {
                 return Err("Screen selection was cancelled.".to_string());
             }
-            core.set_capture(Box::new(Monitor(width, height)))
+            core.set_capture(Box::new(Monitor(width, height, source.separate_cursor())))
                 .map_err(|e| e.to_string())?;
             match &source {
                 Source::Portal(capture) => core
@@ -99,6 +113,8 @@ fn choose_inner(
                 .capabilities
                 .h264_decode;
             core.set_h264_support(vnilink_linux::h264_encode_available(), decode)
+                .map_err(|e| e.to_string())?;
+            core.set_h264_high(vnilink_linux::h264_high_available())
                 .map_err(|e| e.to_string())?;
             if resume_hosting {
                 core.start_hosting().map_err(|e| e.to_string())?;
@@ -130,7 +146,14 @@ fn choose_inner(
                                 session.id,
                                 quality,
                                 &stop,
-                                vnilink_linux::LinuxEncoder::open,
+                                {
+                                    let high = core
+                                        .host_codec(session.id)
+                                        .is_ok_and(|codec| codec == vnilink::CODEC_H264_HIGH);
+                                    move |w, h, fps, bps| {
+                                        vnilink_linux::LinuxEncoder::open(w, h, fps, bps, high)
+                                    }
+                                },
                             ) {
                                 // Host errors otherwise disappear into a short-lived
                                 // toast while the controller receives a generic refusal.

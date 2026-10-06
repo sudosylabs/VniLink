@@ -1,9 +1,13 @@
-//! Authorized incoming clipboard writes are acknowledged after GTK applies
-//! them. Outgoing clipboard sharing is explicit, never an automatic monitor.
-use super::{preferences, tasks};
+//! GTK clipboard integration. Text changes are synchronized only to active
+//! sessions; remote ownership suppresses echoes and stale reads are discarded.
+use super::files;
 use adw::prelude::*;
-use std::sync::{mpsc, Arc};
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
+use vnilink::{Core, CoreEvent, SessionInfo, SessionPhase, SessionRole};
+
 struct Write {
     text: String,
     reply: mpsc::Sender<Result<(), vnilink::Error>>,
@@ -22,64 +26,223 @@ impl vnilink::HostClipboard for Adapter {
             .map_err(|_| vnilink::Error::ShutDown)?
     }
 }
-pub(crate) fn install(window: &adw::ApplicationWindow, core: Arc<vnilink::Core>) {
+#[derive(Clone)]
+struct Native {
+    board: gtk::gdk::Clipboard,
+    remote: Rc<RefCell<Option<gtk::gdk::ContentProvider>>>,
+    revision: Rc<Cell<u64>>,
+    reading: Rc<RefCell<Option<gtk::gio::Cancellable>>>,
+}
+impl Native {
+    fn apply(&self, text: &str) -> Result<(), vnilink::Error> {
+        let provider = gtk::gdk::ContentProvider::for_value(&text.to_value());
+        // Mark the provider before GTK emits changed synchronously.
+        self.remote.replace(Some(provider.clone()));
+        self.board
+            .set_content(Some(&provider))
+            .map_err(|_| vnilink::Error::Unsupported("the desktop clipboard could not be written"))
+    }
+    fn is_remote(&self) -> bool {
+        self.remote
+            .borrow()
+            .as_ref()
+            .is_some_and(|p| self.board.content().as_ref() == Some(p))
+    }
+}
+fn native_adapter(window: &adw::ApplicationWindow) -> (Adapter, Native) {
     let (sender, receiver) = mpsc::sync_channel::<Write>(1);
-    let window = window.downgrade();
+    let native = Native {
+        board: window.clipboard(),
+        remote: Rc::new(RefCell::new(None)),
+        revision: Rc::new(Cell::new(0)),
+        reading: Rc::new(RefCell::new(None)),
+    };
+    let owner = window.downgrade();
+    let writer = native.clone();
     gtk::glib::timeout_add_local(Duration::from_millis(16), move || {
-        let Some(window) = window.upgrade().filter(|w| w.get_visible()) else {
+        if owner.upgrade().is_none() {
             return gtk::glib::ControlFlow::Break;
-        };
-        if let Ok(write) = receiver.try_recv() {
-            window.clipboard().set_text(&write.text);
-            let _ = write.reply.send(Ok(()));
+        }
+        match receiver.try_recv() {
+            Ok(write) => {
+                let _ = write.reply.send(writer.apply(&write.text));
+            }
+            Err(mpsc::TryRecvError::Disconnected) => return gtk::glib::ControlFlow::Break,
+            Err(mpsc::TryRecvError::Empty) => {}
         }
         gtk::glib::ControlFlow::Continue
     });
-    tasks::run(
-        move || {
-            core.set_clipboard(Box::new(Adapter(sender)))
-                .map_err(|e| e.to_string())
-        },
-        |_| {},
-    );
+    (Adapter(sender), native)
 }
-pub(crate) fn send(
-    window: &adw::ApplicationWindow,
-    core: Arc<vnilink::Core>,
-    id: u64,
-    generation: u64,
-) {
-    let win = window.clone();
-    window.clipboard().read_text_async(
-        None::<&gtk::gio::Cancellable>,
-        move |result| match result {
-            Ok(Some(text)) => tasks::run(
-                move || {
-                    core.submit_clipboard(id, generation, &text)
-                        .map_err(|e| e.to_string())
-                },
-                move |r| {
-                    if let Err(e) = r {
-                        preferences::report(&win, &e);
+fn same(core: &Core, session: &SessionInfo) -> bool {
+    core.snapshot()
+        .ok()
+        .and_then(|s| match session.role {
+            SessionRole::Controller => s.outgoing,
+            SessionRole::Host => s.incoming,
+        })
+        .is_some_and(|s| {
+            s.id == session.id
+                && s.generation == session.generation
+                && s.phase == SessionPhase::Active
+        })
+}
+struct Copy {
+    text: String,
+    sessions: Vec<SessionInfo>,
+}
+pub(crate) fn install(window: &adw::ApplicationWindow, core: Arc<Core>) {
+    let (adapter, native) = native_adapter(window);
+    // Install before hosting resumes: no network operation is involved here.
+    if let Err(e) = core.set_clipboard(Box::new(adapter)) {
+        files::feedback(window.upcast_ref(), &e.to_string());
+        return;
+    }
+    let latest = Arc::new(Mutex::new(None::<Copy>));
+    let pending = latest.clone();
+    let (wake, work) = mpsc::sync_channel(1);
+    let (error_tx, errors) = mpsc::sync_channel(1);
+    let worker = Arc::downgrade(&core);
+    std::thread::spawn(move || {
+        while work.recv().is_ok() {
+            loop {
+                let Some(copy) = pending.lock().unwrap().take() else {
+                    break;
+                };
+                let Some(core) = worker.upgrade() else {
+                    return;
+                };
+                for session in copy.sessions {
+                    if !same(&core, &session) {
+                        continue;
                     }
-                },
-            ),
-            Ok(None) => preferences::report(&win, "The local clipboard has no text to send."),
-            Err(_) => preferences::report(&win, "The local clipboard could not be read."),
-        },
-    );
+                    let result = match session.role {
+                        SessionRole::Controller => {
+                            core.submit_clipboard(session.id, session.generation, &copy.text)
+                        }
+                        SessionRole::Host => core.publish_clipboard(session.id, &copy.text),
+                    };
+                    if let Err(e) = result {
+                        if !matches!(
+                            e,
+                            vnilink::Error::ClipboardDenied
+                                | vnilink::Error::NoSession
+                                | vnilink::Error::StaleSession
+                        ) {
+                            let _ = error_tx.try_send(e.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    });
+    let observer = native.clone();
+    let local_core = Arc::downgrade(&core);
+    let handler = native.board.connect_changed(move |board| {
+        let revision = observer.revision.get().wrapping_add(1);
+        observer.revision.set(revision);
+        if let Some(read) = observer.reading.borrow_mut().take() {
+            read.cancel();
+        }
+        if observer.is_remote() {
+            return;
+        }
+        let Some(core) = local_core.upgrade() else {
+            return;
+        };
+        let Ok(snapshot) = core.snapshot() else {
+            return;
+        };
+        let mut sessions = Vec::new();
+        if let Some(s) = snapshot
+            .outgoing
+            .filter(|s| s.phase == SessionPhase::Active)
+        {
+            sessions.push(s);
+        }
+        if let Some(s) = snapshot
+            .incoming
+            .filter(|s| s.phase == SessionPhase::Active)
+        {
+            if snapshot
+                .devices
+                .iter()
+                .any(|d| d.endpoint_id == s.peer_id && d.grants.clipboard)
+            {
+                sessions.push(s);
+            }
+        }
+        if sessions.is_empty() {
+            return;
+        }
+        let observer = observer.clone();
+        let latest = latest.clone();
+        let wake = wake.clone();
+        let read = gtk::gio::Cancellable::new();
+        observer.reading.replace(Some(read.clone()));
+        board.read_text_async(Some(&read), move |result| {
+            if observer.revision.get() != revision || observer.is_remote() {
+                return;
+            }
+            observer.reading.borrow_mut().take();
+            let Ok(Some(text)) = result else {
+                return;
+            };
+            if text.len() > vnilink::MAX_CLIPBOARD_TEXT {
+                return;
+            }
+            *latest.lock().unwrap() = Some(Copy {
+                text: text.into(),
+                sessions,
+            });
+            let _ = wake.try_send(()); // A full wake queue already schedules the latest copy.
+        });
+    });
+    let mut handler = Some(handler);
+    let events = core.subscribe().ok();
+    let weak_core = Arc::downgrade(&core);
+    let owner = window.downgrade();
+    let mut lagged = 0;
+    gtk::glib::timeout_add_local(Duration::from_millis(30), move || {
+        let alive = owner.upgrade().zip(weak_core.upgrade());
+        let Some((window, core)) = alive else {
+            if let Some(handler) = handler.take() {
+                native.board.disconnect(handler);
+            }
+            return gtk::glib::ControlFlow::Break;
+        };
+        let Ok(snapshot) = core.snapshot() else {
+            if let Some(handler) = handler.take() {
+                native.board.disconnect(handler);
+            }
+            return gtk::glib::ControlFlow::Break;
+        };
+        let outgoing = snapshot
+            .outgoing
+            .filter(|s| s.phase == SessionPhase::Active);
+        let mut received = false;
+        if let Some(events) = &events {
+            while let Some(event) = events.try_recv() {
+                if let CoreEvent::ClipboardReceived { id } = event {
+                    received |= outgoing.as_ref().is_some_and(|s| s.id == id);
+                }
+            }
+            let dropped = events.lagged();
+            received |= dropped != lagged;
+            lagged = dropped;
+        }
+        if received && outgoing.is_some() {
+            if let Ok(Some(text)) = core.clipboard_text() {
+                let _ = native.apply(&text);
+            }
+        }
+        if let Ok(e) = errors.try_recv() {
+            files::feedback(window.upcast_ref(), &format!("Clipboard sync failed: {e}"));
+        }
+        gtk::glib::ControlFlow::Continue
+    });
 }
-pub(crate) fn receive(window: &adw::ApplicationWindow, core: Arc<vnilink::Core>) {
-    let win = window.clone();
-    tasks::run(
-        move || core.clipboard_text().map_err(|e| e.to_string()),
-        move |r| match r {
-            Ok(Some(text)) => win.clipboard().set_text(&text),
-            Ok(None) => preferences::report(
-                &win,
-                "The remote computer has not shared any clipboard text.",
-            ),
-            Err(e) => preferences::report(&win, &e),
-        },
-    );
-}
+
+#[cfg(test)]
+#[path = "clipboard_tests.rs"]
+pub(super) mod tests;

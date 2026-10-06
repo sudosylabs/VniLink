@@ -120,6 +120,9 @@ fn the_window_matches_the_computer_and_the_paired_list() {
     a_removed_computer_returns_to_this_computer();
     a_missing_decoder_disables_connect();
     computer_names_refresh_without_changing_selection();
+    pointer_motion_does_not_require_keyboard_focus();
+    super::clipboard::tests::hidden_window_accepts_clipboard();
+    super::clipboard::tests::automatic_text_and_files_contract();
 }
 
 fn an_unpaired_computer_shows_the_empty_state_and_this_computer() {
@@ -586,6 +589,12 @@ fn settings_and_desktop_capture_tour(home: &Home, state: &Snapshot) {
         monitor_height: 1080,
     };
     let viewer = super::viewer::Viewer::build(home.window(), core.clone(), session);
+    assert!(!labels(&viewer.window).iter().any(|s| s == "Quality"));
+    assert!(viewer
+        .picture
+        .observe_controllers()
+        .iter::<gtk::glib::Object>()
+        .any(|c| c.unwrap().is::<gtk::DropTarget>()));
     viewer.window.present();
     capture_widget(&viewer.window, "16-desktop-waiting");
     // Synthetic pixels exercise the real texture upload; this is not a remote session.
@@ -670,6 +679,9 @@ fn background_close_reopen_and_quit() {
             .into_iter()
             .find(|w| w.widget_name() == "vnilink-main")
             .unwrap();
+        // A login launch may stay hidden when a tray host is available.
+        // Explicit activation must reveal it regardless of the tray environment.
+        app.activate();
         assert!(main.is_visible());
         super::background::set_keep_running(true).unwrap();
         main.close();
@@ -686,16 +698,18 @@ fn background_close_reopen_and_quit() {
         assert!(super::background::login_enabled());
         let path = gtk::glib::user_config_dir().join("autostart/com.vnilink.VniLink.desktop");
         let entry = gtk::gio::DesktopAppInfo::from_filename(path).expect("valid desktop entry");
-        let args = gtk::glib::shell_parse_argv(entry.commandline().unwrap().to_str().unwrap()).unwrap();
-        assert_eq!(std::path::Path::new(&args[0]), std::env::current_exe().unwrap());
-        assert_eq!(args[1], "--background");
-        assert!(
-            entry
-                .commandline()
-                .unwrap()
-                .to_string_lossy()
-                .ends_with(" --background")
+        let args =
+            gtk::glib::shell_parse_argv(entry.commandline().unwrap().to_str().unwrap()).unwrap();
+        assert_eq!(
+            std::path::Path::new(&args[0]),
+            std::env::current_exe().unwrap()
         );
+        assert_eq!(args[1], "--background");
+        assert!(entry
+            .commandline()
+            .unwrap()
+            .to_string_lossy()
+            .ends_with(" --background"));
         super::background::set_login(false).unwrap();
         assert!(!super::background::login_enabled());
         super::background::set_keep_running(false).unwrap();
@@ -710,4 +724,35 @@ fn background_close_reopen_and_quit() {
         stopped.get(),
         "closing with background mode off must shut down the app"
     );
+}
+
+fn pointer_motion_does_not_require_keyboard_focus() {
+    let window = gtk::Window::new();
+    let picture = gtk::Picture::builder().focusable(true).build();
+    window.set_child(Some(&picture));
+    let sent = Rc::new(RefCell::new(Vec::new()));
+    let output = sent.clone();
+    let motion = super::viewer::install_pointer_motion(
+        &picture,
+        Rc::new(Cell::new((960, 540))),
+        (1920, 1080),
+        move |x, y| output.borrow_mut().push((x, y)),
+    );
+    // Allocate the image without presenting a focused desktop. Emit the same
+    // GTK motion signal the native event controller delivers to the callback.
+    picture.allocate(960, 540, -1, None);
+    assert!(!picture.has_focus());
+    motion.emit_by_name::<()>("motion", &[&480.0f64, &270.0f64]);
+    assert_eq!(&*sent.borrow(), &[(960, 540)]);
+    // GTK can emit motion again when a new paintable changes hit testing.
+    // An unchanged controller pointer must not keep warping the host pointer.
+    motion.emit_by_name::<()>("motion", &[&480.0f64, &270.0f64]);
+    assert_eq!(sent.borrow().len(), 1, "stationary pointer was resent");
+    motion.emit_by_name::<()>("motion", &[&481.0f64, &270.0f64]);
+    assert_eq!(&*sent.borrow(), &[(960, 540), (962, 540)]);
+    // Letterboxing still excludes movement outside the actual remote image.
+    picture.allocate(960, 700, -1, None);
+    motion.emit_by_name::<()>("motion", &[&480.0f64, &10.0f64]);
+    assert_eq!(sent.borrow().len(), 2);
+    window.close();
 }

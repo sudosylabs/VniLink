@@ -198,21 +198,24 @@ fn present(application: &adw::Application) {
                 opening.set(false);
                 spinner.stop();
                 if closed.get() {
-                    if let Ok(core) = opened {
+                    if let Ok((core, _)) = opened {
                         core.shutdown();
                     }
                     return ControlFlow::Break;
                 }
                 match opened {
-                    Ok(core) => {
+                    Ok((core, file_warning)) => {
                         let core = Arc::new(core);
+                        if let Some(error) = file_warning {
+                            notifications::note(&toasts, &error);
+                        }
                         core_slot.borrow_mut().replace(Arc::clone(&core));
+                        clipboard::install(&window, core.clone());
                         if background::resume_x11() && std::env::var_os("WAYLAND_DISPLAY").is_none()
                         {
                             capture::resume(&window, core.clone());
                         }
                         viewer::watch(&window, core.clone());
-                        clipboard::install(&window, core.clone());
                         if home_slot.borrow().is_none() {
                             let flow = Rc::new(RefCell::new(PairingFlow::default()));
                             let live = Rc::new(RefCell::new(LiveState::default()));
@@ -246,7 +249,17 @@ fn present(application: &adw::Application) {
                                 Duration::from_millis(400),
                                 move || {
                                     if let Some(events) = events.as_ref() {
-                                        while events.try_recv().is_some() {}
+                                        while let Some(event) = events.try_recv() {
+                                            if matches!(
+                                                event,
+                                                vnilink::CoreEvent::TransferCompleted { .. }
+                                            ) {
+                                                notifications::note(
+                                                    &toasts_watch,
+                                                    "File received in your receive folder.",
+                                                );
+                                            }
+                                        }
                                     }
                                     if let Ok(snapshot) = core_watch.snapshot() {
                                         background::update_status(&snapshot);
@@ -351,7 +364,7 @@ struct Notice {
     message: String,
 }
 
-fn open_core() -> Result<Core, Notice> {
+fn open_core() -> Result<(Core, Option<String>), Notice> {
     let store = SecretStore::connect().map_err(|err| {
         let notice = open_notice(&err);
         Notice {
@@ -375,7 +388,11 @@ fn open_core() -> Result<Core, Notice> {
     );
     #[cfg(not(target_os = "linux"))]
     let _ = core.set_h264_support(false, false);
-    Ok(core)
+    let _ = core.set_cursor_receiver(true);
+    let file_warning = files::initialize(&core)
+        .err()
+        .map(|e| format!("File reception is unavailable: {e}"));
+    Ok((core, file_warning))
 }
 
 fn actions(
