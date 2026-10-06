@@ -1,0 +1,8 @@
+// Ad-hoc builds are a fallback when no local signing identity is configured.
+// Their privacy grants can be invalidated by each rebuild.
+CODE_SIGN_IDENTITY = -
+CODE_SIGN_STYLE = Manual
+
+// Use an installed Apple Development identity for durable local permissions.
+// This file is machine-specific and ignored by Git.
+#include? "Local.xcconfig"

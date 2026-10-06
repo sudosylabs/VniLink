@@ -12,6 +12,9 @@ targets:
     sources:
       - path: VniLink
         excludes: [Resources/Info.plist]
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vnilink.app
@@ -19,8 +22,6 @@ targets:
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: VniLink/Resources/Info.plist
-        CODE_SIGN_IDENTITY: "-"
-        CODE_SIGN_STYLE: Manual
         ENABLE_HARDENED_RUNTIME: YES
     dependencies:
       - package: VnilinkCore

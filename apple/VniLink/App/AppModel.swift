@@ -28,7 +28,18 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
     @Published var sharing = false
     @Published var changingSharing = false
     @Published var inputEnabled = false
+    @Published private(set) var receiveFolder = UserDefaults.standard.url(forKey: "receiveFolder") ?? DesktopFiles.defaultFolder
+    private var events: EventPoller?
+    private var lastRemoteClipboard: String?
+    private var clipboardSession: String?
+    private var sendingClipboard = false
+    private let clipboardQueue = DispatchQueue(label: "com.vnilink.clipboard", qos: .userInitiated)
+    private let transferQueue = DispatchQueue(label: "com.vnilink.transfer", qos: .userInitiated)
+    @Published private(set) var sendingHostFile = false
     private var host: MacHost?
+    private var cursorTimer: Timer?
+    private var cursorSampler: HostCursorSampler?
+    private var sendingCursor = false
     private let hostQueue = DispatchQueue(label: "com.vnilink.host", qos: .userInitiated)
 
     func setSharing(_ enabled: Bool, resumeHosting: Bool = false) {
@@ -42,13 +53,20 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
         changingSharing = true
         let old = host
         let display = CGMainDisplayID(), bounds = CGDisplayBounds(CGMainDisplayID())
+        let mode = CGDisplayCopyDisplayMode(display)
+        let pixelWidth = mode?.pixelWidth ?? Int(bounds.width)
+        let pixelHeight = mode?.pixelHeight ?? Int(bounds.height)
+        // If the public system-cursor API is unavailable, retain embedded
+        // ScreenCaptureKit cursors rather than negotiating an empty channel.
+        let sampler = enabled ? HostCursorSampler() : nil
+        let cursorSupported = sampler?.available == true
         hostQueue.async {
             let result = Result { () -> MacHost? in
                 if enabled {
-                    guard bounds.width >= 2, bounds.height >= 2, bounds.width <= 65535, bounds.height <= 65535 else {
+                    guard bounds.width >= 2, bounds.height >= 2, bounds.width <= 65535, bounds.height <= 65535, pixelWidth >= 2, pixelHeight >= 2, pixelWidth <= 65535, pixelHeight <= 65535 else {
                         throw FfiError.Unsupported(message: "This main display is not supported")
                     }
-                    return try core.macHost(displayId: display, width: UInt16(bounds.width), height: UInt16(bounds.height))
+                    return try core.macHost(displayId: display, width: UInt16(bounds.width), height: UInt16(bounds.height), pixelWidth: UInt16(pixelWidth), pixelHeight: UInt16(pixelHeight), cursorSupported: cursorSupported)
                 }
                 old?.stop(); return nil
             }
@@ -57,11 +75,29 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
                 switch result {
                 case .success(let host):
                     self.host = host; self.sharing = enabled
+                    self.startCursorUpdates(cursorSupported ? sampler : nil)
                     if enabled && resumeHosting { self.perform { try $0.startHosting() } }
                 case .failure(let error): self.error = Self.message(error)
                 }
             }
         }
+    }
+    private func startCursorUpdates(_ sampler: HostCursorSampler?) {
+        cursorTimer?.invalidate(); cursorTimer = nil; cursorSampler = sampler
+        guard sampler != nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            // This timer is installed exclusively on the main run loop.
+            MainActor.assumeIsolated {
+                guard let self, !self.sendingCursor, let host = self.host,
+                      let update = self.cursorSampler?.sample() else { return }
+                self.sendingCursor = true
+                self.hostQueue.async {
+                    try? host.updateCursor(update: update)
+                    DispatchQueue.main.async { self.sendingCursor = false }
+                }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common); cursorTimer = timer
     }
     func enableInput() {
         guard AXIsProcessTrusted() else {
@@ -94,13 +130,23 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
         guard core == nil, !starting else { return }
         starting = true
         let previewMode = isPreview
+        let clipboard = MacClipboard.shared, receiveFolder = receiveFolder
+        let savedMode = UserDefaults.standard.integer(forKey: "keyboardMode")
+        let savedKeyboardMode: FfiKeyboardMode = savedMode == 1 ? .map : savedMode == 2 ? .translate : .character
+        let savedSwap = UserDefaults.standard.bool(forKey: "swapControlAndCommand")
         worker.async {
             let result = Result {
                 if previewMode {
                     return try Self.previewCore()
                 }
                 let core = try VnilinkCore.openPersistent(store: KeychainStore())
-                do { try core.prepareMacVideo() } catch { core.shutdown(); throw error }
+                do {
+                    try core.prepareMacVideo()
+                    try core.installClipboard(writer: clipboard)
+                    try core.setTransferDirectory(path: receiveFolder.path)
+                    try core.setKeyboardMode(mode: savedKeyboardMode)
+                    try core.setSwapControlAndCommand(enabled: savedSwap)
+                } catch { core.shutdown(); throw error }
                 return core
             }
             DispatchQueue.main.async {
@@ -108,6 +154,10 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
                 switch result {
                 case .success(let core):
                     self.core = core
+                    self.worker.async {
+                        let events = try? core.subscribeEvents()
+                        DispatchQueue.main.async { self.events = events }
+                    }
                     if !previewMode {
                         let background = BackgroundSettings.shared
                         if background.resumeSharing {
@@ -170,8 +220,9 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
         guard let core, !refreshing else { return }
         refreshing = true
         let host = host
+        let events = events
         worker.async {
-            let result = Result { (try core.snapshot(), try core.controlRequest(), try core.savedRelays(), try core.keyboardMode(), try core.swapControlAndCommand(), host?.error()) }
+            let result = Result { (try core.snapshot(), try core.controlRequest(), try core.savedRelays(), try core.keyboardMode(), try core.swapControlAndCommand(), host?.error(), events?.poll(maxEvents: 128) ?? [], try core.clipboardText()) }
             DispatchQueue.main.async {
                 self.refreshing = false
                 switch result {
@@ -185,6 +236,75 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
                         self.setSharing(false); self.error = error
                     }
                     if let selected = self.selectedDeviceID, !data.0.devices.contains(where: { $0.id == selected }) { self.selectedDeviceID = nil }
+                    let clipboardReceived = data.6.contains { event in
+                        if case .clipboardReceived(let id) = event { return id == data.0.outgoing?.id }
+                        return false
+                    }
+                    self.syncClipboard(core: core, snapshot: data.0, remote: data.7, received: clipboardReceived)
+                    for event in data.6 {
+                        if case .transferCompleted = event { self.notice = "File received in \(self.receiveFolder.lastPathComponent)." }
+                    }
+                case .failure(let error): self.error = Self.message(error)
+                }
+            }
+        }
+    }
+    private func syncClipboard(core: VnilinkCore, snapshot: FfiSnapshot, remote: String?, received: Bool) {
+        let outgoing = snapshot.outgoing.flatMap { $0.phase == .active ? $0 : nil }
+        let incoming = snapshot.incoming.flatMap { session -> FfiSessionInfo? in
+            guard session.phase == .active,
+                  snapshot.devices.contains(where: { $0.endpointId == session.peerId && $0.grants.clipboard }) else { return nil }
+            return session
+        }
+        let stamp = outgoing.map { "out:\($0.id):\($0.generation)" } ?? incoming.map { "in:\($0.id):\($0.generation)" }
+        if clipboardSession != stamp {
+            clipboardSession = stamp; lastRemoteClipboard = nil
+            MacClipboard.shared.baseline()
+        }
+        guard stamp != nil else { return }
+        // Apply incoming host text before inspecting local changes, avoiding an echo.
+        if outgoing != nil, let remote, received || remote != lastRemoteClipboard {
+            try? MacClipboard.shared.setText(text: remote)
+            lastRemoteClipboard = remote
+        }
+        guard !sendingClipboard, let text = MacClipboard.shared.localChange(), text.utf8.count <= 256 * 1024 else { return }
+        sendingClipboard = true
+        clipboardQueue.async {
+            if let outgoing { try? core.submitClipboard(sessionId: outgoing.id, generation: outgoing.generation, text: text) }
+            if let incoming { try? core.publishClipboard(sessionId: incoming.id, text: text) }
+            DispatchQueue.main.async { self.sendingClipboard = false }
+        }
+    }
+    func chooseReceiveFolder() {
+        let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            perform({ try $0.setTransferDirectory(path: url.path) }, success: "Receive folder saved.", completed: {
+                self.receiveFolder = url; UserDefaults.standard.set(url, forKey: "receiveFolder")
+            })
+        }
+    }
+    func setKeyboardMode(_ mode: FfiKeyboardMode) {
+        perform({ try $0.setKeyboardMode(mode: mode) }, completed: {
+            UserDefaults.standard.set(mode == .map ? 1 : mode == .translate ? 2 : 0, forKey: "keyboardMode")
+        })
+    }
+    func setModifierSwap(_ enabled: Bool) {
+        perform({ try $0.setSwapControlAndCommand(enabled: enabled) }, completed: {
+            UserDefaults.standard.set(enabled, forKey: "swapControlAndCommand")
+        })
+    }
+    func sendHostFile() {
+        guard let core, let session = snapshot?.incoming, session.phase == .active, !sendingHostFile else { return }
+        let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        sendingHostFile = true; notice = "Sending \(url.lastPathComponent)…"
+        transferQueue.async {
+            let result = Result { try core.publishFile(sessionId: session.id, name: url.lastPathComponent,
+                bytes: DesktopFiles.read(url), replace: false) }
+            DispatchQueue.main.async {
+                self.sendingHostFile = false
+                switch result {
+                case .success: self.notice = "\(url.lastPathComponent) received by the connected computer."
                 case .failure(let error): self.error = Self.message(error)
                 }
             }
@@ -283,6 +403,7 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
         guard let core else { return }
         guard !changingSharing else { error = "Wait for screen sharing to finish updating, then reset the identity."; return }
         viewerWindow?.close()
+        startCursorUpdates(nil)
         let oldHost = host; host = nil; sharing = false; inputEnabled = false
         hostQueue.async { oldHost?.stop() }
         worker.async {
@@ -291,6 +412,7 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
                 switch result {
                 case .success:
                     self.timer?.invalidate(); self.core = nil; self.snapshot = nil
+                    self.events = nil; self.clipboardSession = nil; self.lastRemoteClipboard = nil
                     self.destination = .devices; self.selectedDeviceID = nil; self.request = nil; self.preview = nil
                     self.notice = "Identity reset. Pair your computers again."
                     self.start()
@@ -300,6 +422,7 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
         }
     }
     func shutdown(_ completion: @escaping () -> Void) {
+        startCursorUpdates(nil)
         timer?.invalidate()
         viewerWindow?.model.close()
         let core = core, host = host
@@ -315,7 +438,51 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
         case FfiError.PairingCheckMismatch: return "The code does not match. Check the other computer."
         case FfiError.InvalidInvitation: return "This invitation is not valid."
         case FfiError.InvitationExpired: return "This invitation has expired. Create a new one."
-        default: return String(describing: error)
+        case FfiError.ClipboardDenied: return "Allow Clipboard text for this computer in the other computer's device permissions."
+        case FfiError.TransferDenied: return "Allow File transfer for this computer in the other computer's device permissions."
+        case FfiError.FileExists: return "A file with this name is already in the receive folder. Rename the file before sending it."
+        case FfiError.InputFailed(let message), FfiError.Unsupported(let message), FfiError.InvalidSetting(let message): return message
+        default: return error.localizedDescription
         }
+    }
+}
+
+/// AppKit cursor images are sampled on the main thread. Only changed shapes
+/// cross FFI; position samples are independent of capture and video decoding.
+@MainActor private final class HostCursorSampler {
+    let available: Bool
+    private var previousPixels: Data?
+    private var previousHotspot: NSPoint?
+    private var previousSize: NSSize?
+
+    init() { available = NSCursor.currentSystem != nil }
+
+    func sample() -> MacCursorUpdate? {
+        guard let cursor = NSCursor.currentSystem,
+              let location = CGEvent(source: nil)?.location else { return nil }
+        let image = cursor.image
+        let width = Int(image.size.width.rounded(.up)), height = Int(image.size.height.rounded(.up))
+        guard width > 0, height > 0, width <= 512, height <= 512,
+              let source = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        var pixels = Data(count: width * height * 4)
+        let rendered = pixels.withUnsafeMutableBytes { bytes -> Bool in
+            guard let base = bytes.baseAddress,
+                  let context = CGContext(data: base, width: width, height: height,
+                      bitsPerComponent: 8, bytesPerRow: width * 4,
+                      space: CGColorSpaceCreateDeviceRGB(),
+                      bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue) else { return false }
+            context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard rendered else { return nil }
+        var shape: MacCursorImage?
+        if pixels != previousPixels || cursor.hotSpot != previousHotspot || image.size != previousSize {
+            shape = MacCursorImage(width: UInt16(width), height: UInt16(height),
+                hotspotX: UInt16(max(0, min(width - 1, Int(cursor.hotSpot.x)))),
+                hotspotY: UInt16(max(0, min(height - 1, Int(cursor.hotSpot.y)))), bgra: pixels)
+            previousPixels = pixels; previousHotspot = cursor.hotSpot; previousSize = image.size
+        }
+        return MacCursorUpdate(x: Int32(location.x.rounded()), y: Int32(location.y.rounded()),
+            visible: true, image: shape)
     }
 }

@@ -1,6 +1,7 @@
 /target
 assets/**
 /apple/.generated/
+/apple/Local.xcconfig
 /apple/.build/
 /apple/VnilinkCore/.build/
 /apple/VnilinkCore/.swiftpm/

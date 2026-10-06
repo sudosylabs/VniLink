@@ -138,32 +138,34 @@ private struct KeyboardSettings: View {
     var body: some View {
         Form {
             Section("Keyboard") {
-                Picker("Mode", selection: Binding(get: { model.keyboardMode }, set: { mode in model.perform { try $0.setKeyboardMode(mode: mode) } })) {
+                Picker("Mode", selection: Binding(get: { model.keyboardMode }, set: { model.setKeyboardMode($0) })) {
                     Text("Characters").tag(FfiKeyboardMode.character)
                     Text("Physical keys").tag(FfiKeyboardMode.map)
                     Text("Translate on host").tag(FfiKeyboardMode.translate)
                 }
                 Text("Character mode keeps what you type. Physical mode keeps key positions. Translation currently requires a Linux X11 host.").foregroundStyle(.secondary)
-                Toggle("Swap Control and Command", isOn: Binding(get: { model.swapModifiers }, set: { enabled in model.perform { try $0.setSwapControlAndCommand(enabled: enabled) } }))
-                Text("Keyboard preferences apply to this launch.").foregroundStyle(.secondary)
+                Toggle("Swap Control and Command", isOn: Binding(get: { model.swapModifiers }, set: { model.setModifierSwap($0) }))
+                Text("Use the swap when sending Mac Command shortcuts to a computer that uses Control. Keyboard preferences are saved for future launches.").foregroundStyle(.secondary)
+            }
+            Section("Clipboard") {
+                Text("Copied text syncs automatically during a desktop session when clipboard access is allowed. Clipboard text and file transfer have separate device permissions.").foregroundStyle(.secondary)
             }
         }.formStyle(.grouped)
     }
 }
 private struct FileSettings: View {
     @EnvironmentObject var model: AppModel
-    @State private var folder: URL?
     var body: some View {
         Form {
             Section("Received files") {
-                LabeledContent("Folder", value: folder?.path ?? "Not selected")
-                Text("Choose a folder for this launch. Each computer needs its own file-transfer permission. Transfers are limited to 8 MiB.").foregroundStyle(.secondary)
-                Button("Choose folder…") {
-                    let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.allowsMultipleSelection = false
-                    if panel.runModal() == .OK, let url = panel.url {
-                        model.perform({ try $0.setTransferDirectory(path: url.path) }, success: "Receive folder selected for this launch.")
-                        folder = url
-                    }
+                LabeledContent("Folder", value: model.receiveFolder.path)
+                Text("Files arrive here automatically when file transfer is allowed for the connected computer. Transfers are limited to 8 MiB.").foregroundStyle(.secondary)
+                Button("Choose folder…") { model.chooseReceiveFolder() }
+                    .disabled(model.snapshot?.incoming?.phase == .active)
+                Button("Show in Finder") { NSWorkspace.shared.open(model.receiveFolder) }
+                if model.snapshot?.incoming?.phase == .active {
+                    Button(model.sendingHostFile ? "Sending file…" : "Send file to connected computer…") { model.sendHostFile() }
+                        .disabled(model.sendingHostFile)
                 }
             }
         }.formStyle(.grouped)
