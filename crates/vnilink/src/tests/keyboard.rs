@@ -1,6 +1,30 @@
 use crate::input::{usage, InputEvent};
 use crate::keyboard::*;
 
+#[test]
+fn held_navigation_keys_repeat_and_release_once() {
+    let mut plan = KeyPlan::new();
+    let press = LocalKey {
+        usage: 42,
+        down: true,
+        text: "",
+    };
+    for mode in [KeyboardMode::Character, KeyboardMode::Map] {
+        plan.clear();
+        for _ in 0..3 {
+            assert_eq!(
+                events(&plan.apply(mode, false, press).unwrap()),
+                vec![InputEvent::key_down(42)]
+            );
+        }
+        assert_eq!(
+            events(&plan.apply(mode, false, up(42)).unwrap()),
+            vec![InputEvent::key_up(42)]
+        );
+        assert!(!plan.is_held());
+    }
+}
+
 fn down<'a>(usage: u16, text: &'a str) -> LocalKey<'a> {
     LocalKey {
         usage,

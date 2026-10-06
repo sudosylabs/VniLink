@@ -19,3 +19,7 @@ rust-version = "1.91"
 
 [profile.dev]
 debug = "line-tables-only"
+
+# Enigo 0.6.1 with a macOS local-input coexistence fix; see vendor/enigo/VNILINK.md.
+[patch.crates-io]
+enigo = { path = "vendor/enigo" }

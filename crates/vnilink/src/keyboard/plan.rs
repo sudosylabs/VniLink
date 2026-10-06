@@ -141,6 +141,12 @@ impl KeyPlan {
 
     fn press(&mut self, usage: u16, planned: &mut Vec<Planned>) {
         if self.sent.contains(&usage) {
+            // AppKit/GTK deliver repeats as further downs. Keep one held
+            // entry for cleanup, but do not swallow Backspace/navigation or
+            // physical-key repeats. Modifier synchronization is idempotent.
+            if !is_level(usage) && !is_command(usage) {
+                planned.push(Planned::Event(self.key_event(usage, true)));
+            }
             return;
         }
         self.sent.push(usage);
