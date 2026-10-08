@@ -156,6 +156,101 @@ fn subscriptions_poll_empty_and_report_lag() {
 }
 
 #[test]
+fn independent_controller_handles_cross_the_ffi() {
+    use crate::FfiSessionPhase;
+    use std::time::{Duration, Instant};
+    struct Capture;
+    impl vnilink::HostCapture for Capture {
+        fn monitor(&self) -> (u16, u16) {
+            (640, 480)
+        }
+    }
+    let make = || VnilinkCore {
+        inner: std::sync::Arc::new(
+            vnilink::Core::start(vnilink::CoreConfig {
+                listen: vnilink::Listen::Loopback,
+                relay: vnilink::RelaySettings::custom(vec![vnilink::CustomRelay::new(
+                    "http://127.0.0.1:9",
+                )
+                .unwrap()])
+                .unwrap(),
+                ..vnilink::CoreConfig::default()
+            })
+            .unwrap(),
+        ),
+        previews: std::sync::Mutex::new(std::collections::HashMap::new()),
+        next_preview: std::sync::atomic::AtomicU64::new(1),
+    };
+    let controller = make();
+    let a = make();
+    let b = make();
+    controller.set_h264_support(true, true).unwrap();
+    for host in [&a, &b] {
+        host.inner.set_capture(Box::new(Capture)).unwrap();
+        host.set_h264_support(true, true).unwrap();
+        host.start_hosting().unwrap();
+        controller
+            .accept_invitation(host.create_invitation(60).unwrap())
+            .unwrap();
+        host.accept_invitation(controller.create_invitation(60).unwrap())
+            .unwrap();
+        host.authorize(controller.endpoint_id(), true, false, false)
+            .unwrap();
+    }
+    let pending_a = controller.begin_connect(a.endpoint_id()).unwrap();
+    let pending_b = controller.begin_connect(b.endpoint_id()).unwrap();
+    assert_ne!(pending_a.id, pending_b.id);
+    let wait = |id, phase| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let session = controller.controller_session(id).unwrap();
+            if session.phase == phase {
+                break session;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "FFI session timed out: {session:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let sa = wait(pending_a.id, FfiSessionPhase::Active);
+    let sb = wait(pending_b.id, FfiSessionPhase::Active);
+    assert_eq!(controller.controller_sessions().unwrap().len(), 2);
+    assert!(controller.disconnect().is_err());
+    let va = controller
+        .subscribe_session_video(sa.id, sa.generation)
+        .unwrap();
+    let vb = controller
+        .subscribe_session_video(sb.id, sb.generation)
+        .unwrap();
+    a.publish_video(
+        a.snapshot().unwrap().incoming.unwrap().id,
+        true,
+        11,
+        vec![1],
+    )
+    .unwrap();
+    b.publish_video(
+        b.snapshot().unwrap().incoming.unwrap().id,
+        true,
+        22,
+        vec![2],
+    )
+    .unwrap();
+    assert_eq!(va.recv_timeout(3000).unwrap().unwrap().payload, vec![1]);
+    assert_eq!(vb.recv_timeout(3000).unwrap().unwrap().payload, vec![2]);
+    controller.disconnect_session(sa.id).unwrap();
+    wait(sa.id, FfiSessionPhase::Closed);
+    controller.forget_controller_session(sa.id).unwrap();
+    assert!(controller.controller_session(sa.id).is_err());
+    assert_eq!(controller.controller_session(sb.id).unwrap(), sb);
+    controller.shutdown();
+    a.shutdown();
+    b.shutdown();
+}
+
+#[test]
 fn keyboard_mode_and_swap_round_trip() {
     let core = open_core();
     assert!(matches!(
@@ -273,4 +368,79 @@ fn native_store_keeps_identity_names_and_opaque_relay_credentials() {
         .unwrap();
     assert!(!reopened.saved_relays().unwrap()[0].authenticated);
     reopened.shutdown();
+}
+
+#[test]
+fn file_roots_and_local_operations_cross_the_ffi() {
+    use crate::{FfiConflictChoice, FfiEntryKind, FfiJobState};
+
+    let dir = std::env::temp_dir().join(format!("vnilink-ffi-files-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("root")).unwrap();
+    std::fs::write(dir.join("root/notes.txt"), b"ffi-bytes").unwrap();
+    let core = open_core();
+    core.set_blob_directory(dir.join("blobs").to_string_lossy().into_owned())
+        .unwrap();
+    assert!(core.file_roots().unwrap().is_empty());
+    assert!(core.list_dir(0, "".into(), 0, 50).is_err());
+    core.set_file_roots(vec![dir.join("root").to_string_lossy().into_owned()])
+        .unwrap();
+    let roots = core.file_roots().unwrap();
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0].id, 0);
+
+    let page = core.list_dir(0, "".into(), 0, 50).unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(page.entries[0].name, "notes.txt");
+    assert_eq!(page.entries[0].kind, FfiEntryKind::File);
+    assert_eq!(page.entries[0].size, 9);
+    assert!(!format!("{:?}", page).contains("notes"));
+
+    core.create_dir(0, "".into(), "docs".into()).unwrap();
+    let token = page.entries[0].token;
+    core.rename_entry(
+        0,
+        "".into(),
+        "notes.txt".into(),
+        Some(token),
+        "renamed.txt".into(),
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read(dir.join("root/renamed.txt")).unwrap(),
+        b"ffi-bytes"
+    );
+
+    // A stale token is refused without touching the replacement (remove
+    // plus recreate makes a new object; truncate would keep the inode).
+    std::fs::rename(dir.join("root/renamed.txt"), dir.join("root/previous.txt")).unwrap();
+    std::fs::write(dir.join("root/renamed.txt"), b"changed").unwrap();
+    let stale = core.rename_entry(
+        0,
+        "".into(),
+        "renamed.txt".into(),
+        Some(token),
+        "x.txt".into(),
+    );
+    assert!(matches!(stale, Err(FfiError::InvalidSetting { .. })));
+    assert!(!dir.join("root/x.txt").exists());
+
+    // A no-session job submit maps cleanly; FFI stays usable afterwards.
+    // Pair first so the failure is the missing session, not pairing.
+    let peer = open_core();
+    let token = core.create_invitation(60).unwrap();
+    peer.accept_invitation(token).unwrap();
+    let back = peer.create_invitation(60).unwrap();
+    core.accept_invitation(back).unwrap();
+    assert!(matches!(
+        core.job_submit_upload(peer.endpoint_id(), 0, "".into(), 0, "x".into()),
+        Err(FfiError::NoSession)
+    ));
+    assert!(core.job_list().unwrap().is_empty());
+    assert!(matches!(
+        core.job_snapshot(7),
+        Err(FfiError::InvalidSetting { .. })
+    ));
+    let _ = FfiConflictChoice::KeepBoth;
+    let _ = FfiJobState::Complete;
+    std::fs::remove_dir_all(&dir).unwrap();
 }

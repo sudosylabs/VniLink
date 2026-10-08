@@ -193,6 +193,12 @@ pub enum FfiEvent {
         phase: FfiSessionPhase,
         peer_id: String,
     },
+    ServiceChanged {
+        service: crate::FfiServiceInfo,
+    },
+    HostedServiceChanged {
+        service: crate::FfiServiceInfo,
+    },
     QualityUpdated {
         id: u64,
         quality: FfiQuality,
@@ -206,6 +212,9 @@ pub enum FfiEvent {
     },
     ClipboardReceived {
         id: u64,
+    },
+    DesktopClipboardReceived {
+        service: crate::FfiServiceInfo,
     },
     TransferCompleted {
         id: u64,
@@ -409,6 +418,12 @@ pub(crate) fn event(event: vnilink::CoreEvent) -> FfiEvent {
             phase: session_phase(&phase),
             peer_id,
         },
+        vnilink::CoreEvent::ServiceChanged { service } => FfiEvent::ServiceChanged {
+            service: service.into(),
+        },
+        vnilink::CoreEvent::HostedServiceChanged { service } => FfiEvent::HostedServiceChanged {
+            service: service.into(),
+        },
         vnilink::CoreEvent::QualityUpdated { id, quality } => FfiEvent::QualityUpdated {
             id,
             quality: quality_record(&quality),
@@ -419,6 +434,11 @@ pub(crate) fn event(event: vnilink::CoreEvent) -> FfiEvent {
         },
         vnilink::CoreEvent::KeyframeRequested { id } => FfiEvent::KeyframeRequested { id },
         vnilink::CoreEvent::ClipboardReceived { id } => FfiEvent::ClipboardReceived { id },
+        vnilink::CoreEvent::DesktopClipboardReceived { service } => {
+            FfiEvent::DesktopClipboardReceived {
+                service: service.into(),
+            }
+        }
         vnilink::CoreEvent::TransferCompleted { id } => FfiEvent::TransferCompleted { id },
     }
 }

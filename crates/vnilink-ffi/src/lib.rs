@@ -24,6 +24,11 @@
 //! Desktop/capture adapter installation stays in platform Rust. Native UI
 //! pasteboards implement `ClipboardWriter`; `install_clipboard` installs that
 //! callback before hosting, while received files use `set_transfer_directory`.
+//! The file manager owns more surface: `set_blob_directory` for the job
+//! store, `set_file_roots` for browsing, `list_dir`/`create_dir`/
+//! `rename_entry` locally, `fs_*` against a live session, and the
+//! `job_submit_*`/`job_poll`/`job_resolve` queue. File and job calls block;
+//! make them all from a background thread, never the UI thread.
 //! The persistent
 //! installation store (`Core::open`) needs the platform credential store
 //! first. `open_persistent` delegates opaque record storage to the native
@@ -33,8 +38,15 @@ mod clipboard;
 pub use clipboard::ClipboardWriter;
 mod error;
 mod events;
+mod files;
 #[cfg(target_os = "macos")]
 mod macos;
+mod services;
+pub use services::{
+    DesktopService, FfiDesktopCursor, FfiDesktopCursorImage, FfiDesktopInfo, FfiServiceInfo,
+    FfiServiceKind, FfiServicePermissions, FfiServicePhase, FfiServiceSupport, FilesService,
+    ServiceLeasePoller,
+};
 mod storage;
 mod types;
 #[cfg(target_os = "macos")]
@@ -43,6 +55,10 @@ pub use storage::{CredentialStore, FfiRelay, FfiRelayInput};
 
 pub use error::FfiError;
 pub use events::{EventPoller, VideoPoller};
+pub use files::{
+    FfiConflictChoice, FfiDirPage, FfiEntryKind, FfiEntryToken, FfiFileRoot, FfiFsEntry,
+    FfiJobDirection, FfiJobSnapshot, FfiJobState,
+};
 pub use types::{
     new_quality, FfiCapabilities, FfiControlRequest, FfiDeviceInfo, FfiEncodedFrame, FfiEvent,
     FfiGrants, FfiKeyboardMode, FfiPairingFile, FfiPairingPreview, FfiPointerButton, FfiQuality,
@@ -345,6 +361,135 @@ impl VnilinkCore {
         self.inner
             .connect(&endpoint_id)
             .map(types::session_info)
+            .map_err(map_error)
+    }
+
+    /// Dials for file roots/listings/transfers only, without requiring a
+    /// video decoder or host screen sharing. Host admission needs Transfer
+    /// (Control not required).
+    pub fn connect_files(&self, endpoint_id: String) -> Result<FfiSessionInfo, FfiError> {
+        self.inner
+            .connect_files(&endpoint_id)
+            .map(types::session_info)
+            .map_err(map_error)
+    }
+
+    /// Nonblocking start for a tab. Its local id exists before peer approval.
+    pub fn begin_connect(&self, endpoint_id: String) -> Result<FfiSessionInfo, FfiError> {
+        self.inner
+            .begin_connect(&endpoint_id)
+            .map(types::session_info)
+            .map_err(map_error)
+    }
+
+    pub fn begin_connect_files(&self, endpoint_id: String) -> Result<FfiSessionInfo, FfiError> {
+        self.inner
+            .begin_connect_files(&endpoint_id)
+            .map(types::session_info)
+            .map_err(map_error)
+    }
+
+    pub fn controller_sessions(&self) -> Result<Vec<FfiSessionInfo>, FfiError> {
+        self.inner
+            .controller_sessions()
+            .map(|sessions| sessions.into_iter().map(types::session_info).collect())
+            .map_err(map_error)
+    }
+
+    pub fn controller_session(&self, session_id: u64) -> Result<FfiSessionInfo, FfiError> {
+        self.inner
+            .controller_session(session_id)
+            .map(types::session_info)
+            .map_err(map_error)
+    }
+
+    pub fn disconnect_session(&self, session_id: u64) -> Result<(), FfiError> {
+        self.inner.disconnect_session(session_id).map_err(map_error)
+    }
+
+    pub fn forget_controller_session(&self, session_id: u64) -> Result<(), FfiError> {
+        self.inner
+            .forget_controller_session(session_id)
+            .map_err(map_error)
+    }
+
+    pub fn session_clipboard_text(
+        &self,
+        session_id: u64,
+        generation: u64,
+    ) -> Result<Option<String>, FfiError> {
+        self.inner
+            .session_clipboard_text(session_id, generation)
+            .map_err(map_error)
+    }
+
+    pub fn subscribe_session_video(
+        &self,
+        session_id: u64,
+        generation: u64,
+    ) -> Result<VideoPoller, FfiError> {
+        self.inner
+            .subscribe_session_video(session_id, generation)
+            .map(VideoPoller::new)
+            .map_err(map_error)
+    }
+
+    pub fn release_session_input(&self, session_id: u64, generation: u64) -> Result<(), FfiError> {
+        self.inner
+            .release_session_input(session_id, generation)
+            .map_err(map_error)
+    }
+
+    pub fn session_keyboard_mode(
+        &self,
+        session_id: u64,
+        generation: u64,
+    ) -> Result<FfiKeyboardMode, FfiError> {
+        self.inner
+            .session_keyboard_mode(session_id, generation)
+            .map(types::keyboard_mode)
+            .map_err(map_error)
+    }
+
+    pub fn session_swap_control_and_command(
+        &self,
+        session_id: u64,
+        generation: u64,
+    ) -> Result<bool, FfiError> {
+        self.inner
+            .session_swap_control_and_command(session_id, generation)
+            .map_err(map_error)
+    }
+
+    pub fn set_session_keyboard_mode(
+        &self,
+        session_id: u64,
+        generation: u64,
+        mode: FfiKeyboardMode,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .set_session_keyboard_mode(session_id, generation, types::to_keyboard_mode(mode))
+            .map_err(map_error)
+    }
+
+    pub fn set_session_swap_control_and_command(
+        &self,
+        session_id: u64,
+        generation: u64,
+        enabled: bool,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .set_session_swap_control_and_command(session_id, generation, enabled)
+            .map_err(map_error)
+    }
+
+    pub fn controller_session_paths(
+        &self,
+        session_id: u64,
+    ) -> Result<Vec<FfiSessionPath>, FfiError> {
+        self.inner
+            .controller_session_paths(session_id)
+            .map(|paths| paths.iter().map(types::session_path).collect())
             .map_err(map_error)
     }
 

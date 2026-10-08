@@ -71,18 +71,31 @@ pub struct MacViewer {
     core: Arc<Core>,
     session_id: u64,
     generation: u64,
+    desktop: Option<Arc<vnilink::RemoteDesktopService>>,
     cursor: Mutex<Option<Arc<vnilink::CursorState>>>,
 }
 
 #[uniffi::export]
 impl MacViewer {
     pub fn separate_cursor(&self) -> bool {
+        if let Some(desktop) = &self.desktop {
+            return desktop
+                .desktop_info()
+                .is_ok_and(|info| info.separate_cursor);
+        }
         self.core
             .separate_cursor(self.session_id, vnilink::SessionRole::Controller)
             .unwrap_or(false)
     }
     pub fn poll_cursor(&self) -> Option<MacCursorUpdate> {
-        let current = self.core.cursor(self.session_id, self.generation).ok()??;
+        if self.stop.load(Ordering::Acquire) {
+            return None;
+        }
+        let current = if let Some(desktop) = &self.desktop {
+            desktop.cursor().ok()??
+        } else {
+            self.core.cursor(self.session_id, self.generation).ok()??
+        };
         let mut previous = self.cursor.lock().unwrap_or_else(|e| e.into_inner());
         if previous
             .as_ref()
@@ -112,6 +125,14 @@ impl MacViewer {
 
     /// Takes the latest frame; old pictures never accumulate behind the UI.
     pub fn poll(&self) -> Option<Arc<MacFrame>> {
+        if self
+            .desktop
+            .as_ref()
+            .is_some_and(|desktop| desktop.is_cancelled())
+        {
+            self.state.lock().unwrap_or_else(|e| e.into_inner()).frame = None;
+            return None;
+        }
         self.state
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -140,12 +161,9 @@ impl Drop for MacViewer {
 }
 
 fn current(core: &Core, id: u64, generation: u64) -> bool {
-    core.snapshot()
-        .ok()
-        .and_then(|s| s.outgoing)
-        .is_some_and(|s| {
-            s.id == id && s.generation == generation && s.phase == SessionPhase::Active
-        })
+    core.controller_session(id).ok().is_some_and(|s| {
+        s.id == id && s.generation == generation && s.phase == SessionPhase::Active
+    })
 }
 
 /// Probe real encode/decode with synthetic pixels; no screen permission needed.
@@ -188,15 +206,52 @@ impl VnilinkCore {
             .map_err(crate::error::map_error)
     }
     pub fn mac_viewer(&self, session_id: u64, generation: u64) -> Result<MacViewer, FfiError> {
+        self.build_mac_viewer(session_id, generation, None)
+    }
+    /// Decode one service-owned Desktop. Closing the handle ends this worker;
+    /// stopping the viewer alone does not disconnect its owner or parent.
+    pub fn mac_desktop_viewer(
+        &self,
+        desktop: Arc<crate::services::DesktopService>,
+    ) -> Result<MacViewer, FfiError> {
+        if !desktop
+            .core
+            .upgrade()
+            .is_some_and(|core| Arc::ptr_eq(&core, &self.inner))
+        {
+            return Err(FfiError::InvalidSetting {
+                message: "Desktop belongs to another core".into(),
+            });
+        }
+        let info = desktop
+            .inner
+            .desktop_info()
+            .map_err(crate::error::map_error)?;
+        self.build_mac_viewer(
+            info.service.connection_id,
+            info.service.generation,
+            Some(desktop.inner.clone()),
+        )
+    }
+}
+
+impl VnilinkCore {
+    fn build_mac_viewer(
+        &self,
+        session_id: u64,
+        generation: u64,
+        desktop: Option<Arc<vnilink::RemoteDesktopService>>,
+    ) -> Result<MacViewer, FfiError> {
         if !current(&self.inner, session_id, generation) {
             return Err(FfiError::InvalidSetting {
                 message: "The desktop session is no longer active".into(),
             });
         }
-        let subscription = self
-            .inner
-            .subscribe_video()
-            .map_err(crate::error::map_error)?;
+        let subscription = match &desktop {
+            Some(desktop) => desktop.subscribe_video(),
+            None => self.inner.subscribe_session_video(session_id, generation),
+        }
+        .map_err(crate::error::map_error)?;
         let stop = Arc::new(AtomicBool::new(false));
         let state = Arc::new(Mutex::new(ViewerState {
             frame: None,
@@ -205,26 +260,36 @@ impl VnilinkCore {
         let core = Arc::clone(&self.inner);
         let worker_stop = Arc::clone(&stop);
         let worker_state = Arc::clone(&state);
+        let worker_desktop = desktop.clone();
         let worker = std::thread::spawn(move || {
             let mut decoder = ControllerVideo::new(vnilink_macos::MacDecoder::new());
             let mut ticks = 0u32;
-            while !worker_stop.load(Ordering::Acquire) && current(&core, session_id, generation) {
+            while !worker_stop.load(Ordering::Acquire)
+                && current(&core, session_id, generation)
+                && !worker_desktop
+                    .as_ref()
+                    .is_some_and(|desktop| desktop.is_cancelled())
+            {
                 let Some(frame) = subscription.recv_timeout(Duration::from_millis(100)) else {
                     // Keep adapting on idle too: a silent path still reports RTT.
                     ticks = ticks.saturating_add(1);
-                    if ticks % 20 == 0 {
+                    if ticks % 20 == 0 && worker_desktop.is_none() {
                         let _ = core.auto_quality_tick(session_id);
                     }
                     continue;
                 };
                 ticks = ticks.saturating_add(1);
-                if ticks % 20 == 0 {
+                if ticks % 20 == 0 && worker_desktop.is_none() {
                     let _ = core.auto_quality_tick(session_id);
                 }
                 let result = decoder.push(&frame);
                 match result {
                     Ok(ControllerOutput::Decoded(picture)) => {
-                        if !current(&core, session_id, generation) {
+                        if !current(&core, session_id, generation)
+                            || worker_desktop
+                                .as_ref()
+                                .is_some_and(|desktop| desktop.is_cancelled())
+                        {
                             break;
                         }
                         worker_state.lock().unwrap_or_else(|e| e.into_inner()).frame =
@@ -247,6 +312,7 @@ impl VnilinkCore {
             core: Arc::clone(&self.inner),
             session_id,
             generation,
+            desktop,
             cursor: Mutex::new(None),
         })
     }
@@ -291,7 +357,8 @@ mod tests {
     }
 }
 
-/// Explicitly enabled capture. Dropping it stops capture and the hosted session.
+/// Sharing configuration with a capture resource opened for each Desktop instance.
+/// Dropping it stops capture and the hosted session.
 #[derive(uniffi::Object)]
 pub struct MacHost {
     core: Arc<Core>,
@@ -304,7 +371,67 @@ pub struct MacHost {
 #[derive(Default)]
 struct HostCursorState {
     state: Option<vnilink::CursorState>,
-    session: Option<(u64, u64)>,
+    session: Option<(bool, u64, u64)>,
+}
+
+struct HostTarget {
+    service: bool,
+    id: u64,
+    generation: u64,
+    separate: bool,
+    quality: vnilink::Quality,
+}
+impl HostTarget {
+    fn stamp(&self) -> (bool, u64, u64) {
+        (self.service, self.id, self.generation)
+    }
+    fn close(&self, core: &Core) {
+        if self.service {
+            let _ = core.close_hosted_service(self.id, self.generation);
+        } else if core
+            .snapshot()
+            .ok()
+            .and_then(|s| s.incoming)
+            .is_some_and(|s| {
+                s.id == self.id
+                    && s.generation == self.generation
+                    && s.phase == SessionPhase::Active
+            })
+        {
+            let _ = core.stop_hosted_session();
+        }
+    }
+}
+fn host_target(core: &Core) -> Option<HostTarget> {
+    if let Some(info) = core
+        .hosted_services()
+        .ok()?
+        .into_iter()
+        .filter(|s| s.kind == vnilink::ServiceKind::Desktop)
+        .find_map(|s| core.hosted_desktop_info(s.id, s.generation).ok())
+    {
+        return Some(HostTarget {
+            service: true,
+            id: info.service.id,
+            generation: info.service.generation,
+            separate: info.separate_cursor,
+            quality: info.quality,
+        });
+    }
+    let session = core
+        .snapshot()
+        .ok()?
+        .incoming
+        .filter(|s| s.phase == SessionPhase::Active)?;
+    Some(HostTarget {
+        service: false,
+        id: session.id,
+        generation: session.generation,
+        separate: core
+            .separate_cursor(session.id, vnilink::SessionRole::Host)
+            .unwrap_or(false),
+        quality: session.quality?,
+    })
 }
 
 struct MacCaptureDescriptor {
@@ -329,13 +456,8 @@ impl MacHost {
         if self.stop.load(Ordering::Acquire) {
             return Ok(());
         }
-        let active = self
-            .core
-            .snapshot()
-            .map_err(crate::error::map_error)?
-            .incoming
-            .filter(|s| s.phase == SessionPhase::Active);
-        let stamp = active.as_ref().map(|s| (s.id, s.generation));
+        let target = host_target(&self.core);
+        let stamp = target.as_ref().map(HostTarget::stamp);
         let mut cache = self.cursor.lock().unwrap_or_else(|e| e.into_inner());
         let current = merge_host_cursor(cache.state.as_ref(), update)?;
         let changed = cache.state.as_ref() != Some(&current) || cache.session != stamp;
@@ -343,19 +465,17 @@ impl MacHost {
         cache.session = stamp;
         drop(cache);
         if changed {
-            if let Some(session) = active {
-                if self
-                    .core
-                    .separate_cursor(session.id, vnilink::SessionRole::Host)
-                    .unwrap_or(false)
-                {
-                    match self
-                        .core
-                        .publish_cursor(session.id, session.generation, current)
-                    {
-                        Ok(()) | Err(vnilink::Error::NoSession) => {}
-                        Err(error) => return Err(crate::error::map_error(error)),
-                    }
+            if let Some(target) = target.filter(|target| target.separate) {
+                let result = if target.service {
+                    self.core
+                        .publish_desktop_cursor(target.id, target.generation, current)
+                } else {
+                    self.core
+                        .publish_cursor(target.id, target.generation, current)
+                };
+                match result {
+                    Ok(()) | Err(vnilink::Error::NoSession | vnilink::Error::StaleSession) => {}
+                    Err(error) => return Err(crate::error::map_error(error)),
                 }
             }
         }
@@ -415,8 +535,6 @@ impl VnilinkCore {
                         message: "This display cannot be captured".into(),
                     }
                 })?;
-                let capture = vnilink_macos::ScreenCapture::start_display(&plan, Some(display_id))
-                    .map_err(|_| FfiError::Unsupported { message: "Screen sharing could not start. Check Screen Recording in System Settings.".into() })?;
                 worker_core
                     .set_capture(Box::new(MacCaptureDescriptor {
                         width,
@@ -432,56 +550,54 @@ impl VnilinkCore {
                 worker_core
                     .set_h264_high(true)
                     .map_err(crate::error::map_error)?;
-                Ok::<_, FfiError>(capture)
+                Ok::<_, FfiError>(plan)
             })();
-            let capture = match opened {
-                Ok(capture) => {
+            let plan = match opened {
+                Ok(plan) => {
                     if ready_tx.send(Ok(())).is_err() {
                         return;
                     }
-                    capture
+                    plan
                 }
                 Err(error) => {
                     let _ = ready_tx.send(Err(error));
                     return;
                 }
             };
+            let mut served = None;
             while !worker_stop.load(Ordering::Acquire) {
-                let Ok(snapshot) = worker_core.snapshot() else {
-                    break;
-                };
-                if let Some(session) = snapshot
-                    .incoming
-                    .filter(|s| s.phase == SessionPhase::Active)
-                {
-                    if let Some(quality) = session.quality {
-                        let separate = worker_core
-                            .separate_cursor(session.id, vnilink::SessionRole::Host)
-                            .unwrap_or(false);
-                        if capture.set_shows_cursor(!separate).is_err() {
-                            *worker_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
-                                "The desktop cursor could not be configured. Restart sharing."
-                                    .into(),
-                            );
-                            let _ = worker_core.stop_hosted_session();
-                            break;
+                let target = host_target(&worker_core);
+                if let Some(target) = target.filter(|target| served != Some(target.stamp())) {
+                    served = Some(target.stamp());
+                    *worker_error.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    // The OS stream belongs to this instance, not the sharing switch.
+                    let result = (|| -> Result<(), vnilink_media::PublishError> {
+                        let capture =
+                            vnilink_macos::ScreenCapture::start_display(&plan, Some(display_id))?;
+                        capture.set_shows_cursor(!target.separate)?;
+                        if target.service {
+                            vnilink_macos::serve_desktop(
+                                &capture,
+                                &worker_core,
+                                target.id,
+                                target.generation,
+                                &worker_stop,
+                            )
+                        } else {
+                            vnilink_macos::serve_stream(
+                                &capture,
+                                &worker_core,
+                                target.id,
+                                target.quality,
+                                &worker_stop,
+                            )
                         }
-                        if vnilink_macos::serve_stream(
-                            &capture,
-                            &worker_core,
-                            session.id,
-                            quality,
-                            &worker_stop,
-                        )
-                        .is_err()
-                        {
-                            *worker_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
-                                "Screen sharing stopped. Disable and enable it to try again."
-                                    .into(),
-                            );
-                            let _ = worker_core.stop_hosted_session();
-                            break;
-                        }
+                        // capture drops here even when this owner failed or closed.
+                    })();
+                    if result.is_err() {
+                        *worker_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
+                            "Screen sharing stopped. Check Screen Recording and try connecting again.".into());
+                        target.close(&worker_core);
                     }
                 }
                 std::thread::sleep(Duration::from_millis(100));
@@ -546,6 +662,114 @@ mod viewer_tests {
             previews: Mutex::new(std::collections::HashMap::new()),
             next_preview: std::sync::atomic::AtomicU64::new(1),
         }
+    }
+    #[test]
+    fn service_viewer_decodes_and_host_cleanup_preserves_neutral_parent() {
+        let host = core();
+        let controller = core();
+        let unrelated = core();
+        host.prepare_mac_video().unwrap();
+        controller.prepare_mac_video().unwrap();
+        host.inner.set_desktop(Box::new(Desktop)).unwrap();
+        host.inner
+            .set_capture(Box::new(vnilink_media::MonitorSize::new(64, 64)))
+            .unwrap();
+        host.start_hosting().unwrap();
+        controller
+            .accept_invitation(host.create_invitation(60).unwrap())
+            .unwrap();
+        host.accept_invitation(controller.create_invitation(60).unwrap())
+            .unwrap();
+        host.authorize(controller.endpoint_id(), true, false, false)
+            .unwrap();
+        let parent = controller
+            .begin_connect_services(host.endpoint_id())
+            .unwrap();
+        let until = std::time::Instant::now() + Duration::from_secs(5);
+        while controller.controller_session(parent.id).unwrap().phase
+            != crate::FfiSessionPhase::Active
+        {
+            assert!(std::time::Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            host_target(&host.inner).is_none(),
+            "idle neutral parent must not start capture"
+        );
+        let parent = controller.controller_session(parent.id).unwrap();
+        let owner = controller
+            .attach_controller_service(parent.id, parent.generation, crate::FfiServiceKind::Desktop)
+            .unwrap();
+        let handle = controller
+            .open_desktop_service(owner.id, owner.generation)
+            .unwrap();
+        assert!(unrelated.mac_desktop_viewer(handle.clone()).is_err());
+        let target = host_target(&host.inner).unwrap();
+        assert!(target.service);
+        let viewer = controller.mac_desktop_viewer(handle.clone()).unwrap();
+        assert!(controller.mac_desktop_viewer(handle.clone()).is_err());
+        let mut encoder = vnilink_macos::MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
+        let raw = RawFrame::bgra(64, 64, 0, vec![255; 64 * 64 * 4]).unwrap();
+        let sample = encoder
+            .encode(
+                &raw,
+                &EncodeParams {
+                    force_keyframe: true,
+                    bitrate_bps: 500_000,
+                    frame_rate: 30,
+                },
+            )
+            .unwrap();
+        host.publish_desktop_video(
+            target.id,
+            target.generation,
+            true,
+            0,
+            sample.bytes().to_vec(),
+        )
+        .unwrap();
+        let until = std::time::Instant::now() + Duration::from_secs(5);
+        let frame = loop {
+            if let Some(frame) = viewer.poll() {
+                break frame;
+            }
+            assert!(
+                std::time::Instant::now() < until,
+                "service viewer did not decode"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!((frame.buffer().width, frame.buffer().height), (64, 64));
+        viewer.stop();
+        assert!(
+            !handle.is_cancelled(),
+            "stopping a decoder is not a disconnect"
+        );
+        let next_viewer = controller.mac_desktop_viewer(handle.clone()).unwrap();
+        target.close(&host.inner); // capture/encode failure cleanup uses this path
+        let until = std::time::Instant::now() + Duration::from_secs(5);
+        while !handle.is_cancelled() {
+            assert!(std::time::Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(next_viewer.poll().is_none());
+        next_viewer.stop();
+        assert!(host_target(&host.inner).is_none());
+        assert_eq!(
+            controller.controller_session(parent.id).unwrap().phase,
+            crate::FfiSessionPhase::Active
+        );
+        let owner = controller
+            .attach_controller_service(parent.id, parent.generation, crate::FfiServiceKind::Desktop)
+            .unwrap();
+        let fresh = controller
+            .open_desktop_service(owner.id, owner.generation)
+            .unwrap();
+        let replacement = host_target(&host.inner).unwrap();
+        assert_ne!(replacement.stamp(), target.stamp());
+        target.close(&host.inner);
+        assert!(!fresh.is_cancelled());
+        controller.mac_desktop_viewer(fresh).unwrap().stop();
     }
     #[test]
     fn loopback_viewer_decodes_pixels_and_releases_its_subscription() {
