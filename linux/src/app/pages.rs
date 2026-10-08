@@ -18,6 +18,7 @@ pub(crate) struct PageActions {
     pub save_computer: Rc<dyn Fn(String)>,
     pub cancel_file: Rc<dyn Fn()>,
     pub connect: Rc<dyn Fn(String)>,
+    pub files: Rc<dyn Fn(String)>,
     pub allow: Rc<dyn Fn(String)>,
     pub refuse: Rc<dyn Fn()>,
 }
@@ -284,7 +285,7 @@ impl Pages {
         let title = presentation::device_name(&device);
         self.detail.append(&widgets::introduction(&title,
             if active {
-                "The remote desktop is open in its own window."
+                "The remote desktop is open in a tab."
             } else {
                 "Connect when this computer is on and VniLink is open. It may ask you to approve access."
             },
@@ -305,6 +306,19 @@ impl Pages {
             let action = Rc::clone(&actions.connect);
             connect.connect_clicked(move |_| action(endpoint.clone()));
             self.detail.append(&connect);
+        }
+        // Files works without opening the desktop viewer and without host
+        // screen sharing: it establishes (or reuses) the control session for
+        // file roots/listings/transfers only. No video decoder is required.
+        {
+            let files = action_button("Files…", false);
+            files.set_widget_name("open-files");
+            files.set_halign(Align::Start);
+            files.set_tooltip_text(Some("Browse both computers and copy files either way"));
+            let endpoint = device.endpoint_id.clone();
+            let action = Rc::clone(&actions.files);
+            files.connect_clicked(move |_| action(endpoint.clone()));
+            self.detail.append(&files);
         }
         if !snapshot.capabilities.h264_decode {
             self.detail.append(&notice(

@@ -127,14 +127,46 @@ fn choose_inner(
             std::thread::spawn(move || {
                 let mut served = None;
                 while !stop.load(Ordering::Relaxed) {
+                    // Neutral parents carry no media. Only an admitted Desktop
+                    // owner starts an encoder; ending it preserves Files/parent.
+                    let desktop = core.hosted_services().ok().and_then(|owners| {
+                        owners
+                            .into_iter()
+                            .filter(|owner| owner.kind == vnilink::ServiceKind::Desktop)
+                            .find_map(|owner| {
+                                core.hosted_desktop_info(owner.id, owner.generation).ok()
+                            })
+                    });
+                    if let Some(desktop) = desktop {
+                        let key = (true, desktop.service.id, desktop.service.generation);
+                        if served != Some(key) {
+                            served = Some(key);
+                            if let Err(error) = vnilink_linux::serve_desktop(
+                                &source,
+                                &core,
+                                desktop.service.id,
+                                desktop.service.generation,
+                                &stop,
+                            ) {
+                                eprintln!("VniLink Desktop service stopped: {error}");
+                                *ERROR.lock().unwrap() = Some(error.to_string());
+                                let _ = core.close_hosted_service(
+                                    desktop.service.id,
+                                    desktop.service.generation,
+                                );
+                            }
+                        }
+                        std::thread::sleep(Duration::from_millis(100));
+                        continue;
+                    }
                     let Ok(snapshot) = core.snapshot() else {
                         break;
                     };
                     if let Some(session) = snapshot
                         .incoming
-                        .filter(|s| s.phase == vnilink::SessionPhase::Active)
+                        .filter(|s| s.phase == vnilink::SessionPhase::Active && s.quality.is_some())
                     {
-                        let key = (session.id, session.generation);
+                        let key = (false, session.id, session.generation);
                         if served != Some(key) {
                             served = Some(key);
                             let quality = session
@@ -164,7 +196,7 @@ fn choose_inner(
                                     .ok()
                                     .and_then(|s| s.incoming)
                                     .is_some_and(|s| {
-                                        (s.id, s.generation) == key
+                                        (false, s.id, s.generation) == key
                                             && s.phase == vnilink::SessionPhase::Active
                                     })
                                 {

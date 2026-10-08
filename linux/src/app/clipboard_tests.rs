@@ -158,8 +158,17 @@ pub(crate) fn automatic_text_and_files_contract() {
         .iter::<gtk::glib::Object>()
         .any(|c| c.unwrap().is::<gtk::DropTarget>()));
     // Paste immediately, before the asynchronous changed callback can finish.
-    // Control was already held when the image gained focus.
+    // Control was already held when the image gained focus. Selection
+    // ownership itself is asynchronous under X11: wait until a read-back
+    // sees the text, so the paste below models an established clipboard
+    // rather than the ownership handshake.
     board.set_text("paste before shortcut");
+    let owned = std::rc::Rc::new(std::cell::Cell::new(false));
+    let seen = owned.clone();
+    board.read_text_async(None::<&gtk::gio::Cancellable>, move |result| {
+        seen.set(result.ok().flatten().as_deref() == Some("paste before shortcut"));
+    });
+    pump(|| owned.get());
     let ctrl = gtk::gdk::ModifierType::CONTROL_MASK;
     assert!(keys.emit_by_name::<bool>("key-pressed", &[&gtk::gdk::Key::v, &55u32, &ctrl]));
     keys.emit_by_name::<()>("key-released", &[&gtk::gdk::Key::v, &55u32, &ctrl]);
@@ -187,19 +196,8 @@ pub(crate) fn automatic_text_and_files_contract() {
         Some("paste before shortcut"),
         "paste key arrived before clipboard application"
     );
-    let dropped_path = root.join("drop.bin");
-    std::fs::write(&dropped_path, [9, 8, 7]).unwrap();
-    let drop = controllers
-        .iter::<gtk::glib::Object>()
-        .filter_map(Result::ok)
-        .find_map(|c| c.downcast::<gtk::DropTarget>().ok())
-        .unwrap();
-    let list = gtk::gdk::FileList::from_array(&[gtk::gio::File::for_path(&dropped_path)]);
-    assert!(drop.emit_by_name::<bool>(
-        "drop",
-        &[&gtk::glib::BoxedValue(list.to_value()), &0f64, &0f64]
-    ));
-    pump(|| std::fs::read(remote_files.join("drop.bin")).ok() == Some(vec![9, 8, 7]));
+    // Desktop file drops are exercised by the Files staging contract. They
+    // now select an approved item for explicit destination/Send confirmation.
     board.set_text("local copy α");
     pump(|| remote_text.lock().unwrap().as_deref() == Some("local copy α"));
     let count = remote_writes.load(Ordering::Relaxed);

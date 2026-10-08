@@ -3,21 +3,11 @@ use super::{preferences, tasks};
 use adw::prelude::*;
 use std::sync::Arc;
 
-pub(crate) fn send(
-    window: &adw::ApplicationWindow,
-    core: Arc<vnilink::Core>,
-    id: u64,
-    generation: u64,
-) {
-    send_selected(window, core, id, generation, false);
-}
-
-fn send_selected(
+fn send_to_controller(
     window: &impl IsA<gtk::Window>,
     core: Arc<vnilink::Core>,
     id: u64,
     generation: u64,
-    hosted: bool,
 ) {
     let window: &gtk::Window = window.as_ref();
     let dialog = gtk::FileDialog::builder().title("Send a file").build();
@@ -33,7 +23,7 @@ fn send_selected(
                 preferences::report(&win, "Choose a local file.");
                 return;
             };
-            send_path(&win, core, id, generation, hosted, path);
+            send_path(&win, core, id, generation, path);
         },
     );
 }
@@ -72,6 +62,69 @@ pub(crate) fn page(window: &adw::Window, core: Arc<vnilink::Core>) -> adw::Prefe
     row.add_suffix(&choose);
     group.add(&row);
     page.add(&group);
+    let folders = adw::PreferencesGroup::builder().title("File manager")
+        .description("The Files window browses these folders on this computer, and paired computers see only these folders. Narrow the list to share less.").build();
+    let current = read_roots(&roots_file()).unwrap_or_else(default_roots);
+    let subtitle = current
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let roots_row = adw::ActionRow::builder()
+        .title("Shared folders")
+        .subtitle(&subtitle)
+        .subtitle_lines(3)
+        .build();
+    let choose_roots = gtk::Button::with_label("Choose folders…");
+    choose_roots.set_valign(gtk::Align::Center);
+    roots_row.add_suffix(&choose_roots);
+    folders.add(&roots_row);
+    page.add(&folders);
+    let roots_win = window.clone();
+    let roots_core = core.clone();
+    choose_roots.connect_clicked(move |_| {
+        let dialog = gtk::FileDialog::builder()
+            .title("Choose shared folders")
+            .build();
+        let win = roots_win.clone();
+        let worker = roots_core.clone();
+        let row = roots_row.clone();
+        dialog.select_multiple_folders(
+            Some(&win.clone()),
+            None::<&gtk::gio::Cancellable>,
+            move |r| {
+                let Ok(model) = r else {
+                    return;
+                };
+                let paths: Vec<std::path::PathBuf> = (0..model.n_items())
+                    .filter_map(|index| model.item(index))
+                    .filter_map(|item| item.downcast::<gtk::gio::File>().ok())
+                    .filter_map(|folder| folder.path())
+                    .collect();
+                if paths.is_empty() {
+                    preferences::report(&win, "Choose at least one folder.");
+                    return;
+                }
+                let display = paths
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                tasks::run(
+                    move || {
+                        worker
+                            .set_file_roots(paths.clone())
+                            .map_err(|e| e.to_string())?;
+                        save_roots(&paths)
+                    },
+                    move |r| match r {
+                        Ok(()) => row.set_subtitle(&display),
+                        Err(e) => preferences::report(&win, &e),
+                    },
+                );
+            },
+        );
+    });
     let win = window.clone();
     let folder_core = core.clone();
     choose.connect_clicked(move |_| {
@@ -111,7 +164,6 @@ pub(crate) fn page(window: &adw::Window, core: Arc<vnilink::Core>) -> adw::Prefe
     let share = adw::PreferencesGroup::builder().title("Share with the connected computer").description("Send a file to the computer controlling this desktop. Clipboard text syncs automatically; separate clipboard and file permissions are required.").build();
     let send = gtk::Button::with_label("Send file to controller…");
     send.set_halign(gtk::Align::Start);
-
     let worker = core.clone();
     let win = window.clone();
     send.connect_clicked(move |_| {
@@ -127,7 +179,7 @@ pub(crate) fn page(window: &adw::Window, core: Arc<vnilink::Core>) -> adw::Prefe
                 })
             },
             move |r| match r {
-                Ok((worker, s)) => send_selected(&win, worker, s.id, s.generation, true),
+                Ok((worker, s)) => send_to_controller(&win, worker, s.id, s.generation),
                 Err(e) => preferences::report(&win, &e),
             },
         );
@@ -169,7 +221,54 @@ fn save_folder_to(config: &std::path::Path, path: &std::path::Path) -> Result<()
 }
 pub(super) fn initialize(core: &vnilink::Core) -> Result<(), String> {
     core.set_transfer_directory(receive_folder())
+        .map_err(|e| e.to_string())?;
+    core.set_blob_directory(blob_directory())
         .map_err(|e| e.to_string())
+        .map_err(|e| format!("Blob storage is unavailable: {e}"))?;
+    let roots = read_roots(&roots_file()).unwrap_or_else(default_roots);
+    core.set_file_roots(roots).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn blob_directory() -> std::path::PathBuf {
+    gtk::glib::user_data_dir().join("vnilink/blobstore")
+}
+
+fn roots_file() -> std::path::PathBuf {
+    gtk::glib::user_config_dir().join("vnilink/file-roots")
+}
+
+fn default_roots() -> Vec<std::path::PathBuf> {
+    Vec::new()
+}
+
+fn read_roots(config: &std::path::Path) -> Option<Vec<std::path::PathBuf>> {
+    let text = std::fs::read_to_string(config).ok()?;
+    let roots: Vec<std::path::PathBuf> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .collect();
+    // An existing (possibly empty) config is authoritative: an empty scope
+    // stays empty and never falls back to the home folder. A missing file
+    // also starts empty; the owner picks folders deliberately in Settings.
+    Some(roots)
+}
+
+fn save_roots(paths: &[std::path::PathBuf]) -> Result<(), String> {
+    let config = roots_file();
+    std::fs::create_dir_all(config.parent().unwrap())
+        .map_err(|_| "The shared folders preference could not be saved.")?;
+    let temporary = config.with_extension("new");
+    let text = paths
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&temporary, text)
+        .and_then(|_| std::fs::rename(&temporary, config))
+        .map_err(|_| "The shared folders preference could not be saved.".into())
 }
 fn read_file(path: &std::path::Path) -> Result<(String, Vec<u8>), String> {
     use std::io::Read;
@@ -201,7 +300,7 @@ fn read_file(path: &std::path::Path) -> Result<(String, Vec<u8>), String> {
     Ok((name.into(), bytes))
 }
 thread_local! {
-    static SENDING: std::cell::RefCell<std::collections::BTreeSet<(u64,u64,bool)>> = const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
+    static SENDING: std::cell::RefCell<std::collections::BTreeSet<(u64,u64)>> = const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 pub(super) fn feedback(window: &gtk::Window, text: &str) {
     fn overlay(widget: &gtk::Widget) -> Option<adw::ToastOverlay> {
@@ -228,10 +327,9 @@ fn send_path(
     core: Arc<vnilink::Core>,
     id: u64,
     generation: u64,
-    hosted: bool,
     path: std::path::PathBuf,
 ) {
-    let key = (id, generation, hosted);
+    let key = (id, generation);
     if !SENDING.with(|s| s.borrow_mut().insert(key)) {
         feedback(window, "A file is already being sent.");
         return;
@@ -241,25 +339,20 @@ fn send_path(
     tasks::run(
         move || {
             let (name, bytes) = read_file(&path)?;
-            if hosted {
-                if !core
-                    .snapshot()
-                    .map_err(|e| e.to_string())?
-                    .incoming
-                    .is_some_and(|s| {
-                        s.id == id
-                            && s.generation == generation
-                            && s.phase == vnilink::SessionPhase::Active
-                    })
-                {
-                    return Err("The hosted session ended.".into());
-                }
-                core.publish_file(id, &name, &bytes, false)
-                    .map_err(|e| e.to_string())
-            } else {
-                core.submit_file(id, generation, &name, &bytes, false)
-                    .map_err(|e| e.to_string())
+            if !core
+                .snapshot()
+                .map_err(|e| e.to_string())?
+                .incoming
+                .is_some_and(|s| {
+                    s.id == id
+                        && s.generation == generation
+                        && s.phase == vnilink::SessionPhase::Active
+                })
+            {
+                return Err("The hosted session ended.".into());
             }
+            core.publish_file(id, &name, &bytes, false)
+                .map_err(|e| e.to_string())
         },
         move |result| {
             SENDING.with(|s| s.borrow_mut().remove(&key));
@@ -288,14 +381,28 @@ pub(super) fn install_drop(
         };
         let files = files.files();
         if files.len() != 1 {
-            preferences::report(&win, "Send one file at a time (up to 8 MiB).");
+            preferences::report(&win, "Choose one file or folder at a time.");
             return false;
         }
         let Some(path) = files[0].path() else {
             preferences::report(&win, "Choose a local file.");
             return false;
         };
-        send_path(win.upcast_ref(), core.clone(), id, generation, false, path);
+        let Ok(session) = core.controller_session(id) else {
+            return false;
+        };
+        if session.generation != generation || session.phase != vnilink::SessionPhase::Active {
+            return false;
+        }
+        let peer = session.peer_id;
+        let manager = super::filemanager::FileManager::open(
+            &win,
+            core.clone(),
+            peer.clone(),
+            "This computer".into(),
+            crate::presentation::computer_name(&peer),
+        );
+        manager.select_upload(path);
         true
     });
     picture.add_controller(drop);

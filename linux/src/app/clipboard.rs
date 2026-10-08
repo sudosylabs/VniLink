@@ -4,6 +4,7 @@ use super::files;
 use adw::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use vnilink::{Core, CoreEvent, SessionInfo, SessionPhase, SessionRole};
@@ -75,23 +76,34 @@ fn native_adapter(window: &adw::ApplicationWindow) -> (Adapter, Native) {
     (Adapter(sender), native)
 }
 fn same(core: &Core, session: &SessionInfo) -> bool {
-    core.snapshot()
-        .ok()
-        .and_then(|s| match session.role {
-            SessionRole::Controller => s.outgoing,
-            SessionRole::Host => s.incoming,
-        })
-        .is_some_and(|s| {
-            s.id == session.id
-                && s.generation == session.generation
-                && s.phase == SessionPhase::Active
-        })
+    match session.role {
+        SessionRole::Controller => core.controller_session(session.id).ok(),
+        SessionRole::Host => core.snapshot().ok().and_then(|s| s.incoming),
+    }
+    .is_some_and(|s| {
+        s.id == session.id && s.generation == session.generation && s.phase == SessionPhase::Active
+    })
 }
 struct Copy {
     text: String,
     sessions: Vec<SessionInfo>,
 }
+#[cfg(test)]
 pub(crate) fn install(window: &adw::ApplicationWindow, core: Arc<Core>) {
+    install_selected(window, core, None);
+}
+pub(crate) fn install_for_tabs(
+    window: &adw::ApplicationWindow,
+    core: Arc<Core>,
+    selected: Arc<AtomicU64>,
+) {
+    install_selected(window, core, Some(selected));
+}
+fn install_selected(
+    window: &adw::ApplicationWindow,
+    core: Arc<Core>,
+    selected: Option<Arc<AtomicU64>>,
+) {
     let (adapter, native) = native_adapter(window);
     // Install before hosting resumes: no network operation is involved here.
     if let Err(e) = core.set_clipboard(Box::new(adapter)) {
@@ -103,6 +115,7 @@ pub(crate) fn install(window: &adw::ApplicationWindow, core: Arc<Core>) {
     let (wake, work) = mpsc::sync_channel(1);
     let (error_tx, errors) = mpsc::sync_channel(1);
     let worker = Arc::downgrade(&core);
+    let worker_selected = selected.clone();
     std::thread::spawn(move || {
         while work.recv().is_ok() {
             loop {
@@ -113,7 +126,12 @@ pub(crate) fn install(window: &adw::ApplicationWindow, core: Arc<Core>) {
                     return;
                 };
                 for session in copy.sessions {
-                    if !same(&core, &session) {
+                    if !same(&core, &session)
+                        || (session.role == SessionRole::Controller
+                            && worker_selected
+                                .as_ref()
+                                .is_some_and(|id| id.load(Ordering::Relaxed) != session.id))
+                    {
                         continue;
                     }
                     let result = match session.role {
@@ -138,6 +156,7 @@ pub(crate) fn install(window: &adw::ApplicationWindow, core: Arc<Core>) {
     });
     let observer = native.clone();
     let local_core = Arc::downgrade(&core);
+    let changed_selected = selected.clone();
     let handler = native.board.connect_changed(move |board| {
         let revision = observer.revision.get().wrapping_add(1);
         observer.revision.set(revision);
@@ -154,10 +173,8 @@ pub(crate) fn install(window: &adw::ApplicationWindow, core: Arc<Core>) {
             return;
         };
         let mut sessions = Vec::new();
-        if let Some(s) = snapshot
-            .outgoing
-            .filter(|s| s.phase == SessionPhase::Active)
-        {
+        let outgoing = selected_controller(&core, &changed_selected);
+        if let Some(s) = outgoing.clone() {
             sessions.push(s);
         }
         if let Some(s) = snapshot
@@ -203,6 +220,7 @@ pub(crate) fn install(window: &adw::ApplicationWindow, core: Arc<Core>) {
     let weak_core = Arc::downgrade(&core);
     let owner = window.downgrade();
     let mut lagged = 0;
+    let mut clipboard_session = None;
     gtk::glib::timeout_add_local(Duration::from_millis(30), move || {
         let alive = owner.upgrade().zip(weak_core.upgrade());
         let Some((window, core)) = alive else {
@@ -211,16 +229,16 @@ pub(crate) fn install(window: &adw::ApplicationWindow, core: Arc<Core>) {
             }
             return gtk::glib::ControlFlow::Break;
         };
-        let Ok(snapshot) = core.snapshot() else {
+        let Ok(_snapshot) = core.snapshot() else {
             if let Some(handler) = handler.take() {
                 native.board.disconnect(handler);
             }
             return gtk::glib::ControlFlow::Break;
         };
-        let outgoing = snapshot
-            .outgoing
-            .filter(|s| s.phase == SessionPhase::Active);
-        let mut received = false;
+        let outgoing = selected_controller(&core, &selected);
+        let stamp = outgoing.as_ref().map(|s| (s.id, s.generation));
+        let mut received = stamp != clipboard_session;
+        clipboard_session = stamp;
         if let Some(events) = &events {
             while let Some(event) = events.try_recv() {
                 if let CoreEvent::ClipboardReceived { id } = event {
@@ -232,7 +250,8 @@ pub(crate) fn install(window: &adw::ApplicationWindow, core: Arc<Core>) {
             lagged = dropped;
         }
         if received && outgoing.is_some() {
-            if let Ok(Some(text)) = core.clipboard_text() {
+            let session = outgoing.as_ref().unwrap();
+            if let Ok(Some(text)) = core.session_clipboard_text(session.id, session.generation) {
                 let _ = native.apply(&text);
             }
         }
@@ -241,6 +260,14 @@ pub(crate) fn install(window: &adw::ApplicationWindow, core: Arc<Core>) {
         }
         gtk::glib::ControlFlow::Continue
     });
+}
+
+fn selected_controller(core: &Core, selected: &Option<Arc<AtomicU64>>) -> Option<SessionInfo> {
+    match selected {
+        Some(id) => core.controller_session(id.load(Ordering::Relaxed)).ok(),
+        None => core.snapshot().ok().and_then(|s| s.outgoing),
+    }
+    .filter(|s| s.phase == SessionPhase::Active)
 }
 
 #[cfg(test)]

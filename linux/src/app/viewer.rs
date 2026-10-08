@@ -1,4 +1,4 @@
-//! Remote desktop window. Frames are decoded off-thread and only the newest
+//! Remote desktop tab content. Frames are decoded off-thread and only the newest
 //! complete BGRA frame is uploaded to GTK. Input is fenced by session generation.
 use super::{preferences, tasks};
 use adw::prelude::*;
@@ -14,27 +14,18 @@ use vnilink_media::{ControllerOutput, ControllerVideo, RawFrame};
 
 pub(crate) struct Viewer {
     pub window: adw::ApplicationWindow,
+    pub content: adw::ToastOverlay,
     pub picture: gtk::Picture,
     pub status: gtk::Label,
     stack: gtk::Stack,
     stop: Arc<AtomicBool>,
-    disconnect_on_close: Rc<Cell<bool>>,
     pub session: SessionInfo,
     size: Rc<Cell<(u16, u16)>>,
+    release_input: RefCell<Option<Rc<dyn Fn()>>>,
+    active_handler: RefCell<Option<glib::SignalHandlerId>>,
 }
 
 impl Viewer {
-    pub(crate) fn open(
-        parent: &adw::ApplicationWindow,
-        core: Arc<Core>,
-        session: SessionInfo,
-    ) -> Rc<Self> {
-        let viewer = Self::build(parent, core.clone(), session);
-        viewer.start(core);
-        viewer.window.present();
-        viewer
-    }
-
     pub(crate) fn build(
         parent: &adw::ApplicationWindow,
         core: Arc<Core>,
@@ -50,28 +41,30 @@ impl Viewer {
             })
             .map(|d| crate::presentation::device_name(&d))
             .unwrap_or_else(|| crate::presentation::computer_name(&session.peer_id));
-        let window = adw::ApplicationWindow::builder()
-            .title(&title)
-            .default_width(1120)
-            .default_height(760)
-            .build();
-        if let Some(application) = parent.application() {
-            window.set_application(Some(&application));
-        }
+        let window = parent.clone();
         let view = adw::ToolbarView::new();
         let header = adw::HeaderBar::new();
+        header.set_show_start_title_buttons(false);
+        header.set_show_end_title_buttons(false);
         header.set_title_widget(Some(&adw::WindowTitle::new(&title, "Remote desktop")));
         let tools = gtk::MenuButton::builder().label("Session").build();
         tools.set_popover(Some(&session_popover(&window, core.clone(), &session)));
         header.pack_start(&tools);
-        let send_file = gtk::Button::with_label("Send file…");
-        send_file.set_tooltip_text(Some("Send a file, or drop one onto the remote desktop"));
+        let files_window = gtk::Button::with_label("Files…");
+        files_window.set_tooltip_text(Some("Browse both computers and copy files either way"));
         let win = window.clone();
         let worker = core.clone();
-        let (id, generation) = (session.id, session.generation);
-        send_file
-            .connect_clicked(move |_| super::files::send(&win, worker.clone(), id, generation));
-        header.pack_start(&send_file);
+        let peer = session.peer_id.clone();
+        files_window.connect_clicked(move |_| {
+            super::filemanager::FileManager::open(
+                &win,
+                worker.clone(),
+                peer.clone(),
+                "This computer".into(),
+                crate::presentation::computer_name(&peer),
+            );
+        });
+        header.pack_start(&files_window);
         let fullscreen = gtk::ToggleButton::builder()
             .icon_name("view-fullscreen-symbolic")
             .tooltip_text("Full screen")
@@ -135,7 +128,7 @@ impl Viewer {
         view.add_bottom_bar(&status);
         let toasts = adw::ToastOverlay::new();
         toasts.set_child(Some(&view));
-        window.set_content(Some(&toasts));
+
         super::files::install_drop(
             &picture,
             &window,
@@ -146,13 +139,15 @@ impl Viewer {
 
         let viewer = Rc::new(Self {
             window,
+            content: toasts.clone(),
             picture,
             status,
             stack,
             stop: Arc::new(AtomicBool::new(false)),
-            disconnect_on_close: Rc::new(Cell::new(true)),
             session,
             size: Rc::new(Cell::new((0, 0))),
+            release_input: RefCell::new(None),
+            active_handler: RefCell::new(None),
         });
         viewer.install_input(core.clone());
         let transfer_events = core.subscribe().ok();
@@ -172,49 +167,27 @@ impl Viewer {
             ControlFlow::Continue
         });
         let weak = Rc::downgrade(&viewer);
+        let disconnect_core = core.clone();
         disconnect.connect_clicked(move |_| {
             if let Some(viewer) = weak.upgrade() {
-                viewer.window.close();
+                let _ = core_disconnect(&viewer, &disconnect_core);
             }
-        });
-        let stop = viewer.stop.clone();
-        let id = viewer.session.id;
-        let generation = viewer.session.generation;
-        let disconnect_on_close = viewer.disconnect_on_close.clone();
-        let picture = viewer.picture.downgrade();
-        viewer.window.connect_close_request(move |_| {
-            stop.store(true, Ordering::Relaxed);
-            if let Some(picture) = picture.upgrade() {
-                picture.set_paintable(None::<&gtk::gdk::Paintable>);
-            }
-            if !disconnect_on_close.get() {
-                return Propagation::Proceed;
-            }
-            let core = core.clone();
-            tasks::run(
-                move || {
-                    if core
-                        .snapshot()
-                        .ok()
-                        .and_then(|s| s.outgoing)
-                        .is_some_and(|s| s.id == id && s.generation == generation)
-                    {
-                        core.disconnect().map_err(|e| e.to_string())?;
-                    }
-                    Ok(())
-                },
-                |_| {},
-            );
-            Propagation::Proceed
         });
         viewer
     }
 
-    fn retire(&self) {
-        self.disconnect_on_close.set(false);
+    pub(crate) fn deactivate(&self) {
+        if let Some(release) = self.release_input.borrow().as_ref() {
+            release();
+        }
+    }
+    pub(crate) fn retire(&self) {
+        self.deactivate();
+        if let Some(handler) = self.active_handler.borrow_mut().take() {
+            self.window.disconnect(handler);
+        }
         self.stop.store(true, Ordering::Relaxed);
         self.picture.set_paintable(None::<&gtk::gdk::Paintable>);
-        self.window.close();
     }
 
     pub(crate) fn show_frame(&self, frame: &RawFrame) {
@@ -242,7 +215,7 @@ impl Viewer {
         self.stack.set_visible_child_name("desktop");
     }
 
-    fn start(self: &Rc<Self>, core: Arc<Core>) {
+    pub(crate) fn start(self: &Rc<Self>, core: Arc<Core>) {
         let latest: Arc<Mutex<Option<Result<RawFrame, String>>>> = Arc::new(Mutex::new(None));
         let delivery = latest.clone();
         let stop = self.stop.clone();
@@ -256,7 +229,7 @@ impl Viewer {
                     if stop.load(Ordering::Relaxed) {
                         return Ok(());
                     }
-                    match worker.subscribe_video() {
+                    match worker.subscribe_session_video(session.id, session.generation) {
                         Ok(value) => {
                             subscription = Some(value);
                             break;
@@ -270,8 +243,10 @@ impl Viewer {
                 let mut controller = ControllerVideo::new(vnilink_linux::LinuxDecoder::new());
                 let mut ticks = 0u32;
                 while !stop.load(Ordering::Relaxed) {
-                    let snapshot = worker.snapshot().map_err(|e| e.to_string())?;
-                    if !snapshot.outgoing.is_some_and(|s| {
+                    let current = worker
+                        .controller_session(session.id)
+                        .map_err(|e| e.to_string())?;
+                    if !Some(current).is_some_and(|s| {
                         s.id == session.id
                             && s.generation == session.generation
                             && s.phase == SessionPhase::Active
@@ -439,12 +414,11 @@ impl Viewer {
                 tasks::run(
                     move || {
                         if core
-                            .snapshot()
+                            .controller_session(id)
                             .ok()
-                            .and_then(|s| s.outgoing)
                             .is_some_and(|s| s.id == id && s.generation == generation)
                         {
-                            core.disconnect().map_err(|e| e.to_string())?;
+                            core.disconnect_session(id).map_err(|e| e.to_string())?;
                         }
                         Ok(())
                     },
@@ -600,17 +574,22 @@ impl Viewer {
         let focus = gtk::EventControllerFocus::new();
         let release_focus = release.clone();
         focus.connect_leave(move |_| release_focus());
-        self.window.connect_is_active_notify(move |window| {
+        self.release_input.replace(Some(release.clone()));
+        let handler = self.window.connect_is_active_notify(move |window| {
             if !window.is_active() {
                 release();
             }
         });
+        self.active_handler.replace(Some(handler));
         self.picture.add_controller(focus);
     }
 }
 
 impl Drop for Viewer {
     fn drop(&mut self) {
+        if let Some(handler) = self.active_handler.get_mut().take() {
+            self.window.disconnect(handler);
+        }
         self.stop.store(true, Ordering::Relaxed);
     }
 }
@@ -643,7 +622,11 @@ fn session_popover(
         let worker = worker.clone();
         let win = win.clone();
         tasks::run(
-            move || worker.session_paths(id).map_err(|e| e.to_string()),
+            move || {
+                worker
+                    .controller_session_paths(id)
+                    .map_err(|e| e.to_string())
+            },
             move |r| match r {
                 Ok(paths) => {
                     let text = if paths.is_empty() {
@@ -728,38 +711,8 @@ fn session_popover(
     popover
 }
 
-/// Own one viewer per active outgoing generation, and close it when its
-/// generation ends. Retiring a reconnecting viewer must not cancel redial.
-pub(crate) fn watch(parent: &adw::ApplicationWindow, core: Arc<Core>) {
-    let parent = parent.downgrade();
-    let current: Rc<RefCell<Option<Rc<Viewer>>>> = Rc::new(RefCell::new(None));
-    glib::timeout_add_local(Duration::from_millis(200), move || {
-        let Some(parent) = parent.upgrade().filter(|p| p.get_visible()) else {
-            if let Some(viewer) = current.borrow_mut().take() {
-                viewer.retire();
-            }
-            return ControlFlow::Break;
-        };
-        let active = core
-            .snapshot()
-            .ok()
-            .and_then(|s| s.outgoing)
-            .filter(|s| s.phase == SessionPhase::Active);
-        let same = current.borrow().as_ref().is_some_and(|v| {
-            active
-                .as_ref()
-                .is_some_and(|s| s.id == v.session.id && s.generation == v.session.generation)
-        });
-        if !same {
-            if let Some(viewer) = current.borrow_mut().take() {
-                viewer.retire();
-            }
-            if let Some(session) = active {
-                current.replace(Some(Viewer::open(&parent, core.clone(), session)));
-            }
-        }
-        ControlFlow::Continue
-    });
+fn core_disconnect(viewer: &Viewer, core: &Core) -> Result<(), vnilink::Error> {
+    core.disconnect_session(viewer.session.id)
 }
 
 /// Mouse motion belongs to the image under the pointer; keyboard focus is

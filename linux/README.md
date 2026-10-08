@@ -4,7 +4,7 @@
 
 The installation record — this computer's identity and the computers paired with it — is one item in the session keyring (Secret Service, normally GNOME Keyring). The app does not write that record to a file. A locked keyring, a missing keyring, or more than one item is shown. Nothing is saved anywhere else.
 
-The window keeps this computer and paired computers in a quiet sidebar. The main pane focuses on sharing this desktop, adding a computer, or approving a connection. Creating a `.vnl` pairing file displays a three-digit code; opening that file on another computer asks for that code. Incoming access requests similarly ask for the code shown on the connecting computer. Connection details stay in an expandable row. Native libadwaita controls adapt to light and dark themes, and a narrow window collapses to one pane. An active session has a Stop banner. Active outgoing sessions open a separate remote desktop window. It subscribes to encoded video, decodes with the Linux VA-API decoder off-thread, and uploads the latest BGRA picture to GTK. Keyboard and pointer input carry the active session generation; losing focus releases held input. Video quality adjusts automatically using the shared congestion controller; the Linux app has no manual quality picker. Full screen, diagnostics, disconnect, short text entry, and file sending are available from the session toolbar. Clipboard text synchronizes automatically in both directions during an active session, subject to the clipboard grant. Remote clipboard ownership suppresses echoes, and hiding the main window does not stop incoming clipboard writes.
+The window keeps this computer and paired computers in a quiet sidebar. The main pane focuses on sharing this desktop, adding a computer, or approving a connection. Creating a `.vnl` pairing file displays a three-digit code; opening that file on another computer asks for that code. Incoming access requests similarly ask for the code shown on the connecting computer. Connection details stay in an expandable row. Native libadwaita controls adapt to light and dark themes, and a narrow window collapses to one pane. An active session has a Stop banner. Outgoing desktop connections open named tabs alongside a permanent Home page in the same window. Switching tabs retains every connection and decoder; closing one tab disconnects only that computer. Each viewer subscribes to encoded video, decodes with the Linux VA-API decoder off-thread, and uploads the latest BGRA picture to GTK. Keyboard and pointer input carry the active session generation; losing focus releases held input. Video quality adjusts automatically using the shared congestion controller; the Linux app has no manual quality picker. Full screen, diagnostics, disconnect, short text entry, and file sending are available from the session toolbar. Clipboard text synchronizes automatically in both directions during an active session, subject to the clipboard grant. Remote clipboard ownership suppresses echoes, and hiding the main window does not stop incoming clipboard writes.
 
 ## Run
 
@@ -75,7 +75,7 @@ ending the hosted session after a two-second frame timeout. Genuine capture
 failures still end the session; the Linux terminal prints the underlying reason
 as well as showing it in a toast.
 
-The visual tour includes the settings pages and a synthetic pixel-upload test for the remote desktop window. It verifies geometry, alpha, and cleanup, and relay saves against a memory installation store. This does not establish a real two-machine remote desktop result.
+The visual tour includes the settings pages and a synthetic pixel-upload test for the remote desktop viewer. It verifies geometry, alpha, and cleanup, and relay saves against a memory installation store. This does not establish a real two-machine remote desktop result.
 
 Paired computers display a local name when set, otherwise the hostname learned from their invitation (refreshed on connection), with an endpoint fragment as fallback. Settings → Computers → Manage lets you save a local name or clear it to use the hostname. Names persist in the keyring record and do not change permissions.
 
@@ -117,6 +117,13 @@ entry creation/removal and quitting with background mode disabled. It needs
 D-Bus and a display (`dbus-run-session -- xvfb-run -a cargo test --locked
 -p vnilink-gnome -- --test-threads=1`). A real desktop tray and login cycle still
 need manual validation.
+
+The host capture worker also serves admitted Desktop service owners on neutral
+connections. Idle neutral connections do not start an encoder. Ending or failing
+one Desktop drops its encoder and preserves the parent and Files owner. The
+selected X11 source/Wayland portal grant and input adapter still belong to the
+sharing switch and are retained across Desktop instances. GTK controller tabs
+still use session-based decoding/input until migration.
 
 Wayland capture currently requests CPU-mappable MemFd/MemPtr buffers and rejects
 DMA-BUF delivery. A real-machine backtrace showed a Mesa heap-corruption abort
@@ -165,3 +172,13 @@ cursor overlay. This does not establish the full platform matrix or RustDesk
 performance parity. The isolated service does not verify compositor behavior.
 
 File sending supports a native file picker and dropping one local file onto the remote desktop. Received files go into the saved receive folder, and the app reports completion. The shared protocol still limits individual files to 8 MiB and preserves existing files. Folder transfers, resumable bulk transfers, rich clipboard formats and copying files through the OS clipboard are not implemented; this is not yet RustDesk file-manager parity.
+
+## Remote-session tabs
+
+The main window uses native `AdwTabView` / `AdwTabBar`. Home is pinned and cannot
+be closed as a tab. Connecting again focuses the existing computer tab. Pending
+approval, failure and reconnect states appear inside that tab. Ctrl-W closes the
+selected session; focus loss releases its held input. Clipboard sync targets the
+selected desktop rather than all connected peers. File-manager windows resolve
+their own peer's session. See
+[controller-session architecture](../docs/architecture/controller-sessions.md).

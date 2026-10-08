@@ -28,6 +28,7 @@ pub(crate) struct Actions {
     pub save_computer: Rc<dyn Fn(String)>,
     pub cancel_file: Rc<dyn Fn()>,
     pub connect: Rc<dyn Fn(String)>,
+    pub files: Rc<dyn Fn(String)>,
     pub allow: Rc<dyn Fn(String)>,
     pub refuse: Rc<dyn Fn()>,
 }
@@ -40,6 +41,7 @@ impl Actions {
             save_computer: Rc::clone(&self.save_computer),
             cancel_file: Rc::clone(&self.cancel_file),
             connect: Rc::clone(&self.connect),
+            files: Rc::clone(&self.files),
             allow: Rc::clone(&self.allow),
             refuse: Rc::clone(&self.refuse),
         }

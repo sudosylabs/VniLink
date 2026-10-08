@@ -9,10 +9,13 @@ mod background;
 mod capture;
 mod clipboard;
 mod dialogs;
+mod filemanager;
 mod files;
 mod notifications;
 mod pages;
 mod preferences;
+mod service_files;
+mod session_tabs;
 mod sidebar;
 mod tasks;
 #[cfg(test)]
@@ -206,16 +209,18 @@ fn present(application: &adw::Application) {
                 match opened {
                     Ok((core, file_warning)) => {
                         let core = Arc::new(core);
+                        // Transfers progress without any Files window open.
+                        core.start_job_driver();
                         if let Some(error) = file_warning {
                             notifications::note(&toasts, &error);
                         }
                         core_slot.borrow_mut().replace(Arc::clone(&core));
-                        clipboard::install(&window, core.clone());
+                        let tabs = session_tabs::SessionTabs::install(&window, core.clone());
+                        clipboard::install_for_tabs(&window, core.clone(), tabs.selected.clone());
                         if background::resume_x11() && std::env::var_os("WAYLAND_DISPLAY").is_none()
                         {
                             capture::resume(&window, core.clone());
                         }
-                        viewer::watch(&window, core.clone());
                         if home_slot.borrow().is_none() {
                             let flow = Rc::new(RefCell::new(PairingFlow::default()));
                             let live = Rc::new(RefCell::new(LiveState::default()));
@@ -230,6 +235,7 @@ fn present(application: &adw::Application) {
                                     Rc::clone(&saving),
                                     Rc::clone(&flow),
                                     Rc::clone(&live),
+                                    tabs.clone(),
                                 ),
                                 flow,
                                 live,
@@ -403,7 +409,8 @@ fn actions(
     pending: Rc<RefCell<Option<PairingPreview>>>,
     saving: Rc<Cell<bool>>,
     flow: Rc<RefCell<PairingFlow>>,
-    live: Rc<RefCell<LiveState>>,
+    _live: Rc<RefCell<LiveState>>,
+    tabs: Rc<session_tabs::SessionTabs>,
 ) -> Actions {
     Actions {
         hosting: {
@@ -568,62 +575,70 @@ fn actions(
             })
         },
         connect: {
-            let core = Arc::clone(&core);
-            let home_slot = Rc::clone(&home_slot);
+            let tabs = tabs.clone();
             let toasts = toasts.clone();
-            let live = Rc::clone(&live);
-            let busy = Rc::new(Cell::new(false));
             Rc::new(move |endpoint_id| {
-                if busy.replace(true) {
-                    return;
+                if let Err(error) = tabs.connect(&endpoint_id) {
+                    notifications::failed(&toasts, &error);
                 }
-                live.borrow_mut().set_connecting(true);
-                if let Some(home) = home_slot.borrow().clone() {
-                    home.set_connecting(true);
-                }
-                if !core.capabilities().h264_decode {
-                    // Name the missing decoder before dialing instead of
-                    // connecting to a black screen.
-                    busy.set(false);
-                    live.borrow_mut().set_connecting(false);
-                    if let Some(home) = home_slot.borrow().clone() {
-                        home.set_connecting(false);
-                    }
-                    notifications::note(
-                        &toasts,
-                        "This computer cannot decode video: no H.264 decoder.",
-                    );
-                    return;
-                }
-                let (sender, receiver) = std::sync::mpsc::channel();
+            })
+        },
+        files: {
+            let core = Arc::clone(&core);
+            let window = window.clone();
+            let toasts = toasts.clone();
+            Rc::new(move |endpoint_id| {
+                // Files without the desktop viewer and without host screen
+                // sharing: reuse the live control session when it already
+                // targets this peer, otherwise establish one for file roots,
+                // listings and transfers only (no video decoder required).
+                let peer = endpoint_id.clone();
                 let worker = Arc::clone(&core);
-                std::thread::spawn(move || {
-                    let _ = sender.send(worker.connect(&endpoint_id));
-                });
-                let core = Arc::clone(&core);
-                let home_slot = Rc::clone(&home_slot);
+                let win = window.clone();
                 let toasts = toasts.clone();
-                let live = Rc::clone(&live);
-                let busy = Rc::clone(&busy);
-                gtk::glib::timeout_add_local(Duration::from_millis(50), move || {
-                    let finished = match receiver.try_recv() {
-                        Ok(result) => Some(result),
-                        Err(std::sync::mpsc::TryRecvError::Empty) => return ControlFlow::Continue,
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            Some(Err(vnilink::Error::ShutDown))
+                let core_open = Arc::clone(&core);
+                tasks::run(
+                    move || {
+                        if let Ok(sessions) = worker.controller_sessions() {
+                            if let Some(session) = sessions.iter().find(|s| {
+                                s.peer_id == peer
+                                    && !matches!(
+                                        s.phase,
+                                        SessionPhase::Closed | SessionPhase::Failed(_)
+                                    )
+                            }) {
+                                let _ = session;
+                                return Ok(false);
+                            }
                         }
-                    };
-                    busy.set(false);
-                    live.borrow_mut().set_connecting(false);
-                    if let Some(home) = home_slot.borrow().clone() {
-                        home.set_connecting(false);
-                    }
-                    if let Some(Err(err)) = finished {
-                        notifications::failed(&toasts, &err);
-                    }
-                    paint(&core, &home_slot, &toasts);
-                    ControlFlow::Break
-                });
+                        worker
+                            .begin_connect_files(&peer)
+                            .map(|_| true)
+                            .map_err(|e| e.to_string())
+                    },
+                    move |result| match result {
+                        Ok(_) => {
+                            let name = core_open
+                                .snapshot()
+                                .ok()
+                                .and_then(|s| {
+                                    s.devices
+                                        .iter()
+                                        .find(|d| d.endpoint_id == endpoint_id)
+                                        .map(|d| crate::presentation::device_name(d))
+                                })
+                                .unwrap_or_else(|| "Remote computer".into());
+                            filemanager::FileManager::open(
+                                &win,
+                                core_open.clone(),
+                                endpoint_id.clone(),
+                                "This computer".into(),
+                                name,
+                            );
+                        }
+                        Err(error) => notifications::note(&toasts, &error),
+                    },
+                );
             })
         },
         allow: {
