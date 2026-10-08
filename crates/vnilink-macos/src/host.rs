@@ -54,3 +54,25 @@ pub fn serve_stream(
         move |w, h, fps, bps| MacEncoder::open(w, h, fps, bps, high),
     )
 }
+
+/// Encode for one admitted Desktop service, stopping when that owner ends.
+/// The caller owns ScreenCaptureKit permission and the capture resource.
+#[cfg(target_os = "macos")]
+pub fn serve_desktop(
+    capture: &crate::capture::ScreenCapture,
+    core: &vnilink::Core,
+    service_id: u64,
+    generation: u64,
+    stop: &AtomicBool,
+) -> Result<(), PublishError> {
+    let info = core.hosted_desktop_info(service_id, generation)?;
+    let high = info.codec == vnilink::CODEC_H264_HIGH;
+    vnilink_media::serve_desktop_capture(
+        capture,
+        core,
+        service_id,
+        generation,
+        stop,
+        move |w, h, fps, bps| MacEncoder::open(w, h, fps, bps, high),
+    )
+}

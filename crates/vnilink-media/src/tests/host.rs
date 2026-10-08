@@ -73,6 +73,142 @@ fn solid(width: u16, height: u16, timestamp_us: u64) -> RawFrame {
     .unwrap()
 }
 
+#[test]
+fn neutral_capture_worker_stops_when_its_desktop_owner_closes() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+    use vnilink::{
+        Core, CoreConfig, CustomRelay, Grants, Listen, RelaySettings, ServiceKind, SessionPhase,
+    };
+    struct Source;
+    impl crate::FrameSource for Source {
+        fn size(&self) -> (u16, u16) {
+            (64, 64)
+        }
+        fn next_frame(&self, timestamp: u64) -> Result<RawFrame, Error> {
+            Ok(solid(64, 64, timestamp))
+        }
+    }
+    impl vnilink::HostCapture for Source {
+        fn monitor(&self) -> (u16, u16) {
+            (64, 64)
+        }
+    }
+    struct Encoder {
+        fake: Fake,
+        drops: Arc<AtomicUsize>,
+    }
+    impl VideoEncoder for Encoder {
+        fn encode(
+            &mut self,
+            frame: &RawFrame,
+            params: &EncodeParams,
+        ) -> Result<EncodedSample, Error> {
+            self.fake.encode(frame, params)
+        }
+    }
+    impl Drop for Encoder {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    let boot = || {
+        Core::start(CoreConfig {
+            listen: Listen::Loopback,
+            relay: RelaySettings::custom(vec![CustomRelay::new("http://127.0.0.1:9").unwrap()])
+                .unwrap(),
+            ..CoreConfig::default()
+        })
+        .unwrap()
+    };
+    let host = Arc::new(boot());
+    let controller = boot();
+    host.set_capture(Box::new(Source)).unwrap();
+    host.set_h264_support(true, true).unwrap();
+    controller.set_h264_support(true, true).unwrap();
+    controller
+        .accept_invitation(&host.create_invitation(Duration::from_secs(60)).unwrap())
+        .unwrap();
+    host.accept_invitation(
+        &controller
+            .create_invitation(Duration::from_secs(60))
+            .unwrap(),
+    )
+    .unwrap();
+    host.authorize(
+        &controller.endpoint_id(),
+        Grants {
+            control: true,
+            clipboard: false,
+            transfer: false,
+        },
+    )
+    .unwrap();
+    host.start_hosting().unwrap();
+    let parent = controller
+        .begin_connect_services(&host.endpoint_id())
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while controller.controller_session(parent.id).unwrap().phase != SessionPhase::Active {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let parent = controller.controller_session(parent.id).unwrap();
+    let owner = controller
+        .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
+        .unwrap();
+    let handle = controller
+        .open_desktop_service(owner.id, owner.generation)
+        .unwrap();
+    let remote = host
+        .hosted_services()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.kind == ServiceKind::Desktop)
+        .unwrap();
+    let frames = handle.subscribe_video().unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let drops = Arc::new(AtomicUsize::new(0));
+    let opens = Arc::new(Mutex::new(0));
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let worker_host = host.clone();
+    let worker_stop = stop.clone();
+    let worker_drops = drops.clone();
+    let worker_opens = opens.clone();
+    let worker = std::thread::spawn(move || {
+        let result = crate::serve_desktop_capture(
+            &Source,
+            &worker_host,
+            remote.id,
+            remote.generation,
+            &worker_stop,
+            move |w, h, fps, bps| {
+                Ok(Encoder {
+                    fake: Fake::open(&worker_opens, w, h, fps, bps)?,
+                    drops: worker_drops.clone(),
+                })
+            },
+        );
+        done_tx.send(result).unwrap();
+    });
+    let picture = frames
+        .recv_timeout(Duration::from_secs(5))
+        .expect("scoped capture frame");
+    assert!(parse_annex_b(&picture.payload).unwrap().has_idr());
+    handle.close();
+    let result = done_rx.recv_timeout(Duration::from_secs(5));
+    stop.store(true, Ordering::Relaxed);
+    worker.join().unwrap();
+    result
+        .expect("owner close must stop capture without the caller stop flag")
+        .unwrap();
+    assert_eq!(drops.load(Ordering::Relaxed), *opens.lock().unwrap());
+    assert_eq!(
+        controller.controller_session(parent.id).unwrap().phase,
+        SessionPhase::Active
+    );
+}
+
 fn session(capture: (u16, u16), quality: Quality, opens: &Arc<Mutex<usize>>) -> HostSession<Fake> {
     let opener = Arc::clone(opens);
     HostSession::open(capture.0, capture.1, quality, move |w, h, fps, bps| {

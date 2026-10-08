@@ -24,9 +24,9 @@ pub use capture::{ScreenPlan, FILEVAULT_PREBOOT_SUPPORTED};
 #[cfg(target_os = "macos")]
 pub use decode::MacDecoder;
 pub use encode::MacEncoder;
-#[cfg(target_os = "macos")]
-pub use host::serve_stream;
 pub use host::HostSession;
+#[cfg(target_os = "macos")]
+pub use host::{serve_desktop, serve_stream};
 pub use pixels::raw_frame_from_bgra;
 #[cfg(target_os = "macos")]
 pub use pixels::raw_frame_from_pixel_buffer;

@@ -54,9 +54,9 @@ pub fn h264_high_available() -> bool {
 pub fn h264_decode_available() -> bool {
     false
 }
-#[cfg(target_os = "linux")]
-pub use host::serve_portal;
 pub use host::HostSession;
+#[cfg(target_os = "linux")]
+pub use host::{serve_desktop, serve_portal};
 pub use pixels::{raw_frame_from_bgra, raw_frame_from_bgrx};
 pub use portal::{PortalPhase, PortalSession, ONE_PORTAL_SESSION_IS_UNIVERSAL};
 pub use x11::{raw_frame_from_ximage, X11Capture, X11Image, X11Plan};

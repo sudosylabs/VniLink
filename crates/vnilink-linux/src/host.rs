@@ -53,3 +53,25 @@ pub fn serve_portal(
         move |w, h, fps, bps| LinuxEncoder::open(w, h, fps, bps, high),
     )
 }
+
+/// Encode an existing X11/portal source for one admitted Desktop owner.
+/// This does not request or replace a Wayland permission grant.
+#[cfg(target_os = "linux")]
+pub fn serve_desktop<C: FrameSource>(
+    capture: &C,
+    core: &vnilink::Core,
+    service_id: u64,
+    generation: u64,
+    stop: &AtomicBool,
+) -> Result<(), PublishError> {
+    let info = core.hosted_desktop_info(service_id, generation)?;
+    let high = info.codec == vnilink::CODEC_H264_HIGH;
+    vnilink_media::serve_desktop_capture(
+        capture,
+        core,
+        service_id,
+        generation,
+        stop,
+        move |w, h, fps, bps| LinuxEncoder::open(w, h, fps, bps, high),
+    )
+}

@@ -170,6 +170,9 @@ where
         if stop.load(Ordering::Relaxed) {
             return Ok(());
         }
+        if !core.host_desktop_active(session_id, generation)? {
+            return Ok(());
+        }
         while let Some(event) = events.try_recv() {
             // One installation can host while it controls another: a quality
             // or keyframe event for the outgoing session must not reconfigure
@@ -204,6 +207,95 @@ where
         // A cached idle picture can be returned immediately. Pace requests,
         // rather than copying and discarding that picture in a busy loop.
         if let Some(remaining) = frame_period.checked_sub(capture_started.elapsed()) {
+            std::thread::sleep(remaining);
+        }
+    }
+}
+
+/// Capture/encode for one neutral Desktop instance, never its parent session.
+/// The caller owns the OS capture source and chooses the negotiated codec from
+/// hosted_desktop_info before constructing its encoder factory.
+pub fn serve_desktop_capture<C, E>(
+    capture: &C,
+    core: &Core,
+    service_id: u64,
+    generation: u64,
+    stop: &AtomicBool,
+    open_encoder: impl Fn(u16, u16, u8, u32) -> Result<E, Error> + Send + 'static,
+) -> Result<(), PublishError>
+where
+    C: FrameSource,
+    E: VideoEncoder,
+{
+    let mut info = core.hosted_desktop_info(service_id, generation)?;
+    let mut session = HostSession::open(
+        capture.size().0,
+        capture.size().1,
+        info.quality,
+        open_encoder,
+    )?;
+    struct Sink<'a> {
+        core: &'a Core,
+        generation: u64,
+    }
+    impl FrameSink for Sink<'_> {
+        fn publish_frame(
+            &mut self,
+            id: u64,
+            frame: vnilink::EncodedFrame,
+        ) -> Result<(), vnilink::Error> {
+            self.core.publish_desktop_video(id, self.generation, frame)
+        }
+    }
+    let mut sink = Sink { core, generation };
+    let started = std::time::Instant::now();
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let current = match core.hosted_desktop_info(service_id, generation) {
+            Ok(info) => info,
+            Err(vnilink::Error::NoSession | vnilink::Error::StaleSession) => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        if current.quality != info.quality {
+            session.observe(&CoreEvent::QualityUpdated {
+                id: service_id,
+                quality: current.quality,
+            })?;
+            info = current;
+        }
+        if core
+            .take_desktop_keyframe_request(service_id, generation)
+            .unwrap_or(false)
+        {
+            session.observe(&CoreEvent::KeyframeRequested { id: service_id })?;
+        }
+        let capture_started = std::time::Instant::now();
+        let timestamp = started.elapsed().as_micros().try_into().unwrap_or(u64::MAX);
+        let mut frame = capture.next_frame(timestamp)?;
+        if let Some(cursor) = capture.cursor() {
+            if info.separate_cursor {
+                match core.publish_desktop_cursor(service_id, generation, cursor) {
+                    Ok(()) => {}
+                    Err(vnilink::Error::NoSession | vnilink::Error::StaleSession) => return Ok(()),
+                    Err(error) => return Err(error.into()),
+                }
+            } else {
+                frame = crate::cursor::composite(&frame, &cursor)?;
+            }
+        }
+        match session.publish(&frame, &mut sink, service_id) {
+            Ok(_) => {}
+            Err(PublishError::Session(
+                vnilink::Error::NoSession | vnilink::Error::StaleSession,
+            )) => return Ok(()),
+            Err(error) => return Err(error),
+        }
+        let period = std::time::Duration::from_micros(
+            1_000_000 / u64::from(session.control.settings().frame_rate),
+        );
+        if let Some(remaining) = period.checked_sub(capture_started.elapsed()) {
             std::thread::sleep(remaining);
         }
     }
