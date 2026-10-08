@@ -2,6 +2,7 @@
 
 use super::*;
 
+use super::blob::drop_blob_offers;
 use super::clipboard::open_controller_clipboard;
 use super::files::open_controller_transfer;
 use super::link::{remember_peer_addresses, write_addresses};
@@ -21,12 +22,44 @@ use crate::session::{Grants, SessionInfo, SessionPhase, SessionRole};
 use crate::trust::Device;
 use crate::video::KeyframeFlag;
 
+/// Dropping a cancelled establish future must stop its side-stream workers.
+#[derive(Default)]
+struct ControllerTasks(Vec<tokio::task::AbortHandle>);
+impl Drop for ControllerTasks {
+    fn drop(&mut self) {
+        for task in &self.0 {
+            task.abort();
+        }
+    }
+}
+
 impl Core {
     pub fn authorize(&self, endpoint_id: &str, grants: Grants) -> Result<(), Error> {
         let key = parse_endpoint_id(endpoint_id)?;
         {
             let mut state = self.alive_state()?;
-            store_grants(&self.shared, &mut state, &key, grants)?;
+            store_grants(&self.shared, &mut state, &key, grants, false)?;
+            if !grants.transfer {
+                let incoming = state
+                    .incoming
+                    .as_ref()
+                    .filter(|session| session.peer_key == key)
+                    .map(|session| session.id);
+                for record in state.hosted_services.values_mut().filter(|record| {
+                    Some(record.info.connection_id) == incoming
+                        && record.info.kind == crate::ServiceKind::Files
+                }) {
+                    if record.change(record.info.generation, crate::ServicePhase::Closed) {
+                        self.shared.events.publish(CoreEvent::HostedServiceChanged {
+                            service: record.info.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        if !grants.transfer {
+            drop_blob_offers(&self.shared, &key);
+            super::jobs::interrupt_peer_jobs(&self.shared, &key);
         }
         self.shared.events.publish(CoreEvent::DeviceAuthorized {
             endpoint_id: endpoint_id.to_owned(),
@@ -39,7 +72,7 @@ impl Core {
         let mut stopped = None;
         {
             let mut state = self.alive_state()?;
-            store_grants(&self.shared, &mut state, &key, Grants::default())?;
+            store_grants(&self.shared, &mut state, &key, Grants::default(), true)?;
             if state
                 .incoming
                 .as_ref()
@@ -55,6 +88,8 @@ impl Core {
         if let Some(stop) = stopped {
             let _ = stop.send(true);
         }
+        drop_blob_offers(&self.shared, &key);
+        super::jobs::interrupt_peer_jobs(&self.shared, &key);
         self.shared.events.publish(CoreEvent::DeviceRevoked {
             endpoint_id: endpoint_id.to_owned(),
         });
@@ -88,16 +123,15 @@ impl Core {
                     incoming_stop = Some(session.stop.clone());
                 }
             }
-            if state
+            for session in state
                 .outgoing
-                .as_ref()
-                .is_some_and(|session| session.peer_key == key && !finished(&session.phase))
+                .values_mut()
+                .filter(|s| s.peer_key == key && !finished(&s.phase))
             {
-                if let Some(session) = state.outgoing.as_mut() {
-                    session.phase = SessionPhase::Stopping;
-                    outgoing_stop = Some(session.stop.clone());
-                }
+                session.phase = SessionPhase::Stopping;
+                outgoing_stop = Some(session.stop.clone());
             }
+            super::services::synchronize(&mut state, &self.shared.events);
         }
         if let Some(stop) = incoming_stop {
             let _ = stop.send(true);
@@ -105,6 +139,8 @@ impl Core {
         if let Some(stop) = outgoing_stop {
             let _ = stop.send(true);
         }
+        drop_blob_offers(&self.shared, &key);
+        super::jobs::interrupt_peer_jobs(&self.shared, &key);
         self.shared.events.publish(CoreEvent::DeviceUnpaired {
             endpoint_id: endpoint_id.to_owned(),
         });
@@ -112,81 +148,246 @@ impl Core {
     }
 
     pub fn connect(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
-        let key = parse_endpoint_id(endpoint_id)?;
-        let device = {
-            let state = self.alive_state()?;
-            if state
-                .outgoing
-                .as_ref()
-                .is_some_and(|session| !finished(&session.phase))
-            {
-                return Err(Error::Busy);
-            }
-            state.trust.get(&key).cloned().ok_or(Error::NotPaired)?
-        };
-        // The controller must decode what the host encodes. Fail here with an
-        // explicit unsupported error instead of connecting to a black screen.
-        if !self
-            .shared
-            .h264_decode
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            return Err(Error::Unsupported("no H.264 decoder is available"));
-        }
-        let (stop, stop_rx) = tokio::sync::watch::channel(false);
-        let outbox = Arc::new(InputOutbox::new());
-        {
-            let mut state = self.alive_state()?;
-            state.outgoing = Some(LiveSession {
-                id: 0,
-                generation: 0,
-                role: SessionRole::Controller,
-                phase: SessionPhase::Connecting,
-                peer_id: device.display_id.clone(),
-                peer_key: device.endpoint_id,
-                quality: Some(crate::session::controller_offer()),
-                codec: crate::protocol::CODEC_H264,
-                separate_cursor: false,
-                monitor_width: 0,
-                monitor_height: 0,
-                stop: stop.clone(),
-                outbox: Some(Arc::clone(&outbox)),
-                video: None,
-                link: None,
-                clipboard: None,
-                transfer: None,
-            });
-        }
-        self.emit_session(
-            0,
-            0,
-            SessionRole::Controller,
-            SessionPhase::Connecting,
-            &device.display_id,
-        );
-        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
-        let shared = Arc::clone(&self.shared);
-        let peer_key = device.endpoint_id;
-        self.runtime.spawn(async move {
-            run_controller(shared, peer_key, stop_rx, outbox, ready_tx).await;
-        });
-        match ready_rx.recv_timeout(CONNECT_WAIT) {
+        self.connect_inner(endpoint_id, false)
+    }
+
+    /// Establishes a control session for file roots/listings/transfers only,
+    /// without requiring a video decoder or host screen sharing. Admission on
+    /// the host needs the Transfer grant (Control not required); file
+    /// operations enforce Transfer per request. Reuses the single outgoing
+    /// slot: fails `Busy` while another control session is active, like
+    /// `connect` (open Files from the live desktop session to reuse it).
+    pub fn connect_files(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
+        self.connect_inner(endpoint_id, true)
+    }
+
+    fn connect_inner(&self, endpoint_id: &str, files_only: bool) -> Result<SessionInfo, Error> {
+        // Compatibility for native clients that still expose one viewer.
+        let (pending, ready, stop) = self.start_controller(endpoint_id, files_only, false, true)?;
+        match ready.recv_timeout(CONNECT_WAIT) {
             Ok(result) => result,
             Err(_) => {
                 let _ = stop.send(true);
+                let _ = self.disconnect_session(pending.id);
                 Err(Error::Timeout)
             }
         }
     }
 
-    pub fn disconnect(&self) -> Result<(), Error> {
+    /// Starts one independent controller connection without waiting for approval.
+    /// The returned local id remains stable across reconnects. Observe its phase
+    /// through controller_session/controller_sessions or SessionChanged events.
+    pub fn begin_connect(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
+        self.start_controller(endpoint_id, false, false, false)
+            .map(|(info, _, _)| info)
+    }
+
+    pub fn begin_connect_files(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
+        self.start_controller(endpoint_id, true, false, false)
+            .map(|(info, _, _)| info)
+    }
+
+    /// Starts a paired, feature-neutral connection. No approval of desktop,
+    /// file transfer, camera or terminal is implied by connection admission.
+    /// Requires protocol v5 and never falls back to a privileged legacy mode.
+    pub fn begin_connect_services(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
+        self.start_controller(endpoint_id, true, true, false)
+            .map(|(info, _, _)| info)
+    }
+
+    fn start_controller(
+        &self,
+        endpoint_id: &str,
+        files_only: bool,
+        services_only: bool,
+        legacy: bool,
+    ) -> Result<
+        (
+            SessionInfo,
+            std::sync::mpsc::Receiver<Result<SessionInfo, Error>>,
+            tokio::sync::watch::Sender<bool>,
+        ),
+        Error,
+    > {
+        let key = parse_endpoint_id(endpoint_id)?;
+        let (stop, stop_rx) = tokio::sync::watch::channel(false);
+        let outbox = Arc::new(InputOutbox::new());
+        // Gate and reserve in one critical section: concurrent connects cannot
+        // overwrite each other or open two control sessions to the same peer.
+        let (pending, peer_key) = {
+            let mut state = self.alive_state()?;
+            let device = state.trust.get(&key).cloned().ok_or(Error::NotPaired)?;
+            if state.outgoing_peer(&key).is_some()
+                || (legacy && state.outgoing.values().any(|s| !finished(&s.phase)))
+            {
+                return Err(Error::Busy);
+            }
+            if !files_only
+                && !self
+                    .shared
+                    .h264_decode
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                return Err(Error::Unsupported("no H.264 decoder is available"));
+            }
+            let id = state.next_session_id;
+            state.next_session_id = id.checked_add(1).ok_or(Error::Busy)?;
+            let inbox = if legacy {
+                video_inbox(&self.shared)
+            } else {
+                Arc::new(crate::video::VideoInbox::new())
+            };
+            let controller = Arc::new(ControllerState::new(
+                inbox,
+                self.shared
+                    .keyboard_mode
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                self.shared
+                    .swap_control_command
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            ));
+            if legacy {
+                *lock(&controller.subscriber) = lock(&self.shared.video_subscriber).clone();
+            }
+            let session = LiveSession {
+                id,
+                generation: 0,
+                wire_stamp: SessionStamp::new(0, 0),
+                controller: Some(controller),
+                role: SessionRole::Controller,
+                phase: SessionPhase::Connecting,
+                peer_id: device.display_id.clone(),
+                peer_key: key,
+                quality: if services_only {
+                    None
+                } else {
+                    Some(crate::session::controller_offer())
+                },
+                codec: crate::protocol::CODEC_H264,
+                separate_cursor: false,
+                files_only,
+                services_only,
+                desktop_stop: tokio::sync::watch::channel(false).0,
+                desktop_owner: None,
+                monitor_width: 0,
+                monitor_height: 0,
+                stop: stop.clone(),
+                outbox: Some(outbox.clone()),
+                video: None,
+                link: None,
+                clipboard: None,
+                transfer: None,
+            };
+            let info = session_info(&session);
+            state.outgoing.insert(id, session);
+            (info, key)
+        };
+        self.emit_session(
+            pending.id,
+            0,
+            SessionRole::Controller,
+            SessionPhase::Connecting,
+            &pending.peer_id,
+        );
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let shared = Arc::clone(&self.shared);
+        let id = pending.id;
+        self.runtime.spawn(async move {
+            run_controller(
+                shared,
+                id,
+                peer_key,
+                stop_rx,
+                outbox,
+                ready_tx,
+                files_only,
+                services_only,
+            )
+            .await;
+        });
+        Ok((pending, ready_rx, stop))
+    }
+
+    pub fn controller_sessions(&self) -> Result<Vec<SessionInfo>, Error> {
+        let state = self.alive_state()?;
+        let mut sessions: Vec<_> = state.outgoing.values().map(session_info).collect();
+        sessions.sort_by_key(|s| s.id);
+        Ok(sessions)
+    }
+
+    pub fn controller_session(&self, id: u64) -> Result<SessionInfo, Error> {
+        let state = self.alive_state()?;
+        state
+            .outgoing
+            .get(&id)
+            .map(session_info)
+            .ok_or(Error::NoSession)
+    }
+
+    /// Stops only this local controller handle, including a pending approval.
+    pub fn disconnect_session(&self, id: u64) -> Result<(), Error> {
         let mut state = self.alive_state()?;
-        let session = state.outgoing.as_mut().ok_or(Error::NoSession)?;
+        let session = state.outgoing.get_mut(&id).ok_or(Error::NoSession)?;
         if finished(&session.phase) {
             return Err(Error::NoSession);
         }
         session.phase = SessionPhase::Stopping;
         let _ = session.stop.send(true);
+        super::services::synchronize(&mut state, &self.shared.events);
+        Ok(())
+    }
+
+    /// Releases a closed/failed tab's record and buffers. Never stops live work.
+    pub fn forget_controller_session(&self, id: u64) -> Result<(), Error> {
+        let mut state = self.alive_state()?;
+        let session = state.outgoing.get(&id).ok_or(Error::NoSession)?;
+        if !finished(&session.phase) {
+            return Err(Error::Busy);
+        }
+        state.outgoing.remove(&id);
+        Ok(())
+    }
+
+    /// Legacy disconnect is refused when more than one outgoing session is live.
+    pub fn disconnect(&self) -> Result<(), Error> {
+        let id = {
+            let state = self.alive_state()?;
+            if state
+                .outgoing
+                .values()
+                .filter(|s| !finished(&s.phase))
+                .count()
+                > 1
+            {
+                return Err(Error::Busy);
+            }
+            state.single_outgoing().ok_or(Error::NoSession)?.id
+        };
+        self.disconnect_session(id)
+    }
+
+    pub(super) fn controller_state(
+        &self,
+        id: u64,
+        generation: u64,
+    ) -> Result<Arc<ControllerState>, Error> {
+        let state = self.alive_state()?;
+        let session = live_session(&state, false, id)?;
+        if session.generation != generation {
+            return Err(Error::StaleSession);
+        }
+        session.controller.clone().ok_or(Error::NoSession)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn drop_controller_link(&self, id: u64) -> Result<(), Error> {
+        let link = self
+            .alive_state()?
+            .outgoing
+            .get(&id)
+            .and_then(|s| s.link.clone())
+            .ok_or(Error::NoSession)?;
+        link.close(1u8.into(), b"test dropped controller");
         Ok(())
     }
 
@@ -198,8 +399,7 @@ impl Core {
         let link = {
             let state = self.alive_state()?;
             state
-                .outgoing
-                .as_ref()
+                .single_outgoing()
                 .and_then(|session| session.link.clone())
                 .or_else(|| {
                     state
@@ -216,44 +416,59 @@ impl Core {
 
 pub(super) async fn run_controller(
     shared: Arc<Shared>,
+    local_id: u64,
     peer_key: [u8; 32],
     mut stop_rx: tokio::sync::watch::Receiver<bool>,
     outbox: Arc<InputOutbox>,
     ready_tx: std::sync::mpsc::SyncSender<Result<SessionInfo, Error>>,
+    files_only: bool,
+    services_only: bool,
 ) {
     let mut ready = Some(ready_tx);
     let mut drops = 0u32;
     loop {
         if *stop_rx.borrow() || lock(&shared.state).shut_down {
-            finish_outgoing(&shared);
+            finish_outgoing(&shared, local_id);
             if let Some(ready) = ready.take() {
                 let _ = ready.send(Err(Error::NoSession));
             }
             return;
         }
         if drops > 0 {
-            mark_reconnecting(&shared);
+            mark_reconnecting(&shared, local_id);
             outbox.clear();
             tokio::select! {
                 _ = tokio::time::sleep(reconnect::PAUSE) => {}
                 _ = stop_rx.changed() => {}
             }
             if *stop_rx.borrow() || lock(&shared.state).shut_down {
-                finish_outgoing(&shared);
+                finish_outgoing(&shared, local_id);
                 return;
             }
         }
         let device = match load_device(&shared, &peer_key) {
             Ok(device) => device,
             Err(error) => {
-                fail_outgoing(&shared, &error);
+                fail_outgoing(&shared, local_id, &error);
                 if let Some(ready) = ready.take() {
                     let _ = ready.send(Err(error));
                 }
                 return;
             }
         };
-        match establish(&shared, device, &mut stop_rx, &outbox, &mut ready).await {
+        let mut dial_stop = stop_rx.clone();
+        let attempt = tokio::select! {
+            result = establish(&shared, local_id, device, &mut dial_stop, &outbox, &mut ready, files_only, services_only) => result,
+            _ = stop_rx.changed() => Err(Error::NoSession),
+        };
+        if *stop_rx.borrow() || lock(&shared.state).shut_down {
+            finish_outgoing(&shared, local_id);
+            if let Some(ready) = ready.take() {
+                let _ = ready.send(Err(Error::NoSession));
+            }
+            return;
+        }
+        match attempt {
             Ok((lasted, LinkEnd::Dropped)) => {
                 if lasted {
                     drops = 1;
@@ -261,23 +476,23 @@ pub(super) async fn run_controller(
                     drops += 1;
                 }
                 if drops > reconnect::ATTEMPTS {
-                    fail_outgoing(&shared, &Error::Timeout);
+                    fail_outgoing(&shared, local_id, &Error::Timeout);
                     return;
                 }
             }
             Ok((_, LinkEnd::LocalStop | LinkEnd::RemoteClose)) => {
-                finish_outgoing(&shared);
+                finish_outgoing(&shared, local_id);
                 return;
             }
             Err(error) if ready.is_none() && reconnect::retries(&error) => {
                 drops += 1;
                 if drops > reconnect::ATTEMPTS {
-                    fail_outgoing(&shared, &error);
+                    fail_outgoing(&shared, local_id, &error);
                     return;
                 }
             }
             Err(error) => {
-                fail_outgoing(&shared, &error);
+                fail_outgoing(&shared, local_id, &error);
                 if let Some(ready) = ready.take() {
                     let _ = ready.send(Err(error));
                 }
@@ -289,49 +504,86 @@ pub(super) async fn run_controller(
 
 pub(super) async fn establish(
     shared: &Arc<Shared>,
+    local_id: u64,
     device: Device,
     stop_rx: &mut tokio::sync::watch::Receiver<bool>,
     outbox: &Arc<InputOutbox>,
     ready: &mut Option<std::sync::mpsc::SyncSender<Result<SessionInfo, Error>>>,
+    files_only: bool,
+    services_only: bool,
 ) -> Result<(bool, LinkEnd), Error> {
+    let mut tasks = ControllerTasks::default();
+    // Retiring an adopted desktop is permanent for this connection. A later
+    // redial must preserve Files without silently starting desktop capture.
+    let retired = lock(&shared.state)
+        .outgoing
+        .get(&local_id)
+        .is_some_and(|s| *s.desktop_stop.borrow());
+    let files_only = files_only || retired;
+    let services_only = services_only || retired;
     let addr = device_addr(&device)?;
     let offer = crate::session::controller_offer();
-    let decode = shared
-        .h264_decode
-        .load(std::sync::atomic::Ordering::Relaxed);
-    // Offer High on the current protocol first for sharper video at the same
-    // bitrate; fall back to a version-1 Baseline hello on a FRESH connection
-    // so older hosts still connect. A fresh dial is required because a host
-    // that rejects never reads a second hello on the same streams.
-    let mut hellos = vec![
-        (2, crate::protocol::CODEC_H264_HIGH),
+    // Neither non-desktop mode needs a decoder. Legacy Files uses v4;
+    // neutral service admission requires v5, with no legacy fallback.
+    let (decode, files_only_flag, hellos_vec) = if files_only {
         (
-            crate::protocol::MIN_PROTOCOL_VERSION,
-            crate::protocol::CODEC_H264,
-        ),
-    ];
-    if shared
-        .cursor_receiver
-        .load(std::sync::atomic::Ordering::Acquire)
-    {
-        hellos.insert(
-            0,
+            false,
+            true,
+            vec![(
+                if services_only {
+                    crate::protocol::PROTOCOL_VERSION
+                } else {
+                    4
+                },
+                crate::protocol::CODEC_H264,
+            )],
+        )
+    } else {
+        let decode = shared
+            .h264_decode
+            .load(std::sync::atomic::Ordering::Relaxed);
+        // Offer High on the current protocol first for sharper video at the same
+        // bitrate; fall back to a version-1 Baseline hello on a FRESH connection
+        // so older hosts still connect. A fresh dial is required because a host
+        // that rejects never reads a second hello on the same streams.
+        let mut hellos = vec![
+            (2, crate::protocol::CODEC_H264_HIGH),
             (
-                crate::protocol::PROTOCOL_VERSION,
-                crate::protocol::CODEC_H264_HIGH,
+                crate::protocol::MIN_PROTOCOL_VERSION,
+                crate::protocol::CODEC_H264,
             ),
-        );
-    }
-    let mut hellos = hellos.iter();
-    let (connection, mut send, mut recv, info) = loop {
+        ];
+        if shared
+            .cursor_receiver
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            hellos.insert(0, (4, crate::protocol::CODEC_H264_HIGH));
+            hellos.insert(
+                0,
+                (
+                    crate::protocol::PROTOCOL_VERSION,
+                    crate::protocol::CODEC_H264_HIGH,
+                ),
+            );
+        }
+        (decode, false, hellos)
+    };
+    let mut hellos = hellos_vec.iter();
+    let (connection, mut send, recv, info) = loop {
         let &(version, codec) = hellos.next().ok_or(Error::IncompatibleVersion)?;
         let connect = shared.endpoint.connect(addr.clone(), ALPN);
         let connection = tokio::time::timeout(Duration::from_secs(10), connect)
             .await
             .map_err(|_| Error::Timeout)?
             .map_err(Error::network_debug)?;
-        if *stop_rx.borrow() {
-            return Err(Error::NoSession);
+        {
+            let mut state = lock(&shared.state);
+            let session = state.outgoing.get_mut(&local_id).ok_or(Error::NoSession)?;
+            if *stop_rx.borrow() || matches!(session.phase, SessionPhase::Stopping) {
+                connection.close(0u8.into(), b"cancelled");
+                return Err(Error::NoSession);
+            }
+            session.link = Some(connection.clone());
         }
         let (mut send, mut recv) = connection.open_bi().await.map_err(Error::network_debug)?;
         write_frame(
@@ -341,6 +593,8 @@ pub(super) async fn establish(
                 codec,
                 quality: offer,
                 decode,
+                files_only: files_only_flag,
+                services_only,
                 hostname: crate::hostname::local_hostname(),
             },
         )
@@ -377,13 +631,35 @@ pub(super) async fn establish(
                 );
                 {
                     let mut state = lock(&shared.state);
-                    if let Some(session) = state.outgoing.as_mut() {
-                        session.id = stamp.id;
-                        session.generation = stamp.generation;
+                    if let Some(session) = state.outgoing.get_mut(&local_id) {
+                        if *stop_rx.borrow() || matches!(session.phase, SessionPhase::Stopping) {
+                            return Err(Error::NoSession);
+                        }
+                        if *session.desktop_stop.borrow() && !services_only {
+                            // Close raced an in-flight desktop Hello. Discard
+                            // that admission and retry as neutral; never publish
+                            // Active or resurrect media from the retired owner.
+                            connection.close(0u8.into(), b"desktop retired");
+                            return Err(Error::network("desktop retired during admission"));
+                        }
+                        if session.generation > 0 {
+                            let previous = session.controller.as_ref().ok_or(Error::NoSession)?;
+                            session.controller = Some(Arc::new(ControllerState::new(
+                                Arc::new(crate::video::VideoInbox::new()),
+                                previous.mode.load(std::sync::atomic::Ordering::Relaxed),
+                                previous.swap.load(std::sync::atomic::Ordering::Relaxed),
+                            )));
+                        }
+                        session.wire_stamp = stamp;
+                        session.files_only = files_only;
+                        session.services_only = services_only;
+                        session.desktop_owner = None;
+                        session.generation =
+                            session.generation.saturating_add(1).max(stamp.generation);
                         session.monitor_width = monitor_width;
                         session.monitor_height = monitor_height;
                         session.link = Some(connection.clone());
-                        session.quality = Some(quality);
+                        session.quality = if services_only { None } else { Some(quality) };
                         session.codec = agreed;
                         session.separate_cursor = separate_cursor;
                     }
@@ -393,12 +669,16 @@ pub(super) async fn establish(
                     send,
                     recv,
                     SessionInfo {
-                        id: stamp.id,
-                        generation: stamp.generation,
+                        id: local_id,
+                        generation: lock(&shared.state)
+                            .outgoing
+                            .get(&local_id)
+                            .ok_or(Error::NoSession)?
+                            .generation,
                         role: SessionRole::Controller,
                         phase: SessionPhase::Active,
                         peer_id,
-                        quality: Some(quality),
+                        quality: if services_only { None } else { Some(quality) },
                         monitor_width,
                         monitor_height,
                     },
@@ -418,40 +698,74 @@ pub(super) async fn establish(
     if write_addresses(shared, &mut send).await.is_err() {
         return Err(Error::network("the address announcement was not written"));
     }
-    let clipboard = match open_controller_clipboard(shared, &connection, info.id, stop_rx).await {
-        Ok(clipboard) => clipboard,
-        Err(error) => return Err(error),
+    let clipboard = if services_only {
+        None
+    } else {
+        Some(
+            match open_controller_clipboard(shared, &connection, info.id, stop_rx).await {
+                Ok(clipboard) => clipboard,
+                Err(error) => return Err(error),
+            },
+        )
     };
-    let transfer = match open_controller_transfer(shared, &connection, info.id, stop_rx).await {
-        Ok(transfer) => transfer,
-        Err(error) => {
-            clipboard.abort();
-            return Err(error);
-        }
+    if let Some(task) = &clipboard {
+        tasks.0.push(task.abort_handle());
+    }
+    let transfer = if services_only {
+        None
+    } else {
+        Some(
+            match open_controller_transfer(shared, &connection, info.id, stop_rx).await {
+                Ok(transfer) => transfer,
+                Err(error) => {
+                    if let Some(task) = &clipboard {
+                        task.abort();
+                    }
+                    return Err(error);
+                }
+            },
+        )
     };
-    let inbox = video_inbox(shared);
+    if let Some(task) = &transfer {
+        tasks.0.push(task.abort_handle());
+    }
+    let controller = lock(&shared.state)
+        .outgoing
+        .get(&local_id)
+        .and_then(|s| s.controller.clone())
+        .ok_or(Error::NoSession)?;
+    let inbox = controller.inbox.clone();
     inbox.reset();
     // A reconnect must not expose Active with senders from the previous
     // connection. Both side streams are usable before the UI can act on it.
     {
         let mut state = lock(&shared.state);
         let stopped = state.shut_down || *stop_rx.borrow();
-        let Some(session) = state.outgoing.as_mut().filter(|s| {
+        let Some(session) = state.outgoing.get_mut(&local_id).filter(|s| {
             s.id == info.id
                 && s.generation == info.generation
                 && !matches!(s.phase, SessionPhase::Stopping)
                 && !finished(&s.phase)
         }) else {
-            clipboard.abort();
-            transfer.abort();
+            if let Some(task) = &clipboard {
+                task.abort();
+            }
+            if let Some(task) = &transfer {
+                task.abort();
+            }
             return Err(Error::NoSession);
         };
         if stopped {
-            clipboard.abort();
-            transfer.abort();
+            if let Some(task) = &clipboard {
+                task.abort();
+            }
+            if let Some(task) = &transfer {
+                task.abort();
+            }
             return Err(Error::NoSession);
         }
         session.phase = SessionPhase::Active;
+        super::services::synchronize(&mut state, &shared.events);
     }
     crate::session::announce_progression(
         &shared.events,
@@ -464,42 +778,67 @@ pub(super) async fn establish(
         let _ = ready.send(Ok(info.clone()));
     }
     let keyframe = Arc::new(KeyframeFlag::new());
-    let session_id = info.id;
-    let generation = info.generation;
     let mut video_stop = stop_rx.clone();
     let video_connection = connection.clone();
     let video_inbox = Arc::clone(&inbox);
     let video_keyframe = Arc::clone(&keyframe);
+    let mut desktop_stop = lock(&shared.state)
+        .outgoing
+        .get(&local_id)
+        .ok_or(Error::NoSession)?
+        .desktop_stop
+        .subscribe();
     let cursor = {
         let state = lock(&shared.state);
         state
             .outgoing
-            .as_ref()
+            .get(&local_id)
             .filter(|s| s.separate_cursor)
-            .map(|s| {
-                (
-                    SessionStamp::new(s.id, s.generation),
-                    Arc::clone(&shared.cursor_inbox),
-                )
-            })
+            .map(|s| (s.wire_stamp, Arc::clone(&controller.cursor)))
     };
     let reader = tokio::spawn(async move {
-        video_recv_loop(
+        if files_only {
+            return;
+        }
+        if *desktop_stop.borrow() {
+            return;
+        }
+        tokio::select! {
+        biased;
+        _ = desktop_stop.changed() => {},
+        _ = video_recv_loop(
             video_connection,
             video_inbox,
             video_keyframe,
             &mut video_stop,
             cursor,
-        )
-        .await;
+        ) => {},
+        }
     });
+    tasks.0.push(reader.abort_handle());
+    // Host-initiated job streams (status queries for host senders) are
+    // accepted here; the controller never accepts anything else.
+    let aux_stop = stop_rx.clone();
+    let aux_connection = connection.clone();
+    let aux_shared = Arc::clone(&shared);
+    let aux_peer = device.endpoint_id;
+    let aux = tokio::spawn(async move {
+        super::fs::serve_aux_controller(aux_shared, aux_connection, aux_peer, aux_stop).await;
+    });
+    tasks.0.push(aux.abort_handle());
     let started = std::time::Instant::now();
+    let wire_stamp = lock(&shared.state)
+        .outgoing
+        .get(&local_id)
+        .ok_or(Error::NoSession)?
+        .wire_stamp;
     let end = command_loop(
         connection,
         send,
         recv,
         Arc::clone(outbox),
-        SessionStamp::new(session_id, generation),
+        wire_stamp,
+        local_id,
         device.endpoint_id,
         keyframe,
         shared,
@@ -507,8 +846,13 @@ pub(super) async fn establish(
     )
     .await;
     reader.abort();
-    transfer.abort();
-    clipboard.abort();
+    aux.abort();
+    if let Some(task) = &transfer {
+        task.abort();
+    }
+    if let Some(task) = &clipboard {
+        task.abort();
+    }
     Ok((started.elapsed() > reconnect::PAUSE, end))
 }
 
@@ -518,13 +862,14 @@ pub(super) async fn command_loop(
     mut recv: iroh::endpoint::RecvStream,
     outbox: Arc<InputOutbox>,
     stamp: SessionStamp,
+    local_id: u64,
     peer_key: [u8; 32],
     keyframe: Arc<KeyframeFlag>,
     shared: &Shared,
     stop_rx: &mut tokio::sync::watch::Receiver<bool>,
 ) -> LinkEnd {
     let (frames_tx, mut frames_rx) = tokio::sync::mpsc::channel(8);
-    tokio::spawn(async move {
+    let reader = tokio::spawn(async move {
         loop {
             match read_session_frame(&mut recv).await {
                 Ok(message) => {
@@ -539,12 +884,18 @@ pub(super) async fn command_loop(
             }
         }
     });
+    let _reader = ControllerTasks(vec![reader.abort_handle()]);
     let mut remote_close = false;
     loop {
         if *stop_rx.borrow() {
             break;
         }
-        if keyframe.take() {
+        if keyframe.take()
+            && !lock(&shared.state)
+                .outgoing
+                .get(&local_id)
+                .is_none_or(|s| *s.desktop_stop.borrow())
+        {
             let wrote = write_frame(&mut send, &ControlMessage::Keyframe { stamp }).await;
             if wrote.is_err() {
                 break;
@@ -586,16 +937,17 @@ pub(super) async fn command_loop(
                             }
                             {
                                 let mut state = lock(&shared.state);
-                                if let Some(session) = state.outgoing.as_mut() {
-                                    if session.id == stamp.id
+                                if let Some(session) = state.outgoing.get_mut(&local_id) {
+                                    if session.wire_stamp == stamp
                                         && session.phase == SessionPhase::Active
+                                        && !*session.desktop_stop.borrow()
                                     {
                                         session.quality = Some(quality);
                                     }
                                 }
                             }
                             shared.events.publish(CoreEvent::QualityUpdated {
-                                id: stamp.id,
+                                id: local_id,
                                 quality,
                             });
                         }
@@ -603,7 +955,7 @@ pub(super) async fn command_loop(
                             let error = code.to_error();
                             outbox.fail(&error);
                             shared.events.publish(CoreEvent::InputFailed {
-                                id: stamp.id,
+                                id: local_id,
                                 message: crate::input::InputFault::from_error(&error).message(),
                             });
                             if !matches!(error, Error::Unsupported(_)) {
@@ -618,6 +970,13 @@ pub(super) async fn command_loop(
         } else {
             let mut failed = false;
             for item in batch {
+                if lock(&shared.state)
+                    .outgoing
+                    .get(&local_id)
+                    .is_none_or(|s| *s.desktop_stop.borrow())
+                {
+                    break;
+                }
                 let message = match item {
                     Outbound::Event(event) => ControlMessage::Input { stamp, event },
                     Outbound::Text(text) => ControlMessage::Text {
@@ -651,50 +1010,90 @@ pub(super) async fn command_loop(
     }
 }
 
-pub(super) fn finish_outgoing(shared: &Shared) {
+pub(super) fn finish_outgoing(shared: &Shared, local_id: u64) {
     let mut state = lock(&shared.state);
-    let Some(session) = state.outgoing.as_mut() else {
+    let Some(session) = state.outgoing.get_mut(&local_id) else {
         return;
     };
     if finished(&session.phase) {
         return;
     }
     let info = session_info(session);
+    let peer_key = session.peer_key;
+    if let Some(link) = session.link.take() {
+        link.close(0u8.into(), b"controller stopped");
+    }
+    session.clipboard = None;
+    session.transfer = None;
     session.phase = SessionPhase::Closed;
     drop(state);
-    settle_outgoing(shared, &info, SessionPhase::Closed);
+    settle_outgoing(shared, &info, SessionPhase::Closed, &peer_key);
 }
 
-pub(super) fn fail_outgoing(shared: &Shared, error: &Error) {
+pub(super) fn fail_outgoing(shared: &Shared, local_id: u64, error: &Error) {
     let mut state = lock(&shared.state);
-    let Some(session) = state.outgoing.as_mut() else {
+    let Some(session) = state.outgoing.get_mut(&local_id) else {
         return;
     };
     let info = session_info(session);
+    let peer_key = session.peer_key;
+    if let Some(link) = session.link.take() {
+        link.close(0u8.into(), b"controller failed");
+    }
+    session.clipboard = None;
+    session.transfer = None;
     session.phase = SessionPhase::Failed(error.to_string());
     drop(state);
-    settle_outgoing(shared, &info, SessionPhase::Failed(error.to_string()));
+    settle_outgoing(
+        shared,
+        &info,
+        SessionPhase::Failed(error.to_string()),
+        &peer_key,
+    );
 }
 
-pub(super) fn mark_reconnecting(shared: &Shared) {
+pub(super) fn mark_reconnecting(shared: &Shared, local_id: u64) {
     let mut state = lock(&shared.state);
-    let Some(session) = state.outgoing.as_mut() else {
+    let Some(session) = state.outgoing.get_mut(&local_id) else {
         return;
     };
     if finished(&session.phase) || matches!(session.phase, SessionPhase::Stopping) {
         return;
     }
+    session.clipboard = None;
+    session.transfer = None;
+    session.link = None;
     session.phase = SessionPhase::Reconnecting;
     let info = session_info(session);
+    let peer_key = session.peer_key;
     drop(state);
-    settle_outgoing(shared, &info, SessionPhase::Reconnecting);
+    settle_outgoing(shared, &info, SessionPhase::Reconnecting, &peer_key);
 }
 
 /// Clears the clipboard inbox and emits the terminal phase. The guards and
 /// the phase assignment stay with each caller: only a finished session
 /// closes, while a failure records even over one.
-fn settle_outgoing(shared: &Shared, info: &SessionInfo, phase: SessionPhase) {
-    *lock(&shared.clipboard_inbox) = None;
+fn settle_outgoing(shared: &Shared, info: &SessionInfo, phase: SessionPhase, peer_key: &[u8; 32]) {
+    {
+        let mut state = lock(&shared.state);
+        super::services::synchronize(&mut state, &shared.events);
+    }
+    let owner = {
+        let state = lock(&shared.state);
+        state
+            .outgoing
+            .get(&info.id)
+            .and_then(|s| s.controller.clone().map(|c| (s.peer_key, c)))
+    };
+    if let Some((_, controller)) = owner {
+        *lock(&controller.clipboard) = None;
+        *lock(&controller.cursor) = None;
+        controller.inbox.reset();
+        lock(&controller.keyboard).clear();
+        *lock(&controller.held) = crate::input::HeldInput::default();
+        *lock(&controller.auto) = AutoState::default();
+    }
+    super::jobs::interrupt_controller_jobs(shared, peer_key);
     shared.events.publish(CoreEvent::SessionChanged {
         id: info.id,
         generation: info.generation,

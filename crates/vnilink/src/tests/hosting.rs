@@ -414,18 +414,20 @@ fn wait_finished(controller: &crate::core::Core) {
 }
 
 #[test]
-fn quality_updates_select_the_role_when_session_ids_collide() {
+fn quality_updates_select_the_role_with_both_directions_active() {
     use crate::protocol::Quality;
 
     let a = start_direct();
     let b = start_direct();
-    // Each core hosts the other. Both first sessions take the same id on
-    // each core, so the id alone cannot select a side.
+    // Each core hosts the other. Local handles are unique across roles;
+    // role-specific quality APIs must still update only the selected direction.
     pair_for_control(&a, &b);
     pair_for_control(&b, &a);
     let b_out = b.connect(&a.endpoint_id()).unwrap();
     let a_out = a.connect(&b.endpoint_id()).unwrap();
-    assert_eq!(b_out.id, a_out.id);
+    let a_host_id = a.snapshot().unwrap().incoming.unwrap().id;
+    assert_ne!(a_host_id, a_out.id);
+    assert_ne!(b.snapshot().unwrap().incoming.unwrap().id, b_out.id);
 
     let controller_quality = Quality::new(1_500, 30, 1280, 720).unwrap();
     a.update_session_quality(a_out.id, SessionRole::Controller, controller_quality)
@@ -441,7 +443,7 @@ fn quality_updates_select_the_role_when_session_ids_collide() {
     );
 
     let host_quality = Quality::new(800, 15, 640, 480).unwrap();
-    a.update_session_quality(a_out.id, SessionRole::Host, host_quality)
+    a.update_session_quality(a_host_id, SessionRole::Host, host_quality)
         .unwrap();
     assert_eq!(
         a.snapshot().unwrap().incoming.unwrap().quality,

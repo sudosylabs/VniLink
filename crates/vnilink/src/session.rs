@@ -56,10 +56,15 @@ pub(crate) enum Grant {
 }
 
 /// Host admission. Iroh has already authenticated the peer key.
+/// Files-only sessions (Transfer grant without Control) are admitted without
+/// video requirements and without screen-capture permission beyond hosting:
+/// file roots/listings/transfers enforce the Transfer grant per operation.
 pub(crate) fn admit(
     hosting: bool,
     session_open: bool,
     control_granted: bool,
+    transfer_granted: bool,
+    files_only: bool,
     version: u16,
     video_unsupported: bool,
     codec_supported: bool,
@@ -76,6 +81,14 @@ pub(crate) fn admit(
     if session_open {
         return Err(Error::Busy);
     }
+    if files_only {
+        // Files-only: Transfer grant suffices, no Control, video, input or
+        // screen sharing required. Old hosts without v4 reject as incompatible.
+        if !transfer_granted {
+            return Err(Error::Unauthorized);
+        }
+        return Ok(());
+    }
     if !control_granted {
         return Err(Error::Unauthorized);
     }
@@ -87,6 +100,29 @@ pub(crate) fn admit(
     }
     if peer_decode_unsupported {
         return Err(Error::Unsupported("the controller cannot decode video"));
+    }
+    Ok(())
+}
+
+/// Neutral transport gate. Pairing and an explicit host enablement admit a
+/// connection, but every feature still needs its own service permission.
+pub(crate) fn admit_services(
+    hosting: bool,
+    open: bool,
+    paired: bool,
+    version: u16,
+) -> Result<(), Error> {
+    if !hosting {
+        return Err(Error::NotHosting);
+    }
+    if !(5..=crate::protocol::PROTOCOL_VERSION).contains(&version) {
+        return Err(Error::IncompatibleVersion);
+    }
+    if !paired {
+        return Err(Error::NotPaired);
+    }
+    if open {
+        return Err(Error::Busy);
     }
     Ok(())
 }

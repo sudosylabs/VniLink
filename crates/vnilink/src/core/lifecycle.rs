@@ -181,8 +181,12 @@ impl Core {
                 replay,
                 record_relay,
                 incoming: None,
-                outgoing: None,
+                outgoing: HashMap::new(),
                 next_session_id: 1,
+                services: HashMap::new(),
+                hosted_services: HashMap::new(),
+                next_service_id: 1,
+                transfer_epochs: HashMap::new(),
                 generation: 0,
                 shut_down: false,
                 pairing_window: None,
@@ -193,21 +197,32 @@ impl Core {
             capture: Mutex::new(None),
             clipboard: Mutex::new(None),
             clipboard_available: AtomicBool::new(false),
-            clipboard_inbox: Mutex::new(None),
             transfer_dir: Mutex::new(None),
             video_inbox: Mutex::new(None),
             video_subscriber: Mutex::new(Weak::new()),
             session_gate: tokio::sync::Mutex::new(()),
+            desktop_gate: tokio::sync::Mutex::new(()),
             swap_control_command: AtomicBool::new(false),
             h264_encode: AtomicBool::new(false),
             h264_decode: AtomicBool::new(false),
             keyboard_mode: AtomicU8::new(KeyboardMode::Character as u8),
-            keyboard: Mutex::new(keyboard::KeyPlan::new()),
             h264_high_encode: AtomicBool::new(false),
-            auto: Mutex::new(AutoState::default()),
             cursor_receiver: AtomicBool::new(false),
             cursor_outbox: tokio::sync::watch::channel(None).0,
-            cursor_inbox: Arc::new(Mutex::new(None)),
+            file_roots: Mutex::new(crate::fs::RootSet::default()),
+            blob_dir: Mutex::new(None),
+            blob_store: Mutex::new(None),
+            blob_open: tokio::sync::Mutex::new(()),
+            blob_offers: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            blob_recent_fetches: Arc::new(Mutex::new(HashMap::new())),
+            blob_import_pins: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            blob_job_offers: Mutex::new(std::collections::HashSet::new()),
+            blob_serving: Mutex::new(std::collections::HashMap::new()),
+            jobs: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            job_next: std::sync::atomic::AtomicU64::new(1),
+            job_save: Mutex::new(()),
+            job_cancel: Mutex::new(std::collections::HashMap::new()),
+            job_driving: Mutex::new(std::collections::HashSet::new()),
         });
         let accept = Arc::clone(&shared);
         runtime.spawn(async move { accept_loop(accept).await });
@@ -215,6 +230,8 @@ impl Core {
     }
 
     pub fn shutdown(&self) {
+        // Settle the blob store first so its directory reopens cleanly.
+        self.blob_close_store();
         {
             let mut state = lock(&self.shared.state);
             if state.shut_down {
@@ -224,9 +241,11 @@ impl Core {
             state.pairing_window = None;
             state.control_request = None;
             signal_stop(state.incoming.as_mut());
-            signal_stop(state.outgoing.as_mut());
+            for session in state.outgoing.values_mut() {
+                signal_stop(Some(session));
+            }
+            super::services::synchronize(&mut state, &self.shared.events);
         }
-        *lock(&self.shared.clipboard_inbox) = None;
         let endpoint = self.shared.endpoint.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         self.runtime.spawn(async move {
@@ -332,7 +351,7 @@ impl Core {
                 })
                 .collect(),
             incoming: state.incoming.as_ref().map(session_info),
-            outgoing: state.outgoing.as_ref().map(session_info),
+            outgoing: state.single_outgoing().map(session_info),
             capabilities: desktop_capabilities(&self.shared),
         })
     }

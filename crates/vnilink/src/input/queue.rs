@@ -224,6 +224,15 @@ impl InputOutbox {
             .unwrap_or_else(|poison| poison.into_inner()) = None;
     }
 
+    /// Focus loss discards pending input without discarding encoder settings
+    /// or clearing a fault from an ended owner.
+    pub(crate) fn clear_pending_input(&self) {
+        self.queue
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .retain(|item| matches!(item, Outbound::Quality(_)));
+    }
+
     pub(crate) fn drain(&self) -> Vec<Outbound> {
         let mut queue = self
             .queue

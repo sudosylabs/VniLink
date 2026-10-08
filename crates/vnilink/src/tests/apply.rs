@@ -52,27 +52,53 @@ fn keyboard_and_pointer_events_are_applied_and_released() {
             .submit_input(session.id, session.generation, event)
             .unwrap();
     }
-    wait_applied(
-        &applied,
-        &[
-            InputEvent::key_down(crate::input::usage::A),
-            InputEvent::pointer(9, 8),
-            InputEvent::button_down(crate::input::PointerButton::Left),
-            InputEvent::wheel(0, -1),
-        ],
+    // Queue coalescing removes samples still queued together. A running
+    // consumer may already have sent either intermediate position; it is not
+    // required to wait until this entire producer burst has finished.
+    let wait_for_tail = |tail: InputEvent| {
+        let until = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let got = applied.lock().unwrap().clone();
+            if got.last() == Some(&tail) {
+                return got;
+            }
+            assert!(
+                std::time::Instant::now() < until,
+                "input tail did not arrive: {got:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let valid: Vec<Vec<InputEvent>> = (0..4)
+        .map(|mask| {
+            let mut events = vec![InputEvent::key_down(crate::input::usage::A)];
+            if mask & 1 != 0 {
+                events.push(InputEvent::pointer(1, 1));
+            }
+            if mask & 2 != 0 {
+                events.push(InputEvent::pointer(4, 5));
+            }
+            events.extend([
+                InputEvent::pointer(9, 8),
+                InputEvent::button_down(crate::input::PointerButton::Left),
+                InputEvent::wheel(0, -1),
+            ]);
+            events
+        })
+        .collect();
+    let got = wait_for_tail(InputEvent::wheel(0, -1));
+    assert!(
+        valid.contains(&got),
+        "unexpected complete input sequence: {got:?}"
     );
     host.stop_hosted_session().unwrap();
-    wait_applied(
-        &applied,
-        &[
-            InputEvent::key_down(crate::input::usage::A),
-            InputEvent::pointer(9, 8),
-            InputEvent::button_down(crate::input::PointerButton::Left),
-            InputEvent::wheel(0, -1),
-            InputEvent::button_up(crate::input::PointerButton::Left),
-            InputEvent::key_up(crate::input::usage::A),
-        ],
-    );
+    let released = wait_for_tail(InputEvent::key_up(crate::input::usage::A));
+    let mut expected = got;
+    expected.extend([
+        InputEvent::button_up(crate::input::PointerButton::Left),
+        InputEvent::key_up(crate::input::usage::A),
+    ]);
+    assert_eq!(released, expected);
 }
 
 #[test]

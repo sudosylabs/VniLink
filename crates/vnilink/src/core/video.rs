@@ -14,12 +14,43 @@ use crate::video::{
 };
 
 impl Core {
+    /// Capture workers stop this generation's encoder without stopping the
+    /// peer connection. Avoid a full installation snapshot on every frame.
+    pub fn host_desktop_active(&self, id: u64, generation: u64) -> Result<bool, Error> {
+        let state = self.alive_state()?;
+        Ok(state.incoming.as_ref().is_some_and(|s| {
+            s.id == id
+                && s.generation == generation
+                && s.phase == SessionPhase::Active
+                && !s.files_only
+                && !*s.desktop_stop.borrow()
+                && s.quality.is_some()
+        }))
+    }
+
     /// Receives encoded frames for the controlling session. One subscriber at a time.
     ///
     /// Frames are not core events. A slow subscriber does not block input. Drop the
     /// subscription to free the slot.
     pub fn subscribe_video(&self) -> Result<VideoSubscription, Error> {
-        self.ensure_alive()?;
+        let selected = {
+            let state = self.alive_state()?;
+            if state
+                .outgoing
+                .values()
+                .filter(|s| !finished(&s.phase))
+                .count()
+                > 1
+            {
+                return Err(Error::Busy);
+            }
+            state.single_outgoing().map(|s| (s.id, s.generation))
+        };
+        if let Some((id, generation)) = selected {
+            return self.subscribe_session_video(id, generation);
+        }
+        // Legacy clients can subscribe before connect(). New tabs use the
+        // explicit API below and never share this reservation/inbox.
         let mut slot = lock(&self.shared.video_subscriber);
         if slot.upgrade().is_some() {
             return Err(Error::Busy);
@@ -30,20 +61,51 @@ impl Core {
         Ok(VideoSubscription::new(inbox, alive))
     }
 
+    /// One independent subscriber per active controller generation.
+    pub fn subscribe_session_video(
+        &self,
+        id: u64,
+        generation: u64,
+    ) -> Result<VideoSubscription, Error> {
+        {
+            let state = self.alive_state()?;
+            if state
+                .outgoing
+                .get(&id)
+                .is_some_and(|s| s.files_only || *s.desktop_stop.borrow())
+            {
+                return Err(Error::Unsupported("video on a service connection"));
+            }
+        }
+        let controller = self.controller_state(id, generation)?;
+        let mut slot = lock(&controller.subscriber);
+        if slot.upgrade().is_some() {
+            return Err(Error::Busy);
+        }
+        let alive = Arc::new(());
+        *slot = Arc::downgrade(&alive);
+        Ok(VideoSubscription::new(controller.inbox.clone(), alive))
+    }
+
     /// Reports the monitor this host captures.
     ///
     /// The platform captures and encodes, then passes bytes to [`Core::publish_video`].
-    /// Refused while a controlling session is active.
+    /// An idle neutral connection may configure capture before Desktop Open.
+    /// Refused while Desktop is active or completing teardown.
     pub fn set_capture(&self, capture: Box<dyn HostCapture>) -> Result<(), Error> {
         let state = self.alive_state()?;
         if state
             .incoming
             .as_ref()
-            .is_some_and(|session| !finished(&session.phase))
+            .is_some_and(|session| !finished(&session.phase) && !session.services_only)
         {
             return Err(Error::Busy);
         }
-        drop(state);
+        let _gate = self
+            .shared
+            .desktop_gate
+            .try_lock()
+            .map_err(|_| Error::Busy)?;
         *lock(&self.shared.capture) = Some(capture);
         Ok(())
     }
@@ -100,7 +162,10 @@ impl Core {
         let outbox = {
             let state = self.alive_state()?;
             let session = state.incoming.as_ref().ok_or(Error::NoSession)?;
-            if session.id != session_id || session.phase != SessionPhase::Active {
+            if session.id != session_id
+                || session.phase != SessionPhase::Active
+                || *session.desktop_stop.borrow()
+            {
                 return Err(Error::NoSession);
             }
             session.video.clone().ok_or(Error::NoSession)?
@@ -139,9 +204,9 @@ impl Core {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        let (current, generation, link, inbox) = {
+        let (current, generation, link, controller) = {
             let state = self.alive_state()?;
-            let session = state.outgoing.as_ref().ok_or(Error::NoSession)?;
+            let session = state.outgoing.get(&session_id).ok_or(Error::NoSession)?;
             if session.id != session_id || session.phase != SessionPhase::Active {
                 return Err(Error::NoSession);
             }
@@ -152,7 +217,7 @@ impl Core {
                 current,
                 session.generation,
                 session.link.clone(),
-                video_inbox(&self.shared),
+                session.controller.as_ref().ok_or(Error::NoSession)?.clone(),
             )
         };
         let Some(link) = link else {
@@ -170,10 +235,10 @@ impl Core {
         if rtt_ms == u64::MAX {
             return Ok(None);
         }
-        let queued = inbox.len();
-        let dropped = inbox.dropped();
+        let queued = controller.inbox.len();
+        let dropped = controller.inbox.dropped();
         let delta = {
-            let mut auto = lock(&self.shared.auto);
+            let mut auto = lock(&controller.auto);
             if auto.manual_session == Some((session_id, generation)) {
                 return Ok(None);
             }
@@ -196,7 +261,7 @@ impl Core {
         )? {
             return Ok(None);
         }
-        lock(&self.shared.auto).last_change_ms = now_ms;
+        lock(&controller.auto).last_change_ms = now_ms;
         Ok(Some(next))
     }
 
@@ -232,7 +297,10 @@ impl Core {
                     .incoming
                     .as_mut()
                     .filter(|session| {
-                        session.id == session_id && session.phase == SessionPhase::Active
+                        session.id == session_id
+                            && session.phase == SessionPhase::Active
+                            && !session.files_only
+                            && !*session.desktop_stop.borrow()
                     })
                     .ok_or(Error::NoSession)?;
                 session.quality = Some(quality);
@@ -246,15 +314,19 @@ impl Core {
             SessionRole::Controller => {
                 let outbox = state
                     .outgoing
-                    .as_ref()
+                    .get(&session_id)
                     .filter(|session| {
-                        session.id == session_id && session.phase == SessionPhase::Active
+                        session.id == session_id
+                            && session.phase == SessionPhase::Active
+                            && !session.files_only
+                            && !*session.desktop_stop.borrow()
                     })
                     .and_then(|session| session.outbox.clone())
                     .ok_or(Error::NoSession)?;
-                let session = state.outgoing.as_mut().expect("checked");
+                let session = state.outgoing.get_mut(&session_id).expect("checked");
+                let controller = session.controller.as_ref().ok_or(Error::NoSession)?;
                 let owner = (session.id, session.generation);
-                let mut auto = lock(&self.shared.auto);
+                let mut auto = lock(&controller.auto);
                 if let Some(generation) = automatic_generation {
                     // A simultaneous manual selection or reconnect takes priority.
                     if generation != session.generation || auto.manual_session == Some(owner) {

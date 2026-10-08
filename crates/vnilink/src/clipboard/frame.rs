@@ -112,7 +112,7 @@ pub(crate) fn check_len(len: usize) -> Result<(), Error> {
     }
 }
 
-pub(super) fn status_result(code: u8) -> Result<(), Error> {
+pub(crate) fn status_result(code: u8) -> Result<(), Error> {
     match code {
         STATUS_APPLIED => Ok(()),
         STATUS_DENIED => Err(Error::ClipboardDenied),
@@ -121,7 +121,7 @@ pub(super) fn status_result(code: u8) -> Result<(), Error> {
     }
 }
 
-pub(super) fn status_code(result: &Result<(), Error>) -> u8 {
+pub(crate) fn status_code(result: &Result<(), Error>) -> u8 {
     match result {
         Ok(()) => STATUS_APPLIED,
         Err(Error::ClipboardDenied) => STATUS_DENIED,

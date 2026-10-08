@@ -132,6 +132,7 @@ impl VideoOutbox {
 pub(crate) struct VideoInbox {
     queue: Mutex<VideoQueue>,
     wake: Condvar,
+    closed: AtomicBool,
 }
 
 impl VideoInbox {
@@ -139,11 +140,16 @@ impl VideoInbox {
         Self {
             queue: Mutex::new(VideoQueue::new()),
             wake: Condvar::new(),
+            closed: AtomicBool::new(false),
         }
     }
 
     pub(crate) fn push(&self, frame: EncodedFrame) -> VideoPush {
-        let result = lock(&self.queue).push(frame);
+        let mut queue = lock(&self.queue);
+        if self.closed.load(Ordering::Acquire) {
+            return VideoPush::StillNeedsKeyframe;
+        }
+        let result = queue.push(frame);
         if matches!(result, VideoPush::Queued) {
             self.wake.notify_one();
         }
@@ -151,7 +157,16 @@ impl VideoInbox {
     }
 
     pub(crate) fn reset(&self) {
-        *lock(&self.queue) = VideoQueue::new();
+        let mut queue = lock(&self.queue);
+        *queue = VideoQueue::new();
+        self.closed.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn close(&self) {
+        let mut queue = lock(&self.queue);
+        *queue = VideoQueue::new();
+        self.closed.store(true, Ordering::Release);
+        self.wake.notify_all();
     }
 
     pub(crate) fn try_pop(&self) -> Option<EncodedFrame> {
@@ -168,6 +183,9 @@ impl VideoInbox {
         let mut queue = lock(&self.queue);
         let deadline = Instant::now() + timeout;
         loop {
+            if self.closed.load(Ordering::Acquire) {
+                return None;
+            }
             if let Some(frame) = queue.pop() {
                 return Some(frame);
             }

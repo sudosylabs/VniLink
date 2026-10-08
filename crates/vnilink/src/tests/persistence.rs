@@ -433,3 +433,100 @@ fn unpair_removal_and_rollback_persist() {
         Err(Error::NotPaired)
     ));
 }
+
+#[test]
+fn service_permissions_are_independent_persisted_and_rollback_before_revocation() {
+    use crate::{ServiceKind as Kind, ServicePermissions};
+    let store = MemoryStore::empty();
+    let host = open_loop(&store, RelaySettings::public_n0());
+    let controller = peer();
+    host.accept_invitation(
+        &controller
+            .create_invitation(Duration::from_secs(60))
+            .unwrap(),
+    )
+    .unwrap();
+    let id = controller.endpoint_id();
+    assert_eq!(
+        host.service_permissions(&id).unwrap(),
+        ServicePermissions::default()
+    );
+    host.authorize_service(&id, Kind::Terminal, true).unwrap();
+    host.authorize_service(&id, Kind::Camera, true).unwrap();
+    host.authorize(&id, all_grants()).unwrap();
+    assert_eq!(
+        host.service_permissions(&id).unwrap(),
+        ServicePermissions {
+            desktop: true,
+            files: true,
+            terminal: true,
+            camera: true
+        }
+    );
+    host.authorize_service(&id, Kind::Files, false).unwrap();
+    assert_eq!(
+        host.service_permissions(&id).unwrap(),
+        ServicePermissions {
+            desktop: true,
+            files: false,
+            terminal: true,
+            camera: true
+        }
+    );
+    assert!(host.snapshot().unwrap().devices[0].grants.clipboard);
+    let saved = store.record().unwrap();
+    store.fail_next_save(Error::StoreLocked);
+    assert!(matches!(
+        host.authorize_service(&id, Kind::Terminal, false),
+        Err(Error::StoreLocked)
+    ));
+    assert!(host.service_permissions(&id).unwrap().terminal);
+    assert_eq!(store.record().unwrap(), saved);
+    store.fail_next_save(Error::StoreUnavailable);
+    assert!(matches!(host.revoke(&id), Err(Error::StoreUnavailable)));
+    assert_eq!(
+        host.service_permissions(&id).unwrap(),
+        ServicePermissions {
+            desktop: true,
+            files: false,
+            terminal: true,
+            camera: true
+        }
+    );
+    assert_eq!(store.record().unwrap(), saved);
+    // Invitation refresh preserves the explicit grants, rather than treating
+    // a peer metadata refresh as permission removal.
+    host.accept_invitation(
+        &controller
+            .create_invitation(Duration::from_secs(60))
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(host.service_permissions(&id).unwrap().camera);
+    host.shutdown();
+    drop(host);
+    let reopened = open_loop(&store, RelaySettings::public_n0());
+    assert_eq!(
+        reopened.service_permissions(&id).unwrap(),
+        ServicePermissions {
+            desktop: true,
+            files: false,
+            terminal: true,
+            camera: true
+        }
+    );
+    reopened.revoke(&id).unwrap();
+    assert_eq!(
+        reopened.service_permissions(&id).unwrap(),
+        ServicePermissions::default()
+    );
+    reopened.unpair(&id).unwrap();
+    assert!(matches!(
+        reopened.service_permissions(&id),
+        Err(Error::NotPaired)
+    ));
+    assert!(matches!(
+        reopened.authorize_service(&id, Kind::Camera, true),
+        Err(Error::NotPaired)
+    ));
+}

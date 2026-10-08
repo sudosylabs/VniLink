@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/vnilink",
+    "crates/vnilink-rename",
     "crates/vnilink-media",
     "crates/vnilink-macos",
     "crates/vnilink-windows",

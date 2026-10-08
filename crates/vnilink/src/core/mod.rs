@@ -12,10 +12,11 @@
 //! - [`video`] — encoded frames
 //! - [`wire`] — control frame read and write
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -35,17 +36,31 @@ use crate::transfer::TransferSender;
 use crate::trust::{Device, Trust};
 use crate::video::{HostCapture, VideoInbox, VideoOutbox};
 
+pub(crate) mod blob;
 mod clipboard;
 mod connect;
 mod cursor;
+mod desktop_clipboard;
+mod desktop_service;
+mod desktop_stream;
 mod files;
+mod fs;
 mod host;
+mod jobs;
 mod keys;
 mod lifecycle;
 mod link;
 mod pairing;
+mod service_jobs;
+mod service_permissions;
+pub(crate) mod service_stream;
+mod services;
 mod video;
 mod wire;
+
+pub use blob::{BLOB_ALPN, BLOB_MAX_BYTES};
+pub use desktop_service::RemoteDesktopService;
+pub use desktop_stream::DesktopInfo;
 
 /// UDP sockets the endpoint binds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -150,7 +165,11 @@ pub struct SessionPath {
 }
 
 struct LiveSession {
+    /// Local controller handle; host sessions retain their host id.
     id: u64,
+    /// Peer-assigned protocol identity, never used for local controller lookup.
+    wire_stamp: crate::protocol::SessionStamp,
+    controller: Option<Arc<ControllerState>>,
     generation: u64,
     role: SessionRole,
     phase: SessionPhase,
@@ -159,8 +178,17 @@ struct LiveSession {
     quality: Option<Quality>,
     /// Agreed H.264 codec id (`CODEC_H264` or `CODEC_H264_HIGH`). Decided in
     /// Hello/Accept; the serve path opens the matching encoder profile.
+    /// `None` for files-only sessions (no video).
     codec: u8,
     separate_cursor: bool,
+    /// Files-only session (Transfer grant, no Control): suppresses desktop
+    /// video, cursor, input and automatic clipboard transport. File roots,
+    /// listings and transfers enforce Transfer per operation.
+    files_only: bool,
+    services_only: bool,
+    /// A desktop may retire without ending its parent connection.
+    desktop_stop: tokio::sync::watch::Sender<bool>,
+    desktop_owner: Option<u64>,
     monitor_width: u16,
     monitor_height: u16,
     stop: tokio::sync::watch::Sender<bool>,
@@ -172,6 +200,57 @@ struct LiveSession {
     transfer: Option<TransferSender>,
 }
 
+/// All mutable controller channels belong to one session, including reconnects.
+struct ControllerState {
+    inbox: Arc<VideoInbox>,
+    subscriber: Mutex<Weak<()>>,
+    cursor: cursor::CursorInbox,
+    clipboard: Mutex<Option<String>>,
+    keyboard: Mutex<keyboard::KeyPlan>,
+    held: Mutex<crate::input::HeldInput>,
+    mode: AtomicU8,
+    swap: AtomicBool,
+    auto: Mutex<AutoState>,
+}
+impl ControllerState {
+    fn new(inbox: Arc<VideoInbox>, mode: u8, swap: bool) -> Self {
+        Self {
+            inbox,
+            subscriber: Mutex::new(Weak::new()),
+            cursor: Arc::new(Mutex::new(None)),
+            clipboard: Mutex::new(None),
+            keyboard: Mutex::new(keyboard::KeyPlan::new()),
+            held: Mutex::new(crate::input::HeldInput::default()),
+            mode: AtomicU8::new(mode),
+            swap: AtomicBool::new(swap),
+            auto: Mutex::new(AutoState::default()),
+        }
+    }
+}
+
+impl State {
+    /// Legacy APIs may address only an unambiguous outgoing session.
+    fn single_outgoing(&self) -> Option<&LiveSession> {
+        if self.outgoing.len() == 1 {
+            return self.outgoing.values().next();
+        }
+        let mut live = self.outgoing.values().filter(|s| !finished(&s.phase));
+        let Some(one) = live.next() else {
+            return self.outgoing.values().max_by_key(|s| s.id);
+        };
+        if live.next().is_none() {
+            Some(one)
+        } else {
+            None
+        }
+    }
+    fn outgoing_peer(&self, peer: &[u8; 32]) -> Option<&LiveSession> {
+        self.outgoing
+            .values()
+            .find(|s| s.peer_key == *peer && !finished(&s.phase))
+    }
+}
+
 struct State {
     hosting: bool,
     trust: Trust,
@@ -180,8 +259,12 @@ struct State {
     /// it bound at start until the next open.
     record_relay: RelaySettings,
     incoming: Option<LiveSession>,
-    outgoing: Option<LiveSession>,
+    outgoing: HashMap<u64, LiveSession>,
     next_session_id: u64,
+    services: HashMap<u64, services::ServiceRecord>,
+    hosted_services: HashMap<u64, services::ServiceRecord>,
+    next_service_id: u64,
+    transfer_epochs: HashMap<[u8; 32], u64>,
     generation: u64,
     shut_down: bool,
     /// Latest `.vnl` export. Process-local, like hosting. The allow switch
@@ -228,13 +311,13 @@ struct Shared {
     // lock. UI snapshots must never acquire that lock to query availability.
     clipboard_available: AtomicBool,
     /// Latest text published by the controlled computer. Not logged.
-    clipboard_inbox: Mutex<Option<String>>,
     /// Canonical directory for files this installation accepts. Not logged.
     transfer_dir: Mutex<Option<PathBuf>>,
     video_inbox: Mutex<Option<Arc<VideoInbox>>>,
     video_subscriber: Mutex<Weak<()>>,
     /// One admitted host session at a time, including the release of held keys.
     session_gate: tokio::sync::Mutex<()>,
+    desktop_gate: tokio::sync::Mutex<()>,
     /// Controller-only. Exchanges Control and Command before an event is queued.
     /// Not written into the installation record.
     swap_control_command: AtomicBool,
@@ -246,20 +329,50 @@ struct Shared {
     h264_decode: AtomicBool,
     /// Controller-only. How a local key becomes host input. Not saved.
     keyboard_mode: AtomicU8,
-    /// Physical keys this controller has seen and not yet released.
-    keyboard: Mutex<keyboard::KeyPlan>,
     /// This host encodes H.264 High profile. Set by the platform after
     /// probing (VA-API High entrypoint on Linux, VideoToolbox on macOS).
     /// Defaults to false so a missing probe negotiates Baseline.
     h264_high_encode: AtomicBool,
-    /// Controller auto-quality state: last inbox drops seen and last change.
-    /// Guards flapping: at most one adaptive step per cooldown.
-    auto: Mutex<AutoState>,
     cursor_receiver: AtomicBool,
     cursor_outbox: tokio::sync::watch::Sender<
         Option<(crate::protocol::SessionStamp, Arc<crate::CursorState>)>,
     >,
-    cursor_inbox: cursor::CursorInbox,
+    /// Managed blob directory for the transfer manager. Empty until set.
+    blob_dir: Mutex<Option<PathBuf>>,
+    /// Owner-approved filesystem roots for the file manager. Empty until
+    /// the owner sets them; pairing and grants never populate this.
+    file_roots: Mutex<crate::fs::RootSet>,
+    /// Persistent blob store shared by serving and fetching. Opened lazily
+    /// inside the core runtime once the directory is set.
+    blob_store: Mutex<Option<iroh_blobs::store::fs::FsStore>>,
+    /// Serializes store opens: concurrent loads of one directory hang.
+    blob_open: tokio::sync::Mutex<()>,
+    /// Fetch authorizations: (peer, hash) pairs this installation serves.
+    /// Legacy (non-job) blob API (`blob_offer`): pairing only, no active-job
+    /// check (used by spike tests and legacy single-file paths).
+    /// Job blob API uses `blob_job_offers` plus an active `Serving` job
+    /// needing the hash, so completed/cancelled jobs never authorize.
+    /// A hash is content, not capability; the grant is re-checked per
+    /// connection on the receiver side.
+    blob_offers: Arc<Mutex<blob::OfferSet>>,
+    blob_job_offers: Mutex<blob::OfferSet>,
+    /// Temporary import pins bridge preparation until durable job ownership.
+    blob_recent_fetches: Arc<Mutex<HashMap<[u8; 32], (std::time::Instant, u64)>>>,
+    blob_import_pins: Arc<Mutex<HashMap<[u8; 32], (std::time::Instant, iroh_blobs::api::TempTag)>>>,
+    /// In-flight blob serving connections by peer, closed on revoke/unpair
+    /// so an accepted request cannot finish after its offers are removed.
+    blob_serving: Mutex<HashMap<[u8; 32], Vec<iroh::endpoint::Connection>>>,
+    /// Transfer job records. Polled by each side; senders learn
+    /// completion by asking the receiver.
+    jobs: Arc<Mutex<HashMap<u64, jobs::JobRecord>>>,
+    /// Next local job id. Adopted peer ids bump it past collisions.
+    job_next: AtomicU64,
+    job_save: Mutex<()>,
+    /// Cancel watches for in-flight job fetches, one per active poll.
+    job_cancel: Mutex<HashMap<u64, tokio::sync::watch::Sender<bool>>>,
+    /// Job ids currently being advanced, preventing concurrent polls for
+    /// the same job from both the background driver and window ticks.
+    job_driving: Mutex<std::collections::HashSet<u64>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -451,16 +564,30 @@ fn store_grants(
     state: &mut State,
     key: &[u8; 32],
     grants: Grants,
+    clear_service_grants: bool,
 ) -> Result<Grants, Error> {
     let previous = state
         .trust
         .get(key)
         .map(|device| device.grants)
         .ok_or(Error::NotPaired)?;
+    let previous_device = state.trust.get(key).cloned().ok_or(Error::NotPaired)?;
     state.trust.authorize(key, grants)?;
+    if clear_service_grants {
+        state
+            .trust
+            .authorize_service(key, crate::ServiceKind::Terminal, false)?;
+        state
+            .trust
+            .authorize_service(key, crate::ServiceKind::Camera, false)?;
+    }
     if let Err(error) = persist(shared, state) {
-        let _ = state.trust.authorize(key, previous);
+        let _ = state.trust.pair(previous_device);
         return Err(error);
+    }
+    if previous.transfer != grants.transfer {
+        let epoch = state.transfer_epochs.entry(*key).or_default();
+        *epoch = epoch.saturating_add(1);
     }
     Ok(previous)
 }
@@ -506,7 +633,7 @@ fn live_session(state: &State, incoming: bool, session_id: u64) -> Result<&LiveS
     let session = if incoming {
         state.incoming.as_ref()
     } else {
-        state.outgoing.as_ref()
+        state.outgoing.get(&session_id)
     }
     .ok_or(Error::NoSession)?;
     if session.phase != SessionPhase::Active || session.id != session_id {

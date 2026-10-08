@@ -2,14 +2,20 @@
 mod admission_tests;
 #[path = "tests/apply.rs"]
 mod apply_tests;
+#[path = "tests/blob.rs"]
+mod blob_tests;
 #[path = "tests/clipboard.rs"]
 mod clipboard_tests;
 #[path = "tests/datagram.rs"]
 mod datagram_tests;
+#[path = "tests/desktop_clipboard.rs"]
+mod desktop_clipboard_tests;
 #[path = "tests/error.rs"]
 mod error_tests;
 #[path = "tests/events.rs"]
 mod events_tests;
+#[path = "tests/fs.rs"]
+mod fs_tests;
 #[path = "tests/hosting.rs"]
 mod hosting_tests;
 #[path = "tests/hostname.rs"]
@@ -22,6 +28,8 @@ mod input_tests;
 mod installation_tests;
 #[path = "tests/invitation.rs"]
 mod invitation_tests;
+#[path = "tests/job.rs"]
+mod job_tests;
 #[path = "tests/keyboard_mode.rs"]
 mod keyboard_mode_tests;
 #[path = "tests/keyboard_support.rs"]
@@ -32,6 +40,8 @@ mod keyboard_tests;
 mod keyboard_text_tests;
 #[path = "tests/link.rs"]
 mod link_tests;
+#[path = "tests/multi_session.rs"]
+mod multi_session_tests;
 #[path = "tests/os_input.rs"]
 mod os_input_tests;
 #[path = "tests/pairing.rs"]
@@ -56,3 +66,9 @@ mod transfer_tests;
 mod trust_tests;
 #[path = "tests/video.rs"]
 mod video_tests;
+
+#[path = "tests/services.rs"]
+mod service_tests;
+
+#[path = "tests/desktop_services.rs"]
+mod desktop_service_tests;

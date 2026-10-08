@@ -103,7 +103,7 @@ fn names_survive_a_restart_and_old_records_still_open() {
     let device = record.trust.get(&peer_id).unwrap();
     assert!(device.grants.control);
 
-    // And the current encoder writes version 2, which round-trips names.
+    // And the current encoder writes version 3, which round-trips names.
     let bytes = installation::encode(
         &secret.to_bytes(),
         &RelaySettings::public_n0(),
@@ -112,7 +112,7 @@ fn names_survive_a_restart_and_old_records_still_open() {
     )
     .unwrap();
     assert_eq!(body[4], 1);
-    assert_eq!(bytes[4], 2);
+    assert_eq!(bytes[4], 3);
     let again = installation::decode(&bytes).unwrap();
     assert!(again.trust.get(&peer_id).is_some());
 }

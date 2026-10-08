@@ -88,8 +88,12 @@ fn pairing_does_not_grant_control_and_a_grant_is_directional() {
         std::thread::sleep(Duration::from_millis(20));
     }
     let quality = Quality::new(2_000, 30, 1920, 1080).unwrap();
-    host.update_session_quality(session.id, SessionRole::Host, quality)
-        .unwrap();
+    host.update_session_quality(
+        host.snapshot().unwrap().incoming.unwrap().id,
+        SessionRole::Host,
+        quality,
+    )
+    .unwrap();
     assert_eq!(
         host.snapshot().unwrap().incoming.unwrap().quality,
         Some(quality)

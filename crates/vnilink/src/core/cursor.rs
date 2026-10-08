@@ -22,7 +22,7 @@ impl Core {
         let state = self.alive_state()?;
         let session = match role {
             SessionRole::Host => state.incoming.as_ref(),
-            SessionRole::Controller => state.outgoing.as_ref(),
+            SessionRole::Controller => state.outgoing.get(&id),
         };
         let session = session
             .filter(|s| s.id == id && s.phase == SessionPhase::Active)
@@ -58,7 +58,7 @@ impl Core {
         let state = self.alive_state()?;
         let session = state
             .outgoing
-            .as_ref()
+            .get(&id)
             .filter(|s| {
                 s.id == id
                     && s.generation == generation
@@ -66,11 +66,13 @@ impl Core {
                     && s.separate_cursor
             })
             .ok_or(Error::NoSession)?;
-        let stamp = SessionStamp::new(session.id, session.generation);
-        Ok(lock(&self.shared.cursor_inbox)
+        let stamp = session.wire_stamp;
+        let controller = session.controller.as_ref().ok_or(Error::NoSession)?;
+        let result = lock(&controller.cursor)
             .as_ref()
             .filter(|(owner, _)| *owner == stamp)
-            .map(|(_, cursor)| Arc::clone(cursor)))
+            .map(|(_, cursor)| Arc::clone(cursor));
+        Ok(result)
     }
 }
 

@@ -64,6 +64,13 @@ pub enum CoreEvent {
         phase: SessionPhase,
         peer_id: String,
     },
+    /// Local service ownership changed. No payload bytes cross this event.
+    ServiceChanged {
+        service: crate::ServiceInfo,
+    },
+    HostedServiceChanged {
+        service: crate::ServiceInfo,
+    },
     QualityUpdated {
         id: u64,
         quality: Quality,
@@ -85,6 +92,10 @@ pub enum CoreEvent {
     /// The event carries no characters. Clipboard text is not logged.
     ClipboardReceived {
         id: u64,
+    },
+    /// Host text for an exact Desktop owner. Carries no clipboard contents.
+    DesktopClipboardReceived {
+        service: crate::ServiceInfo,
     },
     /// A file was written for this session.
     ///

@@ -13,6 +13,8 @@ pub(crate) struct Device {
     pub relays: Vec<String>,
     pub direct: Vec<SocketAddr>,
     pub grants: Grants,
+    pub terminal: bool,
+    pub camera: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -44,6 +46,47 @@ impl Trust {
         let device = self.devices.get_mut(endpoint_id).ok_or(Error::NotPaired)?;
         device.grants = grants;
         Ok(())
+    }
+
+    pub(crate) fn service_permissions(
+        &self,
+        endpoint_id: &[u8; 32],
+    ) -> Result<crate::ServicePermissions, Error> {
+        let device = self.get(endpoint_id).ok_or(Error::NotPaired)?;
+        Ok(crate::ServicePermissions {
+            desktop: device.grants.control,
+            files: device.grants.transfer,
+            terminal: device.terminal,
+            camera: device.camera,
+        })
+    }
+
+    pub(crate) fn authorize_service(
+        &mut self,
+        endpoint_id: &[u8; 32],
+        kind: crate::ServiceKind,
+        allowed: bool,
+    ) -> Result<(), Error> {
+        let device = self.devices.get_mut(endpoint_id).ok_or(Error::NotPaired)?;
+        match kind {
+            crate::ServiceKind::Desktop => device.grants.control = allowed,
+            crate::ServiceKind::Files => device.grants.transfer = allowed,
+            crate::ServiceKind::Terminal => device.terminal = allowed,
+            crate::ServiceKind::Camera => device.camera = allowed,
+        }
+        Ok(())
+    }
+
+    pub(crate) fn service_granted(&self, endpoint_id: &[u8; 32], kind: crate::ServiceKind) -> bool {
+        let Ok(permissions) = self.service_permissions(endpoint_id) else {
+            return false;
+        };
+        match kind {
+            crate::ServiceKind::Desktop => permissions.desktop,
+            crate::ServiceKind::Files => permissions.files,
+            crate::ServiceKind::Terminal => permissions.terminal,
+            crate::ServiceKind::Camera => permissions.camera,
+        }
     }
 
     pub(crate) fn remove(&mut self, endpoint_id: &[u8; 32]) -> Option<Device> {

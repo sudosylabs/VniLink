@@ -15,6 +15,8 @@ fn control_messages_round_trip() {
             codec: crate::protocol::CODEC_H264,
             quality,
             decode: true,
+            files_only: false,
+            services_only: false,
             hostname: Some("mac-mini".to_string()),
         },
         ControlMessage::Hello {
@@ -22,6 +24,8 @@ fn control_messages_round_trip() {
             codec: crate::protocol::CODEC_H264,
             quality,
             decode: false,
+            files_only: false,
+            services_only: false,
             hostname: None,
         },
         ControlMessage::Hello {
@@ -29,6 +33,8 @@ fn control_messages_round_trip() {
             codec: crate::protocol::CODEC_H264_HIGH,
             quality,
             decode: true,
+            files_only: false,
+            services_only: false,
             hostname: Some("mac-mini".to_string()),
         },
         ControlMessage::Accept {
@@ -97,6 +103,8 @@ fn hello_accept_and_quality_shapes_are_validated() {
         codec: crate::protocol::CODEC_H264,
         quality: Quality::new(2_000, 30, 1920, 1080).unwrap(),
         decode: true,
+        files_only: false,
+        services_only: false,
         hostname: None,
     }
     .encode();
@@ -111,6 +119,8 @@ fn hello_accept_and_quality_shapes_are_validated() {
         codec: crate::protocol::CODEC_H264,
         quality: Quality::new(2_000, 30, 1920, 1080).unwrap(),
         decode: true,
+        files_only: false,
+        services_only: false,
         hostname: None,
     }
     .encode();
@@ -143,12 +153,54 @@ fn hostname_shapes_are_validated() {
         codec: crate::protocol::CODEC_H264,
         quality,
         decode: true,
+        files_only: false,
+        services_only: false,
         hostname,
     };
+    // v5 carries both mode flags (17 bytes base); v4 has one (16), v1-v3 none (15).
     // An invalid name encodes as absent; it never breaks the session.
     let encoded = hello(Some("  ".to_string())).encode();
-    assert_eq!(encoded.len(), 15);
+    assert_eq!(encoded.len(), 17);
     assert_eq!(ControlMessage::decode(&encoded).unwrap(), hello(None));
+    // A v3 desktop Hello omits the flag and still round-trips as files_only=false.
+    let mut v3hello = hello(Some("mac-mini".to_string()));
+    if let ControlMessage::Hello {
+        ref mut version, ..
+    } = v3hello
+    {
+        *version = 3;
+    }
+    let v3encoded = v3hello.encode();
+    assert_eq!(v3encoded.len(), 14 + 1 + "mac-mini".len());
+    let back = ControlMessage::decode(&v3encoded).unwrap();
+    assert!(matches!(
+        back,
+        ControlMessage::Hello {
+            version: 3,
+            files_only: false,
+            services_only: false,
+            ..
+        }
+    ));
+    // Files-only v4 round-trips the flag.
+    let mut files_hello = hello(Some("mac-mini".to_string()));
+    if let ControlMessage::Hello {
+        ref mut files_only, ..
+    } = files_hello
+    {
+        *files_only = true;
+    }
+    let files_encoded = files_hello.encode();
+    let back_files = ControlMessage::decode(&files_encoded).unwrap();
+    assert!(matches!(
+        back_files,
+        ControlMessage::Hello {
+            version: PROTOCOL_VERSION,
+            files_only: true,
+            services_only: false,
+            ..
+        }
+    ));
     // Truncated, overlong, and non-canonical names are malformed.
     let mut truncated = hello(Some("mac-mini".to_string())).encode();
     truncated.pop();
@@ -382,4 +434,48 @@ fn unmapped_errors_become_a_malformed_reject() {
     assert_eq!(error_code(&Error::ClipboardDenied), RejectCode::Malformed);
     assert_eq!(error_code(&Error::TransferDenied), RejectCode::Malformed);
     assert_eq!(error_code(&Error::FileExists), RejectCode::Malformed);
+}
+
+#[test]
+fn neutral_hello_has_a_strict_version_five_mode_flag() {
+    let hello = ControlMessage::Hello {
+        version: 5,
+        codec: crate::CODEC_H264,
+        quality: Quality::new(2000, 30, 1920, 1080).unwrap(),
+        decode: false,
+        files_only: true,
+        services_only: true,
+        hostname: Some("service-host".into()),
+    };
+    let bytes = hello.encode();
+    assert_eq!((bytes[14], bytes[15]), (1, 1));
+    assert_eq!(ControlMessage::decode(&bytes).unwrap(), hello);
+    let mut malformed = bytes.clone();
+    malformed[15] = 2;
+    assert!(matches!(
+        ControlMessage::decode(&malformed),
+        Err(Error::Malformed)
+    ));
+    malformed = bytes.clone();
+    malformed[14] = 0;
+    assert!(matches!(
+        ControlMessage::decode(&malformed),
+        Err(Error::Malformed)
+    ));
+    assert!(matches!(
+        ControlMessage::decode(&bytes[..15]),
+        Err(Error::Malformed)
+    ));
+    for version in [1, 2, 3, 4] {
+        let old = ControlMessage::Hello {
+            version,
+            codec: crate::CODEC_H264,
+            quality: Quality::new(2000, 30, 1920, 1080).unwrap(),
+            decode: false,
+            files_only: version >= 4,
+            services_only: false,
+            hostname: Some("old-host".into()),
+        };
+        assert_eq!(ControlMessage::decode(&old.encode()).unwrap(), old);
+    }
 }

@@ -182,6 +182,8 @@ fn an_announcement_round_trips_and_keeps_grants() {
     );
 
     let mut device = Device {
+        terminal: false,
+        camera: false,
         endpoint_id: [4; 32],
         display_id: "peer".to_string(),
         relays: vec!["https://old.example.com".to_string()],

@@ -13,9 +13,9 @@ pub const MAX_CLIPBOARD_TEXT: usize = 256 * 1024;
 mod frame;
 mod stream;
 
-#[cfg(test)]
 pub(crate) use frame::{check_len, decode, encode, Frame};
 pub(crate) use frame::{check_text, ClipboardRequest, ClipboardSender};
+pub(crate) use frame::{status_code, status_result};
 pub(crate) use stream::{attach, exchange};
 
 /// Applies text on the controlled computer.

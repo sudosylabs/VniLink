@@ -51,13 +51,9 @@ pub(super) async fn peer_addresses(
     (relays, direct)
 }
 
-pub(super) fn remember_link(shared: &Shared, incoming: bool, link: iroh::endpoint::Connection) {
+pub(super) fn remember_link(shared: &Shared, link: iroh::endpoint::Connection) {
     let mut state = lock(&shared.state);
-    let session = if incoming {
-        state.incoming.as_mut()
-    } else {
-        state.outgoing.as_mut()
-    };
+    let session = state.incoming.as_mut();
     if let Some(session) = session {
         session.link = Some(link);
     }
@@ -193,6 +189,34 @@ impl Core {
         Ok(state.trust.hostname_of(&key))
     }
 
+    /// Paths for a controller's local handle, independent of host id collisions.
+    pub fn controller_session_paths(&self, id: u64) -> Result<Vec<SessionPath>, Error> {
+        let link = self
+            .alive_state()?
+            .outgoing
+            .get(&id)
+            .ok_or(Error::NoSession)?
+            .link
+            .clone();
+        Ok(link
+            .map(|link| {
+                link.paths()
+                    .iter()
+                    .map(|path| {
+                        let stats = path.stats();
+                        SessionPath {
+                            relay: path.is_relay(),
+                            selected: path.is_selected(),
+                            rtt_ms: u64::try_from(path.rtt().as_millis()).unwrap_or(u64::MAX),
+                            tx_bytes: stats.udp_tx.bytes,
+                            rx_bytes: stats.udp_rx.bytes,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
     /// Open transport paths of one live session. Empty while the session has
     /// no connection yet. Each entry names whether the path goes through a
     /// relay, whether the connection currently sends there, and the
@@ -205,12 +229,7 @@ impl Core {
                 .incoming
                 .as_ref()
                 .filter(|session| session.id == session_id)
-                .or_else(|| {
-                    state
-                        .outgoing
-                        .as_ref()
-                        .filter(|session| session.id == session_id)
-                })
+                .or_else(|| state.outgoing.get(&session_id))
                 .ok_or(Error::NoSession)?;
             session.link.clone()
         };

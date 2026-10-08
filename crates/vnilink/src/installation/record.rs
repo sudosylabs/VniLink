@@ -13,8 +13,9 @@ use crate::trust::{Device, Trust, MAX_DEVICES};
 
 const MAGIC: &[u8; 4] = b"VNLK";
 /// Version 2 appends the peer hostname section after the devices. Version 1
-/// records still decode, with no names.
-const VERSION: u8 = 2;
+/// records still decode, with no names. Version 3 adds independent Terminal
+/// and Camera grant bits; older records default both to denied.
+const VERSION: u8 = 3;
 const MAX_RECORD_BYTES: usize = 1024 * 1024;
 const MAX_TEXT: usize = 512;
 
@@ -73,7 +74,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Record, Error> {
     if crc32(signed) != checksum
         || signed.len() < 5
         || signed[..4] != *MAGIC
-        || (signed[4] != 1 && signed[4] != VERSION)
+        || !(1..=VERSION).contains(&signed[4])
     {
         return Err(Error::CorruptRecord);
     }
@@ -141,7 +142,11 @@ fn write_devices(out: &mut Vec<u8>, trust: &Trust) -> Result<(), Error> {
         for addr in &device.direct {
             write_addr(out, *addr);
         }
-        out.push(grant_bits(device.grants));
+        out.push(
+            grant_bits(device.grants)
+                | (u8::from(device.terminal) << 3)
+                | (u8::from(device.camera) << 4),
+        );
     }
     Ok(())
 }
@@ -287,7 +292,11 @@ fn read_devices(reader: &mut Reader<'_>, secret: &[u8; 32], version: u8) -> Resu
             }
             direct.push(addr);
         }
-        let grants = grants_from_bits(reader.byte()?)?;
+        let bits = reader.byte()?;
+        if bits & !(if version >= 3 { 31 } else { 7 }) != 0 {
+            return Err(Error::CorruptRecord);
+        }
+        let grants = grants_from_bits(bits & 7)?;
         if trust.get(&endpoint_id).is_some() {
             return Err(Error::CorruptRecord);
         }
@@ -298,6 +307,8 @@ fn read_devices(reader: &mut Reader<'_>, secret: &[u8; 32], version: u8) -> Resu
                 relays,
                 direct,
                 grants,
+                terminal: version >= 3 && bits & 8 != 0,
+                camera: version >= 3 && bits & 16 != 0,
             })
             .map_err(|_| Error::CorruptRecord)?;
     }

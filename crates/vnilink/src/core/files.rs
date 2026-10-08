@@ -133,7 +133,7 @@ pub(super) async fn open_controller_transfer(
         };
     {
         let mut state = lock(&shared.state);
-        if let Some(session) = state.outgoing.as_mut() {
+        if let Some(session) = state.outgoing.get_mut(&session_id) {
             if session.id == session_id {
                 session.transfer = Some(tx);
             }

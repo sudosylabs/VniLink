@@ -195,6 +195,10 @@ impl Core {
                 return Err(error);
             }
             if let Err(error) = state.trust.pair(Device {
+                terminal: previous_device
+                    .as_ref()
+                    .is_some_and(|device| device.terminal),
+                camera: previous_device.as_ref().is_some_and(|device| device.camera),
                 endpoint_id: opened.endpoint_id,
                 display_id: display.clone(),
                 relays: opened.relays.clone(),
@@ -289,6 +293,8 @@ impl Core {
             grants,
         };
         if let Err(error) = state.trust.pair(Device {
+            terminal: previous.as_ref().is_some_and(|device| device.terminal),
+            camera: previous.as_ref().is_some_and(|device| device.camera),
             endpoint_id: pending.endpoint_id,
             display_id: pending.display_id.clone(),
             relays: pending.relays.clone(),

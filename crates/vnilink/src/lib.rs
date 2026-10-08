@@ -78,16 +78,20 @@ mod codec;
 mod core;
 mod error;
 mod events;
+pub mod fs;
 mod hostname;
 mod input;
 mod installation;
 mod invitation;
+pub mod job;
 mod keyboard;
+mod manifest;
 mod os_input;
 mod pairing;
 mod protocol;
 mod reconnect;
 mod relay;
+mod service;
 mod session;
 mod sidestream;
 mod transfer;
@@ -95,21 +99,37 @@ mod trust;
 mod video;
 
 pub use clipboard::{HostClipboard, MAX_CLIPBOARD_TEXT};
+pub use core::service_stream::RemoteFilesService;
+pub use core::DesktopInfo;
+pub use core::RemoteDesktopService;
 pub use core::{
     ControlRequest, Core, CoreConfig, DeviceInfo, Listen, OpenConfig, SessionPath, Snapshot,
+    BLOB_ALPN, BLOB_MAX_BYTES,
 };
 pub use error::Error;
 pub use events::{CoreEvent, EventSubscription};
+pub use fs::{
+    DirPage, EntryKind, EntryToken, FsEntry, RevisionGate, MAX_LISTED, MAX_PAGE, MAX_ROOTS,
+};
 pub use hostname::{clean_hostname, local_hostname};
 pub use input::{map_point, usage, HostDesktop, InputEvent, PointerButton, MAX_KEY_TEXT};
 pub use installation::{InstallationStore, MemoryStore};
+pub use job::{ConflictChoice, JobDirection, JobSnapshot, JobState};
 pub use keyboard::{KeyboardMode, LocalKey};
+pub use manifest::{
+    keep_both_name, Manifest, ManifestEntry, MAX_MANIFEST_BYTES, MAX_MANIFEST_DEPTH,
+    MAX_MANIFEST_FILES, MAX_MANIFEST_FILE_BYTES,
+};
 pub use os_input::{linux_evdev_keycode, OsInput};
 pub use pairing::{PairingFile, PairingPreview, PAIRING_FILE_EXTENSION};
 pub use protocol::{
     Capabilities, Quality, CODEC_H264, CODEC_H264_HIGH, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION,
 };
 pub use relay::{CustomRelay, RelaySettings};
+pub use service::{
+    ServiceInfo, ServiceKind, ServiceLease, ServicePermissions, ServicePhase, ServiceSupport,
+    MAX_SERVICE_RECORDS,
+};
 pub use session::{
     negotiate_codec, suggest_quality, Grants, SessionInfo, SessionPhase, SessionRole,
 };

@@ -61,6 +61,8 @@ fn the_record_roundtrips_trust_relay_credentials_and_replay() {
     let mut trust = Trust::default();
     trust
         .pair(Device {
+            terminal: false,
+            camera: false,
             endpoint_id: *peer_key.public().as_bytes(),
             display_id: peer_key.public().to_string(),
             relays: vec![relay_url.clone()],
@@ -100,6 +102,8 @@ fn the_record_roundtrips_trust_relay_credentials_and_replay() {
     for _ in 0..128 {
         let peer_key = SecretKey::generate();
         many.pair(Device {
+            terminal: false,
+            camera: false,
             endpoint_id: *peer_key.public().as_bytes(),
             display_id: peer_key.public().to_string(),
             relays: Vec::new(),
@@ -351,4 +355,56 @@ fn push_device(
         }
     }
     out.push(grants);
+}
+
+#[test]
+fn service_permissions_migrate_old_records_with_new_grants_denied() {
+    let owner = SecretKey::generate();
+    let peer = SecretKey::generate();
+    let mut trust = Trust::default();
+    trust
+        .pair(Device {
+            endpoint_id: *peer.public().as_bytes(),
+            display_id: peer.public().to_string(),
+            relays: vec![],
+            direct: vec![],
+            grants: all_grants(),
+            terminal: true,
+            camera: true,
+        })
+        .unwrap();
+    let current = installation::encode(
+        &owner.to_bytes(),
+        &RelaySettings::public_n0(),
+        &trust,
+        &ReplayCache::new(),
+    )
+    .unwrap();
+    assert_eq!(current[4], 3);
+    let decoded = installation::decode(&current).unwrap();
+    assert!(decoded.trust.devices().next().unwrap().terminal);
+    assert!(decoded.trust.devices().next().unwrap().camera);
+    // V2 layout is unchanged, but its reserved bits must stay zero. Historical
+    // control/clipboard/files grants cannot imply terminal or camera access.
+    let mut old = current.clone();
+    old[4] = 2;
+    // 5-byte header + secret32 + public relay1 + count2 + key32 + relay/address counts2.
+    let grant_offset = 5 + 32 + 1 + 2 + 32 + 2;
+    old[grant_offset] &= 7;
+    resign(&mut old);
+    let restored = installation::decode(&old).unwrap();
+    let device = restored.trust.devices().next().unwrap();
+    assert_eq!(device.grants, all_grants());
+    assert!(!device.terminal && !device.camera);
+    old[grant_offset] |= 8;
+    resign(&mut old);
+    reject(&old);
+    let mut unknown = current;
+    unknown[grant_offset] |= 32;
+    resign(&mut unknown);
+    reject(&unknown);
+    let payload = device_payload(&owner.to_bytes(), peer.public().as_bytes(), 7, &[], &[]);
+    let restored = installation::decode(&installation::frame(&payload)).unwrap();
+    let device = restored.trust.devices().next().unwrap();
+    assert!(!device.terminal && !device.camera);
 }

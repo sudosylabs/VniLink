@@ -6,6 +6,8 @@ fn device(byte: u8) -> Device {
     let mut endpoint_id = [0u8; 32];
     endpoint_id[0] = byte;
     Device {
+        terminal: false,
+        camera: false,
         endpoint_id,
         display_id: format!("{byte}"),
         relays: Vec::new(),

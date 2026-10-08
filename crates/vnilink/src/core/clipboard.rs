@@ -13,18 +13,23 @@ impl Core {
     /// Installs the adapter that receives clipboard text on this host.
     ///
     /// The library does not read or write the operating-system clipboard.
-    /// Refused while a controlling session is active.
+    /// An idle neutral connection may configure it before Desktop Open.
     pub fn set_clipboard(&self, clipboard: Box<dyn HostClipboard>) -> Result<(), Error> {
+        let mut slot = lock(&self.shared.clipboard);
         let state = self.alive_state()?;
         if state
             .incoming
             .as_ref()
-            .is_some_and(|session| !finished(&session.phase))
+            .is_some_and(|session| !finished(&session.phase) && !session.services_only)
         {
             return Err(Error::Busy);
         }
-        drop(state);
-        *lock(&self.shared.clipboard) = Some(clipboard);
+        let _gate = self
+            .shared
+            .desktop_gate
+            .try_lock()
+            .map_err(|_| Error::Busy)?;
+        *slot = Some(clipboard);
         self.shared
             .clipboard_available
             .store(true, std::sync::atomic::Ordering::Release);
@@ -79,7 +84,30 @@ impl Core {
     /// not queued. Do not log the returned string.
     pub fn clipboard_text(&self) -> Result<Option<String>, Error> {
         self.ensure_alive()?;
-        Ok(lock(&self.shared.clipboard_inbox).clone())
+        let state = self.alive_state()?;
+        if state
+            .outgoing
+            .values()
+            .filter(|s| !finished(&s.phase))
+            .count()
+            > 1
+        {
+            return Err(Error::Busy);
+        }
+        Ok(state
+            .single_outgoing()
+            .and_then(|s| s.controller.as_ref())
+            .and_then(|c| lock(&c.clipboard).clone()))
+    }
+    /// Latest clipboard for this exact active controller generation.
+    pub fn session_clipboard_text(
+        &self,
+        id: u64,
+        generation: u64,
+    ) -> Result<Option<String>, Error> {
+        let controller = self.controller_state(id, generation)?;
+        let text = lock(&controller.clipboard).clone();
+        Ok(text)
     }
 }
 
@@ -92,6 +120,12 @@ pub(super) async fn open_controller_clipboard(
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let (opened_tx, opened_rx) = tokio::sync::oneshot::channel();
     let shared_text = Arc::clone(shared);
+    let controller = lock(&shared.state)
+        .outgoing
+        .get(&session_id)
+        .and_then(|s| s.controller.clone())
+        .ok_or(Error::NoSession)?;
+    *lock(&controller.clipboard) = None;
     let connection = iroh::endpoint::Connection::clone(connection);
     let stop_rx = tokio::sync::watch::Receiver::clone(stop_rx);
     let task = tokio::spawn(async move {
@@ -102,7 +136,7 @@ pub(super) async fn open_controller_clipboard(
             stop_rx,
             Some(opened_tx),
             move |text| {
-                *lock(&shared_text.clipboard_inbox) = Some(text.to_owned());
+                *lock(&controller.clipboard) = Some(text.to_owned());
                 shared_text
                     .events
                     .publish(CoreEvent::ClipboardReceived { id: session_id });
@@ -122,13 +156,12 @@ pub(super) async fn open_controller_clipboard(
         };
     {
         let mut state = lock(&shared.state);
-        if let Some(session) = state.outgoing.as_mut() {
+        if let Some(session) = state.outgoing.get_mut(&session_id) {
             if session.id == session_id {
                 session.clipboard = Some(tx);
             }
         }
     }
-    *lock(&shared.clipboard_inbox) = None;
     Ok(task)
 }
 
