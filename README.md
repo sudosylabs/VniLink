@@ -19,6 +19,35 @@ The [implementation handoff](docs/handoffs/file-transfer-implementation.md)
 provides the build sequence, acceptance tests, Linux Docker workflow and
 RustDesk comparison checklist for the agent implementing this feature.
 
+The [service ownership foundation](docs/architecture/services.md) separates
+local service handles and cancellation from peer connections. It is the first
+layer for independent desktop, files, terminal and camera services; terminal
+and camera backends are not implemented yet. Versioned service negotiation
+and an independently owned remote Files browsing/rename stream are implemented;
+native desktop and file-manager ownership migration remains.
+Files-owned transfer jobs now reuse the referenced-blob engine with scoped
+admission and cancellation on both computers; native migration is still pending.
+Independent Terminal/Camera permissions now persist with default-denied
+migration; granting them does not enable the pending backends. Paired neutral
+connections now use protocol v5 without desktop/file permissions, and service
+Open checks its own grant. Native flows have not migrated to that connection
+mode. See its [validation results](docs/validation/services.md).
+An explicit Desktop service handle can adopt an existing desktop session;
+closing it releases held input and stops that session's media while Files and
+the connection remain active. Neutral connections now support independently
+opening, closing and reopening Desktop with scoped input, video and cursor
+queues. The shared capture helper publishes against a Desktop instance rather
+than its parent connection. Mac capture resources now open per Desktop instance,
+and a service-owned Mac decoder API and Linux encoder path are available.
+Native controller callers and Linux portal-grant ownership still need migration.
+Each Desktop now owns its keyboard planner, mode, modifier swap and held input;
+focus-loss releases are ordered before new keys. Each Desktop also owns a bounded,
+acknowledged clipboard pipe. The Files handle exposes an owner-scoped transfer
+queue, including conflict controls and cleanup. Native file-manager windows now
+use those owners for browsing and transfers. Desktop Files actions and external
+drops now use that queue; drops select an approved item before explicit Send.
+Native clipboard hooks must migrate before tabs switch to neutral connections.
+
 **Status:** implementation started October 1, 2026. `crates/vnilink` is a shared control library pinned to iroh 1.3.0 (Rust 1.91). It owns installation identity, public or custom relay selection, signed invitations, directional grants, one control session per host, and keyboard and pointer input. `cargo test -p vnilink` passes, including two cores on loopback. An authorized controller can send key, button, wheel, and pointer events. The host applies them when it calls `enable_os_input`. Pointer positions collapse to the latest sample. Held keys and buttons are released when the session ends. With an `InstallationStore`, a restart keeps the endpoint id, paired devices, grants, used invitations, and relay settings. The library does not open Keychain, DPAPI, or Secret Service. `Core::start` without a store still keeps that state only for the process. Custom relay mode does not publish through n0 address lookup. The library carries encoded H.264 frames over QUIC datagrams with a reliable-stream fallback and drops predicted frames until the next keyframe. Protocol version 2 negotiates H.264 High profile (CABAC and decoder support for 8x8 transforms) and falls back to a version-1 Baseline hello for older hosts. `vnilink-media` paces BGRA pictures and requires an Annex-B keyframe to carry SPS, PPS, and an IDR. `vnilink-macos` encodes and decodes a synthetic picture with VideoToolbox. Its tests build a one-monitor ScreenCaptureKit configuration and do not start capture or record the screen. `vnilink-windows` describes one interactive-desktop monitor and excludes the secure desktop; Desktop Duplication and Media Foundation compile only as Windows code. `vnilink-linux` keeps X11 and the Wayland portal separate. On Linux, H.264 encode opens VA-API High profile when the session negotiates it, else Constrained Baseline, on the first DRM render node that offers it and returns Annex-B; a machine where no render node offers that entrypoint still reports that VA-API is unavailable. The portal path reads one monitor from the PipeWire node it is given, as BGRA or BGRx. The live portal negotiates shared-memory buffers and refuses DMA-BUF delivery after an observed Mesa GBM-unmap abort. Tests do not open the portal or an X server. A test run on macOS does not execute the Windows or Linux capture paths. Pairing starts from a `.vnl` file one computer writes and the other opens. The file holds a signed invitation. The opener types the three digits shown on the writer's screen, and the writer types the controller's digits when Connect starts. No pairing server is required. A dropped control session dials the saved device again with a new generation and does not replay the old input. While a session is up, each side stores the other's current home relay and direct addresses. Clipboard text is a separate grant, limited to 256 KiB, and the library does not read the operating-system clipboard. File transfer is a separate grant: at most 8 MiB, a relative path inside a directory chosen for that installation, and no replace unless the sender asks. The default keyboard mode inserts the character the controller's operating system produced, so a typed `@` arrives as `@`. Map mode sends the physical key, and Translate mode asks a Linux host to press the chord in its X11 layout. Windows and macOS hosts refuse Translate. Tests do not open an X server for that lookup. Left and right modifiers stay distinct. The controller can exchange Control and Command, and it can send finished text of at most 128 bytes separately from the clipboard. The GNOME application in `linux/` keeps the installation record in the session keyring. This computer creates a `.vnl` pairing file and shows the three digits; another computer opens that file, types the digits, and connects. The computer that shared the file types the controller's digits to allow control. The Linux application now wires screen selection, VA-API decode, a remote desktop window, settings, and input to the shared core. GTK tests render synthetic pixels and exercise settings persistence; a real two-machine desktop session is still unverified. There is no deployment or measured remote desktop. The gates in section 11 are not complete. FileVault preboot, the Windows secure desktop, and a universal Wayland session are not claimed. Sections below still describe the product to build except where they name this library or these crates.
 
 ## 1. Product requirements and decision status
