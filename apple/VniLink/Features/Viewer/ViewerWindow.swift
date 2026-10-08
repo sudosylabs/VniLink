@@ -19,40 +19,74 @@ enum DesktopSizing: Int {
     @Published var code: String?
     @Published var controlling = true
     @Published var notice: String?
-    @Published private(set) var sendingFile = false
+    let id = UUID()
     let name: String
+    let deviceId: String
+    private var sessionId: UInt64?
+    private var sessionTimer: Timer?
     private let core: VnilinkCore
+    private var filesWindow: FilesWindowController?
     private let videoQueue = DispatchQueue(label: "com.vnilink.viewer.video", qos: .userInitiated)
     private let inputQueue = DispatchQueue(label: "com.vnilink.viewer.input", qos: .userInteractive)
     private let connectionQueue = DispatchQueue(label: "com.vnilink.viewer.connection", qos: .userInitiated)
-    private let transferQueue = DispatchQueue(label: "com.vnilink.viewer.transfer", qos: .userInitiated)
     private let interruptQueue = DispatchQueue(label: "com.vnilink.viewer.interrupt", qos: .userInteractive)
     private var displayLink: CADisplayLink?
     private var poller: MacViewer?
     private var updating = false
     private var closed = false
+    private var visible = false
     private var epoch: UInt64 = 0
     private var decodingGeneration: UInt64?
     private var pendingInput = 0
     private var nextSessionCheck = 0.0
 
-    init(core: VnilinkCore, device: FfiDeviceInfo) {
-        self.core = core; name = device.name
+    init(core: VnilinkCore, device: FfiDeviceInfo, preview: Bool = false) {
+        self.core = core; name = device.name; deviceId = device.id
         super.init()
+        if preview {
+            status = "Disconnected"; failure = "Preview session"; notice = "Preview only · no remote connection"; controlling = false
+            return
+        }
         connectionQueue.async {
-            let result = Result { try core.connect(endpointId: device.id) }
-            DispatchQueue.main.async {
-                guard !self.closed else { return }
-                if case .failure(let error) = result { self.failure = AppModel.message(error); self.status = "Connection failed" }
+            let result = Result {
+                // A files-only connection cannot supply a desktop. Replace only
+                // this peer's connection, retaining other computers' sessions.
+                if let existing = try core.controllerSessions().first(where: { $0.peerId == device.id && $0.phase != .closed && !$0.phase.isFailed }) {
+                    try core.disconnectSession(sessionId: existing.id)
+                    for _ in 0..<100 {
+                        let current = try core.controllerSession(sessionId: existing.id)
+                        if current.phase == .closed || current.phase.isFailed { break }
+                        Thread.sleep(forTimeInterval: 0.02)
+                    }
+                    try? core.forgetControllerSession(sessionId: existing.id)
+                }
+                return try core.beginConnect(endpointId: device.id)
             }
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let session):
+                    self.sessionId = session.id
+                    if self.closed { self.cleanup(session.id) }
+                    else { self.session = session; self.update() }
+                case .failure(let error):
+                    if !self.closed { self.failure = AppModel.message(error); self.status = "Connection failed" }
+                }
+            }
+        }
+        // Session ownership outlives the selected page and its display link.
+        sessionTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.update() }
         }
     }
     func startUpdates(in view: NSView) {
+        guard !closed else { return }
+        pausePresentation()
         let link = view.displayLink(target: self, selector: #selector(displayTick(_:)))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
         link.add(to: .main, forMode: .common)
         displayLink = link
     }
+    func pausePresentation() { displayLink?.invalidate(); displayLink = nil }
     @objc private func displayTick(_ link: CADisplayLink) {
         guard !closed else { return }
         if let update = poller?.pollCursor() { cursorRevision &+= 1; cursor = update }
@@ -70,19 +104,24 @@ enum DesktopSizing: Int {
         guard !closed else { return }
         guard !updating else { return }
         updating = true
+        guard let sessionId else { updating = false; return }
         let epoch = epoch
         let poller = poller
         videoQueue.async {
-            let result = Result { (try self.core.snapshot().outgoing, self.core.controlCheck(), poller?.error()) }
+            let result = Result { (try self.core.controllerSession(sessionId: sessionId), self.core.controlCheck(), poller?.error()) }
             DispatchQueue.main.async {
                 self.updating = false
                 guard !self.closed, self.epoch == epoch else { return }
                 switch result {
                 case .failure(let error): self.failure = AppModel.message(error)
                 case .success(let data):
-                    self.session = data.0; self.code = data.0?.phase == .active ? nil : data.1
+                    self.session = data.0
+                    switch data.0.phase {
+                    case .connecting, .authenticated, .authorized, .negotiating: self.code = data.1
+                    default: self.code = nil
+                    }
                     if let error = data.2 { self.failure = error }
-                    guard let session = data.0 else { return }
+                    let session = data.0
                     self.status = Self.label(session.phase)
                     if session.phase == .active {
                         if self.decodingGeneration != session.generation {
@@ -121,7 +160,7 @@ enum DesktopSizing: Int {
         videoQueue.async { old?.stop() }
     }
     func send(release: Bool = false, _ operation: @escaping (VnilinkCore, FfiSessionInfo) throws -> Void) {
-        guard !closed, (controlling || release), let session, session.phase == .active else { return }
+        guard !closed, ((controlling && visible) || release), let session, session.phase == .active else { return }
         guard pendingInput < 128 else { failure = "Input fell behind. Reconnect to continue."; close(); return }
         pendingInput += 1
         inputQueue.async {
@@ -129,6 +168,10 @@ enum DesktopSizing: Int {
             DispatchQueue.main.async {
                 self.pendingInput -= 1
                 if case .failure(let error) = result, !self.closed {
+                    // A reconnect can invalidate already queued input. Discard
+                    // it rather than closing the replacement connection.
+                    if case FfiError.StaleSession = error { return }
+                    if case FfiError.NoSession = error { return }
                     self.failure = AppModel.message(error); self.close()
                 }
             }
@@ -168,34 +211,55 @@ enum DesktopSizing: Int {
             }
         }
     }
-    func sendFile() {
-        guard session?.phase == .active, !sendingFile else { return }
-        let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url {
-            sendFile(url)
-        }
-    }
     func sendFile(_ url: URL) {
-        guard let session, session.phase == .active, !sendingFile else { return }
-        sendingFile = true; notice = "Sending \(url.lastPathComponent)…"
-        transferQueue.async {
-            let result = Result { try self.core.submitFile(sessionId: session.id, generation: session.generation,
-                name: url.lastPathComponent, bytes: DesktopFiles.read(url), replace: false) }
-            DispatchQueue.main.async {
-                self.sendingFile = false
-                guard !self.closed else { return }
-                switch result {
-                case .success: self.notice = "\(url.lastPathComponent) received by \(self.name)."
-                case .failure(let error): self.notice = AppModel.message(error)
-                }
+        guard session?.phase == .active else { return }
+        openFiles()
+        filesWindow?.selectUpload(url)
+    }
+    func openFiles() {
+        if let filesWindow, filesWindow.window?.isVisible == true {
+            filesWindow.window?.makeKeyAndOrderFront(nil)
+            return
+        }
+        let files = FilesWindowController.open(core: core, session: { [weak self] in self?.session }, peerId: deviceId, localName: Host.current().localizedName ?? "This Mac", remoteName: name)
+        filesWindow = files
+        files.showWindow(nil)
+        files.window?.makeKeyAndOrderFront(nil)
+    }
+    func setVisible(_ visible: Bool) {
+        guard self.visible != visible else { return }
+        self.visible = visible
+        if !visible { releaseInput() }
+    }
+    func releaseInput() {
+        guard !closed, let session, session.phase == .active else { return }
+        inputQueue.async {
+            // Run after previously queued key/button events; retry a busy core queue.
+            for _ in 0..<20 {
+                do { try self.core.releaseSessionInput(sessionId: session.id, generation: session.generation); return }
+                catch FfiError.Busy { Thread.sleep(forTimeInterval: 0.01) }
+                catch { return }
             }
         }
     }
     func close() {
         guard !closed else { return }
-        closed = true; displayLink?.invalidate(); displayLink = nil; stopDecoder(); status = "Disconnected"; code = nil; session = nil
-        // Separate from connect's blocking worker so Cancel works during approval.
-        interruptQueue.async { try? self.core.disconnect() }
+        closed = true; filesWindow?.close(); filesWindow = nil; sessionTimer?.invalidate(); sessionTimer = nil
+        displayLink?.invalidate(); displayLink = nil; stopDecoder(); status = "Disconnected"; code = nil; session = nil
+        if let sessionId { cleanup(sessionId) }
+        // A still-pending beginConnect result performs its own cleanup above.
+    }
+    private func cleanup(_ id: UInt64) {
+        interruptQueue.async {
+            try? self.core.disconnectSession(sessionId: id)
+            for _ in 0..<100 {
+                guard let session = try? self.core.controllerSession(sessionId: id) else { return }
+                switch session.phase {
+                case .closed, .failed: try? self.core.forgetControllerSession(sessionId: id); return
+                default: Thread.sleep(forTimeInterval: 0.05)
+                }
+            }
+        }
     }
     static func image(_ frame: MacFrame) -> CGImage? {
         let buffer = frame.buffer()
@@ -230,76 +294,15 @@ enum DesktopSizing: Int {
     }
 }
 
-@MainActor final class ViewerWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate, NSToolbarItemValidation {
-    let model: ViewerModel
-    init(core: VnilinkCore, device: FfiDeviceInfo) {
-        model = ViewerModel(core: core, device: device)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 740),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = device.name
-        window.acceptsMouseMovedEvents = true
-        window.minSize = NSSize(width: 640, height: 420)
-        let content = NSHostingView(rootView: ViewerContent(model: model))
-        window.contentView = content
-        model.startUpdates(in: content)
-        window.isReleasedWhenClosed = false
-        window.collectionBehavior = [.fullScreenPrimary]
-        super.init(window: window)
-        window.delegate = self
-        let toolbar = NSToolbar(identifier: "Desktop")
-        toolbar.delegate = self; toolbar.displayMode = .iconOnly
-        window.toolbar = toolbar; window.toolbarStyle = .unified
-        window.center()
+@MainActor final class ViewerPageController: NSHostingController<ViewerContent> {
+    private let model: ViewerModel
+    init(model: ViewerModel) {
+        self.model = model
+        super.init(rootView: ViewerContent(model: model))
     }
-    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
-    func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
-        switch item.itemIdentifier.rawValue {
-        case "clipboard": return model.session?.phase == .active
-        case "file": return model.session?.phase == .active && !model.sendingFile
-        case "disconnect": return model.status != "Disconnected"
-        default: return true
-        }
-    }
-    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.init("sizing"), .init("clipboard"), .init("file"), .flexibleSpace, .init("fullscreen"), .init("disconnect")]
-    }
-    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        let item = NSToolbarItem(itemIdentifier: identifier)
-        item.target = self
-        switch identifier.rawValue {
-        case "sizing":
-            let popup = NSPopUpButton(frame: .zero, pullsDown: true)
-            popup.addItem(withTitle: "Display size")
-            for (title, mode) in [("Fit to window", DesktopSizing.fit), ("Actual size (1:1 pixels)", .actualSize)] {
-                popup.addItem(withTitle: title)
-                popup.lastItem?.tag = mode.rawValue
-                popup.lastItem?.state = mode == model.sizing ? .on : .off
-                popup.lastItem?.target = self
-                popup.lastItem?.action = #selector(changeSizing(_:))
-            }
-            item.view = popup; item.label = "Display size"
-        case "clipboard": item.label = "Send clipboard text"; item.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: item.label); item.action = #selector(sendClipboard)
-        case "file": item.label = "Send file"; item.image = NSImage(systemSymbolName: "document.badge.arrow.up", accessibilityDescription: item.label); item.action = #selector(sendFile)
-        case "fullscreen": item.label = "Full screen"; item.image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: item.label); item.action = #selector(fullscreen)
-        case "disconnect": item.label = "Disconnect"; item.image = NSImage(systemSymbolName: "xmark.circle", accessibilityDescription: item.label); item.action = #selector(disconnect)
-        default: return nil
-        }
-        item.toolTip = item.label
-        return item
-    }
-    @objc private func changeSizing(_ item: NSMenuItem) {
-        guard let mode = DesktopSizing(rawValue: item.tag) else { return }
-        model.sizing = mode
-        for entry in item.menu?.items ?? [] where entry.action == #selector(changeSizing(_:)) {
-            entry.state = entry.tag == mode.rawValue ? .on : .off
-        }
-    }
-    @objc private func sendClipboard() { model.sendClipboard() }
-    @objc private func sendFile() { model.sendFile() }
-    @objc private func fullscreen() { window?.toggleFullScreen(nil) }
-    @objc private func disconnect() { model.close() }
-    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
-    func windowWillClose(_ notification: Notification) { model.close() }
+    @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+    override func viewDidAppear() { super.viewDidAppear(); model.setVisible(true); model.startUpdates(in: view) }
+    override func viewDidDisappear() { model.setVisible(false); model.pausePresentation(); super.viewDidDisappear() }
 }
 
 struct ViewerContent: View {
@@ -427,7 +430,7 @@ final class DesktopView: NSView {
     }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { controlling }
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard model.session?.phase == .active, !model.sendingFile,
+        guard model.session?.phase == .active,
               let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], urls.count == 1 else { return [] }
         return .copy
     }
@@ -580,6 +583,9 @@ final class DesktopView: NSView {
     }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard controlling, window?.firstResponder === self, event.modifierFlags.contains(.command) else { return false }
+        // Tab/window navigation remains local even when the desktop has focus.
+        let character = event.charactersIgnoringModifiers?.lowercased()
+        if character == "w" || (event.modifierFlags.contains(.shift) && ["[", "]", "{", "}"].contains(character ?? "")) { return false }
         keyDown(with: event); return true
     }
     private func sendKey(_ key: DesktopKey, release: Bool = false) {

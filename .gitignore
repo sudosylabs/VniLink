@@ -3,6 +3,7 @@ assets/**
 /apple/.generated/
 /apple/Local.xcconfig
 /apple/.build/
+/apple/.build-xcode/
 /apple/VnilinkCore/.build/
 /apple/VnilinkCore/.swiftpm/
 /apple/*.xcodeproj/

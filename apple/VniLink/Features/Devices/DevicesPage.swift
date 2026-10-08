@@ -78,7 +78,11 @@ struct DeviceInspector: View {
                         Text(hostname).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                     }
                 }.padding(.vertical, 4)
-                Button("Connect") { model.connect(device) }.buttonStyle(.borderedProminent)
+                HStack {
+                    Button("Connect") { model.connect(device) }.buttonStyle(.borderedProminent)
+                    Button("Files…") { model.openFiles(device) }
+                        .help("Browse both computers and copy files without opening the desktop viewer or requiring screen sharing.")
+                }
             }
             Section("Name on this Mac") {
                 TextField("Local name", text: $name)

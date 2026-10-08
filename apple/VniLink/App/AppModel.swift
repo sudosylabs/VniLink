@@ -15,7 +15,7 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
     @Published var snapshot: FfiSnapshot?
     @Published var error: String?
     @Published var notice: String?
-    @Published private(set) var isPreview = ProcessInfo.processInfo.arguments.contains("--preview")
+    @Published private(set) var isPreview = (ProcessInfo.processInfo.arguments.contains("--preview") || Bundle.main.bundleIdentifier == "com.vnilink.tabs-preview")
     @Published var destination: AppSection = .devices
     @Published var selectedDeviceID: String?
     @Published var adding = false
@@ -29,12 +29,29 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
     @Published var changingSharing = false
     @Published var inputEnabled = false
     @Published private(set) var receiveFolder = UserDefaults.standard.url(forKey: "receiveFolder") ?? DesktopFiles.defaultFolder
+    @Published private(set) var fileRoots = AppModel.defaultFileRoots
+    static var blobDirectory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("VniLink/blobstore", isDirectory: true)
+    }
+    /// Folders the Files window may browse on this Mac. Starts empty so
+    /// nothing is browsable until the owner deliberately chooses folders
+    /// in Settings; a receive-directory grant never widens into
+    /// whole-filesystem access. Shown verbatim there, never logged.
+    static var fileRoots: [String] { defaultFileRoots }
+    private static var defaultFileRoots: [String] {
+        let saved = UserDefaults.standard.stringArray(forKey: "fileRoots")
+        guard let saved else { return [] }
+        return saved
+    }
     private var events: EventPoller?
     private var lastRemoteClipboard: String?
     private var clipboardSession: String?
     private var sendingClipboard = false
     private let clipboardQueue = DispatchQueue(label: "com.vnilink.clipboard", qos: .userInitiated)
     private let transferQueue = DispatchQueue(label: "com.vnilink.transfer", qos: .userInitiated)
+    private let jobWorker = DispatchQueue(label: "com.vnilink.jobs", qos: .userInitiated)
+    private var drivingJobs = false
     @Published private(set) var sendingHostFile = false
     private var host: MacHost?
     private var cursorTimer: Timer?
@@ -113,17 +130,85 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
     private var refreshing = false
     private var starting = false
     private var pendingFile: URL?
-    private var viewerWindow: ViewerWindowController?
+    @Published private(set) var viewerTabs: [ViewerModel] = []
+    @Published var selectedTab: UUID?
+    @Published private(set) var controllerSessions: [FfiSessionInfo] = []
+
+    func showHome() { selectedTab = nil }
+    func selectAdjacentTab(_ offset: Int) {
+        let ids: [UUID?] = [nil] + viewerTabs.map { Optional($0.id) }
+        let index = ids.firstIndex(of: selectedTab) ?? 0
+        selectedTab = ids[(index + offset + ids.count) % ids.count]
+    }
+    func closeTab(_ id: UUID) {
+        guard let index = viewerTabs.firstIndex(where: { $0.id == id }) else { return }
+        let tab = viewerTabs.remove(at: index)
+        tab.close()
+        if selectedTab == id { selectedTab = index > 0 ? viewerTabs[index - 1].id : nil }
+    }
+    private func closeAllTabs() {
+        for tab in viewerTabs { tab.close() }
+        viewerTabs.removeAll(); selectedTab = nil
+    }
+    private var filesWindows: [String: FilesWindowController] = [:]
 
     func connect(_ device: FfiDeviceInfo) {
         guard let core else { return }
-        if let viewerWindow, viewerWindow.window?.isVisible == true {
-            viewerWindow.window?.makeKeyAndOrderFront(nil)
+        if let existing = viewerTabs.first(where: { $0.deviceId == device.id }) {
+            if existing.session?.phase == .closed || existing.session?.phase.isFailed == true || existing.failure != nil && existing.session == nil {
+                closeTab(existing.id)
+            } else {
+                selectedTab = existing.id
+                return
+            }
+        }
+        let viewer = ViewerModel(core: core, device: device)
+        viewerTabs.append(viewer); selectedTab = viewer.id
+    }
+
+    /// Opens Files without the desktop viewer and without host screen sharing:
+    /// reuses the live control session for this peer when present, otherwise
+    /// establishes one for file roots/listings/transfers only.
+    func openFiles(_ device: FfiDeviceInfo) {
+        guard let core else { return }
+        if let existing = filesWindows[device.id], existing.window?.isVisible == true {
+            existing.window?.makeKeyAndOrderFront(nil)
             return
         }
-        viewerWindow = ViewerWindowController(core: core, device: device)
-        viewerWindow?.showWindow(nil)
-        viewerWindow?.window?.makeKeyAndOrderFront(nil)
+        // Establish the control session for files when none targets this peer.
+        // Files-only: no video decoder or host screen sharing required
+        // (Transfer grant suffices; Control not required).
+        worker.async {
+            let result = Result { () -> Void in
+                let sessions = try core.controllerSessions()
+                if !sessions.contains(where: { $0.peerId == device.id && $0.phase != .closed && !$0.phase.isFailed }) {
+                    _ = try core.beginConnectFiles(endpointId: device.id)
+                }
+            }
+            DispatchQueue.main.async {
+                switch result {
+                case .success: self.showFiles(device)
+                case .failure(let error): self.error = Self.message(error)
+                }
+            }
+        }
+    }
+
+    private func showFiles(_ device: FfiDeviceInfo) {
+        guard let core else { return }
+        let name = device.name
+        let controller = FilesWindowController.open(
+            core: core,
+            session: { [weak self] in
+                self?.controllerSessions.first { $0.phase == .active && $0.peerId == device.id }
+            },
+            peerId: device.id,
+            localName: Host.current().localizedName ?? "This Mac",
+            remoteName: name
+        )
+        filesWindows[device.id] = controller
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
     }
 
     func start() {
@@ -144,6 +229,8 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
                     try core.prepareMacVideo()
                     try core.installClipboard(writer: clipboard)
                     try core.setTransferDirectory(path: receiveFolder.path)
+                    try core.setBlobDirectory(path: Self.blobDirectory.path)
+                    try core.setFileRoots(paths: Self.fileRoots)
                     try core.setKeyboardMode(mode: savedKeyboardMode)
                     try core.setSwapControlAndCommand(enabled: savedSwap)
                 } catch { core.shutdown(); throw error }
@@ -167,12 +254,21 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
                         if background.resumeInput && AXIsProcessTrusted() { self.enableInput() }
                     }
                     if let url = self.pendingFile { self.pendingFile = nil; self.importFile(url) }
-                    if previewMode { self.notice = nil }
+                    if previewMode {
+                        self.notice = nil
+                        if (ProcessInfo.processInfo.arguments.contains("--preview-tabs") || Bundle.main.bundleIdentifier == "com.vnilink.tabs-preview"), let device = try? core.snapshot().devices.first {
+                            for name in ["Linux laptop", "Mac mini"] {
+                                var preview = device; preview.petName = name
+                                self.viewerTabs.append(ViewerModel(core: core, device: preview, preview: true))
+                            }
+                            self.selectedTab = self.viewerTabs.first?.id
+                        }
+                    }
                     self.refresh()
                     self.scheduleRefresh()
                 case .failure(let error):
                     self.error = Self.message(error)
-                    if ProcessInfo.processInfo.arguments.contains("--preview") { NSLog("VniLink preview startup: %@", Self.message(error)) }
+                    if (ProcessInfo.processInfo.arguments.contains("--preview") || Bundle.main.bundleIdentifier == "com.vnilink.tabs-preview") { NSLog("VniLink preview startup: %@", Self.message(error)) }
                 }
             }
         }
@@ -189,7 +285,7 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
     #if DEBUG
     func loadPreviewDevices() {
         guard !sharing, !changingSharing, !starting,
-              snapshot?.incoming == nil, snapshot?.outgoing == nil else {
+              snapshot?.incoming == nil, controllerSessions.allSatisfy({ $0.phase == .closed || $0.phase.isFailed }) else {
             error = "Stop desktop sessions and screen sharing before opening the preview."; return
         }
         timer?.invalidate(); starting = true
@@ -214,6 +310,23 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
+            self?.driveJobsInBackground()
+        }
+    }
+    /// Advances transfers without any Files window open. Runs off the main
+    /// thread; the core's per-job guard keeps this from double-advancing
+    /// alongside open Files windows.
+    private func driveJobsInBackground() {
+        guard let core, !drivingJobs else { return }
+        drivingJobs = true
+        jobWorker.async {
+            do {
+                let jobs = try core.jobList()
+                for job in jobs where ![.complete, .cancelled, .failed].contains(job.state) && (job.sender || job.state != .waitingDecision) {
+                    _ = try? core.jobPoll(id: job.id)
+                }
+            } catch {}
+            DispatchQueue.main.async { self.drivingJobs = false }
         }
     }
     func refresh() {
@@ -221,12 +334,17 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
         refreshing = true
         let host = host
         let events = events
+        let selectedId = viewerTabs.first { $0.id == selectedTab }?.session?.id
         worker.async {
-            let result = Result { (try core.snapshot(), try core.controlRequest(), try core.savedRelays(), try core.keyboardMode(), try core.swapControlAndCommand(), host?.error(), events?.poll(maxEvents: 128) ?? [], try core.clipboardText()) }
+            let result = Result { (try core.snapshot(), try core.controlRequest(), try core.savedRelays(), try core.keyboardMode(), try core.swapControlAndCommand(), host?.error(), events?.poll(maxEvents: 128) ?? [], selectedId.flatMap { id -> String? in
+                guard let session = try? core.controllerSession(sessionId: id), session.phase == .active else { return nil }
+                return try? core.sessionClipboardText(sessionId: id, generation: session.generation)
+            }, try core.controllerSessions()) }
             DispatchQueue.main.async {
                 self.refreshing = false
                 switch result {
                 case .success(let data):
+                    self.controllerSessions = data.8
                     if self.snapshot != data.0 { self.snapshot = data.0 }
                     if self.request != data.1 { self.request = data.1 }
                     if self.savedRelays != data.2 { self.savedRelays = data.2 }
@@ -237,10 +355,12 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
                     }
                     if let selected = self.selectedDeviceID, !data.0.devices.contains(where: { $0.id == selected }) { self.selectedDeviceID = nil }
                     let clipboardReceived = data.6.contains { event in
-                        if case .clipboardReceived(let id) = event { return id == data.0.outgoing?.id }
+                        if case .clipboardReceived(let id) = event { return id == selectedId }
                         return false
                     }
-                    self.syncClipboard(core: core, snapshot: data.0, remote: data.7, received: clipboardReceived)
+                    if selectedId == self.viewerTabs.first(where: { $0.id == self.selectedTab })?.session?.id {
+                        self.syncClipboard(core: core, snapshot: data.0, outgoing: data.8.first { $0.id == selectedId && $0.phase == .active }, remote: data.7, received: clipboardReceived)
+                    }
                     for event in data.6 {
                         if case .transferCompleted = event { self.notice = "File received in \(self.receiveFolder.lastPathComponent)." }
                     }
@@ -249,8 +369,7 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
             }
         }
     }
-    private func syncClipboard(core: VnilinkCore, snapshot: FfiSnapshot, remote: String?, received: Bool) {
-        let outgoing = snapshot.outgoing.flatMap { $0.phase == .active ? $0 : nil }
+    private func syncClipboard(core: VnilinkCore, snapshot: FfiSnapshot, outgoing: FfiSessionInfo?, remote: String?, received: Bool) {
         let incoming = snapshot.incoming.flatMap { session -> FfiSessionInfo? in
             guard session.phase == .active,
                   snapshot.devices.contains(where: { $0.endpointId == session.peerId && $0.grants.clipboard }) else { return nil }
@@ -280,6 +399,16 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
         if panel.runModal() == .OK, let url = panel.url {
             perform({ try $0.setTransferDirectory(path: url.path) }, success: "Receive folder saved.", completed: {
                 self.receiveFolder = url; UserDefaults.standard.set(url, forKey: "receiveFolder")
+            })
+        }
+    }
+    func chooseFileRoots() {
+        let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.allowsMultipleSelection = true
+        panel.message = "Folders the Files window may browse on this Mac. Paired computers see only these folders."
+        if panel.runModal() == .OK, !panel.urls.isEmpty {
+            let paths = panel.urls.map(\.path)
+            perform({ try $0.setFileRoots(paths: paths) }, success: "Shared folders saved.", completed: {
+                self.fileRoots = paths; UserDefaults.standard.set(paths, forKey: "fileRoots")
             })
         }
     }
@@ -402,7 +531,7 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
     func resetIdentity() {
         guard let core else { return }
         guard !changingSharing else { error = "Wait for screen sharing to finish updating, then reset the identity."; return }
-        viewerWindow?.close()
+        closeAllTabs()
         startCursorUpdates(nil)
         let oldHost = host; host = nil; sharing = false; inputEnabled = false
         hostQueue.async { oldHost?.stop() }
@@ -424,7 +553,7 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
     func shutdown(_ completion: @escaping () -> Void) {
         startCursorUpdates(nil)
         timer?.invalidate()
-        viewerWindow?.model.close()
+        closeAllTabs()
         let core = core, host = host
         hostQueue.async {
             host?.stop()
@@ -485,4 +614,8 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
         return MacCursorUpdate(x: Int32(location.x.rounded()), y: Int32(location.y.rounded()),
             visible: true, image: shape)
     }
+}
+
+extension FfiSessionPhase {
+    var isFailed: Bool { if case .failed = self { return true }; return false }
 }

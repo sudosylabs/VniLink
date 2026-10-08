@@ -71,7 +71,7 @@ signing identity on subsequent builds; pairing remains in Keychain.
 - Local computer names, directional control/clipboard/file permissions,
   revocation and forgetting. Saved relay URLs and optional masked tokens
   apply on the next open. Stored tokens are never displayed.
-- A separate resizable/full-screen desktop window. VideoToolbox decoding runs
+- A single main window with Home and independent remote-desktop tabs. VideoToolbox decoding runs
   in Rust; a bounded latest-picture slot hands immutable BGRA frame objects to
   an AppKit canvas. The native image provider retains the pixels until drawing
   finishes, without serializing full pictures through the Swift bindings.
@@ -105,6 +105,10 @@ signing identity on subsequent builds; pairing remains in Keychain.
   publishes cursor shapes and positions independently of video to compatible
   viewers. The public system-cursor API is deprecated; when unavailable at
   sharing startup, ScreenCaptureKit keeps the cursor embedded in video.
+  Enabling sharing configures the display; ScreenCaptureKit opens for an
+  admitted Desktop instance and stops when that instance ends. The Rust host
+  supports service-owned capture and a `mac_desktop_viewer` decoder factory;
+  Swift controller tabs still use session-based input/video APIs until migration.
   Opt-in startup preferences can resume main-display sharing
   and allow connections, and resume input, only with existing OS permissions.
   Startup never requests missing permissions; grants remain authoritative.
@@ -173,3 +177,18 @@ need the system Swift runtime search path:
 DYLD_LIBRARY_PATH=/usr/lib/swift MACOSX_DEPLOYMENT_TARGET=15.0 \
   cargo test --locked -p vnilink-ffi -p vnilink-macos -p vnilink-media
 ```
+
+## Remote-session tabs
+
+Home retains the device list and settings sidebar. Connect opens a named tab;
+connecting to the same computer focuses its existing tab. Switching tabs keeps
+connections and decoders alive. Each close button stops only that tab's session.
+Command-Shift-[ / ] selects the previous/next tab; Command-W closes the selected
+remote tab. Settings returns to Home. Files windows remain separate utilities.
+Clipboard synchronization follows the selected desktop, and hidden connections
+keep their latest remote clipboard state. See
+[controller-session architecture](../docs/architecture/controller-sessions.md).
+
+For a preview without Keychain changes, launch with `--preview --preview-tabs`.
+The two preview session pages are labelled as previews and do not connect to
+remote computers.

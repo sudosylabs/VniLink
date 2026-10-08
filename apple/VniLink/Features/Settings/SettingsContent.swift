@@ -168,6 +168,14 @@ private struct FileSettings: View {
                         .disabled(model.sendingHostFile)
                 }
             }
+            Section("File manager") {
+                ForEach(model.fileRoots, id: \.self) { root in
+                    LabeledContent("Shared folder", value: root)
+                }
+                Text("The Files window browses these folders on this Mac, and paired computers see only these folders. Narrow the list to share less.").foregroundStyle(.secondary)
+                Button("Choose folders…") { model.chooseFileRoots() }
+                    .disabled(model.snapshot?.incoming?.phase == .active)
+            }
         }.formStyle(.grouped)
     }
 }

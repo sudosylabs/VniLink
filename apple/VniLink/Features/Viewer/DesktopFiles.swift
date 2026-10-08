@@ -40,3 +40,35 @@ struct ClipboardChanges {
     }
     mutating func applied(_ changeCount: Int) { observed = changeCount }
 }
+
+
+/// Map a selected item into approved roots without reading its payload.
+struct FilesSelection: Equatable {
+    let root: UInt64
+    let path: [String]
+    let name: String
+    static func locate(_ url: URL, roots: [(UInt64, URL)]) throws -> FilesSelection {
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey])
+        guard values.isSymbolicLink != true, values.isRegularFile == true || values.isDirectory == true else {
+            throw Failure.unsupported
+        }
+        let item = url.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+        let candidates = roots.compactMap { id, root -> FilesSelection? in
+            let base = root.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+            guard item.count > base.count, Array(item.prefix(base.count)) == base else { return nil }
+            let relative = Array(item.dropFirst(base.count))
+            return FilesSelection(root: id, path: Array(relative.dropLast()), name: relative.last!)
+        }
+        guard let selected = candidates.min(by: { $0.path.count < $1.path.count }) else { throw Failure.outsideRoots }
+        return selected
+    }
+    enum Failure: LocalizedError {
+        case unsupported, outsideRoots
+        var errorDescription: String? {
+            switch self {
+            case .unsupported: return "Choose a regular file or folder. Links cannot be sent."
+            case .outsideRoots: return "Choose an item inside a shared folder, or add its folder in Settings → Files."
+            }
+        }
+    }
+}

@@ -35,22 +35,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         .defaultSize(width: 1080, height: 720)
         .commands {
             CommandGroup(replacing: .appSettings) {
-                Button("Settings…") { model.destination = .sharing; openWindow(id: "computers") }.keyboardShortcut(",")
+                Button("Settings…") { model.showHome(); model.destination = .sharing; openWindow(id: "computers") }.keyboardShortcut(",")
             }
             #if DEBUG
             CommandMenu("Development") {
                 Button("Preview devices") { model.loadPreviewDevices() }
             }
             #endif
+            CommandGroup(after: .windowArrangement) {
+                Button("Next Tab") { model.selectAdjacentTab(1) }.keyboardShortcut("]", modifiers: [.command, .shift])
+                Button("Previous Tab") { model.selectAdjacentTab(-1) }.keyboardShortcut("[", modifiers: [.command, .shift])
+            }
+            CommandGroup(replacing: .saveItem) {
+                Button(model.selectedTab == nil ? "Close Window" : "Close Tab") {
+                    if NSApp.keyWindow?.identifier?.rawValue == "computers", let id = model.selectedTab {
+                        model.closeTab(id)
+                    } else { NSApp.keyWindow?.performClose(nil) }
+                }.keyboardShortcut("w")
+            }
             CommandGroup(after: .newItem) {
-                Button("Add Computer…") { model.adding = true }.keyboardShortcut("o")
+                Button("Add Computer…") { model.showHome(); model.adding = true }.keyboardShortcut("o")
                 Button("Create Pairing File…") { model.createPairingFile() }.keyboardShortcut("n", modifiers: [.command, .shift])
             }
         }
         MenuBarExtra("VniLink", systemImage: "display") {
             Text(model.snapshot?.incoming?.phase == .active ? "A computer is connected" : (model.sharing ? "Screen sharing enabled" : "Screen sharing off"))
             Button("Open VniLink") { NSApp.activate(ignoringOtherApps: true); openWindow(id: "computers") }
-            Button("Settings…") { model.destination = .sharing; NSApp.activate(ignoringOtherApps: true); openWindow(id: "computers") }
+            Button("Settings…") { model.showHome(); model.destination = .sharing; NSApp.activate(ignoringOtherApps: true); openWindow(id: "computers") }
             Divider()
             Button("Stop remote access") {
                 model.setSharing(false)
