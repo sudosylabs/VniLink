@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .task { model.start() }
                 .onOpenURL { model.importFile($0) }
         }
+        .windowToolbarStyle(.unifiedCompact)
         .defaultSize(width: 1080, height: 720)
         .commands {
             CommandGroup(replacing: .appSettings) {

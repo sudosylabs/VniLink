@@ -1,32 +1,21 @@
 import SwiftUI
 import AppKit
 
-/// A compact tab strip above persistent AppKit pages in the single main window.
+/// Title-bar tabs select persistent AppKit pages without recreating sessions.
 struct SessionWorkspace: View {
     @EnvironmentObject var model: AppModel
     private var viewer: ViewerModel? { model.viewerTabs.first { $0.id == model.selectedTab } }
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView(.horizontal) {
-                HStack(spacing: 4) {
-                    tab("Home", id: nil)
-                    ForEach(model.viewerTabs, id: \.id) { tab($0.name, id: $0.id) }
-                }.padding(.horizontal, 10).padding(.vertical, 6)
-            }
-            .scrollIndicators(.hidden)
-            .background(.bar)
-            Divider()
-            SessionPages(model: model)
-        }
-        .navigationTitle(viewer?.name ?? "VniLink")
-        .navigationSubtitle(viewer == nil ? model.destination.rawValue : "Remote desktop")
+        SessionPages(model: model)
+        .toolbar(removing: .title)
         .toolbar {
+            titleBarTabs
             if let viewer {
                 ToolbarItemGroup {
                     ViewerActions(model: viewer)
                 }
             } else {
-                ToolbarItem(placement: .navigation) {
+                ToolbarItem(placement: .primaryAction) {
                     Button { NotificationCenter.default.post(name: .toggleHomeSidebar, object: nil) } label: {
                         Label("Toggle sidebar", systemImage: "sidebar.left")
                     }
@@ -42,12 +31,36 @@ struct SessionWorkspace: View {
             }
         }
     }
+    @ToolbarContentBuilder private var titleBarTabs: some ToolbarContent {
+        if #available(macOS 26.0, *) {
+            ToolbarItem(placement: .navigation) { sessionTabStrip }
+                .sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItem(placement: .navigation) { sessionTabStrip }
+        }
+    }
+
+    private var sessionTabStrip: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 2) {
+                tab("Home", id: nil)
+                ForEach(model.viewerTabs, id: \.id) { tab($0.name, id: $0.id) }
+            }
+            .padding(.horizontal, 2)
+        }
+        .scrollIndicators(.hidden)
+        .frame(width: min(440, 76 + CGFloat(model.viewerTabs.count) * 156), height: 30)
+        .accessibilityLabel("Session tabs")
+    }
+
     private func tab(_ title: String, id: UUID?) -> some View {
         HStack(spacing: 0) {
             Button { model.selectedTab = id } label: {
                 Text(title).lineLimit(1).truncationMode(.middle)
                     .font(.system(size: 13, weight: model.selectedTab == id ? .medium : .regular))
-                    .padding(.leading, 12).padding(.trailing, id == nil ? 12 : 8).padding(.vertical, 8)
+                    .padding(.leading, 12).padding(.trailing, id == nil ? 12 : 8)
+                    .frame(height: 28)
+                    .frame(maxWidth: id == nil ? nil : 120)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(title)
