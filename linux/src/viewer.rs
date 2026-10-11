@@ -1,35 +1,4 @@
-//! Geometry and physical keyboard mapping, independent of GTK and video hardware.
-
-/// Map a point in an aspect-fit picture to the negotiated host monitor.
-/// Letterbox space is not part of the remote desktop.
-pub fn pointer(
-    x: f64,
-    y: f64,
-    view: (f64, f64),
-    frame: (u16, u16),
-    host: (u16, u16),
-) -> Option<(u16, u16)> {
-    if frame.0 == 0 || frame.1 == 0 || view.0 <= 0.0 || view.1 <= 0.0 {
-        return None;
-    }
-    let scale = (view.0 / f64::from(frame.0)).min(view.1 / f64::from(frame.1));
-    let width = f64::from(frame.0) * scale;
-    let height = f64::from(frame.1) * scale;
-    let left = (view.0 - width) / 2.0;
-    let top = (view.1 - height) / 2.0;
-    if x < left || y < top || x >= left + width || y >= top + height {
-        return None;
-    }
-    let host = if host.0 == 0 || host.1 == 0 {
-        frame
-    } else {
-        host
-    };
-    Some((
-        ((x - left) / width * f64::from(host.0)) as u16,
-        ((y - top) / height * f64::from(host.1)) as u16,
-    ))
-}
+//! Physical keyboard mapping, independent of GTK and video hardware.
 
 /// GTK's XKB hardware keycode is the Linux evdev position plus eight.
 /// Map positions rather than translated key symbols, preserving layouts.
@@ -129,22 +98,6 @@ pub fn key_usage(keycode: u32) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn fitted_pointer_excludes_bars_and_scales_to_original_monitor() {
-        assert_eq!(
-            pointer(0., 0., (1000., 1000.), (1920, 1080), (3840, 2160)),
-            None
-        );
-        assert_eq!(
-            pointer(500., 500., (1000., 1000.), (1920, 1080), (3840, 2160)),
-            Some((1920, 1080))
-        );
-        assert_eq!(
-            pointer(999., 780., (1000., 1000.), (1920, 1080), (3840, 2160)),
-            Some((3836, 2155))
-        );
-        assert_eq!(pointer(500., 500., (1000., 1000.), (0, 0), (0, 0)), None);
-    }
     #[test]
     fn keys_keep_positions_and_distinct_modifiers() {
         assert_eq!(key_usage(38), Some(vnilink::usage::A));

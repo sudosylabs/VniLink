@@ -514,6 +514,7 @@ pub(crate) fn manage_computer(
     let win = window.clone();
     save.connect_clicked(move |button| {
         let grants = Grants {
+            view: control.is_active(),
             control: control.is_active(),
             clipboard: clipboard.is_active(),
             transfer: files.is_active(),

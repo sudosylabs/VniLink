@@ -124,7 +124,7 @@ fn the_window_matches_the_computer_and_the_paired_list() {
     pointer_motion_does_not_require_keyboard_focus();
     remote_tabs_are_independent();
     super::clipboard::tests::hidden_window_accepts_clipboard();
-    super::clipboard::tests::automatic_text_and_files_contract();
+    super::clipboard::tests::automatic_text_contract();
     files_panes_show_both_computers();
     desktop_drop_stages_approved_item_without_uploading();
     files_sort_drop_and_restore_locations();
@@ -187,6 +187,7 @@ fn choosing_a_paired_computer_offers_connect() {
     });
     let home = open_home(actions);
     let grants = Grants {
+        view: true,
         control: true,
         clipboard: false,
         transfer: false,
@@ -615,7 +616,11 @@ fn settings_and_desktop_capture_tour(home: &Home, state: &Snapshot) {
             pixels.extend_from_slice(&[value, value, value, 0]);
         }
     }
-    let frame = vnilink_media::RawFrame::bgra(960, 540, 0, pixels).unwrap();
+    let frame = vnilink_media::DecodedFrame {
+        frame: vnilink_media::RawFrame::bgra(960, 540, 0, pixels).unwrap(),
+        display_id: 1,
+        revision: 1,
+    };
     viewer.show_frame(&frame);
     viewer.status.set_label("Synthetic test frame · 960 × 540");
     let texture = viewer
@@ -744,11 +749,22 @@ fn pointer_motion_does_not_require_keyboard_focus() {
     window.set_child(Some(&picture));
     let sent = Rc::new(RefCell::new(Vec::new()));
     let output = sent.clone();
+    let source = Rc::new(Cell::new(vnilink::DisplayInfo {
+        id: 1,
+        origin_x: 0,
+        origin_y: 0,
+        width: 1920,
+        height: 1080,
+        rotation_deg: 0,
+        scale_percent: 100,
+        revision: 3,
+    }));
+    let resolve_source = Rc::clone(&source);
     let motion = super::viewer::install_pointer_motion(
         &picture,
         Rc::new(Cell::new((960, 540))),
-        (1920, 1080),
-        move |x, y| output.borrow_mut().push((x, y)),
+        Rc::new(move || Some(resolve_source.get())),
+        move |x, y, _display| output.borrow_mut().push((x, y)),
     );
     // Allocate the image without presenting a focused desktop. Emit the same
     // GTK motion signal the native event controller delivers to the callback.
@@ -766,6 +782,21 @@ fn pointer_motion_does_not_require_keyboard_focus() {
     picture.allocate(960, 700, -1, None);
     motion.emit_by_name::<()>("motion", &[&480.0f64, &10.0f64]);
     assert_eq!(sent.borrow().len(), 2);
+    // SPEC17: a source change rescales the next event to the new
+    // extent instead of the handshake monitor.
+    source.set(vnilink::DisplayInfo {
+        id: 2,
+        origin_x: 1920,
+        origin_y: 0,
+        width: 1280,
+        height: 720,
+        rotation_deg: 0,
+        scale_percent: 100,
+        revision: 4,
+    });
+    picture.allocate(960, 540, -1, None);
+    motion.emit_by_name::<()>("motion", &[&480.0f64, &270.0f64]);
+    assert_eq!(&*sent.borrow(), &[(960, 540), (962, 540), (640, 360)]);
     window.close();
 }
 
@@ -802,8 +833,11 @@ fn paired_file_cores(tag: &str) -> FilePair {
     };
     let host = Arc::new(open());
     let controller = Arc::new(open());
-    host.set_h264_support(true, true).unwrap();
-    controller.set_h264_support(true, true).unwrap();
+    host.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .unwrap();
+    controller
+        .set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .unwrap();
     host.set_blob_directory(scratch.join("host-blobs")).unwrap();
     controller
         .set_blob_directory(scratch.join("controller-blobs"))
@@ -822,6 +856,7 @@ fn paired_file_cores(tag: &str) -> FilePair {
         .unwrap();
     host.accept_invitation(&back).unwrap();
     let grants = vnilink::Grants {
+        view: true,
         control: true,
         clipboard: false,
         transfer: true,
@@ -1163,7 +1198,7 @@ fn files_upload_and_download_move_trees() {
             .iter()
             .all(|service| {
                 service.kind != vnilink::ServiceKind::Files
-                    || service.phase == vnilink::ServicePhase::Closed
+                    || matches!(service.phase, vnilink::ServicePhase::Closed(_))
             })
     });
     assert!(pair
@@ -1336,7 +1371,9 @@ fn remote_tabs_are_independent() {
     let a = make_core();
     let b = make_core();
     let pending = make_core();
-    controller.set_h264_support(true, true).unwrap();
+    controller
+        .set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .unwrap();
     let clipboard_a = Arc::new(Mutex::new(None));
     let clipboard_b = Arc::new(Mutex::new(None));
     a.set_clipboard(Box::new(Clipboard(clipboard_a.clone())))
@@ -1346,11 +1383,14 @@ fn remote_tabs_are_independent() {
     let input_a = Arc::new(Mutex::new(Vec::new()));
     let input_b = Arc::new(Mutex::new(Vec::new()));
     for (host, input) in [(&a, &input_a), (&b, &input_b)] {
-        host.set_h264_support(true, true).unwrap();
+        host.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
+            .unwrap();
         host.set_capture(Box::new(Capture)).unwrap();
         host.set_desktop(Box::new(Desktop(input.clone()))).unwrap();
     }
-    pending.set_h264_support(true, true).unwrap();
+    pending
+        .set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .unwrap();
     pending
         .set_desktop(Box::new(Desktop(Arc::new(Mutex::new(Vec::new())))))
         .unwrap();
@@ -1376,6 +1416,7 @@ fn remote_tabs_are_independent() {
             host.authorize(
                 &controller.endpoint_id(),
                 Grants {
+                    view: true,
                     control: true,
                     clipboard: true,
                     transfer: false,
@@ -1387,6 +1428,7 @@ fn remote_tabs_are_independent() {
             .authorize(
                 &host.endpoint_id(),
                 Grants {
+                    view: false,
                     control: false,
                     clipboard: true,
                     transfer: false,
@@ -1415,7 +1457,17 @@ fn remote_tabs_are_independent() {
         .id;
     pump_until(|| {
         tabs.refresh();
-        tabs.viewer(sa).is_some() && tabs.viewer(sb).is_some()
+        tabs.viewer(sa)
+            .and_then(|v| v.desktop_owner())
+            .is_some_and(|o| {
+                o.control_state().ok() == Some(vnilink::DesktopControlState::Controlling)
+            })
+            && tabs
+                .viewer(sb)
+                .and_then(|v| v.desktop_owner())
+                .is_some_and(|o| {
+                    o.control_state().ok() == Some(vnilink::DesktopControlState::Controlling)
+                })
     });
     let va = tabs.viewer(sa).unwrap();
     let vb = tabs.viewer(sb).unwrap();
@@ -1431,10 +1483,19 @@ fn remote_tabs_are_independent() {
     assert_eq!(tabs.selected.load(std::sync::atomic::Ordering::Relaxed), sa);
     assert!(Rc::ptr_eq(&tabs.viewer(sa).unwrap(), &va));
     // Exercise real native textures and a focused keyboard controller.
-    va.show_frame(&vnilink_media::RawFrame::bgra(2, 2, 0, vec![40; 16]).unwrap());
-    vb.show_frame(&vnilink_media::RawFrame::bgra(2, 2, 0, vec![90; 16]).unwrap());
-    controller
-        .set_session_keyboard_mode(sa, va.session.generation, vnilink::KeyboardMode::Map)
+    va.show_frame(&vnilink_media::DecodedFrame {
+        frame: vnilink_media::RawFrame::bgra(2, 2, 0, vec![40; 16]).unwrap(),
+        display_id: 1,
+        revision: 1,
+    });
+    vb.show_frame(&vnilink_media::DecodedFrame {
+        frame: vnilink_media::RawFrame::bgra(2, 2, 0, vec![90; 16]).unwrap(),
+        display_id: 2,
+        revision: 1,
+    });
+    va.desktop_owner()
+        .unwrap()
+        .set_keyboard_mode(vnilink::KeyboardMode::Map)
         .unwrap();
     va.picture.grab_focus();
     let keys = va
@@ -1472,14 +1533,34 @@ fn remote_tabs_are_independent() {
     board.set_text("copy for A");
     pump_until(|| clipboard_a.lock().unwrap().as_deref() == Some("copy for A"));
     assert!(clipboard_b.lock().unwrap().is_none());
-    b.publish_clipboard(b.snapshot().unwrap().incoming.unwrap().id, "copy from B")
+    let host_b = b
+        .hosted_services()
+        .unwrap()
+        .into_iter()
+        .find(|s| {
+            s.kind == vnilink::ServiceKind::Desktop && s.phase == vnilink::ServicePhase::Active
+        })
         .unwrap();
+    let publish_b = b.clone();
+    let (published, result) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = published.send(publish_b.publish_desktop_clipboard(
+            host_b.id,
+            host_b.generation,
+            "copy from B",
+        ));
+    });
     pump_until(|| {
-        controller
-            .session_clipboard_text(sb, vb.session.generation)
+        vb.desktop_owner()
+            .unwrap()
+            .clipboard_text()
             .unwrap()
             .is_some()
     });
+    result
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .unwrap()
+        .unwrap();
     assert!(board.content().is_some());
     tabs.view.set_selected_page(&tabs.page(sb));
     let copied = Rc::new(RefCell::new(None::<String>));
@@ -1507,9 +1588,20 @@ fn remote_tabs_are_independent() {
     tabs.view.close_page(&tabs.page(sa));
     pump_until(|| {
         tabs.refresh();
-        controller.controller_session(sa).is_err()
+        va.desktop_owner().is_none()
     });
     assert!(va.picture.paintable().is_none());
+    assert_eq!(
+        controller.controller_session(sa).unwrap().phase,
+        SessionPhase::Active
+    );
+    assert!(controller
+        .controller_services()
+        .unwrap()
+        .iter()
+        .all(|s| s.connection_id != sa
+            || s.kind != vnilink::ServiceKind::Desktop
+            || matches!(s.phase, vnilink::ServicePhase::Closed(_))));
     assert_eq!(
         controller.controller_session(sb).unwrap().phase,
         SessionPhase::Active
@@ -1517,65 +1609,77 @@ fn remote_tabs_are_independent() {
     assert!(Rc::ptr_eq(&tabs.viewer(sb).unwrap(), &vb));
     assert_eq!(tabs.view.n_pages(), 2);
     pending
-        .export_pairing_file(std::time::Duration::from_secs(60), true)
-        .unwrap();
-    tabs.connect(&pending.endpoint_id()).unwrap();
-    let sp = controller
-        .controller_sessions()
-        .unwrap()
-        .into_iter()
-        .find(|s| s.peer_id == pending.endpoint_id())
-        .unwrap()
-        .id;
-    pump_until(|| pending.control_request().unwrap().is_some());
-    tabs.view.close_page(&tabs.page(sp));
-    pump_until(|| {
-        tabs.refresh();
-        controller.controller_session(sp).is_err()
-    });
-    assert_eq!(
-        controller.controller_session(sb).unwrap().phase,
-        SessionPhase::Active
-    );
-    pending
         .authorize(
             &controller.endpoint_id(),
             Grants {
+                view: true,
                 control: true,
                 clipboard: true,
                 transfer: true,
             },
         )
         .unwrap();
+    let files_root =
+        std::env::temp_dir().join(format!("vnilink-neutral-tab-files-{}", std::process::id()));
+    std::fs::create_dir_all(&files_root).unwrap();
+    std::fs::write(files_root.join("survives.txt"), b"owned by Files").unwrap();
+    pending.set_file_roots(vec![files_root.clone()]).unwrap();
     let files = controller
-        .begin_connect_files(&pending.endpoint_id())
+        .begin_connect_services(&pending.endpoint_id())
         .unwrap();
     pump_until(|| controller.controller_session(files.id).unwrap().phase == SessionPhase::Active);
+    let parent = controller.controller_session(files.id).unwrap();
+    let files_info = controller
+        .attach_controller_service(parent.id, parent.generation, vnilink::ServiceKind::Files)
+        .unwrap();
+    let files_lease = controller
+        .service_lease(files_info.id, files_info.generation)
+        .unwrap();
+    let files_service = controller
+        .open_files_service(files_info.id, files_info.generation)
+        .unwrap();
+    assert_eq!(files_service.list(0, "", 0, 16).unwrap().entries.len(), 1);
     tabs.connect(&pending.endpoint_id()).unwrap();
     pump_until(|| {
         tabs.refresh();
-        controller
-            .controller_sessions()
-            .unwrap()
-            .into_iter()
-            .any(|s| {
-                s.peer_id == pending.endpoint_id()
-                    && s.id != files.id
-                    && tabs.viewer(s.id).is_some()
-            })
+        tabs.viewer(files.id)
+            .and_then(|v| v.desktop_owner())
+            .is_some()
     });
+    assert_eq!(
+        controller
+            .begin_connect_services(&pending.endpoint_id())
+            .unwrap()
+            .id,
+        files.id
+    );
     assert!(
-        controller.controller_session(files.id).is_err(),
-        "files-only connection was retired before starting desktop"
+        !files_lease.is_cancelled(),
+        "opening Desktop replaced the Files owner"
+    );
+    tabs.view.close_page(&tabs.page(files.id));
+    assert!(
+        !files_lease.is_cancelled(),
+        "closing Desktop cancelled its sibling Files owner"
+    );
+    assert_eq!(
+        controller.controller_session(files.id).unwrap().phase,
+        SessionPhase::Active
     );
     assert_eq!(
         controller.controller_session(sb).unwrap().phase,
         SessionPhase::Active
     );
+    assert_eq!(
+        files_service.list(0, "", 0, 16).unwrap().entries[0].name,
+        "survives.txt"
+    );
+    files_service.close();
     for core in [controller, a, b, pending] {
         core.shutdown();
     }
     home.window().close();
+    std::fs::remove_dir_all(files_root).unwrap();
 }
 
 fn desktop_drop_stages_approved_item_without_uploading() {

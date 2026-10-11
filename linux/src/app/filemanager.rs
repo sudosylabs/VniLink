@@ -1827,9 +1827,10 @@ mod upload_selection_tests {
         let nested = approved.join("nested");
         std::fs::create_dir_all(&nested).unwrap();
         let file = nested.join("large.bin");
+        // Sparse and unread: selection resolves names, never payload bytes.
         std::fs::File::create(&file)
             .unwrap()
-            .set_len(vnilink::MAX_FILE_BYTES as u64 + 1)
+            .set_len(9 * 1024 * 1024)
             .unwrap();
         assert_eq!(
             selected_upload(&file, &[(4, approved.clone())]).unwrap(),

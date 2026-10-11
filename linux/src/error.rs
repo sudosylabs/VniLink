@@ -63,8 +63,10 @@ mod tests {
             say(&vnilink::Error::NotPaired),
             "Save that computer before connecting."
         );
-        assert!(say(&vnilink::Error::Unsupported("no H.264 encoder is available"))
-            .contains("cannot share its desktop"));
+        assert!(say(&vnilink::Error::Unsupported(
+            "no H.264 encoder is available"
+        ))
+        .contains("cannot share its desktop"));
         let notice = open_notice(&vnilink::Error::StoreLocked);
         assert_eq!(notice.title, "The keyring is locked");
         let notice = open_notice(&vnilink::Error::Timeout);

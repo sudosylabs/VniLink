@@ -241,32 +241,12 @@ fn present(application: &adw::Application) {
                                 live,
                             );
                             home_slot.borrow_mut().replace(Rc::clone(&home));
-                            let events = match core.subscribe() {
-                                Ok(events) => Some(events),
-                                Err(err) => {
-                                    notifications::failed(&toasts, &err);
-                                    None
-                                }
-                            };
                             let core_watch = Arc::clone(&core);
                             let home_watch = Rc::clone(&home_slot);
                             let toasts_watch = toasts.clone();
                             *tick.borrow_mut() = Some(gtk::glib::timeout_add_local(
                                 Duration::from_millis(400),
                                 move || {
-                                    if let Some(events) = events.as_ref() {
-                                        while let Some(event) = events.try_recv() {
-                                            if matches!(
-                                                event,
-                                                vnilink::CoreEvent::TransferCompleted { .. }
-                                            ) {
-                                                notifications::note(
-                                                    &toasts_watch,
-                                                    "File received in your receive folder.",
-                                                );
-                                            }
-                                        }
-                                    }
                                     if let Ok(snapshot) = core_watch.snapshot() {
                                         background::update_status(&snapshot);
                                     }
@@ -311,12 +291,13 @@ fn present(application: &adw::Application) {
                     tasks::run(
                         move || {
                             core.stop_hosting().map_err(|e| e.to_string())?;
-                            let decode = core
-                                .snapshot()
-                                .map_err(|e| e.to_string())?
-                                .capabilities
-                                .h264_decode;
-                            core.set_h264_support(false, decode)
+                            core.video_codecs()
+                                .map(|mut caps| {
+                                    caps.encode_baseline = false;
+                                    caps.encode_high = false;
+                                    caps
+                                })
+                                .and_then(|caps| core.set_video_codecs(caps))
                                 .map_err(|e| e.to_string())
                         },
                         move |result| {
@@ -388,12 +369,11 @@ fn open_core() -> Result<(Core, Option<String>), Notice> {
     // Report VA-API availability explicitly. Without this a machine without a
     // render node would admit a session that can never carry video.
     #[cfg(target_os = "linux")]
-    let _ = core.set_h264_support(
-        vnilink_linux::h264_encode_available(),
-        vnilink_linux::h264_decode_available(),
-    );
+    let _ = core.set_video_codecs(vnilink_linux::video_codec_caps());
     #[cfg(not(target_os = "linux"))]
-    let _ = core.set_h264_support(false, false);
+    let _ = core.set_video_codecs(vnilink::VideoCodecCaps::default());
+    #[cfg(target_os = "linux")]
+    let _ = core.set_power_factory(Some(Arc::new(vnilink_linux::LinuxPowerFactory)));
     let _ = core.set_cursor_receiver(true);
     let file_warning = files::initialize(&core)
         .err()
@@ -612,7 +592,7 @@ fn actions(
                             }
                         }
                         worker
-                            .begin_connect_files(&peer)
+                            .begin_connect_services(&peer)
                             .map(|_| true)
                             .map_err(|e| e.to_string())
                     },

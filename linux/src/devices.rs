@@ -66,6 +66,7 @@ mod tests {
             relays: Vec::new(),
             direct: Vec::new(),
             grants: Grants {
+                view: control,
                 control,
                 clipboard: false,
                 transfer: false,

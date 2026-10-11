@@ -199,6 +199,7 @@ mod tests {
         assert_eq!(grant_summary(Grants::default()), "No allows yet");
         assert_eq!(
             grant_summary(Grants {
+                view: true,
                 control: true,
                 clipboard: false,
                 transfer: true,
@@ -207,6 +208,7 @@ mod tests {
         );
         assert_eq!(
             grant_summary(Grants {
+                view: true,
                 control: true,
                 clipboard: true,
                 transfer: true,
@@ -235,6 +237,7 @@ mod tests {
         assert_eq!(peer_status(Grants::default()), "Needs permission");
         assert_eq!(
             peer_status(Grants {
+                view: true,
                 control: true,
                 clipboard: false,
                 transfer: false,

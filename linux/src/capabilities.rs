@@ -27,18 +27,14 @@ pub fn video_status(capabilities: &Capabilities) -> VideoStatus {
 
 pub fn host_encoder_sentence(status: VideoStatus) -> Option<&'static str> {
     match status {
-        VideoStatus::NoHostEncoder => {
-            Some("Video unavailable: no H.264 encoder on this computer.")
-        }
+        VideoStatus::NoHostEncoder => Some("Video unavailable: no H.264 encoder on this computer."),
         _ => None,
     }
 }
 
 pub fn local_decoder_sentence(status: VideoStatus) -> Option<&'static str> {
     match status {
-        VideoStatus::NoLocalDecoder => {
-            Some("This computer cannot decode video: no H.264 decoder.")
-        }
+        VideoStatus::NoLocalDecoder => Some("This computer cannot decode video: no H.264 decoder."),
         _ => None,
     }
 }

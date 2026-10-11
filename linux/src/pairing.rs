@@ -27,10 +27,7 @@ impl PairingFlow {
     }
 
     pub fn open_file(&mut self, endpoint_id: String, check: String) {
-        *self = Self::FileOpened {
-            endpoint_id,
-            check,
-        };
+        *self = Self::FileOpened { endpoint_id, check };
     }
 
     pub fn wait(&mut self, check: String) {

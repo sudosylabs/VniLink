@@ -54,7 +54,10 @@ mod tests {
         assert!(state.connecting());
         state.toast("one".to_string());
         state.toast("two".to_string());
-        assert_eq!(state.drain_toasts(), vec!["one".to_string(), "two".to_string()]);
+        assert_eq!(
+            state.drain_toasts(),
+            vec!["one".to_string(), "two".to_string()]
+        );
         assert!(state.drain_toasts().is_empty());
         state.set_request(Some(ControlRequest {
             endpoint_id: "other".to_string(),

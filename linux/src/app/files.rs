@@ -1,4 +1,6 @@
-//! Bounded file transfers and a persistent receive directory.
+//! File sharing preferences and sending files to the connected computer.
+//! Transfers move through the jobs engine under approved file roots;
+//! received files land where the Files window directs them.
 use super::{preferences, tasks};
 use adw::prelude::*;
 use std::sync::Arc;
@@ -34,34 +36,6 @@ pub(crate) fn page(window: &adw::Window, core: Arc<vnilink::Core>) -> adw::Prefe
         .name("files")
         .icon_name("folder-symbolic")
         .build();
-    let group = adw::PreferencesGroup::builder().title("Receive files")
-        .description("Received files are saved here automatically when file-transfer permission is enabled. Files are limited to 8 MiB; existing files are kept.").build();
-    let row = adw::ActionRow::builder()
-        .title("Receive folder")
-        .subtitle(receive_folder().display().to_string())
-        .subtitle_lines(2)
-        .build();
-    let open = gtk::Button::builder()
-        .icon_name("folder-open-symbolic")
-        .tooltip_text("Open receive folder")
-        .valign(gtk::Align::Center)
-        .build();
-    let win = window.clone();
-    open.connect_clicked(move |_| {
-        let uri = gtk::gio::File::for_path(receive_folder()).uri();
-        if gtk::gio::AppInfo::launch_default_for_uri(&uri, None::<&gtk::gio::AppLaunchContext>)
-            .is_err()
-        {
-            preferences::report(&win, "The receive folder could not be opened.");
-        }
-    });
-    open.set_margin_end(6);
-    row.add_suffix(&open);
-    let choose = gtk::Button::with_label("Choose folder…");
-    choose.set_valign(gtk::Align::Center);
-    row.add_suffix(&choose);
-    group.add(&row);
-    page.add(&group);
     let folders = adw::PreferencesGroup::builder().title("File manager")
         .description("The Files window browses these folders on this computer, and paired computers see only these folders. Narrow the list to share less.").build();
     let current = read_roots(&roots_file()).unwrap_or_else(default_roots);
@@ -125,43 +99,7 @@ pub(crate) fn page(window: &adw::Window, core: Arc<vnilink::Core>) -> adw::Prefe
             },
         );
     });
-    let win = window.clone();
-    let folder_core = core.clone();
-    choose.connect_clicked(move |_| {
-        let dialog = gtk::FileDialog::builder()
-            .title("Choose a receive folder")
-            .build();
-        let win = win.clone();
-        let worker = folder_core.clone();
-        let row = row.clone();
-        dialog.select_folder(
-            Some(&win.clone()),
-            None::<&gtk::gio::Cancellable>,
-            move |r| {
-                let Ok(folder) = r else {
-                    return;
-                };
-                let Some(path) = folder.path() else {
-                    preferences::report(&win, "Choose a local folder.");
-                    return;
-                };
-                let display = path.display().to_string();
-                tasks::run(
-                    move || {
-                        worker
-                            .set_transfer_directory(&path)
-                            .map_err(|e| e.to_string())?;
-                        save_folder(&path)
-                    },
-                    move |r| match r {
-                        Ok(()) => row.set_subtitle(&display),
-                        Err(e) => preferences::report(&win, &e),
-                    },
-                );
-            },
-        );
-    });
-    let share = adw::PreferencesGroup::builder().title("Share with the connected computer").description("Send a file to the computer controlling this desktop. Clipboard text syncs automatically; separate clipboard and file permissions are required.").build();
+    let share = adw::PreferencesGroup::builder().title("Share with the connected computer").description("Send a file to the computer controlling this desktop. The file must be inside this computer's shared folders; it is saved to the controller's first shared folder. Clipboard text syncs automatically; separate clipboard and file permissions are required.").build();
     let send = gtk::Button::with_label("Send file to controller…");
     send.set_halign(gtk::Align::Start);
     let worker = core.clone();
@@ -189,39 +127,7 @@ pub(crate) fn page(window: &adw::Window, core: Arc<vnilink::Core>) -> adw::Prefe
     page
 }
 
-fn config_file() -> std::path::PathBuf {
-    gtk::glib::user_config_dir().join("vnilink/receive-folder")
-}
-pub(super) fn receive_folder() -> std::path::PathBuf {
-    read_folder(&config_file()).unwrap_or_else(|| {
-        gtk::glib::user_special_dir(gtk::glib::UserDirectory::Downloads)
-            .unwrap_or_else(gtk::glib::home_dir)
-            .join("VniLink")
-    })
-}
-fn read_folder(config: &std::path::Path) -> Option<std::path::PathBuf> {
-    let uri = std::fs::read_to_string(config).ok()?;
-    if !uri.starts_with("file://") {
-        return None;
-    }
-    gtk::gio::File::for_uri(&uri)
-        .path()
-        .filter(|p| p.is_absolute())
-}
-fn save_folder(path: &std::path::Path) -> Result<(), String> {
-    save_folder_to(&config_file(), path)
-}
-fn save_folder_to(config: &std::path::Path, path: &std::path::Path) -> Result<(), String> {
-    std::fs::create_dir_all(config.parent().unwrap())
-        .map_err(|_| "The receive folder preference could not be saved.")?;
-    let temporary = config.with_extension("new");
-    std::fs::write(&temporary, gtk::gio::File::for_path(path).uri().as_bytes())
-        .and_then(|_| std::fs::rename(&temporary, config))
-        .map_err(|_| "The receive folder preference could not be saved.".into())
-}
 pub(super) fn initialize(core: &vnilink::Core) -> Result<(), String> {
-    core.set_transfer_directory(receive_folder())
-        .map_err(|e| e.to_string())?;
     core.set_blob_directory(blob_directory())
         .map_err(|e| e.to_string())
         .map_err(|e| format!("Blob storage is unavailable: {e}"))?;
@@ -270,34 +176,63 @@ fn save_roots(paths: &[std::path::PathBuf]) -> Result<(), String> {
         .and_then(|_| std::fs::rename(&temporary, config))
         .map_err(|_| "The shared folders preference could not be saved.".into())
 }
-fn read_file(path: &std::path::Path) -> Result<(String, Vec<u8>), String> {
-    use std::io::Read;
-    if !std::fs::metadata(path)
-        .map_err(|_| "The file could not be read.")?
-        .is_file()
-    {
-        return Err("Choose a regular file.".into());
+/// Resolve a picked path to a jobs upload: the approved source root, the
+/// root-relative source path, and the file name the receiver saves.
+fn upload_plan(
+    path: &std::path::Path,
+    roots: &[(u64, std::path::PathBuf)],
+) -> Result<(u64, String, String), String> {
+    let (root, mut parent, name) = super::filemanager::selected_upload(path, roots)?;
+    parent.push(name.clone());
+    Ok((root, parent.join("/"), name))
+}
+
+fn incoming_live(core: &vnilink::Core, id: u64, generation: u64) -> Option<String> {
+    core.snapshot()
+        .ok()?
+        .incoming
+        .filter(|session| {
+            session.id == id
+                && session.generation == generation
+                && session.phase == vnilink::SessionPhase::Active
+        })
+        .map(|session| session.peer_id)
+}
+
+fn send_file(
+    core: &vnilink::Core,
+    id: u64,
+    generation: u64,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    let peer = incoming_live(core, id, generation).ok_or("The hosted session ended.")?;
+    let roots = core.file_roots().map_err(|e| e.to_string())?;
+    let (src_root, src_rel, name) = upload_plan(path, &roots)?;
+    let job = core
+        .job_submit_upload(&peer, src_root, &src_rel, 0, &name)
+        .map_err(|e| e.to_string())?;
+    loop {
+        if incoming_live(core, id, generation).is_none() {
+            let _ = core.job_cancel(job);
+            return Err("The hosted session ended.".into());
+        }
+        let snapshot = core.job_poll(job).map_err(|e| e.to_string())?;
+        match snapshot.state {
+            vnilink::JobState::Complete => return Ok(()),
+            vnilink::JobState::Failed => {
+                return Err(snapshot
+                    .error
+                    .unwrap_or_else(|| "The transfer failed.".into()));
+            }
+            vnilink::JobState::Cancelled => return Err("The transfer was cancelled.".into()),
+            vnilink::JobState::WaitingDecision => {
+                // A name conflict waits on the receiver's decision in its
+                // Files window; keep polling rather than failing the send.
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            _ => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
     }
-    let file = std::fs::File::open(path).map_err(|_| "The file could not be read.")?;
-    if !file
-        .metadata()
-        .map_err(|_| "The file could not be read.")?
-        .is_file()
-    {
-        return Err("Choose a regular file.".into());
-    }
-    let mut bytes = Vec::new();
-    file.take(vnilink::MAX_FILE_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "The file could not be read.")?;
-    if bytes.len() > vnilink::MAX_FILE_BYTES {
-        return Err("Files must be 8 MiB or smaller.".into());
-    }
-    let name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or("The file name is unsupported.")?;
-    Ok((name.into(), bytes))
 }
 thread_local! {
     static SENDING: std::cell::RefCell<std::collections::BTreeSet<(u64,u64)>> = const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
@@ -337,23 +272,7 @@ fn send_path(
     feedback(window, "Sending file…");
     let win = window.clone();
     tasks::run(
-        move || {
-            let (name, bytes) = read_file(&path)?;
-            if !core
-                .snapshot()
-                .map_err(|e| e.to_string())?
-                .incoming
-                .is_some_and(|s| {
-                    s.id == id
-                        && s.generation == generation
-                        && s.phase == vnilink::SessionPhase::Active
-                })
-            {
-                return Err("The hosted session ended.".into());
-            }
-            core.publish_file(id, &name, &bytes, false)
-                .map_err(|e| e.to_string())
-        },
+        move || send_file(&core, id, generation, &path),
         move |result| {
             SENDING.with(|s| s.borrow_mut().remove(&key));
             match result {
@@ -411,24 +330,39 @@ pub(super) fn install_drop(
 mod tests {
     use super::*;
     #[test]
-    fn receive_folder_survives_restart_and_reads_are_bounded() {
+    fn upload_plan_names_the_root_relative_source_and_receiver_name() {
         let root = std::env::temp_dir().join(format!("vnilink-file-ui-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        let config = root.join("config");
-        let folder = root.join("my received files");
-        save_folder_to(&config, &folder).unwrap();
-        assert_eq!(read_folder(&config), Some(folder));
-        let empty = root.join("empty");
-        std::fs::write(&empty, []).unwrap();
-        assert_eq!(read_file(&empty).unwrap(), ("empty".into(), vec![]));
-        let large = root.join("large");
-        let file = std::fs::File::create(&large).unwrap();
-        file.set_len(vnilink::MAX_FILE_BYTES as u64 + 1).unwrap();
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(root.clone());
+        let approved = root.join("approved");
+        let nested = approved.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let file = nested.join("large.bin");
+        // Sparse and unread: the plan resolves names, never payload bytes.
+        std::fs::File::create(&file)
+            .unwrap()
+            .set_len(9 * 1024 * 1024)
+            .unwrap();
         assert_eq!(
-            read_file(&large).unwrap_err(),
-            "Files must be 8 MiB or smaller."
+            upload_plan(&file, &[(4, approved.clone())]).unwrap(),
+            (4, "nested/large.bin".into(), "large.bin".into())
         );
-        assert!(read_file(&root).is_err());
-        std::fs::remove_dir_all(root).unwrap();
+        // A file directly under the root keeps a flat relative path.
+        let top = approved.join("top.txt");
+        std::fs::write(&top, []).unwrap();
+        assert_eq!(
+            upload_plan(&top, &[(4, approved.clone())]).unwrap(),
+            (4, "top.txt".into(), "top.txt".into())
+        );
+        // Outside every root, or a bare root itself, is refused.
+        let outside = root.join("approved-sibling");
+        std::fs::write(&outside, []).unwrap();
+        assert!(upload_plan(&outside, &[(4, approved.clone())]).is_err());
+        assert!(upload_plan(&approved, &[(4, approved.clone())]).is_err());
     }
 }

@@ -10,7 +10,91 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use vnilink::{Core, InputEvent, LocalKey, PointerButton, SessionInfo, SessionPhase};
-use vnilink_media::{ControllerOutput, ControllerVideo, RawFrame};
+use vnilink_media::{ControllerOutput, ControllerVideo, DecodedFrame};
+
+/// Native runtime ownership, shared by the video worker and input callbacks.
+/// Closing during Open cancels the admitted record before the backend replies.
+struct DesktopBackend {
+    core: Arc<Core>,
+    state: Mutex<(
+        bool,
+        Option<vnilink::ServiceInfo>,
+        Option<Arc<vnilink::RemoteDesktopService>>,
+    )>,
+}
+impl DesktopBackend {
+    fn new(core: Arc<Core>) -> Self {
+        Self {
+            core,
+            state: Mutex::new((false, None, None)),
+        }
+    }
+    fn open(
+        &self,
+        session: &SessionInfo,
+    ) -> Result<Arc<vnilink::RemoteDesktopService>, vnilink::Error> {
+        let info = self.core.attach_controller_service(
+            session.id,
+            session.generation,
+            vnilink::ServiceKind::Desktop,
+        )?;
+        {
+            let mut state = self.state.lock().unwrap();
+            if state.0 {
+                drop(state);
+                let _ = self.core.close_controller_service(info.id, info.generation);
+                let _ = self.core.forget_controller_service(info.id);
+                return Err(vnilink::Error::NoSession);
+            }
+            state.1 = Some(info.clone());
+        }
+        let next = match self.core.open_desktop_service(info.id, info.generation) {
+            Ok(owner) => Arc::new(owner),
+            Err(error) => {
+                self.close();
+                return Err(error);
+            }
+        };
+        let mut state = self.state.lock().unwrap();
+        if state.0 {
+            drop(state);
+            next.close();
+            return Err(vnilink::Error::NoSession);
+        }
+        state.2 = Some(next.clone());
+        Ok(next)
+    }
+    fn current(&self) -> Option<Arc<vnilink::RemoteDesktopService>> {
+        let state = self.state.lock().unwrap();
+        if state.0 {
+            return None;
+        }
+        state
+            .2
+            .as_ref()
+            .filter(|owner| !owner.is_cancelled())
+            .cloned()
+    }
+    fn close(&self) {
+        let (info, owner) = {
+            let mut state = self.state.lock().unwrap();
+            state.0 = true;
+            (state.1.take(), state.2.take())
+        };
+        if let Some(owner) = owner {
+            owner.close();
+        }
+        if let Some(info) = info {
+            let _ = self.core.close_controller_service(info.id, info.generation);
+            let _ = self.core.forget_controller_service(info.id);
+        }
+    }
+}
+impl Drop for DesktopBackend {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
 
 pub(crate) struct Viewer {
     pub window: adw::ApplicationWindow,
@@ -20,7 +104,9 @@ pub(crate) struct Viewer {
     stack: gtk::Stack,
     stop: Arc<AtomicBool>,
     pub session: SessionInfo,
+    desktop: Arc<DesktopBackend>,
     size: Rc<Cell<(u16, u16)>>,
+    frame_source: Rc<Cell<(u64, u64)>>,
     release_input: RefCell<Option<Rc<dyn Fn()>>>,
     active_handler: RefCell<Option<glib::SignalHandlerId>>,
 }
@@ -48,7 +134,13 @@ impl Viewer {
         header.set_show_end_title_buttons(false);
         header.set_title_widget(Some(&adw::WindowTitle::new(&title, "Remote desktop")));
         let tools = gtk::MenuButton::builder().label("Session").build();
-        tools.set_popover(Some(&session_popover(&window, core.clone(), &session)));
+        let desktop = Arc::new(DesktopBackend::new(core.clone()));
+        tools.set_popover(Some(&session_popover(
+            &window,
+            core.clone(),
+            &session,
+            desktop.clone(),
+        )));
         header.pack_start(&tools);
         let files_window = gtk::Button::with_label("Files…");
         files_window.set_tooltip_text(Some("Browse both computers and copy files either way"));
@@ -145,27 +237,13 @@ impl Viewer {
             stack,
             stop: Arc::new(AtomicBool::new(false)),
             session,
+            desktop,
             size: Rc::new(Cell::new((0, 0))),
+            frame_source: Rc::new(Cell::new((0, 0))),
             release_input: RefCell::new(None),
             active_handler: RefCell::new(None),
         });
-        viewer.install_input(core.clone());
-        let transfer_events = core.subscribe().ok();
-        let owner = Rc::downgrade(&viewer);
-        glib::timeout_add_local(Duration::from_millis(200), move || {
-            let Some(viewer) = owner.upgrade().filter(|v| !v.stop.load(Ordering::Relaxed)) else {
-                return ControlFlow::Break;
-            };
-            if let Some(events) = &transfer_events {
-                while let Some(event) = events.try_recv() {
-                    if matches!(event, vnilink::CoreEvent::TransferCompleted { id } if id == viewer.session.id)
-                    {
-                        toasts.add_toast(adw::Toast::new("File saved in your receive folder."));
-                    }
-                }
-            }
-            ControlFlow::Continue
-        });
+        viewer.install_input();
         let weak = Rc::downgrade(&viewer);
         let disconnect_core = core.clone();
         disconnect.connect_clicked(move |_| {
@@ -176,6 +254,12 @@ impl Viewer {
         viewer
     }
 
+    pub(crate) fn desktop_owner(&self) -> Option<Arc<vnilink::RemoteDesktopService>> {
+        self.desktop.current()
+    }
+    pub(crate) fn is_retired(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
     pub(crate) fn deactivate(&self) {
         if let Some(release) = self.release_input.borrow().as_ref() {
             release();
@@ -187,49 +271,55 @@ impl Viewer {
             self.window.disconnect(handler);
         }
         self.stop.store(true, Ordering::Relaxed);
+        self.desktop.close();
         self.picture.set_paintable(None::<&gtk::gdk::Paintable>);
     }
 
-    pub(crate) fn show_frame(&self, frame: &RawFrame) {
+    pub(crate) fn show_frame(&self, frame: &DecodedFrame) {
         // X11's BGRx and decoded BGRA may have a zero fourth byte. The remote
         // desktop is opaque, so normalize alpha rather than painting it transparent.
-        let mut pixels = frame.pixels().to_vec();
+        let picture = &frame.frame;
+        let mut pixels = picture.pixels().to_vec();
         for row in pixels
-            .chunks_mut(frame.stride())
-            .take(usize::from(frame.height()))
+            .chunks_mut(picture.stride())
+            .take(usize::from(picture.height()))
         {
-            for pixel in row[..usize::from(frame.width()) * 4].chunks_exact_mut(4) {
+            for pixel in row[..usize::from(picture.width()) * 4].chunks_exact_mut(4) {
                 pixel[3] = 255;
             }
         }
         let bytes = glib::Bytes::from_owned(pixels);
         let texture = gtk::gdk::MemoryTexture::new(
-            i32::from(frame.width()),
-            i32::from(frame.height()),
+            i32::from(picture.width()),
+            i32::from(picture.height()),
             gtk::gdk::MemoryFormat::B8g8r8a8,
             &bytes,
-            frame.stride(),
+            picture.stride(),
         );
         self.picture.set_paintable(Some(&texture));
-        self.size.set((frame.width(), frame.height()));
+        self.size.set((picture.width(), picture.height()));
+        self.frame_source.set((frame.display_id, frame.revision));
         self.stack.set_visible_child_name("desktop");
     }
 
     pub(crate) fn start(self: &Rc<Self>, core: Arc<Core>) {
-        let latest: Arc<Mutex<Option<Result<RawFrame, String>>>> = Arc::new(Mutex::new(None));
+        let latest: Arc<Mutex<Option<Result<DecodedFrame, String>>>> = Arc::new(Mutex::new(None));
         let delivery = latest.clone();
         let stop = self.stop.clone();
         let session = self.session.clone();
         let worker = core.clone();
+        let desktop = self.desktop.clone();
         std::thread::spawn(move || {
             let result = (|| -> Result<(), String> {
+                let owner = desktop.open(&session).map_err(|e| e.to_string())?;
+                owner.acquire_control().map_err(|e| e.to_string())?;
                 // A reconnect's previous decoder may still be releasing its subscription.
                 let mut subscription = None;
                 for _ in 0..20 {
                     if stop.load(Ordering::Relaxed) {
                         return Ok(());
                     }
-                    match worker.subscribe_session_video(session.id, session.generation) {
+                    match owner.subscribe_video() {
                         Ok(value) => {
                             subscription = Some(value);
                             break;
@@ -241,7 +331,6 @@ impl Viewer {
                 let subscription =
                     subscription.ok_or("The previous video session is still closing.")?;
                 let mut controller = ControllerVideo::new(vnilink_linux::LinuxDecoder::new());
-                let mut ticks = 0u32;
                 while !stop.load(Ordering::Relaxed) {
                     let current = worker
                         .controller_session(session.id)
@@ -254,18 +343,14 @@ impl Viewer {
                         return Err("The session ended or is reconnecting.".into());
                     }
                     let Some(frame) = subscription.recv_timeout(Duration::from_millis(100)) else {
-                        ticks = ticks.saturating_add(1);
-                        if ticks % 20 == 0 {
-                            let _ = worker.auto_quality_tick(session.id);
-                        }
                         continue;
                     };
-                    ticks = ticks.saturating_add(1);
-                    if ticks % 20 == 0 {
-                        let _ = worker.auto_quality_tick(session.id);
-                    }
+                    let began = std::time::Instant::now();
                     match controller.push(&frame).map_err(|e| e.to_string())? {
                         ControllerOutput::Decoded(frame) => {
+                            let _ = owner.report_decode_duration(
+                                began.elapsed().as_micros().min(5_000_000) as u64,
+                            );
                             *delivery.lock().unwrap() = Some(Ok(frame))
                         }
                         ControllerOutput::Skipped => {}
@@ -286,7 +371,12 @@ impl Viewer {
             if viewer.stop.load(Ordering::Relaxed) {
                 return ControlFlow::Break;
             }
-            if let Ok(Some(cursor)) = core.cursor(viewer.session.id, viewer.session.generation) {
+            if let Ok(Some(cursor)) = viewer
+                .desktop
+                .current()
+                .ok_or(vnilink::Error::NoSession)
+                .and_then(|owner| owner.cursor())
+            {
                 if !cursor.visible {
                     viewer.picture.set_cursor_from_name(Some("none"));
                 } else if let Some(image) = cursor.image.as_ref() {
@@ -322,8 +412,8 @@ impl Viewer {
                         viewer.show_frame(&frame);
                         viewer.status.set_label(&format!(
                             "{} × {} · Click to send keyboard input",
-                            frame.width(),
-                            frame.height()
+                            frame.frame.width(),
+                            frame.frame.height()
                         ));
                     }
                     Err(error) => {
@@ -338,7 +428,7 @@ impl Viewer {
         });
     }
 
-    fn install_input(&self, core: Arc<Core>) {
+    fn install_input(&self) {
         enum Command {
             Event(InputEvent),
             Key(u16, bool, String),
@@ -357,10 +447,8 @@ impl Viewer {
             }
             ControlFlow::Continue
         });
-        let id = self.session.id;
-        let generation = self.session.generation;
         let stop = self.stop.clone();
-        let worker = core.clone();
+        let desktop = self.desktop.clone();
         std::thread::spawn(move || {
             while !stop.load(Ordering::Relaxed) {
                 let command = match receiver.recv_timeout(Duration::from_millis(50)) {
@@ -368,58 +456,53 @@ impl Viewer {
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
                     Err(_) => break,
                 };
+                let Some(owner) = desktop.current() else {
+                    continue;
+                };
+                if owner.control_state().ok() != Some(vnilink::DesktopControlState::Controlling) {
+                    continue;
+                }
                 let result = match command {
-                    Command::Event(event) => worker.submit_input(id, generation, event),
+                    Command::Event(event) => owner.submit_input(event),
                     Command::Paste(usage, text, clipboard) => {
                         if let Ok(Some(copy)) = clipboard.recv_timeout(Duration::from_millis(500)) {
                             // Apply the clipboard before the shortcut, on the same
                             // ordered input worker; UI and video remain responsive.
-                            if let Err(e) = worker.submit_clipboard(id, generation, &copy) {
+                            if let Err(e) = owner.submit_clipboard(&copy) {
                                 let _ = notices
                                     .try_send(format!("Clipboard paste could not sync: {e}"));
                             }
                         }
-                        worker.submit_local_key(
-                            id,
-                            generation,
-                            LocalKey {
-                                usage,
-                                down: true,
-                                text: &text,
-                            },
-                        )
-                    }
-                    Command::Key(usage, down, text) => worker.submit_local_key(
-                        id,
-                        generation,
-                        LocalKey {
+                        owner.submit_local_key(LocalKey {
                             usage,
-                            down,
+                            down: true,
                             text: &text,
-                        },
-                    ),
+                            composing: false,
+                        })
+                    }
+                    Command::Key(usage, down, text) => owner.submit_local_key(LocalKey {
+                        usage,
+                        down,
+                        text: &text,
+                        composing: false,
+                    }),
                 };
-                if result.is_err() {
-                    break;
+                if let Err(error) = result {
+                    let _ = notices.try_send(error.to_string());
                 }
             }
         });
         let fail_stop = self.stop.clone();
         let status = self.status.clone();
+        let overflow_desktop = self.desktop.clone();
         let enqueue: Rc<dyn Fn(Command)> = Rc::new(move |command| {
             if sender.try_send(command).is_err() {
                 fail_stop.store(true, Ordering::Relaxed);
                 status.set_label("Input stopped. Disconnect and reconnect to continue.");
-                let core = core.clone();
+                let desktop = overflow_desktop.clone();
                 tasks::run(
                     move || {
-                        if core
-                            .controller_session(id)
-                            .ok()
-                            .is_some_and(|s| s.id == id && s.generation == generation)
-                        {
-                            core.disconnect_session(id).map_err(|e| e.to_string())?;
-                        }
+                        desktop.close();
                         Ok(())
                     },
                     |_| {},
@@ -427,13 +510,39 @@ impl Viewer {
             }
         });
         let send = enqueue.clone();
+        let pointer_desktop = self.desktop.clone();
+        let chosen = Rc::new(Cell::new(0u64));
+        let sent_revision = Rc::new(Cell::new(0u64));
+        // Fresh source per input event: the picture fraction maps onto
+        // the displayed source's extent, never onto the handshake
+        // monitor. Motion and clicks share one resolver over the same
+        // cells, and each event resolves once, so scaling, selection
+        // and placement always agree on one topology entry.
+        let extent_desktop = self.desktop.clone();
+        let extent_chosen = Rc::clone(&chosen);
+        let extent_source = Rc::clone(&self.frame_source);
+        let resolve: Rc<dyn Fn() -> Option<vnilink::DisplayInfo>> = Rc::new(move || {
+            resolve_pointer_display(&extent_desktop, &extent_chosen, extent_source.get())
+        });
+        let motion_chosen = Rc::clone(&chosen);
+        let motion_revision = Rc::clone(&sent_revision);
         install_pointer_motion(
             &self.picture,
             self.size.clone(),
-            (self.session.monitor_width, self.session.monitor_height),
-            move |x, y| send(Command::Event(InputEvent::pointer(x, y))),
+            Rc::clone(&resolve),
+            move |x, y, display| {
+                if let Some(event) = desktop_pointer(
+                    &pointer_desktop,
+                    display,
+                    x,
+                    y,
+                    &motion_chosen,
+                    &motion_revision,
+                ) {
+                    send(Command::Event(event));
+                }
+            },
         );
-        let host = (self.session.monitor_width, self.session.monitor_height);
         let held_buttons = Rc::new(RefCell::new(BTreeSet::new()));
         let click = gtk::GestureClick::new();
         click.set_button(0);
@@ -441,21 +550,37 @@ impl Viewer {
         let size = self.size.clone();
         let send = enqueue.clone();
         let held = held_buttons.clone();
+        let click_desktop = self.desktop.clone();
+        let click_chosen = Rc::clone(&chosen);
+        let click_revision = Rc::clone(&sent_revision);
+        let click_resolve = Rc::clone(&resolve);
         click.connect_pressed(move |gesture, _, x, y| {
             let Some(picture) = picture.upgrade() else {
                 return;
             };
-            let Some((x, y)) = crate::viewer::pointer(
+            let Some(display) = click_resolve() else {
+                return;
+            };
+            let Some((x, y)) = vnilink_linux::pointer(
                 x,
                 y,
                 (f64::from(picture.width()), f64::from(picture.height())),
                 size.get(),
-                host,
+                (display.width, display.height),
             ) else {
                 return;
             };
             picture.grab_focus();
-            send(Command::Event(InputEvent::pointer(x, y)));
+            if let Some(event) = desktop_pointer(
+                &click_desktop,
+                display,
+                x,
+                y,
+                &click_chosen,
+                &click_revision,
+            ) {
+                send(Command::Event(event));
+            }
             if let Some(button) = pointer_button(gesture.current_button()) {
                 held.borrow_mut().insert(gesture.current_button());
                 send(Command::Event(InputEvent::button_down(button)));
@@ -470,20 +595,32 @@ impl Viewer {
             }
         });
         self.picture.add_controller(click);
-        let scroll = gtk::EventControllerScroll::new(
-            gtk::EventControllerScrollFlags::BOTH_AXES | gtk::EventControllerScrollFlags::DISCRETE,
-        );
+        let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
         let send = enqueue.clone();
         let picture = self.picture.downgrade();
-        scroll.connect_scroll(move |_, dx, dy| {
+        let scroll_remainder = Cell::new((0.0, 0.0));
+        scroll.connect_scroll(move |scroll, dx, dy| {
             let Some(picture) = picture.upgrade() else {
                 return Propagation::Proceed;
             };
             if picture.has_focus() {
-                send(Command::Event(InputEvent::wheel(
-                    dx.round().clamp(-32768., 32767.) as i16,
-                    dy.round().clamp(-32768., 32767.) as i16,
-                )));
+                if dx.is_finite() && dy.is_finite() {
+                    let factor = if scroll.unit() == gtk::gdk::ScrollUnit::Wheel {
+                        120.0
+                    } else {
+                        12.0
+                    };
+                    let old = scroll_remainder.get();
+                    let limit = f64::from(vnilink::MAX_PRECISE_WHEEL);
+                    let x = (dx * factor + old.0).clamp(-limit, limit);
+                    let y = (dy * factor + old.1).clamp(-limit, limit);
+                    let ix = x.trunc() as i32;
+                    let iy = y.trunc() as i32;
+                    scroll_remainder.set((x - f64::from(ix), y - f64::from(iy)));
+                    if ix != 0 || iy != 0 {
+                        send(Command::Event(InputEvent::precise_wheel(ix, iy)));
+                    }
+                }
                 Propagation::Stop
             } else {
                 Propagation::Proceed
@@ -598,6 +735,8 @@ fn pointer_button(button: u32) -> Option<PointerButton> {
         1 => Some(PointerButton::Left),
         2 => Some(PointerButton::Middle),
         3 => Some(PointerButton::Right),
+        8 => Some(PointerButton::Back),
+        9 => Some(PointerButton::Forward),
         _ => None,
     }
 }
@@ -606,6 +745,7 @@ fn session_popover(
     window: &adw::ApplicationWindow,
     core: Arc<Core>,
     session: &SessionInfo,
+    desktop: Arc<DesktopBackend>,
 ) -> gtk::Popover {
     let popover = gtk::Popover::new();
     let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
@@ -664,10 +804,9 @@ fn session_popover(
     automatic.set_max_width_chars(36);
     automatic.set_xalign(0.0);
     content.append(&automatic);
-    let generation = session.generation;
     let text = gtk::Button::with_label("Send text…");
     content.append(&text);
-    let worker = core.clone();
+    let desktop = desktop.clone();
     let win = window.clone();
     text.connect_clicked(move |_| {
         let dialog = adw::MessageDialog::new(
@@ -680,17 +819,19 @@ fn session_popover(
         dialog.set_extra_child(Some(&entry));
         dialog.add_responses(&[("cancel", "Cancel"), ("send", "Send")]);
         dialog.set_response_appearance("send", adw::ResponseAppearance::Suggested);
-        let worker = worker.clone();
+        let desktop = desktop.clone();
         let win = win.clone();
         dialog.connect_response(None, move |_, response| {
             if response == "send" {
                 let text = entry.text().to_string();
-                let worker = worker.clone();
+                let desktop = desktop.clone();
                 let win = win.clone();
                 tasks::run(
                     move || {
-                        worker
-                            .submit_text(id, generation, &text)
+                        desktop
+                            .current()
+                            .ok_or_else(|| vnilink::Error::NoSession.to_string())?
+                            .submit_text(&text)
                             .map_err(|e| e.to_string())
                     },
                     move |r| {
@@ -712,16 +853,80 @@ fn session_popover(
 }
 
 fn core_disconnect(viewer: &Viewer, core: &Core) -> Result<(), vnilink::Error> {
-    core.disconnect_session(viewer.session.id)
+    let _ = core;
+    viewer.retire();
+    viewer.status.set_label("Disconnected");
+    Ok(())
+}
+
+/// Resolve the live topology entry the pointer acts on. A stamped frame
+/// names its exact live source: id and revision must both match, or the
+/// held picture is stale and the pointer is fenced until matching
+/// pixels arrive. The remembered preference never overrides an attested
+/// displayed source. Only unstamped whole-desktop pictures fall back to
+/// preferred-or-unique matching, and an ambiguous frame sends nothing.
+/// Each input event resolves once; scaling, selection and placement
+/// share the returned entry, so a topology change between events can
+/// only drop one event, never misdirect it.
+fn resolve_pointer_display(
+    backend: &DesktopBackend,
+    chosen: &Cell<u64>,
+    frame_source: (u64, u64),
+) -> Option<vnilink::DisplayInfo> {
+    let desktop = backend.current()?;
+    let displays = desktop.topology().ok()?;
+    let (frame_id, frame_revision) = frame_source;
+    if frame_id != 0 {
+        vnilink_linux::display_for_frame_id(&displays, frame_id, frame_revision)
+    } else {
+        let preferred = match chosen.get() {
+            0 => None,
+            id => Some(id),
+        };
+        vnilink_linux::display_for_picture(&displays, preferred).or_else(|| {
+            // No preferred id yet, or it left the topology: fall back to
+            // the unique geometry match instead of stranding the session
+            // with an id that can never become chosen.
+            chosen.set(0);
+            let info = desktop.desktop_info().ok()?;
+            vnilink_linux::display_for_frame(&displays, (info.monitor_width, info.monitor_height))
+        })
+    }
+}
+
+/// Map source pixels onto the resolved display and select it once per
+/// revision. The point was already scaled to the display's extent from
+/// the same resolution, so placement only bounds-checks and adds the
+/// origin. Selection routes through a fresh service handle: the handle
+/// is stable across topology updates, while the entry snapshot stays
+/// the resolved one.
+fn desktop_pointer(
+    backend: &DesktopBackend,
+    display: vnilink::DisplayInfo,
+    x: u16,
+    y: u16,
+    chosen: &Cell<u64>,
+    sent_revision: &Cell<u64>,
+) -> Option<InputEvent> {
+    if sent_revision.get() != display.revision {
+        backend.current()?.select_displays(&[display.id]).ok()?;
+        sent_revision.set(display.revision);
+        chosen.set(display.id);
+    }
+    let (x, y) = vnilink_linux::place_on_display(x, y, display)?;
+    Some(InputEvent::pointer(x, y, display.id, display.revision))
 }
 
 /// Mouse motion belongs to the image under the pointer; keyboard focus is
 /// acquired by clicking and is handled separately by the key controller.
+/// The resolver names the displayed source fresh per motion event; its
+/// extent scales the picture fraction, and the resolved entry travels
+/// with the point so selection and placement agree on one snapshot.
 pub(super) fn install_pointer_motion(
     picture: &gtk::Picture,
     size: Rc<Cell<(u16, u16)>>,
-    host: (u16, u16),
-    send: impl Fn(u16, u16) + 'static,
+    resolve: Rc<dyn Fn() -> Option<vnilink::DisplayInfo>>,
+    send: impl Fn(u16, u16, vnilink::DisplayInfo) + 'static,
 ) -> gtk::EventControllerMotion {
     let picture_for_controller = picture;
     let motion = gtk::EventControllerMotion::new();
@@ -731,17 +936,20 @@ pub(super) fn install_pointer_motion(
         let Some(picture) = picture.upgrade() else {
             return;
         };
-        if let Some((x, y)) = crate::viewer::pointer(
+        let Some(display) = resolve() else {
+            return;
+        };
+        if let Some((x, y)) = vnilink_linux::pointer(
             x,
             y,
             (f64::from(picture.width()), f64::from(picture.height())),
             size.get(),
-            host,
+            (display.width, display.height),
         ) {
             // Replacing the paintable can cause GTK to emit motion without
             // hardware movement. Resending it fights the host's local mouse.
             if last_position.replace(Some((x, y))) != Some((x, y)) {
-                send(x, y);
+                send(x, y, display);
             }
         }
     });

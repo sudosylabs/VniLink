@@ -35,7 +35,7 @@ pub(crate) fn hidden_window_accepts_clipboard() {
     );
 }
 
-pub(crate) fn automatic_text_and_files_contract() {
+pub(crate) fn automatic_text_contract() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     struct Capture;
     impl vnilink::HostCapture for Capture {
@@ -116,7 +116,8 @@ pub(crate) fn automatic_text_and_files_contract() {
         )))
         .unwrap();
     for core in [&native_core, &remote] {
-        core.set_h264_support(true, true).unwrap();
+        core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
+            .unwrap();
         core.set_capture(Box::new(Capture)).unwrap();
     }
     native_core
@@ -130,6 +131,7 @@ pub(crate) fn automatic_text_and_files_contract() {
         )
         .unwrap();
     let grants = vnilink::Grants {
+        view: true,
         control: true,
         clipboard: true,
         transfer: true,
@@ -143,11 +145,21 @@ pub(crate) fn automatic_text_and_files_contract() {
     let root = std::env::temp_dir().join(format!("vnilink-gtk-contract-{}", std::process::id()));
     let local_files = root.join("native");
     let remote_files = root.join("remote");
-    native_core.set_transfer_directory(&local_files).unwrap();
-    remote.set_transfer_directory(&remote_files).unwrap();
+    native_core.set_blob_directory(&local_files).unwrap();
+    remote.set_blob_directory(&remote_files).unwrap();
     remote.start_hosting().unwrap();
-    let session = native_core.connect(&remote.endpoint_id()).unwrap();
+    let pending = native_core
+        .begin_connect_services(&remote.endpoint_id())
+        .unwrap();
+    pump(|| native_core.controller_session(pending.id).unwrap().phase == SessionPhase::Active);
+    let session = native_core.controller_session(pending.id).unwrap();
     let viewer = super::super::viewer::Viewer::build(&window, native_core.clone(), session.clone());
+    viewer.start(native_core.clone());
+    pump(|| {
+        viewer.desktop_owner().is_some_and(|owner| {
+            owner.control_state().ok() == Some(vnilink::DesktopControlState::Controlling)
+        })
+    });
     let controllers = viewer.picture.observe_controllers();
     let keys = controllers
         .iter::<gtk::glib::Object>()
@@ -201,9 +213,17 @@ pub(crate) fn automatic_text_and_files_contract() {
     board.set_text("local copy α");
     pump(|| remote_text.lock().unwrap().as_deref() == Some("local copy α"));
     let count = remote_writes.load(Ordering::Relaxed);
-    let incoming = remote.snapshot().unwrap().incoming.unwrap();
+    let incoming = remote
+        .hosted_services()
+        .unwrap()
+        .into_iter()
+        .find(|owner| {
+            owner.kind == vnilink::ServiceKind::Desktop
+                && owner.phase == vnilink::ServicePhase::Active
+        })
+        .unwrap();
     remote
-        .publish_clipboard(incoming.id, "remote copy β")
+        .publish_desktop_clipboard(incoming.id, incoming.generation, "remote copy β")
         .unwrap();
     let returned = Rc::new(RefCell::new(None::<String>));
     let poll = returned.clone();
@@ -224,28 +244,10 @@ pub(crate) fn automatic_text_and_files_contract() {
         count,
         "remote clipboard echoed to its sender"
     );
-    native_core
-        .submit_file(
-            session.id,
-            session.generation,
-            "out.bin",
-            &[0, 255, 10],
-            false,
-        )
-        .unwrap();
-    remote
-        .publish_file(incoming.id, "in.bin", &[4, 2], false)
-        .unwrap();
-    assert_eq!(
-        std::fs::read(remote_files.join("out.bin")).unwrap(),
-        [0, 255, 10]
-    );
-    assert_eq!(std::fs::read(local_files.join("in.bin")).unwrap(), [4, 2]);
-    assert!(matches!(
-        native_core.submit_file(session.id, session.generation, "out.bin", &[1], false),
-        Err(vnilink::Error::FileExists)
-    ));
-    native_core.disconnect().unwrap();
+    // Bidirectional Files jobs have their own real-disk runtime contracts.
+    // Closing this Desktop leaves its neutral parent independently available.
+    viewer.retire();
+    native_core.disconnect_session(session.id).unwrap();
     viewer.window.close();
     pump(|| {
         remote
@@ -255,11 +257,27 @@ pub(crate) fn automatic_text_and_files_contract() {
             .is_none_or(|s| s.phase != SessionPhase::Active)
     });
     native_core.start_hosting().unwrap();
-    let control = remote.connect(&native_core.endpoint_id()).unwrap();
-    let worker = remote.clone();
+    let pending = remote
+        .begin_connect_services(&native_core.endpoint_id())
+        .unwrap();
+    pump(|| remote.controller_session(pending.id).unwrap().phase == SessionPhase::Active);
+    let control = remote.controller_session(pending.id).unwrap();
+    let owner = remote
+        .attach_controller_service(
+            control.id,
+            control.generation,
+            vnilink::ServiceKind::Desktop,
+        )
+        .unwrap();
+    let desktop = Arc::new(
+        remote
+            .open_desktop_service(owner.id, owner.generation)
+            .unwrap(),
+    );
+    let worker = desktop.clone();
     let (done, result) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = done.send(worker.submit_clipboard(control.id, control.generation, "hidden host γ"));
+        let _ = done.send(worker.submit_clipboard("hidden host γ"));
     });
     pump(|| match result.try_recv() {
         Ok(r) => {
@@ -268,9 +286,17 @@ pub(crate) fn automatic_text_and_files_contract() {
         }
         Err(_) => false,
     });
-    let incoming = native_core.snapshot().unwrap().incoming.unwrap();
+    let incoming = native_core
+        .hosted_services()
+        .unwrap()
+        .into_iter()
+        .find(|owner| {
+            owner.kind == vnilink::ServiceKind::Desktop
+                && owner.phase == vnilink::ServicePhase::Active
+        })
+        .unwrap();
     board.set_text("host return δ");
-    pump(|| remote.clipboard_text().unwrap().as_deref() == Some("host return δ"));
+    pump(|| desktop.clipboard_text().unwrap().as_deref() == Some("host return δ"));
     // Revocation must stop automatic publication even while the session continues.
     native_core
         .authorize(
@@ -285,14 +311,14 @@ pub(crate) fn automatic_text_and_files_contract() {
     let until = std::time::Instant::now() + Duration::from_millis(200);
     pump(|| std::time::Instant::now() >= until);
     assert_eq!(
-        remote.clipboard_text().unwrap().as_deref(),
+        desktop.clipboard_text().unwrap().as_deref(),
         Some("host return δ")
     );
     assert!(matches!(
-        native_core.publish_clipboard(incoming.id, "denied"),
+        native_core.publish_desktop_clipboard(incoming.id, incoming.generation, "denied"),
         Err(vnilink::Error::ClipboardDenied)
     ));
-    remote.disconnect().unwrap();
+    remote.disconnect_session(control.id).unwrap();
     remote.shutdown();
     native_core.shutdown();
     let context = gtk::glib::MainContext::default();

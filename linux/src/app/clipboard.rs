@@ -86,7 +86,7 @@ fn same(core: &Core, session: &SessionInfo) -> bool {
 }
 struct Copy {
     text: String,
-    sessions: Vec<SessionInfo>,
+    sessions: Vec<(SessionInfo, vnilink::ServiceInfo)>,
 }
 #[cfg(test)]
 pub(crate) fn install(window: &adw::ApplicationWindow, core: Arc<Core>) {
@@ -125,7 +125,7 @@ fn install_selected(
                 let Some(core) = worker.upgrade() else {
                     return;
                 };
-                for session in copy.sessions {
+                for (session, desktop) in copy.sessions {
                     if !same(&core, &session)
                         || (session.role == SessionRole::Controller
                             && worker_selected
@@ -134,11 +134,16 @@ fn install_selected(
                     {
                         continue;
                     }
-                    let result = match session.role {
-                        SessionRole::Controller => {
-                            core.submit_clipboard(session.id, session.generation, &copy.text)
+                    let result = match (session.role, desktop) {
+                        (SessionRole::Controller, owner) => core
+                            .submit_controller_desktop_clipboard(
+                                owner.id,
+                                owner.generation,
+                                &copy.text,
+                            ),
+                        (SessionRole::Host, owner) => {
+                            core.publish_desktop_clipboard(owner.id, owner.generation, &copy.text)
                         }
-                        SessionRole::Host => core.publish_clipboard(session.id, &copy.text),
                     };
                     if let Err(e) = result {
                         if !matches!(
@@ -175,10 +180,13 @@ fn install_selected(
         let mut sessions = Vec::new();
         let outgoing = selected_controller(&core, &changed_selected);
         if let Some(s) = outgoing.clone() {
-            sessions.push(s);
+            if let Some(owner) = desktop_owner(&core, &s) {
+                sessions.push((s, owner));
+            }
         }
         if let Some(s) = snapshot
             .incoming
+            .filter(|_| outgoing.is_none())
             .filter(|s| s.phase == SessionPhase::Active)
         {
             if snapshot
@@ -186,7 +194,9 @@ fn install_selected(
                 .iter()
                 .any(|d| d.endpoint_id == s.peer_id && d.grants.clipboard)
             {
-                sessions.push(s);
+                if let Some(owner) = desktop_owner(&core, &s) {
+                    sessions.push((s, owner));
+                }
             }
         }
         if sessions.is_empty() {
@@ -236,13 +246,21 @@ fn install_selected(
             return gtk::glib::ControlFlow::Break;
         };
         let outgoing = selected_controller(&core, &selected);
-        let stamp = outgoing.as_ref().map(|s| (s.id, s.generation));
+        let desktop = outgoing.as_ref().and_then(|s| desktop_owner(&core, s));
+        let stamp = outgoing
+            .as_ref()
+            .map(|s| (s.id, s.generation, desktop.as_ref().map(|d| d.id)));
         let mut received = stamp != clipboard_session;
         clipboard_session = stamp;
         if let Some(events) = &events {
             while let Some(event) = events.try_recv() {
-                if let CoreEvent::ClipboardReceived { id } = event {
-                    received |= outgoing.as_ref().is_some_and(|s| s.id == id);
+                match event {
+                    CoreEvent::DesktopClipboardReceived { service } => {
+                        received |= desktop.as_ref().is_some_and(|owner| {
+                            owner.id == service.id && owner.generation == service.generation
+                        });
+                    }
+                    _ => {}
                 }
             }
             let dropped = events.lagged();
@@ -250,8 +268,11 @@ fn install_selected(
             lagged = dropped;
         }
         if received && outgoing.is_some() {
-            let session = outgoing.as_ref().unwrap();
-            if let Ok(Some(text)) = core.session_clipboard_text(session.id, session.generation) {
+            let text = match desktop.as_ref() {
+                Some(owner) => core.controller_desktop_clipboard_text(owner.id, owner.generation),
+                None => Err(vnilink::Error::NoSession),
+            };
+            if let Ok(Some(text)) = text {
                 let _ = native.apply(&text);
             }
         }
@@ -262,12 +283,26 @@ fn install_selected(
     });
 }
 
+fn desktop_owner(core: &Core, session: &SessionInfo) -> Option<vnilink::ServiceInfo> {
+    let owners = match session.role {
+        SessionRole::Controller => core.controller_services(),
+        SessionRole::Host => core.hosted_services(),
+    }
+    .ok()?;
+    owners.into_iter().find(|owner| {
+        owner.connection_id == session.id
+            && owner.generation == session.generation
+            && owner.kind == vnilink::ServiceKind::Desktop
+            && owner.phase == vnilink::ServicePhase::Active
+    })
+}
+
 fn selected_controller(core: &Core, selected: &Option<Arc<AtomicU64>>) -> Option<SessionInfo> {
     match selected {
         Some(id) => core.controller_session(id.load(Ordering::Relaxed)).ok(),
         None => core.snapshot().ok().and_then(|s| s.outgoing),
     }
-    .filter(|s| s.phase == SessionPhase::Active)
+    .filter(|s| s.phase == SessionPhase::Active && desktop_owner(core, s).is_some())
 }
 
 #[cfg(test)]

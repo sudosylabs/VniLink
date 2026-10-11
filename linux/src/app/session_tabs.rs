@@ -25,7 +25,6 @@ pub(crate) struct SessionTabs {
     window: adw::ApplicationWindow,
     core: Arc<Core>,
     entries: RefCell<BTreeMap<u64, SessionTab>>,
-    closing: RefCell<Vec<u64>>,
 }
 impl SessionTabs {
     pub(crate) fn install(window: &adw::ApplicationWindow, core: Arc<Core>) -> Rc<Self> {
@@ -55,7 +54,6 @@ impl SessionTabs {
             core,
             selected: Arc::new(AtomicU64::new(0)),
             entries: RefCell::new(BTreeMap::new()),
-            closing: RefCell::new(Vec::new()),
         });
         let weak = Rc::downgrade(&tabs);
         tabs.view.connect_close_page(move |view, page| {
@@ -77,8 +75,7 @@ impl SessionTabs {
                         viewer.retire();
                     }
                 }
-                let _ = tabs.core.disconnect_session(id);
-                tabs.closing.borrow_mut().push(id);
+                // The closed tab owns Desktop only; Files/Terminal keep the parent.
             }
             view.close_page_finish(page, true);
             Propagation::Stop
@@ -145,9 +142,14 @@ impl SessionTabs {
             .map(|(id, t)| (*id, t.page.clone()));
         if let Some((id, page)) = existing {
             if self
-                .core
-                .controller_session(id)
-                .is_ok_and(|s| matches!(s.phase, SessionPhase::Closed | SessionPhase::Failed(_)))
+                .entries
+                .borrow()
+                .get(&id)
+                .and_then(|t| t.viewer.as_ref())
+                .is_some_and(|v| v.is_retired())
+                || self.core.controller_session(id).is_ok_and(|s| {
+                    matches!(s.phase, SessionPhase::Closed | SessionPhase::Failed(_))
+                })
             {
                 self.view.close_page(&page);
             } else {
@@ -155,30 +157,7 @@ impl SessionTabs {
                 return Ok(());
             }
         }
-        if let Some(existing) = self.core.controller_sessions()?.into_iter().find(|s| {
-            s.peer_id == peer && !matches!(s.phase, SessionPhase::Closed | SessionPhase::Failed(_))
-        }) {
-            self.core.disconnect_session(existing.id)?;
-            let owner = Rc::downgrade(self);
-            let peer = peer.to_owned();
-            glib::timeout_add_local(Duration::from_millis(50), move || {
-                let Some(tabs) = owner.upgrade() else {
-                    return ControlFlow::Break;
-                };
-                if tabs.core.controller_session(existing.id).is_ok_and(|s| {
-                    !matches!(s.phase, SessionPhase::Closed | SessionPhase::Failed(_))
-                }) {
-                    return ControlFlow::Continue;
-                }
-                let _ = tabs.core.forget_controller_session(existing.id);
-                if let Err(error) = tabs.connect(&peer) {
-                    super::preferences::report(&tabs.window, &error.to_string());
-                }
-                ControlFlow::Break
-            });
-            return Ok(());
-        }
-        let session = self.core.begin_connect(peer)?;
+        let session = self.core.begin_connect_services(peer)?;
         self.add(session);
         Ok(())
     }
@@ -259,16 +238,6 @@ impl SessionTabs {
                 }
             }
         }
-        self.closing
-            .borrow_mut()
-            .retain(|id| match self.core.controller_session(*id) {
-                Ok(s) if matches!(s.phase, SessionPhase::Closed | SessionPhase::Failed(_)) => {
-                    let _ = self.core.forget_controller_session(*id);
-                    false
-                }
-                Err(_) => false,
-                _ => true,
-            });
     }
 }
 fn phase_label(phase: &SessionPhase) -> String {
