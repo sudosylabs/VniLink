@@ -22,7 +22,8 @@ fn start_direct() -> Core {
         RelayMode::Disabled,
     )
     .expect("loopback core");
-    core.set_h264_support(true, true).expect("codec flags");
+    core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .expect("codec flags");
     core
 }
 
@@ -189,6 +190,147 @@ fn listings_are_exact_sorted_and_paged() {
     assert!(core.list_dir(0, "", 0, 0).is_err());
     assert!(core.list_dir(0, "", 0, 501).is_err());
     assert!(format!("{page:?}").contains("beta") == false);
+}
+
+static LIST_PARKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LIST_MAX_UNIT: AtomicU64 = AtomicU64::new(0);
+static LIST_FINISHED: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+static LIST_FINISH_CV: std::sync::Condvar = std::sync::Condvar::new();
+
+fn list_park_probe(unit: u64, cancelled: &std::sync::atomic::AtomicBool) {
+    use std::sync::atomic::Ordering as Seq;
+    LIST_MAX_UNIT.fetch_max(unit, Seq::SeqCst);
+    if LIST_PARKED.swap(true, Seq::SeqCst) {
+        return;
+    }
+    while !cancelled.load(Seq::Acquire) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn list_finish_probe(cancelled: bool) {
+    *LIST_FINISHED.lock().unwrap() = Some(cancelled);
+    LIST_FINISH_CV.notify_all();
+}
+
+/// STD08: detached listing yields the executor and holds no shared lock
+/// (a sibling listing completes while the first is parked), and dropping
+/// the future aborts the worker before anything is enumerated.
+#[test]
+fn parked_list_yields_sibling_and_cancels_before_enumeration() {
+    use std::sync::{Arc, Mutex};
+
+    let scratch = Scratch::new();
+    let root = scratch.join("root");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("alpha.txt"), b"a").unwrap();
+    std::fs::write(root.join("beta.txt"), b"beta-bytes").unwrap();
+    let mut roots = crate::fs::RootSet::default();
+    roots.set(std::slice::from_ref(&root)).unwrap();
+    // Stand-in for the shared file-roots lock: the parked listing must
+    // hold no lock across its worker await, so the sibling locks,
+    // snapshots and completes while the first stays parked.
+    let shared = Arc::new(Mutex::new(roots));
+    let first = shared.lock().unwrap().clone();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let hooks = crate::fs::ListHooks {
+        entry_probe: Some(list_park_probe),
+        finish_probe: Some(list_finish_probe),
+    };
+    let (handle_tx, handle_rx) = std::sync::mpsc::channel();
+    let (sibling_tx, sibling_rx) = std::sync::mpsc::channel();
+    let sibling_shared = shared.clone();
+    // A current-thread runtime only drives tasks under `block_on`; the
+    // driver thread owns it while the test observes from outside.
+    let driver = std::thread::spawn(move || {
+        runtime.block_on(async move {
+            let list = tokio::spawn(crate::fs::list_page_async(
+                first,
+                0,
+                String::new(),
+                0,
+                50,
+                hooks,
+            ));
+            handle_tx.send(list).unwrap();
+            let cap = std::time::Instant::now() + Duration::from_secs(30);
+            while !LIST_PARKED.load(Ordering::SeqCst) {
+                if std::time::Instant::now() > cap {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+            // Spawned only after the park is observed: it must lock the
+            // shared roots, snapshot and finish while parked.
+            tokio::spawn(async move {
+                let snapshot = sibling_shared.lock().unwrap().clone();
+                let page = crate::fs::list_page_async(
+                    snapshot,
+                    0,
+                    String::new(),
+                    0,
+                    50,
+                    crate::fs::ListHooks::none(),
+                )
+                .await;
+                let _ = sibling_tx.send(page.map(|page| page.total));
+            });
+            while LIST_FINISHED.lock().unwrap().is_none() {
+                if std::time::Instant::now() > cap {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+    });
+    // The worker must reach the parked probe; on the old inline path no
+    // probe exists and this times out.
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    while !LIST_PARKED.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "list worker never parked"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Sibling progress while parked: the async worker is free and no
+    // shared lock is held, so a full second listing completes.
+    let sibling = sibling_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("sibling blocked during parked list");
+    assert_eq!(
+        sibling.expect("sibling list failed"),
+        2,
+        "sibling list result changed while parked"
+    );
+    // Cancellation aborts the worker without enumerating anything: only
+    // the pre-access probe fired.
+    let list = handle_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    list.abort();
+    let finished = LIST_FINISHED.lock().unwrap();
+    let (finished, timeout) = LIST_FINISH_CV
+        .wait_timeout_while(finished, Duration::from_secs(5), |done| done.is_none())
+        .unwrap();
+    assert!(
+        !timeout.timed_out(),
+        "list worker never finished after abort"
+    );
+    assert_eq!(
+        *finished,
+        Some(true),
+        "list worker did not report cancellation"
+    );
+    drop(finished);
+    assert_eq!(
+        LIST_MAX_UNIT.load(Ordering::SeqCst),
+        0,
+        "parked list enumerated entries"
+    );
+    driver.join().expect("driver thread panicked");
 }
 
 #[test]
@@ -586,6 +728,7 @@ fn setting_roots_is_refused_during_an_active_session() {
     host.authorize(
         &controller.endpoint_id(),
         crate::session::Grants {
+            view: true,
             control: true,
             clipboard: false,
             transfer: true,
@@ -612,6 +755,7 @@ fn pair_with_transfer(host: &Core, controller: &Core) {
     host.authorize(
         &controller.endpoint_id(),
         crate::session::Grants {
+            view: true,
             control: true,
             clipboard: false,
             transfer: true,
@@ -808,6 +952,7 @@ fn files_only_needs_transfer_not_control_or_decoder() {
     host.authorize(
         &controller.endpoint_id(),
         crate::session::Grants {
+            view: false,
             control: false,
             clipboard: false,
             transfer: true,
@@ -817,12 +962,70 @@ fn files_only_needs_transfer_not_control_or_decoder() {
     host.set_file_roots(vec![root.clone()]).unwrap();
     // Files-only connects without Control grant and without decoder requirement
     // (controller reports no decoder here? Actually test cores have decoder true
-    // via set_h264_support; files-only skips decoder check anyway).
+    // via set_video_codecs; files-only skips decoder check anyway).
     // Disable decoder to prove files-only needs none (desktop connect would fail).
-    controller.set_h264_support(false, false).unwrap();
+    controller
+        .set_video_codecs(crate::VideoCodecCaps::default())
+        .unwrap();
     let session = controller.connect_files(&host.endpoint_id()).unwrap();
     let page = controller
         .fs_list(session.id, session.generation, 0, "", 0, 50)
         .unwrap();
     assert!(page.entries.iter().any(|e| e.name == "shared.txt"));
+}
+
+/// STD05: a directory larger than the list cap reports truncation honestly
+/// from a single bounded pass, and an exactly full directory does not.
+#[test]
+fn large_directory_reports_truncated_honestly() {
+    let scratch = Scratch::new();
+    let big = scratch.join("big");
+    let exact = scratch.join("exact");
+    std::fs::create_dir_all(&big).unwrap();
+    std::fs::create_dir_all(&exact).unwrap();
+    for i in 0..5001 {
+        std::fs::write(big.join(format!("entry-{i:06}")), []).unwrap();
+    }
+    for i in 0..5000 {
+        std::fs::write(exact.join(format!("entry-{i:06}")), []).unwrap();
+    }
+    let core = start_direct();
+    core.set_file_roots(vec![scratch.path.clone()]).unwrap();
+    let root = core.file_roots().unwrap()[0].0;
+    let page = core.list_dir(root, "big", 0, 500).unwrap();
+    assert!(
+        page.truncated,
+        "5001-entry listing claims complete: total={}, returned={}",
+        page.total,
+        page.entries.len()
+    );
+    assert_eq!(page.total, 5000);
+    assert_eq!(page.entries.len(), 500);
+    assert_eq!(page.next_offset, Some(500));
+    let page = core.list_dir(root, "exact", 0, 500).unwrap();
+    assert!(!page.truncated);
+    assert_eq!(page.total, 5000);
+    assert_eq!(page.entries.len(), 500);
+}
+
+/// Persisted pins cannot adopt a different directory at the same path.
+#[test]
+fn persisted_root_pin_refuses_same_path_replacement() {
+    let scratch = Scratch::new();
+    let root = scratch.join("root");
+    std::fs::create_dir(&root).unwrap();
+    let mut roots = crate::fs::RootSet::default();
+    roots.set(std::slice::from_ref(&root)).unwrap();
+    let pin = roots.pin(0).unwrap();
+    let persisted = serde_json::to_vec(&pin).unwrap();
+    std::fs::rename(&root, scratch.join("original")).unwrap();
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("valuable"), b"keep").unwrap();
+    let pin: crate::fs::PinnedRoot = serde_json::from_slice(&persisted).unwrap();
+    let mut restarted = crate::fs::RootSet::default();
+    restarted.set(std::slice::from_ref(&root)).unwrap();
+    assert!(restarted.verify_pin(&pin).is_err());
+    roots.set(std::slice::from_ref(&root)).unwrap();
+    assert!(roots.verify_pin(&pin).is_err());
+    assert_eq!(std::fs::read(root.join("valuable")).unwrap(), b"keep");
 }

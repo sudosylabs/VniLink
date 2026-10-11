@@ -19,7 +19,8 @@ pub(super) fn start_direct() -> Core {
         RelayMode::Disabled,
     )
     .expect("loopback core");
-    core.set_h264_support(true, true).expect("flags");
+    core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .expect("flags");
     core
 }
 
@@ -84,6 +85,7 @@ pub(super) fn pair(host: &Core, controller: &Core) {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: true,
             control: true,
             clipboard: false,
             transfer: false,
@@ -160,7 +162,7 @@ pub(super) fn hides(subscription: &EventSubscription, sample: &str) {
 }
 
 pub(super) fn local<'a>(usage: u16, down: bool, text: &'a str) -> LocalKey<'a> {
-    LocalKey { usage, down, text }
+    LocalKey::new(usage, down, text)
 }
 
 pub(super) fn recording(seen: Arc<Mutex<Vec<Seen>>>, fail_chord: bool) -> RecordingDesktop {

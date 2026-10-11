@@ -14,7 +14,8 @@ use super::support::*;
 
 fn open_loop(store: &MemoryStore, relay: RelaySettings) -> Core {
     let core = Core::open_direct(Arc::new(store.clone()), relay).expect("installation opens");
-    core.set_h264_support(true, true).expect("flags");
+    core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .expect("flags");
     core
 }
 
@@ -103,16 +104,21 @@ fn names_survive_a_restart_and_old_records_still_open() {
     let device = record.trust.get(&peer_id).unwrap();
     assert!(device.grants.control);
 
-    // And the current encoder writes version 3, which round-trips names.
+    // And the current encoder writes version 4, which round-trips names.
     let bytes = installation::encode(
         &secret.to_bytes(),
         &RelaySettings::public_n0(),
         &record.trust,
         &record.replay,
+        &crate::terminal::TerminalPolicy::default(),
+        &crate::job::FileRetentionPolicy::default(),
+        &crate::power::PowerPolicy::default(),
+        &crate::job::FileResourcePolicy::default(),
+        &crate::system::SystemPolicy::default(),
     )
     .unwrap();
     assert_eq!(body[4], 1);
-    assert_eq!(bytes[4], 3);
+    assert_eq!(bytes[4], 4);
     let again = installation::decode(&bytes).unwrap();
     assert!(again.trust.get(&peer_id).is_some());
 }

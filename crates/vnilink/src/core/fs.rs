@@ -46,8 +46,8 @@ impl Core {
         let state = self.alive_state()?;
         if state
             .incoming
-            .as_ref()
-            .is_some_and(|session| !finished(&session.phase))
+            .values()
+            .any(|session| !finished(&session.phase))
         {
             return Err(Error::Busy);
         }
@@ -62,6 +62,13 @@ impl Core {
         Ok(lock(&self.shared.file_roots).snapshot())
     }
 
+    /// Pins one approved root for a direct blob offer. Tests mint pins
+    /// through this so direct offers share the job legs' contract.
+    pub(crate) fn pin_file_root(&self, id: u64) -> Result<crate::fs::PinnedRoot, Error> {
+        self.ensure_alive()?;
+        lock(&self.shared.file_roots).pin(id)
+    }
+
     /// Lists one page of a directory under an approved root.
     pub fn list_dir(
         &self,
@@ -71,8 +78,9 @@ impl Core {
         limit: u16,
     ) -> Result<DirPage, Error> {
         self.ensure_alive()?;
-        let roots = lock(&self.shared.file_roots);
-        fs::list_page(&roots, root, path, offset, limit)
+        // Snapshot under a short lock; enumeration runs off every lock.
+        let snapshot = lock(&self.shared.file_roots).clone();
+        fs::list_page(&snapshot, root, path, offset, limit)
     }
 
     /// Creates one directory level under an approved root.
@@ -355,8 +363,8 @@ async fn dispatch_aux_host(
     };
     let neutral = lock(&shared.state)
         .incoming
-        .as_ref()
-        .is_some_and(|s| s.id == session_id && s.services_only);
+        .get(&session_id)
+        .is_some_and(|s| s.services_only);
     if neutral
         && tag != super::service_stream::TAG_SERVICE
         && tag != super::service_jobs::TAG
@@ -494,6 +502,8 @@ pub(super) async fn handle_fs_request(
     // hold (jobs->state order for renames, consistent with publication):
     // a revoke completing before the mutation prevents it; holding across
     // the anchored syscalls (no awaits) blocks revoke until after.
+    // Listings instead snapshot under short locks and recheck after the
+    // worker await, so slow storage never parks the handler's locks.
     // Reply awaits happen after all locks drop, so futures stay Send.
     let (response, body): (fs::Response, Option<Vec<u8>>) = match request {
         fs::Request::Rename {
@@ -511,9 +521,8 @@ pub(super) async fn handle_fs_request(
             {
                 let jobs_guard = lock(&shared.jobs);
                 let state_guard = lock(&shared.state);
-                let live = matches!(state_guard.incoming.as_ref(), Some(session)
-                    if session.id == session_id
-                        && session.generation == generation
+                let live = matches!(state_guard.incoming.get(&session_id), Some(session)
+                    if session.generation == generation
                         && session.phase == crate::session::SessionPhase::Active
                         && session.peer_key == *peer);
                 if !live {
@@ -543,38 +552,27 @@ pub(super) async fn handle_fs_request(
             limit,
             ..
         } => {
-            // List needs only state (no jobs). Hold state across the anchored
-            // read; reply after drops. Roots nested state->roots; publication
-            // drops roots before jobs->state, so no inversion.
-            let state_guard = lock(&shared.state);
-            let live = matches!(state_guard.incoming.as_ref(), Some(session)
-                if session.id == session_id
-                    && session.generation == generation
-                    && session.phase == crate::session::SessionPhase::Active
-                    && session.peer_key == *peer);
-            if !live {
-                (fs::Response::coded(id, fs::STATUS_STALE), None)
-            } else if !state_guard.trust.granted(peer, Grant::Transfer) {
-                (fs::Response::coded(id, fs::STATUS_DENIED), None)
-            } else {
-                let roots = lock(&shared.file_roots);
-                match fs::list_page(&roots, root, &path, offset, limit) {
-                    Ok(page) => match fs::encode_list_body(&page) {
-                        Ok(body) => (fs::Response::ok(id), Some(body)),
-                        Err(_) => (fs::Response::coded(id, fs::STATUS_ERROR), None),
-                    },
-                    Err(error) => (map_fs_error(id, &error), None),
-                }
-            }
+            serve_list_page(
+                shared,
+                session_id,
+                peer,
+                generation,
+                id,
+                root,
+                &path,
+                offset,
+                limit,
+                fs::ListHooks::none(),
+            )
+            .await
         }
         fs::Request::Mkdir {
             root, path, name, ..
         } => {
             // Mkdir fenced like list: state held across the anchored commit.
             let state_guard = lock(&shared.state);
-            let live = matches!(state_guard.incoming.as_ref(), Some(session)
-                if session.id == session_id
-                    && session.generation == generation
+            let live = matches!(state_guard.incoming.get(&session_id), Some(session)
+                if session.generation == generation
                     && session.phase == crate::session::SessionPhase::Active
                     && session.peer_key == *peer);
             if !live {
@@ -594,11 +592,250 @@ pub(super) async fn handle_fs_request(
     Ok(())
 }
 
+/// Admission gate for one remote listing: stale when the session is
+/// missing, finished, reborn or foreign; denied when the transfer grant
+/// is missing. `None` permits the listing.
+fn list_gate(
+    state: &super::State,
+    session_id: u64,
+    peer: &[u8; 32],
+    generation: u64,
+) -> Option<u8> {
+    let live = matches!(state.incoming.get(&session_id), Some(session)
+        if session.generation == generation
+            && session.phase == crate::session::SessionPhase::Active
+            && session.peer_key == *peer);
+    if !live {
+        Some(fs::STATUS_STALE)
+    } else if !state.trust.granted(peer, Grant::Transfer) {
+        Some(fs::STATUS_DENIED)
+    } else {
+        None
+    }
+}
+
+/// Serves one remote listing: admission under short locks, enumeration
+/// on a bounded worker, then an exact liveness/grant recheck before the
+/// page is encoded. A stale completion never publishes its page.
+async fn serve_list_page(
+    shared: &Shared,
+    session_id: u64,
+    peer: &[u8; 32],
+    generation: u64,
+    id: u32,
+    root: u64,
+    path: &str,
+    offset: u64,
+    limit: u16,
+    hooks: fs::ListHooks,
+) -> (fs::Response, Option<Vec<u8>>) {
+    // Fast gates first, without holding anything across an await.
+    if let Some(status) = list_gate(&lock(&shared.state), session_id, peer, generation) {
+        return (fs::Response::coded(id, status), None);
+    }
+    // Snapshot the approved roots under a short lock; enumeration runs
+    // on a bounded worker with no locks held.
+    let snapshot = lock(&shared.file_roots).clone();
+    let page =
+        match fs::list_page_async(snapshot, root, path.to_owned(), offset, limit, hooks).await {
+            Ok(page) => page,
+            Err(error) => return (map_fs_error(id, &error), None),
+        };
+    // Exact recheck before publishing: a completion that outlived its
+    // session, generation or grant never publishes its page.
+    if let Some(status) = list_gate(&lock(&shared.state), session_id, peer, generation) {
+        return (fs::Response::coded(id, status), None);
+    }
+    match fs::encode_list_body(&page) {
+        Ok(body) => (fs::Response::ok(id), Some(body)),
+        Err(_) => (fs::Response::coded(id, fs::STATUS_ERROR), None),
+    }
+}
+
 fn map_fs_error(id: u32, error: &Error) -> fs::Response {
     match error {
         Error::FileExists => fs::Response::coded(id, fs::STATUS_EXISTS),
         Error::TransferDenied => fs::Response::coded(id, fs::STATUS_DENIED),
         Error::StaleSession => fs::Response::coded(id, fs::STATUS_STALE),
         _ => fs::Response::coded(id, fs::STATUS_ERROR),
+    }
+}
+
+#[cfg(test)]
+mod listing_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::Duration;
+
+    use crate::core::{Core, CoreConfig, Listen};
+
+    static STALE_PARKED: AtomicBool = AtomicBool::new(false);
+    static STALE_RELEASED: AtomicBool = AtomicBool::new(false);
+
+    const STALE_PEER: [u8; 32] = [0xA5; 32];
+
+    fn stale_park_probe(_unit: u64, cancelled: &AtomicBool) {
+        if STALE_PARKED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        while !STALE_RELEASED.load(Ordering::Acquire) && !cancelled.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Forges a live incoming transfer session plus its paired grant, so
+    /// the real serve path (not the wire) is exercised without a peer.
+    fn forge_transfer_session(host: &Core, session_id: u64, generation: u64) {
+        let desktop_stop = tokio::sync::watch::channel(false).0;
+        let stop = tokio::sync::watch::channel(false).0;
+        let session = LiveSession {
+            id: session_id,
+            wire_stamp: crate::protocol::SessionStamp::new(session_id, generation),
+            controller: None,
+            generation,
+            role: crate::session::SessionRole::Host,
+            phase: crate::session::SessionPhase::Active,
+            peer_id: String::new(),
+            peer_key: STALE_PEER,
+            quality: None,
+            codec: 0,
+            separate_cursor: false,
+            files_only: true,
+            services_only: false,
+            desktop_stop,
+            host_held: Arc::new(Mutex::new(crate::input::HeldInput::default())),
+            incoming_slot: None,
+            cursor_outbox: tokio::sync::watch::channel(None).0,
+            input_epoch: Arc::new(AtomicU64::new(1)),
+            desktop_owner: None,
+            monitor_width: 0,
+            monitor_height: 0,
+            peer_topology: Vec::new(),
+            selected_displays: Vec::new(),
+            display_fault: None,
+            stop,
+            outbox: None,
+            video: None,
+            link: None,
+            clipboard: None,
+            clipboard_files: None,
+            published_files: None,
+            published_rev: AtomicU64::new(0),
+        };
+        let mut state = lock(&host.shared.state);
+        state.incoming.insert(session_id, session);
+        state
+            .trust
+            .pair(crate::trust::Device {
+                endpoint_id: STALE_PEER,
+                display_id: String::new(),
+                relays: Vec::new(),
+                direct: Vec::new(),
+                grants: crate::session::Grants {
+                    view: false,
+                    control: false,
+                    clipboard: false,
+                    transfer: true,
+                },
+                terminal: false,
+                camera: false,
+                system_audio: false,
+                microphone: false,
+                recording: false,
+                system_actions: false,
+            })
+            .unwrap();
+    }
+
+    /// STD08: a listing that outlives its grant never publishes its page,
+    /// and a sibling listing completes while the first is parked.
+    #[test]
+    fn stale_list_completion_does_not_publish() {
+        let tag = format!("vnilink-list-stale-{}", std::process::id());
+        let root = std::env::temp_dir().join(&tag).join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("alpha.txt"), b"a").unwrap();
+        std::fs::write(root.join("beta.txt"), b"beta-bytes").unwrap();
+
+        let host = Core::boot(
+            CoreConfig {
+                listen: Listen::Loopback,
+                ..CoreConfig::default()
+            },
+            iroh::RelayMode::Disabled,
+        )
+        .expect("loopback core");
+        host.set_file_roots(vec![root]).unwrap();
+        forge_transfer_session(&host, 41, 7);
+
+        let parked_rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let sibling_rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let hooks = fs::ListHooks {
+            entry_probe: Some(stale_park_probe),
+            finish_probe: None,
+        };
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                parked_rt.block_on(async {
+                    let served =
+                        serve_list_page(&host.shared, 41, &STALE_PEER, 7, 9, 0, "", 0, 50, hooks)
+                            .await;
+                    let _ = result_tx.send(served);
+                });
+            });
+            // Wait for the park: the worker reached the pre-access probe.
+            let deadline = std::time::Instant::now() + Duration::from_secs(8);
+            while !STALE_PARKED.load(Ordering::SeqCst) {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "list worker never parked"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            // Sibling progress while parked: the async path is free and no
+            // shared lock is held, so a full second listing completes.
+            let (sibling, sibling_body) = sibling_rt.block_on(serve_list_page(
+                &host.shared,
+                41,
+                &STALE_PEER,
+                7,
+                10,
+                0,
+                "",
+                0,
+                50,
+                fs::ListHooks::none(),
+            ));
+            assert!(sibling.is_ok(), "sibling list refused while parked");
+            let page =
+                fs::decode_list_body(&sibling_body.expect("sibling body")).expect("sibling decode");
+            assert_eq!(page.total, 2, "sibling list changed while parked");
+            // Revoke the transfer grant while parked, then release: the
+            // stale completion must not publish its page.
+            lock(&host.shared.state)
+                .trust
+                .authorize(&STALE_PEER, crate::session::Grants::default())
+                .unwrap();
+            STALE_RELEASED.store(true, Ordering::SeqCst);
+            let (response, body) = result_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("stale list never completed");
+            assert_eq!(response.id, 9);
+            assert_eq!(
+                response.status,
+                fs::STATUS_DENIED,
+                "stale list was not refused"
+            );
+            assert!(body.is_none(), "stale list published its page");
+        });
+        host.shutdown();
+        std::fs::remove_dir_all(std::env::temp_dir().join(&tag)).unwrap();
     }
 }

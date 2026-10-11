@@ -2,11 +2,19 @@
 
 Source: crates.io enigo 0.6.1, MIT license (LICENSE).
 
-The only runtime change is in src/macos/macos_impl.rs: configure the private
+The macOS patch in src/macos/macos_impl.rs configures the private
 Core Graphics event source with zero local-event suppression interval and
 permit local mouse, keyboard and system events during both suppression states.
 Without this, repeated remote events prevent the Mac owner from using local
-hardware. Linux and Windows implementations are unchanged.
+hardware. The pointer contract also adds `Mouse::scroll_precise`: 120 units per
+wheel detent, positive down/right. macOS posts continuous Core Graphics
+fixed-point line deltas (with ten points per line); Windows forwards the
+signed native wheel delta to SendInput. X11 uses the core adapter's signed
+detent accumulator instead of claiming fractional XTest support.
+
+Windows `raw` now uses the physical E0 prefix for extended flags and supplies
+the low scan byte to SendInput. This keeps keypad Enter distinct from Enter
+and includes both Windows keys, without relying on a virtual-key allowlist.
 
 The native regression queries the real event source, without posting input:
 

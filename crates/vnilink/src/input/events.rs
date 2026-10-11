@@ -10,6 +10,10 @@ pub enum PointerButton {
     Left = 1,
     Right = 2,
     Middle = 3,
+    /// The side button usually labeled Back.
+    Back = 4,
+    /// The side button usually labeled Forward.
+    Forward = 5,
 }
 
 fn direction(value: u8) -> Result<bool, Error> {
@@ -26,6 +30,8 @@ impl PointerButton {
             1 => Ok(Self::Left),
             2 => Ok(Self::Right),
             3 => Ok(Self::Middle),
+            4 => Ok(Self::Back),
+            5 => Ok(Self::Forward),
             _ => Err(Error::Malformed),
         }
     }
@@ -43,19 +49,42 @@ pub enum InputEvent {
         button: PointerButton,
         down: bool,
     },
-    /// Absolute pixels on the host's one monitor. Origin is the top left.
+    /// Desktop pixels on one display. The origin may be negative. `display`
+    /// is the stable id and `revision` is the topology snapshot the controller
+    /// used. A mismatch is rejected and is not moved onto another display.
     Pointer {
-        x: u16,
-        y: u16,
+        x: i32,
+        y: i32,
+        display: u64,
+        revision: u64,
     },
     /// Wheel detents. Positive `dy` scrolls down. Positive `dx` scrolls right.
     Wheel {
         dx: i16,
         dy: i16,
     },
+    /// High-resolution scroll. [`super::WHEEL_DETENT`] units are one detent.
+    /// Positive `dy` scrolls down. Positive `dx` scrolls right. A value
+    /// outside ±[`super::MAX_PRECISE_WHEEL`] is malformed.
+    PreciseWheel {
+        dx: i32,
+        dy: i32,
+    },
+    /// Relative device counts, not desktop pixels. Pointer sensitivity applies
+    /// only to this event. `(0, 0)` is not motion.
+    Motion {
+        dx: i16,
+        dy: i16,
+    },
 }
 
 impl InputEvent {
+    pub(crate) fn validate(self) -> Result<(), Error> {
+        let mut wire = Vec::with_capacity(25);
+        self.encode(&mut wire);
+        Self::decode(&wire).map(|_| ())
+    }
+
     pub fn key_down(usage: u16) -> Self {
         Self::Key { usage, down: true }
     }
@@ -75,12 +104,25 @@ impl InputEvent {
         }
     }
 
-    pub fn pointer(x: u16, y: u16) -> Self {
-        Self::Pointer { x, y }
+    pub fn pointer(x: i32, y: i32, display: u64, revision: u64) -> Self {
+        Self::Pointer {
+            x,
+            y,
+            display,
+            revision,
+        }
     }
 
     pub fn wheel(dx: i16, dy: i16) -> Self {
         Self::Wheel { dx, dy }
+    }
+
+    pub fn precise_wheel(dx: i32, dy: i32) -> Self {
+        Self::PreciseWheel { dx, dy }
+    }
+
+    pub fn motion(dx: i16, dy: i16) -> Self {
+        Self::Motion { dx, dy }
     }
 
     pub(crate) fn encode(self, bytes: &mut Vec<u8>) {
@@ -95,13 +137,30 @@ impl InputEvent {
                 bytes.push(button as u8);
                 bytes.push(u8::from(down));
             }
-            Self::Pointer { x, y } => {
+            Self::Pointer {
+                x,
+                y,
+                display,
+                revision,
+            } => {
                 bytes.push(3);
                 bytes.extend_from_slice(&x.to_be_bytes());
                 bytes.extend_from_slice(&y.to_be_bytes());
+                bytes.extend_from_slice(&display.to_be_bytes());
+                bytes.extend_from_slice(&revision.to_be_bytes());
             }
             Self::Wheel { dx, dy } => {
                 bytes.push(4);
+                bytes.extend_from_slice(&dx.to_be_bytes());
+                bytes.extend_from_slice(&dy.to_be_bytes());
+            }
+            Self::PreciseWheel { dx, dy } => {
+                bytes.push(5);
+                bytes.extend_from_slice(&dx.to_be_bytes());
+                bytes.extend_from_slice(&dy.to_be_bytes());
+            }
+            Self::Motion { dx, dy } => {
+                bytes.push(6);
                 bytes.extend_from_slice(&dx.to_be_bytes());
                 bytes.extend_from_slice(&dy.to_be_bytes());
             }
@@ -123,15 +182,50 @@ impl InputEvent {
                 down: direction(bytes[2])?,
             }),
             2 => Err(Error::Malformed),
-            3 if bytes.len() == 5 => Ok(Self::Pointer {
-                x: u16::from_be_bytes([bytes[1], bytes[2]]),
-                y: u16::from_be_bytes([bytes[3], bytes[4]]),
-            }),
+            3 if bytes.len() == 25 => {
+                let x = i32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
+                let y = i32::from_be_bytes([bytes[5], bytes[6], bytes[7], bytes[8]]);
+                let display = u64::from_be_bytes(bytes[9..17].try_into().expect("8 bytes"));
+                let revision = u64::from_be_bytes(bytes[17..25].try_into().expect("8 bytes"));
+                let bound = u32::try_from(super::MAX_DESKTOP_ORIGIN).unwrap_or(u32::MAX);
+                if display == 0
+                    || revision == 0
+                    || x.unsigned_abs() > bound
+                    || y.unsigned_abs() > bound
+                {
+                    return Err(Error::Malformed);
+                }
+                Ok(Self::Pointer {
+                    x,
+                    y,
+                    display,
+                    revision,
+                })
+            }
             3 => Err(Error::Malformed),
             4 if bytes.len() == 5 => Ok(Self::Wheel {
                 dx: i16::from_be_bytes([bytes[1], bytes[2]]),
                 dy: i16::from_be_bytes([bytes[3], bytes[4]]),
             }),
+            5 if bytes.len() == 9 => {
+                let dx = i32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
+                let dy = i32::from_be_bytes([bytes[5], bytes[6], bytes[7], bytes[8]]);
+                if dx == 0 && dy == 0
+                    || dx.unsigned_abs() > super::MAX_PRECISE_WHEEL as u32
+                    || dy.unsigned_abs() > super::MAX_PRECISE_WHEEL as u32
+                {
+                    return Err(Error::Malformed);
+                }
+                Ok(Self::PreciseWheel { dx, dy })
+            }
+            6 if bytes.len() == 5 => {
+                let dx = i16::from_be_bytes([bytes[1], bytes[2]]);
+                let dy = i16::from_be_bytes([bytes[3], bytes[4]]);
+                if dx == 0 && dy == 0 {
+                    return Err(Error::Malformed);
+                }
+                Ok(Self::Motion { dx, dy })
+            }
             _ => Err(Error::Malformed),
         }
     }
@@ -157,6 +251,22 @@ pub(crate) fn key_text_problem(text: &str) -> Option<&'static str> {
         Some("text entry contains a null byte")
     } else {
         None
+    }
+}
+
+/// Exchanges the primary buttons. Back, Forward, and Middle stay put.
+/// A drag that starts on one button must end on that same swapped button.
+pub(crate) fn swap_pointer_button(event: InputEvent) -> InputEvent {
+    match event {
+        InputEvent::Button { button, down } => InputEvent::Button {
+            button: match button {
+                PointerButton::Left => PointerButton::Right,
+                PointerButton::Right => PointerButton::Left,
+                other => other,
+            },
+            down,
+        },
+        other => other,
     }
 }
 

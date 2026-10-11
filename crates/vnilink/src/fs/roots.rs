@@ -1,12 +1,14 @@
 //! Owner-approved filesystem roots.
 //!
 //! The set starts empty and is replaced wholesale by the owner. A root id
-//! is its position at set time. All access is anchored to directory handles:
+//! is its position at set time. Unix access is anchored to directory handles:
 //! the root is opened `O_NOFOLLOW|O_DIRECTORY` and pinned to its
 //! device+inode, then every component is opened via `openat` with
 //! `O_NOFOLLOW`. A symlink anywhere on the resolved path, including a
 //! parent swapped after listing or the root itself replaced by a symlink,
-//! refuses the operation instead of escaping the approved folder.
+//! refuses the operation instead of escaping the approved folder. Nonempty
+//! Windows root admission is disabled until handle-relative child operations
+//! are available; native root identity alone cannot enforce confinement.
 
 use std::path::{Path, PathBuf};
 
@@ -20,6 +22,7 @@ pub const MAX_ROOTS: usize = 16;
 pub(crate) const NO_ROOTS: &str = "no file roots are set";
 pub(crate) const UNKNOWN_ROOT: &str = "the file root is unknown";
 pub(crate) const NOT_A_DIRECTORY: &str = "the path is not a directory";
+pub(crate) const ROOTS_REBOUND: &str = "the file roots were rebound during the transfer";
 
 #[derive(Debug, Clone)]
 struct Root {
@@ -30,15 +33,90 @@ struct Root {
     ino: u64,
 }
 
-#[derive(Debug, Clone, Default)]
+/// One job leg's pinned root: the identity plus the epoch that admitted
+/// it. The leg serves only this object; a rebind that moves the entry
+/// fails the leg instead of switching sources or destinations mid-job.
+/// Unix and Windows pins carry native object identity across rebind/restart.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct PinnedRoot {
+    pub(crate) epoch: u64,
+    pub(crate) id: u64,
+    pub(crate) dev: u64,
+    pub(crate) ino: u64,
+    pub(crate) path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct RootSet {
     roots: Vec<Root>,
+    epoch: u64,
+}
+
+impl Default for RootSet {
+    fn default() -> Self {
+        // Restart-unique base: epoch equality short-circuits pin
+        // verification ("no re-set since the pin"), which a zero base
+        // cannot promise across a restart — a persisted pin's epoch
+        // could collide with the fresh counter and skip the identity
+        // check that would fail a rebound leg.
+        Self {
+            roots: Vec::new(),
+            epoch: rand::random(),
+        }
+    }
 }
 
 impl RootSet {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.roots.is_empty()
+    }
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// Pin root `id` for a job leg. Fails when the root is unknown, like
+    /// any other resolution.
+    pub(crate) fn pin(&self, id: u64) -> Result<PinnedRoot, Error> {
+        let root = self.root(id)?;
+        Ok(PinnedRoot {
+            epoch: self.epoch,
+            id,
+            dev: root.dev,
+            ino: root.ino,
+            path: root.path.clone(),
+        })
+    }
+
+    /// Verify a leg's pin: the current entry must be the pinned object.
+    /// A matching epoch short-circuits (no rebind ran since the pin); a
+    /// changed epoch re-verifies the full identity, so a same-object
+    /// re-set or a restart with unchanged roots continues while any
+    /// rebound entry fails the leg. Callers must serve nothing on error.
+    pub(crate) fn verify_pin(&self, pin: &PinnedRoot) -> Result<(), Error> {
+        // Epoch equality means no rebind ran since the pin: the entry is
+        // unchanged. (Resolution still validates the id separately.)
+        if self.epoch == pin.epoch {
+            return Ok(());
+        }
+        match self.roots.get(pin.id as usize) {
+            Some(root) if root.dev == pin.dev && root.ino == pin.ino && root.path == pin.path => {
+                Ok(())
+            }
+            _ => Err(Error::InvalidSetting(ROOTS_REBOUND)),
+        }
+    }
+
     pub(crate) fn set(&mut self, paths: &[PathBuf]) -> Result<(), Error> {
         if paths.len() > MAX_ROOTS {
             return Err(Error::InvalidSetting("too many file roots"));
+        }
+        // Path-based child operations cannot enforce confinement on Windows.
+        // Refuse admission rather than expose roots with a check/use race.
+        #[cfg(windows)]
+        if !paths.is_empty() {
+            return Err(Error::Unsupported(
+                "rooted Files operations require handle-relative Windows support",
+            ));
         }
         let mut roots = Vec::with_capacity(paths.len());
         for path in paths {
@@ -73,7 +151,19 @@ impl RootSet {
                     ino,
                 });
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
+            {
+                let file = vnilink_rename::windows::open_directory(&canonical)
+                    .map_err(|_| Error::InvalidSetting("a file root is not usable"))?;
+                let (dev, ino) = vnilink_rename::windows::directory_identity(&file)
+                    .map_err(|_| Error::InvalidSetting("a file root is not usable"))?;
+                roots.push(Root {
+                    path: canonical,
+                    dev,
+                    ino,
+                });
+            }
+            #[cfg(not(any(unix, windows)))]
             {
                 roots.push(Root {
                     path: canonical,
@@ -83,6 +173,7 @@ impl RootSet {
             }
         }
         self.roots = roots;
+        self.epoch += 1;
         Ok(())
     }
 
@@ -178,8 +269,17 @@ impl RootSet {
                     ensure_real_dir(&current)?;
                 }
             }
-            // Non-Unix still revalidates the root itself (symlink check).
             ensure_real_dir(&root.path)?;
+            #[cfg(windows)]
+            {
+                let file = vnilink_rename::windows::open_directory(&root.path)
+                    .map_err(|_| Error::InvalidSetting(UNSAFE_PATH))?;
+                let identity = vnilink_rename::windows::directory_identity(&file)
+                    .map_err(|_| Error::InvalidSetting(UNSAFE_PATH))?;
+                if identity != (root.dev, root.ino) {
+                    return Err(Error::InvalidSetting(UNSAFE_PATH));
+                }
+            }
             Ok(current)
         }
     }
@@ -223,5 +323,22 @@ fn ensure_real_dir(path: &Path) -> Result<(), Error> {
             Err(Error::InvalidSetting(NOT_A_DIRECTORY))
         }
         Err(_) => Err(Error::InvalidSetting(NOT_A_DIRECTORY)),
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_admission_tests {
+    use super::*;
+    #[test]
+    fn nonempty_roots_fail_closed_without_mutating_admission() {
+        let mut roots = RootSet::default();
+        let epoch = roots.epoch();
+        assert!(matches!(
+            roots.set(&[PathBuf::from("C:\\")]),
+            Err(Error::Unsupported(_))
+        ));
+        assert!(roots.snapshot().is_empty());
+        assert_eq!(roots.epoch(), epoch);
+        roots.set(&[]).unwrap();
     }
 }

@@ -6,26 +6,47 @@ use crate::sidestream::{open_stream, write_frame};
 use super::frame::{
     check_len, decode, encode, status_code, status_result, ClipboardRequest, Frame,
 };
+use super::FileSelection;
 
 const DID_NOT_WRITE: &str = "the clipboard frame was not written";
+
+/// One paste: text, a file selection offer, or paste preparation traffic.
+/// Payload bytes never ride here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ClipboardPayload {
+    Text(String),
+    Files {
+        revision: u64,
+        selection: FileSelection,
+    },
+    Prepare {
+        nonce: u64,
+        revision: u64,
+        selection: FileSelection,
+    },
+    FilesReady {
+        nonce: u64,
+        outcome: super::PasteReadyOutcome,
+    },
+}
 
 /// Owns one clipboard stream.
 ///
 /// `dial` is the controller side, which opens the stream and waits for a
-/// status after each paste. The host accepts the stream, applies text, and
-/// writes that status. `on_text` sees incoming text. `allow_outgoing` runs
-/// before this side writes text.
-pub(crate) async fn attach<OnText, Allow>(
+/// status after each paste. The host accepts the stream, applies the payload,
+/// and writes that status. `on_payload` sees incoming payloads.
+/// `allow_outgoing` runs before this side writes.
+pub(crate) async fn attach<OnPayload, Allow>(
     connection: iroh::endpoint::Connection,
     dial: bool,
     requests: tokio::sync::mpsc::Receiver<ClipboardRequest>,
     mut stop_rx: tokio::sync::watch::Receiver<bool>,
     opened: Option<tokio::sync::oneshot::Sender<Result<(), Error>>>,
-    on_text: OnText,
+    on_payload: OnPayload,
     allow_outgoing: Allow,
     expect_status: bool,
 ) where
-    OnText: FnMut(&str) -> Result<(), Error> + Send,
+    OnPayload: FnMut(&ClipboardPayload) -> Result<(), Error> + Send,
     Allow: FnMut() -> Result<(), Error> + Send,
 {
     if *stop_rx.borrow() {
@@ -55,7 +76,7 @@ pub(crate) async fn attach<OnText, Allow>(
                 recv,
                 requests,
                 stop_rx,
-                on_text,
+                on_payload,
                 allow_outgoing,
                 expect_status,
             )
@@ -69,16 +90,16 @@ pub(crate) async fn attach<OnText, Allow>(
     }
 }
 
-pub(crate) async fn exchange<OnText, Allow>(
+pub(crate) async fn exchange<OnPayload, Allow>(
     mut send: iroh::endpoint::SendStream,
     recv: iroh::endpoint::RecvStream,
     mut requests: tokio::sync::mpsc::Receiver<ClipboardRequest>,
     mut stop_rx: tokio::sync::watch::Receiver<bool>,
-    mut on_text: OnText,
+    mut on_payload: OnPayload,
     mut allow_outgoing: Allow,
     expect_status: bool,
 ) where
-    OnText: FnMut(&str) -> Result<(), Error> + Send,
+    OnPayload: FnMut(&ClipboardPayload) -> Result<(), Error> + Send,
     Allow: FnMut() -> Result<(), Error> + Send,
 {
     let mut frames_rx = crate::sidestream::spawn_frame_reader(recv, check_len, decode);
@@ -94,16 +115,36 @@ pub(crate) async fn exchange<OnText, Allow>(
                 }
             }
             request = requests.recv(), if pending.is_none() => {
-                let Some(ClipboardRequest { text, reply }) = request else {
+                let Some(ClipboardRequest { payload, reply }) = request else {
                     break;
                 };
                 if let Err(error) = allow_outgoing() {
                     let _ = reply.send(Err(error));
                     continue;
                 }
+                let frame = match &payload {
+                    ClipboardPayload::Text(text) => Frame::Text(text.clone()),
+                    ClipboardPayload::Files { revision, selection } => Frame::Files {
+                        revision: *revision,
+                        selection: selection.clone(),
+                    },
+                    ClipboardPayload::Prepare {
+                        nonce,
+                        revision,
+                        selection,
+                    } => Frame::Prepare {
+                        nonce: *nonce,
+                        revision: *revision,
+                        selection: selection.clone(),
+                    },
+                    ClipboardPayload::FilesReady { nonce, outcome } => Frame::FilesReady {
+                        nonce: *nonce,
+                        outcome: outcome.clone(),
+                    },
+                };
                 if let Err(error) = write_frame(
                     &mut send,
-                    &Frame::Text(text),
+                    &frame,
                     encode,
                     DID_NOT_WRITE,
                 )
@@ -120,8 +161,27 @@ pub(crate) async fn exchange<OnText, Allow>(
             }
             frame = frames_rx.recv() => {
                 match frame {
-                    Some(Ok(Frame::Text(text))) => {
-                        let result = on_text(&text);
+                    Some(Ok(payload @ (Frame::Text(_) | Frame::Files { .. } | Frame::Prepare { .. } | Frame::FilesReady { .. }))) => {
+                        let payload = match payload {
+                            Frame::Text(text) => ClipboardPayload::Text(text),
+                            Frame::Files { revision, selection } => {
+                                ClipboardPayload::Files { revision, selection }
+                            }
+                            Frame::Prepare {
+                                nonce,
+                                revision,
+                                selection,
+                            } => ClipboardPayload::Prepare {
+                                nonce,
+                                revision,
+                                selection,
+                            },
+                            Frame::FilesReady { nonce, outcome } => {
+                                ClipboardPayload::FilesReady { nonce, outcome }
+                            }
+                            _ => unreachable!("matched a payload frame"),
+                        };
+                        let result = on_payload(&payload);
                         if !expect_status
                             && write_frame(
                                 &mut send,

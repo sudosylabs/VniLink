@@ -8,9 +8,9 @@
 2. Control and Command are still keys. A shortcut such as Command+C stays a shortcut. `set_swap_control_and_command` exchanges those two before the key is sent.
 3. Shift and Alt are sent only when a key that produced no character needs them, such as Shift+Left or Alt+Tab.
 4. Enter, Escape, Backspace, Delete, Tab, arrows, and function keys stay physical keys. A newline or tab in the produced text does not become inserted text.
-5. A press that produces no character is sent as its physical position. The application passes the characters the operating system produced, including repeats. An empty string is not a typed character.
+5. A press that produces no character is sent as its physical position, except an explicitly uncommitted `LocalKey::composing` step in Character/Translate mode. The application passes the characters the operating system produced, including repeats. An empty string is not a typed character.
 6. `KeyboardMode::Map` sends the physical HID usage and ignores the produced text. The host layout decides the glyph. This is RustDesk's Map mode.
-7. `KeyboardMode::Translate` sends a typed character as a request for the host to press the chord in the host layout. Shortcuts stay physical keys, as in Character mode. This is RustDesk's Translate mode: a key combination, not an inserted character. A Linux host reads the X11 keymap and presses Left Shift and Right Alt for group 1. A row of at most four keysyms uses those columns as plain, Shift, Right Alt, and Shift+Right Alt. A wider row follows the X server core packing: group 1 levels 1 and 2 are the first two columns, and levels 3 and 4 are columns 4 and 5. Columns 2 and 3 are the next group, or a copy of the first two, and are not used. A layout that reaches level 3 with a different key still gets Right Alt. A character that is not in group 1 is refused and the session stays up. Windows and macOS hosts refuse Translate. Tests do not open an X server. Wayland input is not claimed.
+7. `KeyboardMode::Translate` sends a typed character as a request for the host to press the chord in the host layout. Shortcuts stay physical keys, as in Character mode. This is RustDesk's Translate mode: a key combination, not an inserted character. A Linux host reads the X11 keymap and presses Left Shift and Right Alt for group 1. A row of at most four keysyms uses those columns as plain, Shift, Right Alt, and Shift+Right Alt. A wider row follows the X server core packing: group 1 levels 1 and 2 are the first two columns, and levels 3 and 4 are columns 4 and 5. Columns 2 and 3 are the next group, or a copy of the first two, and are not used. A layout that reaches level 3 with a different key still gets Right Alt. A character that is not in group 1 is refused and the session stays up. Windows and macOS hosts refuse Translate. Tests do not open an X server. Wayland injection uses the authorized RemoteDesktop portal; Translate on that adapter is still refused.
 
 ## What a physical key does
 
@@ -35,4 +35,13 @@
 
 ## Still open
 
-Windows and Linux injection is not executed by a macOS test run. Enigo sets the Windows extended-key flag when the scan translates to a virtual key on its extended list. That list includes right Control, right Alt, and the arrow and navigation keys. It does not include the Windows key or keypad Enter. Translate on Windows and macOS is refused. The Linux chord lookup is unit-tested against a keymap fixture. Opening the display and pressing the chord is not run by the unit tests. Wayland input is not claimed. A native window and one-monitor capture are still open. README section 11 is not complete.
+Windows and Linux injection is not executed by a macOS test run. Enigo sets the Windows extended-key flag when the scan translates to a virtual key on its extended list. That list includes right Control, right Alt, and the arrow and navigation keys. It does not include the Windows key or keypad Enter. Translate on Windows and macOS is refused. The Linux chord lookup is unit-tested against a keymap fixture. Opening the display and pressing the chord is not run by the unit tests. Wayland injection uses the authorized RemoteDesktop portal; Translate on that adapter is still refused. A native window and one-monitor capture are still open. README section 11 is not complete.
+
+## Pointer and composition extension (October 9, 2026)
+
+See [the input engine contract](../../docs/architecture/input-engine.md) for
+owner-scoped sensitivity/button/wheel policies, fractional scroll, relative
+motion, native side buttons, cursor metadata, and outstanding platform work.
+Character/Translate withhold an uncommitted composition key and inject its final
+commit once; Map continues to send physical transitions. Native IME integration
+and the full layout matrix remain unvalidated.

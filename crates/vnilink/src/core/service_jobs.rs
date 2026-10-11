@@ -32,16 +32,13 @@ pub(super) fn check_owner(state: &State, owner: Option<JobOwner>) -> Result<(), 
         return Err(Error::NoSession);
     }
     let session = if owner.hosted {
-        state.incoming.as_ref()
+        state.incoming.get(&record.info.connection_id)
     } else {
         state.outgoing.get(&record.info.connection_id)
     };
     if state.shut_down
-        || !session.is_some_and(|s| {
-            s.id == record.info.connection_id
-                && s.generation == owner.generation
-                && s.phase == SessionPhase::Active
-        })
+        || !session
+            .is_some_and(|s| s.generation == owner.generation && s.phase == SessionPhase::Active)
     {
         return Err(Error::NoSession);
     }
@@ -152,9 +149,8 @@ impl Core {
         jobs.sort_by_key(|r| r.id);
         Ok(jobs)
     }
-    // Job owners and IDs are immutable. Checking membership before delegating
-    // cannot redirect a concurrent operation to a different owner. The engine
-    // rechecks active ownership at transfer publication and resume boundaries.
+    // Scoped actions and explicit adoption share the owner gate, so an old
+    // handle cannot pass membership then act on a replacement owner.
     fn files_service_job_owner(&self, id: u64, generation: u64, job: u64) -> Result<(), Error> {
         self.ensure_alive()?;
         let jobs = lock(&self.shared.jobs);
@@ -189,6 +185,7 @@ impl Core {
         generation: u64,
         job: u64,
     ) -> Result<JobSnapshot, Error> {
+        let _owner_gate = lock(&self.shared.job_owner_gate);
         self.files_service_job_owner(id, generation, job)?;
         cancel_orphaned(&self.shared);
         self.job_snapshot(job)
@@ -199,6 +196,7 @@ impl Core {
         generation: u64,
         job: u64,
     ) -> Result<JobSnapshot, Error> {
+        let _owner_gate = lock(&self.shared.job_owner_gate);
         self.files_service_job_owner(id, generation, job)?;
         self.job_poll(job)
     }
@@ -208,6 +206,7 @@ impl Core {
         generation: u64,
         job: u64,
     ) -> Result<JobSnapshot, Error> {
+        let _owner_gate = lock(&self.shared.job_owner_gate);
         self.files_service_job_owner(id, generation, job)?;
         self.job_cancel(job)
     }
@@ -217,6 +216,7 @@ impl Core {
         generation: u64,
         job: u64,
     ) -> Result<JobSnapshot, Error> {
+        let _owner_gate = lock(&self.shared.job_owner_gate);
         self.files_service_job_owner(id, generation, job)?;
         self.job_resume(job)
     }
@@ -228,6 +228,7 @@ impl Core {
         choice: crate::ConflictChoice,
         apply_to_remaining: bool,
     ) -> Result<JobSnapshot, Error> {
+        let _owner_gate = lock(&self.shared.job_owner_gate);
         self.files_service_job_owner(id, generation, job)?;
         self.job_resolve(job, choice, apply_to_remaining)
     }
@@ -237,6 +238,7 @@ impl Core {
         generation: u64,
         job: u64,
     ) -> Result<(), Error> {
+        let _owner_gate = lock(&self.shared.job_owner_gate);
         self.files_service_job_owner(id, generation, job)?;
         self.job_forget(job)
     }
@@ -322,6 +324,7 @@ pub(super) async fn serve(
             )
             .await
         }
+        TAG_ADOPT => handle_adopt(shared, peer, send, payload, owner).await,
         _ => Err(()),
     }
 }
@@ -350,4 +353,168 @@ impl Drop for PreparedOffers {
         }
         super::jobs::release_prepared_offers(&self.shared, &self.peer, &self.hashes);
     }
+}
+
+const TAG_ADOPT: u8 = 12;
+#[derive(Serialize, Deserialize)]
+struct AdoptJob {
+    generation: u64,
+    job_id: u64,
+}
+struct AdoptionDrive<'a> {
+    shared: &'a Shared,
+    id: u64,
+}
+impl Drop for AdoptionDrive<'_> {
+    fn drop(&mut self) {
+        lock(&self.shared.job_driving).remove(&self.id);
+    }
+}
+
+impl Core {
+    /// Explicitly claims an inactive scoped job for a fresh Files owner. This
+    /// does not resume it; both sides must durably bind before work restarts.
+    pub fn files_service_adopt_job(
+        &self,
+        id: u64,
+        generation: u64,
+        job: u64,
+    ) -> Result<JobSnapshot, Error> {
+        self.ensure_alive()?;
+        let _gate = lock(&self.shared.job_owner_gate);
+        let (owner, peer_id) = self.files_job_owner(id, generation)?;
+        let peer = parse_endpoint_id(&peer_id)?;
+        cancel_orphaned(&self.shared);
+        if !lock(&self.shared.job_driving).insert(job) {
+            return Err(Error::Busy);
+        }
+        let _driving = AdoptionDrive {
+            shared: &self.shared,
+            id: job,
+        };
+        let (previous, wire_id) = {
+            let jobs = lock(&self.shared.jobs);
+            let record = jobs
+                .get(&job)
+                .ok_or(Error::InvalidSetting("the job is unknown"))?;
+            let state = lock(&self.shared.state);
+            if record.peer_key != peer || record.owner.is_none_or(|o| o.hosted) {
+                return Err(Error::InvalidSetting(
+                    "the job is not a controller-owned Files job for this peer",
+                ));
+            }
+            if record.owner == Some(owner) {
+                return Ok(record.snapshot());
+            }
+            if check_owner(&state, record.owner).is_ok()
+                || !matches!(
+                    record.state,
+                    JobState::Cancelled | JobState::Interrupted | JobState::Failed
+                )
+            {
+                return Err(Error::Busy);
+            }
+            (record.owner, super::jobs::wire_job_id(record))
+        };
+        let payload = job::encode(&AdoptJob {
+            generation,
+            job_id: wire_id,
+        })?;
+        let bytes = self.service_job_round_trip(Some(owner), &peer, TAG_ADOPT, &payload)?;
+        let reply: job::JobReply = job::decode(&bytes)?;
+        if reply.v != job::JOB_VERSION || reply.id != 0 || reply.job_id != wire_id {
+            return Err(Error::Malformed);
+        }
+        if reply.status != job::STATUS_OK {
+            return Err(job::error_for_status(reply.status));
+        }
+        {
+            let mut jobs = lock(&self.shared.jobs);
+            let state = lock(&self.shared.state);
+            check_owner(&state, Some(owner))?;
+            let record = jobs
+                .get_mut(&job)
+                .ok_or(Error::InvalidSetting("the job is unknown"))?;
+            if record.owner != previous {
+                return Err(Error::Busy);
+            }
+            record.owner = Some(owner);
+            // Keep terminal/interrupted state until explicit Resume. This
+            // also fences publication from any old generation.
+        }
+        if let Err(error) = super::jobs::save_jobs(&self.shared) {
+            if let Some(record) = lock(&self.shared.jobs).get_mut(&job) {
+                record.owner = previous;
+            }
+            return Err(error);
+        }
+        self.job_snapshot(job)
+    }
+}
+
+async fn handle_adopt(
+    shared: &Shared,
+    peer: &[u8; 32],
+    send: &mut iroh::endpoint::SendStream,
+    payload: &[u8],
+    owner: JobOwner,
+) -> Result<(), ()> {
+    let request: AdoptJob = job::decode(payload).map_err(|_| ())?;
+    let result = (|| {
+        let mut jobs = lock(&shared.jobs);
+        let state = lock(&shared.state);
+        check_owner(&state, Some(owner))?;
+        if !state.trust.granted(peer, crate::session::Grant::Transfer) {
+            return Err(Error::TransferDenied);
+        }
+        let record = super::jobs::wire_job_mut(&mut jobs, peer, request.job_id)
+            .ok_or(Error::InvalidSetting("the peer job is unknown"))?;
+        if record.owner == Some(owner) {
+            return Ok(());
+        }
+        if record.owner.is_none_or(|o| !o.hosted)
+            || check_owner(&state, record.owner).is_ok()
+            || !matches!(
+                record.state,
+                JobState::Cancelled | JobState::Interrupted | JobState::Failed
+            )
+        {
+            return Err(Error::Busy);
+        }
+        if !lock(&shared.job_driving).insert(record.id) {
+            return Err(Error::Busy);
+        }
+        let _driving = AdoptionDrive {
+            shared,
+            id: record.id,
+        };
+        let previous = record.owner;
+        let local_id = record.id;
+        record.owner = Some(owner);
+        drop(state);
+        drop(jobs);
+        if let Err(error) = super::jobs::save_jobs(shared) {
+            if let Some(record) = lock(&shared.jobs).get_mut(&local_id) {
+                record.owner = previous;
+            }
+            return Err(error);
+        }
+        Ok(())
+    })();
+    let status = match result {
+        Ok(()) => job::STATUS_OK,
+        Err(Error::TransferDenied) => job::STATUS_DENIED,
+        Err(Error::NoSession | Error::StaleSession) => job::STATUS_STALE,
+        _ => job::STATUS_ERROR,
+    };
+    let reply = job::JobReply {
+        v: job::JOB_VERSION,
+        id: 0,
+        status,
+        job_id: request.job_id,
+    };
+    let bytes = job::encode(&reply).map_err(|_| ())?;
+    super::service_stream::write(send, bytes)
+        .await
+        .map_err(|_| ())
 }

@@ -6,17 +6,88 @@
 //! - Linux: `renameat2` with `RENAME_NOREPLACE`.
 //! - macOS: `renameatx_np` with `RENAME_EXCL`.
 //!
-//! Every other platform uses a check-then-rename fallback whose residual
-//! race is documented at [`rename_noreplace`]. Windows gets native
-//! no-replace behavior later through its own adapter (`MoveFileEx` without
-//! `MOVEFILE_REPLACE_EXISTING`); that validation belongs to the Windows
-//! milestone, not to this primitive.
+//! Windows uses MoveFileExW without replacement or copy flags. Remaining
+//! targets use the documented check-then-rename fallback.
+
+#[cfg(windows)]
+pub mod windows;
 
 #[cfg(unix)]
 pub mod anchored;
 
+pub mod recording_retention;
+
 use std::io;
 use std::path::Path;
+
+/// Open an existing regular file for in-place recovery, refusing final symlinks
+/// and multiply linked files. Callers must still validate their own file format.
+pub fn open_single_link_file_rw(path: &Path) -> io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.nlink() != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "recovery requires a single-link regular file",
+            ));
+        }
+        Ok(file)
+    }
+    #[cfg(windows)]
+    {
+        windows::open_single_link_file_rw(path)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "native recovery file checks unavailable",
+        ))
+    }
+}
+
+#[cfg(test)]
+mod recovery_open_tests {
+    use super::*;
+    #[test]
+    fn recovery_open_refuses_aliases_and_preserves_the_original() {
+        let folder = std::env::temp_dir().join(format!(
+            "vnilink-recovery-open-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&folder).unwrap();
+        let file = folder.join("recording.part");
+        std::fs::write(&file, b"unchanged fixture").unwrap();
+        drop(open_single_link_file_rw(&file).unwrap());
+        assert!(open_single_link_file_rw(&folder).is_err());
+        let alias = folder.join("hardlink.part");
+        std::fs::hard_link(&file, &alias).unwrap();
+        assert!(open_single_link_file_rw(&file).is_err());
+        assert!(open_single_link_file_rw(&alias).is_err());
+        std::fs::remove_file(&alias).unwrap();
+        #[cfg(unix)]
+        {
+            let symlink = folder.join("symlink.part");
+            std::os::unix::fs::symlink(&file, &symlink).unwrap();
+            assert!(open_single_link_file_rw(&symlink).is_err());
+        }
+        assert_eq!(std::fs::read(&file).unwrap(), b"unchanged fixture");
+        drop(open_single_link_file_rw(&file).unwrap());
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+}
 
 /// Renames `old` to `new` without replacing an existing destination.
 ///
@@ -27,9 +98,8 @@ use std::path::Path;
 ///
 /// Residual race: on platforms without an atomic primitive this checks for
 /// the destination first and then renames, so a destination created between
-/// the check and the rename can still be replaced. Linux and macOS take the
-/// atomic path; every other target documents this gap until its native
-/// no-replace primitive lands.
+/// the check and the rename can still be replaced. Linux, macOS and Windows take the
+/// atomic path; remaining targets document this gap.
 pub fn rename_noreplace(old: &Path, new: &Path) -> io::Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -39,7 +109,11 @@ pub fn rename_noreplace(old: &Path, new: &Path) -> io::Result<()> {
     {
         rename_macos(old, new)
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(windows)]
+    {
+        windows::rename_noreplace(old, new)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         rename_fallback(old, new)
     }
@@ -100,7 +174,7 @@ fn rename_macos(old: &Path, new: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn rename_fallback(old: &Path, new: &Path) -> io::Result<()> {
     if std::fs::symlink_metadata(new).is_ok() {
         return Err(io::Error::new(
@@ -109,4 +183,19 @@ fn rename_fallback(old: &Path, new: &Path) -> io::Result<()> {
         ));
     }
     std::fs::rename(old, new)
+}
+
+/// Create a recorder-owned file with native retention rights. Exclusive
+/// creation prevents overwriting, while Windows grants delete-by-object rights.
+pub fn create_recording_file(path: &Path) -> io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options
+            .access_mode(0x8000_0000 | 0x4000_0000 | 0x0001_0000)
+            .share_mode(1 | 2 | 4);
+    }
+    options.open(path)
 }

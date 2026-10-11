@@ -5,7 +5,6 @@ use iroh::RelayMode;
 
 use crate::core::{Core, CoreConfig, Listen};
 use crate::error::Error;
-use crate::events::CoreEvent;
 use crate::input::{usage, HostDesktop, InputEvent};
 use crate::session::{Grants, SessionPhase, SessionRole};
 use crate::video::{
@@ -22,13 +21,17 @@ fn start_direct() -> Core {
         RelayMode::Disabled,
     )
     .expect("loopback core");
-    core.set_h264_support(true, true).expect("flags");
+    core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .expect("flags");
     core
 }
 
 fn pair_for_control(host: &Core, controller: &Core) {
-    host.set_h264_support(true, true).unwrap();
-    controller.set_h264_support(true, true).unwrap();
+    host.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .unwrap();
+    controller
+        .set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .unwrap();
     host.start_hosting().unwrap();
     let token = host.create_invitation(Duration::from_secs(60)).unwrap();
     controller.accept_invitation(&token).unwrap();
@@ -39,6 +42,7 @@ fn pair_for_control(host: &Core, controller: &Core) {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: true,
             control: true,
             clipboard: false,
             transfer: false,
@@ -139,7 +143,8 @@ fn encoded_frames_reach_the_controller_without_blocking_input() {
         height: 720,
     }))
     .unwrap();
-    host.set_h264_support(true, false).unwrap();
+    host.set_video_codecs(crate::VideoCodecCaps::encode_only(4096, 4096, "test"))
+        .unwrap();
     let capture_only = host.capabilities();
     assert!(capture_only.desktop_capture);
     assert!(!capture_only.keyboard);
@@ -164,7 +169,6 @@ fn encoded_frames_reach_the_controller_without_blocking_input() {
 
     pair_for_control(&host, &controller);
     let video = controller.subscribe_video().unwrap();
-    let host_events = host.subscribe().unwrap();
     let session = controller.connect(&host.endpoint_id()).unwrap();
     assert_eq!(session.phase, SessionPhase::Active);
     assert_eq!((session.monitor_width, session.monitor_height), (1280, 720));
@@ -226,18 +230,9 @@ fn encoded_frames_reach_the_controller_without_blocking_input() {
     assert_eq!(final_frame.payload, vec![9, 9]);
     assert!(video.try_recv().is_none());
 
-    let event_deadline = Instant::now() + Duration::from_secs(2);
-    let mut saw_keyframe = false;
-    while Instant::now() < event_deadline {
-        if let Some(CoreEvent::KeyframeRequested { id }) =
-            host_events.recv_timeout(Duration::from_millis(50))
-        {
-            assert_eq!(id, session.id);
-            saw_keyframe = true;
-            break;
-        }
-    }
-    assert!(saw_keyframe, "host did not see a keyframe request");
+    // The sender may drain the burst without overflowing on a fast machine.
+    // Overflow recovery is asserted by the bounded-queue tests below; this
+    // integration test checks delivery and independent input progress.
 
     controller
         .submit_input(
@@ -279,7 +274,8 @@ fn a_zero_capture_size_falls_back_to_the_desktop() {
         height: 0,
     }))
     .unwrap();
-    host.set_h264_support(true, false).unwrap();
+    host.set_video_codecs(crate::VideoCodecCaps::encode_only(4096, 4096, "test"))
+        .unwrap();
     host.set_desktop(Box::new(SizeDesktop {
         width: 100,
         height: 80,
@@ -368,6 +364,12 @@ fn h264_frames_round_trip_and_reject_a_bad_payload() {
         decode_video_body(&encode_video_body(&small)).unwrap(),
         small
     );
+    let stamped = EncodedFrame::h264(true, 9, vec![0x65, 1])
+        .unwrap()
+        .with_source(3, 7);
+    let back = decode_video_body(&encode_video_body(&stamped)).unwrap();
+    assert_eq!(back, stamped);
+    assert_eq!((back.display_id, back.revision), (3, 7));
 
     let mut flags = encode_video_body(&EncodedFrame::h264(true, 7, vec![4]).unwrap());
     flags[1] = 0xFF;
@@ -376,12 +378,19 @@ fn h264_frames_round_trip_and_reject_a_bad_payload() {
     assert!(!decode_video_body(&flags).unwrap().keyframe);
 
     assert!(matches!(
-        decode_video_body(&[9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
+        decode_video_body(&[
+            9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
+        ]),
         Err(Error::Unsupported("this video codec"))
     ));
     assert!(matches!(decode_video_body(&[1, 0]), Err(Error::Malformed)));
     assert!(matches!(
         decode_video_body(&[1, 1, 0, 0, 0, 0, 0, 0, 0, 0]),
+        Err(Error::Malformed)
+    ));
+    // The old 10-byte header is too short to carry a source stamp.
+    assert!(matches!(
+        decode_video_body(&[1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
         Err(Error::Malformed)
     ));
 

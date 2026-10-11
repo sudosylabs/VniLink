@@ -30,6 +30,31 @@ use iroh_blobs::BlobFormat;
 const JOBS_FILE: &str = "jobs.json";
 const STAGING_DIR: &str = "staging";
 
+/// Test hooks for cross-volume pre-staging. Production leaves them unset:
+/// the copy runs when staged and destination volumes differ, and no probe
+/// observes it. Tests scope the hooks to one job id, force the
+/// cross-volume path on a single volume, and park a barrier in the copy
+/// (`probe`), the parent-mkdir phase (`mkdir_probe`) or the final stage
+/// sync (`sync_probe`) to prove global locks stay free.
+#[cfg(unix)]
+pub(crate) struct PrestageHooks {
+    pub(crate) job_id: Option<u64>,
+    pub(crate) force_cross_volume: bool,
+    pub(crate) probe: Option<fn(u64, u64)>,
+    pub(crate) mkdir_probe: Option<fn(u64)>,
+    pub(crate) sync_probe: Option<fn(u64)>,
+}
+
+#[cfg(unix)]
+pub(crate) static PRESTAGE_HOOKS: std::sync::Mutex<PrestageHooks> =
+    std::sync::Mutex::new(PrestageHooks {
+        job_id: None,
+        force_cross_volume: false,
+        probe: None,
+        mkdir_probe: None,
+        sync_probe: None,
+    });
+
 const NO_JOB: &str = "the job is unknown";
 const JOB_STORE_FAILED: &str = "the job record could not be saved";
 const SOURCE_CHANGED: &str = "the source changed since preparation";
@@ -57,6 +82,10 @@ pub(super) struct JobRecord {
     manifest: Option<Manifest>,
     local_root: u64,
     local_rel: String,
+    /// Pinned source/target root for this leg. None migrates records
+    /// saved before pinning: the first use adopts the current root.
+    #[serde(default)]
+    local_pin: Option<fs::PinnedRoot>,
     /// True when status queries ride the outgoing session (controller
     /// senders); false for host senders polling over the incoming one.
     outgoing: bool,
@@ -128,6 +157,21 @@ impl JobRecord {
     }
 }
 
+/// Verify a job leg's pin against locked roots, adopting the current
+/// root for legacy records. A rebound entry fails the leg: callers must
+/// serve nothing on error. Runs under the roots lock together with the
+/// resolution it guards, so a rebind between check and use is impossible.
+fn verify_leg_pin(
+    roots: &fs::RootSet,
+    id: u64,
+    pin: &mut Option<fs::PinnedRoot>,
+) -> Result<(), Error> {
+    if pin.is_none() {
+        *pin = Some(roots.pin(id)?);
+    }
+    roots.verify_pin(pin.as_ref().expect("leg pin just adopted"))
+}
+
 impl Core {
     /// Uploads a local tree to the paired peer: scans, hashes, offers and
     /// sends the manifest. The returned id is the sender record; the peer
@@ -164,10 +208,13 @@ impl Core {
         // The host re-fences the generation on arrival.
         let generation = self.outgoing_generation_for(&peer)?;
         super::service_jobs::check_owner(&lock(&self.shared.state), owner)?;
-        let scan = {
-            let roots = lock(&self.shared.file_roots);
-            manifest::scan(&roots, src_root, src_rel)?
-        };
+        // Snapshot under a short lock; the recursive walk runs off every lock.
+        let snapshot = lock(&self.shared.file_roots).clone();
+        let scan = manifest::scan(&snapshot, src_root, src_rel)?;
+        // Pin the leg to the scanned generation: every file offer below
+        // re-verifies it, so a rebind during admission fails the whole
+        // offer instead of mixing generations.
+        let mut pin = Some(snapshot.pin(src_root)?);
         let mut prepared =
             super::service_jobs::PreparedOffers::new(self.shared.clone(), peer, owner.is_some());
         let mut manifest = manifest::skeleton(&scan);
@@ -181,6 +228,7 @@ impl Core {
                 src_root,
                 file,
                 manifest::MAX_MANIFEST_FILE_BYTES,
+                pin.as_ref().expect("leg pin just pinned"),
             )?;
             prepared.hashes.push(*hash.as_bytes());
             if size != file.size {
@@ -197,6 +245,7 @@ impl Core {
         {
             // A directory source keeps its top folder; files stay flat.
             let roots = lock(&self.shared.file_roots);
+            verify_leg_pin(&roots, src_root, &mut pin)?;
             if roots.resolve_dir(src_root, src_rel).is_ok() {
                 manifest::prefix_source_dir(src_rel, &mut manifest);
             }
@@ -224,6 +273,7 @@ impl Core {
             manifest: Some(manifest.clone()),
             local_root: src_root,
             local_rel: src_rel.to_owned(),
+            local_pin: pin,
             outgoing: true,
             skipped_symlinks: scan.skipped_symlinks,
             file_index: 0,
@@ -263,6 +313,13 @@ impl Core {
             let state = lock(&self.shared.state);
             super::service_jobs::check_owner(&state, owner)?;
             let mut record = record;
+            // Re-verify before announcing: a rebind between the last file
+            // and the insert fails here instead of offering moved bytes.
+            verify_leg_pin(
+                &lock(&self.shared.file_roots),
+                record.local_root,
+                &mut record.local_pin,
+            )?;
             record.state = JobState::Serving;
             for hash in record_hashes(&record) {
                 lock(&self.shared.blob_job_offers).insert((peer, hash));
@@ -305,12 +362,15 @@ impl Core {
             state.trust.get(&peer).cloned().ok_or(Error::NotPaired)?;
         }
         fs::check_rel(dst_rel)?;
-        {
+        // Pin the destination leg at admission: every receive below
+        // re-verifies it, so a target rebind reroutes no bytes.
+        let pin = {
             let roots = lock(&self.shared.file_roots);
             if roots.snapshot().iter().all(|(id, _)| *id != dst_root) {
                 return Err(Error::InvalidSetting("the destination root is unknown"));
             }
-        }
+            Some(roots.pin(dst_root)?)
+        };
         // The live session first, as in uploads.
         let generation = self.outgoing_generation_for(&peer)?;
         let request = job::DownloadRequest {
@@ -366,6 +426,7 @@ impl Core {
                     manifest: Some(manifest),
                     local_root: dst_root,
                     local_rel: dst_rel.to_owned(),
+                    local_pin: pin,
                     outgoing: true,
                     landed: HashMap::new(),
                     file_index: 0,
@@ -430,13 +491,18 @@ impl Core {
         if !lock(&self.shared.job_driving).insert(id) {
             return self.job_snapshot(id);
         }
-        let outcome = if sender {
+        struct Driving<'a>(&'a Shared, u64);
+        impl Drop for Driving<'_> {
+            fn drop(&mut self) {
+                lock(&self.0.job_driving).remove(&self.1);
+            }
+        }
+        let _driving = Driving(&self.shared, id);
+        if sender {
             self.poll_sender(id)
         } else {
             self.poll_receiver(id)
-        };
-        lock(&self.shared.job_driving).remove(&id);
-        outcome
+        }
     }
 
     /// Advances every active job by one step (receivers fetch/publish,
@@ -894,8 +960,13 @@ impl Core {
             if !Self::receiver_granted(&self.shared, &peer_bytes) {
                 return self.mark_interrupted(id);
             }
-            self.ensure_receiver_dirs(id)?;
-            return self.finalize_receiver(id);
+            if let Err(error) = self.ensure_receiver_dirs(id) {
+                return self.interrupt_on_rebind(id, error);
+            }
+            match self.finalize_receiver(id) {
+                Err(error) => return self.interrupt_on_rebind(id, error),
+                Ok(snapshot) => return Ok(snapshot),
+            }
         }
         // First poll ensures the directory skeleton exactly once per job;
         // creation is idempotent, so repeats stay safe. Revocation stops
@@ -904,7 +975,9 @@ impl Core {
             if !Self::receiver_granted(&self.shared, &peer_bytes) {
                 return self.mark_interrupted(id);
             }
-            self.ensure_receiver_dirs(id)?;
+            if let Err(error) = self.ensure_receiver_dirs(id) {
+                return self.interrupt_on_rebind(id, error);
+            }
         }
         let entry = {
             let jobs = lock(&self.shared.jobs);
@@ -914,7 +987,10 @@ impl Core {
         .ok_or(Error::InvalidSetting(NO_JOB))?;
         // Conflict check before any fetch: the destination wins ties until
         // the owner decides.
-        let choice = self.conflict_choice(id, file_index, &entry)?;
+        let choice = match self.conflict_choice(id, file_index, &entry) {
+            Err(error) => return self.interrupt_on_rebind(id, error),
+            Ok(choice) => choice,
+        };
         let Some(choice) = choice else {
             let mut jobs = lock(&self.shared.jobs);
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
@@ -948,6 +1024,17 @@ impl Core {
         if !Self::receiver_granted(&self.shared, &peer_bytes) {
             return self.mark_interrupted(id);
         }
+        // Admission precedes network fetching and export. Saturated workers
+        // leave the job queued for a subsequent poll; impossible budgets fail
+        // with a durable, payload-free explanation.
+        let available = self.receiver_available_storage(id, &entry.path)?;
+        let _reservation =
+            match super::file_resources::reserve(&self.shared, id, entry.size, available) {
+                Ok(Some(reservation)) => reservation,
+                Ok(None) => return self.job_snapshot(id),
+                Err(Error::InvalidSetting(message)) => return self.mark_failed(id, message),
+                Err(error) => return Err(error),
+            };
         // Fetch into the persistent store with a per-poll cancel watch.
         let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
         {
@@ -1008,9 +1095,10 @@ impl Core {
             let _ = std::fs::remove_file(&staged);
             return self.mark_failed(id, VERIFY_FAILED);
         }
-        let landed = match self.publish_staged(id, &entry, &staged, choice)? {
-            Some(landed) => landed,
-            None => return self.job_snapshot(id),
+        let landed = match self.publish_staged(id, &entry, &staged, choice) {
+            Err(error) => return self.interrupt_on_rebind(id, error),
+            Ok(Some(landed)) => landed,
+            Ok(None) => return self.job_snapshot(id),
         };
         // Skip leaves the destination untouched; anything published lands
         // under its final name for verification.
@@ -1078,30 +1166,72 @@ impl Core {
         rel: &str,
         path: &str,
     ) -> Result<std::path::PathBuf, Error> {
-        let jobs = lock(&self.shared.jobs);
-        let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
-        let state = lock(&self.shared.state);
-        super::service_jobs::check_owner(&state, record.owner)?;
-        let roots = lock(&self.shared.file_roots);
-        let (parent_rel, name) = match path.rfind('/') {
-            Some(slash) => (&path[..slash], &path[slash + 1..]),
-            None => ("", path),
+        let mut pin = {
+            let jobs = lock(&self.shared.jobs);
+            let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            let state = lock(&self.shared.state);
+            super::service_jobs::check_owner(&state, record.owner)?;
+            record.local_pin.clone()
         };
-        // The manifest jail already validated every component; resolve the
-        // parent through it (creating missing levels idempotently) and
-        // append the single validated file name.
-        let full_parent = if rel.is_empty() {
-            parent_rel.to_owned()
-        } else if parent_rel.is_empty() {
-            rel.to_owned()
-        } else {
-            format!("{rel}/{parent_rel}")
+        let adopted = pin.is_none();
+        let dest = {
+            let roots = lock(&self.shared.file_roots);
+            // A rebound destination fails the leg instead of writing
+            // staged bytes into whatever the path resolves to now.
+            verify_leg_pin(&roots, root, &mut pin)?;
+            let (parent_rel, name) = match path.rfind('/') {
+                Some(slash) => (&path[..slash], &path[slash + 1..]),
+                None => ("", path),
+            };
+            // The manifest jail already validated every component; resolve the
+            // parent through it (creating missing levels idempotently) and
+            // append the single validated file name.
+            let full_parent = if rel.is_empty() {
+                parent_rel.to_owned()
+            } else if parent_rel.is_empty() {
+                rel.to_owned()
+            } else {
+                format!("{rel}/{parent_rel}")
+            };
+            if roots.resolve_dir(root, &full_parent).is_err() {
+                manifest::create_levels(&roots, root, rel, parent_rel)?;
+            }
+            roots.resolve_dir(root, &full_parent)?.join(name)
         };
-        if roots.resolve_dir(root, &full_parent).is_err() {
-            manifest::create_levels(&roots, root, rel, parent_rel)?;
+        if adopted {
+            if let Some(record) = lock(&self.shared.jobs).get_mut(&id) {
+                record.local_pin = pin;
+            }
         }
-        let parent = roots.resolve_dir(root, &full_parent)?;
-        Ok(parent.join(name))
+        Ok(dest)
+    }
+
+    fn receiver_available_storage(&self, id: u64, path: &str) -> Result<u64, Error> {
+        let (root, rel) = {
+            let jobs = lock(&self.shared.jobs);
+            let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            (record.local_root, record.local_rel.clone())
+        };
+        let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
+        let full = match (rel.is_empty(), parent.is_empty()) {
+            (true, _) => parent.to_owned(),
+            (_, true) => rel,
+            _ => format!("{rel}/{parent}"),
+        };
+        #[cfg(unix)]
+        let destination = {
+            let fd = lock(&self.shared.file_roots).open_dir_fd(root, &full)?;
+            super::file_resources::available_fd(&fd)?
+        };
+        #[cfg(not(unix))]
+        let destination = {
+            let path = lock(&self.shared.file_roots).resolve_dir(root, &full)?;
+            super::file_resources::available(&path)?
+        };
+        let blob_dir = lock(&self.shared.blob_dir)
+            .clone()
+            .ok_or(Error::Unsupported("no blob directory is installed"))?;
+        Ok(destination.min(super::file_resources::available(&blob_dir)?))
     }
 
     fn stage_path(&self, id: u64, rel_path: &str) -> Result<std::path::PathBuf, Error> {
@@ -1114,12 +1244,35 @@ impl Core {
             .join(rel_path))
     }
 
+    /// A rebound destination leg interrupts the job instead of wedging
+    /// the poll: the error is retryable, so restoring the original roots
+    /// and resuming continues. Any other error keeps its meaning.
+    fn interrupt_on_rebind(&self, id: u64, error: Error) -> Result<JobSnapshot, Error> {
+        match error {
+            Error::InvalidSetting(msg) if msg == fs::ROOTS_REBOUND => self.mark_interrupted(id),
+            error => Err(error),
+        }
+    }
+
     fn ensure_receiver_dirs(&self, id: u64) -> Result<(), Error> {
-        let jobs = lock(&self.shared.jobs);
-        let state = lock(&self.shared.state);
-        let (local_root, local_rel, manifest) = {
+        // Snapshot under short locks; mkdirs may block on slow storage, so
+        // no job/state/roots lock is held across them. Publish re-checks
+        // owner/grant before committing.
+        let (local_root, local_rel, manifest, roots_snapshot, pin) = {
+            let jobs = lock(&self.shared.jobs);
+            let state = lock(&self.shared.state);
             let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             super::service_jobs::check_owner(&state, record.owner)?;
+            let mut pin = record.local_pin.clone();
+            let adopted = pin.is_none();
+            // Verify and clone under one roots hold: the snapshot is
+            // exactly the verified epoch, so a rebind cannot slip
+            // skeleton mkdirs into the new directory.
+            let roots_snapshot = {
+                let roots = lock(&self.shared.file_roots);
+                verify_leg_pin(&roots, record.local_root, &mut pin)?;
+                roots.clone()
+            };
             (
                 record.local_root,
                 record.local_rel.clone(),
@@ -1127,15 +1280,36 @@ impl Core {
                     .manifest
                     .clone()
                     .ok_or(Error::InvalidSetting(NO_JOB))?,
+                roots_snapshot,
+                adopted.then_some(pin),
             )
         };
-        let roots = lock(&self.shared.file_roots);
+        // Persist a legacy adopt; the snapshot above is already dropped
+        // (sequential, never nested).
+        if let Some(pin) = pin {
+            if let Some(record) = lock(&self.shared.jobs).get_mut(&id) {
+                record.local_pin = pin;
+            }
+        }
+        #[cfg(unix)]
+        let mkdir_probe = {
+            let hooks = lock(&PRESTAGE_HOOKS);
+            if hooks.job_id == Some(id) {
+                hooks.mkdir_probe
+            } else {
+                None
+            }
+        };
+        #[cfg(unix)]
+        if let Some(probe) = mkdir_probe {
+            probe(id);
+        }
         // The destination base itself may be fresh: build it first so the
         // per-entry levels below always start from an existing folder.
-        if !local_rel.is_empty() && roots.resolve_dir(local_root, &local_rel).is_err() {
-            manifest::create_levels(&roots, local_root, "", &local_rel)?;
+        if !local_rel.is_empty() && roots_snapshot.resolve_dir(local_root, &local_rel).is_err() {
+            manifest::create_levels(&roots_snapshot, local_root, "", &local_rel)?;
         }
-        manifest::ensure_manifest_dirs(&roots, local_root, &local_rel, &manifest)
+        manifest::ensure_manifest_dirs(&roots_snapshot, local_root, &local_rel, &manifest)
     }
 
     /// Publishes one staged file, returning the landed file name.
@@ -1204,14 +1378,147 @@ impl Core {
         }
     }
 
+    /// Test hooks for cross-volume pre-staging; see [`PRESTAGE_HOOKS`].
+    /// Production leaves them unset.
+    #[cfg(unix)]
+    pub(crate) fn set_prestage_hooks(hooks: PrestageHooks) {
+        *lock(&PRESTAGE_HOOKS) = hooks;
+    }
+
+    /// Test probe for in-flight serve opens; see [`SERVE_SOURCE_PROBE`].
+    /// Production leaves it unset.
+    #[cfg(unix)]
+    pub(crate) fn set_serve_source_probe(probe: Option<fn([u8; 32])>) {
+        *lock(&SERVE_SOURCE_PROBE) = probe;
+    }
+
+    /// Receiver liveness for one pre-stage block: the job still exists and
+    /// is not stood down, the peer keeps the transfer grant, and the Files
+    /// owner (if any) is still live. Locks are taken and released per
+    /// call; the copy loop never holds them across I/O.
+    #[cfg(unix)]
+    fn prestage_live(&self, id: u64) -> bool {
+        let (owner, peer_key) = {
+            let jobs = lock(&self.shared.jobs);
+            let Some(record) = jobs.get(&id) else {
+                return false;
+            };
+            if matches!(
+                record.state,
+                JobState::Cancelled | JobState::Interrupted | JobState::Failed
+            ) {
+                return false;
+            }
+            (record.owner, record.peer_key)
+        };
+        let state = lock(&self.shared.state);
+        let granted = match state.trust.get(&peer_key) {
+            Some(device) => state.trust.granted(&device.endpoint_id, Grant::Transfer),
+            None => false,
+        };
+        granted && super::service_jobs::check_owner(&state, owner).is_ok()
+    }
+
+    /// Cross-volume pre-stage, run OUTSIDE global locks. When the staged
+    /// file and the destination live on different filesystems, stream the
+    /// bytes to a temp sibling on the destination volume with per-block
+    /// cancel/grant checks; the commit under locks is then a fast
+    /// same-filesystem rename. Returns the stage to commit, `None` for
+    /// the same-volume fast path, or stands the file down (record
+    /// updated, siblings cleaned) and returns `None` with `stood_down`.
+    #[cfg(unix)]
+    fn prestage_cross_volume<'a>(
+        &self,
+        id: u64,
+        staged: &std::path::Path,
+        dir_fd: std::os::unix::io::BorrowedFd<'a>,
+    ) -> Result<(Option<vnilink_rename::anchored::SiblingStage<'a>>, bool), Error> {
+        use std::io::Read;
+        let (force, probe, sync_probe) = {
+            let hooks = lock(&PRESTAGE_HOOKS);
+            let scoped = hooks.job_id == Some(id);
+            (
+                scoped && hooks.force_cross_volume,
+                if scoped { hooks.probe } else { None },
+                if scoped { hooks.sync_probe } else { None },
+            )
+        };
+        if !force {
+            match vnilink_rename::anchored::same_filesystem(staged, dir_fd) {
+                Ok(true) => return Ok((None, false)),
+                Ok(false) => {}
+                Err(_) => {
+                    let _ = std::fs::remove_file(staged);
+                    self.mark_failed(id, PUBLISH_FAILED)?;
+                    return Ok((None, true));
+                }
+            }
+        }
+        let mut stage = match vnilink_rename::anchored::SiblingStage::create(dir_fd) {
+            Ok(stage) => stage,
+            Err(_) => {
+                let _ = std::fs::remove_file(staged);
+                self.mark_failed(id, PUBLISH_FAILED)?;
+                return Ok((None, true));
+            }
+        };
+        let mut src = match std::fs::File::open(staged) {
+            Ok(file) => file,
+            Err(_) => {
+                let _ = std::fs::remove_file(staged);
+                self.mark_failed(id, PUBLISH_FAILED)?;
+                return Ok((None, true));
+            }
+        };
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut copied: u64 = 0;
+        loop {
+            if !self.prestage_live(id) {
+                let _ = std::fs::remove_file(staged);
+                self.mark_interrupted(id)?;
+                return Ok((None, true));
+            }
+            if let Some(probe) = probe {
+                probe(id, copied);
+            }
+            let n = match src.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(_) => {
+                    let _ = std::fs::remove_file(staged);
+                    self.mark_failed(id, PUBLISH_FAILED)?;
+                    return Ok((None, true));
+                }
+            };
+            if stage.write_all(&buf[..n]).is_err() {
+                let _ = std::fs::remove_file(staged);
+                self.mark_failed(id, PUBLISH_FAILED)?;
+                return Ok((None, true));
+            }
+            copied += n as u64;
+        }
+        // Durability lands here, before the authority gate: the commit under
+        // locks performs only the atomic rename via `commit_prepared`.
+        if let Some(probe) = sync_probe {
+            probe(id);
+        }
+        if stage.fsync().is_err() {
+            let _ = std::fs::remove_file(staged);
+            self.mark_failed(id, PUBLISH_FAILED)?;
+            return Ok((None, true));
+        }
+        Ok((Some(stage), false))
+    }
+
     /// Anchored publication: the destination parent is opened as a directory
     /// handle and the staged file is committed with `renameat`, so a parent
     /// replaced by a symlink cannot redirect the write outside the root.
-    /// The final authorization/state decision is synchronized with the commit:
-    /// both the job and grant locks are held across the re-check and the
-    /// `renameat`, so receiver cancellation (`Cancelled`) or revocation
-    /// (`Interrupted` via grant loss) completing before the rename prevents
-    /// destination creation.
+    /// Cross-volume bytes are pre-staged to a destination sibling BEFORE
+    /// locking; the final authorization/state decision is synchronized with
+    /// the commit: both the job and grant locks are held across the re-check
+    /// and the fast same-filesystem `renameat` only, so receiver
+    /// cancellation (`Cancelled`) or revocation (`Interrupted` via grant
+    /// loss) completing before the rename prevents destination creation.
     #[cfg(unix)]
     fn publish_staged_anchored(
         &self,
@@ -1235,19 +1542,45 @@ impl Core {
             format!("{local_rel}/{parent_rel}")
         };
         // Ensure the parent chain exists through anchored mkdirs, then open it.
-        // No job/state locks held across mkdirs (they may block); the commit
-        // below re-locks and re-checks.
-        {
+        // Mkdirs may block on slow storage: snapshot the owner check and the
+        // root set under short locks, then run every filesystem call with no
+        // job/state/roots lock held. The commit below re-locks and re-checks
+        // cancellation, grant and owner before the rename.
+        let (roots_snapshot, mut pin, adopted) = {
             let jobs = lock(&self.shared.jobs);
             let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             let state = lock(&self.shared.state);
             super::service_jobs::check_owner(&state, record.owner)?;
+            let mut pin = record.local_pin.clone();
+            let adopted = pin.is_none();
+            // Verify and clone under one roots hold: pre-stage mkdirs
+            // below run against exactly the verified epoch.
             let roots = lock(&self.shared.file_roots);
-            if roots.open_dir_fd(local_root, &full_parent).is_err() {
-                manifest::create_levels(&roots, local_root, local_rel, parent_rel)?;
+            verify_leg_pin(&roots, record.local_root, &mut pin)?;
+            (roots.clone(), pin, adopted)
+        };
+        let mkdir_probe = {
+            let hooks = lock(&PRESTAGE_HOOKS);
+            if hooks.job_id == Some(id) {
+                hooks.mkdir_probe
+            } else {
+                None
             }
+        };
+        if roots_snapshot
+            .open_dir_fd(local_root, &full_parent)
+            .is_err()
+        {
+            if let Some(probe) = mkdir_probe {
+                probe(id);
+            }
+            manifest::create_levels(&roots_snapshot, local_root, local_rel, parent_rel)?;
         }
         let roots = lock(&self.shared.file_roots);
+        // The dir handle below pins whatever the live roots resolve NOW:
+        // re-verify the leg first so a rebound destination fails instead
+        // of binding the new directory.
+        verify_leg_pin(&roots, local_root, &mut pin)?;
         let dir_fd = roots.open_dir_fd(local_root, &full_parent)?;
         drop(roots);
         // For KeepBoth, choose the free name through the anchored listing
@@ -1267,15 +1600,50 @@ impl Core {
                 }))
             }
         };
+        // Cross-volume bytes move to a destination sibling BEFORE locking;
+        // the commit below only renames within one filesystem, so slow
+        // destination I/O never holds global locks. A stood-down file
+        // (cancelled/revoked/failed mid-copy) already updated its record.
+        let (mut stage, stood_down) = self.prestage_cross_volume(id, staged, dir_fd.as_fd())?;
+        if stood_down {
+            return Ok(None);
+        }
+        // One commit per publish: consumes the pre-staged sibling when the
+        // volumes differ, else renames staged directly (strict: EXDEV
+        // means a remount raced the pre-stage check and stands down
+        // retryably). Reports whether the caller must remove `staged`
+        // (sibling commits leave it behind; renames move it).
+        let mut commit_file = |dest_name: &str, replace: bool| -> std::io::Result<bool> {
+            if let Some(stage) = stage.take() {
+                // Pre-synced above: rename only, no slow I/O under the gate.
+                stage.commit_prepared(dest_name, replace)?;
+                Ok(true)
+            } else {
+                vnilink_rename::anchored::rename_from_staged(
+                    staged,
+                    dir_fd.as_fd(),
+                    dest_name,
+                    replace,
+                )?;
+                Ok(false)
+            }
+        };
         // Commit under both locks: re-check cancellation and grant after any
-        // barrier, then `renameat` without releasing. Revocation (grant update
-        // needs `state`, interruption needs `jobs`) and cancellation (needs
-        // `jobs`) both block here, so completing before the rename prevents it.
+        // barrier, then fast same-filesystem `renameat` without releasing.
+        // Revocation (grant update needs `state`, interruption needs `jobs`)
+        // and cancellation (needs `jobs`) both block here, so completing
+        // before the rename prevents it.
         let commit: Result<Option<String>, Error> = (|| {
             let mut jobs = lock(&self.shared.jobs);
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             if matches!(record.state, JobState::Cancelled | JobState::Interrupted) {
                 return Ok(None);
+            }
+            // Persist a legacy adopt: later publishes are strict. The
+            // adopted pin was verified against the live roots above before
+            // the destination handle was opened.
+            if adopted {
+                record.local_pin = pin.clone();
             }
             let peer_key = record.peer_key;
             // Hold `state` from grant check through `renameat`: revoke's grant
@@ -1327,13 +1695,13 @@ impl Core {
                     // Absent (auto or explicit with deleted dest) -> no-replace
                     // (detects race via Exists); present + explicit -> overwrite.
                     let allow_overwrite = dest_exists && explicit_replace;
-                    match vnilink_rename::anchored::rename_from_staged(
-                        staged,
-                        dir_fd.as_fd(),
-                        file_name,
-                        allow_overwrite,
-                    ) {
-                        Ok(()) => Ok(Some(file_name.to_owned())),
+                    match commit_file(file_name, allow_overwrite) {
+                        Ok(consumed_sibling) => {
+                            if consumed_sibling {
+                                let _ = std::fs::remove_file(staged);
+                            }
+                            Ok(Some(file_name.to_owned()))
+                        }
                         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                             // Lost auto-Replace race (dest appeared): conflict.
                             record.choices.remove(&record.file_index);
@@ -1341,6 +1709,19 @@ impl Core {
                             record.waiting_file = Some(record.file_index);
                             drop(state_guard);
                             drop(jobs);
+                            save_jobs(&self.shared)?;
+                            return Ok(None);
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+                            // Remount raced the pre-stage check: stand down
+                            // retryably; the next poll re-detects volumes.
+                            if record.state != JobState::Cancelled {
+                                record.state = JobState::Interrupted;
+                                record.waiting_file = None;
+                            }
+                            drop(state_guard);
+                            drop(jobs);
+                            let _ = std::fs::remove_file(staged);
                             save_jobs(&self.shared)?;
                             return Ok(None);
                         }
@@ -1358,13 +1739,13 @@ impl Core {
                         .clone()
                         .ok_or(Error::InvalidSetting(PUBLISH_FAILED))?;
                     if free == file_name {
-                        match vnilink_rename::anchored::rename_from_staged(
-                            staged,
-                            dir_fd.as_fd(),
-                            file_name,
-                            false,
-                        ) {
-                            Ok(()) => Ok(Some(file_name.to_owned())),
+                        match commit_file(file_name, false) {
+                            Ok(consumed_sibling) => {
+                                if consumed_sibling {
+                                    let _ = std::fs::remove_file(staged);
+                                }
+                                Ok(Some(file_name.to_owned()))
+                            }
                             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                                 // Lost race: re-enter conflict.
                                 record.choices.remove(&record.file_index);
@@ -1372,6 +1753,17 @@ impl Core {
                                 record.waiting_file = Some(record.file_index);
                                 drop(state_guard);
                                 drop(jobs);
+                                save_jobs(&self.shared)?;
+                                return Ok(None);
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+                                if record.state != JobState::Cancelled {
+                                    record.state = JobState::Interrupted;
+                                    record.waiting_file = None;
+                                }
+                                drop(state_guard);
+                                drop(jobs);
+                                let _ = std::fs::remove_file(staged);
                                 save_jobs(&self.shared)?;
                                 return Ok(None);
                             }
@@ -1384,19 +1776,30 @@ impl Core {
                             }
                         }
                     } else {
-                        match vnilink_rename::anchored::rename_from_staged(
-                            staged,
-                            dir_fd.as_fd(),
-                            &free,
-                            false,
-                        ) {
-                            Ok(()) => Ok(Some(free)),
+                        match commit_file(&free, false) {
+                            Ok(consumed_sibling) => {
+                                if consumed_sibling {
+                                    let _ = std::fs::remove_file(staged);
+                                }
+                                Ok(Some(free))
+                            }
                             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                                 record.choices.remove(&record.file_index);
                                 record.state = JobState::WaitingDecision;
                                 record.waiting_file = Some(record.file_index);
                                 drop(state_guard);
                                 drop(jobs);
+                                save_jobs(&self.shared)?;
+                                return Ok(None);
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+                                if record.state != JobState::Cancelled {
+                                    record.state = JobState::Interrupted;
+                                    record.waiting_file = None;
+                                }
+                                drop(state_guard);
+                                drop(jobs);
+                                let _ = std::fs::remove_file(staged);
                                 save_jobs(&self.shared)?;
                                 return Ok(None);
                             }
@@ -1592,7 +1995,11 @@ impl Core {
                 }
             }
         }
-        let live = retained_hashes(&lock(&shared.jobs));
+        let live = retained_hashes(
+            &lock(&shared.jobs),
+            *lock(&shared.file_retention_policy),
+            retention_now(),
+        );
         let mut pins = lock(&shared.blob_import_pins);
         for hash in hashes {
             if !live.contains(&iroh_blobs::Hash::from_bytes(*hash)) {
@@ -1611,7 +2018,23 @@ impl Core {
     fn resume_sender(&self, id: u64) -> Result<JobSnapshot, Error> {
         // Re-verify sources and re-authorize hashes after a restart. A
         // changed source fails the job instead of moving new bytes.
-        let (peer_id, peer_key, local_root, local_rel, manifest) = {
+        // Adopt the leg's pin first (jobs->roots order); the pin is
+        // leg-wide, so an upfront mismatch is definitive and fails with
+        // the rebound cause instead of erroring the resume call.
+        let rebound = {
+            let mut jobs = lock(&self.shared.jobs);
+            let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            verify_leg_pin(
+                &lock(&self.shared.file_roots),
+                record.local_root,
+                &mut record.local_pin,
+            )
+            .is_err()
+        };
+        if rebound {
+            return self.mark_failed(id, fs::ROOTS_REBOUND);
+        }
+        let (peer_id, peer_key, local_root, local_rel, local_pin, manifest) = {
             let jobs = lock(&self.shared.jobs);
             let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             (
@@ -1619,6 +2042,7 @@ impl Core {
                 record.peer_key,
                 record.local_root,
                 record.local_rel.clone(),
+                record.local_pin.clone().expect("leg pin just verified"),
                 record
                     .manifest
                     .clone()
@@ -1651,6 +2075,7 @@ impl Core {
                 // invert publication/rename jobs->state->roots order).
                 let verified: Result<(), Error> = (|| {
                     let roots = lock(&self.shared.file_roots);
+                    roots.verify_pin(&local_pin)?;
                     let parent_fd = roots
                         .open_dir_fd(local_root, parent_rel)
                         .map_err(|_| Error::InvalidSetting(SOURCE_CHANGED))?;
@@ -1661,8 +2086,14 @@ impl Core {
                     }
                     Ok(())
                 })();
-                if verified.is_err() {
-                    return self.mark_failed(id, SOURCE_CHANGED);
+                if let Err(error) = verified {
+                    // A rebound entry fails with its own cause; anything
+                    // else is a changed source.
+                    let reason = match error {
+                        Error::InvalidSetting(msg) if msg == fs::ROOTS_REBOUND => msg,
+                        _ => SOURCE_CHANGED,
+                    };
+                    return self.mark_failed(id, reason);
                 }
             }
             #[cfg(not(unix))]
@@ -1676,6 +2107,7 @@ impl Core {
                     None => (String::new(), root_rel.clone()),
                 };
                 let roots = lock(&self.shared.file_roots);
+                roots.verify_pin(&local_pin)?;
                 let (_parent, full) = roots
                     .resolve_parent(local_root, &parent_rel, &name)
                     .map_err(|_| Error::InvalidSetting(SOURCE_CHANGED))?;
@@ -1710,8 +2142,12 @@ impl Core {
                         entry.size,
                         old_mtime,
                         manifest::MAX_MANIFEST_FILE_BYTES,
+                        &local_pin,
                     )
-                    .map_err(|_| Error::InvalidSetting(SOURCE_CHANGED))?;
+                    .map_err(|error| match error {
+                        Error::InvalidSetting(msg) if msg == fs::ROOTS_REBOUND => error,
+                        _ => Error::InvalidSetting(SOURCE_CHANGED),
+                    })?;
                 if fresh != hash || size != entry.size {
                     return self.mark_failed(id, SOURCE_CHANGED);
                 }
@@ -1747,7 +2183,7 @@ impl Core {
         let session = if outgoing {
             state.outgoing_peer(peer)
         } else {
-            state.incoming.as_ref()
+            state.incoming_peer(peer)
         }
         .ok_or(Error::NoSession)?;
         if session.phase != crate::session::SessionPhase::Active || session.peer_key != *peer {
@@ -1785,7 +2221,7 @@ impl Core {
             let session = if outgoing {
                 state.outgoing_peer(peer)
             } else {
-                state.incoming.as_ref()
+                state.incoming_peer(peer)
             }
             .ok_or(Error::NoSession)?;
             if session.phase != crate::session::SessionPhase::Active {
@@ -1877,8 +2313,6 @@ pub(super) const ACTIVE_STATES: &[JobState] = &[
 
 /// Resumable payload cache: seven days, at most 4 GiB across inactive jobs.
 /// Active work remains protected by the manifest and concurrency limits.
-const RESUME_CACHE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-const RESUME_CACHE_AGE: u64 = 7 * 24 * 60 * 60;
 fn retention_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1893,7 +2327,7 @@ fn allocate_job_id(shared: &Shared) -> Result<u64, Error> {
         .map_err(|_| Error::Busy)
 }
 
-fn wire_job_id(record: &JobRecord) -> u64 {
+pub(super) fn wire_job_id(record: &JobRecord) -> u64 {
     if record.wire_id == 0 {
         record.id
     } else {
@@ -1908,7 +2342,7 @@ fn wire_job<'a>(
     jobs.values()
         .find(|record| record.peer_key == *peer && wire_job_id(record) == id)
 }
-fn wire_job_mut<'a>(
+pub(super) fn wire_job_mut<'a>(
     jobs: &'a mut HashMap<u64, JobRecord>,
     peer: &[u8; 32],
     id: u64,
@@ -1954,19 +2388,25 @@ pub(super) fn record_reclaimable(
 
 pub(super) fn retained_hashes(
     jobs: &HashMap<u64, JobRecord>,
+    policy: crate::job::FileRetentionPolicy,
+    now: u64,
 ) -> std::collections::HashSet<iroh_blobs::Hash> {
-    retained_job_ids(jobs)
+    retained_job_ids(jobs, policy, now)
         .into_iter()
         .flat_map(|id| record_hashes(&jobs[&id]))
         .map(iroh_blobs::Hash::from_bytes)
         .collect()
 }
 
-pub(super) fn retained_job_ids(jobs: &HashMap<u64, JobRecord>) -> std::collections::HashSet<u64> {
+pub(super) fn retained_job_ids(
+    jobs: &HashMap<u64, JobRecord>,
+    policy: crate::job::FileRetentionPolicy,
+    now: u64,
+) -> std::collections::HashSet<u64> {
     let mut live = std::collections::HashSet::new();
     let mut records: Vec<_> = jobs.values().collect();
     records.sort_by_key(|record| std::cmp::Reverse((record.created_at, record.id)));
-    let mut budget = RESUME_CACHE_BYTES;
+    let mut budget = policy.resume_cache_bytes;
     for record in records {
         let keep = match record.state {
             JobState::Complete | JobState::Failed => false,
@@ -1976,7 +2416,9 @@ pub(super) fn retained_job_ids(jobs: &HashMap<u64, JobRecord>) -> std::collectio
                     .as_ref()
                     .map(Manifest::total_bytes)
                     .unwrap_or(0);
-                if retention_now().saturating_sub(record.created_at) > RESUME_CACHE_AGE
+                if policy.resume_cache_bytes == 0
+                    || policy.resume_cache_age_secs == 0
+                    || now.saturating_sub(record.created_at) >= policy.resume_cache_age_secs
                     || size > budget
                 {
                     false
@@ -2018,19 +2460,29 @@ pub(super) fn is_active_serve(shared: &Shared, peer: &[u8; 32], hash: &[u8; 32])
     })
 }
 
+/// Test probe parked by the rebind regression: called with the served
+/// hash after the source fd opens, before the bytes are authorized.
+/// Production leaves it unset. The probe must return promptly for
+/// hashes it does not recognize: suites run in parallel.
+#[cfg(unix)]
+pub(crate) static SERVE_SOURCE_PROBE: std::sync::Mutex<Option<fn([u8; 32])>> =
+    std::sync::Mutex::new(None);
+
 /// Serve-time source re-verification for job blob requests (see blob.rs):
 /// finds the active sender entry for `hash`, reconstructs its root-relative
 /// source (parent of `local_rel` + manifest path, handling nested `docs/pack`
 /// correctly) and stats it through handles (NOFOLLOW, regular, size matches).
 /// Denies swapped parents/replaced files so TryReference absolute paths can
-/// never disclose outside bytes.
+/// never disclose outside bytes. The leg's pin is re-verified under the
+/// same roots hold: a rebound source fails the fetch instead of serving
+/// moved bytes, while an already-open fd (in-flight) still completes.
 #[cfg(unix)]
-pub(super) fn verify_serve_source(
+pub(super) async fn verify_serve_source(
     shared: &Shared,
     peer: &[u8; 32],
     hash: &[u8; 32],
 ) -> Result<std::os::unix::io::OwnedFd, Error> {
-    let (local_root, local_rel, entry_size, entry_path) = {
+    let (job_id, local_root, local_rel, entry_size, entry_path, mut pin) = {
         let jobs = lock(&shared.jobs);
         let mut found = None;
         for record in jobs.values() {
@@ -2049,10 +2501,12 @@ pub(super) fn verify_serve_source(
                     .find(|e| e.hash == *hash)
                 {
                     found = Some((
+                        record.id,
                         record.local_root,
                         record.local_rel.clone(),
                         entry.size,
                         entry.path.clone(),
+                        record.local_pin.clone(),
                     ));
                     break;
                 }
@@ -2075,22 +2529,42 @@ pub(super) fn verify_serve_source(
     #[cfg(unix)]
     {
         use std::os::unix::io::AsFd;
-        let roots = lock(&shared.file_roots);
-        let parent_fd = roots
-            .open_dir_fd(local_root, parent_rel)
-            .map_err(|_| Error::TransferDenied)?;
-        let st = vnilink_rename::anchored::stat_at(parent_fd.as_fd(), name)
-            .map_err(|_| Error::TransferDenied)?;
-        if !st.is_file || st.is_symlink || st.size != entry_size {
+        // Handle acquisition under a short lock: the scope ends (and the
+        // roots guard drops) before the first await below.
+        let adopted = pin.is_none();
+        let fd = {
+            let roots = lock(&shared.file_roots);
+            verify_leg_pin(&roots, local_root, &mut pin).map_err(|_| Error::TransferDenied)?;
+            let parent_fd = roots
+                .open_dir_fd(local_root, parent_rel)
+                .map_err(|_| Error::TransferDenied)?;
+            let st = vnilink_rename::anchored::stat_at(parent_fd.as_fd(), name)
+                .map_err(|_| Error::TransferDenied)?;
+            if !st.is_file || st.is_symlink || st.size != entry_size {
+                return Err(Error::TransferDenied);
+            }
+            vnilink_rename::anchored::open_file_verified(parent_fd.as_fd(), name, st.dev, st.ino)
+                .map_err(|_| Error::TransferDenied)?
+        };
+        // Persist a legacy adopt so later fetches are strict; the roots
+        // guard above is already dropped (sequential, never nested).
+        if adopted {
+            if let Some(record) = lock(&shared.jobs).get_mut(&job_id) {
+                record.local_pin = pin.clone();
+            }
+        }
+        if let Some(probe) = *lock(&SERVE_SOURCE_PROBE) {
+            probe(*hash);
+        }
+        let duplicate = fd.try_clone().map_err(|_| Error::TransferDenied)?;
+        // Whole-file verification runs on a bounded worker with no locks
+        // held. Recheck after the slow work: the job may have completed or
+        // cancelled and the grant may have been revoked while hashing.
+        if Core::hash_fd_async(duplicate, super::blob::HashHooks::none()).await? != *hash {
             return Err(Error::TransferDenied);
         }
-        let fd =
-            vnilink_rename::anchored::open_file_verified(parent_fd.as_fd(), name, st.dev, st.ino)
-                .map_err(|_| Error::TransferDenied)?;
-        drop(parent_fd);
-        drop(roots);
-        let duplicate = fd.try_clone().map_err(|_| Error::TransferDenied)?;
-        if Core::hash_fd(duplicate)? != *hash {
+        let granted = lock(&shared.state).trust.granted(peer, Grant::Transfer);
+        if !granted || !is_active_serve(shared, peer, hash) {
             return Err(Error::TransferDenied);
         }
         Ok(fd)
@@ -2264,11 +2738,58 @@ pub(super) fn load_jobs(shared: &Shared) {
             jobs.insert(record.id, record);
         }
     }
+    reconcile_staging(shared, &dir);
     let next = shared.job_next.load(Ordering::Relaxed);
     if max.saturating_add(1) > next {
         shared
             .job_next
             .store(max.saturating_add(1), Ordering::Relaxed);
+    }
+}
+
+/// Only reconcile after a valid durable index was loaded. Missing/corrupt
+/// indexes retain payloads for diagnosis rather than interpreting corruption
+/// as permission to delete all previously owned data. Only canonical managed
+/// names are candidates; unexpected entries remain untouched.
+fn reconcile_staging(shared: &Shared, dir: &std::path::Path) {
+    let keep: std::collections::HashSet<u64> = lock(&shared.jobs)
+        .values()
+        .filter(|job| !matches!(job.state, JobState::Complete | JobState::Failed))
+        .map(|job| job.id)
+        .collect();
+    #[cfg(unix)]
+    reconcile_staging_at(dir, &keep);
+    #[cfg(not(unix))]
+    let _ = (dir, keep);
+}
+#[cfg(unix)]
+fn reconcile_staging_at(dir: &std::path::Path, keep: &std::collections::HashSet<u64>) {
+    use std::os::fd::AsFd;
+    use vnilink_rename::anchored;
+    let Ok(root) = anchored::open_root(dir) else {
+        return;
+    };
+    if let Ok(staging) = anchored::open_child(root.as_fd(), STAGING_DIR) {
+        if let Ok(entries) = anchored::list_names(staging.as_fd()) {
+            for name in entries {
+                let Some(name) = name.to_str() else { continue };
+                let Some(id) = name
+                    .strip_prefix("job-")
+                    .and_then(|n| n.parse::<u64>().ok())
+                else {
+                    continue;
+                };
+                if name != format!("job-{id}") || keep.contains(&id) {
+                    continue;
+                }
+                let _ = anchored::remove_tree_at(staging.as_fd(), name);
+            }
+        }
+    }
+    // Incomplete atomic-save temporary records are not authoritative. Only
+    // unlink a file/symlink; an unexpected directory is not our record.
+    if anchored::stat_at(root.as_fd(), "jobs.json.tmp").is_ok_and(|m| m.is_file || m.is_symlink) {
+        let _ = anchored::remove_tree_at(root.as_fd(), "jobs.json.tmp");
     }
 }
 
@@ -2310,9 +2831,8 @@ pub(super) async fn handle_job_request(
         .ok_or(())?;
     let live = {
         let state = lock(&shared.state);
-        matches!(state.incoming.as_ref(), Some(session)
-            if session.id == session_id
-                && session.generation == generation
+        matches!(state.incoming.get(&session_id), Some(session)
+            if session.generation == generation
                 && session.phase == crate::session::SessionPhase::Active
                 && session.peer_key == *peer)
     };
@@ -2397,7 +2917,7 @@ async fn handle_cancel(
     let live = {
         let state = lock(&shared.state);
         let session = if incoming_side {
-            state.incoming.as_ref()
+            state.incoming.values().find(|s| s.peer_key == *peer)
         } else {
             state.outgoing_peer(peer)
         };
@@ -2474,7 +2994,7 @@ async fn handle_status_query(
     let live = {
         let state = lock(&shared.state);
         let session = if incoming_side {
-            state.incoming.as_ref()
+            state.incoming.values().find(|s| s.peer_key == *peer)
         } else {
             state.outgoing_peer(peer)
         };
@@ -2565,7 +3085,7 @@ async fn handle_resolve(
     let live = {
         let state = lock(&shared.state);
         let session = if incoming_side {
-            state.incoming.as_ref()
+            state.incoming.values().find(|s| s.peer_key == *peer)
         } else {
             state.outgoing_peer(peer)
         };
@@ -2681,7 +3201,7 @@ async fn handle_resume(
     let live = {
         let state = lock(&shared.state);
         let session = if incoming_side {
-            state.incoming.as_ref()
+            state.incoming.values().find(|s| s.peer_key == *peer)
         } else {
             state.outgoing_peer(peer)
         };
@@ -2785,6 +3305,60 @@ async fn handle_resume(
         // re-import missing hashes via fd paths; present hashes re-offered
         // without rereading. Source changes fail instead of moving new bytes.
         let manifest = manifest.ok_or(())?;
+        // Adopt the leg's pin up front (jobs->roots order); a rebound
+        // source fails here with its own cause instead of re-authorizing
+        // the new directory below. Decided under the guards, acted on
+        // after: no mutex is held across the reply await.
+        enum PinDecision {
+            Go(fs::PinnedRoot),
+            Gone,
+            Rebound,
+        }
+        let decision = {
+            let mut jobs = lock(&shared.jobs);
+            match wire_job_mut(&mut jobs, peer, resume.job_id) {
+                None => PinDecision::Gone,
+                Some(record) => {
+                    if verify_leg_pin(
+                        &lock(&shared.file_roots),
+                        record.local_root,
+                        &mut record.local_pin,
+                    )
+                    .is_err()
+                    {
+                        record.state = JobState::Failed;
+                        record.error = Some(fs::ROOTS_REBOUND.to_owned());
+                        PinDecision::Rebound
+                    } else {
+                        PinDecision::Go(record.local_pin.clone().expect("leg pin just verified"))
+                    }
+                }
+            }
+        };
+        let pin = match decision {
+            PinDecision::Go(pin) => pin,
+            PinDecision::Gone => {
+                let err = job::JobReply {
+                    v: job::JOB_VERSION,
+                    id: resume.id,
+                    status: job::STATUS_ERROR,
+                    job_id: resume.job_id,
+                };
+                reply(send, job::encode(&err).map_err(|_| ())?).await?;
+                return Ok(());
+            }
+            PinDecision::Rebound => {
+                let _ = save_jobs(shared);
+                let err = job::JobReply {
+                    v: job::JOB_VERSION,
+                    id: resume.id,
+                    status: job::STATUS_ERROR,
+                    job_id: resume.job_id,
+                };
+                reply(send, job::encode(&err).map_err(|_| ())?).await?;
+                return Ok(());
+            }
+        };
         // Compute root-relative source paths (same reconstruction as
         // `resume_sender`: parent of `local_rel` + manifest path).
         let src_parent = if local_rel.is_empty() {
@@ -2811,6 +3385,30 @@ async fn handle_resume(
             #[cfg(unix)]
             {
                 use std::os::unix::io::AsFd;
+                // Re-verify per entry: the loop awaits below, so a rebind
+                // between entries must fail rather than open the new dir.
+                let rebound = {
+                    let roots = lock(&shared.file_roots);
+                    roots.verify_pin(&pin).is_err()
+                };
+                if rebound {
+                    {
+                        let mut jobs = lock(&shared.jobs);
+                        if let Some(record) = wire_job_mut(&mut jobs, peer, resume.job_id) {
+                            record.state = JobState::Failed;
+                            record.error = Some(fs::ROOTS_REBOUND.to_owned());
+                        }
+                    }
+                    let _ = save_jobs(shared);
+                    let err = job::JobReply {
+                        v: job::JOB_VERSION,
+                        id: resume.id,
+                        status: job::STATUS_ERROR,
+                        job_id: resume.job_id,
+                    };
+                    reply(send, job::encode(&err).map_err(|_| ())?).await?;
+                    return Ok(());
+                }
                 let parent_fd = {
                     let roots = lock(&shared.file_roots);
                     let fd = roots.open_dir_fd(local_root, parent_rel).map_err(|_| ())?;
@@ -2897,6 +3495,28 @@ async fn handle_resume(
             #[cfg(not(unix))]
             {
                 let _ = (&parent_rel, name);
+                let rebound = {
+                    let roots = lock(&shared.file_roots);
+                    roots.verify_pin(&pin).is_err()
+                };
+                if rebound {
+                    {
+                        let mut jobs = lock(&shared.jobs);
+                        if let Some(record) = wire_job_mut(&mut jobs, peer, resume.job_id) {
+                            record.state = JobState::Failed;
+                            record.error = Some(fs::ROOTS_REBOUND.to_owned());
+                        }
+                    }
+                    let _ = save_jobs(shared);
+                    let err = job::JobReply {
+                        v: job::JOB_VERSION,
+                        id: resume.id,
+                        status: job::STATUS_ERROR,
+                        job_id: resume.job_id,
+                    };
+                    reply(send, job::encode(&err).map_err(|_| ())?).await?;
+                    return Ok(());
+                }
                 let hash = iroh_blobs::Hash::from_bytes(entry.hash);
                 let present = store.has(hash).await.map_err(|_| ())?;
                 if present {
@@ -2986,6 +3606,10 @@ pub(super) async fn handle_upload_offer(
         if manifest::validate(&offer.manifest).is_err() || fs::check_rel(&offer.dst_rel).is_err() {
             return Err(job::STATUS_ERROR);
         }
+        // Pin the destination leg before insertion (sequential roots
+        // hold, never nested): a rebind between here and first use then
+        // fails the leg instead of landing bytes in the new directory.
+        let local_pin = lock(&shared.file_roots).pin(offer.dst_root).ok();
         let mut jobs = lock(&shared.jobs);
         let state = lock(&shared.state);
         super::service_jobs::check_owner(&state, owner).map_err(|_| job::STATUS_STALE)?;
@@ -3011,6 +3635,7 @@ pub(super) async fn handle_upload_offer(
                 manifest: Some(offer.manifest),
                 local_root: offer.dst_root,
                 local_rel: offer.dst_rel,
+                local_pin,
                 outgoing: false,
                 landed: HashMap::new(),
                 file_index: 0,
@@ -3055,8 +3680,8 @@ fn prepared_download_permitted(
 ) -> bool {
     state.trust.granted(peer, Grant::Transfer)
         && *state.transfer_epochs.get(peer).unwrap_or(&0) == permission_epoch
-        && matches!(state.incoming.as_ref(), Some(session)
-            if session.id == session_id && session.generation == generation
+        && matches!(state.incoming.get(&session_id), Some(session)
+            if session.generation == generation
             && session.phase == SessionPhase::Active && session.peer_key == *peer)
 }
 
@@ -3110,13 +3735,22 @@ pub(super) async fn handle_download_request(
     };
     // Scan, hash and offer from this host's roots. Failures reject the
     // request; nothing is announced before every hash is served.
-    let prepared = prepare_host_manifest(shared, request.src_root, &request.src_rel).await;
+    let prepared = prepare_host_manifest(
+        shared,
+        request.src_root,
+        &request.src_rel,
+        manifest::ScanHooks::none(),
+    )
+    .await;
     let outcome: Result<(u64, Manifest, u64), u8> = match prepared {
         Err(status) => Err(status),
         Ok((id, manifest, skipped)) => {
             // Same order as publication/rename: jobs -> state. Activation
             // and permission changes cannot interleave between this check
             // and insertion. A new session cannot inherit prepared work.
+            // Pin the source leg before insertion: a rebind between here
+            // and first serve fails the leg instead of serving moved bytes.
+            let local_pin = lock(&shared.file_roots).pin(request.src_root).ok();
             let mut jobs = lock(&shared.jobs);
             let state = lock(&shared.state);
             let permitted = prepared_download_permitted(
@@ -3150,6 +3784,7 @@ pub(super) async fn handle_download_request(
                         manifest: Some(manifest.clone()),
                         local_root: request.src_root,
                         local_rel: request.src_rel.clone(),
+                        local_pin,
                         outgoing: false,
                         skipped_symlinks,
                         file_index: 0,
@@ -3190,11 +3825,14 @@ async fn prepare_host_manifest(
     shared: &Shared,
     src_root: u64,
     src_rel: &str,
+    scan_hooks: manifest::ScanHooks,
 ) -> Result<(u64, Manifest, u64), u8> {
-    let scan = {
-        let roots = lock(&shared.file_roots);
-        manifest::scan(&roots, src_root, src_rel).map_err(|_| job::STATUS_ERROR)?
-    };
+    // Snapshot the approved roots under a short lock; the recursive walk
+    // runs on a bounded worker with no locks held.
+    let snapshot = lock(&shared.file_roots).clone();
+    let scan = manifest::scan_roots_async(snapshot, src_root, src_rel.to_owned(), scan_hooks)
+        .await
+        .map_err(|_| job::STATUS_ERROR)?;
     let mut manifest = manifest::skeleton(&scan);
     let store = super::blob::open_store(shared)
         .await
@@ -3202,57 +3840,68 @@ async fn prepare_host_manifest(
     for file in &scan.files {
         // Anchored import: re-open through handles, never the retained
         // absolute pathname.
-        let fd_path = {
-            let (parent_rel, name) = match file.root_rel.rfind('/') {
-                Some(slash) => (&file.root_rel[..slash], &file.root_rel[slash + 1..]),
-                None => ("", file.root_rel.as_str()),
-            };
-            // `src_root` is the scan root; `file.root_rel` is root-relative.
-            // Open parent + file with NOFOLLOW while holding no other locks.
-            let roots = lock(&shared.file_roots);
-            #[cfg(unix)]
-            {
-                use std::os::unix::io::AsFd;
-                let parent_fd = roots
-                    .open_dir_fd(src_root, parent_rel)
-                    .map_err(|_| job::STATUS_ERROR)?;
-                let st = vnilink_rename::anchored::stat_at(parent_fd.as_fd(), name)
-                    .map_err(|_| job::STATUS_ERROR)?;
-                if !st.is_file
-                    || st.is_symlink
-                    || st.size != file.size
-                    || st.dev != file.dev
-                    || st.ino != file.ino
-                    || st.mtime_ms != file.mtime_ms
-                {
-                    return Err(job::STATUS_ERROR);
-                }
-                let _file_fd = vnilink_rename::anchored::open_file_verified(
-                    parent_fd.as_fd(),
-                    name,
-                    st.dev,
-                    st.ino,
-                )
-                .map_err(|_| job::STATUS_ERROR)?;
-                let expected_hash = Core::hash_fd(_file_fd).map_err(|_| job::STATUS_ERROR)?;
-                // Stable absolute path for TryReference (no temp fd reference
-                // persisted): verified parent (not symlink) just above; serve-time
-                // fd re-verification denies if swapped later. No second full copy
-                // when the store can reference (small/differing mounts may copy).
-                (file.absolute.clone(), expected_hash, parent_fd)
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = (&roots, parent_rel, name);
-                (file.absolute.clone(), (), ())
-            }
+        let (parent_rel, name) = match file.root_rel.rfind('/') {
+            Some(slash) => (&file.root_rel[..slash], &file.root_rel[slash + 1..]),
+            None => ("", file.root_rel.as_str()),
         };
+        // `src_root` is the scan root; `file.root_rel` is root-relative.
+        // Each file re-snapshots the approved roots under a short lock,
+        // then opens parent + file with NOFOLLOW on a bounded worker:
+        // slow storage parks a blocking thread, never a Tokio worker,
+        // and never while holding the shared roots.
         #[cfg(unix)]
-        let (abs_path, expected_hash, _parent_fd) = fd_path;
+        let (abs_path, file_fd) = {
+            let snapshot = lock(&shared.file_roots).clone();
+            let parent_rel = parent_rel.to_owned();
+            let name = name.to_owned();
+            let expected = (file.size, file.dev, file.ino, file.mtime_ms);
+            let absolute = file.absolute.clone();
+            tokio::task::spawn_blocking(
+                move || -> Result<(std::path::PathBuf, std::os::unix::io::OwnedFd), u8> {
+                    use std::os::unix::io::AsFd;
+                    let parent_fd = snapshot
+                        .open_dir_fd(src_root, &parent_rel)
+                        .map_err(|_| job::STATUS_ERROR)?;
+                    let st = vnilink_rename::anchored::stat_at(parent_fd.as_fd(), &name)
+                        .map_err(|_| job::STATUS_ERROR)?;
+                    if !st.is_file
+                        || st.is_symlink
+                        || st.size != expected.0
+                        || st.dev != expected.1
+                        || st.ino != expected.2
+                        || st.mtime_ms != expected.3
+                    {
+                        return Err(job::STATUS_ERROR);
+                    }
+                    let file_fd = vnilink_rename::anchored::open_file_verified(
+                        parent_fd.as_fd(),
+                        &name,
+                        st.dev,
+                        st.ino,
+                    )
+                    .map_err(|_| job::STATUS_ERROR)?;
+                    // Stable absolute path for TryReference (no temp fd
+                    // reference persisted): verified parent (not symlink)
+                    // just above; serve-time fd re-verification denies if
+                    // swapped later. No second full copy when the store can
+                    // reference (small/differing mounts may copy).
+                    Ok((absolute, file_fd))
+                },
+            )
+            .await
+            .map_err(|_| job::STATUS_ERROR)??
+        };
         #[cfg(not(unix))]
-        let (abs_path, _, _) = fd_path;
+        let abs_path = file.absolute.clone();
+        #[cfg(not(unix))]
+        let _ = (parent_rel, name);
+        // No roots lock is held here: the digest lands on a blocking worker
+        // and the activation below rechecks grant, epoch, generation and
+        // owner before installing the offer.
         #[cfg(unix)]
-        drop(_parent_fd);
+        let expected_hash = Core::hash_fd_async(file_fd, super::blob::HashHooks::none())
+            .await
+            .map_err(|_| job::STATUS_ERROR)?;
         let tag = store
             .add_path_with_opts(AddPathOptions {
                 path: abs_path,
@@ -3327,8 +3976,11 @@ mod lifecycle_tests {
         };
         let host = boot();
         let controller = boot();
-        host.set_h264_support(true, true).unwrap();
-        controller.set_h264_support(true, true).unwrap();
+        host.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+            .unwrap();
+        controller
+            .set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+            .unwrap();
         host.start_hosting().unwrap();
         controller
             .accept_invitation(
@@ -3345,6 +3997,7 @@ mod lifecycle_tests {
         .unwrap();
         let peer = parse_endpoint_id(&controller.endpoint_id()).unwrap();
         let grants = crate::session::Grants {
+            view: true,
             control: true,
             clipboard: false,
             transfer: true,
@@ -3353,7 +4006,7 @@ mod lifecycle_tests {
         controller.connect(&host.endpoint_id()).unwrap();
         let (id, generation, epoch) = {
             let state = lock(&host.shared.state);
-            let session = state.incoming.as_ref().unwrap();
+            let session = state.incoming_live().unwrap();
             let epoch = *state.transfer_epochs.get(&peer).unwrap();
             assert!(prepared_download_permitted(
                 &state,
@@ -3409,6 +4062,7 @@ mod lifecycle_tests {
             }),
             local_root: 0,
             local_rel: String::new(),
+            local_pin: None,
             outgoing: false,
             file_index: 0,
             done_bytes: 0,
@@ -3425,6 +4079,102 @@ mod lifecycle_tests {
     }
 
     #[test]
+    fn legacy_leg_adopts_pin_on_first_destination_use() {
+        let core = Core::boot(
+            CoreConfig {
+                listen: Listen::Loopback,
+                ..CoreConfig::default()
+            },
+            iroh::RelayMode::Disabled,
+        )
+        .unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "vnilink-adopt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(scratch.join("root/got")).unwrap();
+        std::fs::create_dir_all(scratch.join("elsewhere")).unwrap();
+        // Roots canonicalize (macOS /var is a symlink); compare against
+        // the canonical form.
+        let scratch = std::fs::canonicalize(&scratch).unwrap();
+        core.set_blob_directory(scratch.join("blobs")).unwrap();
+        core.set_file_roots(vec![scratch.join("root")]).unwrap();
+        // Legacy record: persisted before pinning, so the pin is None.
+        let mut legacy = record(7, 10, 0, JobState::Transferring);
+        legacy.local_rel = "got".to_owned();
+        assert!(legacy.local_pin.is_none());
+        lock(&core.shared.jobs).insert(7, legacy);
+        // First destination use adopts the current roots and persists.
+        let dest = core.receiver_dest(7, 0, "got", "file-7").unwrap();
+        assert_eq!(dest, scratch.join("root/got/file-7"));
+        let adopted = lock(&core.shared.jobs).get(&7).unwrap().local_pin.clone();
+        assert!(adopted.is_some());
+        // The adopted pin is strict: a rebound entry fails the leg.
+        core.set_file_roots(vec![scratch.join("elsewhere")])
+            .unwrap();
+        let err = core.receiver_dest(7, 0, "got", "file-7").unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidSetting(msg) if msg == crate::fs::ROOTS_REBOUND
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        core.shutdown();
+    }
+
+    #[test]
+    fn configured_retention_has_exact_age_budget_and_shared_active_bounds() {
+        let mut first = record(1, 30, 0, JobState::Interrupted);
+        first.created_at = 90;
+        let mut second = record(2, 80, 0, JobState::Cancelled);
+        second.created_at = 95;
+        let mut active = record(3, 200, 0, JobState::Transferring);
+        active.created_at = 0;
+        active.manifest.as_mut().unwrap().entries[0].hash = [1; 32];
+        let jobs = HashMap::from([(1, first), (2, second), (3, active)]);
+        let policy = crate::job::FileRetentionPolicy {
+            resume_cache_bytes: 110,
+            resume_cache_age_secs: 10,
+            ..Default::default()
+        };
+        assert_eq!(
+            retained_job_ids(&jobs, policy, 99),
+            std::collections::HashSet::from([1, 2, 3])
+        );
+        assert_eq!(
+            retained_job_ids(&jobs, policy, 100),
+            std::collections::HashSet::from([2, 3])
+        );
+        assert_eq!(
+            retained_hashes(&jobs, policy, 100),
+            std::collections::HashSet::from([
+                iroh_blobs::Hash::from_bytes([1; 32]),
+                iroh_blobs::Hash::from_bytes([2; 32])
+            ])
+        );
+        let mut small = policy;
+        small.resume_cache_bytes = 79;
+        assert_eq!(
+            retained_job_ids(&jobs, small, 100),
+            std::collections::HashSet::from([3])
+        );
+        small.resume_cache_bytes = 0;
+        assert_eq!(
+            retained_job_ids(&jobs, small, 99),
+            std::collections::HashSet::from([3])
+        );
+        small.resume_cache_bytes = 110;
+        small.resume_cache_age_secs = 0;
+        assert_eq!(
+            retained_job_ids(&jobs, small, 99),
+            std::collections::HashSet::from([3])
+        );
+    }
+
+    #[test]
     fn retention_bounds_inactive_data_and_preserves_active_shared_hashes() {
         let gib = 1024 * 1024 * 1024;
         let jobs = HashMap::from([
@@ -3432,16 +4182,30 @@ mod lifecycle_tests {
             (2, record(2, 3 * gib, 10, JobState::Interrupted)),
             (
                 3,
-                record(3, 100, RESUME_CACHE_AGE + 1, JobState::Interrupted),
+                record(
+                    3,
+                    100,
+                    crate::job::FileRetentionPolicy::default().resume_cache_age_secs + 1,
+                    JobState::Interrupted,
+                ),
             ),
             (4, record(4, 100, 0, JobState::Complete)),
             (5, record(5, 100, 0, JobState::Failed)),
             (
                 6,
-                record(6, 8 * gib, RESUME_CACHE_AGE + 1, JobState::Transferring),
+                record(
+                    6,
+                    8 * gib,
+                    crate::job::FileRetentionPolicy::default().resume_cache_age_secs + 1,
+                    JobState::Transferring,
+                ),
             ),
         ]);
-        let live = retained_hashes(&jobs);
+        let live = retained_hashes(
+            &jobs,
+            crate::job::FileRetentionPolicy::default(),
+            retention_now(),
+        );
         assert_eq!(
             live,
             std::collections::HashSet::from([
@@ -3449,7 +4213,11 @@ mod lifecycle_tests {
                 iroh_blobs::Hash::from_bytes([6; 32])
             ])
         );
-        let owners = retained_job_ids(&jobs);
+        let owners = retained_job_ids(
+            &jobs,
+            crate::job::FileRetentionPolicy::default(),
+            retention_now(),
+        );
         assert!(record_reclaimable(&jobs[&1], &owners));
         assert!(record_reclaimable(&jobs[&3], &owners));
         assert!(record_reclaimable(&jobs[&4], &owners));
@@ -3475,6 +4243,99 @@ pub(super) fn release_prepared_offers(shared: &Shared, peer: &[u8; 32], hashes: 
         });
         if !needed {
             offers.remove(&(*peer, *hash));
+        }
+    }
+}
+
+impl Core {
+    pub fn file_retention_policy(&self) -> Result<crate::job::FileRetentionPolicy, Error> {
+        Ok(self.alive_state()?.file_retention_policy)
+    }
+    /// Persist before publishing to GC. A failed save cannot cause eviction
+    /// under a policy that was never committed. Active jobs remain protected.
+    pub fn set_file_retention_policy(
+        &self,
+        policy: crate::job::FileRetentionPolicy,
+    ) -> Result<(), Error> {
+        let policy = policy.validate()?;
+        let mut state = self.alive_state()?;
+        let previous = std::mem::replace(&mut state.file_retention_policy, policy);
+        if let Err(error) = persist(&self.shared, &state) {
+            state.file_retention_policy = previous;
+            return Err(error);
+        }
+        *lock(&self.shared.file_retention_policy) = policy;
+        Ok(())
+    }
+}
+
+impl Core {
+    pub fn file_resource_policy(&self) -> Result<crate::job::FileResourcePolicy, Error> {
+        Ok(self.alive_state()?.file_resource_policy)
+    }
+    /// Persist first. Reductions govern new reservations; active work retains
+    /// its existing reservation until completion/cancel to avoid partial loss.
+    pub fn set_file_resource_policy(
+        &self,
+        policy: crate::job::FileResourcePolicy,
+    ) -> Result<(), Error> {
+        let policy = policy.validate()?;
+        let mut state = self.alive_state()?;
+        let previous = std::mem::replace(&mut state.file_resource_policy, policy);
+        if let Err(error) = persist(&self.shared, &state) {
+            state.file_resource_policy = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod crash_staging_tests {
+    use super::*;
+    #[test]
+    fn reconciliation_keeps_resumable_work_and_removes_only_managed_orphans() {
+        let base =
+            std::env::temp_dir().join(format!("vnilink-stage-reconcile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(base.clone());
+        for name in ["job-1", "job-2", "job-3", "job-02", "unrelated"] {
+            std::fs::create_dir_all(base.join(STAGING_DIR).join(name)).unwrap();
+            std::fs::write(base.join(STAGING_DIR).join(name).join("bytes"), name).unwrap();
+        }
+        std::fs::write(base.join("jobs.json.tmp"), "incomplete save").unwrap();
+        std::fs::write(base.join("jobs.json"), "authoritative index").unwrap();
+        reconcile_staging_at(&base, &std::collections::HashSet::from([1]));
+        assert_eq!(
+            std::fs::read(base.join("staging/job-1/bytes")).unwrap(),
+            b"job-1"
+        );
+        assert!(!base.join("staging/job-2").exists());
+        assert!(!base.join("staging/job-3").exists());
+        assert!(base.join("staging/job-02/bytes").exists());
+        assert!(base.join("staging/unrelated/bytes").exists());
+        assert!(!base.join("jobs.json.tmp").exists());
+        assert_eq!(
+            std::fs::read(base.join("jobs.json")).unwrap(),
+            b"authoritative index"
+        );
+        #[cfg(unix)]
+        {
+            std::fs::create_dir(base.join("external")).unwrap();
+            std::fs::write(base.join("external/preserve"), "payload").unwrap();
+            std::os::unix::fs::symlink(base.join("external"), base.join("staging/job-4")).unwrap();
+            reconcile_staging_at(&base, &std::collections::HashSet::from([1]));
+            assert!(std::fs::symlink_metadata(base.join("staging/job-4")).is_err());
+            assert_eq!(
+                std::fs::read(base.join("external/preserve")).unwrap(),
+                b"payload"
+            );
         }
     }
 }

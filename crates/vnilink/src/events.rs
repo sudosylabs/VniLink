@@ -93,15 +93,28 @@ pub enum CoreEvent {
     ClipboardReceived {
         id: u64,
     },
+    /// A file selection offer arrived. Read it with
+    /// [`crate::Core::clipboard_files`] or
+    /// [`crate::Core::incoming_clipboard_files`].
+    ///
+    /// The event carries no paths. Selections are not logged.
+    ClipboardFilesReceived {
+        id: u64,
+    },
     /// Host text for an exact Desktop owner. Carries no clipboard contents.
     DesktopClipboardReceived {
         service: crate::ServiceInfo,
     },
-    /// A file was written for this session.
-    ///
-    /// The event carries no path and no bytes. File contents are not logged.
-    TransferCompleted {
-        id: u64,
+    /// A display snapshot was published or received. Read the topology for
+    /// the records. `revision` 0 is not used.
+    TopologyChanged {
+        revision: u64,
+    },
+    /// The lock-after-control policy fired the workstation lock. `locked`
+    /// is false when no backend is installed or the OS call failed; the
+    /// edge is consumed either way and re-arms on the next control owner.
+    HostLocked {
+        locked: bool,
     },
 }
 

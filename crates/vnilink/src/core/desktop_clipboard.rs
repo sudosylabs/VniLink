@@ -80,10 +80,34 @@ impl RemoteDesktopService {
         if desktop.clipboard.closed.load(Ordering::Acquire) {
             return Err(Error::Unsupported("Desktop clipboard pipe ended"));
         }
-        Ok(lock(&desktop.clipboard.latest).clone())
+        let text = lock(&desktop.clipboard.latest).clone();
+        Ok(text)
     }
 }
 impl Core {
+    /// Non-owning native clipboard routing to an exact controller Desktop.
+    /// This never adopts a replacement owner or keeps its connection alive.
+    pub fn submit_controller_desktop_clipboard(
+        &self,
+        id: u64,
+        generation: u64,
+        text: &str,
+    ) -> Result<(), Error> {
+        let desktop = runtime(&*self.alive_state()?, id, generation, false)?;
+        desktop.clipboard.submit(text)
+    }
+    pub fn controller_desktop_clipboard_text(
+        &self,
+        id: u64,
+        generation: u64,
+    ) -> Result<Option<String>, Error> {
+        let desktop = runtime(&*self.alive_state()?, id, generation, false)?;
+        if desktop.clipboard.closed.load(Ordering::Acquire) {
+            return Err(Error::Unsupported("Desktop clipboard pipe ended"));
+        }
+        let text = lock(&desktop.clipboard.latest).clone();
+        Ok(text)
+    }
     /// Publishes host text for one admitted Desktop, with controller receipt ACK.
     pub fn publish_desktop_clipboard(
         &self,
@@ -295,6 +319,11 @@ async fn exchange(
                     let _ = request.reply.send(clipboard::status_result(status));
                 }
                 Frame::Ready => return Err(Error::Malformed),
+                // File selections and paste preparation ride the session
+                // clipboard stream, never a per-Desktop-owner stream.
+                Frame::Files { .. } | Frame::Prepare { .. } | Frame::FilesReady { .. } => {
+                    return Err(Error::Malformed)
+                }
             }
         }
     }

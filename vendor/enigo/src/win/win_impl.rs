@@ -214,27 +214,19 @@ impl Mouse for Enigo {
         send_input(&[input])
     }
 
-    // Sends a scroll event to the X11 server via `XTest` extension
     fn scroll(&mut self, length: i32, axis: Axis) -> InputResult<()> {
-        debug!("\x1b[93mscroll(length: {length:?}, axis: {axis:?})\x1b[0m");
-        let input = match axis {
-            Axis::Horizontal => mouse_event(
-                MOUSEEVENTF_HWHEEL,
-                length * (WHEEL_DELTA as i32),
-                0,
-                0,
-                self.dw_extra_info,
-            ),
-            Axis::Vertical => mouse_event(
-                MOUSEEVENTF_WHEEL,
-                -length * (WHEEL_DELTA as i32),
-                0,
-                0,
-                self.dw_extra_info,
-            ),
+        let delta = length.checked_mul(WHEEL_DELTA as i32)
+            .ok_or(InputError::Simulate("wheel delta overflow"))?;
+        self.scroll_precise(delta, axis)
+    }
+
+    fn scroll_precise(&mut self, length: i32, axis: Axis) -> InputResult<()> {
+        let (flag, delta) = match axis {
+            Axis::Horizontal => (MOUSEEVENTF_HWHEEL, length),
+            Axis::Vertical => (MOUSEEVENTF_WHEEL, length.checked_neg()
+                .ok_or(InputError::Simulate("wheel delta overflow"))?),
         };
-        send_input(&[input])?;
-        Ok(())
+        send_input(&[mouse_event(flag, delta, 0, 0, self.dw_extra_info)])
     }
 
     fn main_display(&self) -> InputResult<(i32, i32)> {
@@ -331,19 +323,21 @@ impl Keyboard for Enigo {
         let vk = VIRTUAL_KEY(Enigo::translate_key(scan, MAPVK_VSC_TO_VK_EX)?); // translate scan code to virtual key
 
         let mut keyflags = KEYEVENTF_SCANCODE;
-        // TODO: Check if the first bytes need to be truncated if it is an extended key
-        if Enigo::is_extended_key(vk) {
+        // Physical input carries the E0 prefix. Deriving this from the
+        // virtual key loses keypad Enter (same VK as ordinary Enter).
+        let native_scan = scan & 0xff;
+        if scan & 0xff00 == 0xe000 {
             keyflags |= KEYEVENTF_EXTENDEDKEY;
         }
 
         if direction == Direction::Click || direction == Direction::Press {
-            input.push(keybd_event(keyflags, vk, scan, self.dw_extra_info));
+            input.push(keybd_event(keyflags, vk, native_scan, self.dw_extra_info));
         }
         if direction == Direction::Click || direction == Direction::Release {
             input.push(keybd_event(
                 keyflags | KEYEVENTF_KEYUP,
                 vk,
-                scan,
+                native_scan,
                 self.dw_extra_info,
             ));
         }

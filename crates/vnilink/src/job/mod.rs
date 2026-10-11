@@ -101,3 +101,69 @@ pub struct JobSnapshot {
     pub waiting_file: Option<String>,
     pub error: Option<String>,
 }
+
+/// Host-local cache retention. Active jobs/imports remain independently pinned.
+/// Zero bytes or age disables the corresponding inactive payload cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileRetentionPolicy {
+    pub resume_cache_bytes: u64,
+    pub resume_cache_age_secs: u64,
+    pub recent_fetch_bytes: u64,
+    pub recent_fetch_age_secs: u64,
+}
+impl Default for FileRetentionPolicy {
+    fn default() -> Self {
+        Self {
+            resume_cache_bytes: 4 * 1024 * 1024 * 1024,
+            resume_cache_age_secs: 7 * 24 * 60 * 60,
+            recent_fetch_bytes: 1024 * 1024 * 1024,
+            recent_fetch_age_secs: 300,
+        }
+    }
+}
+impl FileRetentionPolicy {
+    pub fn validate(self) -> Result<Self, crate::Error> {
+        if self.resume_cache_bytes > 64 * 1024 * 1024 * 1024
+            || self.recent_fetch_bytes > 64 * 1024 * 1024 * 1024
+            || self.resume_cache_age_secs > 90 * 24 * 60 * 60
+            || self.recent_fetch_age_secs > 90 * 24 * 60 * 60
+        {
+            return Err(crate::Error::InvalidSetting(
+                "file retention policy is out of range",
+            ));
+        }
+        Ok(self)
+    }
+}
+
+/// Receiver worker and peak temporary-storage admission. Disk checks are
+/// estimates; actual write failures remain authoritative and preserve sources.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileResourcePolicy {
+    pub max_concurrent_receivers: u16,
+    pub max_reserved_bytes: u64,
+    pub minimum_free_bytes: u64,
+}
+impl Default for FileResourcePolicy {
+    fn default() -> Self {
+        Self {
+            max_concurrent_receivers: 4,
+            max_reserved_bytes: 64 * 1024 * 1024 * 1024,
+            minimum_free_bytes: 256 * 1024 * 1024,
+        }
+    }
+}
+impl FileResourcePolicy {
+    pub fn validate(self) -> Result<Self, crate::Error> {
+        if !(1..=16).contains(&self.max_concurrent_receivers)
+            || self.max_reserved_bytes == 0
+            || self.max_reserved_bytes > 1024 * 1024 * 1024 * 1024
+            || self.minimum_free_bytes > 1024 * 1024 * 1024 * 1024
+        {
+            return Err(crate::Error::InvalidSetting(
+                "file resource policy is out of range",
+            ));
+        }
+        Ok(self)
+    }
+}

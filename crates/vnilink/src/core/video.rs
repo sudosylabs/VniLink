@@ -13,14 +13,99 @@ use crate::video::{
     VideoOutbox, VideoPush, VideoSubscription,
 };
 
+/// One consumer of the shared physical capture. Legacy desktop sessions and
+/// neutral Desktop owners are separate records; a files-only or stopped
+/// desktop is absent. Each target owns its encoder, quality and queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoTarget {
+    /// True when `id` is a hosted Desktop service. False for a legacy session.
+    pub service: bool,
+    pub id: u64,
+    pub generation: u64,
+    pub quality: Quality,
+    pub separate_cursor: bool,
+    pub codec: u8,
+    /// Display this consumer selected. Zero means it has not chosen one and
+    /// still follows whichever capture the supervisor opened.
+    pub display_id: u64,
+    /// Topology revision the selection was accepted under. Zero when the
+    /// consumer selected nothing or the display is no longer published.
+    pub revision: u64,
+}
+
+/// Consumers and the resolved source for consumers without a selection.
+#[derive(Debug, Clone)]
+pub struct VideoRouting {
+    pub targets: Vec<VideoTarget>,
+    pub default_source: Option<u64>,
+}
+impl VideoRouting {
+    pub fn serves_selection(&self, selected: &[u64], source: u64) -> bool {
+        serves_source(
+            selected.first().copied().unwrap_or(0),
+            source,
+            self.default_source,
+        )
+    }
+}
+impl VideoTarget {
+    pub fn serves_source(&self, source: u64, default: Option<u64>) -> bool {
+        serves_source(self.display_id, source, default)
+    }
+}
+fn serves_source(selected: u64, source: u64, default: Option<u64>) -> bool {
+    source == 0
+        || if selected == 0 {
+            default.is_none_or(|id| id == source)
+        } else {
+            selected == source
+        }
+}
+
 impl Core {
+    /// Fence physical capture startup to the consumers present when it began.
+    /// One departing viewer does not cancel its siblings. A newly attached
+    /// viewer cannot adopt a cancelled startup; the supervisor opens afresh.
+    pub fn desktop_capture_startup(
+        &self,
+        display_id: u64,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        timeout: std::time::Duration,
+    ) -> Result<crate::BackendStartup, Error> {
+        let state = self.alive_state()?;
+        let routing = video_routing_locked(&self.shared, &state);
+        let mut owners = Vec::new();
+        for target in routing
+            .targets
+            .into_iter()
+            .filter(|target| target.serves_source(display_id, routing.default_source))
+        {
+            if target.service {
+                if let Some(owner) = state
+                    .hosted_services
+                    .get(&target.id)
+                    .filter(|owner| owner.info.generation == target.generation)
+                {
+                    owners.push(owner.stop.subscribe());
+                }
+            } else if let Some(owner) = state
+                .incoming
+                .get(&target.id)
+                .filter(|owner| owner.generation == target.generation)
+            {
+                owners.push(owner.desktop_stop.subscribe());
+            }
+        }
+        let startup = crate::BackendStartup::for_consumers(stop, owners, timeout);
+        startup.check()?;
+        Ok(startup)
+    }
     /// Capture workers stop this generation's encoder without stopping the
     /// peer connection. Avoid a full installation snapshot on every frame.
     pub fn host_desktop_active(&self, id: u64, generation: u64) -> Result<bool, Error> {
         let state = self.alive_state()?;
-        Ok(state.incoming.as_ref().is_some_and(|s| {
-            s.id == id
-                && s.generation == generation
+        Ok(state.incoming.get(&id).is_some_and(|s| {
+            s.generation == generation
                 && s.phase == SessionPhase::Active
                 && !s.files_only
                 && !*s.desktop_stop.borrow()
@@ -96,8 +181,13 @@ impl Core {
         let state = self.alive_state()?;
         if state
             .incoming
-            .as_ref()
-            .is_some_and(|session| !finished(&session.phase) && !session.services_only)
+            .values()
+            .any(|session| !finished(&session.phase) && !session.services_only)
+            || self
+                .shared
+                .desktop_streams
+                .load(std::sync::atomic::Ordering::Acquire)
+                != 0
         {
             return Err(Error::Busy);
         }
@@ -110,34 +200,38 @@ impl Core {
         Ok(())
     }
 
-    /// Records the platform's H.264 codec availability.
+    /// Registers the platform's probe-validated video codec abilities.
     ///
-    /// The library never probes hardware itself. The native host calls this
-    /// after asking its adapters (VA-API on Linux) so `capabilities()` and
-    /// host admission report an explicit unsupported state instead of
-    /// admitting a session that can never carry video.
-    pub fn set_h264_support(&self, encode: bool, decode: bool) -> Result<(), Error> {
+    /// The library never probes hardware itself. The native layer calls this
+    /// after initializing its encoder and decoder so `capabilities()`,
+    /// admission and negotiation report an explicit unsupported state
+    /// instead of admitting a session that can never carry video. Every set
+    /// bit must mean a backend processed a sample; a failed probe registers
+    /// cleared bits, never assumed ones.
+    pub fn set_video_codecs(&self, caps: crate::video_caps::VideoCodecCaps) -> Result<(), Error> {
         self.ensure_alive()?;
-        self.shared
-            .h264_encode
-            .store(encode, std::sync::atomic::Ordering::Relaxed);
-        self.shared
-            .h264_decode
-            .store(decode, std::sync::atomic::Ordering::Relaxed);
+        caps.validate()?;
+        *lock(&self.shared.video_caps) = caps;
         Ok(())
     }
 
-    /// Records whether this host encodes H.264 High profile. The native host
-    /// calls this after probing (VA-API High entrypoint on Linux,
-    /// VideoToolbox on macOS). Defaults to false: without it the session
-    /// negotiates Baseline. Every decoder we ship handles both profiles, so
-    /// only the host side needs this flag.
-    pub fn set_h264_high(&self, high: bool) -> Result<(), Error> {
+    /// Currently registered video codec abilities.
+    pub fn video_codecs(&self) -> Result<crate::video_caps::VideoCodecCaps, Error> {
         self.ensure_alive()?;
-        self.shared
-            .h264_high_encode
-            .store(high, std::sync::atomic::Ordering::Relaxed);
-        Ok(())
+        Ok(lock(&self.shared.video_caps).clone())
+    }
+
+    /// Live capture consumers. The list is a snapshot: a later open, close or
+    /// revoke changes the next call. Order is service flag, then id.
+    pub fn video_targets(&self) -> Result<Vec<VideoTarget>, Error> {
+        let state = self.alive_state()?;
+        Ok(video_targets_locked(&self.shared, &state))
+    }
+
+    /// Frame, cursor and failure attribution share this atomic routing snapshot.
+    pub fn video_routing(&self) -> Result<VideoRouting, Error> {
+        let state = self.alive_state()?;
+        Ok(video_routing_locked(&self.shared, &state))
     }
 
     /// Agreed H.264 codec id for one hosted session (`CODEC_H264` or
@@ -145,8 +239,8 @@ impl Core {
     /// profile with it.
     pub fn host_codec(&self, session_id: u64) -> Result<u8, Error> {
         let state = self.alive_state()?;
-        let session = state.incoming.as_ref().ok_or(Error::NoSession)?;
-        if session.id != session_id || session.phase != SessionPhase::Active {
+        let session = state.incoming.get(&session_id).ok_or(Error::NoSession)?;
+        if session.phase != SessionPhase::Active {
             return Err(Error::NoSession);
         }
         Ok(session.codec)
@@ -156,20 +250,22 @@ impl Core {
     ///
     /// A full queue drops predicted frames until the next keyframe and still returns
     /// `Ok`. The frame bytes are not logged.
-    pub fn publish_video(&self, session_id: u64, frame: EncodedFrame) -> Result<(), Error> {
+    pub fn publish_video(&self, session_id: u64, mut frame: EncodedFrame) -> Result<(), Error> {
         self.ensure_alive()?;
         frame.check()?;
         let outbox = {
             let state = self.alive_state()?;
-            let session = state.incoming.as_ref().ok_or(Error::NoSession)?;
-            if session.id != session_id
-                || session.phase != SessionPhase::Active
-                || *session.desktop_stop.borrow()
-            {
+            let session = state.incoming.get(&session_id).ok_or(Error::NoSession)?;
+            if session.phase != SessionPhase::Active || *session.desktop_stop.borrow() {
                 return Err(Error::NoSession);
             }
             session.video.clone().ok_or(Error::NoSession)?
         };
+        // Same backstop as the service path: a zero revision reads the live
+        // topology. The display id is never invented here.
+        if frame.revision == 0 {
+            frame.revision = lock(&self.shared.topology).revision;
+        }
         if matches!(outbox.push(frame), VideoPush::KeyframeNeeded) {
             self.shared
                 .events
@@ -185,84 +281,12 @@ impl Core {
     pub fn video_backpressure(&self, session_id: u64) -> Result<(usize, u64), Error> {
         self.ensure_alive()?;
         let state = self.alive_state()?;
-        let session = state.incoming.as_ref().ok_or(Error::NoSession)?;
-        if session.id != session_id || session.phase != SessionPhase::Active {
+        let session = state.incoming.get(&session_id).ok_or(Error::NoSession)?;
+        if session.phase != SessionPhase::Active {
             return Err(Error::NoSession);
         }
         let outbox = session.video.clone().ok_or(Error::NoSession)?;
         Ok((outbox.queued(), outbox.dropped()))
-    }
-
-    /// One adaptive step for the controlling session. Reads the selected
-    /// path RTT/relay from the live connection and the inbox drop counter,
-    /// then applies `suggest_quality` with a 2s cooldown. Returns the applied
-    /// quality, or `None` to hold. Call every ~2s from the viewer; manual
-    /// `update_session_quality` holds the manual preset for that generation.
-    pub fn auto_quality_tick(&self, session_id: u64) -> Result<Option<Quality>, Error> {
-        self.ensure_alive()?;
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let (current, generation, link, controller) = {
-            let state = self.alive_state()?;
-            let session = state.outgoing.get(&session_id).ok_or(Error::NoSession)?;
-            if session.id != session_id || session.phase != SessionPhase::Active {
-                return Err(Error::NoSession);
-            }
-            let current = session
-                .quality
-                .unwrap_or_else(crate::session::controller_offer);
-            (
-                current,
-                session.generation,
-                session.link.clone(),
-                session.controller.as_ref().ok_or(Error::NoSession)?.clone(),
-            )
-        };
-        let Some(link) = link else {
-            return Ok(None);
-        };
-        let mut rtt_ms = u64::MAX;
-        let mut relay = false;
-        for path in link.paths().iter() {
-            if path.is_selected() {
-                rtt_ms = u64::try_from(path.rtt().as_millis()).unwrap_or(u64::MAX);
-                relay = path.is_relay();
-                break;
-            }
-        }
-        if rtt_ms == u64::MAX {
-            return Ok(None);
-        }
-        let queued = controller.inbox.len();
-        let dropped = controller.inbox.dropped();
-        let delta = {
-            let mut auto = lock(&controller.auto);
-            if auto.manual_session == Some((session_id, generation)) {
-                return Ok(None);
-            }
-            let delta = dropped.saturating_sub(auto.last_dropped);
-            auto.last_dropped = dropped;
-            if now_ms.saturating_sub(auto.last_change_ms) < 2000 {
-                return Ok(None);
-            }
-            delta
-        };
-        let Some(next) = crate::session::suggest_quality(&current, rtt_ms, relay, queued, delta)
-        else {
-            return Ok(None);
-        };
-        if !self.apply_session_quality(
-            session_id,
-            SessionRole::Controller,
-            next,
-            Some(generation),
-        )? {
-            return Ok(None);
-        }
-        lock(&controller.auto).last_change_ms = now_ms;
-        Ok(Some(next))
     }
 
     /// Changes the encoder limits for one live session.
@@ -279,7 +303,7 @@ impl Core {
         role: SessionRole,
         quality: Quality,
     ) -> Result<(), Error> {
-        self.apply_session_quality(session_id, role, quality, None)
+        self.apply_session_quality(session_id, role, quality)
             .map(|_| ())
     }
 
@@ -288,17 +312,15 @@ impl Core {
         session_id: u64,
         role: SessionRole,
         quality: Quality,
-        automatic_generation: Option<u64>,
     ) -> Result<bool, Error> {
         let mut state = self.alive_state()?;
         match role {
             SessionRole::Host => {
                 let session = state
                     .incoming
-                    .as_mut()
+                    .get_mut(&session_id)
                     .filter(|session| {
-                        session.id == session_id
-                            && session.phase == SessionPhase::Active
+                        session.phase == SessionPhase::Active
                             && !session.files_only
                             && !*session.desktop_stop.borrow()
                     })
@@ -327,17 +349,9 @@ impl Core {
                 let controller = session.controller.as_ref().ok_or(Error::NoSession)?;
                 let owner = (session.id, session.generation);
                 let mut auto = lock(&controller.auto);
-                if let Some(generation) = automatic_generation {
-                    // A simultaneous manual selection or reconnect takes priority.
-                    if generation != session.generation || auto.manual_session == Some(owner) {
-                        return Ok(false);
-                    }
-                }
                 // Only change the local limits after the command is queued.
                 outbox.push_quality(quality)?;
-                if automatic_generation.is_none() {
-                    auto.manual_session = Some(owner);
-                }
+                auto.manual_session = Some(owner);
                 drop(auto);
                 session.quality = Some(quality);
                 drop(state);
@@ -530,4 +544,79 @@ pub(super) async fn read_video_frame(
         .await
         .map_err(Error::network_debug)?;
     decode_video_body(&body)
+}
+
+fn video_targets_locked(shared: &Shared, state: &State) -> Vec<VideoTarget> {
+    let topology = lock(&shared.topology).clone();
+    let revision_of = |display_id: u64| {
+        topology
+            .displays
+            .iter()
+            .find(|display| display.id == display_id)
+            .map(|display| display.revision)
+            .unwrap_or(0)
+    };
+    let mut targets = Vec::new();
+    for record in state.hosted_services.values() {
+        if record.info.kind != crate::ServiceKind::Desktop
+            || record.info.phase != crate::ServicePhase::Active
+            || *record.stop.borrow()
+        {
+            continue;
+        }
+        let Some(desktop) = &record.desktop else {
+            continue;
+        };
+        let info = desktop.metadata();
+        let display_id = lock(&desktop.selected).first().copied().unwrap_or(0);
+        targets.push(VideoTarget {
+            service: true,
+            id: info.service.id,
+            generation: info.service.generation,
+            quality: info.quality,
+            separate_cursor: info.separate_cursor,
+            codec: info.codec,
+            display_id,
+            revision: revision_of(display_id),
+        });
+    }
+    for session in state.incoming.values() {
+        if session.phase != SessionPhase::Active
+            || session.files_only
+            || session.services_only
+            || *session.desktop_stop.borrow()
+            || session.desktop_owner.is_some()
+        {
+            continue;
+        }
+        let Some(quality) = session.quality else {
+            continue;
+        };
+        let display_id = session.selected_displays.first().copied().unwrap_or(0);
+        targets.push(VideoTarget {
+            service: false,
+            id: session.id,
+            generation: session.generation,
+            quality,
+            separate_cursor: session.separate_cursor,
+            codec: session.codec,
+            display_id,
+            revision: revision_of(display_id),
+        });
+    }
+    targets.sort_by_key(|target| (target.service, target.id));
+    targets
+}
+
+pub(super) fn video_routing_locked(shared: &Shared, state: &State) -> VideoRouting {
+    let targets = video_targets_locked(shared, state);
+    let default_source = targets
+        .iter()
+        .filter_map(|t| (t.display_id != 0).then_some(t.display_id))
+        .min()
+        .or_else(|| lock(&shared.topology).displays.first().map(|d| d.id));
+    VideoRouting {
+        targets,
+        default_source,
+    }
 }

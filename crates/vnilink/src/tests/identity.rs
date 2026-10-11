@@ -63,7 +63,7 @@ fn shutdown_is_idempotent_and_later_calls_report_it() {
     ));
     assert!(matches!(core.disconnect(), Err(Error::ShutDown)));
     assert!(matches!(
-        core.submit_input(1, 1, InputEvent::pointer(0, 0)),
+        core.submit_input(1, 1, InputEvent::pointer(0, 0, 1, 1)),
         Err(Error::ShutDown)
     ));
     assert!(matches!(
@@ -168,6 +168,7 @@ fn unknown_devices_and_garbage_ids_are_rejected() {
     let host = start_direct();
     let stranger = start_direct();
     let control = Grants {
+        view: true,
         control: true,
         clipboard: false,
         transfer: false,

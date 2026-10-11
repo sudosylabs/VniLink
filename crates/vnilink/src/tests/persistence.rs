@@ -22,13 +22,15 @@ fn peer() -> Core {
         RelayMode::Disabled,
     )
     .expect("loopback core");
-    core.set_h264_support(true, true).expect("flags");
+    core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .expect("flags");
     core
 }
 
 fn open_loop(store: &MemoryStore, relay: RelaySettings) -> Core {
     let core = Core::open_direct(Arc::new(store.clone()), relay).expect("installation opens");
-    core.set_h264_support(true, true).expect("flags");
+    core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .expect("flags");
     core
 }
 
@@ -42,6 +44,7 @@ fn credentialed_relay() -> RelaySettings {
 
 fn all_grants() -> Grants {
     Grants {
+        view: true,
         control: true,
         clipboard: true,
         transfer: true,
@@ -330,6 +333,7 @@ fn a_failed_save_keeps_the_previous_record() {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: true,
             control: true,
             clipboard: false,
             transfer: false,
@@ -453,6 +457,10 @@ fn service_permissions_are_independent_persisted_and_rollback_before_revocation(
     );
     host.authorize_service(&id, Kind::Terminal, true).unwrap();
     host.authorize_service(&id, Kind::Camera, true).unwrap();
+    host.authorize_service(&id, Kind::SystemAudio, true)
+        .unwrap();
+    host.authorize_service(&id, Kind::Microphone, true).unwrap();
+    host.authorize_recording(&id, true).unwrap();
     host.authorize(&id, all_grants()).unwrap();
     assert_eq!(
         host.service_permissions(&id).unwrap(),
@@ -460,7 +468,11 @@ fn service_permissions_are_independent_persisted_and_rollback_before_revocation(
             desktop: true,
             files: true,
             terminal: true,
-            camera: true
+            camera: true,
+            system_audio: true,
+            microphone: true,
+            recording: true,
+            system_actions: false
         }
     );
     host.authorize_service(&id, Kind::Files, false).unwrap();
@@ -470,7 +482,11 @@ fn service_permissions_are_independent_persisted_and_rollback_before_revocation(
             desktop: true,
             files: false,
             terminal: true,
-            camera: true
+            camera: true,
+            system_audio: true,
+            microphone: true,
+            recording: true,
+            system_actions: false
         }
     );
     assert!(host.snapshot().unwrap().devices[0].grants.clipboard);
@@ -482,6 +498,20 @@ fn service_permissions_are_independent_persisted_and_rollback_before_revocation(
     ));
     assert!(host.service_permissions(&id).unwrap().terminal);
     assert_eq!(store.record().unwrap(), saved);
+    store.fail_next_save(Error::StoreLocked);
+    assert!(matches!(
+        host.authorize_service(&id, Kind::SystemAudio, false),
+        Err(Error::StoreLocked)
+    ));
+    assert!(host.service_permissions(&id).unwrap().system_audio);
+    store.fail_next_save(Error::StoreLocked);
+    assert!(matches!(
+        host.authorize_recording(&id, false),
+        Err(Error::StoreLocked)
+    ));
+    assert!(host.service_permissions(&id).unwrap().recording);
+    assert_eq!(store.record().unwrap(), saved);
+    assert_eq!(store.record().unwrap(), saved);
     store.fail_next_save(Error::StoreUnavailable);
     assert!(matches!(host.revoke(&id), Err(Error::StoreUnavailable)));
     assert_eq!(
@@ -490,7 +520,11 @@ fn service_permissions_are_independent_persisted_and_rollback_before_revocation(
             desktop: true,
             files: false,
             terminal: true,
-            camera: true
+            camera: true,
+            system_audio: true,
+            microphone: true,
+            recording: true,
+            system_actions: false
         }
     );
     assert_eq!(store.record().unwrap(), saved);
@@ -512,7 +546,11 @@ fn service_permissions_are_independent_persisted_and_rollback_before_revocation(
             desktop: true,
             files: false,
             terminal: true,
-            camera: true
+            camera: true,
+            system_audio: true,
+            microphone: true,
+            recording: true,
+            system_actions: false
         }
     );
     reopened.revoke(&id).unwrap();
@@ -529,4 +567,164 @@ fn service_permissions_are_independent_persisted_and_rollback_before_revocation(
         reopened.authorize_service(&id, Kind::Camera, true),
         Err(Error::NotPaired)
     ));
+}
+
+#[test]
+fn terminal_policy_is_durable_and_save_failure_rolls_back() {
+    use crate::terminal::TerminalPolicy;
+    let store = MemoryStore::empty();
+    let core = open_loop(&store, RelaySettings::public_n0());
+    let policy = TerminalPolicy {
+        allow_persistence: false,
+        max_sessions: 3,
+        max_sessions_per_peer: 1,
+        history_bytes: 32 * 1024,
+        replay_bytes: 1024,
+        detached_timeout_secs: 17,
+    };
+    core.set_terminal_policy(policy).unwrap();
+    let saved = store.record().unwrap();
+    store.fail_next_save(Error::StoreUnavailable);
+    assert!(matches!(
+        core.set_terminal_policy(TerminalPolicy::default()),
+        Err(Error::StoreUnavailable)
+    ));
+    assert_eq!(core.terminal_policy().unwrap(), policy);
+    assert_eq!(store.record().unwrap(), saved);
+    core.shutdown();
+    drop(core);
+    let reopened = open_loop(&store, RelaySettings::public_n0());
+    assert_eq!(reopened.terminal_policy().unwrap(), policy);
+    let mut invalid = policy;
+    invalid.replay_bytes = invalid.history_bytes + 1;
+    assert!(matches!(
+        reopened.set_terminal_policy(invalid),
+        Err(Error::InvalidSetting(_))
+    ));
+    assert_eq!(reopened.terminal_policy().unwrap(), policy);
+    assert_eq!(store.record().unwrap(), saved);
+}
+
+#[test]
+fn file_retention_policy_is_durable_and_save_failure_rolls_back() {
+    use crate::job::FileRetentionPolicy;
+    let store = MemoryStore::empty();
+    let core = open_loop(&store, RelaySettings::public_n0());
+    let policy = FileRetentionPolicy {
+        resume_cache_bytes: 12_345,
+        resume_cache_age_secs: 456,
+        recent_fetch_bytes: 789,
+        recent_fetch_age_secs: 10,
+    };
+    core.set_file_retention_policy(policy).unwrap();
+    let saved = store.record().unwrap();
+    store.fail_next_save(Error::StoreUnavailable);
+    assert!(matches!(
+        core.set_file_retention_policy(FileRetentionPolicy {
+            resume_cache_bytes: 0,
+            resume_cache_age_secs: 0,
+            recent_fetch_bytes: 0,
+            recent_fetch_age_secs: 0
+        }),
+        Err(Error::StoreUnavailable)
+    ));
+    assert_eq!(core.file_retention_policy().unwrap(), policy);
+    assert_eq!(store.record().unwrap(), saved);
+    let mut invalid = policy;
+    invalid.resume_cache_bytes = u64::MAX;
+    assert!(matches!(
+        core.set_file_retention_policy(invalid),
+        Err(Error::InvalidSetting(_))
+    ));
+    core.shutdown();
+    drop(core);
+    let reopened = open_loop(&store, RelaySettings::public_n0());
+    assert_eq!(reopened.file_retention_policy().unwrap(), policy);
+}
+
+#[test]
+fn power_policy_is_durable_and_save_failure_rolls_back() {
+    use crate::power::PowerPolicy;
+    let store = MemoryStore::empty();
+    let core = open_loop(&store, RelaySettings::public_n0());
+    let policy = PowerPolicy {
+        incoming_display: true,
+        outgoing_system: true,
+        incoming_idle_secs: 73,
+        outgoing_idle_secs: 94,
+        ..Default::default()
+    };
+    core.set_power_policy(policy).unwrap();
+    let saved = store.record().unwrap();
+    store.fail_next_save(Error::StoreUnavailable);
+    assert!(matches!(
+        core.set_power_policy(PowerPolicy::default()),
+        Err(Error::StoreUnavailable)
+    ));
+    assert_eq!(core.power_policy().unwrap(), policy);
+    assert_eq!(store.record().unwrap(), saved);
+    core.shutdown();
+    drop(core);
+    assert_eq!(
+        open_loop(&store, RelaySettings::public_n0())
+            .power_policy()
+            .unwrap(),
+        policy
+    );
+    for bits in 0..=31 {
+        assert_eq!(PowerPolicy::from_bits(bits).unwrap().bits(), bits);
+    }
+    for bits in 32..=255 {
+        assert!(matches!(
+            PowerPolicy::from_bits(bits),
+            Err(Error::CorruptRecord)
+        ));
+    }
+}
+
+#[test]
+fn file_resource_policy_roundtrips_and_save_failure_preserves_durable_state() {
+    use crate::job::FileResourcePolicy;
+    let store = MemoryStore::empty();
+    let core = open_loop(&store, RelaySettings::public_n0());
+    let policy = FileResourcePolicy {
+        max_concurrent_receivers: 2,
+        max_reserved_bytes: 123456,
+        minimum_free_bytes: 7890,
+    };
+    core.set_file_resource_policy(policy).unwrap();
+    let saved = store.record().unwrap();
+    store.fail_next_save(Error::StoreUnavailable);
+    assert!(matches!(
+        core.set_file_resource_policy(Default::default()),
+        Err(Error::StoreUnavailable)
+    ));
+    assert_eq!(core.file_resource_policy().unwrap(), policy);
+    assert_eq!(store.record().unwrap(), saved);
+    for invalid in [
+        FileResourcePolicy {
+            max_concurrent_receivers: 0,
+            ..policy
+        },
+        FileResourcePolicy {
+            max_concurrent_receivers: 17,
+            ..policy
+        },
+        FileResourcePolicy {
+            max_reserved_bytes: 0,
+            ..policy
+        },
+        FileResourcePolicy {
+            minimum_free_bytes: u64::MAX,
+            ..policy
+        },
+    ] {
+        assert!(core.set_file_resource_policy(invalid).is_err());
+        assert_eq!(core.file_resource_policy().unwrap(), policy);
+        assert_eq!(store.record().unwrap(), saved);
+    }
+    core.shutdown();
+    drop(core);
+    let reopened = open_loop(&store, RelaySettings::public_n0());
+    assert_eq!(reopened.file_resource_policy().unwrap(), policy);
 }

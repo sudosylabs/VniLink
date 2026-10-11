@@ -48,6 +48,7 @@ fn grant(host: &Core, controller: &Core, clipboard: bool) {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: true,
             control: true,
             clipboard,
             transfer: false,
@@ -79,7 +80,13 @@ fn desktop_clipboard_acknowledges_both_directions_and_isolates_reopen_and_revoke
     grant(&host, &controller, true);
     let events = controller.subscribe().unwrap();
     std::thread::scope(|scope| {
-        let outgoing = scope.spawn(|| desktop.submit_clipboard("controller copy"));
+        let outgoing = scope.spawn(|| {
+            controller.submit_controller_desktop_clipboard(
+                desktop.info().id,
+                desktop.info().generation,
+                "controller copy",
+            )
+        });
         let incoming = scope
             .spawn(|| host.publish_desktop_clipboard(remote.id, remote.generation, "host copy"));
         outgoing.join().unwrap().unwrap();
@@ -87,7 +94,10 @@ fn desktop_clipboard_acknowledges_both_directions_and_isolates_reopen_and_revoke
     });
     assert_eq!(*texts.lock().unwrap(), vec!["controller copy"]);
     assert_eq!(
-        desktop.clipboard_text().unwrap().as_deref(),
+        controller
+            .controller_desktop_clipboard_text(desktop.info().id, desktop.info().generation)
+            .unwrap()
+            .as_deref(),
         Some("host copy")
     );
     let event = events.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -118,6 +128,17 @@ fn desktop_clipboard_acknowledges_both_directions_and_isolates_reopen_and_revoke
     let fresh = open(&controller, &parent);
     assert_eq!(fresh.clipboard_text().unwrap(), None);
     assert!(desktop.clipboard_text().is_err());
+    assert!(controller
+        .controller_desktop_clipboard_text(desktop.info().id, desktop.info().generation)
+        .is_err());
+    assert!(controller
+        .submit_controller_desktop_clipboard(
+            desktop.info().id,
+            desktop.info().generation,
+            "late controller"
+        )
+        .is_err());
+    assert_eq!(fresh.clipboard_text().unwrap(), None);
     assert!(host
         .publish_desktop_clipboard(remote.id, remote.generation, "late")
         .is_err());

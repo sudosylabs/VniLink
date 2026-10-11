@@ -2,14 +2,20 @@
 mod admission_tests;
 #[path = "tests/apply.rs"]
 mod apply_tests;
+#[path = "tests/availability.rs"]
+mod availability_tests;
 #[path = "tests/blob.rs"]
 mod blob_tests;
+#[path = "tests/clipboard_files.rs"]
+mod clipboard_files_tests;
 #[path = "tests/clipboard.rs"]
 mod clipboard_tests;
 #[path = "tests/datagram.rs"]
 mod datagram_tests;
 #[path = "tests/desktop_clipboard.rs"]
 mod desktop_clipboard_tests;
+#[path = "tests/diagnostics.rs"]
+mod diagnostics_tests;
 #[path = "tests/error.rs"]
 mod error_tests;
 #[path = "tests/events.rs"]
@@ -58,12 +64,18 @@ mod relay_tests;
 mod session_tests;
 #[path = "tests/sidestream.rs"]
 mod sidestream_tests;
+#[path = "tests/soak.rs"]
+mod soak_tests;
 #[path = "tests/support.rs"]
-mod support;
-#[path = "tests/transfer.rs"]
-mod transfer_tests;
+pub(crate) mod support;
+#[path = "tests/system.rs"]
+mod system_tests;
+#[path = "tests/topology.rs"]
+mod topology_tests;
 #[path = "tests/trust.rs"]
 mod trust_tests;
+#[path = "tests/video_caps.rs"]
+mod video_caps_tests;
 #[path = "tests/video.rs"]
 mod video_tests;
 
@@ -72,3 +84,15 @@ mod service_tests;
 
 #[path = "tests/desktop_services.rs"]
 mod desktop_service_tests;
+
+#[cfg(unix)]
+#[path = "tests/terminal.rs"]
+mod terminal_tests;
+
+#[path = "tests/audio.rs"]
+mod audio_tests;
+#[path = "tests/camera.rs"]
+mod camera_tests;
+
+#[path = "tests/power.rs"]
+mod power_tests;

@@ -13,6 +13,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -89,29 +90,142 @@ pub struct Scan {
     pub skipped_symlinks: u64,
 }
 
+/// Per-directory test probes for detached scanning. Passed by the caller
+/// (unit tests) rather than installed globally, so concurrent suites never
+/// observe them. Production passes [`ScanHooks::none`].
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ScanHooks {
+    /// Called with index 0 before any filesystem access, then once per
+    /// listed directory with 1-based indices. A probe that parks
+    /// (controlled slow scan) must also watch `cancelled` and return
+    /// promptly once it is set.
+    pub(crate) dir_probe: Option<fn(u64, &AtomicBool)>,
+    /// Called once when the worker finishes; `true` reports cancellation.
+    pub(crate) finish_probe: Option<fn(bool)>,
+}
+
+impl ScanHooks {
+    pub(crate) fn none() -> Self {
+        Self::default()
+    }
+}
+
+/// Dropping the scan future cancels its detached blocking worker between
+/// directories; never rely on dropping the JoinHandle alone.
+struct ScanGuard(std::sync::Arc<AtomicBool>);
+
+impl Drop for ScanGuard {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
 /// Walks `rel` under root `id` and returns the sorted scan. `rel` names
 /// either a directory (its tree is scanned) or a single file (the scan
 /// holds just it, so selections of individual files transfer too).
 /// Symlinks are skipped and counted, never followed. Non-UTF-8 names are
 /// skipped. Directory handles anchor every listing and stat so a parent
 /// replaced by a symlink cannot escape the approved root.
+/// Sync; only for callers outside the runtime (sync offer APIs). Async
+/// callers use [`scan_roots_async`] so recursive traversal never occupies
+/// a Tokio worker.
 pub(crate) fn scan(roots: &RootSet, id: u64, rel: &str) -> Result<Scan, Error> {
+    let never = AtomicBool::new(false);
+    scan_with_hooks(roots, id, rel, &never, ScanHooks::none())
+}
+
+/// Cancellable scan over an already-snapshotted root set. Holds no locks;
+/// callers snapshot under a short lock, then await off every lock.
+pub(crate) fn scan_with_hooks(
+    roots: &RootSet,
+    id: u64,
+    rel: &str,
+    cancelled: &AtomicBool,
+    hooks: ScanHooks,
+) -> Result<Scan, Error> {
+    let aborted = || -> Result<Scan, Error> {
+        if let Some(finish) = hooks.finish_probe {
+            finish(true);
+        }
+        Err(Error::NoSession)
+    };
+    if cancelled.load(Ordering::Acquire) {
+        return aborted();
+    }
+    if let Some(probe) = hooks.dir_probe {
+        probe(0, cancelled);
+        // The probe may have waited out a cancellation.
+        if cancelled.load(Ordering::Acquire) {
+            return aborted();
+        }
+    }
     if let Ok(file) = scan_single_file(roots, id, rel) {
+        if let Some(finish) = hooks.finish_probe {
+            finish(false);
+        }
         return Ok(file);
     }
     #[cfg(unix)]
     {
-        scan_anchored(roots, id, rel)
+        scan_anchored(roots, id, rel, cancelled, hooks)
     }
     #[cfg(not(unix))]
     {
-        scan_pathname(roots, id, rel)
+        scan_pathname(roots, id, rel, cancelled, hooks)
     }
 }
 
+/// Scans a snapshotted root set on a bounded blocking worker (the Tokio
+/// blocking pool), checking for cancellation between directories. Yields
+/// the async worker while scanning; dropping the future aborts the
+/// detached worker promptly instead of orphaning it. Callers must hold no
+/// locks across the await and must recheck owner/grant/liveness before
+/// using the scan.
+pub(crate) async fn scan_roots_async(
+    roots: RootSet,
+    id: u64,
+    rel: String,
+    hooks: ScanHooks,
+) -> Result<Scan, Error> {
+    let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+    let _guard = ScanGuard(cancelled.clone());
+    let worker_cancelled = cancelled.clone();
+    tokio::task::spawn_blocking(move || scan_with_hooks(&roots, id, &rel, &worker_cancelled, hooks))
+        .await
+        .map_err(|_| Error::NoSession)?
+}
+
+/// Runs the directory probe for one unit of traversal. Returns true when
+/// the scan must stop.
+fn scan_probe(unit: u64, cancelled: &AtomicBool, hooks: ScanHooks) -> bool {
+    if cancelled.load(Ordering::Acquire) {
+        return true;
+    }
+    if let Some(probe) = hooks.dir_probe {
+        probe(unit, cancelled);
+        // The probe may have waited out a cancellation.
+        if cancelled.load(Ordering::Acquire) {
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(unix)]
-fn scan_anchored(roots: &RootSet, id: u64, rel: &str) -> Result<Scan, Error> {
+fn scan_anchored(
+    roots: &RootSet,
+    id: u64,
+    rel: &str,
+    cancelled: &AtomicBool,
+    hooks: ScanHooks,
+) -> Result<Scan, Error> {
     use std::os::unix::io::AsFd;
+    let aborted = || -> Result<Scan, Error> {
+        if let Some(finish) = hooks.finish_probe {
+            finish(true);
+        }
+        Err(Error::NoSession)
+    };
     // Base is verified through handles; its absolute path is for blob imports
     // that still take paths (verified again at offer time).
     let base = roots.resolve_dir(id, rel)?;
@@ -122,9 +236,23 @@ fn scan_anchored(roots: &RootSet, id: u64, rel: &str) -> Result<Scan, Error> {
     let base_fd = roots.open_dir_fd(id, rel)?;
     let mut stack: Vec<(std::path::PathBuf, String, std::os::unix::io::OwnedFd)> =
         vec![(base, rel.to_owned(), base_fd)];
+    // Probe indices continue the scan sequence: 0 fired before any access.
+    let mut unit: u64 = 1;
     while let Some((dir, dir_rel, dir_fd)) = stack.pop() {
-        let raw = vnilink_rename::anchored::list_names(dir_fd.as_fd())
-            .map_err(|_| Error::InvalidSetting("the source folder cannot be read"))?;
+        if scan_probe(unit, cancelled, hooks) {
+            return aborted();
+        }
+        unit += 1;
+        // Per-directory budget from the global manifest cap: at most
+        // `remaining + 1` raw entries are ever allocated, and overflow fails
+        // here instead of after unbounded work.
+        let remaining = MAX_MANIFEST_FILES.saturating_sub(files.len() + dirs.len());
+        let (raw, truncated) =
+            vnilink_rename::anchored::list_names_bounded(dir_fd.as_fd(), remaining + 1)
+                .map_err(|_| Error::InvalidSetting("the source folder cannot be read"))?;
+        if truncated {
+            return Err(Error::InvalidSetting(MANIFEST_LIMIT));
+        }
         let mut names: Vec<String> = Vec::new();
         for os in raw {
             let Some(name) = os.to_str().map(|s| s.to_owned()) else {
@@ -180,6 +308,9 @@ fn scan_anchored(roots: &RootSet, id: u64, rel: &str) -> Result<Scan, Error> {
     if files.is_empty() && dirs.is_empty() {
         return Err(Error::InvalidSetting(MANIFEST_EMPTY));
     }
+    if let Some(finish) = hooks.finish_probe {
+        finish(false);
+    }
     Ok(Scan {
         files,
         dirs,
@@ -188,20 +319,44 @@ fn scan_anchored(roots: &RootSet, id: u64, rel: &str) -> Result<Scan, Error> {
 }
 
 #[cfg(not(unix))]
-fn scan_pathname(roots: &RootSet, id: u64, rel: &str) -> Result<Scan, Error> {
+fn scan_pathname(
+    roots: &RootSet,
+    id: u64,
+    rel: &str,
+    cancelled: &AtomicBool,
+    hooks: ScanHooks,
+) -> Result<Scan, Error> {
+    let aborted = || -> Result<Scan, Error> {
+        if let Some(finish) = hooks.finish_probe {
+            finish(true);
+        }
+        Err(Error::NoSession)
+    };
     let base = roots.resolve_dir(id, rel)?;
     let mut files = Vec::new();
     let mut dirs = Vec::new();
     let mut skipped_symlinks = 0u64;
     // (absolute dir, root-relative rel of that dir)
     let mut stack = vec![(base, rel.to_owned())];
+    // Probe indices continue the scan sequence: 0 fired before any access.
+    let mut unit: u64 = 1;
     while let Some((dir, dir_rel)) = stack.pop() {
+        if scan_probe(unit, cancelled, hooks) {
+            return aborted();
+        }
+        unit += 1;
         let read = std::fs::read_dir(&dir)
             .map_err(|_| Error::InvalidSetting("the source folder cannot be read"))?;
+        // Same per-directory budget as the anchored scan: at most
+        // `remaining + 1` raw entries are ever allocated.
+        let remaining = MAX_MANIFEST_FILES.saturating_sub(files.len() + dirs.len());
         let mut names: Vec<std::ffi::OsString> = Vec::new();
         for entry in read {
             let entry =
                 entry.map_err(|_| Error::InvalidSetting("the source folder cannot be read"))?;
+            if names.len() > remaining {
+                return Err(Error::InvalidSetting(MANIFEST_LIMIT));
+            }
             names.push(entry.file_name());
         }
         names.sort();
@@ -266,6 +421,9 @@ fn scan_pathname(roots: &RootSet, id: u64, rel: &str) -> Result<Scan, Error> {
     }
     if files.is_empty() && dirs.is_empty() {
         return Err(Error::InvalidSetting(MANIFEST_EMPTY));
+    }
+    if let Some(finish) = hooks.finish_probe {
+        finish(false);
     }
     Ok(Scan {
         files,

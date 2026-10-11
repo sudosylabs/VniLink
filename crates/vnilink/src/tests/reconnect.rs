@@ -25,7 +25,8 @@ fn start_direct() -> Core {
         RelayMode::Disabled,
     )
     .expect("loopback core");
-    core.set_h264_support(true, true).expect("flags");
+    core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .expect("flags");
     core
 }
 
@@ -40,14 +41,16 @@ fn start_custom(url: &str) -> Core {
         RelayMode::Disabled,
     )
     .expect("loopback core");
-    core.set_h264_support(true, true).expect("flags");
+    core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .expect("flags");
     core
 }
 
 fn open_stored(store: &MemoryStore) -> Core {
     let core = Core::open_direct(Arc::new(store.clone()), RelaySettings::public_n0())
         .expect("store opens");
-    core.set_h264_support(true, true).expect("flags");
+    core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .expect("flags");
     core
 }
 
@@ -103,6 +106,7 @@ fn pair(host: &Core, controller: &Core, extra: Option<SocketAddr>) -> Vec<Socket
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: true,
             control: true,
             clipboard: false,
             transfer: false,
@@ -184,11 +188,16 @@ fn an_announcement_round_trips_and_keeps_grants() {
     let mut device = Device {
         terminal: false,
         camera: false,
+        system_audio: false,
+        microphone: false,
+        recording: false,
+        system_actions: false,
         endpoint_id: [4; 32],
         display_id: "peer".to_string(),
         relays: vec!["https://old.example.com".to_string()],
         direct: vec!["198.51.100.8:8".parse().unwrap()],
         grants: Grants {
+            view: true,
             control: true,
             clipboard: false,
             transfer: false,

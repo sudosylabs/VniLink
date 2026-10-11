@@ -37,7 +37,7 @@ fn an_unknown_session_has_no_paths() {
 }
 
 #[test]
-fn automatic_ticks_preserve_an_explicit_picture_preset() {
+fn manual_picture_preset_persists_on_the_session() {
     let host = start_direct();
     let controller = start_direct();
     pair_for_control(&host, &controller);
@@ -46,7 +46,6 @@ fn automatic_ticks_preserve_an_explicit_picture_preset() {
     controller
         .update_session_quality(session.id, crate::SessionRole::Controller, chosen)
         .unwrap();
-    assert_eq!(controller.auto_quality_tick(session.id).unwrap(), None);
     assert_eq!(
         controller.snapshot().unwrap().outgoing.unwrap().quality,
         Some(chosen)

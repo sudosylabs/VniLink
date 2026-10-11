@@ -8,6 +8,10 @@ fn device(byte: u8) -> Device {
     Device {
         terminal: false,
         camera: false,
+        system_audio: false,
+        microphone: false,
+        recording: false,
+        system_actions: false,
         endpoint_id,
         display_id: format!("{byte}"),
         relays: Vec::new(),
@@ -28,6 +32,7 @@ fn grants_are_directional_records_on_the_host_that_stores_them() {
         .authorize(
             &id,
             Grants {
+                view: true,
                 control: true,
                 clipboard: false,
                 transfer: false,
@@ -72,6 +77,7 @@ fn the_directory_holds_128_devices_and_replacing_one_does_not_grow_it() {
         .authorize(
             &id,
             Grants {
+                view: false,
                 control: false,
                 clipboard: true,
                 transfer: true,
@@ -86,6 +92,7 @@ fn the_directory_holds_128_devices_and_replacing_one_does_not_grow_it() {
         .authorize(
             &id,
             Grants {
+                view: true,
                 control: true,
                 clipboard: false,
                 transfer: false,

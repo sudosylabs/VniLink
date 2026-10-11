@@ -21,6 +21,8 @@ pub struct OsInput {
     enigo: Enigo,
     width: u16,
     height: u16,
+    #[cfg(all(unix, not(target_os = "macos")))]
+    wheel_remainder: (i32, i32),
     /// X11 connection used to read the keymap for Translate mode. Opened on
     /// the first chord, not by a unit test.
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -45,13 +47,18 @@ impl OsInput {
             width,
             height,
             #[cfg(all(unix, not(target_os = "macos")))]
+            wheel_remainder: (0, 0),
+            #[cfg(all(unix, not(target_os = "macos")))]
             display: None,
         })
     }
 }
 
-impl HostDesktop for OsInput {
-    fn apply(&mut self, event: InputEvent) -> Result<(), Error> {
+impl OsInput {
+    /// Applies one event on this thread. The [`HostDesktop`] wrapper routes
+    /// through the input owner while input is blocked; the owner's own
+    /// backend calls here so validation runs exactly once per event.
+    pub(crate) fn apply_direct(&mut self, event: InputEvent) -> Result<(), Error> {
         match event {
             InputEvent::Key { usage, down } => {
                 let codes = key_for_usage(usage).ok_or(Error::InputFailed(
@@ -76,12 +83,49 @@ impl HostDesktop for OsInput {
                     .button(enigo_button(button), direction)
                     .map_err(apply_error)
             }
-            InputEvent::Pointer { x, y } => {
-                let x = clamp_point(x, self.width);
-                let y = clamp_point(y, self.height);
+            InputEvent::Pointer { x, y, .. } => {
+                let bound = u32::try_from(crate::input::MAX_DESKTOP_ORIGIN).unwrap_or(u32::MAX);
+                if x.unsigned_abs() > bound || y.unsigned_abs() > bound {
+                    return Err(Error::InputFailed("the pointer is outside the desktop"));
+                }
                 self.enigo
                     .move_mouse(x, y, Coordinate::Abs)
                     .map_err(apply_error)
+            }
+            InputEvent::Motion { dx, dy } => self
+                .enigo
+                .move_mouse(i32::from(dx), i32::from(dy), Coordinate::Rel)
+                .map_err(apply_error),
+            InputEvent::PreciseWheel { dx, dy } => {
+                if dx.unsigned_abs() > crate::input::MAX_PRECISE_WHEEL as u32
+                    || dy.unsigned_abs() > crate::input::MAX_PRECISE_WHEEL as u32
+                {
+                    return Err(Error::InputFailed(
+                        "scroll delta is outside the supported range",
+                    ));
+                }
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                {
+                    if dx != 0 {
+                        self.enigo
+                            .scroll_precise(dx, Axis::Horizontal)
+                            .map_err(apply_error)?;
+                    }
+                    if dy != 0 {
+                        self.enigo
+                            .scroll_precise(dy, Axis::Vertical)
+                            .map_err(apply_error)?;
+                    }
+                    Ok(())
+                }
+                #[cfg(all(unix, not(target_os = "macos")))]
+                {
+                    // XTest offers detents, not fractional axes. Retain the
+                    // signed remainder rather than rounding each small sample.
+                    let dx = crate::input::accumulate_detents(&mut self.wheel_remainder.0, dx);
+                    let dy = crate::input::accumulate_detents(&mut self.wheel_remainder.1, dy);
+                    self.apply(InputEvent::wheel(dx as i16, dy as i16))
+                }
             }
             InputEvent::Wheel { dx, dy } => {
                 if dx != 0 {
@@ -99,14 +143,14 @@ impl HostDesktop for OsInput {
         }
     }
 
-    fn type_text(&mut self, text: &str) -> Result<(), Error> {
+    pub(crate) fn type_text_direct(&mut self, text: &str) -> Result<(), Error> {
         if let Some(message) = crate::input::key_text_problem(text) {
             return Err(Error::InputFailed(message));
         }
         self.enigo.text(text).map_err(apply_error)
     }
 
-    fn type_chord(&mut self, text: &str) -> Result<(), Error> {
+    pub(crate) fn type_chord_direct(&mut self, text: &str) -> Result<(), Error> {
         if let Some(message) = crate::input::key_text_problem(text) {
             return Err(Error::InputFailed(message));
         }
@@ -119,6 +163,37 @@ impl HostDesktop for OsInput {
             let _ = text;
             Err(Error::InputFailed("translated keys are not available"))
         }
+    }
+}
+
+impl HostDesktop for OsInput {
+    fn apply(&mut self, event: InputEvent) -> Result<(), Error> {
+        // While input is blocked, only the owner thread may inject.
+        #[cfg(target_os = "windows")]
+        if crate::system::owner::is_blocked() {
+            return crate::system::owner::inject(crate::system::owner::InjectOp::Apply(event));
+        }
+        self.apply_direct(event)
+    }
+
+    fn type_text(&mut self, text: &str) -> Result<(), Error> {
+        #[cfg(target_os = "windows")]
+        if crate::system::owner::is_blocked() {
+            return crate::system::owner::inject(crate::system::owner::InjectOp::TypeText(
+                text.to_owned(),
+            ));
+        }
+        self.type_text_direct(text)
+    }
+
+    fn type_chord(&mut self, text: &str) -> Result<(), Error> {
+        #[cfg(target_os = "windows")]
+        if crate::system::owner::is_blocked() {
+            return crate::system::owner::inject(crate::system::owner::InjectOp::TypeChord(
+                text.to_owned(),
+            ));
+        }
+        self.type_chord_direct(text)
     }
 
     fn monitor(&self) -> (u16, u16) {

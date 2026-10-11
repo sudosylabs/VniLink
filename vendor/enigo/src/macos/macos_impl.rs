@@ -237,6 +237,15 @@ impl Mouse for Enigo {
         self.scroll_unit(length, ScrollEventUnit::LINE, axis)
     }
 
+    fn scroll_precise(&mut self, length: i32, axis: Axis) -> InputResult<()> {
+        let event = precise_scroll_event(self.event_source.clone(), length, axis)?;
+        event.set_integer_value_field(EventField::EVENT_SOURCE_USER_DATA, self.event_source_user_data);
+        event.set_flags(self.event_flags);
+        event.post(CGEventTapLocation::HID);
+        self.update_wait_time();
+        Ok(())
+    }
+
     #[cfg(all(feature = "platform_specific", target_os = "macos"))]
     fn smooth_scroll(&mut self, length: i32, axis: Axis) -> InputResult<()> {
         debug!("\x1b[93msmooth_scroll(length: {length:?}, axis: {axis:?})\x1b[0m");
@@ -1206,6 +1215,26 @@ unsafe extern "C" {
     fn CGEventSourceSetLocalEventsFilterDuringSuppressionState(source: *const c_void, filter: u32, state: u32);
 }
 
+// Build without posting so native regression tests can inspect exact units.
+fn precise_scroll_event(source: CGEventSource, length: i32, axis: Axis) -> InputResult<CGEvent> {
+    // Core Graphics fixed-point line deltas preserve a fraction of a
+    // detent; point deltas use its conventional ten points per line.
+    let event = CGEvent::new_scroll_event(source,
+        ScrollEventUnit::LINE, 2, 0, 0, 0)
+        .map_err(|_| InputError::Simulate("failed creating event to scroll"))?;
+    let (fixed, points) = match axis {
+        Axis::Vertical => (EventField::SCROLL_WHEEL_EVENT_FIXED_POINT_DELTA_AXIS_1,
+            EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1),
+        Axis::Horizontal => (EventField::SCROLL_WHEEL_EVENT_FIXED_POINT_DELTA_AXIS_2,
+            EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_2),
+    };
+    let delta = -i64::from(length);
+    event.set_integer_value_field(fixed, delta * 65_536 / 120);
+    event.set_integer_value_field(points, delta * 10 / 120);
+    event.set_integer_value_field(EventField::SCROLL_WHEEL_EVENT_IS_CONTINUOUS, 1);
+    Ok(event)
+}
+
 #[cfg(test)]
 mod local_input_tests {
     use super::*;
@@ -1217,6 +1246,19 @@ mod local_input_tests {
     #[test]
     fn remote_source_preserves_local_mouse_and_keyboard() {
         let source = remote_event_source(CGEventSourceStateID::Private).unwrap();
+        for (axis, fixed, points) in [
+            (Axis::Vertical, EventField::SCROLL_WHEEL_EVENT_FIXED_POINT_DELTA_AXIS_1,
+                EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1),
+            (Axis::Horizontal, EventField::SCROLL_WHEEL_EVENT_FIXED_POINT_DELTA_AXIS_2,
+                EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_2),
+        ] {
+            for delta in [15, -30, 120, -120] {
+                let event = precise_scroll_event(source.clone(), delta, axis).unwrap();
+                assert_eq!(event.get_integer_value_field(fixed), -i64::from(delta) * 65_536 / 120);
+                assert_eq!(event.get_integer_value_field(points), -i64::from(delta) * 10 / 120);
+                assert_eq!(event.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_IS_CONTINUOUS), 1);
+            }
+        }
         // Query the actual Core Graphics source; no synthetic events are posted.
         unsafe {
             let pointer = source.as_ptr().cast();

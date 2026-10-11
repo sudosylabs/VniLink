@@ -199,6 +199,18 @@ impl Core {
                     .as_ref()
                     .is_some_and(|device| device.terminal),
                 camera: previous_device.as_ref().is_some_and(|device| device.camera),
+                system_audio: previous_device
+                    .as_ref()
+                    .is_some_and(|device| device.system_audio),
+                recording: previous_device
+                    .as_ref()
+                    .is_some_and(|device| device.recording),
+                microphone: previous_device
+                    .as_ref()
+                    .is_some_and(|device| device.microphone),
+                system_actions: previous_device
+                    .as_ref()
+                    .is_some_and(|device| device.system_actions),
                 endpoint_id: opened.endpoint_id,
                 display_id: display.clone(),
                 relays: opened.relays.clone(),
@@ -284,6 +296,7 @@ impl Core {
             .map(|device| device.grants)
             .unwrap_or_default();
         grants.control = true;
+        grants.view = true;
         let info = DeviceInfo {
             endpoint_id: pending.display_id.clone(),
             hostname: state.trust.hostname_of(&pending.endpoint_id),
@@ -295,6 +308,12 @@ impl Core {
         if let Err(error) = state.trust.pair(Device {
             terminal: previous.as_ref().is_some_and(|device| device.terminal),
             camera: previous.as_ref().is_some_and(|device| device.camera),
+            system_audio: previous.as_ref().is_some_and(|device| device.system_audio),
+            recording: previous.as_ref().is_some_and(|device| device.recording),
+            microphone: previous.as_ref().is_some_and(|device| device.microphone),
+            system_actions: previous
+                .as_ref()
+                .is_some_and(|device| device.system_actions),
             endpoint_id: pending.endpoint_id,
             display_id: pending.display_id.clone(),
             relays: pending.relays.clone(),

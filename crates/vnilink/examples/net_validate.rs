@@ -54,7 +54,8 @@ fn main() {
     let host = Core::start(host_config(&relay)).expect("host starts");
     // Synthetic frames bypass capture and encode, but admission still
     // requires the negotiated codec flags.
-    host.set_h264_support(true, true).expect("host flags");
+    host.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .expect("host flags");
     let controller_store: Arc<dyn vnilink::InstallationStore> = Arc::new(MemoryStore::empty());
     let mut controller = Core::open(
         Arc::clone(&controller_store),
@@ -62,7 +63,7 @@ fn main() {
     )
     .expect("controller opens");
     controller
-        .set_h264_support(true, true)
+        .set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
         .expect("controller flags");
 
     let ttl = Duration::from_secs(15 * 60);
@@ -73,6 +74,7 @@ fn main() {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: true,
             control: true,
             clipboard: false,
             transfer: false,
@@ -127,7 +129,7 @@ fn main() {
             )
             .expect("controller reopens");
             controller
-                .set_h264_support(true, true)
+                .set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
                 .expect("controller flags");
             let identity_preserved = controller.endpoint_id() == controller_id;
             println!("identity_preserved={identity_preserved}");

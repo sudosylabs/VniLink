@@ -343,6 +343,13 @@ pub trait Mouse {
     #[doc(alias = "mouse_scroll_x", alias = "mouse_scroll_y")]
     fn scroll(&mut self, length: i32, axis: Axis) -> InputResult<()>;
 
+    /// Fractional wheel movement: 120 units are one detent. Positive values
+    /// scroll down/right. Native macOS and Windows implementations preserve
+    /// fractions. Other backends must accumulate detents before calling scroll.
+    fn scroll_precise(&mut self, _length: i32, _axis: Axis) -> InputResult<()> {
+        Err(InputError::Simulate("fractional scroll is not available"))
+    }
+
     /// Smooth scroll using pixel-based scrolling on macOS
     ///
     /// This function provides pixel-level precision for scrolling

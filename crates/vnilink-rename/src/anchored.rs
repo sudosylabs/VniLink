@@ -80,7 +80,23 @@ pub fn mkdir_at(parent: BorrowedFd, name: &str) -> io::Result<()> {
 }
 
 /// Lists entry names (excluding `.`/`..`) under `dir` via `fdopendir`.
+/// Unbounded: only for callers that need every name for completeness
+/// (conflict choice, cleanup, deletion). Callers that page or budget use
+/// [`list_names_bounded`].
 pub fn list_names(dir: BorrowedFd) -> io::Result<Vec<OsString>> {
+    Ok(list_names_inner(dir, usize::MAX)?.0)
+}
+
+/// Single bounded enumeration: collects at most `limit` names and reports
+/// whether more entries exist, without allocating past the bound. The
+/// stream is rewound first, so repeated scans of one handle each see the
+/// whole directory (a bare `dup` would share the caller's offset and a
+/// second scan would see nothing).
+pub fn list_names_bounded(dir: BorrowedFd, limit: usize) -> io::Result<(Vec<OsString>, bool)> {
+    list_names_inner(dir, limit)
+}
+
+fn list_names_inner(dir: BorrowedFd, limit: usize) -> io::Result<(Vec<OsString>, bool)> {
     // Duplicate: `fdopendir` takes ownership; the caller's fd must stay alive.
     // SAFETY: `dup` returns a fresh fd on success.
     let dup = unsafe { libc::dup(dir.as_raw_fd()) };
@@ -104,7 +120,14 @@ pub fn list_names(dir: BorrowedFd) -> io::Result<Vec<OsString>> {
     unsafe {
         *libc::__error() = 0
     };
+    // The dup shares the caller's offset: rewind so every scan starts at
+    // the first entry even after an earlier scan exhausted the stream.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    unsafe {
+        libc::rewinddir(dirp)
+    };
     let mut out = Vec::new();
+    let mut truncated = false;
     loop {
         // SAFETY: `readdir` on our own DIR*; null means end or error.
         let ent = unsafe { libc::readdir(dirp) };
@@ -130,9 +153,15 @@ pub fn list_names(dir: BorrowedFd) -> io::Result<Vec<OsString>> {
         if name == b"." || name == b".." {
             continue;
         }
+        if out.len() >= limit {
+            truncated = true;
+            // SAFETY: always close our DIR*.
+            unsafe { libc::closedir(dirp) };
+            break;
+        }
         out.push(OsString::from_vec(name.to_vec()));
     }
-    Ok(out)
+    Ok((out, truncated))
 }
 
 /// `fstat` device+inode for pinning a root to its directory object.
@@ -262,9 +291,10 @@ pub fn rename_at_noreplace(dir: BorrowedFd, old: &str, new: &str) -> io::Result<
 
 /// Cross-directory rename for publication: staged (outside) into an anchored
 /// destination dir. `replace` allows overwrite; otherwise no-replace.
-/// Across filesystems (`EXDEV`) falls back to copy + atomic rename of a
-/// temp sibling inside the destination (same filesystem), preserving
-/// no-replace semantics for KeepBoth via the final `renameat`.
+/// Strictly a rename: across filesystems it returns the `EXDEV` error and
+/// never copies. Callers pre-stage a [`SiblingStage`] on the destination
+/// volume first (outside global locks), so the commit under locks stays a
+/// fast same-filesystem rename.
 pub fn rename_from_staged(
     staged: &Path,
     dest_dir: BorrowedFd,
@@ -287,7 +317,7 @@ pub fn rename_from_staged(
             } else {
                 let e = io::Error::last_os_error();
                 if e.raw_os_error() == Some(libc::EXDEV) {
-                    copy_then_rename(staged, dest_dir, dest_name, true)
+                    Err(e)
                 } else {
                     Err(e)
                 }
@@ -324,7 +354,7 @@ pub fn rename_from_staged(
             } else {
                 let e = io::Error::last_os_error();
                 if e.raw_os_error() == Some(libc::EXDEV) {
-                    copy_then_rename(staged, dest_dir, dest_name, false)
+                    Err(e)
                 } else {
                     Err(e)
                 }
@@ -347,7 +377,7 @@ pub fn rename_from_staged(
                 let e = io::Error::last_os_error();
                 // macOS `renameatx_np` reports EXDEV for cross-device moves.
                 if e.raw_os_error() == Some(libc::EXDEV) {
-                    copy_then_rename(staged, dest_dir, dest_name, false)
+                    Err(e)
                 } else {
                     Err(e)
                 }
@@ -364,201 +394,202 @@ pub fn rename_from_staged(
     }
 }
 
-/// Cross-filesystem fallback for `rename_from_staged`: copies `staged`
-/// bytes to a temp sibling inside `dest_dir` (same filesystem), fsyncs,
-/// then atomically renames the temp onto `dest_name` with replace/no-replace
-/// semantics. The temp is unlinked on any failure; the staged source is
-/// removed on success (move semantics, like `rename`), left for the caller
-/// to clean on failure paths that return `AlreadyExists` for conflict
-/// re-entry.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn copy_then_rename(
-    staged: &Path,
-    dest_dir: BorrowedFd,
-    dest_name: &str,
-    replace: bool,
-) -> io::Result<()> {
+/// True when `staged` and the open destination dir live on the same
+/// filesystem (`st_dev` equality). Publication pre-stages a temp sibling
+/// on the destination volume first when they differ, so the commit under
+/// global locks is always a fast same-filesystem rename.
+pub fn same_filesystem(staged: &Path, dir: BorrowedFd) -> io::Result<bool> {
     use std::os::unix::io::AsRawFd;
-    let dest_c = cstr_name(dest_name)?;
-    // Unique temp sibling inside the destination (same filesystem for the
-    // final atomic rename).
-    for attempt in 0..32u32 {
-        let temp = format!(".vnlpub.{}.tmp", attempt);
-        // `O_EXCL` ensures we never truncate an existing temp.
-        let temp_c = cstr_name(&temp)?;
-        // SAFETY: `openat` with borrowed dir fd + name.
-        let wfd = unsafe {
-            libc::openat(
-                dest_dir.as_raw_fd(),
-                temp_c.as_ptr(),
-                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC,
-                0o644,
-            )
-        };
-        if wfd < 0 {
-            let e = io::Error::last_os_error();
-            if e.kind() == io::ErrorKind::AlreadyExists {
-                continue;
-            }
-            return Err(e);
-        }
-        // SAFETY: fresh owned fd; closed on every path below via `close`
-        // or conversion. Use manual `read`/`write` loop to stream without
-        // holding whole files in memory (up to manifest limits).
-        let result: io::Result<()> = (|| {
-            // SAFETY: `open` staged for reading (regular file from export).
-            let staged_c = cstr(staged)?;
-            let rfd = unsafe { libc::open(staged_c.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
-            if rfd < 0 {
-                unsafe { libc::close(wfd) };
-                // Best effort: remove temp.
-                unsafe { libc::unlinkat(dest_dir.as_raw_fd(), temp_c.as_ptr(), 0) };
-                return Err(io::Error::last_os_error());
-            }
-            let mut buf = vec![0u8; 64 * 1024];
-            loop {
-                // SAFETY: `read` into borrowed buffer.
-                let n =
-                    unsafe { libc::read(rfd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
-                if n < 0 {
-                    unsafe { libc::close(rfd) };
-                    unsafe { libc::close(wfd) };
-                    unsafe { libc::unlinkat(dest_dir.as_raw_fd(), temp_c.as_ptr(), 0) };
-                    return Err(io::Error::last_os_error());
-                }
-                if n == 0 {
-                    break;
-                }
-                let mut written = 0isize;
-                while written < n {
-                    // SAFETY: `write` from borrowed buffer range.
-                    let m = unsafe {
-                        libc::write(
-                            wfd,
-                            buf.as_ptr().add(written as usize) as *const libc::c_void,
-                            (n - written) as usize,
-                        )
-                    };
-                    if m <= 0 {
-                        unsafe { libc::close(rfd) };
-                        unsafe { libc::close(wfd) };
-                        unsafe { libc::unlinkat(dest_dir.as_raw_fd(), temp_c.as_ptr(), 0) };
-                        return Err(io::Error::last_os_error());
-                    }
-                    written += m;
-                }
-            }
-            unsafe { libc::close(rfd) };
-            // SAFETY: `fsync` the temp before the atomic rename.
-            if unsafe { libc::fsync(wfd) } != 0 {
-                unsafe { libc::close(wfd) };
-                unsafe { libc::unlinkat(dest_dir.as_raw_fd(), temp_c.as_ptr(), 0) };
-                return Err(io::Error::last_os_error());
-            }
-            unsafe { libc::close(wfd) };
-            // Atomic commit inside the destination (same filesystem).
-            #[cfg(target_os = "linux")]
-            {
-                if replace {
-                    // SAFETY: `renameat` within one dir fd (overwrite allowed).
-                    let r = unsafe {
-                        libc::renameat(
-                            dest_dir.as_raw_fd(),
-                            temp_c.as_ptr(),
-                            dest_dir.as_raw_fd(),
-                            dest_c.as_ptr(),
-                        )
-                    };
-                    if r != 0 {
-                        unsafe { libc::unlinkat(dest_dir.as_raw_fd(), temp_c.as_ptr(), 0) };
-                        return Err(io::Error::last_os_error());
-                    }
-                    Ok(())
-                } else {
-                    // SAFETY: no-replace commit decides atomically.
-                    let r = unsafe {
-                        libc::renameat2(
-                            dest_dir.as_raw_fd(),
-                            temp_c.as_ptr(),
-                            dest_dir.as_raw_fd(),
-                            dest_c.as_ptr(),
-                            libc::RENAME_NOREPLACE,
-                        )
-                    };
-                    if r != 0 {
-                        let e = io::Error::last_os_error();
-                        unsafe { libc::unlinkat(dest_dir.as_raw_fd(), temp_c.as_ptr(), 0) };
-                        return Err(e);
-                    }
-                    Ok(())
-                }
-            }
-            #[cfg(target_os = "macos")]
-            {
-                if replace {
-                    // SAFETY: `renameat` within one dir (overwrite allowed).
-                    let r = unsafe {
-                        libc::renameat(
-                            dest_dir.as_raw_fd(),
-                            temp_c.as_ptr(),
-                            dest_dir.as_raw_fd(),
-                            dest_c.as_ptr(),
-                        )
-                    };
-                    if r != 0 {
-                        unsafe { libc::unlinkat(dest_dir.as_raw_fd(), temp_c.as_ptr(), 0) };
-                        return Err(io::Error::last_os_error());
-                    }
-                    Ok(())
-                } else {
-                    let r = unsafe {
-                        libc::renameatx_np(
-                            dest_dir.as_raw_fd(),
-                            temp_c.as_ptr(),
-                            dest_dir.as_raw_fd(),
-                            dest_c.as_ptr(),
-                            libc::RENAME_EXCL,
-                        )
-                    };
-                    if r != 0 {
-                        let e = io::Error::last_os_error();
-                        unsafe { libc::unlinkat(dest_dir.as_raw_fd(), temp_c.as_ptr(), 0) };
-                        return Err(e);
-                    }
-                    Ok(())
-                }
-            }
-        })();
-        match result {
-            Ok(()) => {
-                // Move semantics like `rename`: remove the staged source.
-                let _ = std::fs::remove_file(staged);
-                return Ok(());
-            }
-            Err(e) => {
-                // Temp-name collision: try next temp. Other errors (including
-                // `AlreadyExists` on the final no-replace commit) propagate
-                // so the caller re-enters conflict instead of failing.
-                if e.kind() == io::ErrorKind::AlreadyExists {
-                    // Could be temp collision (retry) or final dest collision
-                    // (propagate for conflict). Distinguish by checking dest?
-                    // Our temp names are unique per attempt; `AlreadyExists`
-                    // here comes from the final commit (dest exists) since temp
-                    // creation uses `O_EXCL` and retries on collision above.
-                    // Actually temp creation collision continues above, so any
-                    // `AlreadyExists` here is the final commit → propagate.
-                    return Err(e);
-                }
-                // For other errors, do not retry different temps endlessly;
-                // propagate (caller marks failed).
-                return Err(e);
-            }
-        }
+    let staged_c = cstr(staged)?;
+    let mut src: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `stat` takes a borrowed NUL-terminated path; `fstat` takes
+    // our own open dir fd.
+    if unsafe { libc::stat(staged_c.as_ptr(), &mut src) } != 0 {
+        return Err(io::Error::last_os_error());
     }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "no free temp name",
-    ))
+    let mut dst: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(dir.as_raw_fd(), &mut dst) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(src.st_dev == dst.st_dev)
+}
+
+/// A temp sibling inside the destination directory, created `O_EXCL` so a
+/// concurrent publisher never truncates it. The caller streams staged
+/// bytes in without holding global locks, fsyncs, then commits with a
+/// same-filesystem rename. Dropping without commit unlinks the temp.
+pub struct SiblingStage<'a> {
+    dir: BorrowedFd<'a>,
+    temp: CString,
+    file: Option<std::fs::File>,
+}
+
+impl<'a> SiblingStage<'a> {
+    pub fn create(dir: BorrowedFd<'a>) -> io::Result<Self> {
+        use std::os::unix::io::{AsRawFd, FromRawFd};
+        for attempt in 0..32u32 {
+            let temp = cstr_name(&format!(".vnlpub.{attempt}.tmp"))?;
+            // SAFETY: `openat` with borrowed dir fd + name; the fd is
+            // converted to `File` exactly once on success.
+            let fd = unsafe {
+                libc::openat(
+                    dir.as_raw_fd(),
+                    temp.as_ptr(),
+                    libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC,
+                    0o644,
+                )
+            };
+            if fd < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::AlreadyExists {
+                    continue;
+                }
+                return Err(error);
+            }
+            let file = unsafe { std::fs::File::from_raw_fd(fd) };
+            return Ok(Self {
+                dir,
+                temp,
+                file: Some(file),
+            });
+        }
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "no free temp name",
+        ))
+    }
+
+    pub fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        use std::io::Write;
+        self.file
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "stage committed"))?
+            .write_all(buf)
+    }
+
+    pub fn fsync(&self) -> io::Result<()> {
+        self.file
+            .as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "stage committed"))?
+            .sync_all()
+    }
+
+    /// Atomically renames the staged temp onto `dest_name` with
+    /// replace/no-replace semantics. Same filesystem by construction, so
+    /// this never copies. Consumes the stage without unlinking.
+    /// Durability-syncs the staged contents first; when the caller
+    /// already synced before taking an authority gate, use
+    /// [`commit_prepared`](Self::commit_prepared) so no slow I/O runs
+    /// under locks.
+    pub fn commit(self, dest_name: &str, replace: bool) -> io::Result<()> {
+        self.commit_inner(dest_name, replace, true)
+    }
+
+    /// Rename-only commit for a stage whose contents the caller already
+    /// made durable (write + `fsync`) before taking its authority gate.
+    /// Performs no I/O besides the atomic rename, so it is safe under
+    /// short-held locks. Consumes the stage without unlinking.
+    pub fn commit_prepared(self, dest_name: &str, replace: bool) -> io::Result<()> {
+        self.commit_inner(dest_name, replace, false)
+    }
+
+    fn commit_inner(mut self, dest_name: &str, replace: bool, sync_first: bool) -> io::Result<()> {
+        use std::os::unix::io::AsRawFd;
+        let dest_c = cstr_name(dest_name)?;
+        let dir_fd = self.dir.as_raw_fd();
+        let temp = self.temp.clone();
+        let file = self
+            .file
+            .take()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "stage committed"))?;
+        // `file` is taken, so every failure below unlinks explicitly;
+        // Drop treats the stage as settled once `file` is gone.
+        if sync_first {
+            if let Err(error) = file.sync_all() {
+                drop(file);
+                unsafe { libc::unlinkat(dir_fd, temp.as_ptr(), 0) };
+                return Err(error);
+            }
+        }
+        drop(file);
+        #[cfg(target_os = "linux")]
+        let result = if replace {
+            // SAFETY: `renameat` within one dir fd (overwrite allowed).
+            let r = unsafe { libc::renameat(dir_fd, temp.as_ptr(), dir_fd, dest_c.as_ptr()) };
+            if r == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        } else {
+            // SAFETY: no-replace commit decides atomically.
+            let r = unsafe {
+                libc::renameat2(
+                    dir_fd,
+                    temp.as_ptr(),
+                    dir_fd,
+                    dest_c.as_ptr(),
+                    libc::RENAME_NOREPLACE,
+                )
+            };
+            if r == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        };
+        #[cfg(target_os = "macos")]
+        let result = if replace {
+            // SAFETY: `renameat` within one dir (overwrite allowed).
+            let r = unsafe { libc::renameat(dir_fd, temp.as_ptr(), dir_fd, dest_c.as_ptr()) };
+            if r == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        } else {
+            // SAFETY: `renameatx_np` with `RENAME_EXCL` decides atomically.
+            let r = unsafe {
+                libc::renameatx_np(
+                    dir_fd,
+                    temp.as_ptr(),
+                    dir_fd,
+                    dest_c.as_ptr(),
+                    libc::RENAME_EXCL,
+                )
+            };
+            if r == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        };
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let result = {
+            let _ = (dir_fd, &temp, &dest_c, replace);
+            Err::<(), io::Error>(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "anchored publish needs a native primitive",
+            ))
+        };
+        if result.is_err() {
+            // Unlink the orphan here: `file` is already taken, so Drop
+            // treats the stage as settled.
+            unsafe { libc::unlinkat(dir_fd, temp.as_ptr(), 0) };
+        }
+        result
+    }
+}
+
+impl Drop for SiblingStage<'_> {
+    fn drop(&mut self) {
+        use std::os::unix::io::AsRawFd;
+        if self.file.is_none() {
+            return;
+        }
+        // SAFETY: `unlinkat` with borrowed dir fd + name; best effort.
+        unsafe { libc::unlinkat(self.dir.as_raw_fd(), self.temp.as_ptr(), 0) };
+    }
 }
 
 /// Opens a regular file under `parent` and verifies it is the same object
@@ -634,4 +665,175 @@ pub fn open_file_at(parent: BorrowedFd, name: &str) -> io::Result<OwnedFd> {
         ));
     }
     Ok(owned)
+}
+
+/// Removes one managed subtree through directory handles. Symlinks are
+/// unlinked as entries, never traversed. Work is bounded to 64 levels and
+/// 10,000 entries; failure leaves remaining entries for a later cleanup.
+pub fn remove_tree_at(parent: BorrowedFd, name: &str) -> io::Result<()> {
+    if name == "." || name == ".." {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "managed subtree must be a child",
+        ));
+    }
+    let mut remaining = 10_000usize;
+    remove_tree_inner(parent, name, 0, &mut remaining)
+}
+fn remove_tree_inner(
+    parent: BorrowedFd,
+    name: &str,
+    depth: usize,
+    remaining: &mut usize,
+) -> io::Result<()> {
+    if depth > 64 || *remaining == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "managed subtree exceeds cleanup bounds",
+        ));
+    }
+    *remaining -= 1;
+    let before = stat_at(parent, name)?;
+    if before.is_dir && !before.is_symlink {
+        if before.dev != fstat_dev_ino(parent)?.0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "managed subtree crosses a volume",
+            ));
+        }
+        use std::os::fd::AsFd;
+        let child = open_child(parent, name)?;
+        if fstat_dev_ino(child.as_fd())? != (before.dev, before.ino) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "managed subtree changed",
+            ));
+        }
+        for entry in list_names(child.as_fd())? {
+            let entry = entry.to_str().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "managed entry encoding")
+            })?;
+            remove_tree_inner(child.as_fd(), entry, depth + 1, remaining)?;
+        }
+        let current = stat_at(parent, name)?;
+        if (current.dev, current.ino) != (before.dev, before.ino)
+            || !current.is_dir
+            || current.is_symlink
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "managed subtree changed",
+            ));
+        }
+    }
+    let name = cstr_name(name)?;
+    // SAFETY: the borrowed parent FD and checked component live through the
+    // call. unlinkat removes an entry relative to that FD; it never traverses
+    // the final symlink. Directory removal is only attempted after anchored
+    // traversal and object identity checks.
+    let result = unsafe {
+        libc::unlinkat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            if before.is_dir && !before.is_symlink {
+                libc::AT_REMOVEDIR
+            } else {
+                0
+            },
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(test)]
+mod stage_commit_tests {
+    use super::*;
+    use std::os::unix::io::AsFd;
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("vnilink-stage-{}-{}", std::process::id(), tag));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    /// A caller-synced stage lands identical bytes through the rename-only
+    /// commit, and no-replace still refuses an existing destination.
+    #[test]
+    fn commit_prepared_lands_synced_bytes_and_keeps_no_replace_atomic() {
+        let root = scratch("prepared");
+        let dir = std::fs::File::open(&root).unwrap();
+        let mut stage = SiblingStage::create(dir.as_fd()).unwrap();
+        stage.write_all(b"prepared bytes").unwrap();
+        stage.fsync().unwrap();
+        stage.commit_prepared("landed.txt", false).unwrap();
+        assert_eq!(
+            std::fs::read(root.join("landed.txt")).unwrap(),
+            b"prepared bytes"
+        );
+        let mut stage = SiblingStage::create(dir.as_fd()).unwrap();
+        stage.write_all(b"replacement").unwrap();
+        stage.fsync().unwrap();
+        let conflict = stage.commit_prepared("landed.txt", false).unwrap_err();
+        assert_eq!(conflict.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            std::fs::read(root.join("landed.txt")).unwrap(),
+            b"prepared bytes"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod bounded_list_tests {
+    use super::*;
+    use std::os::unix::io::AsFd;
+
+    fn scratch(tag: &str, count: usize) -> std::path::PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("vnilink-list-{}-{}", std::process::id(), tag));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        for i in 0..count {
+            std::fs::write(root.join(format!("entry-{i:04}")), []).unwrap();
+        }
+        root
+    }
+
+    /// A bounded scan stops at the limit and reports overflow from the
+    /// same pass; an exact fit reports no truncation.
+    #[test]
+    fn bounded_scan_reports_overflow_without_over_allocating() {
+        let root = scratch("bounded", 10);
+        let dir = std::fs::File::open(&root).unwrap();
+        let (names, truncated) = list_names_bounded(dir.as_fd(), 4).unwrap();
+        assert_eq!(names.len(), 4);
+        assert!(truncated);
+        let (names, truncated) = list_names_bounded(dir.as_fd(), 10).unwrap();
+        assert_eq!(names.len(), 10);
+        assert!(!truncated);
+        let (names, truncated) = list_names_bounded(dir.as_fd(), 11).unwrap();
+        assert_eq!(names.len(), 10);
+        assert!(!truncated);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Repeated scans of one handle each see the whole directory: the
+    /// dup must not inherit an exhausted offset from an earlier scan.
+    #[test]
+    fn repeated_scans_each_see_the_whole_directory() {
+        let root = scratch("rewind", 6);
+        let dir = std::fs::File::open(&root).unwrap();
+        let first = list_names(dir.as_fd()).unwrap();
+        let second = list_names(dir.as_fd()).unwrap();
+        assert_eq!(first.len(), 6);
+        assert_eq!(second.len(), 6);
+        assert_eq!(first, second);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

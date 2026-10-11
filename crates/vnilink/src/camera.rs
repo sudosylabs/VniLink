@@ -1,0 +1,146 @@
+//! Host-approved encoded camera sources. Platform capture remains outside Core.
+use crate::{
+    video::{EncodedFrame, VideoOutbox, VideoPush},
+    Error,
+};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CameraDevice {
+    pub id: String,
+    pub name: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CameraConfig {
+    pub device_id: String,
+    pub width: u16,
+    pub height: u16,
+    pub fps: u16,
+}
+impl CameraConfig {
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.device_id.is_empty()
+            || self.device_id.len() > 256
+            || self.width == 0
+            || self.height == 0
+            || self.width > 4096
+            || self.height > 4096
+            || !self.width.is_multiple_of(2)
+            || !self.height.is_multiple_of(2)
+            || self.fps == 0
+            || self.fps > 60
+        {
+            return Err(Error::InvalidSetting(
+                "camera configuration is out of range",
+            ));
+        }
+        Ok(())
+    }
+}
+/// Host opt-in is separate from each peer's Camera grant. Return only devices
+/// approved locally. Open must honour OS consent and return the actual format.
+/// Encode Annex-B H.264 Constrained Baseline, with SPS/PPS on every keyframe,
+/// without B-frames. The producer must serialize publication and stop promptly
+/// when its source is cancelled, including when the device stops delivering.
+/// During Open, check BackendStartup between resource acquisitions and while
+/// waiting for the first encoded frame; cancellation/deadline must close partial
+/// capture. After Open succeeds, use CameraSource cancellation instead.
+pub trait HostCameraFactory: Send + Sync {
+    fn devices(&self) -> Result<Vec<CameraDevice>, Error>;
+    fn open(
+        &self,
+        requested: CameraConfig,
+        startup: crate::BackendStartup,
+    ) -> Result<CameraBackend, Error>;
+}
+/// Native producer polls cancellation and keyframe requests. One source per
+/// capture; do not reuse a source across Opens or publish Desktop frames here.
+pub struct CameraSource {
+    claimed: AtomicBool,
+    pub(crate) frames: VideoOutbox,
+    stopped: AtomicBool,
+    failed: AtomicBool,
+    keyframe: AtomicBool,
+    needs_keyframe: AtomicBool,
+}
+impl CameraSource {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            claimed: AtomicBool::new(false),
+            frames: VideoOutbox::new(),
+            stopped: AtomicBool::new(false),
+            failed: AtomicBool::new(false),
+            keyframe: AtomicBool::new(true),
+            needs_keyframe: AtomicBool::new(true),
+        })
+    }
+    pub fn publish(&self, frame: EncodedFrame) -> Result<(), Error> {
+        if self.is_cancelled() {
+            return Err(Error::NoSession);
+        }
+        frame.check()?;
+        if !frame.keyframe && self.needs_keyframe.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        if frame.keyframe {
+            self.needs_keyframe.store(false, Ordering::Release);
+        }
+        if matches!(self.frames.push(frame), VideoPush::KeyframeNeeded) {
+            self.request_keyframe();
+        }
+        Ok(())
+    }
+    pub fn take_keyframe_request(&self) -> bool {
+        self.keyframe.swap(false, Ordering::AcqRel)
+    }
+    pub(crate) fn request_keyframe(&self) {
+        self.needs_keyframe.store(true, Ordering::Release);
+        self.keyframe.store(true, Ordering::Release);
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.stopped.load(Ordering::Acquire)
+    }
+    pub fn fail(&self) {
+        self.failed.store(true, Ordering::Release);
+        self.close();
+    }
+    pub(crate) fn has_failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
+    }
+    pub fn close(&self) {
+        self.stopped.store(true, Ordering::Release);
+    }
+}
+pub struct CameraBackend {
+    pub config: CameraConfig,
+    pub source: Arc<CameraSource>,
+    _claim: (),
+}
+impl CameraBackend {
+    pub fn new(config: CameraConfig, source: Arc<CameraSource>) -> Result<Self, Error> {
+        config.validate()?;
+        if source.is_cancelled() {
+            return Err(Error::NoSession);
+        }
+        if source
+            .claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(Error::Busy);
+        }
+        Ok(Self {
+            config,
+            source,
+            _claim: (),
+        })
+    }
+}
+impl Drop for CameraBackend {
+    fn drop(&mut self) {
+        self.source.close();
+    }
+}

@@ -6,19 +6,31 @@ use crate::error::Error;
 
 use super::MAX_VIDEO_FRAME;
 
-/// Header before the payload: codec, flags, timestamp.
-pub(crate) const VIDEO_HEADER: usize = 10;
+/// Header before the payload: codec, flags, timestamp, source display id,
+/// source topology revision.
+pub(crate) const VIDEO_HEADER: usize = 26;
 const CODEC_H264: u8 = 1;
 
 /// One encoded H.264 frame. Construct it with [`EncodedFrame::h264`].
 ///
 /// Fields stay visible so a caller can replace the payload. [`crate::Core::publish_video`]
 /// checks the payload again.
+///
+/// `display_id`/`revision` name the captured source: the topology display
+/// id and the topology revision the producer captured under. Zero means
+/// unstamped (synthetic, non-display, or whole-desktop frames that name no
+/// single display). Desktop producers always stamp via
+/// [`EncodedFrame::with_source`]; publish backstops a zero revision from
+/// the live topology but never invents a display id, so viewers map
+/// pointer input by attested source id (fencing unknown sources) instead
+/// of guessing from picture dimensions.
 #[derive(Clone, PartialEq, Eq)]
 pub struct EncodedFrame {
     pub keyframe: bool,
     pub timestamp_us: u64,
     pub payload: Vec<u8>,
+    pub display_id: u64,
+    pub revision: u64,
 }
 
 impl EncodedFrame {
@@ -28,7 +40,16 @@ impl EncodedFrame {
             keyframe,
             timestamp_us,
             payload,
+            display_id: 0,
+            revision: 0,
         })
+    }
+
+    /// Stamps the captured source: topology display id and revision.
+    pub fn with_source(mut self, display_id: u64, revision: u64) -> Self {
+        self.display_id = display_id;
+        self.revision = revision;
+        self
     }
 
     pub(crate) fn check(&self) -> Result<(), Error> {
@@ -42,6 +63,8 @@ impl fmt::Debug for EncodedFrame {
             .debug_struct("EncodedFrame")
             .field("keyframe", &self.keyframe)
             .field("timestamp_us", &self.timestamp_us)
+            .field("display_id", &self.display_id)
+            .field("revision", &self.revision)
             .field("payload_len", &self.payload.len())
             .finish()
     }
@@ -69,6 +92,8 @@ pub(crate) fn encode_video_body(frame: &EncodedFrame) -> Vec<u8> {
     body.push(CODEC_H264);
     body.push(u8::from(frame.keyframe));
     body.extend_from_slice(&frame.timestamp_us.to_be_bytes());
+    body.extend_from_slice(&frame.display_id.to_be_bytes());
+    body.extend_from_slice(&frame.revision.to_be_bytes());
     body.extend_from_slice(&frame.payload);
     body
 }
@@ -79,6 +104,9 @@ pub(crate) fn decode_video_body(body: &[u8]) -> Result<EncodedFrame, Error> {
         return Err(Error::Unsupported("this video codec"));
     }
     let timestamp_us = u64::from_be_bytes(body[2..10].try_into().expect("8 bytes"));
-    EncodedFrame::h264(body[1] & 1 == 1, timestamp_us, body[10..].to_vec())
+    let display_id = u64::from_be_bytes(body[10..18].try_into().expect("8 bytes"));
+    let revision = u64::from_be_bytes(body[18..26].try_into().expect("8 bytes"));
+    EncodedFrame::h264(body[1] & 1 == 1, timestamp_us, body[26..].to_vec())
+        .map(|frame| frame.with_source(display_id, revision))
         .map_err(|_| Error::Malformed)
 }

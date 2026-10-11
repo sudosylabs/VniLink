@@ -8,6 +8,7 @@ fn held_navigation_keys_repeat_and_release_once() {
         usage: 42,
         down: true,
         text: "",
+        composing: false,
     };
     for mode in [KeyboardMode::Character, KeyboardMode::Map] {
         plan.clear();
@@ -26,19 +27,11 @@ fn held_navigation_keys_repeat_and_release_once() {
 }
 
 fn down<'a>(usage: u16, text: &'a str) -> LocalKey<'a> {
-    LocalKey {
-        usage,
-        down: true,
-        text,
-    }
+    LocalKey::new(usage, true, text)
 }
 
 fn up(usage: u16) -> LocalKey<'static> {
-    LocalKey {
-        usage,
-        down: false,
-        text: "",
-    }
+    LocalKey::new(usage, false, "")
 }
 
 fn events(planned: &[Planned]) -> Vec<InputEvent> {
@@ -347,5 +340,61 @@ fn a_single_group_wide_row_skips_the_copied_columns() {
             keycode: 24,
             level: ChordLevel::ShiftAltGr,
         })
+    );
+}
+
+#[test]
+fn uncommitted_dead_key_does_not_duplicate_the_final_composed_character() {
+    for mode in [KeyboardMode::Character, KeyboardMode::Translate] {
+        let mut plan = KeyPlan::new();
+        assert!(plan
+            .apply(mode, false, LocalKey::composing(usage::APOSTROPHE, true))
+            .unwrap()
+            .is_empty());
+        assert!(plan
+            .apply(mode, false, LocalKey::composing(usage::APOSTROPHE, false))
+            .unwrap()
+            .is_empty());
+        let committed = plan
+            .apply(mode, false, LocalKey::new(usage::E, true, "é"))
+            .unwrap();
+        assert_eq!(
+            committed,
+            vec![if mode == KeyboardMode::Character {
+                Planned::Text("é".into())
+            } else {
+                Planned::Chord("é".into())
+            }]
+        );
+        assert!(plan
+            .apply(mode, false, LocalKey::new(usage::E, false, ""))
+            .unwrap()
+            .is_empty());
+        assert!(!plan.is_held());
+    }
+    let mut plan = KeyPlan::new();
+    assert_eq!(
+        events(
+            &plan
+                .apply(
+                    KeyboardMode::Map,
+                    false,
+                    LocalKey::composing(usage::APOSTROPHE, true)
+                )
+                .unwrap()
+        ),
+        vec![InputEvent::key_down(usage::APOSTROPHE)]
+    );
+    assert_eq!(
+        events(
+            &plan
+                .apply(
+                    KeyboardMode::Map,
+                    false,
+                    LocalKey::composing(usage::APOSTROPHE, false)
+                )
+                .unwrap()
+        ),
+        vec![InputEvent::key_up(usage::APOSTROPHE)]
     );
 }

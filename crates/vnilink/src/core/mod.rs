@@ -12,11 +12,11 @@
 //! - [`video`] — encoded frames
 //! - [`wire`] — control frame read and write
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -32,35 +32,53 @@ use crate::keyboard::{self};
 use crate::protocol::{Capabilities, Quality};
 use crate::relay::RelaySettings;
 use crate::session::{Grants, SessionInfo, SessionPhase, SessionRole};
-use crate::transfer::TransferSender;
 use crate::trust::{Device, Trust};
 use crate::video::{HostCapture, VideoInbox, VideoOutbox};
 
+mod activity;
+mod audio_stream;
+mod availability;
 pub(crate) mod blob;
+mod camera_stream;
 mod clipboard;
 mod connect;
 mod cursor;
 mod desktop_clipboard;
 mod desktop_service;
 mod desktop_stream;
-mod files;
+mod diagnostics;
+mod file_resources;
 mod fs;
 mod host;
 mod jobs;
+#[cfg(unix)]
+pub(crate) use jobs::PrestageHooks;
+mod input_cleanup;
 mod keys;
 mod lifecycle;
 mod link;
 mod pairing;
+mod power;
 mod service_jobs;
 mod service_permissions;
 pub(crate) mod service_stream;
 mod services;
+pub use audio_stream::RemoteAudioService;
+pub use camera_stream::RemoteCameraService;
+pub use system_stream::RemoteSystemService;
+mod system_stream;
+mod terminal_runtime;
+mod terminal_stream;
+mod topology;
 mod video;
 mod wire;
 
 pub use blob::{BLOB_ALPN, BLOB_MAX_BYTES};
 pub use desktop_service::RemoteDesktopService;
-pub use desktop_stream::DesktopInfo;
+pub use desktop_stream::{DesktopControlState, DesktopInfo};
+pub use terminal_stream::RemoteTerminalService;
+pub use topology::TopologySnapshot;
+pub use video::{VideoRouting, VideoTarget};
 
 /// UDP sockets the endpoint binds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -143,6 +161,9 @@ pub struct Snapshot {
     pub relay_urls: Vec<String>,
     pub hosting: bool,
     pub devices: Vec<DeviceInfo>,
+    /// Latest hosted session, including finished records. Legacy single-view
+    /// for callers that address one peer; use `hosted_sessions()` to iterate
+    /// all live hosted peers.
     pub incoming: Option<SessionInfo>,
     pub outgoing: Option<SessionInfo>,
     pub capabilities: Capabilities,
@@ -188,16 +209,43 @@ struct LiveSession {
     services_only: bool,
     /// A desktop may retire without ending its parent connection.
     desktop_stop: tokio::sync::watch::Sender<bool>,
+    host_held: Arc<Mutex<crate::input::HeldInput>>,
+    /// Native workers and cleanup retain admission after parent closure.
+    incoming_slot: Option<Arc<input_cleanup::AdmissionSlot>>,
+    /// One latest sample for this exact owner generation, never another peer.
+    cursor_outbox: tokio::sync::watch::Sender<
+        Option<(crate::protocol::SessionStamp, Arc<crate::CursorState>)>,
+    >,
+    /// Fences legacy native work across revoke/regrant and retirement.
+    input_epoch: Arc<AtomicU64>,
     desktop_owner: Option<u64>,
     monitor_width: u16,
     monitor_height: u16,
+    /// Topology last received from the host. Empty until the first snapshot.
+    peer_topology: Vec<crate::input::DisplayInfo>,
+    /// Display this hosted session is allowed to control. Empty until selected.
+    selected_displays: Vec<u64>,
+    /// Set when a selected display disappears. Not cleared by a later pointer.
+    display_fault: Option<&'static str>,
     stop: tokio::sync::watch::Sender<bool>,
     outbox: Option<Arc<InputOutbox>>,
     video: Option<Arc<VideoOutbox>>,
     /// Live connection. A test can close it without asking the session to stop.
     link: Option<iroh::endpoint::Connection>,
     clipboard: Option<ClipboardSender>,
-    transfer: Option<TransferSender>,
+    /// Latest file selection this session's peer offered. Revisioned so a
+    /// paste prepared earlier is stale, and cleared on revoke because a
+    /// selection is a live capability, unlike inert text.
+    clipboard_files: Option<crate::clipboard::StoredFileSelection>,
+    /// This core's own file offers on this hosted session. Revisioned:
+    /// paste preparation serves only the revision it was asked for, so a
+    /// same-path re-offer cannot satisfy an older preparation. An empty
+    /// offer stores an empty selection at a fresh revision instead of
+    /// dropping the chain.
+    published_files: Option<crate::clipboard::StoredFileSelection>,
+    /// Next own-offer revision minus one. Monotonic across clears and
+    /// revokes so a revision is never reused within the session.
+    published_rev: AtomicU64,
 }
 
 /// All mutable controller channels belong to one session, including reconnects.
@@ -206,8 +254,18 @@ struct ControllerState {
     subscriber: Mutex<Weak<()>>,
     cursor: cursor::CursorInbox,
     clipboard: Mutex<Option<String>>,
+    clipboard_files: Mutex<Option<crate::clipboard::StoredFileSelection>>,
+    /// This core's own file offers on this session, for binding pastes to
+    /// offers. Revisioned: a prepare naming an older revision is refused
+    /// even when its paths match, and the Transfer grant alone never
+    /// authorizes a fetch.
+    published_files: Mutex<Option<crate::clipboard::StoredFileSelection>>,
+    /// Next own-offer revision minus one. Monotonic across clears and
+    /// revokes so a revision is never reused within the session.
+    published_rev: AtomicU64,
     keyboard: Mutex<keyboard::KeyPlan>,
     held: Mutex<crate::input::HeldInput>,
+    pointer: Mutex<crate::input::PointerPlan>,
     mode: AtomicU8,
     swap: AtomicBool,
     auto: Mutex<AutoState>,
@@ -219,8 +277,12 @@ impl ControllerState {
             subscriber: Mutex::new(Weak::new()),
             cursor: Arc::new(Mutex::new(None)),
             clipboard: Mutex::new(None),
+            clipboard_files: Mutex::new(None),
+            published_files: Mutex::new(None),
+            published_rev: AtomicU64::new(0),
             keyboard: Mutex::new(keyboard::KeyPlan::new()),
             held: Mutex::new(crate::input::HeldInput::default()),
+            pointer: Mutex::new(crate::input::PointerPlan::default()),
             mode: AtomicU8::new(mode),
             swap: AtomicBool::new(swap),
             auto: Mutex::new(AutoState::default()),
@@ -249,17 +311,127 @@ impl State {
             .values()
             .find(|s| s.peer_key == *peer && !finished(&s.phase))
     }
+    /// Live hosted session for one peer, if any. Peers are looked up by
+    /// identity, never by assuming a single hosted connection.
+    fn incoming_peer(&self, peer: &[u8; 32]) -> Option<&LiveSession> {
+        self.incoming
+            .values()
+            .find(|s| s.peer_key == *peer && !finished(&s.phase))
+    }
+    /// Live hosted session for one peer and wire generation. Job control
+    /// frames carry no host session id, so they fence on peer identity plus
+    /// the generation inside the message.
+    fn incoming_live_for(&self, peer: &[u8; 32], generation: u64) -> Option<&LiveSession> {
+        self.incoming.values().find(|s| {
+            s.peer_key == *peer
+                && s.wire_stamp.generation == generation
+                && s.phase == SessionPhase::Active
+        })
+    }
+    /// Explicit service input ownership precedes legacy desktop admission.
+    /// A retiring service keeps its reservation until held input is released.
+    fn input_holder(&self) -> Option<u64> {
+        if self
+            .input_cleanup
+            .load(std::sync::atomic::Ordering::Acquire)
+            != 0
+        {
+            return Some(u64::MAX);
+        }
+        if let Some(owner) = self.desktop_control {
+            if let Some(record) = self.hosted_services.get(&owner.id) {
+                if record.info.generation == owner.generation {
+                    return Some(record.info.connection_id);
+                }
+            }
+        }
+        let mut holder: Option<u64> = None;
+        let mut consider = |id: u64| {
+            holder = Some(holder.map_or(id, |current| current.min(id)));
+        };
+        for session in self.incoming.values() {
+            if session.phase == SessionPhase::Active
+                && !session.files_only
+                && !session.services_only
+                && !*session.desktop_stop.borrow()
+                && self
+                    .trust
+                    .granted(&session.peer_key, crate::session::Grant::Control)
+            {
+                consider(session.id);
+            }
+        }
+        holder
+    }
+    /// A live hosted session, for legacy single-view callers. New code that
+    /// already knows the session id must use `incoming.get(&id)` instead.
+    fn incoming_live(&self) -> Option<&LiveSession> {
+        self.incoming.values().find(|s| !finished(&s.phase))
+    }
+    /// The most recent hosted session, including finished records. Backs
+    /// `Snapshot::incoming`, which reports the last session even after close.
+    fn incoming_latest(&self) -> Option<&LiveSession> {
+        self.incoming.values().max_by_key(|s| s.id)
+    }
+    fn incoming_live_mut(&mut self) -> Option<&mut LiveSession> {
+        self.incoming.values_mut().find(|s| !finished(&s.phase))
+    }
+    fn live_incoming_count(&self) -> usize {
+        self.incoming
+            .values()
+            .filter(|s| !finished(&s.phase))
+            .count()
+    }
+    fn incoming_admission_count(&self) -> usize {
+        self.live_incoming_count().max(
+            self.incoming_slots
+                .load(std::sync::atomic::Ordering::Acquire),
+        )
+    }
+    fn live_outgoing_count(&self) -> usize {
+        self.outgoing
+            .values()
+            .filter(|s| !finished(&s.phase))
+            .count()
+    }
 }
 
 struct State {
+    input_cleanup: Arc<AtomicUsize>,
+    power_policy: crate::power::PowerPolicy,
+    file_resource_policy: crate::job::FileResourcePolicy,
+    file_retention_policy: crate::job::FileRetentionPolicy,
+    terminal_policy: crate::terminal::TerminalPolicy,
+    system_policy: crate::system::SystemPolicy,
+    system_operations: HashMap<u64, crate::system::SystemOperationRecord>,
+    next_operation_id: u64,
+    privacy: Option<crate::system::PrivacyLease>,
+    terminal_pending: HashMap<[u8; 32], usize>,
     hosting: bool,
     trust: Trust,
     replay: ReplayCache,
     /// Relay written into the installation record. The endpoint keeps the relay
     /// it bound at start until the next open.
     record_relay: RelaySettings,
-    incoming: Option<LiveSession>,
+    /// Hosted peer connections by local session id. Connection-scoped: every
+    /// lookup carries the session id, never a global current session.
+    /// Capacity is enforced at admission (`MAX_LIVE_INCOMING`).
+    incoming: HashMap<u64, LiveSession>,
+    /// Live parents plus reservations retained by uncancellable native work.
+    incoming_slots: Arc<AtomicUsize>,
     outgoing: HashMap<u64, LiveSession>,
+    /// Hosted session selected for legacy session-clipboard sync. Host OS
+    /// clipboard changes publish only to this session, and peer text applies
+    /// to the OS clipboard only from it, so one peer's selection is never
+    /// broadcast to another. Admission selects the new session; closing it
+    /// hands selection to the lowest remaining live hosted session, if any.
+    clipboard_owner: Option<u64>,
+    /// Host-local Desktop service identity plus parent generation.
+    desktop_control: Option<crate::protocol::SessionStamp>,
+    /// Lock-after-control edge state. Grant sites arm it synchronously so
+    /// a control session briefer than a power tick still locks; the tick
+    /// observes ends and fires.
+    lock_watch: crate::power::LockAfterControl,
     next_session_id: u64,
     services: HashMap<u64, services::ServiceRecord>,
     hosted_services: HashMap<u64, services::ServiceRecord>,
@@ -298,45 +470,77 @@ pub struct ControlRequest {
 }
 
 struct Shared {
+    power_factory: Mutex<power::Factory>,
+    power_status: Mutex<[crate::power::PowerStatus; 2]>,
+    file_retention_policy: Arc<Mutex<crate::job::FileRetentionPolicy>>,
     endpoint: Endpoint,
     secret: SecretKey,
     relay: RelaySettings,
     store: Option<Arc<dyn InstallationStore>>,
     events: EventHub,
     state: Mutex<State>,
-    desktop: Mutex<Option<Box<dyn HostDesktop>>>,
+    desktop: Arc<Mutex<Option<Box<dyn HostDesktop>>>>,
+    /// Immutable adapter metadata, readable without waiting for native input.
+    desktop_info: Mutex<Option<(u16, u16)>>,
+    cleanup_executor: input_cleanup::Executor,
+    desktop_owners: Arc<AtomicUsize>,
+    input_cleanup: Arc<AtomicUsize>,
     capture: Mutex<Option<Box<dyn HostCapture>>>,
     clipboard: Mutex<Option<Box<dyn HostClipboard>>>,
+    clipboard_file_source: Mutex<Option<std::sync::Arc<dyn crate::clipboard::HostClipboardFiles>>>,
+    /// One in-flight paste preparation per session side, keyed
+    /// `(incoming, session id)`. A second concurrent prepare is Busy.
+    paste_waiters: Mutex<HashMap<(bool, u64), clipboard::PasteWaiter>>,
+    /// Serving-side twin of `paste_waiters`: one worker per session side
+    /// at a time, so repeated wire Prepares cannot spawn unbounded
+    /// detached threads. Released by RAII when the worker settles.
+    paste_preparing: Mutex<HashSet<(bool, u64)>>,
+    /// Request nonce source for paste preparation. Each prepare binds its
+    /// waiter and its wire answer to one value, so a late answer for a
+    /// replaced selection cannot satisfy the live waiter.
+    paste_nonce: AtomicU64,
     // A native write can wait for the UI thread while holding the adapter
     // lock. UI snapshots must never acquire that lock to query availability.
     clipboard_available: AtomicBool,
+    camera_factory: Mutex<Option<Arc<dyn crate::camera::HostCameraFactory>>>,
+    /// Camera device ids with a live host serve. One opener per device;
+    /// a second concurrent open is refused with structured Busy.
+    camera_open: Mutex<HashSet<String>>,
+    audio_factory: Mutex<Option<Arc<dyn crate::audio::HostAudioFactory>>>,
+    terminal_factory: Mutex<Option<Arc<dyn crate::terminal::HostTerminalFactory>>>,
+    system_actions: Mutex<Option<Arc<dyn crate::system::HostSystemActions>>>,
+    /// Serializes native privacy/input transitions so a revoke restore can
+    /// never interleave with an in-flight enable. Never held across network.
+    privacy_serial: Mutex<()>,
+    terminal_sessions: Mutex<HashMap<String, Arc<terminal_runtime::HostedTerminal>>>,
     /// Latest text published by the controlled computer. Not logged.
-    /// Canonical directory for files this installation accepts. Not logged.
-    transfer_dir: Mutex<Option<PathBuf>>,
     video_inbox: Mutex<Option<Arc<VideoInbox>>>,
     video_subscriber: Mutex<Weak<()>>,
     /// One admitted host session at a time, including the release of held keys.
     session_gate: tokio::sync::Mutex<()>,
+    /// Held only while capture, input or the clipboard adapter is replaced.
+    /// Live Desktop streams are counted separately so viewers do not exclude
+    /// each other.
     desktop_gate: tokio::sync::Mutex<()>,
+    desktop_streams: AtomicUsize,
+    /// Controller-only. Connections with a live desktop datagram router,
+    /// keyed `(connection id, generation)`. One router per key owns
+    /// `read_datagram`, so sibling owners never split each other's fragments.
+    desktop_routers: Mutex<HashSet<(u64, u64)>>,
+    topology: Mutex<topology::TopologySnapshot>,
+    topology_watch: tokio::sync::watch::Sender<u64>,
     /// Controller-only. Exchanges Control and Command before an event is queued.
     /// Not written into the installation record.
     swap_control_command: AtomicBool,
     /// Platform-reported H.264 codec availability. The library does not probe
-    /// hardware itself; the native host sets these after asking its adapters
-    /// (VA-API on Linux). Both default to false so a missing probe reads as
-    /// unsupported, never as silent success.
-    h264_encode: AtomicBool,
-    h264_decode: AtomicBool,
+    /// Probe-validated video codec abilities. The native layer registers
+    /// these after initializing its encoder and decoder; every bit means a
+    /// backend processed a sample. Defaults to nothing so a missing probe
+    /// reads as unsupported, never as silent success.
+    video_caps: Mutex<crate::video_caps::VideoCodecCaps>,
     /// Controller-only. How a local key becomes host input. Not saved.
     keyboard_mode: AtomicU8,
-    /// This host encodes H.264 High profile. Set by the platform after
-    /// probing (VA-API High entrypoint on Linux, VideoToolbox on macOS).
-    /// Defaults to false so a missing probe negotiates Baseline.
-    h264_high_encode: AtomicBool,
     cursor_receiver: AtomicBool,
-    cursor_outbox: tokio::sync::watch::Sender<
-        Option<(crate::protocol::SessionStamp, Arc<crate::CursorState>)>,
-    >,
     /// Managed blob directory for the transfer manager. Empty until set.
     blob_dir: Mutex<Option<PathBuf>>,
     /// Owner-approved filesystem roots for the file manager. Empty until
@@ -368,17 +572,21 @@ struct Shared {
     /// Next local job id. Adopted peer ids bump it past collisions.
     job_next: AtomicU64,
     job_save: Mutex<()>,
+    job_owner_gate: Mutex<()>,
     /// Cancel watches for in-flight job fetches, one per active poll.
     job_cancel: Mutex<HashMap<u64, tokio::sync::watch::Sender<bool>>>,
     /// Job ids currently being advanced, preventing concurrent polls for
     /// the same job from both the background driver and window ticks.
     job_driving: Mutex<std::collections::HashSet<u64>>,
+    file_resources: Arc<Mutex<file_resources::Resources>>,
+    /// Last-known backend facts per capability, published by adapters and
+    /// serve loops. Read by the availability query; never guessed.
+    backend_state:
+        Mutex<HashMap<crate::availability::Capability, crate::availability::BackendState>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct AutoState {
-    last_dropped: u64,
-    last_change_ms: u64,
     manual_session: Option<(u64, u64)>,
 }
 
@@ -493,22 +701,15 @@ fn monitor_size(shared: &Shared) -> (u16, u16) {
             return size;
         }
     }
-    let desktop = lock(&shared.desktop);
-    desktop
-        .as_ref()
-        .map(|desktop| desktop.monitor())
-        .unwrap_or((0, 0))
+    lock(&shared.desktop_info).unwrap_or((0, 0))
 }
 
 fn desktop_capabilities(shared: &Shared) -> Capabilities {
     let capture = lock(&shared.capture);
-    let desktop = lock(&shared.desktop);
+    let desktop = *lock(&shared.desktop_info);
     let (width, height) = match capture.as_ref().map(|capture| capture.monitor()) {
         Some((width, height)) if width > 0 && height > 0 => (width, height),
-        _ => desktop
-            .as_ref()
-            .map(|desktop| desktop.monitor())
-            .unwrap_or((0, 0)),
+        _ => desktop.unwrap_or((0, 0)),
     };
     Capabilities {
         desktop_capture: capture.is_some(),
@@ -517,16 +718,11 @@ fn desktop_capabilities(shared: &Shared) -> Capabilities {
         clipboard: shared
             .clipboard_available
             .load(std::sync::atomic::Ordering::Acquire),
-        file_transfer: lock(&shared.transfer_dir).is_some(),
+        file_transfer: !lock(&shared.file_roots).is_empty(),
         audio: false,
         monitors: u8::from(width > 0 && height > 0),
-        h264_encode: capture.is_some()
-            && shared
-                .h264_encode
-                .load(std::sync::atomic::Ordering::Relaxed),
-        h264_decode: shared
-            .h264_decode
-            .load(std::sync::atomic::Ordering::Relaxed),
+        h264_encode: capture.is_some() && lock(&shared.video_caps).can_encode(),
+        h264_decode: lock(&shared.video_caps).can_decode(),
     }
 }
 
@@ -534,10 +730,7 @@ fn desktop_capabilities(shared: &Shared) -> Capabilities {
 /// maps this to `Error::Unsupported` so the controller sees an explicit
 /// unsupported-desktop reject instead of an admitted session with no video.
 pub(super) fn video_unsupported(shared: &Shared) -> bool {
-    lock(&shared.capture).is_some()
-        && !shared
-            .h264_encode
-            .load(std::sync::atomic::Ordering::Relaxed)
+    lock(&shared.capture).is_some() && !lock(&shared.video_caps).can_encode()
 }
 
 fn finished(phase: &SessionPhase) -> bool {
@@ -580,6 +773,16 @@ fn store_grants(
         state
             .trust
             .authorize_service(key, crate::ServiceKind::Camera, false)?;
+        state
+            .trust
+            .authorize_service(key, crate::ServiceKind::SystemAudio, false)?;
+        state
+            .trust
+            .authorize_service(key, crate::ServiceKind::Microphone, false)?;
+        state
+            .trust
+            .authorize_service(key, crate::ServiceKind::System, false)?;
+        state.trust.authorize_recording(key, false)?;
     }
     if let Err(error) = persist(shared, state) {
         let _ = state.trust.pair(previous_device);
@@ -589,6 +792,7 @@ fn store_grants(
         let epoch = state.transfer_epochs.entry(*key).or_default();
         *epoch = epoch.saturating_add(1);
     }
+    desktop_stream::reconcile_grants(shared, state, key, grants);
     Ok(previous)
 }
 
@@ -604,6 +808,11 @@ fn forget_device(shared: &Shared, state: &mut State, key: &[u8; 32]) -> Result<D
 }
 
 struct Installed {
+    power_policy: crate::power::PowerPolicy,
+    file_resource_policy: crate::job::FileResourcePolicy,
+    file_retention_policy: crate::job::FileRetentionPolicy,
+    terminal_policy: crate::terminal::TerminalPolicy,
+    system_policy: crate::system::SystemPolicy,
     trust: Trust,
     replay: ReplayCache,
     record_relay: RelaySettings,
@@ -619,6 +828,11 @@ fn persist(shared: &Shared, state: &State) -> Result<(), Error> {
         &state.record_relay,
         &state.trust,
         &state.replay,
+        &state.terminal_policy,
+        &state.file_retention_policy,
+        &state.power_policy,
+        &state.file_resource_policy,
+        &state.system_policy,
     )?;
     store.save(&bytes)
 }
@@ -631,7 +845,7 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// so the clipboard, transfer, and control paths share one rule.
 fn live_session(state: &State, incoming: bool, session_id: u64) -> Result<&LiveSession, Error> {
     let session = if incoming {
-        state.incoming.as_ref()
+        state.incoming.get(&session_id)
     } else {
         state.outgoing.get(&session_id)
     }

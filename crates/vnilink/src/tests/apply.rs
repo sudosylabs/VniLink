@@ -31,6 +31,7 @@ fn keyboard_and_pointer_events_are_applied_and_released() {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: true,
             control: true,
             clipboard: false,
             transfer: false,
@@ -40,11 +41,12 @@ fn keyboard_and_pointer_events_are_applied_and_released() {
     let session = controller.connect(&host.endpoint_id()).unwrap();
     assert_eq!(session.monitor_width, 1920);
     assert_eq!(session.monitor_height, 1080);
+    arm_display(&host, &controller, session.id, session.generation);
     for event in [
         InputEvent::key_down(crate::input::usage::A),
-        InputEvent::pointer(1, 1),
-        InputEvent::pointer(4, 5),
-        InputEvent::pointer(9, 8),
+        InputEvent::pointer(1, 1, 1, 1),
+        InputEvent::pointer(4, 5, 1, 1),
+        InputEvent::pointer(9, 8, 1, 1),
         InputEvent::button_down(crate::input::PointerButton::Left),
         InputEvent::wheel(0, -1),
     ] {
@@ -73,13 +75,13 @@ fn keyboard_and_pointer_events_are_applied_and_released() {
         .map(|mask| {
             let mut events = vec![InputEvent::key_down(crate::input::usage::A)];
             if mask & 1 != 0 {
-                events.push(InputEvent::pointer(1, 1));
+                events.push(InputEvent::pointer(1, 1, 1, 1));
             }
             if mask & 2 != 0 {
-                events.push(InputEvent::pointer(4, 5));
+                events.push(InputEvent::pointer(4, 5, 1, 1));
             }
             events.extend([
-                InputEvent::pointer(9, 8),
+                InputEvent::pointer(9, 8, 1, 1),
                 InputEvent::button_down(crate::input::PointerButton::Left),
                 InputEvent::wheel(0, -1),
             ]);
@@ -175,14 +177,19 @@ fn an_apply_failure_is_reported_and_the_session_stays_open() {
             InputEvent::key_down(crate::input::usage::A),
         )
         .unwrap();
+    arm_display(&host, &controller, session.id, session.generation);
     controller
-        .submit_input(session.id, session.generation, InputEvent::pointer(3, 4))
+        .submit_input(
+            session.id,
+            session.generation,
+            InputEvent::pointer(3, 4, 1, 1),
+        )
         .unwrap();
     wait_applied(
         &applied,
         &[
             InputEvent::key_down(crate::input::usage::A),
-            InputEvent::pointer(3, 4),
+            InputEvent::pointer(3, 4, 1, 1),
         ],
     );
     assert_eq!(

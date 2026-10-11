@@ -3,8 +3,7 @@
 use super::*;
 
 use super::blob::drop_blob_offers;
-use super::clipboard::open_controller_clipboard;
-use super::files::open_controller_transfer;
+use super::clipboard::{drop_peer_clipboard_files, open_controller_clipboard};
 use super::link::{remember_peer_addresses, write_addresses};
 use super::video::{video_inbox, video_recv_loop};
 use super::wire::{read_frame, read_session_frame, write_frame};
@@ -21,6 +20,12 @@ use crate::reconnect::{self, LinkEnd};
 use crate::session::{Grants, SessionInfo, SessionPhase, SessionRole};
 use crate::trust::Device;
 use crate::video::KeyframeFlag;
+
+/// Live controller-side connections, across all peers. Mirrors the host's
+/// `MAX_LIVE_INCOMING`: each outgoing session owns dial tasks, reconnect
+/// state and per-peer channels, so fan-out is bounded and the fifth peer
+/// gets a structured `Busy` instead of silent degradation.
+const MAX_LIVE_OUTGOING: usize = 4;
 
 /// Dropping a cancelled establish future must stop its side-stream workers.
 #[derive(Default)]
@@ -40,16 +45,20 @@ impl Core {
             let mut state = self.alive_state()?;
             store_grants(&self.shared, &mut state, &key, grants, false)?;
             if !grants.transfer {
-                let incoming = state
+                let incoming: Vec<u64> = state
                     .incoming
-                    .as_ref()
+                    .values()
                     .filter(|session| session.peer_key == key)
-                    .map(|session| session.id);
+                    .map(|session| session.id)
+                    .collect();
                 for record in state.hosted_services.values_mut().filter(|record| {
-                    Some(record.info.connection_id) == incoming
+                    incoming.contains(&record.info.connection_id)
                         && record.info.kind == crate::ServiceKind::Files
                 }) {
-                    if record.change(record.info.generation, crate::ServicePhase::Closed) {
+                    if record.change(
+                        record.info.generation,
+                        crate::ServicePhase::Closed(crate::CloseCause::Revoked),
+                    ) {
                         self.shared.events.publish(CoreEvent::HostedServiceChanged {
                             service: record.info.clone(),
                         });
@@ -61,6 +70,9 @@ impl Core {
             drop_blob_offers(&self.shared, &key);
             super::jobs::interrupt_peer_jobs(&self.shared, &key);
         }
+        if !grants.clipboard {
+            drop_peer_clipboard_files(&self.shared, &key);
+        }
         self.shared.events.publish(CoreEvent::DeviceAuthorized {
             endpoint_id: endpoint_id.to_owned(),
         });
@@ -69,27 +81,32 @@ impl Core {
 
     pub fn revoke(&self, endpoint_id: &str) -> Result<(), Error> {
         let key = parse_endpoint_id(endpoint_id)?;
-        let mut stopped = None;
+        let mut stopped = Vec::new();
         {
             let mut state = self.alive_state()?;
             store_grants(&self.shared, &mut state, &key, Grants::default(), true)?;
-            if state
+            let live: Vec<u64> = state
                 .incoming
-                .as_ref()
-                .is_some_and(|session| session.peer_key == key && !finished(&session.phase))
-            {
+                .values()
+                .filter(|session| session.peer_key == key && !finished(&session.phase))
+                .map(|session| session.id)
+                .collect();
+            if !live.is_empty() {
                 state.generation = state.generation.saturating_add(1);
-                if let Some(session) = state.incoming.as_mut() {
-                    session.phase = SessionPhase::Stopping;
-                    stopped = Some(session.stop.clone());
+                for id in live {
+                    if let Some(session) = state.incoming.get_mut(&id) {
+                        session.phase = SessionPhase::Stopping;
+                        stopped.push(session.stop.clone());
+                    }
                 }
             }
         }
-        if let Some(stop) = stopped {
+        for stop in stopped {
             let _ = stop.send(true);
         }
         drop_blob_offers(&self.shared, &key);
         super::jobs::interrupt_peer_jobs(&self.shared, &key);
+        drop_peer_clipboard_files(&self.shared, &key);
         self.shared.events.publish(CoreEvent::DeviceRevoked {
             endpoint_id: endpoint_id.to_owned(),
         });
@@ -107,20 +124,24 @@ impl Core {
     /// device and reports the store error.
     pub fn unpair(&self, endpoint_id: &str) -> Result<(), Error> {
         let key = parse_endpoint_id(endpoint_id)?;
-        let mut incoming_stop = None;
+        let mut incoming_stop = Vec::new();
         let mut outgoing_stop = None;
         {
             let mut state = self.alive_state()?;
             forget_device(&self.shared, &mut state, &key)?;
-            if state
+            let live: Vec<u64> = state
                 .incoming
-                .as_ref()
-                .is_some_and(|session| session.peer_key == key && !finished(&session.phase))
-            {
+                .values()
+                .filter(|session| session.peer_key == key && !finished(&session.phase))
+                .map(|session| session.id)
+                .collect();
+            if !live.is_empty() {
                 state.generation = state.generation.saturating_add(1);
-                if let Some(session) = state.incoming.as_mut() {
-                    session.phase = SessionPhase::Stopping;
-                    incoming_stop = Some(session.stop.clone());
+                for id in live {
+                    if let Some(session) = state.incoming.get_mut(&id) {
+                        session.phase = SessionPhase::Stopping;
+                        incoming_stop.push(session.stop.clone());
+                    }
                 }
             }
             for session in state
@@ -133,7 +154,7 @@ impl Core {
             }
             super::services::synchronize(&mut state, &self.shared.events);
         }
-        if let Some(stop) = incoming_stop {
+        for stop in incoming_stop {
             let _ = stop.send(true);
         }
         if let Some(stop) = outgoing_stop {
@@ -189,7 +210,9 @@ impl Core {
 
     /// Starts a paired, feature-neutral connection. No approval of desktop,
     /// file transfer, camera or terminal is implied by connection admission.
-    /// Requires protocol v5 and never falls back to a privileged legacy mode.
+    /// Reuses this peer's live neutral connection, including pending admission
+    /// and reconnect. This does not open or replace any service owner. A live
+    /// legacy connection still returns Busy; no privileged fallback is used.
     pub fn begin_connect_services(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
         self.start_controller(endpoint_id, true, true, false)
             .map(|(info, _, _)| info)
@@ -217,17 +240,25 @@ impl Core {
         let (pending, peer_key) = {
             let mut state = self.alive_state()?;
             let device = state.trust.get(&key).cloned().ok_or(Error::NotPaired)?;
-            if state.outgoing_peer(&key).is_some()
-                || (legacy && state.outgoing.values().any(|s| !finished(&s.phase)))
-            {
+            if let Some(existing) = state.outgoing_peer(&key) {
+                if services_only
+                    && existing.services_only
+                    && existing.phase != SessionPhase::Stopping
+                {
+                    let info = session_info(existing);
+                    let (ready, result) = std::sync::mpsc::sync_channel(1);
+                    let _ = ready.send(Ok(info.clone()));
+                    return Ok((info, result, existing.stop.clone()));
+                }
                 return Err(Error::Busy);
             }
-            if !files_only
-                && !self
-                    .shared
-                    .h264_decode
-                    .load(std::sync::atomic::Ordering::Relaxed)
-            {
+            if legacy && state.outgoing.values().any(|s| !finished(&s.phase)) {
+                return Err(Error::Busy);
+            }
+            if state.live_outgoing_count() >= MAX_LIVE_OUTGOING {
+                return Err(Error::Busy);
+            }
+            if !files_only && !lock(&self.shared.video_caps).can_decode() {
                 return Err(Error::Unsupported("no H.264 decoder is available"));
             }
             let id = state.next_session_id;
@@ -268,15 +299,24 @@ impl Core {
                 files_only,
                 services_only,
                 desktop_stop: tokio::sync::watch::channel(false).0,
+                host_held: Arc::new(Mutex::new(crate::input::HeldInput::default())),
+                incoming_slot: None,
+                cursor_outbox: tokio::sync::watch::channel(None).0,
+                input_epoch: Arc::new(AtomicU64::new(1)),
                 desktop_owner: None,
                 monitor_width: 0,
                 monitor_height: 0,
+                peer_topology: Vec::new(),
+                selected_displays: Vec::new(),
+                display_fault: None,
                 stop: stop.clone(),
                 outbox: Some(outbox.clone()),
                 video: None,
                 link: None,
                 clipboard: None,
-                transfer: None,
+                clipboard_files: None,
+                published_files: None,
+                published_rev: std::sync::atomic::AtomicU64::new(0),
             };
             let info = session_info(&session);
             state.outgoing.insert(id, session);
@@ -352,13 +392,7 @@ impl Core {
     pub fn disconnect(&self) -> Result<(), Error> {
         let id = {
             let state = self.alive_state()?;
-            if state
-                .outgoing
-                .values()
-                .filter(|s| !finished(&s.phase))
-                .count()
-                > 1
-            {
+            if state.live_outgoing_count() > 1 {
                 return Err(Error::Busy);
             }
             state.single_outgoing().ok_or(Error::NoSession)?.id
@@ -403,8 +437,7 @@ impl Core {
                 .and_then(|session| session.link.clone())
                 .or_else(|| {
                     state
-                        .incoming
-                        .as_ref()
+                        .incoming_live()
                         .and_then(|session| session.link.clone())
                 })
                 .ok_or(Error::NoSession)?
@@ -539,9 +572,7 @@ pub(super) async fn establish(
             )],
         )
     } else {
-        let decode = shared
-            .h264_decode
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let decode = lock(&shared.video_caps).can_decode();
         // Offer High on the current protocol first for sharper video at the same
         // bitrate; fall back to a version-1 Baseline hello on a FRESH connection
         // so older hosts still connect. A fresh dial is required because a host
@@ -711,24 +742,6 @@ pub(super) async fn establish(
     if let Some(task) = &clipboard {
         tasks.0.push(task.abort_handle());
     }
-    let transfer = if services_only {
-        None
-    } else {
-        Some(
-            match open_controller_transfer(shared, &connection, info.id, stop_rx).await {
-                Ok(transfer) => transfer,
-                Err(error) => {
-                    if let Some(task) = &clipboard {
-                        task.abort();
-                    }
-                    return Err(error);
-                }
-            },
-        )
-    };
-    if let Some(task) = &transfer {
-        tasks.0.push(task.abort_handle());
-    }
     let controller = lock(&shared.state)
         .outgoing
         .get(&local_id)
@@ -750,16 +763,10 @@ pub(super) async fn establish(
             if let Some(task) = &clipboard {
                 task.abort();
             }
-            if let Some(task) = &transfer {
-                task.abort();
-            }
             return Err(Error::NoSession);
         };
         if stopped {
             if let Some(task) = &clipboard {
-                task.abort();
-            }
-            if let Some(task) = &transfer {
                 task.abort();
             }
             return Err(Error::NoSession);
@@ -847,9 +854,6 @@ pub(super) async fn establish(
     .await;
     reader.abort();
     aux.abort();
-    if let Some(task) = &transfer {
-        task.abort();
-    }
     if let Some(task) = &clipboard {
         task.abort();
     }
@@ -962,6 +966,22 @@ pub(super) async fn command_loop(
                                 break;
                             }
                         }
+                        Some(Ok(ControlMessage::Topology {
+                            stamp: msg_stamp,
+                            revision,
+                            displays,
+                        })) => {
+                            if msg_stamp != stamp {
+                                break;
+                            }
+                            super::topology::store_peer_topology(
+                                shared,
+                                local_id,
+                                stamp,
+                                revision,
+                                displays,
+                            );
+                        }
                         Some(Ok(_)) | Some(Err(_)) | None => break,
                     }
                 }
@@ -988,6 +1008,9 @@ pub(super) async fn command_loop(
                         text: KeyText(text),
                     },
                     Outbound::Quality(quality) => ControlMessage::Quality { stamp, quality },
+                    Outbound::Displays(displays) => {
+                        ControlMessage::SelectDisplays { stamp, displays }
+                    }
                 };
                 let wrote = write_frame(&mut send, &message).await;
                 if wrote.is_err() {
@@ -1024,7 +1047,6 @@ pub(super) fn finish_outgoing(shared: &Shared, local_id: u64) {
         link.close(0u8.into(), b"controller stopped");
     }
     session.clipboard = None;
-    session.transfer = None;
     session.phase = SessionPhase::Closed;
     drop(state);
     settle_outgoing(shared, &info, SessionPhase::Closed, &peer_key);
@@ -1041,7 +1063,6 @@ pub(super) fn fail_outgoing(shared: &Shared, local_id: u64, error: &Error) {
         link.close(0u8.into(), b"controller failed");
     }
     session.clipboard = None;
-    session.transfer = None;
     session.phase = SessionPhase::Failed(error.to_string());
     drop(state);
     settle_outgoing(
@@ -1061,7 +1082,6 @@ pub(super) fn mark_reconnecting(shared: &Shared, local_id: u64) {
         return;
     }
     session.clipboard = None;
-    session.transfer = None;
     session.link = None;
     session.phase = SessionPhase::Reconnecting;
     let info = session_info(session);
@@ -1091,6 +1111,7 @@ fn settle_outgoing(shared: &Shared, info: &SessionInfo, phase: SessionPhase, pee
         controller.inbox.reset();
         lock(&controller.keyboard).clear();
         *lock(&controller.held) = crate::input::HeldInput::default();
+        lock(&controller.pointer).reset();
         *lock(&controller.auto) = AutoState::default();
     }
     super::jobs::interrupt_controller_jobs(shared, peer_key);

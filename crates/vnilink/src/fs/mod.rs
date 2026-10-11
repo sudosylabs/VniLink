@@ -19,13 +19,13 @@ mod rename;
 mod roots;
 mod wire;
 
-pub(crate) use list::list_page;
+pub(crate) use list::{list_page, list_page_async, ListHooks};
 pub(crate) use mkdir::create_dir;
 pub(crate) use path::{check_name, check_rel};
 pub(crate) use rename::rename_entry;
 #[cfg(test)]
 pub(crate) use rename::STALE_ENTRY;
-pub(crate) use roots::RootSet;
+pub(crate) use roots::{PinnedRoot, RootSet, ROOTS_REBOUND};
 pub use wire::RevisionGate;
 pub(crate) use wire::{
     decode_list_body, decode_request, decode_response, encode_list_body, encode_request,

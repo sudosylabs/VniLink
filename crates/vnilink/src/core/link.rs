@@ -51,10 +51,9 @@ pub(super) async fn peer_addresses(
     (relays, direct)
 }
 
-pub(super) fn remember_link(shared: &Shared, link: iroh::endpoint::Connection) {
+pub(super) fn remember_link(shared: &Shared, session_id: u64, link: iroh::endpoint::Connection) {
     let mut state = lock(&shared.state);
-    let session = state.incoming.as_mut();
-    if let Some(session) = session {
+    if let Some(session) = state.incoming.get_mut(&session_id) {
         session.link = Some(link);
     }
 }
@@ -227,8 +226,7 @@ impl Core {
             let state = self.alive_state()?;
             let session = state
                 .incoming
-                .as_ref()
-                .filter(|session| session.id == session_id)
+                .get(&session_id)
                 .or_else(|| state.outgoing.get(&session_id))
                 .ok_or(Error::NoSession)?;
             session.link.clone()

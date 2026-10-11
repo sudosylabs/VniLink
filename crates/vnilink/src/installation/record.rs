@@ -14,8 +14,10 @@ use crate::trust::{Device, Trust, MAX_DEVICES};
 const MAGIC: &[u8; 4] = b"VNLK";
 /// Version 2 appends the peer hostname section after the devices. Version 1
 /// records still decode, with no names. Version 3 adds independent Terminal
-/// and Camera grant bits; older records default both to denied.
-const VERSION: u8 = 3;
+/// and Camera grant bits; older records default both to denied. Version 4
+/// adds the System grant bit and the system-action policy; older records
+/// keep their other policies and default the new fields to denied.
+const VERSION: u8 = 4;
 const MAX_RECORD_BYTES: usize = 1024 * 1024;
 const MAX_TEXT: usize = 512;
 
@@ -24,6 +26,11 @@ pub(crate) struct Record {
     pub relay: RelaySettings,
     pub trust: Trust,
     pub replay: ReplayCache,
+    pub file_resource_policy: crate::job::FileResourcePolicy,
+    pub power_policy: crate::power::PowerPolicy,
+    pub terminal_policy: crate::terminal::TerminalPolicy,
+    pub file_retention_policy: crate::job::FileRetentionPolicy,
+    pub system_policy: crate::system::SystemPolicy,
 }
 
 impl std::fmt::Debug for Record {
@@ -42,6 +49,11 @@ pub(crate) fn encode(
     relay: &RelaySettings,
     trust: &Trust,
     replay: &ReplayCache,
+    terminal_policy: &crate::terminal::TerminalPolicy,
+    file_retention_policy: &crate::job::FileRetentionPolicy,
+    power_policy: &crate::power::PowerPolicy,
+    file_resource_policy: &crate::job::FileResourcePolicy,
+    system_policy: &crate::system::SystemPolicy,
 ) -> Result<Vec<u8>, Error> {
     let mut body = Vec::new();
     body.extend_from_slice(MAGIC);
@@ -51,6 +63,28 @@ pub(crate) fn encode(
     write_devices(&mut body, trust)?;
     write_names(&mut body, trust)?;
     write_replay(&mut body, replay)?;
+    terminal_policy.validate()?;
+    body.push(u8::from(terminal_policy.allow_persistence));
+    body.extend(terminal_policy.max_sessions.to_be_bytes());
+    body.extend(terminal_policy.max_sessions_per_peer.to_be_bytes());
+    body.extend(terminal_policy.history_bytes.to_be_bytes());
+    body.extend(terminal_policy.replay_bytes.to_be_bytes());
+    body.extend(terminal_policy.detached_timeout_secs.to_be_bytes());
+    file_retention_policy.validate()?;
+    body.extend(file_retention_policy.resume_cache_bytes.to_be_bytes());
+    body.extend(file_retention_policy.resume_cache_age_secs.to_be_bytes());
+    body.extend(file_retention_policy.recent_fetch_bytes.to_be_bytes());
+    body.extend(file_retention_policy.recent_fetch_age_secs.to_be_bytes());
+    power_policy.validate()?;
+    body.push(power_policy.bits());
+    body.extend_from_slice(&power_policy.incoming_idle_secs.to_be_bytes());
+    body.extend_from_slice(&power_policy.outgoing_idle_secs.to_be_bytes());
+    file_resource_policy.validate()?;
+    body.extend(file_resource_policy.max_concurrent_receivers.to_be_bytes());
+    body.extend(file_resource_policy.max_reserved_bytes.to_be_bytes());
+    body.extend(file_resource_policy.minimum_free_bytes.to_be_bytes());
+    system_policy.validate()?;
+    body.push(system_policy.bits());
     if body.len() + 4 > MAX_RECORD_BYTES {
         return Err(Error::InvalidSetting(
             "installation record field is too long",
@@ -87,12 +121,72 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Record, Error> {
     let relay = read_relay(&mut reader)?;
     let trust = read_devices(&mut reader, &secret, version)?;
     let replay = read_replay(&mut reader)?;
+    let terminal_policy = if version >= 3 {
+        let allow_persistence = match reader.byte()? {
+            0 => false,
+            1 => true,
+            _ => return Err(Error::CorruptRecord),
+        };
+        crate::terminal::TerminalPolicy {
+            allow_persistence,
+            max_sessions: u16::from_be_bytes(reader.array()?),
+            max_sessions_per_peer: u16::from_be_bytes(reader.array()?),
+            history_bytes: u32::from_be_bytes(reader.array()?),
+            replay_bytes: u32::from_be_bytes(reader.array()?),
+            detached_timeout_secs: u32::from_be_bytes(reader.array()?),
+        }
+        .validate()
+        .map_err(|_| Error::CorruptRecord)?
+    } else {
+        crate::terminal::TerminalPolicy::default()
+    };
+    let file_retention_policy = if version >= 3 {
+        crate::job::FileRetentionPolicy {
+            resume_cache_bytes: u64::from_be_bytes(reader.array()?),
+            resume_cache_age_secs: u64::from_be_bytes(reader.array()?),
+            recent_fetch_bytes: u64::from_be_bytes(reader.array()?),
+            recent_fetch_age_secs: u64::from_be_bytes(reader.array()?),
+        }
+        .validate()
+        .map_err(|_| Error::CorruptRecord)?
+    } else {
+        crate::job::FileRetentionPolicy::default()
+    };
+    let power_policy = if version >= 3 {
+        let mut policy = crate::power::PowerPolicy::from_bits(reader.byte()?)?;
+        policy.incoming_idle_secs = u32::from_be_bytes(reader.array()?);
+        policy.outgoing_idle_secs = u32::from_be_bytes(reader.array()?);
+        policy.validate().map_err(|_| Error::CorruptRecord)?
+    } else {
+        Default::default()
+    };
+    let file_resource_policy = if version >= 3 {
+        crate::job::FileResourcePolicy {
+            max_concurrent_receivers: u16::from_be_bytes(reader.array()?),
+            max_reserved_bytes: u64::from_be_bytes(reader.array()?),
+            minimum_free_bytes: u64::from_be_bytes(reader.array()?),
+        }
+        .validate()
+        .map_err(|_| Error::CorruptRecord)?
+    } else {
+        crate::job::FileResourcePolicy::default()
+    };
+    let system_policy = if version >= 4 {
+        crate::system::SystemPolicy::from_bits(reader.byte()?).map_err(|_| Error::CorruptRecord)?
+    } else {
+        crate::system::SystemPolicy::default()
+    };
     reader.finish()?;
     Ok(Record {
         secret,
         relay,
         trust,
         replay,
+        terminal_policy,
+        file_retention_policy,
+        power_policy,
+        file_resource_policy,
+        system_policy,
     })
 }
 
@@ -142,11 +236,14 @@ fn write_devices(out: &mut Vec<u8>, trust: &Trust) -> Result<(), Error> {
         for addr in &device.direct {
             write_addr(out, *addr);
         }
-        out.push(
-            grant_bits(device.grants)
-                | (u8::from(device.terminal) << 3)
-                | (u8::from(device.camera) << 4),
-        );
+        let bits = u16::from(grant_bits(device.grants))
+            | (u16::from(device.terminal) << 3)
+            | (u16::from(device.camera) << 4)
+            | (u16::from(device.system_audio) << 6)
+            | (u16::from(device.microphone) << 7)
+            | (u16::from(device.recording) << 8)
+            | (u16::from(device.system_actions) << 9);
+        out.extend_from_slice(&bits.to_be_bytes());
     }
     Ok(())
 }
@@ -248,7 +345,7 @@ fn read_relay(reader: &mut Reader<'_>) -> Result<RelaySettings, Error> {
 }
 
 fn read_devices(reader: &mut Reader<'_>, secret: &[u8; 32], version: u8) -> Result<Trust, Error> {
-    let count = reader.u16()? as usize;
+    let count = u16::from_be_bytes(reader.array()?) as usize;
     if count > MAX_DEVICES {
         return Err(Error::CorruptRecord);
     }
@@ -292,11 +389,15 @@ fn read_devices(reader: &mut Reader<'_>, secret: &[u8; 32], version: u8) -> Resu
             }
             direct.push(addr);
         }
-        let bits = reader.byte()?;
-        if bits & !(if version >= 3 { 31 } else { 7 }) != 0 {
+        let bits = if version >= 3 {
+            reader.u16()?
+        } else {
+            u16::from(reader.byte()?)
+        };
+        if bits & !(if version >= 3 { 1023 } else { 7 }) != 0 {
             return Err(Error::CorruptRecord);
         }
-        let grants = grants_from_bits(bits & 7)?;
+        let grants = grants_from_bits((bits & 39) as u8)?;
         if trust.get(&endpoint_id).is_some() {
             return Err(Error::CorruptRecord);
         }
@@ -309,6 +410,10 @@ fn read_devices(reader: &mut Reader<'_>, secret: &[u8; 32], version: u8) -> Resu
                 grants,
                 terminal: version >= 3 && bits & 8 != 0,
                 camera: version >= 3 && bits & 16 != 0,
+                system_audio: version >= 3 && bits & 64 != 0,
+                microphone: version >= 3 && bits & 128 != 0,
+                recording: version >= 3 && bits & 256 != 0,
+                system_actions: version >= 3 && bits & 512 != 0,
             })
             .map_err(|_| Error::CorruptRecord)?;
     }
@@ -325,13 +430,13 @@ fn read_names(reader: &mut Reader<'_>, trust: &mut Trust) -> Result<(), Error> {
 }
 
 fn read_name_map(reader: &mut Reader<'_>, trust: &mut Trust, reported: bool) -> Result<(), Error> {
-    let count = reader.u16()? as usize;
+    let count = u16::from_be_bytes(reader.array()?) as usize;
     if count > MAX_DEVICES {
         return Err(Error::CorruptRecord);
     }
     for _ in 0..count {
         let endpoint_id = reader.array::<32>()?;
-        let len = reader.u16()? as usize;
+        let len = u16::from_be_bytes(reader.array()?) as usize;
         if len > crate::hostname::MAX_HOSTNAME_BYTES {
             return Err(Error::CorruptRecord);
         }
@@ -368,14 +473,14 @@ fn read_name_map(reader: &mut Reader<'_>, trust: &mut Trust, reported: bool) -> 
 }
 
 fn read_replay(reader: &mut Reader<'_>) -> Result<ReplayCache, Error> {
-    let count = reader.u16()? as usize;
+    let count = u16::from_be_bytes(reader.array()?) as usize;
     if count > invitation::MAX_REPLAY {
         return Err(Error::CorruptRecord);
     }
     let mut entries = Vec::with_capacity(count);
     for _ in 0..count {
         let nonce = reader.array::<16>()?;
-        let expires_at_ms = reader.u64()?;
+        let expires_at_ms = u64::from_be_bytes(reader.array()?);
         if entries.iter().any(|(seen, _)| seen == &nonce) {
             return Err(Error::CorruptRecord);
         }
@@ -395,12 +500,12 @@ fn read_addr(reader: &mut Reader<'_>) -> Result<SocketAddr, Error> {
     let addr = match reader.byte()? {
         4 => {
             let octets = reader.array::<4>()?;
-            let port = reader.u16()?;
+            let port = u16::from_be_bytes(reader.array()?);
             SocketAddr::new(IpAddr::V4(Ipv4Addr::from(octets)), port)
         }
         6 => {
             let octets = reader.array::<16>()?;
-            let port = reader.u16()?;
+            let port = u16::from_be_bytes(reader.array()?);
             SocketAddr::new(IpAddr::V6(Ipv6Addr::from(octets)), port)
         }
         _ => return Err(Error::CorruptRecord),
@@ -413,6 +518,9 @@ fn read_addr(reader: &mut Reader<'_>) -> Result<SocketAddr, Error> {
 
 fn grant_bits(grants: Grants) -> u8 {
     let mut bits = 0;
+    if grants.view {
+        bits |= 32;
+    }
     if grants.control {
         bits |= 1;
     }
@@ -426,10 +534,11 @@ fn grant_bits(grants: Grants) -> u8 {
 }
 
 fn grants_from_bits(bits: u8) -> Result<Grants, Error> {
-    if bits & !0b111 != 0 {
+    if bits & !0b100111 != 0 {
         return Err(Error::CorruptRecord);
     }
     Ok(Grants {
+        view: bits & 32 != 0,
         control: bits & 1 != 0,
         clipboard: bits & 2 != 0,
         transfer: bits & 4 != 0,

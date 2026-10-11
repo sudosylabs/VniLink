@@ -11,6 +11,7 @@ pub(super) async fn write_frame(
 ) -> Result<(), Error> {
     let limit = match message {
         ControlMessage::Addresses { .. } => MAX_ADDRESS_FRAME,
+        ControlMessage::Topology { .. } => crate::protocol::MAX_TOPOLOGY_FRAME,
         _ => MAX_CONTROL_FRAME,
     };
     let payload = message.encode();

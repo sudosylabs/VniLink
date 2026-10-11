@@ -17,7 +17,8 @@ fn start_direct() -> Core {
         RelayMode::Disabled,
     )
     .expect("loopback core");
-    core.set_h264_support(true, true).expect("flags");
+    core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .expect("flags");
     core
 }
 
@@ -67,7 +68,7 @@ fn pairing_counts(events: &EventSubscription) -> (usize, usize) {
             CoreEvent::SessionChanged { .. }
             | CoreEvent::PeerRenamed { .. }
             | CoreEvent::AddressesUpdated { .. }
-            | CoreEvent::TransferCompleted { .. } => {}
+            | CoreEvent::TopologyChanged { .. } => {}
             other => panic!("pairing emitted {other:?}"),
         }
     }
@@ -323,6 +324,7 @@ fn accepting_a_second_invitation_keeps_authorized_grants() {
         .authorize(
             &host.endpoint_id(),
             Grants {
+                view: false,
                 control: false,
                 clipboard: true,
                 transfer: true,
@@ -349,6 +351,7 @@ fn approving_control_keeps_authorized_clipboard_and_transfer() {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: false,
             control: false,
             clipboard: true,
             transfer: true,

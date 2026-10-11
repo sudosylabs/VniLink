@@ -25,7 +25,16 @@ fn start_direct() -> Core {
         RelayMode::Disabled,
     )
     .expect("loopback core");
-    core.set_h264_support(true, true).expect("flags");
+    core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .expect("flags");
+    // These correctness fixtures may live on a small /dev/shm volume. Resource
+    // admission has separate exact-boundary tests; don't require production
+    // free-space headroom for these small temporary fixtures.
+    core.set_file_resource_policy(crate::job::FileResourcePolicy {
+        minimum_free_bytes: 0,
+        ..Default::default()
+    })
+    .unwrap();
     core
 }
 
@@ -112,6 +121,7 @@ fn pair_with_transfer(host: &Core, controller: &Core) {
     host.authorize(
         &controller.endpoint_id(),
         crate::session::Grants {
+            view: true,
             control: true,
             clipboard: false,
             transfer: true,
@@ -135,6 +145,7 @@ fn setup(tag: &str) -> (Core, Core, Scratch, Scratch) {
         .authorize(
             &host.endpoint_id(),
             crate::session::Grants {
+                view: false,
                 control: false,
                 clipboard: false,
                 transfer: true,
@@ -389,6 +400,7 @@ fn interrupted_download_resumes_with_byte_reuse() {
     host.authorize(
         &receiver_a.endpoint_id(),
         crate::session::Grants {
+            view: false,
             control: false,
             clipboard: false,
             transfer: true,
@@ -505,7 +517,9 @@ fn job_restart_resumes_unfinished_files() {
         RelayMode::Disabled,
     )
     .unwrap();
-    controller.set_h264_support(true, true).unwrap();
+    controller
+        .set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .unwrap();
     controller.set_blob_directory(&blob_dir).unwrap();
     controller.set_file_roots(vec![root_dir]).unwrap();
     let jobs = controller.job_list().unwrap();
@@ -524,6 +538,7 @@ fn job_restart_resumes_unfinished_files() {
         .authorize(
             &host.endpoint_id(),
             crate::session::Grants {
+                view: false,
                 control: false,
                 clipboard: false,
                 transfer: true,
@@ -681,6 +696,7 @@ fn revoke_pauses_and_reauthorize_resumes() {
     host.authorize(
         &controller.endpoint_id(),
         crate::session::Grants {
+            view: true,
             control: true,
             clipboard: false,
             transfer: true,
@@ -865,6 +881,167 @@ fn scan_accepts_single_files_as_well_as_trees() {
     }
 }
 
+/// STD05: manifest budgets apply while enumerating. A directory past the
+/// file cap fails instead of allocating every entry first, and an exactly
+/// full directory still scans.
+#[test]
+fn scan_refuses_directories_past_the_manifest_budget() {
+    let scratch = Scratch::tagged("scan-budget");
+    let root = scratch.join("root");
+    let big = root.join("big");
+    let exact = root.join("exact");
+    std::fs::create_dir_all(&big).unwrap();
+    std::fs::create_dir_all(&exact).unwrap();
+    for i in 0..5001 {
+        std::fs::write(big.join(format!("entry-{i:06}")), []).unwrap();
+    }
+    for i in 0..5000 {
+        std::fs::write(exact.join(format!("entry-{i:06}")), []).unwrap();
+    }
+    let mut roots = crate::fs::RootSet::default();
+    roots.set(std::slice::from_ref(&root)).unwrap();
+    assert!(crate::manifest::scan(&roots, 0, "big").is_err());
+    let fit = crate::manifest::scan(&roots, 0, "exact").unwrap();
+    assert_eq!(fit.files.len(), 5000);
+    assert!(fit.dirs.is_empty());
+}
+
+static SCAN_PARKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static SCAN_MAX_UNIT: AtomicU64 = AtomicU64::new(0);
+static SCAN_FINISHED: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+static SCAN_FINISH_CV: std::sync::Condvar = std::sync::Condvar::new();
+
+fn scan_park_probe(unit: u64, cancelled: &std::sync::atomic::AtomicBool) {
+    use std::sync::atomic::Ordering as Seq;
+    SCAN_MAX_UNIT.fetch_max(unit, Seq::SeqCst);
+    if SCAN_PARKED.swap(true, Seq::SeqCst) {
+        return;
+    }
+    while !cancelled.load(Seq::Acquire) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn scan_finish_probe(cancelled: bool) {
+    *SCAN_FINISHED.lock().unwrap() = Some(cancelled);
+    SCAN_FINISH_CV.notify_all();
+}
+
+/// STD08: detached scanning yields the executor and holds no shared lock
+/// (a sibling scan completes while the first scan is parked), and
+/// dropping the future aborts the worker before anything is traversed.
+#[test]
+fn parked_scan_yields_sibling_and_cancels_before_traversal() {
+    use std::sync::{Arc, Mutex};
+
+    let scratch = Scratch::tagged("scan-park");
+    let root = scratch.join("root");
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    std::fs::write(root.join("sub/a.txt"), b"parked-bytes").unwrap();
+    let mut roots = crate::fs::RootSet::default();
+    roots.set(std::slice::from_ref(&root)).unwrap();
+    // Stand-in for the shared file-roots lock: the parked scan must hold
+    // no lock across its worker await, so the sibling locks, snapshots
+    // and completes while the first scan stays parked.
+    let shared = Arc::new(Mutex::new(roots));
+    let first = shared.lock().unwrap().clone();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let hooks = crate::manifest::ScanHooks {
+        dir_probe: Some(scan_park_probe),
+        finish_probe: Some(scan_finish_probe),
+    };
+    let (handle_tx, handle_rx) = std::sync::mpsc::channel();
+    let (sibling_tx, sibling_rx) = std::sync::mpsc::channel();
+    let sibling_shared = shared.clone();
+    // A current-thread runtime only drives tasks under `block_on`; the
+    // driver thread owns it while the test observes from outside.
+    let driver = std::thread::spawn(move || {
+        runtime.block_on(async move {
+            let scan = tokio::spawn(crate::manifest::scan_roots_async(
+                first,
+                0,
+                String::new(),
+                hooks,
+            ));
+            handle_tx.send(scan).unwrap();
+            let cap = std::time::Instant::now() + Duration::from_secs(30);
+            while !SCAN_PARKED.load(Ordering::SeqCst) {
+                if std::time::Instant::now() > cap {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+            // Spawned only after the park is observed: it must lock the
+            // shared roots, snapshot and finish while parked.
+            tokio::spawn(async move {
+                let snapshot = sibling_shared.lock().unwrap().clone();
+                let page = crate::manifest::scan_roots_async(
+                    snapshot,
+                    0,
+                    String::new(),
+                    crate::manifest::ScanHooks::none(),
+                )
+                .await;
+                let _ = sibling_tx.send(page.map(|scan| scan.files.len()));
+            });
+            while SCAN_FINISHED.lock().unwrap().is_none() {
+                if std::time::Instant::now() > cap {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+    });
+    // The worker must reach the parked probe; on the old inline path no
+    // probe exists and this times out.
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    while !SCAN_PARKED.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "scan worker never parked"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Sibling progress while parked: the async worker is free and no
+    // shared lock is held, so a full second scan completes.
+    let sibling = sibling_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("sibling blocked during parked scan");
+    assert_eq!(
+        sibling.expect("sibling scan failed"),
+        1,
+        "sibling scan result changed while parked"
+    );
+    // Cancellation aborts the worker without traversing anything: only
+    // the pre-access probe fired.
+    let scan = handle_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    scan.abort();
+    let finished = SCAN_FINISHED.lock().unwrap();
+    let (finished, timeout) = SCAN_FINISH_CV
+        .wait_timeout_while(finished, Duration::from_secs(5), |done| done.is_none())
+        .unwrap();
+    assert!(
+        !timeout.timed_out(),
+        "scan worker never finished after abort"
+    );
+    assert_eq!(
+        *finished,
+        Some(true),
+        "scan worker did not report cancellation"
+    );
+    drop(finished);
+    assert_eq!(
+        SCAN_MAX_UNIT.load(Ordering::SeqCst),
+        0,
+        "parked scan traversed directories"
+    );
+    driver.join().expect("driver thread panicked");
+}
+
 #[test]
 fn upload_conflict_forwards_to_sender_and_resolves() {
     let (host, controller, host_scratch, controller_scratch) = setup("conflict-fwd");
@@ -974,7 +1151,9 @@ fn nested_sender_resume_resolves_correct_file() {
         RelayMode::Disabled,
     )
     .unwrap();
-    controller.set_h264_support(true, true).unwrap();
+    controller
+        .set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .unwrap();
     controller.set_blob_directory(&blob_dir).unwrap();
     controller.set_file_roots(vec![root_dir]).unwrap();
     controller
@@ -990,6 +1169,7 @@ fn nested_sender_resume_resolves_correct_file() {
         .authorize(
             &host.endpoint_id(),
             crate::session::Grants {
+                view: false,
                 control: false,
                 clipboard: false,
                 transfer: true,
@@ -1034,11 +1214,13 @@ fn anchored_import_refuses_swapped_parent() {
         dev: 0,
         ino: 0,
     };
+    let pin = controller.pin_file_root(0).unwrap();
     let err = controller.blob_offer_file_at(
         &host.endpoint_id(),
         0,
         &dummy,
         manifest::MAX_MANIFEST_FILE_BYTES,
+        &pin,
     );
     assert!(err.is_err());
     // Restore honest dir so temp cleanup works.
@@ -1049,33 +1231,11 @@ fn anchored_import_refuses_swapped_parent() {
     let _ = &host;
 }
 
-fn dir_bytes(path: &std::path::Path) -> u64 {
-    fn walk(dir: &std::path::Path, acc: &mut u64) {
-        let Ok(read) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in read.flatten() {
-            let path = entry.path();
-            if let Ok(meta) = std::fs::symlink_metadata(&path) {
-                if meta.is_dir() {
-                    walk(&path, acc);
-                } else if meta.is_file() {
-                    *acc = acc.saturating_add(meta.len());
-                }
-            }
-        }
-    }
-    let mut total = 0u64;
-    walk(path, &mut total);
-    total
-}
-
 #[test]
 fn sender_store_does_not_retain_full_copy() {
-    // Sender no-copy via TryReference (both directions, distinct files):
-    // managed sender payload growth stays well below transferred bytes.
-    // Receiver store retains fetched blobs for resume (documented; no public
-    // delete API upstream), so this asserts sender-side only.
+    // Test sender references separately from legitimate receiver cache data
+    // and database allocation. The pinned FsStore keeps external data out of
+    // its hash.data payload files when TryReference and no inlining are used.
     let (host, controller, host_scratch, controller_scratch) = setup("no-copy");
     // Distinct 2 MiB files (incompressible xorshift, different seeds).
     std::fs::write(
@@ -1091,8 +1251,11 @@ fn sender_store_does_not_retain_full_copy() {
 
     let controller_blobs = controller_scratch.join("blobs");
     let host_blobs = host_scratch.join("blobs");
-    let c_before = dir_bytes(&controller_blobs);
-    let h_before = dir_bytes(&host_blobs);
+    let up_hash = iroh_blobs::Hash::new(payload(2 * 1024 * 1024, 101));
+    let down_hash = iroh_blobs::Hash::new(payload(2 * 1024 * 1024, 202));
+    let payload_path = |root: &std::path::Path, hash: iroh_blobs::Hash| {
+        root.join("data").join(format!("{}.data", hash.to_hex()))
+    };
 
     controller.connect(&host.endpoint_id()).unwrap();
     // Controller-upload (controller sender, host receiver).
@@ -1120,28 +1283,19 @@ fn sender_store_does_not_retain_full_copy() {
     assert_eq!(down_receiver.state, JobState::Complete);
     assert_eq!(down_sender.state, JobState::Complete);
 
-    let c_after = dir_bytes(&controller_blobs);
-    let h_after = dir_bytes(&host_blobs);
-    let c_growth = c_after.saturating_sub(c_before);
-    let h_growth = h_after.saturating_sub(h_before);
-    // Each direction moved 2 MiB distinct payloads. Sender-side managed growth
-    // (references/metadata, plus small-file copies when the store must copy)
-    // stays well below a second full copy per direction (2 MiB). Bound as
-    // <1 MiB growth per 2 MiB transferred (generous for metadata/small-copy
-    // fallback; Copy would grow ~2 MiB per direction).
-    // Current FsStore ignores TryReference and copies (allowed fallback per
-    // upstream docs); bounded single copy per distinct payload (<2.5 MiB growth
-    // for 2 MiB transfer, no more than payload+overhead). Zero-copy
-    // source-backed serving (no second full copy) needs a custom provider
-    // (future work, explicitly incomplete).
     assert!(
-        c_growth < 4 * 1024 * 1024,
-        "controller sender store grew {c_growth} bytes for 2 MiB upload (more than single copy?)"
+        !payload_path(&controller_blobs, up_hash).exists(),
+        "upload sender must reference its source, not retain a payload copy"
     );
     assert!(
-        h_growth < 4 * 1024 * 1024,
-        "host sender store grew {h_growth} bytes for 2 MiB download (more than single copy?)"
+        !payload_path(&host_blobs, down_hash).exists(),
+        "download sender must reference its source, not retain a payload copy"
     );
+    // Each peer received the other, distinct hash. Verified receiver payloads
+    // are allowed for publication/resume; they must not be mistaken for copies
+    // of that peer's own outgoing source.
+    assert!(payload_path(&host_blobs, up_hash).exists());
+    assert!(payload_path(&controller_blobs, down_hash).exists());
 }
 
 #[test]
@@ -1227,6 +1381,7 @@ fn cross_filesystem_publication_succeeds() {
             .authorize(
                 &host.endpoint_id(),
                 crate::session::Grants {
+                    view: false,
                     control: false,
                     clipboard: false,
                     transfer: true,
@@ -1253,6 +1408,7 @@ fn cross_filesystem_publication_succeeds() {
             .authorize(
                 &host.endpoint_id(),
                 crate::session::Grants {
+                    view: false,
                     control: false,
                     clipboard: false,
                     transfer: true,
@@ -1409,8 +1565,11 @@ fn service_jobs_complete_both_directions(neutral: bool) {
             false,
         )
         .unwrap();
-        host.set_h264_support(false, false).unwrap();
-        controller.set_h264_support(false, false).unwrap();
+        host.set_video_codecs(crate::VideoCodecCaps::default())
+            .unwrap();
+        controller
+            .set_video_codecs(crate::VideoCodecCaps::default())
+            .unwrap();
         let pending = controller
             .begin_connect_services(&host.endpoint_id())
             .unwrap();
@@ -1579,7 +1738,7 @@ fn service_jobs_host_close_stops_download_and_rejects_new_work() {
 }
 
 #[test]
-fn service_jobs_require_peer_admission_and_cannot_rebind_after_restart() {
+fn service_jobs_require_peer_admission_and_explicit_adoption_after_restart() {
     let (host, controller, _hs, cs) = setup("owned-admit-restart");
     std::fs::write(cs.join("root/a.bin"), payload(4096, 139)).unwrap();
     let session = controller.connect(&host.endpoint_id()).unwrap();
@@ -1593,7 +1752,12 @@ fn service_jobs_require_peer_admission_and_cannot_rebind_after_restart() {
     assert!(controller.job_list().unwrap().is_empty());
     // An ambiguous remote refusal ends only this owner, preventing orphaned
     // admitted jobs if a reply were lost. Open a fresh owner for the retry.
-    if controller.controller_service(owner.id).unwrap().phase != crate::ServicePhase::Closed {
+    if !controller
+        .controller_service(owner.id)
+        .unwrap()
+        .phase
+        .finished()
+    {
         controller
             .close_controller_service(owner.id, owner.generation)
             .unwrap();
@@ -1638,6 +1802,7 @@ fn service_jobs_closing_one_computer_keeps_another_transfer_active() {
         .authorize(
             &second.endpoint_id(),
             crate::Grants {
+                view: false,
                 control: false,
                 clipboard: false,
                 transfer: true,
@@ -1743,4 +1908,1244 @@ fn service_jobs_closing_one_computer_keeps_another_transfer_active() {
         .service_lease(two.id, two.generation)
         .unwrap()
         .is_cancelled());
+}
+
+#[test]
+fn files_job_explicit_adoption_rebinds_both_sides_and_fences_old_handle() {
+    let (host, controller, host_scratch, controller_scratch) = setup("adopt-job");
+    let bytes = payload(1024 * 1024, 903);
+    std::fs::write(controller_scratch.join("root/adopt.bin"), &bytes).unwrap();
+    let session = controller.connect(&host.endpoint_id()).unwrap();
+    let scoped_files = |core: &Core, session: &crate::SessionInfo| {
+        let owner = core
+            .attach_controller_service(session.id, session.generation, crate::ServiceKind::Files)
+            .unwrap();
+        let pipe = core.open_files_service(owner.id, owner.generation).unwrap();
+        (owner, pipe)
+    };
+    let (old, pipe) = scoped_files(&controller, &session);
+    let job = controller
+        .files_service_upload(old.id, old.generation, 0, "adopt.bin", 0, "adopted")
+        .unwrap();
+    let receiver = host.job_list().unwrap()[0].id;
+    controller
+        .close_controller_service(old.id, old.generation)
+        .unwrap();
+    drop(pipe);
+    let end = std::time::Instant::now() + Duration::from_secs(5);
+    while !host.hosted_services().unwrap().is_empty() {
+        assert!(std::time::Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let (fresh, _pipe) = scoped_files(&controller, &session);
+    assert_eq!(
+        controller
+            .files_service_adopt_job(fresh.id, fresh.generation, job)
+            .unwrap()
+            .state,
+        JobState::Cancelled
+    );
+    assert!(controller
+        .files_service_job_resume(old.id, old.generation, job)
+        .is_err());
+    assert!(controller
+        .files_service_job_forget(old.id, old.generation, job)
+        .is_err());
+    assert!(controller
+        .files_service_jobs(old.id, old.generation)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        controller
+            .files_service_jobs(fresh.id, fresh.generation)
+            .unwrap()
+            .len(),
+        1
+    );
+    controller
+        .files_service_job_resume(fresh.id, fresh.generation, job)
+        .unwrap();
+    let (sender, receiver) = drive_to_end(&controller, job, &host, receiver);
+    assert_eq!(sender.state, JobState::Complete);
+    assert_eq!(receiver.state, JobState::Complete);
+    assert_eq!(
+        std::fs::read(host_scratch.join("root/adopted/adopt.bin")).unwrap(),
+        bytes
+    );
+}
+
+#[test]
+fn files_download_adoption_after_parent_replacement_preserves_verified_progress() {
+    let (host, controller, hs, cs) = setup("adopt-download-reconnect");
+    std::fs::create_dir_all(hs.join("root/source")).unwrap();
+    let first = payload(65536, 912);
+    let second = payload(131072, 913);
+    std::fs::write(hs.join("root/source/a.bin"), &first).unwrap();
+    std::fs::write(hs.join("root/source/b.bin"), &second).unwrap();
+    let connect = || {
+        let pending = controller
+            .begin_connect_services(&host.endpoint_id())
+            .unwrap();
+        let end = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let session = controller.controller_session(pending.id).unwrap();
+            if session.phase == crate::SessionPhase::Active {
+                break session;
+            }
+            assert!(std::time::Instant::now() < end);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    let session = connect();
+    let old = controller
+        .attach_controller_service(session.id, session.generation, crate::ServiceKind::Files)
+        .unwrap();
+    let pipe = controller
+        .open_files_service(old.id, old.generation)
+        .unwrap();
+    let job = controller
+        .files_service_download(old.id, old.generation, 0, "source", 0, "received")
+        .unwrap();
+    let sender = host
+        .job_list()
+        .unwrap()
+        .into_iter()
+        .find(|j| j.sender)
+        .unwrap()
+        .id;
+    let progress = controller
+        .files_service_job_poll(old.id, old.generation, job)
+        .unwrap();
+    assert_eq!(progress.done_bytes, first.len() as u64);
+    assert_ne!(progress.state, JobState::Complete);
+    assert_eq!(
+        std::fs::read(cs.join("root/received/source/a.bin")).unwrap(),
+        first
+    );
+    controller.disconnect_session(session.id).unwrap();
+    drop(pipe);
+    let end = std::time::Instant::now() + Duration::from_secs(5);
+    while !host.hosted_services().unwrap().is_empty() {
+        assert!(std::time::Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let fresh_session = connect();
+    let fresh = controller
+        .attach_controller_service(
+            fresh_session.id,
+            fresh_session.generation,
+            crate::ServiceKind::Files,
+        )
+        .unwrap();
+    let _pipe = controller
+        .open_files_service(fresh.id, fresh.generation)
+        .unwrap();
+    let adopted = controller
+        .files_service_adopt_job(fresh.id, fresh.generation, job)
+        .unwrap();
+    assert_eq!(adopted.done_bytes, progress.done_bytes);
+    assert_eq!(adopted.id, job);
+    assert!(controller
+        .files_service_job_resume(old.id, old.generation, job)
+        .is_err());
+    controller
+        .files_service_job_resume(fresh.id, fresh.generation, job)
+        .unwrap();
+    let (receiver, sender) = drive_to_end(&controller, job, &host, sender);
+    assert_eq!(receiver.state, JobState::Complete);
+    assert_eq!(sender.state, JobState::Complete);
+    assert_eq!(
+        std::fs::read(cs.join("root/received/source/a.bin")).unwrap(),
+        first
+    );
+    assert_eq!(
+        std::fs::read(cs.join("root/received/source/b.bin")).unwrap(),
+        second
+    );
+}
+
+#[test]
+fn files_adoption_survives_both_core_restarts_with_verified_download() {
+    let (host, controller, hs, cs) = setup("adopt-both-restart");
+    std::fs::create_dir(hs.join("root/pack")).unwrap();
+    let first = payload(32768, 940);
+    let second = payload(65536, 941);
+    std::fs::write(hs.join("root/pack/a.bin"), &first).unwrap();
+    std::fs::write(hs.join("root/pack/b.bin"), &second).unwrap();
+    let connect_files = |controller: &Core, host: &Core| {
+        let pending = controller
+            .begin_connect_services(&host.endpoint_id())
+            .unwrap();
+        await_jobs(|| {
+            controller.controller_session(pending.id).unwrap().phase == crate::SessionPhase::Active
+        });
+        let session = controller.controller_session(pending.id).unwrap();
+        let owner = controller
+            .attach_controller_service(session.id, session.generation, crate::ServiceKind::Files)
+            .unwrap();
+        let pipe = controller
+            .open_files_service(owner.id, owner.generation)
+            .unwrap();
+        (owner, pipe)
+    };
+    let (old, pipe) = connect_files(&controller, &host);
+    let job = controller
+        .files_service_download(old.id, old.generation, 0, "pack", 0, "received")
+        .unwrap();
+    let peer_job = host
+        .job_list()
+        .unwrap()
+        .into_iter()
+        .find(|j| j.sender)
+        .unwrap()
+        .id;
+    assert_eq!(
+        controller
+            .files_service_job_poll(old.id, old.generation, job)
+            .unwrap()
+            .files_done,
+        1
+    );
+    let host_key = host.export_identity();
+    let controller_key = controller.export_identity();
+    controller.shutdown();
+    host.shutdown();
+    drop(pipe);
+    drop(controller);
+    drop(host);
+    let reopen = |key, scratch: &Scratch| {
+        let core = Core::boot(
+            CoreConfig {
+                identity: Some(key),
+                listen: Listen::Loopback,
+                ..CoreConfig::default()
+            },
+            RelayMode::Disabled,
+        )
+        .unwrap();
+        core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+            .unwrap();
+        core.set_blob_directory(scratch.join("blobs")).unwrap();
+        core.set_file_roots(vec![scratch.join("root")]).unwrap();
+        core
+    };
+    let host = reopen(host_key, &hs);
+    let controller = reopen(controller_key, &cs);
+    pair_with_transfer(&host, &controller);
+    controller
+        .authorize(
+            &host.endpoint_id(),
+            crate::session::Grants {
+                view: false,
+                control: false,
+                clipboard: false,
+                transfer: true,
+            },
+        )
+        .unwrap();
+    let (fresh, _pipe) = connect_files(&controller, &host);
+    assert!(controller
+        .files_service_jobs(fresh.id, fresh.generation)
+        .unwrap()
+        .is_empty());
+    let adopted = controller
+        .files_service_adopt_job(fresh.id, fresh.generation, job)
+        .unwrap();
+    assert_eq!(adopted.files_done, 1);
+    assert_eq!(adopted.done_bytes, first.len() as u64);
+    controller
+        .files_service_job_resume(fresh.id, fresh.generation, job)
+        .unwrap();
+    let (receiver, sender) = drive_to_end(&controller, job, &host, peer_job);
+    assert_eq!(
+        (receiver.state, sender.state),
+        (JobState::Complete, JobState::Complete)
+    );
+    assert_eq!(
+        std::fs::read(cs.join("root/received/pack/a.bin")).unwrap(),
+        first
+    );
+    assert_eq!(
+        std::fs::read(cs.join("root/received/pack/b.bin")).unwrap(),
+        second
+    );
+}
+
+#[test]
+fn files_adoption_local_save_failure_can_retry_remote_acknowledged_binding() {
+    let (host, controller, hs, cs) = setup("adopt-save-retry");
+    let expected = payload(65536, 942);
+    std::fs::write(cs.join("root/source.bin"), &expected).unwrap();
+    let pending = controller
+        .begin_connect_services(&host.endpoint_id())
+        .unwrap();
+    await_jobs(|| {
+        controller.controller_session(pending.id).unwrap().phase == crate::SessionPhase::Active
+    });
+    let session = controller.controller_session(pending.id).unwrap();
+    let open = || {
+        let owner = controller
+            .attach_controller_service(session.id, session.generation, crate::ServiceKind::Files)
+            .unwrap();
+        let pipe = controller
+            .open_files_service(owner.id, owner.generation)
+            .unwrap();
+        (owner, pipe)
+    };
+    let (old, pipe) = open();
+    let job = controller
+        .files_service_upload(old.id, old.generation, 0, "source.bin", 0, "received")
+        .unwrap();
+    let peer_job = host.job_list().unwrap()[0].id;
+    controller
+        .close_controller_service(old.id, old.generation)
+        .unwrap();
+    drop(pipe);
+    await_jobs(|| host.hosted_services().unwrap().is_empty());
+    let (fresh, _pipe) = open();
+    // An existing directory refuses atomic replacement on every target without
+    // relying on permissions (the Docker validation account may be root).
+    let index = cs.join("blobs/jobs.json");
+    let saved = cs.join("blobs/jobs.saved");
+    std::fs::rename(&index, &saved).unwrap();
+    std::fs::create_dir(&index).unwrap();
+    assert!(controller
+        .files_service_adopt_job(fresh.id, fresh.generation, job)
+        .is_err());
+    assert!(controller
+        .files_service_jobs(fresh.id, fresh.generation)
+        .unwrap()
+        .is_empty());
+    assert!(controller
+        .files_service_job_resume(old.id, old.generation, job)
+        .is_err());
+    std::fs::remove_dir(&index).unwrap();
+    std::fs::rename(&saved, &index).unwrap();
+    let adopted = controller
+        .files_service_adopt_job(fresh.id, fresh.generation, job)
+        .unwrap();
+    assert_eq!(adopted.state, JobState::Cancelled);
+    controller
+        .files_service_job_resume(fresh.id, fresh.generation, job)
+        .unwrap();
+    let (sender, receiver) = drive_to_end(&controller, job, &host, peer_job);
+    assert_eq!(
+        (sender.state, receiver.state),
+        (JobState::Complete, JobState::Complete)
+    );
+    assert_eq!(
+        std::fs::read(hs.join("root/received/source.bin")).unwrap(),
+        expected
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn resume_reoffer_enforces_size_limit_before_import_and_accepts_exact_boundary() {
+    let (host, controller, _host_scratch, controller_scratch) = setup("resume-limit");
+    let bytes = payload(64 * 1024, 99);
+    let path = controller_scratch.join("root/resume.bin");
+    std::fs::write(&path, &bytes).unwrap();
+    let metadata = std::fs::metadata(&path).unwrap();
+    let mtime = metadata
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let hash = *blake3::hash(&bytes).as_bytes();
+    let pin = controller.pin_file_root(0).unwrap();
+    assert!(matches!(
+        controller.blob_reoffer_file_at(
+            &host.endpoint_id(),
+            0,
+            "resume.bin",
+            hash,
+            bytes.len() as u64,
+            mtime,
+            bytes.len() as u64 - 1,
+            &pin,
+        ),
+        Err(Error::InvalidSetting("the source file is too large"))
+    ));
+    // Rejection does not mutate the source, and a limit equal to the actual
+    // verified size can still import a reference and return the expected hash.
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    let (offered, size) = controller
+        .blob_reoffer_file_at(
+            &host.endpoint_id(),
+            0,
+            "resume.bin",
+            hash,
+            bytes.len() as u64,
+            mtime,
+            bytes.len() as u64,
+            &pin,
+        )
+        .unwrap();
+    assert_eq!(offered.as_bytes(), &hash);
+    assert_eq!(size, bytes.len() as u64);
+}
+
+#[test]
+fn receiver_resource_budget_refuses_before_fetch_and_preserves_source_and_destination() {
+    let (host, controller, hs, cs) = setup("resource-admission");
+    let bytes = payload(64 * 1024, 314);
+    std::fs::write(cs.join("root/send.bin"), &bytes).unwrap();
+    let hash = iroh_blobs::Hash::new(&bytes);
+    host.set_file_resource_policy(crate::job::FileResourcePolicy {
+        max_concurrent_receivers: 1,
+        max_reserved_bytes: 3 * bytes.len() as u64 - 1,
+        minimum_free_bytes: 0,
+    })
+    .unwrap();
+    controller.connect(&host.endpoint_id()).unwrap();
+    let sent = controller
+        .job_submit_upload(&host.endpoint_id(), 0, "", 0, "arrived")
+        .unwrap();
+    let rx = receiver_id(&host, sent);
+    let failed = host.job_poll(rx).unwrap();
+    assert_eq!(failed.state, JobState::Failed);
+    assert_eq!(
+        failed.error.as_deref(),
+        Some("file exceeds the receiver resource budget")
+    );
+    assert_eq!(failed.done_bytes, 0);
+    assert!(!host.blob_has(hash).unwrap());
+    assert!(!hs.join("root/arrived/send.bin").exists());
+    assert_eq!(std::fs::read(cs.join("root/send.bin")).unwrap(), bytes);
+    let sender = controller.job_poll(sent).unwrap();
+    assert_eq!(sender.state, JobState::Failed);
+    assert!(host
+        .blob_fetch_streamed(&controller.endpoint_id(), hash, None, None)
+        .is_err());
+}
+
+#[test]
+#[cfg(unix)]
+fn restart_reconciles_managed_orphans_but_keeps_interrupted_staging() {
+    let (host, controller, hs, cs) = setup("stage-crash");
+    std::fs::write(cs.join("root/source.bin"), b"source survives crash").unwrap();
+    controller.connect(&host.endpoint_id()).unwrap();
+    let sent = controller
+        .job_submit_upload(&host.endpoint_id(), 0, "", 0, "received")
+        .unwrap();
+    let rx = receiver_id(&host, sent);
+    host.shutdown();
+    controller.shutdown();
+    drop(host);
+    drop(controller);
+    let staged = hs.join(&format!("blobs/staging/job-{rx}"));
+    std::fs::create_dir_all(&staged).unwrap();
+    std::fs::write(staged.join("verified"), b"resume data").unwrap();
+    let orphan = hs.join("blobs/staging/job-18446744073709551615");
+    std::fs::create_dir_all(&orphan).unwrap();
+    std::fs::write(orphan.join("unused"), b"orphan").unwrap();
+    std::fs::write(hs.join("blobs/jobs.json.tmp"), b"incomplete atomic save").unwrap();
+    let reopened = start_direct();
+    reopened.set_blob_directory(hs.join("blobs")).unwrap();
+    assert_eq!(
+        reopened.job_snapshot(rx).unwrap().state,
+        JobState::Interrupted
+    );
+    assert_eq!(
+        std::fs::read(staged.join("verified")).unwrap(),
+        b"resume data"
+    );
+    assert!(!orphan.exists());
+    assert!(!hs.join("blobs/jobs.json.tmp").exists());
+    assert_eq!(
+        std::fs::read(cs.join("root/source.bin")).unwrap(),
+        b"source survives crash"
+    );
+}
+
+/// Cross-volume pre-stage barrier: parked inside the copy while global
+/// locks must stay free. Scoped to one job id; the guard resets the
+/// process hooks on completion or panic so no other test observes them.
+#[cfg(unix)]
+mod prestage_gate {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Condvar, Mutex};
+
+    static ENTERED: AtomicBool = AtomicBool::new(false);
+    static RELEASED: Mutex<bool> = Mutex::new(false);
+    static CV: Condvar = Condvar::new();
+
+    pub fn reset() {
+        ENTERED.store(false, Ordering::SeqCst);
+        *RELEASED.lock().unwrap() = false;
+    }
+
+    pub fn entered() -> bool {
+        ENTERED.load(Ordering::SeqCst)
+    }
+
+    pub fn probe(_id: u64, _bytes: u64) {
+        if ENTERED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let guard = RELEASED.lock().unwrap();
+        // Bounded park: the test releases promptly; the timeout only
+        // frees a worker orphaned by a failed test.
+        let _ = CV.wait_timeout(guard, std::time::Duration::from_secs(30));
+    }
+
+    pub fn release() {
+        *RELEASED.lock().unwrap() = true;
+        CV.notify_all();
+    }
+
+    pub struct Guard;
+
+    impl Guard {
+        pub fn install(job: u64) -> Self {
+            reset();
+            crate::core::Core::set_prestage_hooks(crate::core::PrestageHooks {
+                job_id: Some(job),
+                force_cross_volume: true,
+                probe: Some(probe),
+                mkdir_probe: None,
+                sync_probe: None,
+            });
+            Self
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            release();
+            crate::core::Core::set_prestage_hooks(crate::core::PrestageHooks {
+                job_id: None,
+                force_cross_volume: false,
+                probe: None,
+                mkdir_probe: None,
+                sync_probe: None,
+            });
+        }
+    }
+}
+
+/// STD03: a cross-volume publish copies outside global locks, so a
+/// snapshot and a revocation complete while the copy is parked, and the
+/// revoked destination is never published.
+#[cfg(unix)]
+#[test]
+fn revoked_cross_volume_publish_never_lands_and_locks_stay_free() {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    let _heavy = HEAVY_JOB
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let (host, controller, host_scratch, controller_scratch) = setup("prestage");
+    std::fs::write(
+        controller_scratch.join("root/big.bin"),
+        payload(200 * 1024, 7),
+    )
+    .unwrap();
+    let host = Arc::new(host);
+    let controller = Arc::new(controller);
+    controller.connect(&host.endpoint_id()).unwrap();
+    let job = controller
+        .job_submit_upload(&host.endpoint_id(), 0, "", 0, "arrived")
+        .unwrap();
+    let rx = receiver_id(&host, job);
+    let _guard = prestage_gate::Guard::install(rx);
+    let driver_host = Arc::clone(&host);
+    let driver_controller = Arc::clone(&controller);
+    let worker = std::thread::spawn(move || {
+        let mut sender = driver_controller.job_snapshot(job).unwrap();
+        let mut receiver = driver_host.job_snapshot(rx).unwrap();
+        for _ in 0..500 {
+            if !receiver.state.is_terminal() {
+                receiver = driver_host.job_poll(rx).unwrap();
+            }
+            if !sender.state.is_terminal() {
+                sender = driver_controller.job_poll(job).unwrap();
+            }
+            if receiver.state.is_terminal() {
+                break;
+            }
+        }
+        receiver.state
+    });
+    // The worker must reach the pre-stage barrier; on the old
+    // under-lock copy path no probe exists and this times out.
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while !prestage_gate::entered() {
+        assert!(Instant::now() < deadline, "pre-stage barrier never reached");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Locks are free while the copy is parked: bound the wait so a
+    // regression fails instead of deadlocking.
+    let snapshot_host = Arc::clone(&host);
+    let (done, completion) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done.send(snapshot_host.snapshot().map(|_| ()));
+    });
+    completion
+        .recv_timeout(Duration::from_secs(5))
+        .expect("snapshot blocked during parked copy")
+        .unwrap();
+    host.authorize(
+        &controller.endpoint_id(),
+        crate::session::Grants {
+            view: true,
+            control: true,
+            clipboard: false,
+            transfer: false,
+        },
+    )
+    .unwrap();
+    prestage_gate::release();
+    let receiver_state = worker.join().expect("driver thread panicked");
+    assert_eq!(receiver_state, JobState::Interrupted);
+    assert!(!host_scratch.join("root/arrived/big.bin").exists());
+    // The parent chain is created eagerly; only file publication counts.
+    let arrived = host_scratch.join("root/arrived");
+    assert!(
+        !arrived.exists() || std::fs::read_dir(&arrived).unwrap().count() == 0,
+        "revoked publish landed files"
+    );
+    let mut leftovers = Vec::new();
+    for entry in walkdir(&host_scratch.path) {
+        if entry
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(".vnlpub."))
+        {
+            leftovers.push(entry);
+        }
+    }
+    assert!(leftovers.is_empty(), "sibling temps leaked: {leftovers:?}");
+}
+
+/// Parent-mkdir and final-stage-sync barriers: parked independently while
+/// global locks must stay free. Scoped to one job id; the guard releases
+/// both barriers and resets the process hooks on completion or panic so no
+/// other test observes them.
+#[cfg(unix)]
+mod publish_gate {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Condvar, Mutex};
+
+    static MKDIR_ENTERED: AtomicBool = AtomicBool::new(false);
+    static MKDIR_RELEASED: Mutex<bool> = Mutex::new(false);
+    static MKDIR_CV: Condvar = Condvar::new();
+    static SYNC_ENTERED: AtomicBool = AtomicBool::new(false);
+    static SYNC_RELEASED: Mutex<bool> = Mutex::new(false);
+    static SYNC_CV: Condvar = Condvar::new();
+
+    pub fn reset() {
+        MKDIR_ENTERED.store(false, Ordering::SeqCst);
+        *MKDIR_RELEASED.lock().unwrap() = false;
+        SYNC_ENTERED.store(false, Ordering::SeqCst);
+        *SYNC_RELEASED.lock().unwrap() = false;
+    }
+
+    pub fn mkdir_entered() -> bool {
+        MKDIR_ENTERED.load(Ordering::SeqCst)
+    }
+
+    pub fn sync_entered() -> bool {
+        SYNC_ENTERED.load(Ordering::SeqCst)
+    }
+
+    fn park(entered: &AtomicBool, released: &Mutex<bool>, cv: &Condvar) {
+        if entered.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let guard = released.lock().unwrap();
+        // Bounded park: the test releases promptly; the timeout only
+        // frees a worker orphaned by a failed test.
+        let _ = cv.wait_timeout(guard, std::time::Duration::from_secs(30));
+    }
+
+    pub fn mkdir_probe(_id: u64) {
+        park(&MKDIR_ENTERED, &MKDIR_RELEASED, &MKDIR_CV);
+    }
+
+    pub fn sync_probe(_id: u64) {
+        park(&SYNC_ENTERED, &SYNC_RELEASED, &SYNC_CV);
+    }
+
+    pub fn release_mkdir() {
+        *MKDIR_RELEASED.lock().unwrap() = true;
+        MKDIR_CV.notify_all();
+    }
+
+    pub fn release_sync() {
+        *SYNC_RELEASED.lock().unwrap() = true;
+        SYNC_CV.notify_all();
+    }
+
+    pub struct Guard;
+
+    impl Guard {
+        pub fn install(job: u64) -> Self {
+            reset();
+            crate::core::Core::set_prestage_hooks(crate::core::PrestageHooks {
+                job_id: Some(job),
+                force_cross_volume: true,
+                probe: None,
+                mkdir_probe: Some(mkdir_probe),
+                sync_probe: Some(sync_probe),
+            });
+            Self
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            release_mkdir();
+            release_sync();
+            crate::core::Core::set_prestage_hooks(crate::core::PrestageHooks {
+                job_id: None,
+                force_cross_volume: false,
+                probe: None,
+                mkdir_probe: None,
+                sync_probe: None,
+            });
+        }
+    }
+}
+
+/// STD03 (v3 follow-up): parent mkdirs and the final stage sync both run
+/// outside global locks. While each storage barrier is parked, the owner
+/// operations behind the same locks stop/revoke needs settle; a
+/// revocation during the parked sync still prevents the publish from
+/// landing.
+#[cfg(unix)]
+#[test]
+fn parked_mkdir_and_stage_sync_leave_locks_free() {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    fn bounded(name: &'static str, task: impl FnOnce() + Send + 'static) {
+        let (done, completion) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            task();
+            let _ = done.send(());
+        });
+        if completion.recv_timeout(Duration::from_secs(5)).is_err() {
+            panic!("{name} blocked while storage was parked");
+        }
+        worker.join().expect("bounded op panicked");
+    }
+    let _heavy = HEAVY_JOB
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let (host, controller, host_scratch, controller_scratch) = setup("pubgate");
+    std::fs::write(
+        controller_scratch.join("root/big.bin"),
+        payload(200 * 1024, 7),
+    )
+    .unwrap();
+    let host = Arc::new(host);
+    let controller = Arc::new(controller);
+    controller.connect(&host.endpoint_id()).unwrap();
+    let job = controller
+        .job_submit_upload(&host.endpoint_id(), 0, "", 0, "arrived")
+        .unwrap();
+    let rx = receiver_id(&host, job);
+    let _guard = publish_gate::Guard::install(rx);
+    let driver_host = Arc::clone(&host);
+    let driver_controller = Arc::clone(&controller);
+    let worker = std::thread::spawn(move || {
+        let mut sender = driver_controller.job_snapshot(job).unwrap();
+        let mut receiver = driver_host.job_snapshot(rx).unwrap();
+        for _ in 0..500 {
+            if !receiver.state.is_terminal() {
+                receiver = driver_host.job_poll(rx).unwrap();
+            }
+            if !sender.state.is_terminal() {
+                sender = driver_controller.job_poll(job).unwrap();
+            }
+            if receiver.state.is_terminal() {
+                break;
+            }
+        }
+        receiver.state
+    });
+    // Phase 1: parked in parent mkdirs with no global lock held.
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while !publish_gate::mkdir_entered() {
+        assert!(Instant::now() < deadline, "mkdir barrier never reached");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // The state, jobs and roots locks stop/revoke needs are all free.
+    let snapshot_host = Arc::clone(&host);
+    bounded("snapshot during parked mkdir", move || {
+        snapshot_host.snapshot().unwrap();
+    });
+    let jobs_host = Arc::clone(&host);
+    bounded("job snapshot during parked mkdir", move || {
+        jobs_host.job_snapshot(rx).unwrap();
+    });
+    let roots_host = Arc::clone(&host);
+    bounded("file roots during parked mkdir", move || {
+        roots_host.file_roots().unwrap();
+    });
+    publish_gate::release_mkdir();
+    // Phase 2: parked at the final stage sync, after the copy loop.
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while !publish_gate::sync_entered() {
+        assert!(
+            Instant::now() < deadline,
+            "stage-sync barrier never reached"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let snapshot_host = Arc::clone(&host);
+    bounded("snapshot during parked stage sync", move || {
+        snapshot_host.snapshot().unwrap();
+    });
+    host.authorize(
+        &controller.endpoint_id(),
+        crate::session::Grants {
+            view: true,
+            control: true,
+            clipboard: false,
+            transfer: false,
+        },
+    )
+    .unwrap();
+    publish_gate::release_sync();
+    let receiver_state = worker.join().expect("driver thread panicked");
+    assert_eq!(receiver_state, JobState::Interrupted);
+    assert!(!host_scratch.join("root/arrived/big.bin").exists());
+    let arrived = host_scratch.join("root/arrived");
+    assert!(
+        !arrived.exists() || std::fs::read_dir(&arrived).unwrap().count() == 0,
+        "revoked publish landed files"
+    );
+    let mut leftovers = Vec::new();
+    for entry in walkdir(&host_scratch.path) {
+        if entry
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(".vnlpub."))
+        {
+            leftovers.push(entry);
+        }
+    }
+    assert!(leftovers.is_empty(), "sibling temps leaked: {leftovers:?}");
+}
+
+#[cfg(unix)]
+fn walkdir(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    out
+}
+
+/// Polls until `done` files land. Job polls advance one file, so the
+/// bound only guards against hangs; the loop never sleeps.
+fn poll_until_files_done(receiver: &Core, job: u64, done: u64) {
+    for _ in 0..20 {
+        let snap = receiver.job_poll(job).unwrap();
+        assert!(
+            !snap.state.is_terminal(),
+            "job ended early: {:?}",
+            snap.state
+        );
+        if snap.files_done == done {
+            return;
+        }
+    }
+    panic!("files_done never reached {done}");
+}
+
+/// Polls until the receiver interrupts. A rebound leg surfaces as a
+/// snapshot, never as a poll error, so the job stays resumable.
+fn poll_until_interrupted(receiver: &Core, job: u64) {
+    for _ in 0..10 {
+        let snap = receiver.job_poll(job).unwrap();
+        if snap.state == JobState::Interrupted {
+            return;
+        }
+        assert!(
+            !snap.state.is_terminal(),
+            "job ended without interrupting: {:?}",
+            snap.state
+        );
+    }
+    panic!("receiver never interrupted");
+}
+
+#[test]
+fn rebound_source_interrupts_and_restores() {
+    // The controller uploads: the dialed side cannot rebind mid-session
+    // (Busy), so the sender leg under test is the dialer's own.
+    let (host, controller, host_scratch, controller_scratch) = setup("rebind-src");
+    let controller_root = controller_scratch.join("root");
+    let one = payload(512, 1603);
+    let two = payload(512, 1604);
+    std::fs::write(controller_root.join("one.txt"), &one).unwrap();
+    std::fs::write(controller_root.join("two.txt"), &two).unwrap();
+
+    controller.connect(&host.endpoint_id()).unwrap();
+    let job = controller
+        .job_submit_upload(&host.endpoint_id(), 0, "", 0, "arrived")
+        .unwrap();
+    let rx = receiver_id(&host, job);
+    poll_until_files_done(&host, rx, 1);
+    let arrived = host_scratch.join("root/arrived");
+    assert_eq!(std::fs::read(arrived.join("one.txt")).unwrap(), one);
+
+    // Rebind the sender to identical copies: content checks alone would
+    // pass, so only the leg pin can stop the second file.
+    let rebound = controller_scratch.join("rebound");
+    std::fs::create_dir_all(&rebound).unwrap();
+    std::fs::write(rebound.join("one.txt"), &one).unwrap();
+    std::fs::write(rebound.join("two.txt"), &two).unwrap();
+    controller.set_file_roots(vec![rebound]).unwrap();
+
+    poll_until_interrupted(&host, rx);
+    assert!(
+        !arrived.join("two.txt").exists(),
+        "rebound bytes must not land"
+    );
+    // The sender mirrors receiver state only when polled; nothing here
+    // polls it, so it still shows the pre-rebind state.
+    assert_eq!(
+        controller.job_snapshot(job).unwrap().state,
+        JobState::Serving
+    );
+
+    // Restoring the original roots resumes with the original bytes: the
+    // epoch advanced twice but the pinned identity matches again.
+    controller.set_file_roots(vec![controller_root]).unwrap();
+    host.job_resume(rx).unwrap();
+    let (sender, receiver) = drive_to_end(&controller, job, &host, rx);
+    assert_eq!(sender.state, JobState::Complete);
+    assert_eq!(receiver.state, JobState::Complete);
+    assert_eq!(std::fs::read(arrived.join("two.txt")).unwrap(), two);
+}
+
+#[test]
+fn rebound_destination_interrupts_without_writing() {
+    let (host, controller, _host_scratch, controller_scratch) = setup("rebind-dst");
+    let host_root = _host_scratch.join("root");
+    let one = payload(512, 1605);
+    let two = payload(512, 1606);
+    std::fs::write(host_root.join("one.txt"), &one).unwrap();
+    std::fs::write(host_root.join("two.txt"), &two).unwrap();
+
+    controller.connect(&host.endpoint_id()).unwrap();
+    controller.create_dir(0, "", "got").unwrap();
+    let job = controller
+        .job_submit_download(&host.endpoint_id(), 0, "", 0, "got")
+        .unwrap();
+    poll_until_files_done(&controller, job, 1);
+    let host_job = host.job_list().unwrap()[0].id;
+    let got = controller_scratch.join("root/got");
+    assert_eq!(std::fs::read(got.join("one.txt")).unwrap(), one);
+
+    // Rebind the receiver to an empty directory mid-transfer: the
+    // conflict check precedes the fetch, so no fetch runs and no
+    // skeleton or file is created under the new roots.
+    let rebound = controller_scratch.join("rebound");
+    std::fs::create_dir_all(&rebound).unwrap();
+    controller.set_file_roots(vec![rebound.clone()]).unwrap();
+
+    poll_until_interrupted(&controller, job);
+    assert_eq!(
+        std::fs::read_dir(&rebound).unwrap().count(),
+        0,
+        "rebound directory must stay empty"
+    );
+    assert!(!got.join("two.txt").exists(), "second file must not land");
+
+    controller
+        .set_file_roots(vec![controller_scratch.join("root")])
+        .unwrap();
+    controller.job_resume(job).unwrap();
+    let (receiver, sender) = drive_to_end(&controller, job, &host, host_job);
+    assert_eq!(receiver.state, JobState::Complete);
+    assert_eq!(sender.state, JobState::Complete);
+    assert_eq!(std::fs::read(got.join("two.txt")).unwrap(), two);
+}
+
+#[test]
+fn replace_approval_stays_bound_to_original_across_rebind() {
+    let (host, controller, host_scratch, controller_scratch) = setup("rebind-choice");
+    let remote = payload(512, 1610);
+    std::fs::write(host_scratch.join("root/one.txt"), &remote).unwrap();
+    let got = controller_scratch.join("root/got");
+    std::fs::create_dir_all(&got).unwrap();
+    std::fs::write(got.join("one.txt"), b"original-local-content").unwrap();
+
+    controller.connect(&host.endpoint_id()).unwrap();
+    let job = controller
+        .job_submit_download(&host.endpoint_id(), 0, "", 0, "got")
+        .unwrap();
+    // Conflict waits; approve Replace for the ORIGINAL destination.
+    let waiting = controller.job_poll(job).unwrap();
+    assert_eq!(waiting.state, JobState::WaitingDecision);
+    controller
+        .job_resolve(job, ConflictChoice::Replace, false)
+        .unwrap();
+
+    // Rebind the receiver to a directory holding a valuable same-name file.
+    let rebound = controller_scratch.join("rebound");
+    std::fs::create_dir_all(rebound.join("got")).unwrap();
+    let valuable = payload(512, 1611);
+    std::fs::write(rebound.join("got/one.txt"), &valuable).unwrap();
+    controller.set_file_roots(vec![rebound.clone()]).unwrap();
+
+    // The stored Replace cannot fire under the new roots: neither the
+    // valuable file nor the original conflict target is touched.
+    poll_until_interrupted(&controller, job);
+    assert_eq!(
+        std::fs::read(rebound.join("got/one.txt")).unwrap(),
+        valuable
+    );
+    assert_eq!(
+        std::fs::read(got.join("one.txt")).unwrap(),
+        b"original-local-content"
+    );
+
+    // Restore: the old approval applies to the original object only.
+    controller
+        .set_file_roots(vec![controller_scratch.join("root")])
+        .unwrap();
+    controller.job_resume(job).unwrap();
+    let host_job = host.job_list().unwrap()[0].id;
+    let (receiver, sender) = drive_to_end(&controller, job, &host, host_job);
+    assert_eq!(receiver.state, JobState::Complete);
+    assert_eq!(sender.state, JobState::Complete);
+    assert_eq!(std::fs::read(got.join("one.txt")).unwrap(), remote);
+    assert_eq!(
+        std::fs::read(rebound.join("got/one.txt")).unwrap(),
+        valuable
+    );
+}
+
+#[test]
+fn persisted_replace_refuses_replaced_root_at_same_path() {
+    let (host, controller, host_scratch, controller_scratch) = setup("same-path-replace");
+    std::fs::write(host_scratch.join("root/one.txt"), payload(512, 1701)).unwrap();
+    let root = controller_scratch.join("root");
+    std::fs::create_dir_all(root.join("got")).unwrap();
+    std::fs::write(root.join("got/one.txt"), b"original").unwrap();
+    controller.connect(&host.endpoint_id()).unwrap();
+    let job = controller
+        .job_submit_download(&host.endpoint_id(), 0, "", 0, "got")
+        .unwrap();
+    assert_eq!(
+        controller.job_poll(job).unwrap().state,
+        JobState::WaitingDecision
+    );
+    controller
+        .job_resolve(job, ConflictChoice::Replace, false)
+        .unwrap();
+    let secret = controller.export_identity();
+    controller.shutdown();
+    drop(controller);
+    std::fs::rename(&root, controller_scratch.join("original-root")).unwrap();
+    std::fs::create_dir_all(root.join("got")).unwrap();
+    std::fs::write(root.join("got/one.txt"), b"valuable-replacement").unwrap();
+    let controller = Core::boot(
+        CoreConfig {
+            listen: Listen::Loopback,
+            identity: Some(secret),
+            ..CoreConfig::default()
+        },
+        RelayMode::Disabled,
+    )
+    .unwrap();
+    controller
+        .set_blob_directory(controller_scratch.join("blobs"))
+        .unwrap();
+    controller.set_file_roots(vec![root.clone()]).unwrap();
+    pair_with_transfer(&host, &controller);
+    controller
+        .authorize(
+            &host.endpoint_id(),
+            crate::session::Grants {
+                view: false,
+                control: false,
+                clipboard: false,
+                transfer: true,
+            },
+        )
+        .unwrap();
+    controller.connect_files(&host.endpoint_id()).unwrap();
+    controller.job_resume(job).unwrap();
+    let resumed = controller.job_poll(job).unwrap();
+    assert_eq!(resumed.state, JobState::Interrupted);
+    assert_eq!(
+        std::fs::read(root.join("got/one.txt")).unwrap(),
+        b"valuable-replacement"
+    );
+    assert_eq!(
+        std::fs::read(controller_scratch.join("original-root/got/one.txt")).unwrap(),
+        b"original"
+    );
+}
+
+#[test]
+fn resume_after_source_rebind_fails_with_rebound_cause() {
+    let (host, controller, host_scratch, controller_scratch) = setup("rebind-resume");
+    let host_root = host_scratch.join("root");
+    let one = payload(512, 1607);
+    let two = payload(512, 1608);
+    std::fs::write(host_root.join("one.txt"), &one).unwrap();
+    std::fs::write(host_root.join("two.txt"), &two).unwrap();
+
+    controller.connect(&host.endpoint_id()).unwrap();
+    controller.create_dir(0, "", "got").unwrap();
+    let job = controller
+        .job_submit_download(&host.endpoint_id(), 0, "", 0, "got")
+        .unwrap();
+    poll_until_files_done(&controller, job, 1);
+    let sender_job = host.job_list().unwrap()[0].id;
+
+    // Kill the sender; reopen the same installation with the source
+    // root rebound to identical copies. The persisted pin survives the
+    // restart, so only it can fail the resume.
+    let secret = host.export_identity();
+    let blob_dir = host_scratch.join("blobs");
+    host.shutdown();
+    drop(host);
+    let rebound = host_scratch.join("rebound");
+    std::fs::create_dir_all(&rebound).unwrap();
+    std::fs::write(rebound.join("one.txt"), &one).unwrap();
+    std::fs::write(rebound.join("two.txt"), &two).unwrap();
+    let host = Core::boot(
+        CoreConfig {
+            listen: Listen::Loopback,
+            identity: Some(secret),
+            ..CoreConfig::default()
+        },
+        RelayMode::Disabled,
+    )
+    .unwrap();
+    host.set_blob_directory(&blob_dir).unwrap();
+    host.set_file_roots(vec![rebound]).unwrap();
+
+    let jobs = host.job_list().unwrap();
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].state, JobState::Interrupted);
+    let resumed = host.job_resume(sender_job).unwrap();
+    assert_eq!(resumed.state, JobState::Failed);
+    assert_eq!(resumed.error.as_deref(), Some(crate::fs::ROOTS_REBOUND));
+    let got = controller_scratch.join("root/got");
+    assert_eq!(std::fs::read(got.join("one.txt")).unwrap(), one);
+    assert!(!got.join("two.txt").exists(), "rebound bytes must not land");
+    let _ = job;
+}
+
+/// Target hash plus hit/release barriers for the in-flight serve probe.
+/// The probe parks only the armed hash; every other serve passes
+/// straight through, so parallel suites are unaffected.
+#[cfg(unix)]
+static REBIND_TARGET: std::sync::Mutex<Option<[u8; 32]>> = std::sync::Mutex::new(None);
+#[cfg(unix)]
+static REBIND_HIT: (std::sync::Mutex<bool>, std::sync::Condvar) =
+    (std::sync::Mutex::new(false), std::sync::Condvar::new());
+#[cfg(unix)]
+static REBIND_RELEASE: (std::sync::Mutex<bool>, std::sync::Condvar) =
+    (std::sync::Mutex::new(false), std::sync::Condvar::new());
+
+#[cfg(unix)]
+fn rebind_serve_probe(hash: [u8; 32]) {
+    if *REBIND_TARGET.lock().unwrap() != Some(hash) {
+        return;
+    }
+    *REBIND_HIT.0.lock().unwrap() = true;
+    REBIND_HIT.1.notify_one();
+    let guard = REBIND_RELEASE.0.lock().unwrap();
+    let _guard = REBIND_RELEASE
+        .1
+        .wait_while(guard, |released| !*released)
+        .unwrap();
+}
+
+/// Disarms the serve probe even when the test panics. Payload seeds
+/// below are unique to this test, so a leaked arm could never match
+/// another test's content hash anyway.
+#[cfg(unix)]
+struct RebindProbeGuard;
+
+#[cfg(unix)]
+impl Drop for RebindProbeGuard {
+    fn drop(&mut self) {
+        Core::set_serve_source_probe(None);
+        *REBIND_TARGET.lock().unwrap() = None;
+        *REBIND_RELEASE.0.lock().unwrap() = true;
+        REBIND_RELEASE.1.notify_all();
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn open_handle_completes_across_source_rebind() {
+    // The controller uploads: the dialed side cannot rebind mid-session
+    // (Busy), so the sender leg under test is the dialer's own.
+    let (host, controller, host_scratch, controller_scratch) = setup("rebind-flight");
+    let controller_root = controller_scratch.join("root");
+    let one = payload(512, 1601);
+    let two = payload(512, 1602);
+    std::fs::write(controller_root.join("one.txt"), &one).unwrap();
+    std::fs::write(controller_root.join("two.txt"), &two).unwrap();
+    let two_hash = *blake3::hash(&two).as_bytes();
+
+    controller.connect(&host.endpoint_id()).unwrap();
+    let job = controller
+        .job_submit_upload(&host.endpoint_id(), 0, "", 0, "arrived")
+        .unwrap();
+    let rx = receiver_id(&host, job);
+    poll_until_files_done(&host, rx, 1);
+
+    // Decoy second file: same size, different bytes. A handle opened
+    // before the rebind still serves the original bytes; only opens
+    // after the rebind are denied.
+    let rebound = controller_scratch.join("rebound");
+    std::fs::create_dir_all(&rebound).unwrap();
+    std::fs::write(rebound.join("one.txt"), &one).unwrap();
+    std::fs::write(rebound.join("two.txt"), payload(512, 1609)).unwrap();
+
+    *REBIND_TARGET.lock().unwrap() = Some(two_hash);
+    *REBIND_HIT.0.lock().unwrap() = false;
+    *REBIND_RELEASE.0.lock().unwrap() = false;
+    Core::set_serve_source_probe(Some(rebind_serve_probe));
+    let _guard = RebindProbeGuard;
+    std::thread::scope(|scope| {
+        let poll = scope.spawn(|| host.job_poll(rx));
+        // Wait for file-2's serve to open its handle, then rebind under it.
+        let guard = REBIND_HIT.0.lock().unwrap();
+        let (guard, _) = REBIND_HIT
+            .1
+            .wait_timeout_while(guard, Duration::from_secs(30), |hit| !*hit)
+            .unwrap();
+        assert!(*guard, "file-2 serve never parked");
+        drop(guard);
+        controller.set_file_roots(vec![rebound]).unwrap();
+        *REBIND_RELEASE.0.lock().unwrap() = true;
+        REBIND_RELEASE.1.notify_one();
+        let snap = poll.join().unwrap().unwrap();
+        assert_eq!(snap.files_done, 2);
+    });
+    drop(_guard);
+
+    // The in-flight handle served the original bytes, not the decoy.
+    let arrived = host_scratch.join("root/arrived");
+    assert_eq!(std::fs::read(arrived.join("two.txt")).unwrap(), two);
+    let (sender, receiver) = drive_to_end(&controller, job, &host, rx);
+    assert_eq!(sender.state, JobState::Complete);
+    assert_eq!(receiver.state, JobState::Complete);
 }

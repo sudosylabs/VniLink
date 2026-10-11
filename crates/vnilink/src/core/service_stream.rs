@@ -1,11 +1,11 @@
 //! Versioned, independently owned service pipes on the existing peer link.
 use super::*;
 use crate::protocol::SessionStamp;
-use crate::{fs, ServiceInfo, ServiceKind, ServiceLease, ServicePhase, ServiceSupport};
+use crate::{fs, CloseCause, ServiceInfo, ServiceKind, ServiceLease, ServicePhase, ServiceSupport};
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 
 pub(super) const TAG_SERVICE: u8 = 8;
-const VERSION: u8 = 1;
+pub(super) const VERSION: u8 = 1;
 const OPEN: u8 = 1;
 const PROBE: u8 = 0;
 const MAX_FRAME: usize = super::fs::MAX_FS_FRAME;
@@ -16,10 +16,10 @@ fn encode(bytes: &Vec<u8>) -> Result<Vec<u8>, Error> {
     out.extend_from_slice(bytes);
     Ok(out)
 }
-async fn write(send: &mut SendStream, bytes: Vec<u8>) -> Result<(), Error> {
+pub(super) async fn write(send: &mut SendStream, bytes: Vec<u8>) -> Result<(), Error> {
     crate::sidestream::write_frame(send, &bytes, encode, "the service frame was not written").await
 }
-async fn read(recv: &mut RecvStream) -> Result<Vec<u8>, Error> {
+pub(super) async fn read(recv: &mut RecvStream) -> Result<Vec<u8>, Error> {
     crate::sidestream::read_frame(
         recv,
         |len| {
@@ -33,7 +33,7 @@ async fn read(recv: &mut RecvStream) -> Result<Vec<u8>, Error> {
     )
     .await
 }
-fn preamble(stamp: SessionStamp, id: u64, op: u8, kind: u8) -> Vec<u8> {
+pub(super) fn preamble(stamp: SessionStamp, id: u64, op: u8, kind: u8) -> Vec<u8> {
     let mut bytes = vec![TAG_SERVICE, VERSION, op];
     bytes.extend_from_slice(&stamp.id.to_be_bytes());
     bytes.extend_from_slice(&stamp.generation.to_be_bytes());
@@ -41,7 +41,7 @@ fn preamble(stamp: SessionStamp, id: u64, op: u8, kind: u8) -> Vec<u8> {
     bytes.push(kind);
     bytes
 }
-fn status(bytes: &[u8]) -> Result<u8, Error> {
+pub(super) fn status(bytes: &[u8]) -> Result<u8, Error> {
     if bytes.len() != 3 || bytes[0] != VERSION {
         return Err(Error::IncompatibleVersion);
     }
@@ -52,6 +52,7 @@ fn status(bytes: &[u8]) -> Result<u8, Error> {
         3 => Err(Error::StaleSession),
         4 => Err(Error::Busy),
         6 => Err(Error::Unauthorized),
+        7 => Err(Error::NoSession),
         _ => Err(Error::IncompatibleVersion),
     }
 }
@@ -206,6 +207,9 @@ impl Core {
             files: flags & 2 != 0,
             terminal: flags & 4 != 0,
             camera: flags & 8 != 0,
+            system_audio: flags & 16 != 0,
+            microphone: flags & 32 != 0,
+            system_actions: flags & 64 != 0,
         })
     }
     pub fn close_hosted_service(&self, id: u64, generation: u64) -> Result<(), Error> {
@@ -214,7 +218,7 @@ impl Core {
         if record.info.generation != generation {
             return Err(Error::StaleSession);
         }
-        if record.change(generation, ServicePhase::Closed) {
+        if record.change(generation, ServicePhase::Closed(CloseCause::OwnerClose)) {
             self.shared.events.publish(CoreEvent::HostedServiceChanged {
                 service: record.info.clone(),
             });
@@ -224,7 +228,11 @@ impl Core {
         super::service_jobs::cancel_orphaned(&self.shared);
         Ok(())
     }
-    fn service_link(&self, id: u64, generation: u64) -> Result<(Connection, SessionStamp), Error> {
+    pub(super) fn service_link(
+        &self,
+        id: u64,
+        generation: u64,
+    ) -> Result<(Connection, SessionStamp), Error> {
         let state = self.alive_state()?;
         let session = live_session(&state, false, id)?;
         if session.generation != generation {
@@ -281,13 +289,26 @@ impl Core {
                     return;
                 }
             };
+            // Lease cancellation and handle abandonment are local-owner ends;
+            // unexpected EOF or a fatal exchange error means the far end is
+            // gone. The tail below turns this into the close cause.
+            let mut owner_done = false;
             loop {
                 let mut unexpected = [0u8; 1];
                 let work = tokio::select! {
                     biased;
-                    _ = lease.cancelled() => break,
+                    _ = lease.cancelled() => {
+                        owner_done = true;
+                        break;
+                    }
                     _ = recv.read(&mut unexpected) => break,
-                    work = rx.recv() => match work { Some(work) => work, None => break },
+                    work = rx.recv() => match work {
+                        Some(work) => work,
+                        None => {
+                            owner_done = true;
+                            break;
+                        }
+                    },
                 };
                 if std::time::Instant::now() >= work.deadline {
                     let _ = work.reply.send(Err(Error::Timeout));
@@ -319,12 +340,17 @@ impl Core {
             // Closing the pipe produces EOF remotely and closes only that host
             // backend. There is no connection-wide close here.
             let _ = send.finish();
+            let cause = if lease.is_cancelled() || owner_done {
+                CloseCause::OwnerClose
+            } else {
+                CloseCause::PeerClose
+            };
             let mut state = lock(&shared.state);
             if let Some(record) = state.services.get_mut(&id) {
                 if link.close_reason().is_none()
                     && record.info.generation == generation
                     && record.info.phase == ServicePhase::Active
-                    && record.change(generation, ServicePhase::Closed)
+                    && record.change(generation, ServicePhase::Closed(cause))
                 {
                     shared.events.publish(CoreEvent::ServiceChanged {
                         service: record.info.clone(),
@@ -423,6 +449,11 @@ impl Core {
                         id,
                         generation,
                         link.close_reason().is_none(),
+                        if lease.is_cancelled() {
+                            CloseCause::OwnerClose
+                        } else {
+                            CloseCause::PeerClose
+                        },
                     );
                 }
                 Err(error) => {
@@ -448,6 +479,11 @@ impl Core {
                             id,
                             generation,
                             link.close_reason().is_none(),
+                            if lease.is_cancelled() {
+                                CloseCause::OwnerClose
+                            } else {
+                                CloseCause::PeerClose
+                            },
                         );
                     }
                     let _ = ready.send(Err(error));
@@ -503,9 +539,9 @@ async fn exchange(
     }
 }
 
-struct HostedGuard {
-    shared: Arc<Shared>,
-    id: u64,
+pub(super) struct HostedGuard {
+    pub(super) shared: Arc<Shared>,
+    pub(super) id: u64,
 }
 impl Drop for HostedGuard {
     fn drop(&mut self) {
@@ -513,8 +549,20 @@ impl Drop for HostedGuard {
         if let Some(mut record) = state.hosted_services.remove(&self.id) {
             super::desktop_service::retire_owner(&mut state, self.id, record.info.generation, true);
             record.stop.send_replace(true);
-            if record.info.phase != ServicePhase::Closed {
-                record.info.phase = ServicePhase::Closed;
+            if !record.info.phase.finished() {
+                // Backstop for a serve task that ended without an explicit
+                // close. A live parent means the backend or loop itself died.
+                let cause = if state.shut_down {
+                    CloseCause::Shutdown
+                } else {
+                    match state.incoming.get(&record.info.connection_id) {
+                        Some(session) if session.phase == SessionPhase::Active => {
+                            CloseCause::DeviceLoss
+                        }
+                        _ => CloseCause::ParentLoss,
+                    }
+                };
+                record.info.phase = ServicePhase::Closed(cause);
                 self.shared.events.publish(CoreEvent::HostedServiceChanged {
                     service: record.info,
                 });
@@ -553,8 +601,62 @@ pub(super) async fn serve(
         2 => Some(ServiceKind::Files),
         3 => Some(ServiceKind::Terminal),
         4 => Some(ServiceKind::Camera),
+        5 => Some(ServiceKind::SystemAudio),
+        6 => Some(ServiceKind::Microphone),
+        7 => Some(ServiceKind::System),
         _ => None,
     };
+    if matches!(body[1], 3 | 4) && remote_id == 0 && kind == 3 {
+        {
+            let state = lock(&shared.state);
+            let session = live_session(&state, true, connection_id)?;
+            if session.wire_stamp != stamp || session.peer_key != peer {
+                return Err(Error::StaleSession);
+            }
+            if !session.services_only {
+                return Err(Error::Unsupported("terminal registry"));
+            }
+        }
+        return super::terminal_stream::registry(
+            shared,
+            peer,
+            body[1] == 4,
+            send,
+            recv,
+            parent_stop,
+        )
+        .await;
+    }
+    if body[1] == 2 && remote_id == 0 && matches!(kind, 4 | 5 | 6) {
+        let supported = {
+            let state = lock(&shared.state);
+            let session = live_session(&state, true, connection_id)?;
+            if session.wire_stamp != stamp || session.peer_key != peer {
+                return Err(Error::StaleSession);
+            }
+            session.services_only
+        };
+        if !supported {
+            write(&mut send, vec![VERSION, 1, 0]).await?;
+            return Ok(());
+        }
+        return if kind == 4 {
+            super::camera_stream::list(shared, peer, send, parent_stop).await
+        } else {
+            super::audio_stream::list(
+                shared,
+                peer,
+                if kind == 5 {
+                    crate::audio::AudioKind::System
+                } else {
+                    crate::audio::AudioKind::Microphone
+                },
+                send,
+                parent_stop,
+            )
+            .await
+        };
+    }
     let outcome = {
         let mut state = lock(&shared.state);
         let session = live_session(&state, true, connection_id)?;
@@ -569,14 +671,27 @@ pub(super) async fn serve(
         } else if !super::service_permissions::admitted(&state, &peer, service_kind.unwrap()) {
             Err(if kind == 2 { 2 } else { 6 })
         } else if kind != 2
+            && !(kind == 4 && session.services_only && lock(&shared.camera_factory).is_some())
+            && !(matches!(kind, 5 | 6)
+                && session.services_only
+                && lock(&shared.audio_factory).as_ref().is_some_and(|f| {
+                    f.supports(if kind == 5 {
+                        crate::audio::AudioKind::System
+                    } else {
+                        crate::audio::AudioKind::Microphone
+                    })
+                }))
+            && !(kind == 3 && session.services_only && lock(&shared.terminal_factory).is_some())
+            && !(kind == 7 && session.services_only)
             && !(kind == 1 && !session.files_only && !*session.desktop_stop.borrow())
         {
             Err(1)
         } else if state.hosted_services.len() >= 16
-            || state
-                .hosted_services
-                .values()
-                .any(|r| r.info.connection_id == connection_id && Some(r.info.kind) == service_kind)
+            || state.hosted_services.values().any(|r| {
+                r.info.connection_id == connection_id
+                    && (Some(r.info.kind) == service_kind && kind != 3
+                        || r.remote_id == Some(remote_id))
+            })
         {
             Err(4)
         } else {
@@ -596,6 +711,7 @@ pub(super) async fn serve(
                 super::services::ServiceRecord {
                     info: info.clone(),
                     remote_id: Some(remote_id),
+                    stream_open: false,
                     stop: tokio::sync::watch::channel(false).0,
                     desktop: None,
                 },
@@ -603,7 +719,7 @@ pub(super) async fn serve(
             if kind == 1 {
                 state
                     .incoming
-                    .as_mut()
+                    .get_mut(&connection_id)
                     .ok_or(Error::NoSession)?
                     .desktop_owner = Some(id);
             }
@@ -619,15 +735,57 @@ pub(super) async fn serve(
             return Ok(());
         }
         Ok(None) => {
-            let desktop = lock(&shared.state).incoming.as_ref().is_some_and(|s| {
-                (s.services_only
-                    && shared
-                        .h264_encode
-                        .load(std::sync::atomic::Ordering::Relaxed)
-                    && monitor_size(&shared) != (0, 0))
-                    || (!s.files_only && !*s.desktop_stop.borrow())
-            });
-            write(&mut send, vec![VERSION, 0, 2 | u8::from(desktop)]).await?;
+            let desktop = lock(&shared.state)
+                .incoming
+                .get(&connection_id)
+                .is_some_and(|s| {
+                    (s.services_only
+                        && lock(&shared.video_caps).can_encode()
+                        && monitor_size(&shared) != (0, 0))
+                        || (!s.files_only && !*s.desktop_stop.borrow())
+                });
+            let terminal = lock(&shared.state)
+                .incoming
+                .get(&connection_id)
+                .is_some_and(|s| s.services_only)
+                && lock(&shared.terminal_factory).is_some();
+            let camera = lock(&shared.state)
+                .incoming
+                .get(&connection_id)
+                .is_some_and(|s| s.services_only)
+                && lock(&shared.camera_factory).is_some();
+            let audio = lock(&shared.state)
+                .incoming
+                .get(&connection_id)
+                .is_some_and(|s| s.services_only);
+            let factory = lock(&shared.audio_factory).clone();
+            let system_audio = audio
+                && factory
+                    .as_ref()
+                    .is_some_and(|f| f.supports(crate::audio::AudioKind::System));
+            let microphone = audio
+                && factory
+                    .as_ref()
+                    .is_some_and(|f| f.supports(crate::audio::AudioKind::Microphone));
+            let system_actions = lock(&shared.state)
+                .incoming
+                .get(&connection_id)
+                .is_some_and(|s| s.services_only)
+                && lock(&shared.system_actions).is_some();
+            write(
+                &mut send,
+                vec![
+                    VERSION,
+                    0,
+                    2 | u8::from(desktop)
+                        | if terminal { 4 } else { 0 }
+                        | if camera { 8 } else { 0 }
+                        | if system_audio { 16 } else { 0 }
+                        | if microphone { 32 } else { 0 }
+                        | if system_actions { 64 } else { 0 },
+                ],
+            )
+            .await?;
             return Ok(());
         }
         Ok(Some(id)) => id,
@@ -642,6 +800,34 @@ pub(super) async fn serve(
         .ok_or(Error::NoSession)?
         .stop
         .subscribe();
+    if matches!(kind, 5 | 6) {
+        return super::audio_stream::serve(
+            shared,
+            id,
+            if kind == 5 {
+                crate::audio::AudioKind::System
+            } else {
+                crate::audio::AudioKind::Microphone
+            },
+            send,
+            recv,
+            parent_stop,
+            service_stop,
+        )
+        .await;
+    }
+    if kind == 4 {
+        return super::camera_stream::serve(shared, id, send, recv, parent_stop, service_stop)
+            .await;
+    }
+    if kind == 3 {
+        return super::terminal_stream::serve(shared, id, send, recv, parent_stop, service_stop)
+            .await;
+    }
+    if kind == 7 {
+        return super::system_stream::serve(shared, id, send, recv, parent_stop, service_stop)
+            .await;
+    }
     write(&mut send, vec![VERSION, 0, 2]).await?;
     if kind == 1 {
         // This stream is the ownership lease. Input/media retain the existing

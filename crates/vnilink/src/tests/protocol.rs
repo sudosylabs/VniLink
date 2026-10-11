@@ -1,9 +1,9 @@
 use crate::error::Error;
 use crate::input::InputEvent;
-use crate::input::MAX_KEY_TEXT;
+use crate::input::{DisplayInfo, MAX_KEY_TEXT};
 use crate::protocol::{
     error_code, ControlMessage, KeyText, Quality, RejectCode, SessionStamp, MAX_CONTROL_FRAME,
-    PROTOCOL_VERSION,
+    MAX_TOPOLOGY_FRAME, PROTOCOL_VERSION,
 };
 
 #[test]
@@ -68,7 +68,7 @@ fn control_messages_round_trip() {
         },
         ControlMessage::Input {
             stamp: SessionStamp::new(7, 3),
-            event: InputEvent::pointer(15, 20),
+            event: InputEvent::pointer(15, 20, 1, 1),
         },
         ControlMessage::Input {
             stamp: SessionStamp::new(7, 3),
@@ -356,8 +356,8 @@ fn every_reject_code_and_input_shape_round_trips() {
         InputEvent::button_up(crate::input::PointerButton::Right),
         InputEvent::button_down(crate::input::PointerButton::Middle),
         InputEvent::button_up(crate::input::PointerButton::Middle),
-        InputEvent::pointer(0, 0),
-        InputEvent::pointer(u16::MAX, u16::MAX),
+        InputEvent::pointer(0, 0, 1, 1),
+        InputEvent::pointer(-32768, 32768, 2, 9),
         InputEvent::wheel(i16::MIN, i16::MAX),
     ];
     for event in events {
@@ -478,4 +478,106 @@ fn neutral_hello_has_a_strict_version_five_mode_flag() {
         };
         assert_eq!(ControlMessage::decode(&old.encode()).unwrap(), old);
     }
+}
+
+fn display(id: u64, origin_x: i32, width: u16, height: u16, rotation: u16) -> DisplayInfo {
+    DisplayInfo {
+        id,
+        origin_x,
+        origin_y: 0,
+        width,
+        height,
+        rotation_deg: rotation,
+        scale_percent: 100,
+        revision: 4,
+    }
+}
+
+#[test]
+fn topology_and_one_display_selection_round_trip() {
+    let displays = vec![
+        display(1, -1920, 1920, 1080, 0),
+        display(2, 0, 1280, 800, 90),
+    ];
+    let message = ControlMessage::Topology {
+        stamp: SessionStamp::new(9, 2),
+        revision: 4,
+        displays: displays.clone(),
+    };
+    assert_eq!(ControlMessage::decode(&message.encode()).unwrap(), message);
+    assert!(message.encode().len() <= MAX_CONTROL_FRAME);
+
+    let wide = (0..10)
+        .map(|index| DisplayInfo {
+            id: index + 1,
+            origin_x: i32::try_from(index).unwrap() * 200,
+            origin_y: 0,
+            width: 200,
+            height: 100,
+            rotation_deg: 0,
+            scale_percent: 100,
+            revision: 4,
+        })
+        .collect::<Vec<_>>();
+    let wide_message = ControlMessage::Topology {
+        stamp: SessionStamp::new(9, 2),
+        revision: 4,
+        displays: wide,
+    };
+    let encoded = wide_message.encode();
+    assert!(encoded.len() > MAX_CONTROL_FRAME);
+    assert!(encoded.len() <= MAX_TOPOLOGY_FRAME);
+    assert_eq!(ControlMessage::decode(&encoded).unwrap(), wide_message);
+
+    let empty = ControlMessage::Topology {
+        stamp: SessionStamp::new(9, 2),
+        revision: 4,
+        displays: Vec::new(),
+    };
+    assert_eq!(ControlMessage::decode(&empty.encode()).unwrap(), empty);
+
+    let selection = ControlMessage::SelectDisplays {
+        stamp: SessionStamp::new(9, 2),
+        displays: vec![2],
+    };
+    assert_eq!(
+        ControlMessage::decode(&selection.encode()).unwrap(),
+        selection
+    );
+    let mut duplicate = selection.encode();
+    duplicate[17] = 2;
+    duplicate.extend_from_slice(&2u64.to_be_bytes());
+    assert!(matches!(
+        ControlMessage::decode(&duplicate),
+        Err(Error::Malformed)
+    ));
+
+    let mut old_pointer = vec![4];
+    old_pointer.extend_from_slice(&9u64.to_be_bytes());
+    old_pointer.extend_from_slice(&2u64.to_be_bytes());
+    old_pointer.extend_from_slice(&[3, 0, 1, 0, 2]);
+    assert!(matches!(
+        ControlMessage::decode(&old_pointer),
+        Err(Error::Malformed)
+    ));
+    assert!(matches!(
+        ControlMessage::decode(
+            &ControlMessage::Input {
+                stamp: SessionStamp::new(9, 2),
+                event: InputEvent::pointer(1, 2, 0, 4),
+            }
+            .encode()
+        ),
+        Err(Error::Malformed)
+    ));
+    assert!(matches!(
+        ControlMessage::decode(
+            &ControlMessage::Input {
+                stamp: SessionStamp::new(9, 2),
+                event: InputEvent::pointer(1, 2, 1, 0),
+            }
+            .encode()
+        ),
+        Err(Error::Malformed)
+    ));
 }

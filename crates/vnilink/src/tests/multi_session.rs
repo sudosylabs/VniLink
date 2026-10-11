@@ -1,7 +1,7 @@
 use super::support::{pair_for_control, start_direct, RecordingDesktop};
 use crate::{
     Core, CursorState, EncodedFrame, Error, Grants, HostClipboard, InputEvent, KeyboardMode,
-    LocalKey, SessionInfo, SessionPhase, SessionRole,
+    LocalKey, ServiceKind, SessionInfo, SessionPhase, SessionRole,
 };
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -56,6 +56,7 @@ fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() {
         host.authorize(
             &controller.endpoint_id(),
             Grants {
+                view: true,
                 control: true,
                 clipboard: true,
                 transfer: false,
@@ -163,15 +164,7 @@ fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() {
             .set_session_keyboard_mode(session.id, session.generation, KeyboardMode::Map)
             .unwrap();
         controller
-            .submit_local_key(
-                session.id,
-                session.generation,
-                LocalKey {
-                    usage: 4,
-                    text: "a",
-                    down: true,
-                },
-            )
+            .submit_local_key(session.id, session.generation, LocalKey::new(4, true, "a"))
             .unwrap();
     }
     wait(|| !keys_a.lock().unwrap().is_empty() && !keys_b.lock().unwrap().is_empty());
@@ -319,6 +312,7 @@ fn cancellation_during_approval_and_reconnect_do_not_stop_the_other_session() {
     b.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: true,
             control: true,
             ..Grants::default()
         },
@@ -471,4 +465,451 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() {
     a.shutdown();
     b.shutdown();
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_fifth_outgoing_connection_is_busy_until_one_closes() {
+    let controller = start_direct();
+    let hosts: Vec<Core> = (0..5).map(|_| start_direct()).collect();
+    for host in &hosts {
+        pair_for_control(host, &controller);
+    }
+    let mut live = Vec::new();
+    for host in hosts.iter().take(4) {
+        live.push(active(
+            &controller,
+            controller.begin_connect(&host.endpoint_id()).unwrap().id,
+        ));
+    }
+    assert_eq!(controller.controller_sessions().unwrap().len(), 4);
+    assert!(matches!(
+        controller.begin_connect(&hosts[4].endpoint_id()),
+        Err(Error::Busy)
+    ));
+    // The refused peer left no session record behind.
+    assert_eq!(controller.controller_sessions().unwrap().len(), 4);
+    controller.disconnect_session(live[0].id).unwrap();
+    wait(|| controller.controller_session(live[0].id).unwrap().phase == SessionPhase::Closed);
+    let fifth = active(
+        &controller,
+        controller
+            .begin_connect(&hosts[4].endpoint_id())
+            .unwrap()
+            .id,
+    );
+    assert_eq!(fifth.peer_id, hosts[4].endpoint_id());
+    for survivor in &live[1..] {
+        assert_eq!(
+            controller.controller_session(survivor.id).unwrap().phase,
+            SessionPhase::Active
+        );
+    }
+    controller.shutdown();
+    for host in &hosts {
+        host.shutdown();
+    }
+}
+
+#[test]
+fn a_saturated_viewer_does_not_slow_another_viewer() {
+    let host = start_direct();
+    let slow = start_direct();
+    let fast = start_direct();
+    for viewer in [&slow, &fast] {
+        pair_for_control(&host, viewer);
+        host.authorize(
+            &viewer.endpoint_id(),
+            Grants {
+                view: true,
+                ..Grants::default()
+            },
+        )
+        .unwrap();
+    }
+    let sa = active(&slow, slow.begin_connect(&host.endpoint_id()).unwrap().id);
+    let sb = active(&fast, fast.begin_connect(&host.endpoint_id()).unwrap().id);
+    // Only the fast viewer subscribes; the slow viewer never reads video.
+    let vb = fast.subscribe_session_video(sb.id, sb.generation).unwrap();
+    let hosted = host.hosted_sessions().unwrap();
+    assert_eq!(hosted.len(), 2);
+    let ha = hosted
+        .iter()
+        .find(|s| s.peer_id == slow.endpoint_id())
+        .unwrap()
+        .id;
+    let hb = hosted
+        .iter()
+        .find(|s| s.peer_id == fast.endpoint_id())
+        .unwrap()
+        .id;
+    // Flood the slow viewer's outbox past its 8-frame bound.
+    host.publish_video(ha, EncodedFrame::h264(true, 1, vec![7]).unwrap())
+        .unwrap();
+    for stamp in 2..=41 {
+        host.publish_video(ha, EncodedFrame::h264(false, stamp, vec![7]).unwrap())
+            .unwrap();
+    }
+    // The fast viewer still gets a fresh keyframe promptly.
+    host.publish_video(hb, EncodedFrame::h264(true, 777, vec![9]).unwrap())
+        .unwrap();
+    assert_eq!(
+        vb.recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .timestamp_us,
+        777
+    );
+    assert_eq!(
+        slow.controller_session(sa.id).unwrap().phase,
+        SessionPhase::Active
+    );
+    assert_eq!(
+        fast.controller_session(sb.id).unwrap().phase,
+        SessionPhase::Active
+    );
+    slow.shutdown();
+    fast.shutdown();
+    host.shutdown();
+}
+
+/// CP02 combined scenario: one host serves four distinct paired peers at
+/// once — a fast legacy viewer, a slow legacy viewer that never reads, a
+/// files-only peer running an upload job, and a services peer with two
+/// independent shells. Mid-run the terminal peer is revoked and the slow
+/// viewer reconnects; the fast viewer streams uninterrupted throughout, and
+/// a global host stop tears every remaining session down.
+#[cfg(unix)]
+#[test]
+fn four_peers_share_one_host_through_slow_revoke_and_reconnect() {
+    use crate::job::JobState;
+    use crate::terminal::{NativeTerminalFactory, TerminalEvent, TerminalSize};
+    const SIZE: TerminalSize = TerminalSize {
+        rows: 24,
+        columns: 80,
+    };
+
+    let host = start_direct();
+    let fast = start_direct();
+    let slow = start_direct();
+    let files = start_direct();
+    let term = start_direct();
+    host.set_desktop(Box::new(RecordingDesktop {
+        events: Arc::new(Mutex::new(Vec::new())),
+    }))
+    .unwrap();
+    host.set_capture(Box::new(Capture)).unwrap();
+    host.set_terminal_factory(Some(Arc::new(
+        NativeTerminalFactory::new("/bin/sh".into(), std::env::temp_dir()).unwrap(),
+    )))
+    .unwrap();
+
+    // File roots for the jobs leg; small fixtures need no free-space margin.
+    let base = std::env::temp_dir().join(format!(
+        "vnilink-multi-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    for (core, name) in [(&host, "host"), (&files, "files")] {
+        let root = base.join(name).join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        core.set_blob_directory(base.join(name).join("blobs"))
+            .unwrap();
+        core.set_file_roots(vec![root]).unwrap();
+        core.set_file_resource_policy(crate::job::FileResourcePolicy {
+            minimum_free_bytes: 0,
+            ..Default::default()
+        })
+        .unwrap();
+    }
+    std::fs::write(base.join("files/root/note.txt"), b"combined-scenario").unwrap();
+
+    // Viewers use session-model connections (View grant admits); the
+    // services peers connect neutrally and authorize per feature.
+    for peer in [&fast, &slow, &files, &term] {
+        pair_for_control(&host, peer);
+    }
+    for peer in [&fast, &slow] {
+        host.authorize(
+            &peer.endpoint_id(),
+            Grants {
+                view: true,
+                ..Grants::default()
+            },
+        )
+        .unwrap();
+    }
+    host.authorize(
+        &files.endpoint_id(),
+        Grants {
+            transfer: true,
+            ..Grants::default()
+        },
+    )
+    .unwrap();
+    files
+        .authorize(
+            &host.endpoint_id(),
+            Grants {
+                transfer: true,
+                ..Grants::default()
+            },
+        )
+        .unwrap();
+    host.authorize_service(&term.endpoint_id(), ServiceKind::Terminal, true)
+        .unwrap();
+
+    let sa = active(&fast, fast.begin_connect(&host.endpoint_id()).unwrap().id);
+    let sb = active(&slow, slow.begin_connect(&host.endpoint_id()).unwrap().id);
+    let sc = active(
+        &files,
+        files.begin_connect_files(&host.endpoint_id()).unwrap().id,
+    );
+    let sd = active(
+        &term,
+        term.begin_connect_services(&host.endpoint_id()).unwrap().id,
+    );
+    assert_eq!(host.hosted_sessions().unwrap().len(), 4);
+
+    // Two viewers: only the fast one reads. The slow subscription stays
+    // unread while its outbox floods past the 8-frame bound.
+    let va = fast.subscribe_session_video(sa.id, sa.generation).unwrap();
+    let _vb = slow.subscribe_session_video(sb.id, sb.generation).unwrap();
+    let hosted_id = |peer: &Core| {
+        host.hosted_sessions()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.peer_id == peer.endpoint_id())
+            .unwrap()
+            .id
+    };
+    let ha = hosted_id(&fast);
+    let hb = hosted_id(&slow);
+    host.publish_video(hb, EncodedFrame::h264(true, 1, vec![7]).unwrap())
+        .unwrap();
+    for stamp in 2..=41u64 {
+        host.publish_video(hb, EncodedFrame::h264(false, stamp, vec![7]).unwrap())
+            .unwrap();
+    }
+
+    // Two independent shells on the services peer: distinct sessions and
+    // distinct host processes.
+    let open_shell = || {
+        let owner = term
+            .attach_controller_service(sd.id, sd.generation, ServiceKind::Terminal)
+            .unwrap();
+        term.open_terminal_service(owner.id, owner.generation, SIZE)
+            .unwrap()
+    };
+    let sh_first = open_shell();
+    let sh_second = open_shell();
+    assert_ne!(sh_first.session().id, sh_second.session().id);
+    assert_ne!(
+        sh_first.session().process_id,
+        sh_second.session().process_id
+    );
+
+    // One files job, driven to completion while video floods.
+    let job = files
+        .job_submit_upload(&host.endpoint_id(), 0, "", 0, "arrived")
+        .unwrap();
+    let host_jobs = host.job_list().unwrap();
+    assert_eq!(host_jobs.len(), 1);
+    let host_job = host_jobs[0].id;
+    let mut sender = files.job_snapshot(job).unwrap();
+    let mut receiver = host.job_snapshot(host_job).unwrap();
+    for _ in 0..200 {
+        if !receiver.state.is_terminal() {
+            receiver = host.job_poll(host_job).unwrap();
+        }
+        if !sender.state.is_terminal() {
+            sender = files.job_poll(job).unwrap();
+        }
+        if sender.state.is_terminal() && receiver.state.is_terminal() {
+            break;
+        }
+    }
+    assert_eq!(sender.state, JobState::Complete);
+    assert_eq!(receiver.state, JobState::Complete);
+    assert_eq!(
+        std::fs::read(base.join("host/root/arrived/note.txt")).unwrap(),
+        b"combined-scenario"
+    );
+
+    // Both shells answer while the slow viewer floods.
+    let drain = |shell: &crate::RemoteTerminalService, needle: &str| {
+        let mut output = Vec::new();
+        wait(|| {
+            while let Some(event) = shell.poll() {
+                match event {
+                    TerminalEvent::Output(data) => output.extend(data),
+                    TerminalEvent::Failed(error) => panic!("{error}"),
+                    _ => {}
+                }
+            }
+            String::from_utf8_lossy(&output).contains(needle)
+        });
+    };
+    sh_first.input(b"printf 'FIRST_ALIVE\\n'\n").unwrap();
+    drain(&sh_first, "FIRST_ALIVE");
+    sh_second.input(b"printf 'SECOND_ALIVE\\n'\n").unwrap();
+    drain(&sh_second, "SECOND_ALIVE");
+
+    // Revoke the terminal peer mid-run: both shells close, the viewers and
+    // the finished job lane continue.
+    host.authorize_service(&term.endpoint_id(), ServiceKind::Terminal, false)
+        .unwrap();
+    wait(|| sh_first.is_cancelled() && sh_second.is_cancelled());
+    host.publish_video(ha, EncodedFrame::h264(true, 777, vec![9]).unwrap())
+        .unwrap();
+    assert_eq!(
+        va.recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .timestamp_us,
+        777
+    );
+
+    // Reconnect the slow viewer; the fast viewer never notices.
+    slow.drop_controller_link(sb.id).unwrap();
+    wait(|| {
+        slow.controller_session(sb.id).unwrap().phase == SessionPhase::Active
+            && slow.controller_session(sb.id).unwrap().generation > sb.generation
+    });
+    let sb2 = slow.controller_session(sb.id).unwrap();
+    assert_eq!(sb2.id, sb.id);
+    host.publish_video(ha, EncodedFrame::h264(true, 778, vec![9]).unwrap())
+        .unwrap();
+    assert_eq!(
+        va.recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .timestamp_us,
+        778
+    );
+    let vb2 = slow
+        .subscribe_session_video(sb2.id, sb2.generation)
+        .unwrap();
+    let hb2 = hosted_id(&slow);
+    host.publish_video(hb2, EncodedFrame::h264(true, 779, vec![8]).unwrap())
+        .unwrap();
+    assert_eq!(
+        vb2.recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .timestamp_us,
+        779
+    );
+
+    // Global stop tears everything down: no session stays Active once the
+    // host is gone — redial arms as Reconnecting, never as usable — and
+    // every record disconnects and releases from the controller side.
+    host.shutdown();
+    let legs = [
+        (&fast, sa.id),
+        (&slow, sb.id),
+        (&files, sc.id),
+        (&term, sd.id),
+    ];
+    for (core, id) in &legs {
+        wait(|| {
+            !matches!(
+                core.controller_session(*id).unwrap().phase,
+                SessionPhase::Active
+            )
+        });
+    }
+    for (core, id) in &legs {
+        // Already-Closed legs report NoSession; anything else must stop.
+        match core.disconnect_session(*id) {
+            Ok(()) | Err(Error::NoSession) => {}
+            Err(error) => panic!("disconnect after host stop failed: {error}"),
+        }
+        wait(|| match core.controller_session(*id) {
+            Err(Error::NoSession) => true,
+            Ok(session) => session.phase == SessionPhase::Closed,
+            Err(_) => false,
+        });
+        let _ = core.forget_controller_session(*id);
+        assert!(core.controller_sessions().unwrap().is_empty());
+    }
+    fast.shutdown();
+    slow.shutdown();
+    files.shutdown();
+    term.shutdown();
+    std::fs::remove_dir_all(&base).unwrap();
+}
+
+#[test]
+fn review_stop_hosting_stops_every_peer() {
+    let host = start_direct();
+    let a = start_direct();
+    let b = start_direct();
+    pair_for_control(&host, &a);
+    pair_for_control(&host, &b);
+    for peer in [&a, &b] {
+        let pending = peer.begin_connect_services(&host.endpoint_id()).unwrap();
+        active(peer, pending.id);
+    }
+    wait(|| {
+        host.hosted_sessions()
+            .unwrap()
+            .iter()
+            .filter(|s| s.phase == SessionPhase::Active)
+            .count()
+            == 2
+    });
+    host.stop_hosting().unwrap();
+    // Stopping must fence every peer immediately; transport may close later.
+    assert_eq!(
+        host.hosted_sessions()
+            .unwrap()
+            .iter()
+            .filter(|s| s.phase == SessionPhase::Active)
+            .count(),
+        0,
+        "hosting disabled while another peer remains active"
+    );
+}
+
+#[test]
+fn stop_hosting_cancels_live_owners_and_refuses_new_sessions() {
+    let host = start_direct();
+    let a = start_direct();
+    let b = start_direct();
+    host.set_capture(Box::new(Capture)).unwrap();
+    pair_for_control(&host, &a);
+    pair_for_control(&host, &b);
+    for peer in [&a, &b] {
+        host.authorize(
+            &peer.endpoint_id(),
+            Grants {
+                view: true,
+                ..Grants::default()
+            },
+        )
+        .unwrap();
+    }
+    let mut owners = Vec::new();
+    for peer in [&a, &b] {
+        let pending = peer.begin_connect_services(&host.endpoint_id()).unwrap();
+        active(peer, pending.id);
+        let session = peer.controller_session(pending.id).unwrap();
+        let owner = peer
+            .attach_controller_service(session.id, session.generation, ServiceKind::Desktop)
+            .unwrap();
+        owners.push(
+            peer.open_desktop_service(owner.id, owner.generation)
+                .unwrap(),
+        );
+    }
+    host.stop_hosting().unwrap();
+    for owner in &owners {
+        wait(|| owner.is_cancelled());
+    }
+    assert!(matches!(
+        a.connect(&host.endpoint_id()),
+        Err(Error::NotHosting)
+    ));
+    host.shutdown();
+    a.shutdown();
+    b.shutdown();
 }

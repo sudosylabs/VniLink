@@ -41,6 +41,8 @@ pub struct SessionInfo {
 /// Separate grants. Pairing does not set any of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Grants {
+    /// Permission to receive Desktop pixels, independent of input injection.
+    pub view: bool,
     pub control: bool,
     pub clipboard: bool,
     pub transfer: bool,
@@ -50,6 +52,7 @@ pub struct Grants {
 /// through this so the mapping lives in one method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Grant {
+    View,
     Control,
     Clipboard,
     Transfer,
@@ -127,87 +130,19 @@ pub(crate) fn admit_services(
     Ok(())
 }
 
-/// Agreed H.264 codec for the live session: the lower of offered and locally
-/// encodable. A Baseline offer always agrees Baseline; a High offer agrees
-/// High only when this host encodes it. Downgrade is silent and safe because
-/// every High decoder also decodes Baseline. Returns `None` for an unknown
-/// codec id, which the host rejects.
-pub fn negotiate_codec(offered: u8, host_high: bool) -> Option<u8> {
-    match offered {
-        crate::protocol::CODEC_H264 => Some(crate::protocol::CODEC_H264),
-        crate::protocol::CODEC_H264_HIGH if host_high => Some(crate::protocol::CODEC_H264_HIGH),
-        crate::protocol::CODEC_H264_HIGH => Some(crate::protocol::CODEC_H264),
-        _ => None,
-    }
-}
 /// Default encoder limits the controller offers when it dials.
 pub(crate) fn controller_offer() -> Quality {
     Quality::new(2_000, 30, 1920, 1080).expect("default offer is valid")
 }
 
-/// Ordered quality ladder for automatic mode, low to high. Clear paths can
-/// reach Retina detail without a manual override; congestion steps back down.
-const LADDER: [(u32, u8, u16, u16); 6] = [
-    (800, 10, 854, 480),
-    (1_500, 15, 1280, 720),
-    (2_000, 30, 1920, 1080),
-    (5_000, 30, 1920, 1080),
-    (12_000, 60, 2560, 1440),
-    (24_000, 60, 3840, 2160),
-];
-
-/// One adaptive step based on transport congestion. Downshift is eager
-/// (queue, drops, high RTT/relay); upshift needs all-clear. Returns `None`
-/// to hold. Pure function so hosts, controllers, and tests share one policy.
-pub fn suggest_quality(
-    current: &Quality,
-    rtt_ms: u64,
-    relay: bool,
-    queued: usize,
-    dropped_delta: u64,
-) -> Option<Quality> {
-    let index = LADDER
-        .iter()
-        .position(|&(bitrate, fps, _, _)| {
-            current.max_bitrate_kbps == bitrate && current.max_frame_rate == fps
-        })
-        .unwrap_or(2);
-    let strained = queued >= 6 || dropped_delta > 0 || rtt_ms >= 150 || (relay && rtt_ms >= 80);
-    if strained {
-        if index == 0 {
-            return None;
-        }
-        let (bitrate, fps, width, height) = LADDER[index - 1];
-        return Quality::new(bitrate, fps, width, height).ok();
-    }
-    let clear = queued == 0 && dropped_delta == 0 && rtt_ms < 50 && !relay;
-    if clear && index + 1 < LADDER.len() {
-        let (bitrate, fps, width, height) = LADDER[index + 1];
-        return Quality::new(bitrate, fps, width, height).ok();
-    }
-    None
-}
-
 /// Agreed limits for the live session: the offer clamped to the host monitor.
 /// A zero monitor side is unknown, so that axis keeps the offered value.
-pub(crate) fn agree_quality(offered: &Quality, monitor: (u16, u16)) -> Quality {
-    let width = if monitor.0 > 0 {
-        offered.max_width.min(monitor.0)
-    } else {
-        offered.max_width
-    };
-    let height = if monitor.1 > 0 {
-        offered.max_height.min(monitor.1)
-    } else {
-        offered.max_height
-    };
-    Quality::new(
-        offered.max_bitrate_kbps,
-        offered.max_frame_rate,
-        width.max(1),
-        height.max(1),
-    )
-    .unwrap_or(*offered)
+pub(crate) fn agree_quality(
+    offered: &Quality,
+    monitor: (u16, u16),
+    caps: &crate::video_caps::VideoCodecCaps,
+) -> Quality {
+    crate::video_caps::clamp_quality(offered, monitor, caps)
 }
 
 /// Input is accepted only for the generation that owns the active session.

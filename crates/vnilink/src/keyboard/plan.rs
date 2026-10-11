@@ -77,6 +77,15 @@ impl KeyPlan {
         let mut planned = Vec::new();
         if key.down {
             self.track_local(true, key.usage);
+            // An uncommitted dead key must not be injected and then committed
+            // again as text. Map mode still sends the physical key.
+            if key.composing
+                && mode != KeyboardMode::Map
+                && key.text.is_empty()
+                && !self.command_held()
+            {
+                return Ok(planned);
+            }
             if self.sends_character(mode, key.usage, key.text) {
                 self.release_levels(&mut planned);
                 planned.push(if mode == KeyboardMode::Translate {

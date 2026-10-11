@@ -5,7 +5,11 @@
 //! host to press the chord in its own layout.
 
 mod chord;
+mod layout;
 mod plan;
+
+pub(crate) use layout::layout_steps;
+pub use layout::{HostLayout, LayoutStep, ModifierLevel};
 
 /// How [`crate::Core::submit_local_key`] turns one local key into host input.
 ///
@@ -38,13 +42,39 @@ impl KeyboardMode {
 /// One key transition from the controller's operating system.
 ///
 /// `usage` is the physical HID position. `text` is what that press produced.
-/// It is empty on release and when the key produced no character. The library
-/// does not log `text`.
+/// It is empty on release and when the key produced no character. `composing`
+/// marks a dead key or an input-method step that has not committed a character.
+/// The library does not log `text`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalKey<'a> {
     pub usage: u16,
     pub down: bool,
     pub text: &'a str,
+    /// True when this transition is an uncommitted composition step.
+    /// Character and Translate modes do not inject it. Map mode still sends
+    /// the physical key so the host layout can compose.
+    pub composing: bool,
+}
+
+impl<'a> LocalKey<'a> {
+    pub const fn new(usage: u16, down: bool, text: &'a str) -> Self {
+        Self {
+            usage,
+            down,
+            text,
+            composing: false,
+        }
+    }
+
+    /// A dead key or other composition step with no committed character.
+    pub const fn composing(usage: u16, down: bool) -> Self {
+        Self {
+            usage,
+            down,
+            text: "",
+            composing: true,
+        }
+    }
 }
 
 #[cfg(test)]

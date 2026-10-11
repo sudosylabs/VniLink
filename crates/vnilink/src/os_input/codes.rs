@@ -135,6 +135,8 @@ pub(super) fn enigo_button(button: PointerButton) -> Button {
         PointerButton::Left => Button::Left,
         PointerButton::Right => Button::Right,
         PointerButton::Middle => Button::Middle,
+        PointerButton::Back => Button::Back,
+        PointerButton::Forward => Button::Forward,
     }
 }
 

@@ -1,12 +1,15 @@
 //! Ownership bridge for an already negotiated desktop transport.
 use super::*;
-use crate::{ServiceInfo, ServiceLease, ServicePhase};
+use crate::{CloseCause, ServiceInfo, ServiceLease, ServicePhase};
 
 /// Retires desktop resources while retaining the connection and Files work.
 /// Called under state; old-generation cleanup cannot touch a replacement.
 pub(super) fn retire_owner(state: &mut State, id: u64, generation: u64, hosted: bool) {
     let session = if hosted {
-        state.incoming.as_mut()
+        state
+            .incoming
+            .values_mut()
+            .find(|s| s.desktop_owner == Some(id))
     } else {
         state
             .outgoing
@@ -50,7 +53,13 @@ impl RemoteDesktopService {
     }
     pub fn close(&self) {
         if let Some(shared) = self.shared.upgrade() {
-            finish_controller(&shared, self.info().id, self.info().generation, true);
+            finish_controller(
+                &shared,
+                self.info().id,
+                self.info().generation,
+                true,
+                CloseCause::OwnerClose,
+            );
         }
         self.stop.send_replace(true);
     }
@@ -61,13 +70,19 @@ impl Drop for RemoteDesktopService {
     }
 }
 
-pub(super) fn finish_controller(shared: &Shared, id: u64, generation: u64, retire: bool) {
+pub(super) fn finish_controller(
+    shared: &Shared,
+    id: u64,
+    generation: u64,
+    retire: bool,
+    cause: CloseCause,
+) {
     let mut state = lock(&shared.state);
     if retire {
         retire_owner(&mut state, id, generation, false);
         if let Some(record) = state.services.get_mut(&id) {
             if record.info.generation == generation
-                && record.change(generation, ServicePhase::Closed)
+                && record.change(generation, ServicePhase::Closed(cause))
             {
                 shared.events.publish(CoreEvent::ServiceChanged {
                     service: record.info.clone(),

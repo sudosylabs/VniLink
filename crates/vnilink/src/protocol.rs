@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::address;
 use crate::error::Error;
-use crate::input::InputEvent;
+use crate::input::{DisplayInfo, InputEvent};
 
 /// Finished text carried on the control stream. Debug shows the length only.
 #[derive(Clone, PartialEq, Eq)]
@@ -50,6 +50,9 @@ pub const ALPN: &[u8] = b"vnilink/1";
 
 pub(crate) const MAX_CONTROL_FRAME: usize = 256;
 
+/// Display snapshots. Sixteen displays at 32 bytes, plus the stamp and revision.
+pub(crate) const MAX_TOPOLOGY_FRAME: usize = 1024;
+
 /// Address announcements are larger than an input frame and use this cap.
 pub(crate) const MAX_ADDRESS_FRAME: usize = address::MAX_FRAME;
 
@@ -58,7 +61,7 @@ pub(crate) const MAX_ADDRESS_FRAME: usize = address::MAX_FRAME;
 /// `desktop_capture` is true once a capture adapter is installed. The library
 /// still does not capture or encode. Keyboard and pointer are true once a
 /// desktop adapter is installed. Clipboard is true once a clipboard adapter
-/// is installed. File transfer is true once a transfer directory is set.
+/// is installed. File transfer is true once at least one file root is set.
 /// `h264_encode` is true once the platform reports a usable H.264 encoder
 /// (VA-API on Linux); `h264_decode` is true once it reports a usable H.264
 /// decoder. Those grants stay off until `authorize` sets them. Audio stays false.
@@ -240,6 +243,18 @@ pub(crate) enum ControlMessage {
         stamp: SessionStamp,
         quality: Quality,
     },
+    /// Host display snapshot. An empty list means every display is gone.
+    /// The revision fences pointer events mapped against an older snapshot.
+    Topology {
+        stamp: SessionStamp,
+        revision: u64,
+        displays: Vec<DisplayInfo>,
+    },
+    /// The one display this desktop stream will show and control.
+    SelectDisplays {
+        stamp: SessionStamp,
+        displays: Vec<u64>,
+    },
 }
 
 /// Session identity stamped on every control message that belongs to one.
@@ -339,14 +354,44 @@ impl ControlMessage {
                 bytes.extend_from_slice(&quality.max_height.to_be_bytes());
                 bytes
             }
+            Self::Topology {
+                stamp,
+                revision,
+                displays,
+            } => {
+                let mut bytes = Vec::with_capacity(26 + displays.len() * DISPLAY_BYTES);
+                bytes.push(11);
+                write_stamp(stamp, &mut bytes);
+                bytes.extend_from_slice(&revision.to_be_bytes());
+                bytes.push(u8::try_from(displays.len()).unwrap_or(u8::MAX));
+                for display in displays {
+                    write_display(&mut bytes, display);
+                }
+                bytes
+            }
+            Self::SelectDisplays { stamp, displays } => {
+                let mut bytes = Vec::with_capacity(18 + displays.len() * 8);
+                bytes.push(12);
+                write_stamp(stamp, &mut bytes);
+                bytes.push(u8::try_from(displays.len()).unwrap_or(u8::MAX));
+                for id in displays {
+                    bytes.extend_from_slice(&id.to_be_bytes());
+                }
+                bytes
+            }
         }
     }
 
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.is_empty() || bytes.len() > MAX_ADDRESS_FRAME {
+        if bytes.is_empty() {
             return Err(Error::Malformed);
         }
-        if bytes[0] != address::TAG && bytes.len() > MAX_CONTROL_FRAME {
+        let limit = match bytes[0] {
+            address::TAG => MAX_ADDRESS_FRAME,
+            11 => MAX_TOPOLOGY_FRAME,
+            _ => MAX_CONTROL_FRAME,
+        };
+        if bytes.len() > limit {
             return Err(Error::Malformed);
         }
         match bytes[0] {
@@ -458,9 +503,83 @@ impl ControlMessage {
                     quality,
                 })
             }
+            11 => decode_topology(bytes),
+            12 => decode_selection(bytes),
             _ => Err(Error::Malformed),
         }
     }
+}
+
+const DISPLAY_BYTES: usize = 32;
+
+fn write_display(bytes: &mut Vec<u8>, display: &DisplayInfo) {
+    bytes.extend_from_slice(&display.id.to_be_bytes());
+    bytes.extend_from_slice(&display.origin_x.to_be_bytes());
+    bytes.extend_from_slice(&display.origin_y.to_be_bytes());
+    bytes.extend_from_slice(&display.width.to_be_bytes());
+    bytes.extend_from_slice(&display.height.to_be_bytes());
+    bytes.extend_from_slice(&display.rotation_deg.to_be_bytes());
+    bytes.extend_from_slice(&display.scale_percent.to_be_bytes());
+    bytes.extend_from_slice(&display.revision.to_be_bytes());
+}
+
+fn decode_topology(bytes: &[u8]) -> Result<ControlMessage, Error> {
+    if bytes.len() < 26 {
+        return Err(Error::Malformed);
+    }
+    let revision = u64::from_be_bytes(bytes[17..25].try_into().expect("8 bytes"));
+    let count = usize::from(bytes[25]);
+    if revision == 0
+        || count > crate::input::MAX_DISPLAYS
+        || bytes.len() != 26 + count * DISPLAY_BYTES
+    {
+        return Err(Error::Malformed);
+    }
+    let mut displays = Vec::with_capacity(count);
+    for index in 0..count {
+        let start = 26 + index * DISPLAY_BYTES;
+        let record = &bytes[start..start + DISPLAY_BYTES];
+        let display = DisplayInfo {
+            id: u64::from_be_bytes(record[0..8].try_into().expect("8 bytes")),
+            origin_x: i32::from_be_bytes(record[8..12].try_into().expect("4 bytes")),
+            origin_y: i32::from_be_bytes(record[12..16].try_into().expect("4 bytes")),
+            width: u16::from_be_bytes(record[16..18].try_into().expect("2 bytes")),
+            height: u16::from_be_bytes(record[18..20].try_into().expect("2 bytes")),
+            rotation_deg: u16::from_be_bytes(record[20..22].try_into().expect("2 bytes")),
+            scale_percent: u16::from_be_bytes(record[22..24].try_into().expect("2 bytes")),
+            revision: u64::from_be_bytes(record[24..32].try_into().expect("8 bytes")),
+        };
+        if display.revision != revision {
+            return Err(Error::Malformed);
+        }
+        displays.push(display);
+    }
+    if !displays.is_empty() {
+        crate::input::validate_topology(&displays).map_err(|_| Error::Malformed)?;
+    }
+    Ok(ControlMessage::Topology {
+        stamp: decode_stamp(bytes),
+        revision,
+        displays,
+    })
+}
+
+fn decode_selection(bytes: &[u8]) -> Result<ControlMessage, Error> {
+    if bytes.len() < 18 {
+        return Err(Error::Malformed);
+    }
+    let count = usize::from(bytes[17]);
+    if count != 1 || bytes.len() != 18 + count * 8 {
+        return Err(Error::Malformed);
+    }
+    let id = u64::from_be_bytes(bytes[18..26].try_into().expect("8 bytes"));
+    if id == 0 {
+        return Err(Error::Malformed);
+    }
+    Ok(ControlMessage::SelectDisplays {
+        stamp: decode_stamp(bytes),
+        displays: vec![id],
+    })
 }
 
 fn write_stamp(stamp: &SessionStamp, bytes: &mut Vec<u8>) {

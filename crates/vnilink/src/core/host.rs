@@ -3,13 +3,16 @@
 use super::*;
 
 use super::blob::{is_blob_connection, serve_blob_connection, BLOB_ALPN};
-use super::clipboard::apply_clipboard;
-use super::files::apply_transfer;
+use super::clipboard::{
+    apply_clipboard, apply_clipboard_files, clipboard_selected, deliver_paste_ready,
+    spawn_paste_preparation,
+};
 use super::keys::host_input_loop;
 use super::link::{remember_link, write_addresses};
 use super::pairing::{wait_for_control_approval, ControlAnswer};
 use super::video::host_video_loop;
 use super::wire::{read_frame, write_frame};
+use crate::clipboard::ClipboardPayload;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,8 +24,17 @@ use crate::error::Error;
 use crate::events::CoreEvent;
 use crate::protocol::{error_code, ControlMessage, Quality, SessionStamp, ALPN};
 use crate::session::{self, Grant, SessionInfo, SessionPhase, SessionRole};
-use crate::transfer::{self};
 use crate::video::VideoOutbox;
+
+/// Live hosted peer slots. Each hosted connection owns its session record,
+/// service owners, video/clipboard streams and input loop; the host
+/// clipboard sync selects exactly one session (see `clipboard_owner`).
+/// Four bounds concurrent task trees and per-connection queues while covering
+/// two viewers plus Files/Terminal work. Capture is shared: each consumer has
+/// its own encoder and bounded queue (`video_targets`). Native single-viewer
+/// callers still address one session via `Snapshot::incoming`; multi-session
+/// callers use `hosted_sessions()`.
+const MAX_LIVE_INCOMING: usize = 4;
 
 impl Core {
     pub fn start_hosting(&self) -> Result<(), Error> {
@@ -35,23 +47,29 @@ impl Core {
         Ok(())
     }
 
+    /// Disables hosting and fences every live hosted peer in one state
+    /// operation: no hosted session stays usable and no new Hello is
+    /// admitted afterwards. Owner tasks observe their parent stop and
+    /// close asynchronously; outgoing (controller-side) sessions are
+    /// untouched.
     pub fn stop_hosting(&self) -> Result<(), Error> {
-        let active = {
-            let state = self.alive_state()?;
+        let stops = {
+            let mut state = self.alive_state()?;
+            state.hosting = false;
+            state.generation = state.generation.saturating_add(1);
             state
                 .incoming
-                .as_ref()
-                .is_some_and(|session| !finished(&session.phase))
+                .values_mut()
+                .filter(|session| !finished(&session.phase))
+                .map(|session| {
+                    session.phase = SessionPhase::Stopping;
+                    session.stop.clone()
+                })
+                .collect::<Vec<_>>()
         };
-        if active {
-            match self.stop_incoming() {
-                Ok(()) | Err(Error::NoSession) => {}
-                Err(error) => return Err(error),
-            }
+        for stop in stops {
+            let _ = stop.send(true);
         }
-        let mut state = self.alive_state()?;
-        state.hosting = false;
-        drop(state);
         self.shared
             .events
             .publish(CoreEvent::HostingChanged { hosting: false });
@@ -59,14 +77,33 @@ impl Core {
     }
 
     /// Ends the hosted session and leaves hosting enabled.
+    ///
+    /// With more than one live peer this stops an arbitrary one. Call
+    /// [`Core::stop_hosted_peer`] when the session id is known.
     pub fn stop_hosted_session(&self) -> Result<(), Error> {
         self.stop_incoming()
+    }
+
+    /// Ends one hosted peer. Other live peers, their services and their
+    /// capture consumers stay up. Hosting itself stays enabled.
+    pub fn stop_hosted_peer(&self, id: u64) -> Result<(), Error> {
+        let stop = {
+            let mut state = self.alive_state()?;
+            let session = state.incoming.get_mut(&id).ok_or(Error::NoSession)?;
+            if finished(&session.phase) {
+                return Err(Error::NoSession);
+            }
+            session.phase = SessionPhase::Stopping;
+            session.stop.clone()
+        };
+        let _ = stop.send(true);
+        Ok(())
     }
 
     pub(super) fn stop_incoming(&self) -> Result<(), Error> {
         let mut state = self.alive_state()?;
         let stop = {
-            let session = state.incoming.as_mut().ok_or(Error::NoSession)?;
+            let session = state.incoming_live_mut().ok_or(Error::NoSession)?;
             if finished(&session.phase) {
                 return Err(Error::NoSession);
             }
@@ -205,18 +242,15 @@ fn admission(
     if services_only {
         return session::admit_services(
             state.hosting,
-            state.incoming.as_ref().is_some_and(|s| !finished(&s.phase)),
+            state.incoming_admission_count() >= MAX_LIVE_INCOMING,
             state.trust.get(peer.as_bytes()).is_some(),
             version,
         );
     }
     session::admit(
         state.hosting,
-        state
-            .incoming
-            .as_ref()
-            .is_some_and(|session| !finished(&session.phase)),
-        state.trust.granted(peer.as_bytes(), Grant::Control),
+        state.incoming_admission_count() >= MAX_LIVE_INCOMING,
+        state.trust.granted(peer.as_bytes(), Grant::View),
         state.trust.granted(peer.as_bytes(), Grant::Transfer),
         files_only,
         version,
@@ -257,10 +291,10 @@ pub(super) async fn handle_host_request(
             services_only,
             hostname: hello_hostname,
         } => {
-            let host_high = shared
-                .h264_high_encode
-                .load(std::sync::atomic::Ordering::Relaxed);
-            let agreed_codec = crate::session::negotiate_codec(codec, host_high);
+            // Hello carries a decode bit, not a profile bit; every decoder we
+            // ship handles both profiles, so High is a host-encoder decision.
+            let caps = lock(&shared.video_caps).clone();
+            let agreed_codec = crate::video_caps::negotiate(codec, &caps, true);
             let codec_supported = agreed_codec.is_some();
             // The controller names its decoder in Hello. A peer that cannot
             // decode gets an explicit reject, not a session with no
@@ -325,10 +359,13 @@ pub(super) async fn handle_host_request(
                         return HostTurn::PeerShouldClose;
                     }
                     // Agree the encoder limits before admitting: the offer
-                    // clamped to this host's monitor.
+                    // clamped to this host's monitor and codec caps.
                     let monitor = monitor_size(shared);
-                    let agreed = session::agree_quality(&quality, monitor);
-                    let codec_id = agreed_codec.unwrap_or(crate::protocol::CODEC_H264);
+                    let caps = lock(&shared.video_caps).clone();
+                    let agreed = session::agree_quality(&quality, monitor, &caps);
+                    let codec_id = agreed_codec
+                        .map(|agreed| agreed.codec)
+                        .unwrap_or(crate::protocol::CODEC_H264);
                     let separate_cursor = !files_only
                         && version >= 3
                         && lock(&shared.capture)
@@ -346,7 +383,12 @@ pub(super) async fn handle_host_request(
                     ) {
                         Ok(info) => {
                             *owned_session = Some(info.id);
-                            remember_link(shared, connection.clone());
+                            remember_link(shared, info.id, connection.clone());
+                            // Admission is complete: release the gate so a
+                            // concurrent peer's Hello is not serialized behind
+                            // this session's lifetime. Everything below runs
+                            // per connection without shared admission state.
+                            drop(_gate);
                             // The peer is admitted: keep its display name for
                             // this host's device list. Persist failures stay
                             // local; the next dial refreshes the name.
@@ -357,14 +399,19 @@ pub(super) async fn handle_host_request(
                             );
                             let desktop_stop = lock(&shared.state)
                                 .incoming
-                                .as_ref()
+                                .get(&info.id)
                                 .expect("admitted session")
                                 .desktop_stop
                                 .subscribe();
                             let cursor_task = separate_cursor.then(|| {
                                 let mut desktop_stop = desktop_stop.clone();
                                 let connection = connection.clone();
-                                let cursor = shared.cursor_outbox.subscribe();
+                                let cursor = lock(&shared.state)
+                                    .incoming
+                                    .get(&info.id)
+                                    .expect("admitted session")
+                                    .cursor_outbox
+                                    .subscribe();
                                 let stop = stop_rx.clone();
                                 tokio::spawn(async move {
                                     if *desktop_stop.borrow() {
@@ -382,6 +429,17 @@ pub(super) async fn handle_host_request(
                                         }
                                 })
                             });
+                            // Install reverse side-stream senders before Accept can
+                            // make the controller's connect call return. In particular,
+                            // a host file send immediately after connect must not race
+                            // this registration.
+                            let (clipboard, files) = spawn_host_streams(
+                                shared,
+                                iroh::endpoint::Connection::clone(connection),
+                                info.id,
+                                *peer.as_bytes(),
+                                tokio::sync::watch::Receiver::clone(stop_rx),
+                            );
                             let wrote = write_frame(
                                 &mut send,
                                 &ControlMessage::Accept {
@@ -403,6 +461,10 @@ pub(super) async fn handle_host_request(
                                 if let Some(task) = cursor_task {
                                     task.abort();
                                 }
+                                if let Some(task) = clipboard {
+                                    task.abort();
+                                }
+                                files.abort();
                                 finish_incoming(shared, info.id);
                                 return HostTurn::PeerShouldClose;
                             }
@@ -410,7 +472,7 @@ pub(super) async fn handle_host_request(
                                 let state = lock(&shared.state);
                                 state
                                     .incoming
-                                    .as_ref()
+                                    .get(&info.id)
                                     .and_then(|session| session.video.clone())
                             };
                             let video = outbox.map(|outbox| {
@@ -428,20 +490,10 @@ pub(super) async fn handle_host_request(
                                     }
                                 })
                             });
-                            let (clipboard, transfer, files) = spawn_host_streams(
-                                shared,
-                                iroh::endpoint::Connection::clone(connection),
-                                info.id,
-                                *peer.as_bytes(),
-                                tokio::sync::watch::Receiver::clone(stop_rx),
-                            );
                             let local_stop = host_input_loop(
                                 shared, info.id, peer, &mut send, &mut recv, stop_rx,
                             )
                             .await;
-                            if let Some(task) = transfer {
-                                task.abort();
-                            }
                             if let Some(task) = clipboard {
                                 task.abort();
                             }
@@ -503,11 +555,10 @@ pub(super) fn register_incoming(
     if state.shut_down {
         return Err(Error::ShutDown);
     }
-    if state
-        .incoming
-        .as_ref()
-        .is_some_and(|session| !finished(&session.phase))
-    {
+    // Finished records are retained for status reads; drop them here so the
+    // map holds only live sessions plus the latest finished one per id.
+    state.incoming.retain(|_, s| !finished(&s.phase));
+    if state.incoming_admission_count() >= MAX_LIVE_INCOMING {
         return Err(Error::Busy);
     }
     state.generation = state.generation.saturating_add(1);
@@ -526,35 +577,55 @@ pub(super) fn register_incoming(
         monitor_width,
         monitor_height,
     };
-    state.incoming = Some(LiveSession {
-        wire_stamp: crate::protocol::SessionStamp::new(id, generation),
-        controller: None,
+    state
+        .incoming_slots
+        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    let incoming_slot = Arc::new(super::input_cleanup::AdmissionSlot(
+        state.incoming_slots.clone(),
+    ));
+    state.incoming.insert(
         id,
-        generation,
-        role: SessionRole::Host,
-        phase: session::phase_after_admit(),
-        peer_id: peer_id.clone(),
-        peer_key: *peer.as_bytes(),
-        quality,
-        codec,
-        separate_cursor: separate_cursor && !files_only,
-        files_only,
-        services_only,
-        desktop_stop: tokio::sync::watch::channel(false).0,
-        desktop_owner: None,
-        monitor_width,
-        monitor_height,
-        stop: stop.clone(),
-        outbox: None,
-        video: if files_only {
-            None
-        } else {
-            Some(Arc::new(VideoOutbox::new()))
+        LiveSession {
+            wire_stamp: crate::protocol::SessionStamp::new(id, generation),
+            controller: None,
+            id,
+            generation,
+            role: SessionRole::Host,
+            phase: session::phase_after_admit(),
+            peer_id: peer_id.clone(),
+            peer_key: *peer.as_bytes(),
+            quality,
+            codec,
+            separate_cursor: separate_cursor && !files_only,
+            files_only,
+            services_only,
+            desktop_stop: tokio::sync::watch::channel(false).0,
+            host_held: Arc::new(Mutex::new(crate::input::HeldInput::default())),
+            incoming_slot: Some(incoming_slot),
+            cursor_outbox: tokio::sync::watch::channel(None).0,
+            input_epoch: Arc::new(AtomicU64::new(1)),
+            desktop_owner: None,
+            monitor_width,
+            monitor_height,
+            peer_topology: Vec::new(),
+            selected_displays: Vec::new(),
+            display_fault: None,
+            stop: stop.clone(),
+            outbox: None,
+            video: if files_only {
+                None
+            } else {
+                Some(Arc::new(VideoOutbox::new()))
+            },
+            link: None,
+            clipboard: None,
+            clipboard_files: None,
+            published_files: None,
+            published_rev: std::sync::atomic::AtomicU64::new(0),
         },
-        link: None,
-        clipboard: None,
-        transfer: None,
-    });
+    );
+    // Admission selects the new session for host clipboard sync.
+    state.clipboard_owner = Some(id);
     drop(state);
     session::announce_progression(&shared.events, id, generation, SessionRole::Host, &peer_id);
     Ok(info)
@@ -562,18 +633,28 @@ pub(super) fn register_incoming(
 
 pub(super) fn finish_incoming(shared: &Shared, session_id: u64) {
     let mut state = lock(&shared.state);
-    let active = match state.incoming.as_ref() {
-        Some(session) if session.id == session_id && !finished(&session.phase) => {
-            session.phase == SessionPhase::Active
-        }
+    let active = match state.incoming.get(&session_id) {
+        Some(session) if !finished(&session.phase) => session.phase == SessionPhase::Active,
         _ => return,
     };
     if active {
         state.generation = state.generation.saturating_add(1);
     }
-    let session = state.incoming.as_mut().expect("checked");
+    let session = state.incoming.get_mut(&session_id).expect("checked");
     let info = session_info(session);
     session.phase = SessionPhase::Closed;
+    session.cursor_outbox.send_replace(None);
+    session.incoming_slot = None;
+    // Hand clipboard selection to the lowest remaining live hosted session,
+    // if any, so sync never points at a closed session.
+    if state.clipboard_owner == Some(session_id) {
+        state.clipboard_owner = state
+            .incoming
+            .values()
+            .filter(|s| !finished(&s.phase))
+            .map(|s| s.id)
+            .min();
+    }
     super::services::synchronize(&mut state, &shared.events);
     drop(state);
     shared.events.publish(CoreEvent::SessionChanged {
@@ -585,11 +666,11 @@ pub(super) fn finish_incoming(shared: &Shared, session_id: u64) {
     });
 }
 
-/// Clipboard is accepted before transfer, and transfer before the
-/// filesystem loop. Two `accept_bi` calls at once can take each other's
-/// stream, so each accept starts only after the previous one has returned.
-/// Filesystem requests open their own short streams afterwards and are
-/// accepted in a loop, so no gate is needed past this point.
+/// Clipboard is accepted before the filesystem loop. Two `accept_bi`
+/// calls at once can take each other's stream, so each accept starts only
+/// after the previous one has returned. Filesystem requests open their own
+/// short streams afterwards and are accepted in a loop, so no gate is
+/// needed past this point.
 pub(super) fn spawn_host_streams(
     shared: &Arc<Shared>,
     connection: iroh::endpoint::Connection,
@@ -598,39 +679,31 @@ pub(super) fn spawn_host_streams(
     stop_rx: tokio::sync::watch::Receiver<bool>,
 ) -> (
     Option<tokio::task::JoinHandle<()>>,
-    Option<tokio::task::JoinHandle<()>>,
     tokio::task::JoinHandle<()>,
 ) {
     if lock(&shared.state)
         .incoming
-        .as_ref()
-        .is_some_and(|s| s.id == session_id && s.services_only)
+        .get(&session_id)
+        .is_some_and(|s| s.services_only)
     {
         let shared = shared.clone();
         let aux = tokio::spawn(async move {
             super::fs::serve_aux_host(shared, connection, session_id, peer, stop_rx).await;
         });
-        return (None, None, aux);
+        return (None, aux);
     }
     let (clipboard_tx, clipboard_rx) = tokio::sync::mpsc::channel(1);
-    let (transfer_tx, transfer_rx) = tokio::sync::mpsc::channel(1);
     {
         let mut state = lock(&shared.state);
-        if let Some(session) = state.incoming.as_mut() {
-            if session.id == session_id {
-                session.clipboard = Some(clipboard_tx);
-                session.transfer = Some(transfer_tx);
-            }
+        if let Some(session) = state.incoming.get_mut(&session_id) {
+            session.clipboard = Some(clipboard_tx);
         }
     }
     let (gate_tx, gate_rx) = tokio::sync::oneshot::channel();
-    let (fs_gate_tx, fs_gate_rx) = tokio::sync::oneshot::channel();
     let clipboard_connection = iroh::endpoint::Connection::clone(&connection);
-    let transfer_connection = iroh::endpoint::Connection::clone(&connection);
     let fs_connection = connection;
     let fs_stop = tokio::sync::watch::Receiver::clone(&stop_rx);
     let mut clipboard_stop = tokio::sync::watch::Receiver::clone(&stop_rx);
-    let mut transfer_stop = stop_rx;
     let shared_apply = Arc::clone(shared);
     let shared_allow = Arc::clone(shared);
     let clipboard_task = tokio::spawn(async move {
@@ -642,7 +715,46 @@ pub(super) fn spawn_host_streams(
                 recv,
                 clipboard_rx,
                 clipboard_stop,
-                move |text| apply_clipboard(&shared_apply, &peer, text),
+                move |payload| match payload {
+                    ClipboardPayload::Text(text) => {
+                        if !clipboard_selected(&lock(&shared_apply.state), session_id) {
+                            return Err(Error::Busy);
+                        }
+                        apply_clipboard(&shared_apply, &peer, text)
+                    }
+                    ClipboardPayload::Files {
+                        revision,
+                        selection,
+                    } => {
+                        if !clipboard_selected(&lock(&shared_apply.state), session_id) {
+                            return Err(Error::Busy);
+                        }
+                        apply_clipboard_files(
+                            &shared_apply,
+                            &peer,
+                            session_id,
+                            *revision,
+                            selection,
+                        )
+                    }
+                    ClipboardPayload::Prepare {
+                        nonce,
+                        revision,
+                        selection,
+                    } => spawn_paste_preparation(
+                        &shared_apply,
+                        true,
+                        session_id,
+                        peer,
+                        *nonce,
+                        *revision,
+                        selection,
+                    ),
+                    ClipboardPayload::FilesReady { nonce, outcome } => {
+                        deliver_paste_ready(&shared_apply, true, session_id, *nonce, outcome);
+                        Ok(())
+                    }
+                },
                 move || {
                     if lock(&shared_allow.state)
                         .trust
@@ -658,65 +770,12 @@ pub(super) fn spawn_host_streams(
             .await;
         }
     });
-    let shared_inspect = Arc::clone(shared);
-    let shared_write = Arc::clone(shared);
-    let shared_allow_files = Arc::clone(shared);
-    let transfer_task = tokio::spawn(async move {
-        if !matches!(gate_rx.await, Ok(true)) {
-            return;
-        }
-        let Ok((send, recv)) =
-            crate::sidestream::accept_bi(&transfer_connection, &mut transfer_stop).await
-        else {
-            let _ = fs_gate_tx.send(false);
-            return;
-        };
-        let _ = fs_gate_tx.send(true);
-        transfer::exchange(
-            send,
-            recv,
-            transfer_rx,
-            transfer_stop,
-            move |name, size, _replace| {
-                transfer::check_name(name)?;
-                transfer::checked_size(size)?;
-                if !lock(&shared_inspect.state)
-                    .trust
-                    .granted(&peer, Grant::Transfer)
-                {
-                    return Err(Error::TransferDenied);
-                }
-                if lock(&shared_inspect.transfer_dir).is_none() {
-                    return Err(Error::Unsupported("no transfer directory is installed"));
-                }
-                Ok(())
-            },
-            move |name, bytes, replace| {
-                apply_transfer(&shared_write, &peer, name, bytes, replace)?;
-                shared_write
-                    .events
-                    .publish(CoreEvent::TransferCompleted { id: session_id });
-                Ok(())
-            },
-            move || {
-                if lock(&shared_allow_files.state)
-                    .trust
-                    .granted(&peer, Grant::Transfer)
-                {
-                    Ok(())
-                } else {
-                    Err(Error::TransferDenied)
-                }
-            },
-        )
-        .await;
-    });
     let shared_fs = Arc::clone(shared);
     let fs_task = tokio::spawn(async move {
-        if !matches!(fs_gate_rx.await, Ok(true)) {
+        if !matches!(gate_rx.await, Ok(true)) {
             return;
         }
         super::fs::serve_aux_host(shared_fs, fs_connection, session_id, peer, fs_stop).await;
     });
-    (Some(clipboard_task), Some(transfer_task), fs_task)
+    (Some(clipboard_task), fs_task)
 }

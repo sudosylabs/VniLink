@@ -349,6 +349,7 @@ fn removing_control_mid_session_stops_applying_input() {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: true,
             control: false,
             clipboard: true,
             transfer: false,
@@ -362,7 +363,7 @@ fn removing_control_mid_session_stops_applying_input() {
             InputEvent::key_down(crate::input::usage::B),
         )
         .unwrap();
-    // The downgraded key is refused, the loop ends, and the held key releases.
+    // Input revocation releases held input while preserving viewing.
     wait_applied(
         &applied,
         &[
@@ -370,47 +371,35 @@ fn removing_control_mid_session_stops_applying_input() {
             InputEvent::key_up(crate::input::usage::A),
         ],
     );
-    wait_closed(&host, SessionRole::Host);
-    // The controller learns through the reject frame, so its side fails
-    // instead of closing cleanly.
-    wait_finished(&controller);
-    assert!(matches!(
-        controller
-            .snapshot()
-            .unwrap()
-            .outgoing
-            .as_ref()
-            .map(|session| &session.phase),
-        Some(SessionPhase::Failed(_))
-    ));
-    assert!(matches!(
-        controller.connect(&host.endpoint_id()),
-        Err(Error::Unauthorized)
-    ));
-}
-
-fn wait_finished(controller: &crate::core::Core) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        let done = controller
-            .snapshot()
-            .unwrap()
-            .outgoing
-            .as_ref()
-            .is_some_and(|session| {
-                matches!(
-                    session.phase,
-                    SessionPhase::Closed | SessionPhase::Failed(_)
-                )
-            });
-        if done {
-            return;
-        }
-        if std::time::Instant::now() > deadline {
-            panic!("controller session did not finish");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
+    let quality = crate::protocol::Quality {
+        max_bitrate_kbps: 1500,
+        max_frame_rate: 20,
+        max_width: 1280,
+        max_height: 720,
+    };
+    controller
+        .update_session_quality(session.id, SessionRole::Controller, quality)
+        .unwrap();
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while host.snapshot().unwrap().incoming.as_ref().unwrap().quality != Some(quality) {
+        assert!(std::time::Instant::now() < until);
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
+    assert_eq!(
+        *applied.lock().unwrap(),
+        vec![
+            InputEvent::key_down(crate::input::usage::A),
+            InputEvent::key_up(crate::input::usage::A)
+        ]
+    );
+    assert_eq!(
+        host.snapshot().unwrap().incoming.unwrap().phase,
+        SessionPhase::Active
+    );
+    assert_eq!(
+        controller.controller_session(session.id).unwrap().phase,
+        SessionPhase::Active
+    );
 }
 
 #[test]
@@ -453,4 +442,184 @@ fn quality_updates_select_the_role_with_both_directions_active() {
         a.snapshot().unwrap().outgoing.unwrap().quality,
         Some(controller_quality)
     );
+}
+
+#[test]
+fn concurrent_peers_operate_independently_within_capacity() {
+    let host = start_direct();
+    let viewers = [start_direct(), start_direct()];
+    let worker = start_direct();
+    let extra = [start_direct(), start_direct()];
+    for peer in viewers.iter().chain([&worker]).chain(extra.iter()) {
+        pair_for_control(&host, peer);
+    }
+    let applied = Arc::new(Mutex::new(Vec::new()));
+    host.set_desktop(Box::new(RecordingDesktop {
+        events: Arc::clone(&applied),
+    }))
+    .unwrap();
+    let root = std::env::temp_dir().join(format!("vnilink-multi-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    host.set_file_roots(vec![root.clone()]).unwrap();
+    host.authorize_service(&worker.endpoint_id(), crate::ServiceKind::Files, true)
+        .unwrap();
+    host.authorize(
+        &worker.endpoint_id(),
+        Grants {
+            view: true,
+            control: true,
+            clipboard: false,
+            transfer: true,
+        },
+    )
+    .unwrap();
+
+    // Two viewers and one worker are live at once with distinct records.
+    let va = viewers[0].connect(&host.endpoint_id()).unwrap();
+    let vb = viewers[1].connect(&host.endpoint_id()).unwrap();
+    let files_session = worker.connect_files(&host.endpoint_id()).unwrap();
+    assert_eq!(host.hosted_sessions().unwrap().len(), 3);
+    let mut peers: Vec<String> = host
+        .hosted_sessions()
+        .unwrap()
+        .into_iter()
+        .map(|s| s.peer_id)
+        .collect();
+    peers.sort();
+    let mut expected = vec![
+        viewers[0].endpoint_id(),
+        viewers[1].endpoint_id(),
+        worker.endpoint_id(),
+    ];
+    expected.sort();
+    assert_eq!(peers, expected);
+    let targets = host.video_targets().unwrap();
+    assert_eq!(
+        targets.len(),
+        2,
+        "a files session is not a capture consumer"
+    );
+    assert!(targets.iter().all(|target| !target.service));
+    let target_ids: Vec<u64> = targets.iter().map(|target| target.id).collect();
+    for session in host.hosted_sessions().unwrap() {
+        if session.peer_id == worker.endpoint_id() {
+            assert!(!target_ids.contains(&session.id));
+        } else {
+            assert!(target_ids.contains(&session.id));
+        }
+    }
+
+    // Input control is an explicit lease: the earliest live desktop session
+    // holds it (viewer A here) while viewers coexist. Each transition is
+    // awaited before the next is sent, so shared-adapter order is exact.
+    // Held keys are released before disconnecting, so closing a peer emits
+    // no further input of its own.
+    viewers[0]
+        .submit_input(
+            va.id,
+            va.generation,
+            InputEvent::key_down(crate::input::usage::A),
+        )
+        .unwrap();
+    wait_applied(&applied, &[InputEvent::key_down(crate::input::usage::A)]);
+    viewers[0]
+        .submit_input(
+            va.id,
+            va.generation,
+            InputEvent::key_up(crate::input::usage::A),
+        )
+        .unwrap();
+    let pair = [
+        InputEvent::key_down(crate::input::usage::A),
+        InputEvent::key_up(crate::input::usage::A),
+    ];
+    wait_applied(&applied, &pair);
+    // Viewer B is connected but without the lease: its input is discarded,
+    // its session stays Active, and nothing reaches the adapter.
+    viewers[1]
+        .submit_input(
+            vb.id,
+            vb.generation,
+            InputEvent::key_down(crate::input::usage::B),
+        )
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(
+        *applied.lock().unwrap(),
+        pair,
+        "contended input must not reach the adapter"
+    );
+    assert_eq!(
+        viewers[1].controller_session(vb.id).unwrap().phase,
+        SessionPhase::Active
+    );
+    worker
+        .fs_mkdir(
+            files_session.id,
+            files_session.generation,
+            0,
+            "",
+            "from-worker",
+        )
+        .unwrap();
+    assert!(root.join("from-worker").is_dir());
+
+    // Capacity is explicit: the fifth concurrent peer is refused with Busy,
+    // without disturbing the live sessions.
+    let vd = extra[0].connect(&host.endpoint_id()).unwrap();
+    assert_eq!(vd.phase, SessionPhase::Active);
+    assert_eq!(host.hosted_sessions().unwrap().len(), 4);
+    assert!(matches!(
+        extra[1].connect(&host.endpoint_id()),
+        Err(Error::Busy)
+    ));
+    assert_eq!(host.hosted_sessions().unwrap().len(), 4);
+    extra[0].disconnect().unwrap();
+    wait_until_hosted(&host, 3);
+
+    // Closing the holder passes the lease deterministically: viewer B's
+    // input now reaches the adapter while the worker is unaffected.
+    viewers[0].disconnect().unwrap();
+    wait_until_hosted(&host, 2);
+    viewers[1]
+        .submit_input(
+            vb.id,
+            vb.generation,
+            InputEvent::key_down(crate::input::usage::C),
+        )
+        .unwrap();
+    wait_applied(
+        &applied,
+        &[
+            InputEvent::key_down(crate::input::usage::A),
+            InputEvent::key_up(crate::input::usage::A),
+            InputEvent::key_down(crate::input::usage::C),
+        ],
+    );
+
+    // Revoking one peer stops only its session.
+    host.revoke(&worker.endpoint_id()).unwrap();
+    wait_until_hosted(&host, 1);
+    assert_eq!(
+        viewers[1].controller_session(vb.id).unwrap().phase,
+        SessionPhase::Active
+    );
+    assert_eq!(
+        host.hosted_sessions().unwrap()[0].peer_id,
+        viewers[1].endpoint_id()
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn wait_until_hosted(host: &crate::core::Core, count: usize) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if host.hosted_sessions().unwrap().len() == count {
+            return;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("hosted session count did not settle");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }

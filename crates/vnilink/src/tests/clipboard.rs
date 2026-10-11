@@ -19,7 +19,8 @@ fn start_direct() -> Core {
         RelayMode::Disabled,
     )
     .expect("loopback core");
-    core.set_h264_support(true, true).expect("flags");
+    core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .expect("flags");
     core
 }
 
@@ -66,6 +67,7 @@ fn pair(host: &Core, controller: &Core, clipboard: bool) {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: true,
             control: true,
             clipboard,
             transfer: false,
@@ -145,6 +147,7 @@ fn clipboard_requires_the_grant_and_leaves_the_session_up() {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: true,
             control: true,
             clipboard: true,
             transfer: false,
@@ -210,14 +213,23 @@ fn the_host_publishes_text_the_controller_can_read() {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: true,
             control: true,
             clipboard: true,
             transfer: false,
         },
     )
     .unwrap();
-    host.publish_clipboard(hosted.id, "secret-from-host")
-        .unwrap();
+    // Controller connect sends Ready before the host installs its side-stream
+    // sender. Wait for that asynchronous setup rather than assuming scheduler
+    // ordering; every other failure is still an immediate test failure.
+    wait_until(
+        || match host.publish_clipboard(hosted.id, "secret-from-host") {
+            Ok(()) => true,
+            Err(Error::Unsupported("clipboard stream is not open")) => false,
+            Err(error) => panic!("host clipboard publication failed: {error}"),
+        },
+    );
     wait_until(|| controller.clipboard_text().unwrap().as_deref() == Some("secret-from-host"));
     host.publish_clipboard(hosted.id, "").unwrap();
     wait_until(|| controller.clipboard_text().unwrap().as_deref() == Some(""));
@@ -334,4 +346,66 @@ fn text_frames_round_trip_and_hide_the_characters() {
         clipboard::decode(&clipboard::encode(&Frame::Ready).unwrap()[4..]).unwrap(),
         Frame::Ready
     );
+}
+
+#[test]
+fn clipboard_owner_follows_hosted_session_lifecycle() {
+    let host = start_direct();
+    let first = start_direct();
+    let second = start_direct();
+    host.set_clipboard(Box::new(RecordingClipboard {
+        texts: Arc::new(Mutex::new(Vec::new())),
+    }))
+    .unwrap();
+    pair(&host, &first, true);
+    pair(&host, &second, true);
+    assert!(host.clipboard_owner_session().unwrap().is_none());
+
+    let _a = first.connect(&host.endpoint_id()).unwrap();
+    let incoming_a = host.snapshot().unwrap().incoming.unwrap();
+    assert_eq!(
+        host.clipboard_owner_session().unwrap().unwrap().id,
+        incoming_a.id
+    );
+    // The selected session publishes; the stream opens asynchronously.
+    wait_until(
+        || match host.publish_clipboard(incoming_a.id, "from-first") {
+            Ok(()) => true,
+            Err(Error::Unsupported("clipboard stream is not open")) => false,
+            Err(error) => panic!("host clipboard publication failed: {error}"),
+        },
+    );
+    wait_until(|| first.clipboard_text().unwrap().as_deref() == Some("from-first"));
+
+    first.disconnect().unwrap();
+    wait_until(|| {
+        host.snapshot()
+            .unwrap()
+            .incoming
+            .is_some_and(|s| s.phase == SessionPhase::Closed)
+    });
+    assert!(host.clipboard_owner_session().unwrap().is_none());
+    // A closed session is gone, not merely deselected.
+    assert!(matches!(
+        host.publish_clipboard(incoming_a.id, "stale"),
+        Err(Error::NoSession)
+    ));
+
+    let _b = second.connect(&host.endpoint_id()).unwrap();
+    let incoming_b = host.snapshot().unwrap().incoming.unwrap();
+    assert_ne!(incoming_b.id, incoming_a.id);
+    assert_eq!(
+        host.clipboard_owner_session().unwrap().unwrap().peer_id,
+        second.endpoint_id()
+    );
+    wait_until(
+        || match host.publish_clipboard(incoming_b.id, "from-second") {
+            Ok(()) => true,
+            Err(Error::Unsupported("clipboard stream is not open")) => false,
+            Err(error) => panic!("host clipboard publication failed: {error}"),
+        },
+    );
+    wait_until(|| second.clipboard_text().unwrap().as_deref() == Some("from-second"));
+    // The first peer's text never leaked into the second session.
+    assert!(first.clipboard_text().unwrap().as_deref() != Some("from-second"));
 }

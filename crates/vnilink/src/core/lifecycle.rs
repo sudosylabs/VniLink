@@ -4,7 +4,7 @@ use super::*;
 
 use super::host::{accept_loop, bind_endpoint};
 
-use std::sync::atomic::{AtomicBool, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -75,18 +75,38 @@ impl Core {
             Some(bytes) => Some(installation::decode(&bytes)?),
         };
         let fresh = loaded.is_none();
-        let (identity, relay, trust, replay) = match loaded {
+        let (
+            identity,
+            relay,
+            trust,
+            replay,
+            terminal_policy,
+            file_retention_policy,
+            power_policy,
+            file_resource_policy,
+            system_policy,
+        ) = match loaded {
             None => (
                 None,
                 config.initial_relay.clone(),
                 Trust::default(),
                 ReplayCache::new(),
+                crate::terminal::TerminalPolicy::default(),
+                crate::job::FileRetentionPolicy::default(),
+                crate::power::PowerPolicy::default(),
+                crate::job::FileResourcePolicy::default(),
+                crate::system::SystemPolicy::default(),
             ),
             Some(record) => (
                 Some(record.secret),
                 record.relay,
                 record.trust,
                 record.replay,
+                record.terminal_policy,
+                record.file_retention_policy,
+                record.power_policy,
+                record.file_resource_policy,
+                record.system_policy,
             ),
         };
         let relay_mode = if direct_only {
@@ -104,6 +124,11 @@ impl Core {
             relay_mode,
             direct_only,
             Some(Installed {
+                power_policy,
+                file_resource_policy,
+                file_retention_policy,
+                terminal_policy,
+                system_policy,
                 trust,
                 replay,
                 record_relay: relay,
@@ -139,18 +164,38 @@ impl Core {
             None => SecretKey::generate(),
         };
         let bound_relay = config.relay.clone();
-        let (trust, replay, record_relay, store) = match installed {
+        let (
+            trust,
+            replay,
+            record_relay,
+            store,
+            terminal_policy,
+            file_retention_policy,
+            power_policy,
+            file_resource_policy,
+            system_policy,
+        ) = match installed {
             Some(installed) => (
                 installed.trust,
                 installed.replay,
                 installed.record_relay,
                 installed.store,
+                installed.terminal_policy,
+                installed.file_retention_policy,
+                installed.power_policy,
+                installed.file_resource_policy,
+                installed.system_policy,
             ),
             None => (
                 Trust::default(),
                 ReplayCache::new(),
                 bound_relay.clone(),
                 None,
+                crate::terminal::TerminalPolicy::default(),
+                crate::job::FileRetentionPolicy::default(),
+                crate::power::PowerPolicy::default(),
+                crate::job::FileResourcePolicy::default(),
+                crate::system::SystemPolicy::default(),
             ),
         };
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -169,19 +214,42 @@ impl Core {
             listen,
             direct_only || !bound_relay.is_public(),
         ))?;
+        let input_cleanup = Arc::new(AtomicUsize::new(0));
         let shared = Arc::new(Shared {
+            power_factory: Mutex::new(power::Factory {
+                revision: 0,
+                adapter: None,
+            }),
+            power_status: Mutex::new(
+                crate::power::PowerKind::ALL.map(crate::power::PowerStatus::idle),
+            ),
+            file_retention_policy: Arc::new(Mutex::new(file_retention_policy)),
             endpoint,
             secret,
             relay: bound_relay,
             store,
             events: EventHub::new(event_capacity),
             state: Mutex::new(State {
+                input_cleanup: input_cleanup.clone(),
+                power_policy,
+                file_resource_policy,
+                file_retention_policy,
+                terminal_policy,
+                system_policy,
+                system_operations: HashMap::new(),
+                next_operation_id: 1,
+                privacy: None,
+                terminal_pending: HashMap::new(),
                 hosting: false,
                 trust,
                 replay,
                 record_relay,
-                incoming: None,
+                incoming: HashMap::new(),
+                incoming_slots: Arc::new(AtomicUsize::new(0)),
                 outgoing: HashMap::new(),
+                clipboard_owner: None,
+                desktop_control: None,
+                lock_watch: crate::power::LockAfterControl::default(),
                 next_session_id: 1,
                 services: HashMap::new(),
                 hosted_services: HashMap::new(),
@@ -193,22 +261,40 @@ impl Core {
                 control_request: None,
                 next_control_request: 1,
             }),
-            desktop: Mutex::new(None),
+            desktop: Arc::new(Mutex::new(None)),
+            desktop_info: Mutex::new(None),
+            cleanup_executor: input_cleanup::Executor::new().map_err(Error::network)?,
+            desktop_owners: Arc::new(AtomicUsize::new(0)),
+            input_cleanup,
             capture: Mutex::new(None),
             clipboard: Mutex::new(None),
+            clipboard_file_source: Mutex::new(None),
+            paste_waiters: Mutex::new(HashMap::new()),
+            paste_preparing: Mutex::new(std::collections::HashSet::new()),
+            paste_nonce: AtomicU64::new(1),
+            camera_factory: Mutex::new(None),
+            camera_open: Mutex::new(std::collections::HashSet::new()),
+            audio_factory: Mutex::new(None),
+            terminal_factory: Mutex::new(None),
+            system_actions: Mutex::new(None),
+            privacy_serial: Mutex::new(()),
+            terminal_sessions: Mutex::new(HashMap::new()),
             clipboard_available: AtomicBool::new(false),
-            transfer_dir: Mutex::new(None),
             video_inbox: Mutex::new(None),
             video_subscriber: Mutex::new(Weak::new()),
             session_gate: tokio::sync::Mutex::new(()),
             desktop_gate: tokio::sync::Mutex::new(()),
+            desktop_streams: AtomicUsize::new(0),
+            desktop_routers: Mutex::new(std::collections::HashSet::new()),
+            topology: Mutex::new(super::topology::TopologySnapshot {
+                revision: 0,
+                displays: Vec::new(),
+            }),
+            topology_watch: tokio::sync::watch::channel(0).0,
             swap_control_command: AtomicBool::new(false),
-            h264_encode: AtomicBool::new(false),
-            h264_decode: AtomicBool::new(false),
+            video_caps: Mutex::new(crate::video_caps::VideoCodecCaps::default()),
             keyboard_mode: AtomicU8::new(KeyboardMode::Character as u8),
-            h264_high_encode: AtomicBool::new(false),
             cursor_receiver: AtomicBool::new(false),
-            cursor_outbox: tokio::sync::watch::channel(None).0,
             file_roots: Mutex::new(crate::fs::RootSet::default()),
             blob_dir: Mutex::new(None),
             blob_store: Mutex::new(None),
@@ -221,11 +307,18 @@ impl Core {
             jobs: Arc::new(Mutex::new(std::collections::HashMap::new())),
             job_next: std::sync::atomic::AtomicU64::new(1),
             job_save: Mutex::new(()),
+            job_owner_gate: Mutex::new(()),
             job_cancel: Mutex::new(std::collections::HashMap::new()),
             job_driving: Mutex::new(std::collections::HashSet::new()),
+            file_resources: Arc::new(Mutex::new(file_resources::Resources::default())),
+            backend_state: Mutex::new(std::collections::HashMap::new()),
         });
         let accept = Arc::clone(&shared);
         runtime.spawn(async move { accept_loop(accept).await });
+        let power_shared = Arc::downgrade(&shared);
+        runtime.spawn(async move {
+            power::start(power_shared);
+        });
         Ok(Self { runtime, shared })
     }
 
@@ -240,7 +333,9 @@ impl Core {
             state.shut_down = true;
             state.pairing_window = None;
             state.control_request = None;
-            signal_stop(state.incoming.as_mut());
+            for session in state.incoming.values_mut() {
+                signal_stop(Some(session));
+            }
             for session in state.outgoing.values_mut() {
                 signal_stop(Some(session));
             }
@@ -316,6 +411,11 @@ impl Core {
                 &state.record_relay,
                 &Trust::default(),
                 &ReplayCache::new(),
+                &state.terminal_policy,
+                &state.file_retention_policy,
+                &state.power_policy,
+                &state.file_resource_policy,
+                &state.system_policy,
             )?;
             store.save(&bytes)?;
         }
@@ -326,6 +426,20 @@ impl Core {
     pub fn subscribe(&self) -> Result<EventSubscription, Error> {
         self.ensure_alive()?;
         self.shared.events.subscribe()
+    }
+
+    /// Live hosted peers, oldest id first. `Snapshot::incoming` remains the
+    /// latest session for single-view callers. Use this when iterating peers.
+    pub fn hosted_sessions(&self) -> Result<Vec<SessionInfo>, Error> {
+        let state = self.alive_state()?;
+        let mut sessions: Vec<SessionInfo> = state
+            .incoming
+            .values()
+            .filter(|session| !finished(&session.phase))
+            .map(session_info)
+            .collect();
+        sessions.sort_by_key(|s| s.id);
+        Ok(sessions)
     }
 
     pub fn snapshot(&self) -> Result<Snapshot, Error> {
@@ -350,7 +464,7 @@ impl Core {
                     grants: device.grants,
                 })
                 .collect(),
-            incoming: state.incoming.as_ref().map(session_info),
+            incoming: state.incoming_latest().map(session_info),
             outgoing: state.single_outgoing().map(session_info),
             capabilities: desktop_capabilities(&self.shared),
         })

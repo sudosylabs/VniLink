@@ -42,6 +42,7 @@ fn pairing_does_not_grant_control_and_a_grant_is_directional() {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: false,
             control: false,
             clipboard: true,
             transfer: false,
@@ -56,6 +57,7 @@ fn pairing_does_not_grant_control_and_a_grant_is_directional() {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: true,
             control: true,
             clipboard: false,
             transfer: false,
@@ -121,12 +123,17 @@ fn pairing_does_not_grant_control_and_a_grant_is_directional() {
 }
 
 #[test]
-fn a_second_controller_is_rejected_while_a_session_is_active() {
+fn peers_past_capacity_are_rejected_while_live_sessions_stay_active() {
     let host = start_direct();
-    let first = start_direct();
-    let second = start_direct();
+    let peers = [
+        start_direct(),
+        start_direct(),
+        start_direct(),
+        start_direct(),
+        start_direct(),
+    ];
     host.start_hosting().unwrap();
-    for controller in [&first, &second] {
+    for controller in &peers {
         let token = host.create_invitation(Duration::from_secs(60)).unwrap();
         controller.accept_invitation(&token).unwrap();
         let back = controller
@@ -136,6 +143,7 @@ fn a_second_controller_is_rejected_while_a_session_is_active() {
         host.authorize(
             &controller.endpoint_id(),
             Grants {
+                view: true,
                 control: true,
                 clipboard: false,
                 transfer: false,
@@ -143,14 +151,28 @@ fn a_second_controller_is_rejected_while_a_session_is_active() {
         )
         .unwrap();
     }
-    let session = first.connect(&host.endpoint_id()).unwrap();
-    assert_eq!(session.phase, SessionPhase::Active);
-    let busy = second.connect(&host.endpoint_id());
+    let mut sessions = Vec::new();
+    for controller in &peers[..4] {
+        let session = controller.connect(&host.endpoint_id()).unwrap();
+        assert_eq!(session.phase, SessionPhase::Active);
+        sessions.push(session);
+    }
+    assert_eq!(host.hosted_sessions().unwrap().len(), 4);
+    // The fifth concurrent peer is refused with Busy. The refusal must not
+    // disturb the live sessions.
+    let busy = peers[4].connect(&host.endpoint_id());
     assert!(
         matches!(busy, Err(Error::Busy)),
-        "second connect returned {busy:?}; host={:?}",
+        "fifth connect returned {busy:?}; host={:?}",
         host.snapshot()
     );
+    assert_eq!(host.hosted_sessions().unwrap().len(), 4);
+    for (controller, session) in peers[..4].iter().zip(&sessions) {
+        assert_eq!(
+            controller.controller_session(session.id).unwrap().phase,
+            SessionPhase::Active
+        );
+    }
 }
 
 #[test]
@@ -194,6 +216,7 @@ fn accepting_a_new_invitation_neither_adds_nor_removes_grants() {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: false,
             control: false,
             clipboard: true,
             transfer: false,
@@ -277,6 +300,7 @@ fn connect_requires_pairing_and_hosting() {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: true,
             control: true,
             clipboard: false,
             transfer: false,
@@ -385,6 +409,7 @@ fn admission_publishes_the_session_lifecycle() {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: true,
             control: true,
             clipboard: false,
             transfer: false,
@@ -480,19 +505,22 @@ fn a_host_without_an_encoder_reports_unsupported_instead_of_admitting() {
     // A capture adapter without a usable encoder is an explicit unsupported
     // host, not a silent session with no video.
     host.set_capture(Box::new(ShutdownCapture)).unwrap();
-    host.set_h264_support(false, false).unwrap();
+    host.set_video_codecs(crate::VideoCodecCaps::default())
+        .unwrap();
     assert!(host.capabilities().desktop_capture);
     assert!(!host.capabilities().h264_encode);
     pair_for_control(&host, &controller);
     // Pairing for control restores capable flags; clear the encoder again so
     // this connect exercises the unsupported path.
-    host.set_h264_support(false, false).unwrap();
+    host.set_video_codecs(crate::VideoCodecCaps::default())
+        .unwrap();
     assert!(matches!(
         controller.connect(&host.endpoint_id()),
         Err(Error::Unsupported(_))
     ));
     // Reporting the platform encoder makes the same host admittable.
-    host.set_h264_support(true, false).unwrap();
+    host.set_video_codecs(crate::VideoCodecCaps::encode_only(4096, 4096, "test"))
+        .unwrap();
     assert!(host.capabilities().h264_encode);
     assert!(!host.capabilities().h264_decode);
     let session = controller.connect(&host.endpoint_id()).unwrap();
@@ -504,9 +532,13 @@ fn a_host_without_an_encoder_reports_unsupported_instead_of_admitting() {
 #[test]
 fn controller_decode_availability_is_visible_in_capabilities() {
     let controller = start_direct();
-    controller.set_h264_support(false, false).unwrap();
+    controller
+        .set_video_codecs(crate::VideoCodecCaps::default())
+        .unwrap();
     assert!(!controller.capabilities().h264_decode);
-    controller.set_h264_support(false, true).unwrap();
+    controller
+        .set_video_codecs(crate::VideoCodecCaps::decode_only("test"))
+        .unwrap();
     assert!(controller.capabilities().h264_decode);
     assert!(!controller.capabilities().h264_encode);
 }
@@ -516,7 +548,9 @@ fn a_controller_without_a_decoder_is_rejected_before_dialing() {
     let host = start_direct();
     let controller = start_direct();
     pair_for_control(&host, &controller);
-    controller.set_h264_support(false, false).unwrap();
+    controller
+        .set_video_codecs(crate::VideoCodecCaps::default())
+        .unwrap();
     assert!(matches!(
         controller.connect(&host.endpoint_id()),
         Err(Error::Unsupported(_))

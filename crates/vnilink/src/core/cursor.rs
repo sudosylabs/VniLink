@@ -21,7 +21,7 @@ impl Core {
     pub fn separate_cursor(&self, id: u64, role: SessionRole) -> Result<bool, Error> {
         let state = self.alive_state()?;
         let session = match role {
-            SessionRole::Host => state.incoming.as_ref(),
+            SessionRole::Host => state.incoming.get(&id),
             SessionRole::Controller => state.outgoing.get(&id),
         };
         let session = session
@@ -39,15 +39,16 @@ impl Core {
         let state = self.alive_state()?;
         let session = state
             .incoming
-            .as_ref()
+            .get(&id)
             .filter(|s| {
                 s.id == id
                     && s.generation == generation
                     && s.phase == SessionPhase::Active
                     && s.separate_cursor
+                    && !*s.desktop_stop.borrow()
             })
             .ok_or(Error::NoSession)?;
-        self.shared.cursor_outbox.send_replace(Some((
+        session.cursor_outbox.send_replace(Some((
             SessionStamp::new(session.id, session.generation),
             Arc::new(cursor),
         )));
@@ -165,5 +166,168 @@ pub(super) async fn receive_cursor(
         }
         update.image = image.clone();
         *lock(&inbox) = Some((stamp, Arc::new(update)));
+    }
+}
+
+#[cfg(test)]
+mod review_v11 {
+    use super::*;
+    struct Capture;
+    impl crate::HostCapture for Capture {
+        fn monitor(&self) -> (u16, u16) {
+            (64, 64)
+        }
+        fn separate_cursor(&self) -> bool {
+            true
+        }
+    }
+    #[test]
+    fn legacy_two_peer_cursor_publish_preserves_each_consumers_latest_sample() {
+        let host = crate::tests::support::start_direct();
+        host.set_capture(Box::new(Capture)).unwrap();
+        host.start_hosting().unwrap();
+        let first = crate::tests::support::start_direct();
+        let second = crate::tests::support::start_direct();
+        for viewer in [&first, &second] {
+            viewer.set_cursor_receiver(true).unwrap();
+            viewer
+                .accept_invitation(&host.create_invitation(Duration::from_secs(60)).unwrap())
+                .unwrap();
+            host.accept_invitation(&viewer.create_invitation(Duration::from_secs(60)).unwrap())
+                .unwrap();
+            host.authorize(
+                &viewer.endpoint_id(),
+                crate::Grants {
+                    view: true,
+                    control: true,
+                    clipboard: false,
+                    transfer: false,
+                },
+            )
+            .unwrap();
+            viewer.connect(&host.endpoint_id()).unwrap();
+        }
+        let owners = host.hosted_sessions().unwrap();
+        assert_eq!(owners.len(), 2);
+        let a = SessionStamp::new(owners[0].id, owners[0].generation);
+        let b = SessionStamp::new(owners[1].id, owners[1].generation);
+        let mut reader_a = lock(&host.shared.state)
+            .incoming
+            .get(&a.id)
+            .unwrap()
+            .cursor_outbox
+            .subscribe();
+        let mut reader_b = lock(&host.shared.state)
+            .incoming
+            .get(&b.id)
+            .unwrap()
+            .cursor_outbox
+            .subscribe();
+        let sample = CursorState {
+            position: (12, 34),
+            visible: true,
+            image: None,
+        };
+        host.publish_cursor(a.id, a.generation, sample.clone())
+            .unwrap();
+        host.publish_cursor(
+            b.id,
+            b.generation,
+            CursorState {
+                position: (56, 78),
+                ..sample.clone()
+            },
+        )
+        .unwrap();
+        // Exact per-owner filter used by production send_cursor. Readers
+        // are scheduled only after both native publications in this probe.
+        let delivered_a = reader_a
+            .borrow_and_update()
+            .clone()
+            .filter(|(owner, _)| *owner == a);
+        let delivered_b = reader_b
+            .borrow_and_update()
+            .clone()
+            .filter(|(owner, _)| *owner == b);
+        assert_eq!(delivered_a.as_ref().unwrap().1.position, (12, 34));
+        assert_eq!(delivered_b.as_ref().unwrap().1.position, (56, 78));
+        let first_parent = first.snapshot().unwrap().outgoing.unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while first
+            .cursor(first_parent.id, first_parent.generation)
+            .unwrap()
+            .is_none()
+        {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(
+            first
+                .cursor(first_parent.id, first_parent.generation)
+                .unwrap()
+                .unwrap()
+                .position,
+            (12, 34)
+        );
+        host.stop_hosted_peer(a.id).unwrap();
+        while !finished(&first.controller_session(first_parent.id).unwrap().phase) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(host
+            .publish_cursor(a.id, a.generation, sample.clone())
+            .is_err());
+        let replaced = first.connect(&host.endpoint_id()).unwrap();
+        let new = host
+            .hosted_sessions()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.peer_id == first.endpoint_id())
+            .unwrap();
+        assert_ne!(new.generation, a.generation);
+        assert!(lock(&host.shared.state)
+            .incoming
+            .get(&new.id)
+            .unwrap()
+            .cursor_outbox
+            .borrow()
+            .is_none());
+        host.publish_cursor(
+            new.id,
+            new.generation,
+            CursorState {
+                position: (90, 91),
+                ..sample
+            },
+        )
+        .unwrap();
+        assert!(reader_a.borrow_and_update().is_none());
+        assert_eq!(
+            reader_b.borrow_and_update().as_ref().unwrap().1.position,
+            (56, 78)
+        );
+        while first
+            .cursor(replaced.id, replaced.generation)
+            .unwrap()
+            .is_none()
+        {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(
+            first
+                .cursor(replaced.id, replaced.generation)
+                .unwrap()
+                .unwrap()
+                .position,
+            (90, 91)
+        );
+        host.shutdown();
+        first.shutdown();
+        second.shutdown();
+        assert!(
+            delivered_a.is_some(),
+            "peer A sample overwritten by peer B before its sender reads"
+        );
     }
 }

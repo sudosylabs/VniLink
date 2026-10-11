@@ -7,8 +7,8 @@
 //! operating-system clipboard. Call [`Core::enable_os_input`] on the host so
 //! authorized sessions inject keys and pointer events. Call
 //! [`Core::set_clipboard`] so a granted controller can paste text. Call
-//! [`Core::set_transfer_directory`] so a granted peer can send a file. Call
-//! [`Core::publish_video`] with encoded H.264 frames and
+//! [`Core::set_file_roots`] so a granted peer can browse and receive files.
+//! Call [`Core::publish_video`] with encoded H.264 frames and
 //! [`Core::subscribe_video`] to receive them. [`Core::submit_local_key`] is
 //! the key path. The default mode inserts the character the controller
 //! produced. Map mode sends the physical HID position, and Translate mode
@@ -59,10 +59,10 @@
 //!
 //! # File transfer
 //!
-//! File transfer is a separate grant from control and from clipboard. A file
-//! is at most 8 MiB. The name is a relative path under the directory from
-//! [`Core::set_transfer_directory`]. An existing file is replaced only when
-//! the sender asks. The steps are in `crates/vnilink/TRANSFER.md`.
+//! File transfer is a separate grant from control and from clipboard. The
+//! owner approves roots with [`Core::set_file_roots`]; the peer browses
+//! them with `fs_*` calls and moves bytes with resumable transfer jobs
+//! (`job_submit_*`/`job_poll`). The steps are in `crates/vnilink/TRANSFER.md`.
 //!
 //! # Threading
 //!
@@ -72,10 +72,16 @@
 
 #![forbid(unsafe_code)]
 
+mod adaptation;
 mod address;
+pub mod availability;
+pub use adaptation::{AdaptationReason, DesktopMediaStatus};
+pub mod audio;
+pub mod camera;
 mod clipboard;
 mod codec;
 mod core;
+pub mod diagnostics;
 mod error;
 mod events;
 pub mod fs;
@@ -94,17 +100,33 @@ mod relay;
 mod service;
 mod session;
 mod sidestream;
-mod transfer;
+pub mod system;
+pub mod terminal;
 mod trust;
 mod video;
+pub mod video_caps;
 
-pub use clipboard::{HostClipboard, MAX_CLIPBOARD_TEXT};
+pub use availability::{
+    evaluate, policy_descriptor, Availability, AvailabilityInputs, AvailabilityReason,
+    BackendState, Capability, PolicyChangeScope, PolicyDescriptor, POLICIES,
+};
+pub use clipboard::{
+    ClipboardFileEntry, FileSelection, HostClipboard, HostClipboardFiles, PreparedFile,
+    PreparedPaste, StoredFileSelection, MAX_CLIPBOARD_FILES, MAX_CLIPBOARD_FILES_BYTES,
+    MAX_CLIPBOARD_TEXT,
+};
 pub use core::service_stream::RemoteFilesService;
-pub use core::DesktopInfo;
 pub use core::RemoteDesktopService;
+pub use core::TopologySnapshot;
 pub use core::{
     ControlRequest, Core, CoreConfig, DeviceInfo, Listen, OpenConfig, SessionPath, Snapshot,
-    BLOB_ALPN, BLOB_MAX_BYTES,
+    VideoRouting, VideoTarget, BLOB_ALPN, BLOB_MAX_BYTES,
+};
+pub use core::{DesktopControlState, DesktopInfo};
+pub use diagnostics::{
+    build_snapshot, export_json, file_name_only, fingerprint, monotonic_ms, ConnectionSummary,
+    DiagnosticSnapshot, QueueDepths, ResourceCounts, ServiceSummary, SnapshotInputs,
+    MAX_EXPORT_BYTES, MAX_SNAPSHOT_LISTED, SNAPSHOT_VERSION,
 };
 pub use error::Error;
 pub use events::{CoreEvent, EventSubscription};
@@ -112,7 +134,11 @@ pub use fs::{
     DirPage, EntryKind, EntryToken, FsEntry, RevisionGate, MAX_LISTED, MAX_PAGE, MAX_ROOTS,
 };
 pub use hostname::{clean_hostname, local_hostname};
-pub use input::{map_point, usage, HostDesktop, InputEvent, PointerButton, MAX_KEY_TEXT};
+pub use input::{
+    desktop_bounds, display_for_point, map_point, map_window_to_desktop, usage, validate_topology,
+    DisplayInfo, HostDesktop, InputEvent, PointerButton, PointerSettings, MAX_DESKTOP_ORIGIN,
+    MAX_DISPLAYS, MAX_DISPLAY_EDGE, MAX_KEY_TEXT, MAX_PRECISE_WHEEL, WHEEL_DETENT,
+};
 pub use installation::{InstallationStore, MemoryStore};
 pub use job::{ConflictChoice, JobDirection, JobSnapshot, JobState};
 pub use keyboard::{KeyboardMode, LocalKey};
@@ -127,14 +153,18 @@ pub use protocol::{
 };
 pub use relay::{CustomRelay, RelaySettings};
 pub use service::{
-    ServiceInfo, ServiceKind, ServiceLease, ServicePermissions, ServicePhase, ServiceSupport,
-    MAX_SERVICE_RECORDS,
+    CloseCause, ServiceInfo, ServiceKind, ServiceLease, ServicePermissions, ServicePhase,
+    ServiceSupport, MAX_SERVICE_RECORDS,
 };
-pub use session::{
-    negotiate_codec, suggest_quality, Grants, SessionInfo, SessionPhase, SessionRole,
+pub use session::{Grants, SessionInfo, SessionPhase, SessionRole};
+pub use system::{
+    HostSessionState, HostSystemActions, OperationState, PrivacyState, SystemAction,
+    SystemOperation, SystemPolicy, SystemSupport,
 };
-pub use transfer::MAX_FILE_BYTES;
-pub use video::{EncodedFrame, HostCapture, VideoSubscription, MAX_VIDEO_FRAME};
+pub use video::{EncodedFrame, HostCapture, RecordingVideoTap, VideoSubscription, MAX_VIDEO_FRAME};
+pub use video_caps::{
+    clamp_quality, negotiate as negotiate_video_codec, AgreedCodec, VideoCodecCaps,
+};
 
 #[cfg(test)]
 #[path = "tests.rs"]
@@ -142,3 +172,12 @@ mod tests;
 
 mod cursor;
 pub use cursor::{CursorImage, CursorState, MAX_CURSOR_EDGE};
+
+pub use core::RemoteAudioService;
+pub use core::RemoteCameraService;
+pub use core::RemoteSystemService;
+pub use core::RemoteTerminalService;
+
+pub use service::BackendStartup;
+
+pub mod power;

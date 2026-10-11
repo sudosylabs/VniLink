@@ -78,6 +78,7 @@ fn pair(host: &Core, controller: &Core, transfer: bool) {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: true,
             control: true,
             clipboard: false,
             transfer,
@@ -150,6 +151,7 @@ fn blob_spike_serves_both_directions() {
         .authorize(
             &host.endpoint_id(),
             Grants {
+                view: false,
                 control: false,
                 clipboard: false,
                 transfer: true,
@@ -235,4 +237,54 @@ fn blob_spike_rejects_oversize_and_unpaired_offers() {
         ),
         Err(Error::InvalidSetting(_))
     ));
+}
+
+#[test]
+fn changing_recent_fetch_retention_reclaims_payload_in_the_running_store() {
+    let host = start_direct();
+    let receiver = start_direct();
+    let (_host_dir, _receiver_dir) = paired_with_dirs(&host, &receiver, true, "retention-policy");
+    let data = payload(64 * 1024);
+    let (hash, size) = host.blob_offer(&receiver.endpoint_id(), &data).unwrap();
+    for policy in [
+        crate::job::FileRetentionPolicy {
+            recent_fetch_bytes: 0,
+            ..Default::default()
+        },
+        crate::job::FileRetentionPolicy {
+            recent_fetch_age_secs: 0,
+            ..Default::default()
+        },
+    ] {
+        receiver
+            .set_file_retention_policy(Default::default())
+            .unwrap();
+        assert_eq!(
+            receiver
+                .blob_fetch(&host.endpoint_id(), hash, size)
+                .unwrap(),
+            data
+        );
+        assert!(receiver.blob_has(hash).unwrap());
+        // The store was opened using the original policy. Each independent
+        // limit must reach its already installed GC callback.
+        receiver.set_file_retention_policy(policy).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(12);
+        while receiver.blob_has(hash).unwrap() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "collector did not release the completed fetch for {policy:?}"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(host.blob_has(hash).unwrap());
+    }
+    // GC operates on receiver cache, never the sender's currently approved offer.
+    assert!(host.blob_has(hash).unwrap());
+    assert_eq!(
+        receiver
+            .blob_fetch(&host.endpoint_id(), hash, size)
+            .unwrap(),
+        data
+    );
 }

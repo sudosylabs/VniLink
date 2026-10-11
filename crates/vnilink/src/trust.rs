@@ -15,6 +15,10 @@ pub(crate) struct Device {
     pub grants: Grants,
     pub terminal: bool,
     pub camera: bool,
+    pub system_audio: bool,
+    pub microphone: bool,
+    pub recording: bool,
+    pub system_actions: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -54,13 +58,28 @@ impl Trust {
     ) -> Result<crate::ServicePermissions, Error> {
         let device = self.get(endpoint_id).ok_or(Error::NotPaired)?;
         Ok(crate::ServicePermissions {
-            desktop: device.grants.control,
+            desktop: device.grants.view,
             files: device.grants.transfer,
             terminal: device.terminal,
             camera: device.camera,
+            system_audio: device.system_audio,
+            microphone: device.microphone,
+            recording: device.recording,
+            system_actions: device.system_actions,
         })
     }
 
+    pub(crate) fn authorize_recording(
+        &mut self,
+        endpoint_id: &[u8; 32],
+        allowed: bool,
+    ) -> Result<(), Error> {
+        self.devices
+            .get_mut(endpoint_id)
+            .ok_or(Error::NotPaired)?
+            .recording = allowed;
+        Ok(())
+    }
     pub(crate) fn authorize_service(
         &mut self,
         endpoint_id: &[u8; 32],
@@ -69,10 +88,13 @@ impl Trust {
     ) -> Result<(), Error> {
         let device = self.devices.get_mut(endpoint_id).ok_or(Error::NotPaired)?;
         match kind {
-            crate::ServiceKind::Desktop => device.grants.control = allowed,
+            crate::ServiceKind::Desktop => device.grants.view = allowed,
             crate::ServiceKind::Files => device.grants.transfer = allowed,
             crate::ServiceKind::Terminal => device.terminal = allowed,
             crate::ServiceKind::Camera => device.camera = allowed,
+            crate::ServiceKind::SystemAudio => device.system_audio = allowed,
+            crate::ServiceKind::Microphone => device.microphone = allowed,
+            crate::ServiceKind::System => device.system_actions = allowed,
         }
         Ok(())
     }
@@ -86,6 +108,9 @@ impl Trust {
             crate::ServiceKind::Files => permissions.files,
             crate::ServiceKind::Terminal => permissions.terminal,
             crate::ServiceKind::Camera => permissions.camera,
+            crate::ServiceKind::SystemAudio => permissions.system_audio,
+            crate::ServiceKind::Microphone => permissions.microphone,
+            crate::ServiceKind::System => permissions.system_actions,
         }
     }
 
@@ -156,6 +181,7 @@ impl Trust {
             return false;
         };
         match grant {
+            Grant::View => device.grants.view,
             Grant::Control => device.grants.control,
             Grant::Clipboard => device.grants.clipboard,
             Grant::Transfer => device.grants.transfer,

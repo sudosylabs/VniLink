@@ -22,6 +22,7 @@ fn credentialed_relay() -> RelaySettings {
 
 fn all_grants() -> Grants {
     Grants {
+        view: true,
         control: true,
         clipboard: true,
         transfer: true,
@@ -63,6 +64,10 @@ fn the_record_roundtrips_trust_relay_credentials_and_replay() {
         .pair(Device {
             terminal: false,
             camera: false,
+            system_audio: false,
+            microphone: false,
+            recording: false,
+            system_actions: false,
             endpoint_id: *peer_key.public().as_bytes(),
             display_id: peer_key.public().to_string(),
             relays: vec![relay_url.clone()],
@@ -77,7 +82,18 @@ fn the_record_roundtrips_trust_relay_credentials_and_replay() {
         ReplayCache::from_entries(vec![(future_nonce, now + 3_600_000), (past_nonce, 1)]).unwrap();
     let settings = credentialed_relay();
     let secret = owner.to_bytes();
-    let bytes = installation::encode(&secret, &settings, &trust, &replay).unwrap();
+    let bytes = installation::encode(
+        &secret,
+        &settings,
+        &trust,
+        &replay,
+        &crate::terminal::TerminalPolicy::default(),
+        &crate::job::FileRetentionPolicy::default(),
+        &crate::power::PowerPolicy::default(),
+        &crate::job::FileResourcePolicy::default(),
+        &crate::system::SystemPolicy::default(),
+    )
+    .unwrap();
     let decoded = installation::decode(&bytes).unwrap();
     assert!(decoded.secret == secret, "decode changed the secret");
     assert_eq!(decoded.relay, settings);
@@ -104,11 +120,16 @@ fn the_record_roundtrips_trust_relay_credentials_and_replay() {
         many.pair(Device {
             terminal: false,
             camera: false,
+            system_audio: false,
+            microphone: false,
+            recording: false,
+            system_actions: false,
             endpoint_id: *peer_key.public().as_bytes(),
             display_id: peer_key.public().to_string(),
             relays: Vec::new(),
             direct: Vec::new(),
             grants: Grants {
+                view: true,
                 control: true,
                 clipboard: false,
                 transfer: true,
@@ -121,6 +142,11 @@ fn the_record_roundtrips_trust_relay_credentials_and_replay() {
         &RelaySettings::public_n0(),
         &many,
         &ReplayCache::new(),
+        &crate::terminal::TerminalPolicy::default(),
+        &crate::job::FileRetentionPolicy::default(),
+        &crate::power::PowerPolicy::default(),
+        &crate::job::FileResourcePolicy::default(),
+        &crate::system::SystemPolicy::default(),
     )
     .unwrap();
     let decoded = installation::decode(&bytes).unwrap();
@@ -371,6 +397,10 @@ fn service_permissions_migrate_old_records_with_new_grants_denied() {
             grants: all_grants(),
             terminal: true,
             camera: true,
+            system_audio: false,
+            microphone: false,
+            recording: false,
+            system_actions: false,
         })
         .unwrap();
     let current = installation::encode(
@@ -378,9 +408,14 @@ fn service_permissions_migrate_old_records_with_new_grants_denied() {
         &RelaySettings::public_n0(),
         &trust,
         &ReplayCache::new(),
+        &crate::terminal::TerminalPolicy::default(),
+        &crate::job::FileRetentionPolicy::default(),
+        &crate::power::PowerPolicy::default(),
+        &crate::job::FileResourcePolicy::default(),
+        &crate::system::SystemPolicy::default(),
     )
     .unwrap();
-    assert_eq!(current[4], 3);
+    assert_eq!(current[4], 4);
     let decoded = installation::decode(&current).unwrap();
     assert!(decoded.trust.devices().next().unwrap().terminal);
     assert!(decoded.trust.devices().next().unwrap().camera);
@@ -388,23 +423,130 @@ fn service_permissions_migrate_old_records_with_new_grants_denied() {
     // control/clipboard/files grants cannot imply terminal or camera access.
     let mut old = current.clone();
     old[4] = 2;
+    old.drain(old.len() - 4 - 77..old.len() - 4);
     // 5-byte header + secret32 + public relay1 + count2 + key32 + relay/address counts2.
     let grant_offset = 5 + 32 + 1 + 2 + 32 + 2;
+    old.remove(grant_offset); // Historical fixture has a one-byte grant field.
     old[grant_offset] &= 7;
     resign(&mut old);
     let restored = installation::decode(&old).unwrap();
     let device = restored.trust.devices().next().unwrap();
-    assert_eq!(device.grants, all_grants());
+    assert!(!device.grants.view);
+    assert!(device.grants.control && device.grants.clipboard && device.grants.transfer);
     assert!(!device.terminal && !device.camera);
     old[grant_offset] |= 8;
     resign(&mut old);
     reject(&old);
     let mut unknown = current;
-    unknown[grant_offset] |= 32;
+    unknown[grant_offset + 1] |= 64;
+    resign(&mut unknown);
+    let with_system = installation::decode(&unknown).unwrap();
+    let current = with_system.trust.devices().next().unwrap();
+    assert!(current.system_audio);
+    assert!(!current.microphone);
+    unknown[grant_offset + 1] |= 128;
+    resign(&mut unknown);
+    let with_microphone = installation::decode(&unknown).unwrap();
+    let current = with_microphone.trust.devices().next().unwrap();
+    assert!(current.system_audio && current.microphone);
+    unknown[grant_offset] |= 1;
+    resign(&mut unknown);
+    let with_recording = installation::decode(&unknown).unwrap();
+    assert!(with_recording.trust.devices().next().unwrap().recording);
+    unknown[grant_offset] |= 2;
+    resign(&mut unknown);
+    let with_system = installation::decode(&unknown).unwrap();
+    assert!(with_system.trust.devices().next().unwrap().system_actions);
+    unknown[grant_offset] |= 4;
     resign(&mut unknown);
     reject(&unknown);
     let payload = device_payload(&owner.to_bytes(), peer.public().as_bytes(), 7, &[], &[]);
     let restored = installation::decode(&installation::frame(&payload)).unwrap();
     let device = restored.trust.devices().next().unwrap();
     assert!(!device.terminal && !device.camera);
+}
+
+#[test]
+fn viewing_and_input_grants_roundtrip_independently() {
+    let owner = SecretKey::generate();
+    for (view, control) in [(true, false), (false, true), (false, false), (true, true)] {
+        let peer = SecretKey::generate();
+        let mut trust = Trust::default();
+        let grants = Grants {
+            view,
+            control,
+            clipboard: false,
+            transfer: false,
+        };
+        trust
+            .pair(Device {
+                endpoint_id: *peer.public().as_bytes(),
+                display_id: peer.public().to_string(),
+                relays: vec![],
+                direct: vec![],
+                grants,
+                terminal: false,
+                camera: false,
+                system_audio: false,
+                microphone: false,
+                recording: false,
+                system_actions: false,
+            })
+            .unwrap();
+        let bytes = installation::encode(
+            &owner.to_bytes(),
+            &RelaySettings::public_n0(),
+            &trust,
+            &ReplayCache::new(),
+            &crate::terminal::TerminalPolicy::default(),
+            &crate::job::FileRetentionPolicy::default(),
+            &crate::power::PowerPolicy::default(),
+            &crate::job::FileResourcePolicy::default(),
+            &crate::system::SystemPolicy::default(),
+        )
+        .unwrap();
+        let restored = installation::decode(&bytes).unwrap();
+        let device = restored.trust.devices().next().unwrap();
+        assert_eq!(device.grants, grants);
+        assert_eq!(
+            restored
+                .trust
+                .service_permissions(&device.endpoint_id)
+                .unwrap()
+                .desktop,
+            view
+        );
+    }
+}
+
+#[test]
+fn lock_after_control_roundtrips_and_reserved_bits_stay_rejected() {
+    let owner = SecretKey::generate();
+    let bytes = installation::encode(
+        &owner.to_bytes(),
+        &RelaySettings::public_n0(),
+        &Trust::default(),
+        &ReplayCache::new(),
+        &crate::terminal::TerminalPolicy::default(),
+        &crate::job::FileRetentionPolicy::default(),
+        &crate::power::PowerPolicy {
+            lock_after_control: true,
+            ..Default::default()
+        },
+        &crate::job::FileResourcePolicy::default(),
+        &crate::system::SystemPolicy::default(),
+    )
+    .unwrap();
+    assert!(
+        installation::decode(&bytes)
+            .unwrap()
+            .power_policy
+            .lock_after_control
+    );
+    assert!(
+        crate::power::PowerPolicy::from_bits(16)
+            .unwrap()
+            .lock_after_control
+    );
+    assert!(crate::power::PowerPolicy::from_bits(32).is_err());
 }

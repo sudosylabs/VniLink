@@ -24,6 +24,7 @@ use iroh_blobs::provider::{handle_get, StreamPair};
 use iroh_blobs::store::fs::FsStore;
 
 use crate::error::Error;
+use crate::session::Grant;
 
 /// ALPN for blob connections. Control stays on `vnilink/1`.
 pub const BLOB_ALPN: &[u8] = b"vnilink/blob/1";
@@ -51,6 +52,86 @@ pub enum FetchResult {
     Cancelled,
 }
 
+/// Per-chunk test probes for detached hashing. Passed by the caller (unit
+/// tests) rather than installed globally, so concurrent suites never
+/// observe them. Production passes [`HashHooks::none`].
+#[cfg(unix)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct HashHooks {
+    /// Called before every 64 KiB chunk with the chunk index. A probe that
+    /// parks (controlled slow reader) must also watch `cancelled` and
+    /// return promptly once it is set.
+    pub(crate) chunk_probe: Option<fn(u64, &std::sync::atomic::AtomicBool)>,
+    /// Called once when the worker finishes; `true` reports cancellation.
+    pub(crate) finish_probe: Option<fn(bool)>,
+}
+
+#[cfg(unix)]
+impl HashHooks {
+    pub(crate) fn none() -> Self {
+        Self::default()
+    }
+}
+
+/// Dropping the hashing future cancels its detached blocking worker
+/// between chunks; never rely on dropping the JoinHandle alone.
+#[cfg(unix)]
+struct HashGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+#[cfg(unix)]
+impl Drop for HashGuard {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Streaming BLAKE3 over an open handle with cooperative cancellation.
+/// Sync; runs on a blocking worker (async callers) or the caller's own
+/// worker thread (sync offer APIs outside the runtime).
+#[cfg(unix)]
+fn hash_fd_cancelled(
+    fd: std::os::unix::io::OwnedFd,
+    cancelled: &std::sync::atomic::AtomicBool,
+    hooks: HashHooks,
+) -> Result<[u8; 32], Error> {
+    use std::io::Read;
+    use std::sync::atomic::Ordering;
+    let aborted = || -> Result<[u8; 32], Error> {
+        if let Some(finish) = hooks.finish_probe {
+            finish(true);
+        }
+        Err(Error::NoSession)
+    };
+    let mut file = std::fs::File::from(fd);
+    let mut hasher = blake3::Hasher::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut chunk: u64 = 0;
+    loop {
+        if cancelled.load(Ordering::Acquire) {
+            return aborted();
+        }
+        if let Some(probe) = hooks.chunk_probe {
+            probe(chunk, cancelled);
+            // The probe may have waited out a cancellation.
+            if cancelled.load(Ordering::Acquire) {
+                return aborted();
+            }
+        }
+        let n = file
+            .read(&mut buf)
+            .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        chunk += 1;
+    }
+    if let Some(finish) = hooks.finish_probe {
+        finish(false);
+    }
+    Ok(*hasher.finalize().as_bytes())
+}
+
 impl Core {
     /// Chooses the managed directory for blob storage. Created when
     /// missing. Refused while a controlling session is active.
@@ -58,8 +139,8 @@ impl Core {
         let state = self.alive_state()?;
         if state
             .incoming
-            .as_ref()
-            .is_some_and(|session| !finished(&session.phase))
+            .values()
+            .any(|session| !finished(&session.phase))
         {
             return Err(Error::Busy);
         }
@@ -119,30 +200,14 @@ impl Core {
         max_bytes: u64,
     ) -> Result<(iroh_blobs::Hash, u64), Error> {
         let peer = parse_endpoint_id(peer_endpoint_id)?;
-        {
-            let state = self.alive_state()?;
-            state.trust.get(&peer).cloned().ok_or(Error::NotPaired)?;
-        }
-        let size = std::fs::metadata(path)
-            .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?
-            .len();
-        if size > max_bytes {
-            return Err(Error::InvalidSetting("the source file is too large"));
-        }
         let path = path.to_path_buf();
-        self.runtime.block_on(async {
-            let store = open_store(&self.shared).await?;
-            let tag = store
-                .add_path(&path)
-                .temp_tag()
-                .await
-                .map_err(|error| Error::network(error.to_string()))?;
-            lock(&self.shared.blob_offers).insert((peer, *tag.hash().as_bytes()));
-            let hash = tag.hash();
-            lock(&self.shared.blob_import_pins)
-                .insert(*hash.as_bytes(), (std::time::Instant::now(), tag));
-            Ok((hash, size))
-        })
+        self.runtime.block_on(offer_file_for_peer(
+            &self.shared,
+            peer,
+            &path,
+            max_bytes,
+            false,
+        ))
     }
 
     /// Anchored source import for job manifests: re-opens `root_rel`
@@ -152,12 +217,13 @@ impl Core {
     /// absolute pathname retained by the scan. A parent swapped for a
     /// symlink between scan and import fails here instead of disclosing an
     /// outside file.
-    pub fn blob_offer_file_at(
+    pub(crate) fn blob_offer_file_at(
         &self,
         peer_endpoint_id: &str,
         root: u64,
         file: &crate::manifest::ScannedFile,
         max_bytes: u64,
+        pin: &crate::fs::PinnedRoot,
     ) -> Result<(iroh_blobs::Hash, u64), Error> {
         let peer = parse_endpoint_id(peer_endpoint_id)?;
         {
@@ -180,6 +246,7 @@ impl Core {
             crate::fs::check_name(name)
                 .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
             let roots = lock(&self.shared.file_roots);
+            roots.verify_pin(pin)?;
             let parent_fd = roots
                 .open_dir_fd(root, parent_rel)
                 .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
@@ -218,14 +285,17 @@ impl Core {
                 st.ino,
             )
             .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
-            let fd_hash = Self::hash_fd(file_fd)
-                .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
+            // Resolve the import path under the short roots lock, then hash
+            // with no locks held: whole-file reads never block root
+            // operations.
             let parent_abs = roots
                 .resolve_dir(root, parent_rel)
                 .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
             let absolute = parent_abs.join(name);
             drop(parent_fd);
             drop(roots);
+            let fd_hash = Self::hash_fd(file_fd)
+                .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
             let size = st.size;
             self.runtime.block_on(async {
                 let store = open_store(&self.shared).await?;
@@ -253,6 +323,7 @@ impl Core {
         #[cfg(not(unix))]
         {
             let roots = lock(&self.shared.file_roots);
+            roots.verify_pin(pin)?;
             let parent = roots
                 .resolve_dir(root, {
                     match root_rel.rfind('/') {
@@ -283,30 +354,32 @@ impl Core {
     /// source association through import: FD hash must match the absolute
     /// TryReference import hash, else the source changed/swapped between
     /// validation and import and the import fails without announcing.
+    /// Sync; only for callers outside the runtime (sync offer APIs). Async
+    /// callers use [`hash_fd_async`](Self::hash_fd_async) so whole-file
+    /// reads never occupy a Tokio worker.
     #[cfg(unix)]
     pub(crate) fn hash_fd(fd: std::os::unix::io::OwnedFd) -> Result<[u8; 32], Error> {
-        use std::io::Read;
-        #[cfg(unix)]
-        {
-            let mut file = std::fs::File::from(fd);
-            let mut hasher = blake3::Hasher::new();
-            let mut buf = vec![0u8; 64 * 1024];
-            loop {
-                let n = file
-                    .read(&mut buf)
-                    .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
-                if n == 0 {
-                    break;
-                }
-                hasher.update(&buf[..n]);
-            }
-            Ok(*hasher.finalize().as_bytes())
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = fd;
-            Err(Error::InvalidSetting("the source file cannot be read"))
-        }
+        let never = std::sync::atomic::AtomicBool::new(false);
+        hash_fd_cancelled(fd, &never, HashHooks::none())
+    }
+
+    /// Hashes an already-open verified handle on a bounded blocking worker
+    /// (the Tokio blocking pool), checking for cancellation between 64 KiB
+    /// chunks. Yields the async worker while hashing; dropping the future
+    /// aborts the detached worker promptly instead of orphaning it.
+    /// Callers must hold no locks across the await and must recheck
+    /// owner/grant/liveness before using the digest.
+    #[cfg(unix)]
+    pub(crate) async fn hash_fd_async(
+        fd: std::os::unix::io::OwnedFd,
+        hooks: HashHooks,
+    ) -> Result<[u8; 32], Error> {
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let _guard = HashGuard(cancelled.clone());
+        let worker_cancelled = cancelled.clone();
+        tokio::task::spawn_blocking(move || hash_fd_cancelled(fd, &worker_cancelled, hooks))
+            .await
+            .map_err(|_| Error::NoSession)?
     }
 
     /// Re-offers for resume (no ScannedFile with dev/ino; old hash/size/mtime
@@ -315,7 +388,7 @@ impl Core {
     /// old hash, then stable absolute TryReference import must hash to old hash,
     /// else source changed/swapped and the re-offer fails without serving.
     /// Sync (caller outside runtime); blocking hashing on caller worker thread.
-    pub fn blob_reoffer_file_at(
+    pub(crate) fn blob_reoffer_file_at(
         &self,
         peer_endpoint_id: &str,
         root: u64,
@@ -324,11 +397,15 @@ impl Core {
         old_size: u64,
         old_mtime_ms: u64,
         max_bytes: u64,
+        pin: &crate::fs::PinnedRoot,
     ) -> Result<(iroh_blobs::Hash, u64), Error> {
         let peer = parse_endpoint_id(peer_endpoint_id)?;
         {
             let state = self.alive_state()?;
             state.trust.get(&peer).cloned().ok_or(Error::NotPaired)?;
+        }
+        if old_size > max_bytes {
+            return Err(Error::InvalidSetting("the source file is too large"));
         }
         crate::fs::check_rel(root_rel)
             .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
@@ -345,6 +422,7 @@ impl Core {
             crate::fs::check_name(name)
                 .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
             let roots = lock(&self.shared.file_roots);
+            roots.verify_pin(pin)?;
             let parent_fd = roots
                 .open_dir_fd(root, parent_rel)
                 .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
@@ -362,6 +440,15 @@ impl Core {
                 st.ino,
             )
             .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
+            // Resolve the import path under the short roots lock, then hash
+            // with no locks held: whole-file reads never block root
+            // operations.
+            let parent_abs = roots
+                .resolve_dir(root, parent_rel)
+                .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
+            let absolute = parent_abs.join(name);
+            drop(parent_fd);
+            drop(roots);
             let fd_hash = Self::hash_fd(file_fd)
                 .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
             if fd_hash != old_hash {
@@ -369,12 +456,6 @@ impl Core {
                     "the source changed since preparation",
                 ));
             }
-            let parent_abs = roots
-                .resolve_dir(root, parent_rel)
-                .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
-            let absolute = parent_abs.join(name);
-            drop(parent_fd);
-            drop(roots);
             self.runtime.block_on(async {
                 let store = open_store(&self.shared).await?;
                 let tag = store
@@ -400,7 +481,15 @@ impl Core {
         }
         #[cfg(not(unix))]
         {
-            let _ = (root, root_rel, old_hash, old_size, old_mtime_ms, max_bytes);
+            let _ = (
+                root,
+                root_rel,
+                old_hash,
+                old_size,
+                old_mtime_ms,
+                max_bytes,
+                pin,
+            );
             Err(Error::InvalidSetting("the source file cannot be read"))
         }
     }
@@ -610,6 +699,55 @@ async fn fetch_with_cancel(
     }
 }
 
+/// Hashes one file into the store and authorizes one peer to fetch it.
+/// Admission is re-fenced after the slow import: a revoke or shutdown that
+/// lands mid-hash must not leave an offer behind. Paste preparation sets
+/// `transfer` to require the Transfer grant; plain offers require pairing.
+pub(super) async fn offer_file_for_peer(
+    shared: &Shared,
+    peer: [u8; 32],
+    path: &std::path::Path,
+    max_bytes: u64,
+    transfer: bool,
+) -> Result<(iroh_blobs::Hash, u64), Error> {
+    {
+        let state = lock(&shared.state);
+        if state.shut_down {
+            return Err(Error::ShutDown);
+        }
+        state.trust.get(&peer).cloned().ok_or(Error::NotPaired)?;
+        if transfer && !state.trust.granted(&peer, Grant::Transfer) {
+            return Err(Error::TransferDenied);
+        }
+    }
+    let size = std::fs::metadata(path)
+        .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?
+        .len();
+    if size > max_bytes {
+        return Err(Error::InvalidSetting("the source file is too large"));
+    }
+    let store = open_store(shared).await?;
+    let tag = store
+        .add_path(path)
+        .temp_tag()
+        .await
+        .map_err(|error| Error::network(error.to_string()))?;
+    {
+        let state = lock(&shared.state);
+        if state.shut_down {
+            return Err(Error::ShutDown);
+        }
+        state.trust.get(&peer).cloned().ok_or(Error::NotPaired)?;
+        if transfer && !state.trust.granted(&peer, Grant::Transfer) {
+            return Err(Error::TransferDenied);
+        }
+        lock(&shared.blob_offers).insert((peer, *tag.hash().as_bytes()));
+    }
+    let hash = tag.hash();
+    lock(&shared.blob_import_pins).insert(*hash.as_bytes(), (std::time::Instant::now(), tag));
+    Ok((hash, size))
+}
+
 pub(super) async fn open_store(shared: &Shared) -> Result<FsStore, Error> {
     if let Some(store) = lock(&shared.blob_store).clone() {
         return Ok(store);
@@ -642,12 +780,18 @@ pub(super) async fn open_store(shared: &Shared) -> Result<FsStore, Error> {
     let pins = shared.blob_import_pins.clone();
     let recent = shared.blob_recent_fetches.clone();
     let staging_dir = dir.join("staging");
+    let retention_policy = shared.file_retention_policy.clone();
     options.gc = Some(iroh_blobs::store::GcConfig {
         interval: Duration::from_secs(if cfg!(test) { 2 } else { 30 }),
         add_protected: Some(Arc::new(move |live| {
+            let policy = *lock(&retention_policy);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
             let records = lock(&jobs);
-            let retained = super::jobs::retained_hashes(&records);
-            let retained_jobs = super::jobs::retained_job_ids(&records);
+            let retained = super::jobs::retained_hashes(&records, policy, now);
+            let retained_jobs = super::jobs::retained_job_ids(&records, policy, now);
             // Expired/evicted resume data includes staging exports too.
             for (id, record) in records.iter() {
                 if super::jobs::record_reclaimable(record, &retained_jobs) {
@@ -672,13 +816,16 @@ pub(super) async fn open_store(shared: &Shared) -> Result<FsStore, Error> {
                     || (!owned.contains(hash) && created.elapsed() < Duration::from_secs(300))
             });
             let mut recent = lock(&recent);
-            recent.retain(|_, (created, _)| created.elapsed() < Duration::from_secs(300));
+            recent.retain(|_, (created, _)| {
+                policy.recent_fetch_bytes != 0
+                    && created.elapsed() < Duration::from_secs(policy.recent_fetch_age_secs)
+            });
             let mut entries: Vec<_> = recent
                 .iter()
                 .map(|(hash, (created, size))| (*hash, *created, *size))
                 .collect();
             entries.sort_by_key(|(_, created, _)| std::cmp::Reverse(*created));
-            let mut budget = 1024 * 1024 * 1024u64;
+            let mut budget = policy.recent_fetch_bytes;
             for (hash, _, size) in entries {
                 if size <= budget {
                     budget -= size;
@@ -846,6 +993,7 @@ async fn handle_blob_stream(
             {
                 source = Some(
                     super::jobs::verify_serve_source(shared, &peer, get.hash.as_bytes())
+                        .await
                         .map_err(|_| ())?,
                 );
             }
@@ -932,3 +1080,161 @@ pub(super) fn is_blob_connection(connection: &iroh::endpoint::Connection) -> boo
 
 /// Type alias so `core/mod.rs` can name the offer set.
 pub(super) type OfferSet = HashSet<([u8; 32], [u8; 32])>;
+
+#[cfg(all(test, unix))]
+mod hash_detach_tests {
+    use super::*;
+    use std::os::unix::io::AsFd;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Condvar, Mutex};
+
+    static PARKED: AtomicBool = AtomicBool::new(false);
+    static FINISHED: Mutex<Option<bool>> = Mutex::new(None);
+    static FINISH_CV: Condvar = Condvar::new();
+
+    fn reset() {
+        PARKED.store(false, Ordering::SeqCst);
+        *FINISHED.lock().unwrap() = None;
+    }
+
+    /// Controlled slow reader: parks the first chunk until cancellation
+    /// arrives. The test never releases this barrier: sibling progress
+    /// and worker cancellation must both happen while it is held.
+    fn chunk_probe(_chunk: u64, cancelled: &AtomicBool) {
+        if PARKED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        while !cancelled.load(Ordering::Acquire) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    fn finish_probe(cancelled: bool) {
+        *FINISHED.lock().unwrap() = Some(cancelled);
+        FINISH_CV.notify_all();
+    }
+
+    fn scratch_file(tag: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("vnilink-hash-{}-{tag}", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// STD04: detached hashing yields the executor (a sibling future
+    /// completes while the first chunk is parked) and dropping the future
+    /// aborts the worker without releasing the storage barrier.
+    #[test]
+    fn parked_hash_yields_sibling_and_cancels_without_release() {
+        reset();
+        let path = scratch_file("park", b"slow reader payload");
+        let fd = std::fs::File::open(&path).unwrap();
+        // `File::open` borrows the fd; the hash worker needs ownership.
+        let owned = fd.as_fd().try_clone_to_owned().unwrap();
+        drop(fd);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let hooks = HashHooks {
+            chunk_probe: Some(chunk_probe),
+            finish_probe: Some(finish_probe),
+        };
+        let (handle_tx, handle_rx) = std::sync::mpsc::channel();
+        let (sibling_tx, sibling_rx) = std::sync::mpsc::channel();
+        // A current-thread runtime only drives tasks under `block_on`; the
+        // driver thread owns it while the test observes from outside. Loop
+        // caps only free a driver orphaned by a failed test.
+        let driver = std::thread::spawn(move || {
+            runtime.block_on(async move {
+                let hash = tokio::spawn(Core::hash_fd_async(owned, hooks));
+                handle_tx.send(hash).unwrap();
+                let cap = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                while !PARKED.load(Ordering::SeqCst) {
+                    if std::time::Instant::now() > cap {
+                        return;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                // Spawned only after the park is observed: it must complete
+                // while the hash stays parked.
+                tokio::spawn(async move {
+                    let _ = sibling_tx.send(());
+                });
+                while FINISHED.lock().unwrap().is_none() {
+                    if std::time::Instant::now() > cap {
+                        return;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            });
+        });
+        // The worker must reach the parked chunk; on the old inline path no
+        // probe exists and this times out.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while !PARKED.load(Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "hash worker never parked"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // Sibling progress while the hash is parked: the async worker is
+        // free, so this completes without releasing the barrier.
+        sibling_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("sibling blocked during parked hash");
+        // Cancellation aborts the worker without releasing the barrier.
+        let hash = handle_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        hash.abort();
+        let finished = FINISHED.lock().unwrap();
+        let (finished, timeout) = FINISH_CV
+            .wait_timeout_while(finished, std::time::Duration::from_secs(5), |done| {
+                done.is_none()
+            })
+            .unwrap();
+        assert!(
+            !timeout.timed_out(),
+            "hash worker never finished after abort"
+        );
+        assert_eq!(
+            *finished,
+            Some(true),
+            "hash worker did not report cancellation"
+        );
+        drop(finished);
+        driver.join().expect("driver thread panicked");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    /// The detached digest matches the sync digest on identical bytes.
+    #[test]
+    fn detached_hash_matches_sync_digest() {
+        let bytes = vec![7u8; 200 * 1024 + 13];
+        let path = scratch_file("digest", &bytes);
+        let expected = Core::hash_fd(
+            std::fs::File::open(&path)
+                .unwrap()
+                .as_fd()
+                .try_clone_to_owned()
+                .unwrap(),
+        )
+        .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let owned = std::fs::File::open(&path)
+            .unwrap()
+            .as_fd()
+            .try_clone_to_owned()
+            .unwrap();
+        let observed = runtime
+            .block_on(Core::hash_fd_async(owned, HashHooks::none()))
+            .unwrap();
+        assert_eq!(observed, expected);
+        assert_eq!(observed, *blake3::hash(&bytes).as_bytes());
+        std::fs::remove_file(&path).unwrap();
+    }
+}
