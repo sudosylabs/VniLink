@@ -9,6 +9,9 @@ pub enum FfiServiceKind {
     Files,
     Terminal,
     Camera,
+    SystemAudio,
+    Microphone,
+    System,
 }
 
 impl From<FfiServiceKind> for vnilink::ServiceKind {
@@ -18,6 +21,9 @@ impl From<FfiServiceKind> for vnilink::ServiceKind {
             FfiServiceKind::Files => Self::Files,
             FfiServiceKind::Terminal => Self::Terminal,
             FfiServiceKind::Camera => Self::Camera,
+            FfiServiceKind::SystemAudio => Self::SystemAudio,
+            FfiServiceKind::Microphone => Self::Microphone,
+            FfiServiceKind::System => Self::System,
         }
     }
 }
@@ -29,6 +35,52 @@ impl From<vnilink::ServiceKind> for FfiServiceKind {
             vnilink::ServiceKind::Files => Self::Files,
             vnilink::ServiceKind::Terminal => Self::Terminal,
             vnilink::ServiceKind::Camera => Self::Camera,
+            vnilink::ServiceKind::SystemAudio => Self::SystemAudio,
+            vnilink::ServiceKind::Microphone => Self::Microphone,
+            vnilink::ServiceKind::System => Self::System,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum FfiDesktopControlState {
+    Viewing,
+    Controlling,
+    Contended,
+}
+impl From<vnilink::DesktopControlState> for FfiDesktopControlState {
+    fn from(value: vnilink::DesktopControlState) -> Self {
+        match value {
+            vnilink::DesktopControlState::Viewing => Self::Viewing,
+            vnilink::DesktopControlState::Controlling => Self::Controlling,
+            vnilink::DesktopControlState::Contended => Self::Contended,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum FfiCloseCause {
+    OwnerClose,
+    ParentLoss,
+    Revoked,
+    Replaced,
+    DeviceLoss,
+    Shutdown,
+    PeerClose,
+    IdleExpired,
+}
+
+impl From<vnilink::CloseCause> for FfiCloseCause {
+    fn from(value: vnilink::CloseCause) -> Self {
+        match value {
+            vnilink::CloseCause::OwnerClose => Self::OwnerClose,
+            vnilink::CloseCause::ParentLoss => Self::ParentLoss,
+            vnilink::CloseCause::Revoked => Self::Revoked,
+            vnilink::CloseCause::Replaced => Self::Replaced,
+            vnilink::CloseCause::DeviceLoss => Self::DeviceLoss,
+            vnilink::CloseCause::Shutdown => Self::Shutdown,
+            vnilink::CloseCause::PeerClose => Self::PeerClose,
+            vnilink::CloseCause::IdleExpired => Self::IdleExpired,
         }
     }
 }
@@ -38,7 +90,7 @@ pub enum FfiServicePhase {
     Waiting,
     Active,
     Suspended,
-    Closed,
+    Closed { cause: FfiCloseCause },
     Failed { message: String },
 }
 
@@ -64,7 +116,9 @@ impl From<vnilink::ServiceInfo> for FfiServiceInfo {
                 vnilink::ServicePhase::Waiting => FfiServicePhase::Waiting,
                 vnilink::ServicePhase::Active => FfiServicePhase::Active,
                 vnilink::ServicePhase::Suspended => FfiServicePhase::Suspended,
-                vnilink::ServicePhase::Closed => FfiServicePhase::Closed,
+                vnilink::ServicePhase::Closed(cause) => FfiServicePhase::Closed {
+                    cause: cause.into(),
+                },
                 vnilink::ServicePhase::Failed(message) => FfiServicePhase::Failed { message },
             },
         }
@@ -77,15 +131,22 @@ pub struct FfiServiceSupport {
     pub files: bool,
     pub terminal: bool,
     pub camera: bool,
+    pub system_audio: bool,
+    pub microphone: bool,
+    pub system_actions: bool,
 }
 
 /// Permissions this installation grants the paired peer; not remote support.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct FfiServicePermissions {
+    pub recording: bool,
     pub desktop: bool,
     pub files: bool,
     pub terminal: bool,
     pub camera: bool,
+    pub system_audio: bool,
+    pub microphone: bool,
+    pub system_actions: bool,
 }
 
 /// Pollable cancellation for one service generation. An old lease stays
@@ -107,6 +168,17 @@ impl ServiceLeasePoller {
 
 #[uniffi::export]
 impl VnilinkCore {
+    pub fn transfer_desktop_control(
+        &self,
+        from_id: u64,
+        from_generation: u64,
+        to_id: u64,
+        to_generation: u64,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .transfer_desktop_control(from_id, from_generation, to_id, to_generation)
+            .map_err(map_error)
+    }
     pub fn host_desktop_active(&self, id: u64, generation: u64) -> Result<bool, FfiError> {
         self.inner
             .host_desktop_active(id, generation)
@@ -119,6 +191,11 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
+    pub fn authorize_recording(&self, endpoint_id: String, allowed: bool) -> Result<(), FfiError> {
+        self.inner
+            .authorize_recording(&endpoint_id, allowed)
+            .map_err(map_error)
+    }
     pub fn service_permissions(
         &self,
         endpoint_id: String,
@@ -130,6 +207,10 @@ impl VnilinkCore {
                 files: p.files,
                 terminal: p.terminal,
                 camera: p.camera,
+                system_audio: p.system_audio,
+                microphone: p.microphone,
+                recording: p.recording,
+                system_actions: p.system_actions,
             })
             .map_err(map_error)
     }
@@ -195,6 +276,9 @@ impl VnilinkCore {
             files: support.files,
             terminal: support.terminal,
             camera: support.camera,
+            system_audio: support.system_audio,
+            microphone: support.microphone,
+            system_actions: support.system_actions,
         })
     }
 
@@ -255,6 +339,9 @@ impl VnilinkCore {
             files: support.files,
             terminal: support.terminal,
             camera: support.camera,
+            system_audio: support.system_audio,
+            microphone: support.microphone,
+            system_actions: support.system_actions,
         })
     }
 
@@ -327,6 +414,18 @@ pub struct DesktopService {
 
 #[uniffi::export]
 impl DesktopService {
+    pub fn control_state(&self) -> Result<FfiDesktopControlState, FfiError> {
+        self.inner
+            .control_state()
+            .map(Into::into)
+            .map_err(map_error)
+    }
+    pub fn acquire_control(&self) -> Result<(), FfiError> {
+        self.inner.acquire_control().map_err(map_error)
+    }
+    pub fn yield_control(&self) -> Result<(), FfiError> {
+        self.inner.yield_control().map_err(map_error)
+    }
     pub fn submit_clipboard(&self, text: String) -> Result<(), FfiError> {
         self.inner.submit_clipboard(&text).map_err(map_error)
     }
@@ -358,6 +457,7 @@ impl DesktopService {
                 usage,
                 down,
                 text: &text,
+                composing: false,
             })
             .map_err(map_error)
     }
@@ -646,6 +746,21 @@ impl VnilinkCore {
             .take_desktop_keyframe_request(id, generation)
             .map_err(map_error)
     }
+    /// Reports measured native capture-read and encode costs for one hosted
+    /// Desktop owner. Capture read may include waiting for a frame; it is
+    /// diagnostic, not a CPU congestion signal. Feeds the diagnostics
+    /// pipeline section and the host feedback the controller adapts on.
+    pub fn report_desktop_producer_duration(
+        &self,
+        id: u64,
+        generation: u64,
+        capture_us: u64,
+        encode_us: u64,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .report_desktop_producer_duration(id, generation, capture_us, encode_us)
+            .map_err(map_error)
+    }
 }
 #[uniffi::export]
 impl DesktopService {
@@ -669,9 +784,26 @@ impl DesktopService {
             .submit_input(vnilink::InputEvent::Key { usage, down })
             .map_err(map_error)
     }
-    pub fn submit_pointer(&self, x: u16, y: u16) -> Result<(), FfiError> {
+    pub fn topology(&self) -> Result<Vec<crate::types::FfiDisplay>, FfiError> {
         self.inner
-            .submit_input(vnilink::InputEvent::Pointer { x, y })
+            .topology()
+            .map(|displays| displays.iter().map(crate::types::display_record).collect())
+            .map_err(map_error)
+    }
+
+    pub fn select_displays(&self, ids: Vec<u64>) -> Result<(), FfiError> {
+        self.inner.select_displays(&ids).map_err(map_error)
+    }
+
+    pub fn submit_pointer(
+        &self,
+        x: i32,
+        y: i32,
+        display: u64,
+        revision: u64,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .submit_input(vnilink::InputEvent::pointer(x, y, display, revision))
             .map_err(map_error)
     }
     pub fn submit_button(
@@ -683,6 +815,8 @@ impl DesktopService {
             crate::FfiPointerButton::Left => vnilink::PointerButton::Left,
             crate::FfiPointerButton::Right => vnilink::PointerButton::Right,
             crate::FfiPointerButton::Middle => vnilink::PointerButton::Middle,
+            crate::FfiPointerButton::Back => vnilink::PointerButton::Back,
+            crate::FfiPointerButton::Forward => vnilink::PointerButton::Forward,
         };
         self.inner
             .submit_input(vnilink::InputEvent::Button { button, down })
@@ -696,6 +830,30 @@ impl DesktopService {
             })
             .map_err(map_error)
     }
+    pub fn pointer_settings(&self) -> Result<crate::FfiPointerSettings, FfiError> {
+        self.inner
+            .pointer_settings()
+            .map(Into::into)
+            .map_err(map_error)
+    }
+    pub fn set_pointer_settings(
+        &self,
+        settings: crate::FfiPointerSettings,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .set_pointer_settings(settings.into())
+            .map_err(map_error)
+    }
+    pub fn submit_precise_wheel(&self, dx: i32, dy: i32) -> Result<(), FfiError> {
+        self.inner
+            .submit_input(vnilink::InputEvent::precise_wheel(dx, dy))
+            .map_err(map_error)
+    }
+    pub fn submit_motion(&self, dx: i16, dy: i16) -> Result<(), FfiError> {
+        self.inner
+            .submit_input(vnilink::InputEvent::motion(dx, dy))
+            .map_err(map_error)
+    }
     pub fn submit_text(&self, text: String) -> Result<(), FfiError> {
         self.inner.submit_text(&text).map_err(map_error)
     }
@@ -704,5 +862,91 @@ impl DesktopService {
     }
     pub fn request_keyframe(&self) -> Result<(), FfiError> {
         self.inner.request_keyframe().map_err(map_error)
+    }
+}
+
+#[uniffi::export]
+impl VnilinkCore {
+    pub fn files_service_adopt_job(
+        &self,
+        id: u64,
+        generation: u64,
+        job: u64,
+    ) -> Result<crate::FfiJobSnapshot, FfiError> {
+        self.inner
+            .files_service_adopt_job(id, generation, job)
+            .map(crate::files::job_snapshot)
+            .map_err(map_error)
+    }
+}
+
+#[uniffi::export]
+impl FilesService {
+    pub fn adopt_job(&self, job: u64) -> Result<crate::FfiJobSnapshot, FfiError> {
+        let info = self.inner.info();
+        self.core()?
+            .files_service_adopt_job(info.id, info.generation, job)
+            .map(crate::files::job_snapshot)
+            .map_err(map_error)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum FfiAdaptationReason {
+    WarmingUp,
+    Stable,
+    ReceiverPressure,
+    EncoderPressure,
+    NetworkPressure,
+    Recovering,
+    Idle,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct FfiDesktopMediaStatus {
+    pub reason: FfiAdaptationReason,
+    pub received_kbps: u32,
+    pub received_fps: u16,
+    pub receiver_queue_ms: u64,
+    pub host_queue_ms: u64,
+    pub send_loss_per_mille: u16,
+    pub rtt_ms: u64,
+    pub decode_us: u64,
+    pub encode_us: u64,
+    pub capture_us: u64,
+}
+impl From<vnilink::DesktopMediaStatus> for FfiDesktopMediaStatus {
+    fn from(status: vnilink::DesktopMediaStatus) -> Self {
+        use vnilink::AdaptationReason as Reason;
+        Self {
+            reason: match status.reason {
+                Reason::WarmingUp => FfiAdaptationReason::WarmingUp,
+                Reason::Stable => FfiAdaptationReason::Stable,
+                Reason::ReceiverPressure => FfiAdaptationReason::ReceiverPressure,
+                Reason::EncoderPressure => FfiAdaptationReason::EncoderPressure,
+                Reason::NetworkPressure => FfiAdaptationReason::NetworkPressure,
+                Reason::Recovering => FfiAdaptationReason::Recovering,
+                Reason::Idle => FfiAdaptationReason::Idle,
+            },
+            received_kbps: status.received_kbps,
+            received_fps: status.received_fps,
+            receiver_queue_ms: status.receiver_queue_ms,
+            host_queue_ms: status.host_queue_ms,
+            send_loss_per_mille: status.send_loss_per_mille,
+            rtt_ms: status.rtt_ms,
+            decode_us: status.decode_us,
+            encode_us: status.encode_us,
+            capture_us: status.capture_us,
+        }
+    }
+}
+#[uniffi::export]
+impl DesktopService {
+    pub fn report_decode_duration(&self, microseconds: u64) -> Result<(), FfiError> {
+        self.inner
+            .report_decode_duration(microseconds)
+            .map_err(map_error)
+    }
+    pub fn media_status(&self) -> Result<FfiDesktopMediaStatus, FfiError> {
+        self.inner.media_status().map(Into::into).map_err(map_error)
     }
 }

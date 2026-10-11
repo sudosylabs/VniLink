@@ -13,9 +13,16 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 vnilink = { path = "../vnilink" }
+vnilink-audio = { path = "../vnilink-audio", features = ["native"] }
+vnilink-media = { path = "../vnilink-media" }
 uniffi = { version = "=0.29.4" }
 thiserror = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 vnilink-macos = { path = "../vnilink-macos" }
-vnilink-media = { path = "../vnilink-media" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+vnilink-linux = { path = "../vnilink-linux" }
+
+[target.'cfg(windows)'.dependencies]
+vnilink-windows = { path = "../vnilink-windows" }

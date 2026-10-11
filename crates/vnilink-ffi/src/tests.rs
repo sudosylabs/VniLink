@@ -1,5 +1,9 @@
 use crate::{new_quality, FfiKeyboardMode, FfiPointerButton, FfiSessionRole, VnilinkCore};
-use crate::{FfiError, FfiEvent};
+use crate::{FfiError, FfiEvent, FfiVideoCodecCaps};
+
+fn full_codecs() -> FfiVideoCodecCaps {
+    vnilink::VideoCodecCaps::h264_full(4096, 4096, "test").into()
+}
 
 fn open_core() -> VnilinkCore {
     VnilinkCore::create(true, vec![]).expect("public-relay core starts")
@@ -24,7 +28,7 @@ fn relay_selection_is_validated() {
 fn snapshot_capabilities_and_hosting_lifecycle() {
     let core = open_core();
     assert!(!core.capabilities().h264_decode);
-    core.set_h264_support(true, true).unwrap();
+    core.set_video_codecs(full_codecs()).unwrap();
     assert!(core.capabilities().h264_decode);
     // Encode also needs a capture adapter, which foreign callers install
     // from platform Rust: without one it stays false.
@@ -32,6 +36,7 @@ fn snapshot_capabilities_and_hosting_lifecycle() {
     assert!(!core.snapshot().unwrap().hosting);
     core.start_hosting().unwrap();
     assert!(core.snapshot().unwrap().hosting);
+    assert!(core.hosted_sessions().unwrap().is_empty());
     core.stop_hosting().unwrap();
     assert!(!core.snapshot().unwrap().hosting);
     assert!(!core.endpoint_id().is_empty());
@@ -54,9 +59,10 @@ fn pairing_handles_and_errors() {
     assert_eq!(file.check.len(), 3);
     let preview = reader.open_pairing_file(file.bytes.clone()).unwrap();
     assert_eq!(preview.check, file.check);
-    // Wrong digits keep the preview server-side; the token never crossed.
+    // Check a guaranteed mismatch; the preview token never crosses the FFI.
+    let wrong_check = if file.check == "000" { "001" } else { "000" };
     assert!(matches!(
-        reader.confirm_pairing(preview.id, "000".to_string()),
+        reader.confirm_pairing(preview.id, wrong_check.to_string()),
         Err(FfiError::PairingCheckMismatch)
     ));
     assert!(reader.open_pairing_file(vec![0, 1, 2]).is_err());
@@ -90,7 +96,7 @@ fn unpaired_peers_fail_before_dialing() {
     ));
     assert!(matches!(core.disconnect(), Err(FfiError::NoSession)));
     assert!(matches!(
-        core.authorize(other.endpoint_id(), true, false, false),
+        core.authorize(other.endpoint_id(), true, true, false, false),
         Err(FfiError::NotPaired)
     ));
     assert!(matches!(
@@ -110,7 +116,7 @@ fn input_clipboard_transfer_and_video_fail_without_a_session() {
         core.submit_key(1, 1, 0x04, true),
         Err(FfiError::NoSession) | Err(FfiError::StaleSession)
     ));
-    assert!(core.submit_pointer(1, 1, 10, 10).is_err());
+    assert!(core.submit_pointer(1, 1, 10, 10, 1, 1).is_err());
     assert!(core
         .submit_button(1, 1, FfiPointerButton::Left, true)
         .is_err());
@@ -121,11 +127,9 @@ fn input_clipboard_transfer_and_video_fail_without_a_session() {
         .is_err());
     assert!(core.submit_clipboard(1, 1, "hi".to_string()).is_err());
     assert!(core.clipboard_text().unwrap().is_none());
+    assert!(core.fs_list(1, 1, 0, "".to_string(), 0, 20).is_err());
     assert!(core
-        .submit_file(1, 1, "a.txt".to_string(), vec![1], false)
-        .is_err());
-    assert!(core
-        .publish_file(1, "a.txt".to_string(), vec![1], false)
+        .job_submit_upload("bogus".to_string(), 0, "a.txt".into(), 0, "a.txt".into())
         .is_err());
     assert!(core
         .publish_video(1, true, 0, vec![0, 0, 0, 1, 0x65, 0x00])
@@ -180,21 +184,22 @@ fn independent_controller_handles_cross_the_ffi() {
         ),
         previews: std::sync::Mutex::new(std::collections::HashMap::new()),
         next_preview: std::sync::atomic::AtomicU64::new(1),
+        audio_coordinator: std::sync::Arc::new(crate::audio_native::AudioCoordinator::default()),
     };
     let controller = make();
     let a = make();
     let b = make();
-    controller.set_h264_support(true, true).unwrap();
+    controller.set_video_codecs(full_codecs()).unwrap();
     for host in [&a, &b] {
         host.inner.set_capture(Box::new(Capture)).unwrap();
-        host.set_h264_support(true, true).unwrap();
+        host.set_video_codecs(full_codecs()).unwrap();
         host.start_hosting().unwrap();
         controller
             .accept_invitation(host.create_invitation(60).unwrap())
             .unwrap();
         host.accept_invitation(controller.create_invitation(60).unwrap())
             .unwrap();
-        host.authorize(controller.endpoint_id(), true, false, false)
+        host.authorize(controller.endpoint_id(), true, true, false, false)
             .unwrap();
     }
     let pending_a = controller.begin_connect(a.endpoint_id()).unwrap();
@@ -268,10 +273,11 @@ fn keyboard_mode_and_swap_round_trip() {
 }
 
 #[test]
-fn transfer_directory_and_events_flow() {
+fn file_roots_advertise_transfer_and_events_flow() {
     let core = open_core();
     let root = std::env::temp_dir().join(format!("vnl-ffi-{}", std::process::id()));
-    core.set_transfer_directory(root.to_string_lossy().to_string())
+    std::fs::create_dir_all(&root).unwrap();
+    core.set_file_roots(vec![root.to_string_lossy().into_owned()])
         .unwrap();
     assert!(core.snapshot().unwrap().capabilities.file_transfer);
     let events = core.subscribe_events().unwrap();
@@ -443,4 +449,66 @@ fn file_roots_and_local_operations_cross_the_ffi() {
     let _ = FfiConflictChoice::KeepBoth;
     let _ = FfiJobState::Complete;
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn power_policy_roundtrip_and_registration_do_not_claim_active_inhibition() {
+    use crate::{FfiPowerPhase, FfiPowerPolicy};
+    let core = open_core();
+    let policy = FfiPowerPolicy {
+        incoming_display: true,
+        incoming_system: false,
+        outgoing_display: false,
+        outgoing_system: true,
+        incoming_idle_secs: 73,
+        outgoing_idle_secs: 94,
+        lock_after_control: true,
+    };
+    core.set_power_policy(policy).unwrap();
+    assert_eq!(core.power_policy().unwrap(), policy);
+    assert!(matches!(
+        core.set_power_policy(FfiPowerPolicy {
+            incoming_idle_secs: u32::MAX,
+            ..policy
+        }),
+        Err(FfiError::InvalidSetting { .. })
+    ));
+    assert_eq!(core.power_policy().unwrap(), policy);
+    core.enable_native_power(true).unwrap();
+    assert_eq!(core.power_status().unwrap().len(), 2);
+    assert!(core
+        .power_status()
+        .unwrap()
+        .iter()
+        .all(|s| s.owners == 0 && s.phase == FfiPowerPhase::Idle));
+    core.enable_native_power(false).unwrap();
+}
+
+#[test]
+fn backend_state_publish_flows_into_availability_and_clears() {
+    use crate::{FfiAvailabilityReason, FfiBackendState, FfiCapability};
+    let core = open_core();
+    core.report_backend_state(
+        FfiCapability::Camera,
+        FfiBackendState {
+            os_denied: true,
+            device_missing: false,
+            failed: None,
+        },
+    )
+    .unwrap();
+    let blocked = core
+        .capability_availability(None, FfiCapability::Camera)
+        .unwrap();
+    assert!(!blocked.available);
+    assert!(blocked
+        .reasons
+        .contains(&FfiAvailabilityReason::DeniedOsPermission));
+    core.clear_backend_state(FfiCapability::Camera).unwrap();
+    let cleared = core
+        .capability_availability(None, FfiCapability::Camera)
+        .unwrap();
+    assert!(!cleared
+        .reasons
+        .contains(&FfiAvailabilityReason::DeniedOsPermission));
 }

@@ -75,6 +75,8 @@ impl VideoPoller {
                 keyframe: frame.keyframe,
                 timestamp_us: frame.timestamp_us,
                 payload: frame.payload,
+                display_id: frame.display_id,
+                revision: frame.revision,
             }))
     }
 
@@ -83,6 +85,8 @@ impl VideoPoller {
             keyframe: frame.keyframe,
             timestamp_us: frame.timestamp_us,
             payload: frame.payload,
+            display_id: frame.display_id,
+            revision: frame.revision,
         })
     }
 

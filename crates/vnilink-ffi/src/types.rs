@@ -6,6 +6,7 @@ use crate::error::{map_error, FfiError};
 /// Directional grants. Pairing alone sets none of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct FfiGrants {
+    pub view: bool,
     pub control: bool,
     pub clipboard: bool,
     pub transfer: bool,
@@ -23,6 +24,53 @@ pub struct FfiCapabilities {
     pub monitors: u8,
     pub h264_encode: bool,
     pub h264_decode: bool,
+}
+
+/// Probe-validated H.264 abilities. Every set bit means a backend
+/// initialized and processed a sample.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiVideoCodecCaps {
+    pub encode_baseline: bool,
+    pub encode_high: bool,
+    pub decode_baseline: bool,
+    pub decode_high: bool,
+    pub max_width: u16,
+    pub max_height: u16,
+    pub hardware: bool,
+    pub device: String,
+    pub chroma444: bool,
+}
+
+impl From<vnilink::VideoCodecCaps> for FfiVideoCodecCaps {
+    fn from(value: vnilink::VideoCodecCaps) -> Self {
+        Self {
+            encode_baseline: value.encode_baseline,
+            encode_high: value.encode_high,
+            decode_baseline: value.decode_baseline,
+            decode_high: value.decode_high,
+            max_width: value.max_width,
+            max_height: value.max_height,
+            hardware: value.hardware,
+            device: value.device,
+            chroma444: value.chroma444,
+        }
+    }
+}
+
+impl From<FfiVideoCodecCaps> for vnilink::VideoCodecCaps {
+    fn from(value: FfiVideoCodecCaps) -> Self {
+        Self {
+            encode_baseline: value.encode_baseline,
+            encode_high: value.encode_high,
+            decode_baseline: value.decode_baseline,
+            decode_high: value.decode_high,
+            max_width: value.max_width,
+            max_height: value.max_height,
+            hardware: value.hardware,
+            device: value.device,
+            chroma444: value.chroma444,
+        }
+    }
 }
 
 /// Preferred limits for the platform encoder.
@@ -137,11 +185,17 @@ pub struct FfiSessionPath {
 }
 
 /// One encoded H.264 frame. Screen content: never logged.
+///
+/// `display_id`/`revision` attest the captured source (topology display id
+/// and revision); zero means unstamped. Viewers map pointer input by this
+/// id instead of guessing from picture dimensions.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct FfiEncodedFrame {
     pub keyframe: bool,
     pub timestamp_us: u64,
     pub payload: Vec<u8>,
+    pub display_id: u64,
+    pub revision: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -156,6 +210,8 @@ pub enum FfiPointerButton {
     Left,
     Right,
     Middle,
+    Back,
+    Forward,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
@@ -213,16 +269,36 @@ pub enum FfiEvent {
     ClipboardReceived {
         id: u64,
     },
+    ClipboardFilesReceived {
+        id: u64,
+    },
     DesktopClipboardReceived {
         service: crate::FfiServiceInfo,
     },
-    TransferCompleted {
-        id: u64,
+    TopologyChanged {
+        revision: u64,
     },
+    HostLocked {
+        locked: bool,
+    },
+}
+
+/// One display in a host snapshot. Origins are desktop pixels and may be negative.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct FfiDisplay {
+    pub id: u64,
+    pub origin_x: i32,
+    pub origin_y: i32,
+    pub width: u16,
+    pub height: u16,
+    pub rotation_deg: u16,
+    pub scale_percent: u16,
+    pub revision: u64,
 }
 
 pub(crate) fn grants(grants: &vnilink::Grants) -> FfiGrants {
     FfiGrants {
+        view: grants.view,
         control: grants.control,
         clipboard: grants.clipboard,
         transfer: grants.transfer,
@@ -434,11 +510,67 @@ pub(crate) fn event(event: vnilink::CoreEvent) -> FfiEvent {
         },
         vnilink::CoreEvent::KeyframeRequested { id } => FfiEvent::KeyframeRequested { id },
         vnilink::CoreEvent::ClipboardReceived { id } => FfiEvent::ClipboardReceived { id },
+        vnilink::CoreEvent::ClipboardFilesReceived { id } => {
+            FfiEvent::ClipboardFilesReceived { id }
+        }
         vnilink::CoreEvent::DesktopClipboardReceived { service } => {
             FfiEvent::DesktopClipboardReceived {
                 service: service.into(),
             }
         }
-        vnilink::CoreEvent::TransferCompleted { id } => FfiEvent::TransferCompleted { id },
+        vnilink::CoreEvent::TopologyChanged { revision } => FfiEvent::TopologyChanged { revision },
+        vnilink::CoreEvent::HostLocked { locked } => FfiEvent::HostLocked { locked },
+    }
+}
+
+pub(crate) fn display_record(display: &vnilink::DisplayInfo) -> FfiDisplay {
+    FfiDisplay {
+        id: display.id,
+        origin_x: display.origin_x,
+        origin_y: display.origin_y,
+        width: display.width,
+        height: display.height,
+        rotation_deg: display.rotation_deg,
+        scale_percent: display.scale_percent,
+        revision: display.revision,
+    }
+}
+
+pub(crate) fn display_info(display: &FfiDisplay) -> vnilink::DisplayInfo {
+    vnilink::DisplayInfo {
+        id: display.id,
+        origin_x: display.origin_x,
+        origin_y: display.origin_y,
+        width: display.width,
+        height: display.height,
+        rotation_deg: display.rotation_deg,
+        scale_percent: display.scale_percent,
+        revision: display.revision,
+    }
+}
+
+/// Per-owner pointer policy; 100 percent leaves relative device counts unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct FfiPointerSettings {
+    pub sensitivity_percent: u16,
+    pub reverse_wheel: bool,
+    pub swap_buttons: bool,
+}
+impl From<FfiPointerSettings> for vnilink::PointerSettings {
+    fn from(value: FfiPointerSettings) -> Self {
+        Self {
+            sensitivity_percent: value.sensitivity_percent,
+            reverse_wheel: value.reverse_wheel,
+            swap_buttons: value.swap_buttons,
+        }
+    }
+}
+impl From<vnilink::PointerSettings> for FfiPointerSettings {
+    fn from(value: vnilink::PointerSettings) -> Self {
+        Self {
+            sensitivity_percent: value.sensitivity_percent,
+            reverse_wheel: value.reverse_wheel,
+            swap_buttons: value.swap_buttons,
+        }
     }
 }

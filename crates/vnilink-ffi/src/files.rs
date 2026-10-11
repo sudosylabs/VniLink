@@ -480,3 +480,87 @@ mod tests {
         assert_eq!(entry_token(token).dev, Some(3));
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct FfiFileRetentionPolicy {
+    pub resume_cache_bytes: u64,
+    pub resume_cache_age_secs: u64,
+    pub recent_fetch_bytes: u64,
+    pub recent_fetch_age_secs: u64,
+}
+impl From<vnilink::job::FileRetentionPolicy> for FfiFileRetentionPolicy {
+    fn from(p: vnilink::job::FileRetentionPolicy) -> Self {
+        Self {
+            resume_cache_bytes: p.resume_cache_bytes,
+            resume_cache_age_secs: p.resume_cache_age_secs,
+            recent_fetch_bytes: p.recent_fetch_bytes,
+            recent_fetch_age_secs: p.recent_fetch_age_secs,
+        }
+    }
+}
+impl From<FfiFileRetentionPolicy> for vnilink::job::FileRetentionPolicy {
+    fn from(p: FfiFileRetentionPolicy) -> Self {
+        Self {
+            resume_cache_bytes: p.resume_cache_bytes,
+            resume_cache_age_secs: p.resume_cache_age_secs,
+            recent_fetch_bytes: p.recent_fetch_bytes,
+            recent_fetch_age_secs: p.recent_fetch_age_secs,
+        }
+    }
+}
+#[uniffi::export]
+impl VnilinkCore {
+    pub fn file_retention_policy(&self) -> Result<FfiFileRetentionPolicy, FfiError> {
+        self.inner
+            .file_retention_policy()
+            .map(Into::into)
+            .map_err(map_error)
+    }
+    pub fn set_file_retention_policy(
+        &self,
+        policy: FfiFileRetentionPolicy,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .set_file_retention_policy(policy.into())
+            .map_err(map_error)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct FfiFileResourcePolicy {
+    pub max_concurrent_receivers: u16,
+    pub max_reserved_bytes: u64,
+    pub minimum_free_bytes: u64,
+}
+impl From<vnilink::job::FileResourcePolicy> for FfiFileResourcePolicy {
+    fn from(p: vnilink::job::FileResourcePolicy) -> Self {
+        Self {
+            max_concurrent_receivers: p.max_concurrent_receivers,
+            max_reserved_bytes: p.max_reserved_bytes,
+            minimum_free_bytes: p.minimum_free_bytes,
+        }
+    }
+}
+impl From<FfiFileResourcePolicy> for vnilink::job::FileResourcePolicy {
+    fn from(p: FfiFileResourcePolicy) -> Self {
+        Self {
+            max_concurrent_receivers: p.max_concurrent_receivers,
+            max_reserved_bytes: p.max_reserved_bytes,
+            minimum_free_bytes: p.minimum_free_bytes,
+        }
+    }
+}
+#[uniffi::export]
+impl VnilinkCore {
+    pub fn file_resource_policy(&self) -> Result<FfiFileResourcePolicy, FfiError> {
+        self.inner
+            .file_resource_policy()
+            .map(Into::into)
+            .map_err(map_error)
+    }
+    pub fn set_file_resource_policy(&self, policy: FfiFileResourcePolicy) -> Result<(), FfiError> {
+        self.inner
+            .set_file_resource_policy(policy.into())
+            .map_err(map_error)
+    }
+}

@@ -23,7 +23,7 @@
 //!
 //! Desktop/capture adapter installation stays in platform Rust. Native UI
 //! pasteboards implement `ClipboardWriter`; `install_clipboard` installs that
-//! callback before hosting, while received files use `set_transfer_directory`.
+//! callback before hosting, while received files land under `set_file_roots`.
 //! The file manager owns more surface: `set_blob_directory` for the job
 //! store, `set_file_roots` for browsing, `list_dir`/`create_dir`/
 //! `rename_entry` locally, `fs_*` against a live session, and the
@@ -34,18 +34,55 @@
 //! first. `open_persistent` delegates opaque record storage to the native
 //! credential-store callback; saved relay credentials are never read back.
 
+mod audio;
+mod audio_native;
+#[cfg(test)]
+mod audio_tests;
+mod availability;
+pub use audio_native::NativeAudioPlayback;
+mod camera;
+pub use audio::{
+    AudioProvider, AudioService, AudioSource, FfiAudioBlock, FfiAudioConfig, FfiAudioDevice,
+    FfiAudioKind, FfiAudioPacket, FfiAudioPlaybackStats,
+};
+pub use availability::{
+    FfiAvailability, FfiAvailabilityReason, FfiBackendState, FfiCapability, FfiPolicyChangeScope,
+    FfiPolicyDescriptor,
+};
+pub use camera::{
+    BackendStartup, CameraProvider, CameraService, CameraSource, FfiCameraConfig, FfiCameraDevice,
+};
 mod clipboard;
-pub use clipboard::ClipboardWriter;
+pub use clipboard::{
+    ClipboardFileSource, ClipboardWriter, FfiClipboardFileEntry, FfiFileSelection, FfiPreparedFile,
+    FfiPreparedPaste, FfiStoredFileSelection,
+};
 mod error;
 mod events;
 mod files;
 #[cfg(target_os = "macos")]
 mod macos;
+mod power;
+mod recording;
+pub use power::{FfiPowerKind, FfiPowerPhase, FfiPowerPolicy, FfiPowerStatus};
+pub use recording::{
+    recover_desktop_recording, FfiRecordingFailure, FfiRecordingLimits, FfiRecordingPhase,
+    FfiRecordingRecovery, FfiRecordingRetention, FfiRecordingStatus, RecordingHandle,
+};
 mod services;
+mod system;
+mod terminal;
 pub use services::{
-    DesktopService, FfiDesktopCursor, FfiDesktopCursorImage, FfiDesktopInfo, FfiServiceInfo,
-    FfiServiceKind, FfiServicePermissions, FfiServicePhase, FfiServiceSupport, FilesService,
-    ServiceLeasePoller,
+    DesktopService, FfiAdaptationReason, FfiCloseCause, FfiDesktopControlState, FfiDesktopCursor,
+    FfiDesktopCursorImage, FfiDesktopInfo, FfiDesktopMediaStatus, FfiServiceInfo, FfiServiceKind,
+    FfiServicePermissions, FfiServicePhase, FfiServiceSupport, FilesService, ServiceLeasePoller,
+};
+pub use system::{
+    FfiHostSystemReport, FfiOperationState, FfiPrivacyState, FfiSessionState, FfiSystemAction,
+    FfiSystemOperation, FfiSystemPolicy, FfiSystemSupport, SystemServiceHandle,
+};
+pub use terminal::{
+    FfiTerminalEvent, FfiTerminalPolicy, FfiTerminalSessionInfo, FfiTerminalSize, TerminalService,
 };
 mod storage;
 mod types;
@@ -56,13 +93,14 @@ pub use storage::{CredentialStore, FfiRelay, FfiRelayInput};
 pub use error::FfiError;
 pub use events::{EventPoller, VideoPoller};
 pub use files::{
-    FfiConflictChoice, FfiDirPage, FfiEntryKind, FfiEntryToken, FfiFileRoot, FfiFsEntry,
-    FfiJobDirection, FfiJobSnapshot, FfiJobState,
+    FfiConflictChoice, FfiDirPage, FfiEntryKind, FfiEntryToken, FfiFileResourcePolicy,
+    FfiFileRetentionPolicy, FfiFileRoot, FfiFsEntry, FfiJobDirection, FfiJobSnapshot, FfiJobState,
 };
 pub use types::{
-    new_quality, FfiCapabilities, FfiControlRequest, FfiDeviceInfo, FfiEncodedFrame, FfiEvent,
-    FfiGrants, FfiKeyboardMode, FfiPairingFile, FfiPairingPreview, FfiPointerButton, FfiQuality,
-    FfiSessionInfo, FfiSessionPath, FfiSessionPhase, FfiSessionRole, FfiSnapshot,
+    new_quality, FfiCapabilities, FfiControlRequest, FfiDeviceInfo, FfiDisplay, FfiEncodedFrame,
+    FfiEvent, FfiGrants, FfiKeyboardMode, FfiPairingFile, FfiPairingPreview, FfiPointerButton,
+    FfiPointerSettings, FfiQuality, FfiSessionInfo, FfiSessionPath, FfiSessionPhase,
+    FfiSessionRole, FfiSnapshot, FfiVideoCodecCaps,
 };
 
 use std::collections::HashMap;
@@ -70,6 +108,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
+use std::sync::Arc;
 use vnilink::{Core, CoreConfig, CustomRelay, Listen, LocalKey, RelaySettings};
 
 use error::map_error;
@@ -80,6 +119,7 @@ pub struct VnilinkCore {
     inner: std::sync::Arc<Core>,
     previews: Mutex<HashMap<u64, vnilink::PairingPreview>>,
     next_preview: AtomicU64,
+    audio_coordinator: Arc<audio_native::AudioCoordinator>,
 }
 
 #[uniffi::export]
@@ -108,6 +148,7 @@ impl VnilinkCore {
             inner: std::sync::Arc::new(core),
             previews: Mutex::new(HashMap::new()),
             next_preview: AtomicU64::new(1),
+            audio_coordinator: Arc::new(audio_native::AudioCoordinator::default()),
         })
     }
 
@@ -123,6 +164,7 @@ impl VnilinkCore {
             inner: std::sync::Arc::new(core),
             previews: Mutex::new(HashMap::new()),
             next_preview: AtomicU64::new(1),
+            audio_coordinator: Arc::new(audio_native::AudioCoordinator::default()),
         })
     }
 
@@ -190,16 +232,15 @@ impl VnilinkCore {
         types::capabilities(&self.inner.capabilities())
     }
 
-    /// Records the platform's H.264 availability after its VA-API /
-    /// VideoToolbox / Media Foundation probe.
-    pub fn set_h264_support(&self, encode: bool, decode: bool) -> Result<(), FfiError> {
-        self.inner
-            .set_h264_support(encode, decode)
-            .map_err(map_error)
+    /// Registers the platform's probe-validated H.264 abilities after its
+    /// VA-API / VideoToolbox / Media Foundation probe. Every set bit must
+    /// mean a backend processed a sample.
+    pub fn set_video_codecs(&self, caps: FfiVideoCodecCaps) -> Result<(), FfiError> {
+        self.inner.set_video_codecs(caps.into()).map_err(map_error)
     }
 
-    pub fn set_transfer_directory(&self, path: String) -> Result<(), FfiError> {
-        self.inner.set_transfer_directory(path).map_err(map_error)
+    pub fn video_codecs(&self) -> Result<FfiVideoCodecCaps, FfiError> {
+        self.inner.video_codecs().map(Into::into).map_err(map_error)
     }
 
     pub fn start_hosting(&self) -> Result<(), FfiError> {
@@ -294,6 +335,7 @@ impl VnilinkCore {
     pub fn authorize(
         &self,
         endpoint_id: String,
+        view: bool,
         control: bool,
         clipboard: bool,
         transfer: bool,
@@ -302,6 +344,8 @@ impl VnilinkCore {
             .authorize(
                 &endpoint_id,
                 vnilink::Grants {
+                    view,
+
                     control,
                     clipboard,
                     transfer,
@@ -393,6 +437,20 @@ impl VnilinkCore {
         self.inner
             .controller_sessions()
             .map(|sessions| sessions.into_iter().map(types::session_info).collect())
+            .map_err(map_error)
+    }
+
+    pub fn hosted_sessions(&self) -> Result<Vec<FfiSessionInfo>, FfiError> {
+        self.inner
+            .hosted_sessions()
+            .map(|sessions| sessions.into_iter().map(types::session_info).collect())
+            .map_err(map_error)
+    }
+
+    pub fn clipboard_owner_session(&self) -> Result<Option<FfiSessionInfo>, FfiError> {
+        self.inner
+            .clipboard_owner_session()
+            .map(|session| session.map(types::session_info))
             .map_err(map_error)
     }
 
@@ -524,16 +582,68 @@ impl VnilinkCore {
         &self,
         session_id: u64,
         generation: u64,
-        x: u16,
-        y: u16,
+        x: i32,
+        y: i32,
+        display: u64,
+        revision: u64,
     ) -> Result<(), FfiError> {
         self.inner
             .submit_input(
                 session_id,
                 generation,
-                vnilink::InputEvent::Pointer { x, y },
+                vnilink::InputEvent::pointer(x, y, display, revision),
             )
             .map_err(map_error)
+    }
+
+    pub fn set_topology(
+        &self,
+        revision: u64,
+        displays: Vec<types::FfiDisplay>,
+    ) -> Result<(), FfiError> {
+        let displays = displays.iter().map(types::display_info).collect::<Vec<_>>();
+        self.inner
+            .set_topology(revision, &displays)
+            .map_err(map_error)
+    }
+
+    pub fn topology(&self) -> Result<Vec<types::FfiDisplay>, FfiError> {
+        self.inner
+            .topology()
+            .map(|snapshot| {
+                snapshot
+                    .displays
+                    .iter()
+                    .map(types::display_record)
+                    .collect()
+            })
+            .map_err(map_error)
+    }
+
+    pub fn session_topology(
+        &self,
+        session_id: u64,
+        generation: u64,
+    ) -> Result<Vec<types::FfiDisplay>, FfiError> {
+        self.inner
+            .session_topology(session_id, generation)
+            .map(|displays| displays.iter().map(types::display_record).collect())
+            .map_err(map_error)
+    }
+
+    pub fn select_displays(
+        &self,
+        session_id: u64,
+        generation: u64,
+        ids: Vec<u64>,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .select_displays(session_id, generation, &ids)
+            .map_err(map_error)
+    }
+
+    pub fn capture_displays(&self) -> Result<Vec<u64>, FfiError> {
+        self.inner.capture_displays().map_err(map_error)
     }
 
     pub fn submit_button(
@@ -547,6 +657,8 @@ impl VnilinkCore {
             FfiPointerButton::Left => vnilink::PointerButton::Left,
             FfiPointerButton::Right => vnilink::PointerButton::Right,
             FfiPointerButton::Middle => vnilink::PointerButton::Middle,
+            FfiPointerButton::Back => vnilink::PointerButton::Back,
+            FfiPointerButton::Forward => vnilink::PointerButton::Forward,
         };
         self.inner
             .submit_input(
@@ -573,6 +685,57 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
+    pub fn session_pointer_settings(
+        &self,
+        id: u64,
+        generation: u64,
+    ) -> Result<FfiPointerSettings, FfiError> {
+        self.inner
+            .session_pointer_settings(id, generation)
+            .map(Into::into)
+            .map_err(map_error)
+    }
+    pub fn set_session_pointer_settings(
+        &self,
+        id: u64,
+        generation: u64,
+        settings: FfiPointerSettings,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .set_session_pointer_settings(id, generation, settings.into())
+            .map_err(map_error)
+    }
+
+    /// Fractional wheel units: 120 per detent; positive down/right.
+    pub fn submit_precise_wheel(
+        &self,
+        session_id: u64,
+        generation: u64,
+        dx: i32,
+        dy: i32,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .submit_input(
+                session_id,
+                generation,
+                vnilink::InputEvent::precise_wheel(dx, dy),
+            )
+            .map_err(map_error)
+    }
+
+    /// Relative device counts, not absolute screen coordinates.
+    pub fn submit_motion(
+        &self,
+        session_id: u64,
+        generation: u64,
+        dx: i16,
+        dy: i16,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .submit_input(session_id, generation, vnilink::InputEvent::motion(dx, dy))
+            .map_err(map_error)
+    }
+
     pub fn submit_local_key(
         &self,
         session_id: u64,
@@ -589,6 +752,7 @@ impl VnilinkCore {
                     usage,
                     down,
                     text: &text,
+                    composing: false,
                 },
             )
             .map_err(map_error)
@@ -643,15 +807,6 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
-    /// One adaptive step for the controlling session. Returns the applied
-    /// quality, or `None` to hold. Call every ~2s from the viewer.
-    pub fn auto_quality_tick(&self, session_id: u64) -> Result<Option<FfiQuality>, FfiError> {
-        self.inner
-            .auto_quality_tick(session_id)
-            .map(|opt| opt.as_ref().map(types::quality_record))
-            .map_err(map_error)
-    }
-
     pub fn submit_clipboard(
         &self,
         session_id: u64,
@@ -665,31 +820,6 @@ impl VnilinkCore {
 
     pub fn clipboard_text(&self) -> Result<Option<String>, FfiError> {
         self.inner.clipboard_text().map_err(map_error)
-    }
-
-    pub fn submit_file(
-        &self,
-        session_id: u64,
-        generation: u64,
-        name: String,
-        bytes: Vec<u8>,
-        replace: bool,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .submit_file(session_id, generation, &name, &bytes, replace)
-            .map_err(map_error)
-    }
-
-    pub fn publish_file(
-        &self,
-        session_id: u64,
-        name: String,
-        bytes: Vec<u8>,
-        replace: bool,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .publish_file(session_id, &name, &bytes, replace)
-            .map_err(map_error)
     }
 
     pub fn publish_video(
