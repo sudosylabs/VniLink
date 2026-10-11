@@ -65,6 +65,12 @@ impl RawFrame {
         self.timestamp_us
     }
 
+    /// Retimestamp an owned cached picture without copying its pixels again.
+    pub fn with_timestamp(mut self, timestamp_us: u64) -> Self {
+        self.timestamp_us = timestamp_us;
+        self
+    }
+
     pub fn pixels(&self) -> &[u8] {
         &self.bgra
     }

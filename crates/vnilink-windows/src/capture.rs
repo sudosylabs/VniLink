@@ -4,6 +4,7 @@
 //! and this module reports that instead of pretending the picture is available.
 
 use std::slice;
+use std::sync::Mutex;
 
 use vnilink_media::{Error, RawFrame};
 use windows::core::Interface;
@@ -29,6 +30,8 @@ pub struct WindowsCapture {
     /// Desktop size validated at open. A resize surfaces as access lost on the
     /// next acquire, so the size is fixed for the life of one capture.
     size: (u16, u16),
+    last: Mutex<Option<RawFrame>>,
+    pointer: Mutex<crate::cursor::Pointer>,
 }
 
 /// Desktop Duplication handles before the format and size are validated.
@@ -42,8 +45,10 @@ struct UnvalidatedDesktop {
 
 impl WindowsCapture {
     /// Opens the first output of the first adapter. Monitor index is always 0.
-    pub fn open() -> Result<Self, Error> {
-        let desktop = unsafe { Self::open_desktop() }.map_err(map_error)?;
+    pub fn open(startup: &vnilink::BackendStartup) -> Result<Self, Error> {
+        check_startup(startup)?;
+        let desktop = unsafe { Self::open_desktop(startup) }?;
+        check_startup(startup)?;
         if desktop.format != DXGI_FORMAT_B8G8R8A8_UNORM {
             return Err(Error::Unsupported("Desktop Duplication format is not BGRA"));
         }
@@ -51,6 +56,8 @@ impl WindowsCapture {
             context: desktop.context,
             duplication: desktop.duplication,
             size: frame_size(desktop.width, desktop.height)?,
+            last: Mutex::new(None),
+            pointer: Mutex::new(crate::cursor::Pointer::default()),
         })
     }
 
@@ -62,15 +69,36 @@ impl WindowsCapture {
     /// itself never waits: blocking until a newer frame arrives lives with
     /// the host caller behind the frame-source seam.
     pub fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
-        unsafe { self.acquire(timestamp_us) }
+        let mut last = self
+            .last
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        // Check the native source even when pixels are cached: access loss or
+        // permission denial must not be hidden by an old picture.
+        let frame = crate::idle::picture(
+            unsafe { self.acquire(timestamp_us) },
+            &mut last,
+            timestamp_us,
+        )?;
+        frame
+            .map(|frame| {
+                self.pointer
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .composite(frame)
+            })
+            .transpose()
     }
 
-    unsafe fn open_desktop() -> windows::core::Result<UnvalidatedDesktop> {
+    unsafe fn open_desktop(startup: &vnilink::BackendStartup) -> Result<UnvalidatedDesktop, Error> {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-        let factory: IDXGIFactory1 = CreateDXGIFactory1()?;
-        let adapter: IDXGIAdapter1 = factory.EnumAdapters1(0)?;
+        check_startup(startup)?;
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().map_err(map_error)?;
+        check_startup(startup)?;
+        let adapter: IDXGIAdapter1 = factory.EnumAdapters1(0).map_err(map_error)?;
         let mut device = None;
         let mut context = None;
+        check_startup(startup)?;
         D3D11CreateDevice(
             &adapter,
             D3D_DRIVER_TYPE_UNKNOWN,
@@ -81,12 +109,17 @@ impl WindowsCapture {
             Some(&mut device),
             None,
             Some(&mut context),
-        )?;
-        let device = device.ok_or_else(|| windows::core::Error::from_hresult(E_FAIL))?;
-        let context = context.ok_or_else(|| windows::core::Error::from_hresult(E_FAIL))?;
-        let output = adapter.EnumOutputs(0)?;
-        let output: IDXGIOutput1 = output.cast()?;
-        let duplication = output.DuplicateOutput(&device)?;
+        )
+        .map_err(map_error)?;
+        check_startup(startup)?;
+        let device = device.ok_or_else(|| map_error(windows::core::Error::from_hresult(E_FAIL)))?;
+        let context =
+            context.ok_or_else(|| map_error(windows::core::Error::from_hresult(E_FAIL)))?;
+        let output = adapter.EnumOutputs(0).map_err(map_error)?;
+        let output: IDXGIOutput1 = output.cast().map_err(map_error)?;
+        check_startup(startup)?;
+        let duplication = output.DuplicateOutput(&device).map_err(map_error)?;
+        check_startup(startup)?;
         let desc = duplication.GetDesc();
         Ok(UnvalidatedDesktop {
             context,
@@ -95,6 +128,56 @@ impl WindowsCapture {
             width: desc.ModeDesc.Width,
             height: desc.ModeDesc.Height,
         })
+    }
+
+    unsafe fn update_pointer(
+        &self,
+        info: &windows::Win32::Graphics::Dxgi::DXGI_OUTDUPL_FRAME_INFO,
+    ) -> Result<(), Error> {
+        let mut pointer = self.pointer.lock().unwrap_or_else(|p| p.into_inner());
+        if info.LastMouseUpdateTime != 0 {
+            pointer.visible = info.PointerPosition.Visible.as_bool();
+            pointer.position = (
+                info.PointerPosition.Position.x,
+                info.PointerPosition.Position.y,
+            );
+        }
+        if info.PointerShapeBufferSize != 0 {
+            let size = info.PointerShapeBufferSize as usize;
+            if size > crate::cursor::MAX_SHAPE_BYTES {
+                return Err(Error::InvalidFrame("DXGI cursor shape is too large"));
+            }
+            let mut bytes = vec![0u8; size];
+            let mut required = 0;
+            let mut shape =
+                windows::Win32::Graphics::Dxgi::DXGI_OUTDUPL_POINTER_SHAPE_INFO::default();
+            self.duplication
+                .GetFramePointerShape(
+                    info.PointerShapeBufferSize,
+                    bytes.as_mut_ptr().cast(),
+                    &mut required,
+                    &mut shape,
+                )
+                .map_err(map_error)?;
+            if required as usize > bytes.len() {
+                return Err(Error::InvalidFrame("DXGI cursor shape changed size"));
+            }
+            bytes.truncate(required as usize);
+            let kind = match shape.Type {
+                1 => crate::cursor::Kind::Monochrome,
+                2 => crate::cursor::Kind::Color,
+                4 => crate::cursor::Kind::MaskedColor,
+                _ => return Err(Error::Unsupported("DXGI cursor shape type")),
+            };
+            pointer.shape = Some(crate::cursor::Shape::new(
+                kind,
+                shape.Width,
+                shape.Height,
+                shape.Pitch,
+                bytes,
+            )?);
+        }
+        Ok(())
     }
 
     unsafe fn acquire(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
@@ -109,7 +192,11 @@ impl WindowsCapture {
             }
             return Err(map_error(err));
         }
-        let frame = self.copy_resource(resource.as_ref(), timestamp_us);
+        // ReleaseFrame still runs if shape extraction fails. Cache only the
+        // desktop base; each presentation composites the newest pointer once.
+        let frame = self
+            .update_pointer(&info)
+            .and_then(|_| self.copy_resource(resource.as_ref(), timestamp_us));
         if let Err(err) = self.duplication.ReleaseFrame() {
             return Err(map_error(err));
         }
@@ -189,4 +276,27 @@ fn map_error(err: windows::core::Error) -> Error {
         return Error::CaptureRejected("Desktop Duplication cannot read this desktop");
     }
     Error::CaptureFailed(code.0)
+}
+
+// COM allocations are owned locals at every boundary, so cancellation also
+// releases a duplication returned after the owner ended. Synchronous driver
+// calls cannot be forcibly interrupted; cancellation is checked on return.
+fn check_startup(startup: &vnilink::BackendStartup) -> Result<(), Error> {
+    startup
+        .check()
+        .map_err(|_| Error::CaptureRejected("Desktop capture startup ended"))
+}
+
+#[cfg(test)]
+mod startup_tests {
+    #[test]
+    fn cancelled_startup_does_not_enter_desktop_duplication() {
+        let startup = vnilink::BackendStartup::new(std::time::Duration::ZERO);
+        assert!(matches!(
+            super::WindowsCapture::open(&startup),
+            Err(vnilink_media::Error::CaptureRejected(
+                "Desktop capture startup ended"
+            ))
+        ));
+    }
 }

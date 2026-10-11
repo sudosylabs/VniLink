@@ -82,6 +82,33 @@ impl WindowsEncoder {
     ) -> windows::core::Result<Self> {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)?;
+        Self::create_transform(width, height, frame_rate, bitrate_bps, false)
+    }
+
+    /// The caller must own an MTA apartment and Media Foundation startup on
+    /// this thread until the encoder has been dropped. Camera capture does so.
+    #[cfg(windows)]
+    pub(crate) unsafe fn open_camera(
+        width: u16,
+        height: u16,
+        frame_rate: u8,
+        bitrate_bps: u32,
+    ) -> Result<Self, Error> {
+        if width % 2 != 0 || height % 2 != 0 {
+            return Err(Error::InvalidFrame("NV12 width and height must be even"));
+        }
+        Self::create_transform(width, height, frame_rate, bitrate_bps, true)
+            .map_err(|_| Error::Unsupported("Media Foundation camera H.264"))
+    }
+
+    #[cfg(windows)]
+    unsafe fn create_transform(
+        width: u16,
+        height: u16,
+        frame_rate: u8,
+        bitrate_bps: u32,
+        camera: bool,
+    ) -> windows::core::Result<Self> {
         let transform: IMFTransform =
             CoCreateInstance(&CLSID_MSH264_ENCODER, None, CLSCTX_INPROC_SERVER)?;
         if let Ok(attributes) = transform.GetAttributes() {
@@ -91,7 +118,24 @@ impl WindowsEncoder {
         let output = video_type(MFVideoFormat_H264, width, height, rate)?;
         output.SetUINT32(&MF_MT_AVG_BITRATE, bitrate_bps)?;
         output.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, rate)?;
-        transform.SetOutputType(0, &output, 0)?;
+        if camera {
+            // Baseline excludes B pictures. Prefer the explicit constrained
+            // profile; older transforms accept Baseline only. The camera
+            // publisher still checks emitted SPS constraint flags before use.
+            use windows::Win32::Media::MediaFoundation::{
+                eAVEncH264VProfile_Base, eAVEncH264VProfile_ConstrainedBase, MF_MT_MPEG2_PROFILE,
+            };
+            output.SetUINT32(
+                &MF_MT_MPEG2_PROFILE,
+                eAVEncH264VProfile_ConstrainedBase.0 as u32,
+            )?;
+            if transform.SetOutputType(0, &output, 0).is_err() {
+                output.SetUINT32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base.0 as u32)?;
+                transform.SetOutputType(0, &output, 0)?;
+            }
+        } else {
+            transform.SetOutputType(0, &output, 0)?;
+        }
         let input = video_type(MFVideoFormat_NV12, width, height, rate)?;
         transform.SetInputType(0, &input, 0)?;
         transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;

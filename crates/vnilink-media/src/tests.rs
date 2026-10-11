@@ -6,6 +6,8 @@ mod channel_tests;
 mod controller_tests;
 #[path = "tests/desktop.rs"]
 mod desktop_tests;
+#[path = "tests/fanout.rs"]
+mod fanout_tests;
 #[path = "tests/frame.rs"]
 mod frame_tests;
 #[path = "tests/host.rs"]
@@ -16,3 +18,5 @@ mod nv12_tests;
 mod pump_tests;
 #[path = "tests/rate.rs"]
 mod rate_tests;
+#[path = "tests/recording_segments.rs"]
+mod recording_segments_tests;

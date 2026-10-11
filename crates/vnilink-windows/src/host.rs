@@ -8,9 +8,6 @@
 
 #[cfg(windows)]
 use std::sync::atomic::AtomicBool;
-#[cfg(windows)]
-use std::time::Duration;
-
 pub use vnilink_media::HostSession;
 #[cfg(windows)]
 use vnilink_media::{Error, FrameSource, PublishError, Quality, RawFrame};
@@ -19,25 +16,14 @@ use vnilink_media::{Error, FrameSource, PublishError, Quality, RawFrame};
 use crate::encode::WindowsEncoder;
 
 #[cfg(windows)]
-const FRAME_POLL_INTERVAL: Duration = Duration::from_millis(10);
-
-#[cfg(windows)]
 impl FrameSource for crate::capture::WindowsCapture {
     fn size(&self) -> (u16, u16) {
         self.size()
     }
 
-    /// Polls Desktop Duplication until a newer frame arrives. The zero-timeout
-    /// acquire never waits itself; this loop is the wait. An unchanged desktop
-    /// produces no frames, which is normal: the wait has no deadline, and the
-    /// serve loop notices `stop` once a frame arrives.
-    fn next_frame(&self, timestamp_us: u64) -> Result<RawFrame, Error> {
-        loop {
-            if let Some(frame) = self.poll_frame(timestamp_us)? {
-                return Ok(frame);
-            }
-            std::thread::sleep(FRAME_POLL_INTERVAL);
-        }
+    /// A zero-timeout native acquire, with cached pixels for an idle desktop.
+    fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
+        self.poll_frame(timestamp_us)
     }
 }
 

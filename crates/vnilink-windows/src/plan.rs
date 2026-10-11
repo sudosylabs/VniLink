@@ -11,7 +11,7 @@ pub const SECURE_DESKTOP_SUPPORTED: bool = false;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowsPlan {
-    monitor_index: u32,
+    display_id: u64,
     width: u16,
     height: u16,
     frame_rate: u8,
@@ -20,16 +20,13 @@ pub struct WindowsPlan {
 
 impl WindowsPlan {
     pub fn from_capture(plan: &CapturePlan, bitrate_kbps: u32) -> Result<Self, Error> {
-        if plan.monitor_index() != 0 {
-            return Err(Error::Unsupported("only one monitor is supported"));
-        }
         let bitrate_bps = bitrate_kbps
             .checked_mul(1_000)
             .ok_or(Error::InvalidSetting(
                 "bitrate does not fit in bits per second",
             ))?;
         Ok(Self {
-            monitor_index: 0,
+            display_id: plan.display_id(),
             width: plan.width(),
             height: plan.height(),
             frame_rate: plan.frame_rate(),
@@ -37,8 +34,8 @@ impl WindowsPlan {
         })
     }
 
-    pub fn monitor_index(&self) -> u32 {
-        self.monitor_index
+    pub fn display_id(&self) -> u64 {
+        self.display_id
     }
 
     pub fn width(&self) -> u16 {

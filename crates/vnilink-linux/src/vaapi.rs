@@ -533,7 +533,7 @@ pub(crate) fn render_nodes() -> Vec<std::path::PathBuf> {
 /// True when a DRM render node offers VA-API H.264 Constrained Baseline
 /// slice encode. No encoder session is opened. Used to report an explicit
 /// unsupported state instead of admitting a session that can never carry video.
-pub fn h264_encode_available() -> bool {
+fn probe_encode() -> bool {
     #[cfg(not(target_os = "linux"))]
     {
         return false;
@@ -566,7 +566,7 @@ pub fn h264_encode_available() -> bool {
 
 /// True when a DRM render node offers VA-API H.264 High slice encode. The
 /// session negotiates High only then; otherwise it stays on Baseline.
-pub fn h264_high_available() -> bool {
+fn probe_high() -> bool {
     #[cfg(not(target_os = "linux"))]
     {
         return false;
@@ -595,7 +595,7 @@ pub fn h264_high_available() -> bool {
 /// True when a DRM render node offers VA-API H.264 VLD decode. No decode
 /// session is opened. A machine without this entrypoint reports unsupported
 /// instead of silently showing no video.
-pub fn h264_decode_available() -> bool {
+fn probe_decode() -> bool {
     #[cfg(not(target_os = "linux"))]
     {
         return false;
@@ -624,6 +624,27 @@ pub fn h264_decode_available() -> bool {
             }
         }
         false
+    }
+}
+
+/// Probe-validated H.264 abilities of this machine. Sizes are the
+/// conservative documented ceiling for VA-API H.264 encode: offers above
+/// it clamp instead of failing, and a weaker driver still fails its owner
+/// explicitly at encoder open.
+pub fn video_codec_caps() -> vnilink::VideoCodecCaps {
+    let encode = probe_encode();
+    let high = probe_high();
+    let decode = probe_decode();
+    vnilink::VideoCodecCaps {
+        encode_baseline: encode,
+        encode_high: encode && high,
+        decode_baseline: decode,
+        decode_high: decode,
+        max_width: 4096,
+        max_height: 4096,
+        hardware: encode || decode,
+        device: "vaapi".into(),
+        chroma444: false,
     }
 }
 

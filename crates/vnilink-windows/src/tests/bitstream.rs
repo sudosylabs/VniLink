@@ -179,3 +179,20 @@ impl BitWriter {
         self.bytes
     }
 }
+
+#[test]
+fn camera_keyframes_require_actual_constrained_baseline_parameter_sets() {
+    use crate::bitstream::camera_access_unit;
+    let valid = [
+        0, 0, 0, 1, 0x67, 66, 0x40, 31, 0, 0, 0, 1, 0x68, 1, 0, 0, 0, 1, 0x65, 1,
+    ];
+    camera_access_unit(&valid).unwrap();
+    let mut high = valid;
+    high[5] = 100;
+    assert!(camera_access_unit(&high).is_err());
+    let mut unconstrained = valid;
+    unconstrained[6] = 0;
+    assert!(camera_access_unit(&unconstrained).is_err());
+    assert!(camera_access_unit(&valid[..14]).is_err());
+    assert!(camera_access_unit(&valid[8..]).is_err());
+}

@@ -461,7 +461,7 @@ fn vaapi_high_round_trips_where_the_entrypoint_exists() {
 
     use crate::encode::LinuxEncoder;
 
-    if !crate::h264_high_available() {
+    if !crate::video_codec_caps().encode_high {
         return;
     }
     let mut encoder = match LinuxEncoder::open(64, 64, 30, 500_000, true) {

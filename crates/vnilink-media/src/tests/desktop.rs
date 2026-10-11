@@ -7,20 +7,23 @@ use crate::error::Error;
 #[test]
 fn capture_plan_is_one_even_monitor_without_a_cursor() {
     let quality = Quality::new(2_500, 30, 1919, 1080).unwrap();
-    let plan = CapturePlan::one_monitor(quality).unwrap();
-    assert_eq!(plan.monitor_index(), 0);
+    let plan = CapturePlan::for_display(1, quality).unwrap();
+    assert_eq!(plan.display_id(), 1);
     assert_eq!((plan.width(), plan.height()), (1918, 1080));
     assert_eq!(plan.frame_rate(), 30);
     assert_eq!(plan.cursor(), CursorPolicy::Hidden);
     let shown = plan.with_cursor(CursorPolicy::InFrame);
     assert_eq!(shown.cursor(), CursorPolicy::InFrame);
+    let other = CapturePlan::for_display(2, quality).unwrap();
+    assert_eq!(other.display_id(), 2);
+    assert_ne!(plan.display_id(), other.display_id());
     assert!(matches!(
-        CapturePlan::for_monitor(1, quality),
-        Err(Error::Unsupported("only one monitor is supported"))
+        CapturePlan::for_display(0, quality),
+        Err(Error::InvalidSetting("a display id is invalid"))
     ));
     let tiny = Quality::new(1, 1, 1, 1).unwrap();
     assert!(matches!(
-        CapturePlan::one_monitor(tiny),
+        CapturePlan::for_display(1, tiny),
         Err(Error::InvalidSetting(
             "encoded size must be at least 2 by 2"
         ))

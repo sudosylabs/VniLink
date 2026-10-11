@@ -30,7 +30,7 @@ use crate::pixels::{raw_frame_from_bgra, raw_frame_from_bgrx};
 const DRM_FORMAT_MOD_INVALID: u64 = 0x00ff_ffff_ffff_ffff;
 
 const OPEN_TIMEOUT: Duration = Duration::from_secs(3);
-const FRAME_TIMEOUT: Duration = Duration::from_secs(2);
+const FRAME_TIMEOUT: Duration = Duration::from_millis(100);
 
 struct Shared {
     cursor: Mutex<Option<vnilink::CursorState>>,
@@ -49,7 +49,7 @@ struct ListenerState {
 enum Command {
     Frame {
         timestamp_us: u64,
-        reply: Sender<Result<(RawFrame, PortalDelivery), Error>>,
+        reply: Sender<Result<Option<(RawFrame, PortalDelivery)>, Error>>,
     },
     Stop,
 }
@@ -96,7 +96,14 @@ impl PortalCapture {
     /// PipeWire closes `remote`. The call fails when the node does not offer
     /// BGRA or BGRx, or when no format arrives before the timeout. Unexpected
     /// GPU buffers are refused before import.
-    pub fn open(remote: OwnedFd, node_id: u32) -> Result<Self, Error> {
+    pub fn open(
+        remote: OwnedFd,
+        node_id: u32,
+        startup: vnilink::BackendStartup,
+    ) -> Result<Self, Error> {
+        startup
+            .check()
+            .map_err(|_| Error::CaptureRejected("desktop capture startup cancelled or expired"))?;
         let shared = Arc::new(Shared {
             cursor: Mutex::new(None),
             size: Mutex::new(None),
@@ -112,18 +119,37 @@ impl PortalCapture {
         let worker_shared = Arc::clone(&shared);
         let thread = thread::Builder::new()
             .name("vnilink-pipewire".to_string())
-            .spawn(move || capture_thread(remote, node_id, worker_shared, rx, wake_rx, ready_tx))
+            .spawn({
+                let startup = startup.clone();
+                move || {
+                    capture_thread(
+                        remote,
+                        node_id,
+                        worker_shared,
+                        rx,
+                        wake_rx,
+                        ready_tx,
+                        startup,
+                    )
+                }
+            })
             .map_err(|_| Error::CaptureRejected("the screen cast portal did not start"))?;
-        match ready_rx.recv_timeout(OPEN_TIMEOUT + Duration::from_secs(5)) {
-            Ok(Ok((width, height))) => Ok(Self {
-                width,
-                height,
-                delivery: Mutex::new(None),
-                tx,
-                wake,
-                thread: Some(thread),
-                shared,
-            }),
+        match startup.receive(&ready_rx) {
+            Ok(Ok((width, height))) => {
+                let capture = Self {
+                    width,
+                    height,
+                    delivery: Mutex::new(None),
+                    tx,
+                    wake,
+                    thread: Some(thread),
+                    shared,
+                };
+                startup.check().map_err(|_| {
+                    Error::CaptureRejected("desktop capture startup cancelled or expired")
+                })?;
+                Ok(capture)
+            }
             Ok(Err(err)) => {
                 let _ = thread.join();
                 Err(err)
@@ -149,13 +175,13 @@ impl PortalCapture {
         (self.width, self.height)
     }
 
-    /// Arrangement of the frame most recently returned by [`Self::next_frame`].
+    /// Arrangement of the frame most recently returned by [`Self::poll_frame`].
     pub fn last_delivery(&self) -> Option<PortalDelivery> {
         *self.delivery.lock().expect("portal delivery")
     }
 
     /// Return the latest picture, retaining it while the desktop is idle.
-    pub fn next_frame(&self, timestamp_us: u64) -> Result<RawFrame, Error> {
+    pub fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.tx
             .send(Command::Frame {
@@ -164,11 +190,12 @@ impl PortalCapture {
             })
             .map_err(|_| Error::CaptureRejected("the screen cast portal did not start"))?;
         let _ = self.wake.send(&[1]);
-        match reply_rx.recv_timeout(FRAME_TIMEOUT + Duration::from_secs(1)) {
-            Ok(Ok((frame, delivery))) => {
+        match reply_rx.recv_timeout(FRAME_TIMEOUT) {
+            Ok(Ok(Some((frame, delivery)))) => {
                 *self.delivery.lock().expect("portal delivery") = Some(delivery);
-                Ok(frame)
+                Ok(Some(frame))
             }
+            Ok(Ok(None)) => Ok(None),
             Ok(Err(err)) => Err(err),
             Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => Err(
                 Error::CaptureRejected("the screen cast portal did not start"),
@@ -194,9 +221,10 @@ fn capture_thread(
     commands: Receiver<Command>,
     wake: UnixDatagram,
     ready: Sender<Result<(u16, u16), Error>>,
+    startup: vnilink::BackendStartup,
 ) {
     pw::init();
-    if let Err(err) = run(remote, node_id, &shared, &commands, wake, &ready) {
+    if let Err(err) = run(remote, node_id, &shared, &commands, wake, &ready, &startup) {
         let _ = ready.send(Err(err));
     }
 }
@@ -208,7 +236,14 @@ fn run(
     commands: &Receiver<Command>,
     wake: UnixDatagram,
     ready: &Sender<Result<(u16, u16), Error>>,
+    startup: &vnilink::BackendStartup,
 ) -> Result<(), Error> {
+    let check = || {
+        startup
+            .check()
+            .map_err(|_| Error::CaptureRejected("desktop capture startup cancelled or expired"))
+    };
+    check()?;
     let mainloop = pw::main_loop::MainLoopRc::new(None)
         .map_err(|_| Error::CaptureRejected("the screen cast portal did not start"))?;
     let context = pw::context::ContextRc::new(&mainloop, None)
@@ -283,6 +318,7 @@ fn run(
 
     let started = Instant::now();
     let size = loop {
+        check()?;
         if let Some(reason) = shared.channel.failure() {
             return Err(Error::Unsupported(reason));
         }
@@ -298,7 +334,10 @@ fn run(
             .loop_()
             .iterate(pw::loop_::Timeout::Finite(Duration::from_millis(50)));
     };
-    let _ = ready.send(Ok(size));
+    check()?;
+    ready
+        .send(Ok(size))
+        .map_err(|_| Error::CaptureRejected("desktop capture startup cancelled or expired"))?;
 
     dispatch_commands(&mainloop, shared, commands, wake)
 }
@@ -351,7 +390,7 @@ fn wait_frame(
     mainloop: &pw::main_loop::MainLoopRc,
     shared: &Shared,
     timestamp_us: u64,
-) -> Result<(RawFrame, PortalDelivery), Error> {
+) -> Result<Option<(RawFrame, PortalDelivery)>, Error> {
     // Drain ready compositor events without sleeping before using cached pixels.
     // Waiting 50ms here and again in dispatch caps even idle capture at ~10fps.
     let _ = mainloop
@@ -359,11 +398,7 @@ fn wait_frame(
         .iterate(pw::loop_::Timeout::Finite(Duration::ZERO));
     let slot = match shared.channel.try_latest()? {
         Some(slot) => slot,
-        None => shared.channel.recv_timeout(FRAME_TIMEOUT, || {
-            let _ = mainloop
-                .loop_()
-                .iterate(pw::loop_::Timeout::Finite(Duration::from_millis(50)));
-        })?,
+        None => return Ok(None),
     };
     let delivery = shared
         .delivery
@@ -383,7 +418,7 @@ fn wait_frame(
         timestamp_us,
         &slot.bytes,
     )?;
-    Ok((frame, delivery))
+    Ok(Some((frame, delivery)))
 }
 
 fn remember_format(shared: &Shared, id: u32, param: Option<&Pod>) {
@@ -707,6 +742,25 @@ mod timing_tests {
     use super::*;
 
     #[test]
+    fn cancelled_startup_closes_remote_fd_without_opening_pipewire() {
+        use std::io::Read;
+        let (remote, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        let startup = vnilink::BackendStartup::new(Duration::ZERO);
+        assert!(matches!(
+            PortalCapture::open(remote.into(), 42, startup),
+            Err(Error::CaptureRejected(
+                "desktop capture startup cancelled or expired"
+            ))
+        ));
+        assert_eq!(
+            peer.read(&mut [0]).unwrap(),
+            0,
+            "cancelled capture must close the owned remote fd"
+        );
+    }
+
+    #[test]
     fn cached_capture_commands_meet_a_60fps_frame_budget() {
         let (tx, rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::channel();
@@ -714,7 +768,7 @@ mod timing_tests {
         let worker = thread::spawn(move || {
             pw::init();
             let mainloop = pw::main_loop::MainLoopRc::new(None).unwrap();
-            let shared = Shared {
+            let shared = Arc::new(Shared {
                 cursor: Mutex::new(None),
                 size: Mutex::new(Some((8, 8))),
                 channel: FrameChannel::new(),
@@ -725,17 +779,31 @@ mod timing_tests {
                     format: PortalFormat::Bgra,
                     buffer: PortalBuffer::Memory,
                 })),
-            };
-            shared.channel.push(ChannelSlot {
-                width: 8,
-                height: 8,
-                stride: 32,
-                bytes: vec![255; 256],
             });
-            ready_tx.send(()).unwrap();
+            ready_tx.send(Arc::clone(&shared)).unwrap();
             dispatch_commands(&mainloop, &shared, &rx, wake_rx).unwrap();
         });
-        ready_rx.recv().unwrap();
+        let shared = ready_rx.recv().unwrap();
+        for timestamp_us in 0..20 {
+            let (reply, result) = mpsc::channel();
+            tx.send(Command::Frame {
+                timestamp_us,
+                reply,
+            })
+            .unwrap();
+            wake.send(&[1]).unwrap();
+            assert!(result
+                .recv_timeout(Duration::from_millis(100))
+                .unwrap()
+                .unwrap()
+                .is_none());
+        }
+        shared.channel.push(ChannelSlot {
+            width: 8,
+            height: 8,
+            stride: 32,
+            bytes: vec![255; 256],
+        });
         let started = Instant::now();
         for timestamp_us in 0..20 {
             let (reply, result) = mpsc::channel();
@@ -747,6 +815,7 @@ mod timing_tests {
             wake.send(&[1]).unwrap();
             let (frame, _) = result
                 .recv_timeout(Duration::from_secs(1))
+                .unwrap()
                 .unwrap()
                 .unwrap();
             assert_eq!((frame.width(), frame.height()), (8, 8));

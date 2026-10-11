@@ -8,14 +8,26 @@
 //! A build on macOS or Linux does not execute the Win32 code.
 
 mod bitstream;
+mod codecs;
+#[cfg(any(windows, test))]
+mod cursor;
 mod decode;
 mod encode;
 mod host;
+#[cfg(any(windows, test))]
+mod idle;
 mod plan;
 
 #[cfg(windows)]
 mod capture;
+#[cfg(windows)]
+mod terminal;
+#[cfg(any(windows, test))]
+mod terminal_io;
+#[cfg(windows)]
+pub use terminal::WindowsTerminalFactory;
 
+pub use codecs::probe_video_codecs;
 pub use decode::WindowsDecoder;
 pub use encode::WindowsEncoder;
 pub use plan::{WindowsPlan, SECURE_DESKTOP_SUPPORTED};
@@ -29,3 +41,19 @@ pub use host::HostSession;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(windows)]
+mod power;
+#[cfg(windows)]
+pub use power::WindowsPowerFactory;
+#[cfg(windows)]
+mod system;
+#[cfg(windows)]
+pub use system::WindowsSystemActions;
+
+#[cfg(windows)]
+mod camera;
+#[cfg(any(windows, test))]
+mod camera_format;
+#[cfg(windows)]
+pub use camera::{camera_devices, WindowsCameraFactory};

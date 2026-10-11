@@ -66,7 +66,7 @@ fn serve_controller_paints_in_order_and_stops_on_request() {
         fail_unsupported: false,
     });
     serve_controller(&mut |_| frames.next(), &mut video, &stop, |picture| {
-        painted.push(picture.timestamp_us());
+        painted.push(picture.frame.timestamp_us());
         if painted.len() >= 2 {
             stop.store(true, Ordering::Relaxed);
         }

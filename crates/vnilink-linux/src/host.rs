@@ -22,8 +22,8 @@ impl FrameSource for crate::pipewire::PortalCapture {
         self.size()
     }
 
-    fn next_frame(&self, timestamp_us: u64) -> Result<RawFrame, Error> {
-        self.next_frame(timestamp_us)
+    fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
+        self.poll_frame(timestamp_us)
     }
 }
 

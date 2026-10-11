@@ -28,6 +28,8 @@ enum Notify {
     Pointer(f64, f64),
     Button(i32, bool),
     Wheel(Axis, i32),
+    PreciseWheel(f64, f64),
+    Motion(f64, f64),
 }
 enum Command {
     Input(Vec<Notify>, mpsc::Sender<Result<(), vnilink::Error>>),
@@ -57,6 +59,9 @@ pub struct WaylandInput {
     connection: Arc<Connection>,
     pixels: (u16, u16),
     logical: (i32, i32),
+    /// Desktop origin of this granted surface. The portal does not enumerate
+    /// other monitors, so this is normally `(0, 0)`.
+    origin: (i32, i32),
 }
 impl WaylandInput {
     fn send(&self, events: Vec<Notify>) -> Result<(), vnilink::Error> {
@@ -81,7 +86,12 @@ impl WaylandInput {
 }
 impl HostDesktop for WaylandInput {
     fn apply(&mut self, event: InputEvent) -> Result<(), vnilink::Error> {
-        self.send(notifications(event, self.pixels, self.logical)?)
+        self.send(notifications(
+            event,
+            self.pixels,
+            self.logical,
+            self.origin,
+        )?)
     }
     fn type_text(&mut self, text: &str) -> Result<(), vnilink::Error> {
         if text.len() > vnilink::MAX_KEY_TEXT || text.contains('\0') {
@@ -108,7 +118,8 @@ pub struct WaylandCapture {
     cursor_metadata: bool,
 }
 impl WaylandCapture {
-    pub fn open() -> Result<Self, Error> {
+    pub fn open(startup: vnilink::BackendStartup) -> Result<Self, Error> {
+        startup.check().map_err(startup_error)?;
         let (tx, rx) = mpsc::sync_channel(64);
         let connection = Arc::new(Connection {
             tx,
@@ -118,14 +129,25 @@ impl WaylandCapture {
         let (ready_tx, ready_rx) = mpsc::channel();
         std::thread::Builder::new()
             .name("vnilink-wayland-input".into())
-            .spawn(move || worker_main(worker, rx, ready_tx))
+            .spawn({
+                let startup = startup.clone();
+                move || worker_main(worker, rx, ready_tx, startup)
+            })
             .map_err(|_| Error::CaptureRejected("the Wayland input worker could not start"))?;
         // Consent may need human interaction. Cancellation in the GTK layer
         // fences installation; a lost receiver makes the worker close its grant.
-        let (fd, node, logical, cursor_metadata) = ready_rx
-            .recv()
-            .map_err(|_| Error::CaptureRejected("the Wayland permission worker stopped"))??;
-        let capture = match PortalCapture::open(fd, node) {
+        let (fd, node, logical, cursor_metadata) = match startup.receive(&ready_rx) {
+            Ok(result) => result?,
+            Err(error) => {
+                connection.close();
+                return Err(startup_error(error));
+            }
+        };
+        startup.check().map_err(|error| {
+            connection.close();
+            startup_error(error)
+        })?;
+        let capture = match PortalCapture::open(fd, node, startup.clone()) {
             Ok(capture) => capture,
             Err(error) => {
                 connection.close();
@@ -136,12 +158,15 @@ impl WaylandCapture {
             connection,
             pixels: capture.size(),
             logical,
+            origin: (0, 0),
         };
-        Ok(Self {
+        let source = Self {
             capture,
             input,
             cursor_metadata,
-        })
+        };
+        startup.check().map_err(startup_error)?;
+        Ok(source)
     }
     pub fn separate_cursor(&self) -> bool {
         self.cursor_metadata
@@ -161,13 +186,13 @@ impl FrameSource for WaylandCapture {
     fn size(&self) -> (u16, u16) {
         self.capture.size()
     }
-    fn next_frame(&self, time: u64) -> Result<RawFrame, Error> {
+    fn poll_frame(&self, time: u64) -> Result<Option<RawFrame>, Error> {
         if self.input.connection.closed.load(Ordering::Acquire) {
             return Err(Error::CaptureRejected(
                 "the Wayland control permission session ended",
             ));
         }
-        self.capture.next_frame(time)
+        self.capture.poll_frame(time)
     }
 }
 impl Drop for WaylandCapture {
@@ -185,7 +210,16 @@ struct Grant {
     logical: (i32, i32),
     cursor_metadata: bool,
 }
-async fn open_grant() -> Result<Grant, Error> {
+fn startup_error(_: vnilink::Error) -> Error {
+    Error::CaptureRejected("desktop capture startup cancelled or expired")
+}
+async fn cancelled(startup: &vnilink::BackendStartup) {
+    while startup.check().is_ok() {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+async fn open_grant(startup: &vnilink::BackendStartup) -> Result<Grant, Error> {
+    startup.check().map_err(startup_error)?;
     let proxy = RemoteDesktop::new()
         .await
         .map_err(|_| Error::Unsupported("the RemoteDesktop portal is unavailable"))?;
@@ -195,7 +229,12 @@ async fn open_grant() -> Result<Grant, Error> {
         .map_err(|_| {
             Error::CaptureRejected("the RemoteDesktop portal could not create a session")
         })?;
-    let result = async {
+    // Once a session exists, cancellation must explicitly close it, including
+    // while the compositor's permission request is waiting for the user.
+    let work = async {
+        startup
+            .check()
+            .map_err(|_| ashpd::Error::Response(ashpd::desktop::ResponseError::Other))?;
         proxy
             .select_devices(
                 &session,
@@ -253,8 +292,12 @@ async fn open_grant() -> Result<Grant, Error> {
             .open_pipe_wire_remote(&session, Default::default())
             .await?;
         Ok::<_, ashpd::Error>((fd, node, logical, cursor_metadata))
-    }
-    .await;
+    };
+    let result = tokio::select! {
+        biased;
+        _ = cancelled(startup) => Err(ashpd::Error::Response(ashpd::desktop::ResponseError::Other)),
+        result = work => result,
+    };
     match result {
         Ok((fd, node, logical, cursor_metadata)) => Ok(Grant {
             proxy,
@@ -265,7 +308,7 @@ async fn open_grant() -> Result<Grant, Error> {
             cursor_metadata,
         }),
         Err(_) => {
-            let _ = session.close().await;
+            let _ = tokio::time::timeout(INPUT_TIMEOUT, session.close()).await;
             Err(Error::CaptureRejected(
                 "allow one screen, keyboard and pointer in the RemoteDesktop permission dialog",
             ))
@@ -276,6 +319,7 @@ fn worker_main(
     connection: Arc<Connection>,
     rx: mpsc::Receiver<Command>,
     ready: mpsc::Sender<Ready>,
+    startup: vnilink::BackendStartup,
 ) {
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -289,7 +333,7 @@ fn worker_main(
     // zbus drops proxies by spawning cleanup tasks. Keep a runtime context
     // entered until all portal objects/streams have been dropped.
     let _runtime_context = runtime.enter();
-    let grant = match runtime.block_on(open_grant()) {
+    let grant = match runtime.block_on(open_grant(&startup)) {
         Ok(grant) => grant,
         Err(error) => {
             let _ = ready.send(Err(error));
@@ -314,7 +358,7 @@ fn worker_main(
             return;
         }
     };
-    if ready.send(Ok((fd, node, logical, cursor_metadata))).is_ok() {
+    if startup.check().is_ok() && ready.send(Ok((fd, node, logical, cursor_metadata))).is_ok() {
         while !connection.closed.load(Ordering::Acquire) {
             // Pump D-Bus even with no input queued, and notice compositor-side
             // revocation instead of keeping a cached picture alive indefinitely.
@@ -386,6 +430,16 @@ async fn deliver(
                     .notify_pointer_button(session, button, state(down), Default::default())
                     .await?
             }
+            Notify::Motion(dx, dy) => {
+                proxy
+                    .notify_pointer_motion(session, dx, dy, Default::default())
+                    .await?
+            }
+            Notify::PreciseWheel(dx, dy) => {
+                proxy
+                    .notify_pointer_axis(session, dx, dy, Default::default())
+                    .await?
+            }
             Notify::Wheel(axis, steps) => {
                 proxy
                     .notify_pointer_axis_discrete(session, axis, steps, Default::default())
@@ -399,6 +453,7 @@ fn notifications(
     event: InputEvent,
     pixels: (u16, u16),
     logical: (i32, i32),
+    origin: (i32, i32),
 ) -> Result<Vec<Notify>, vnilink::Error> {
     Ok(match event {
         InputEvent::Key { usage, down } => vec![Notify::Key(
@@ -412,15 +467,53 @@ fn notifications(
                 PointerButton::Left => 0x110,
                 PointerButton::Right => 0x111,
                 PointerButton::Middle => 0x112,
+                PointerButton::Back => 0x116,
+                PointerButton::Forward => 0x115,
             },
             down,
         )],
-        InputEvent::Pointer { x, y } => vec![Notify::Pointer(
-            f64::from(x.min(pixels.0.saturating_sub(1))) * f64::from(logical.0)
-                / f64::from(pixels.0),
-            f64::from(y.min(pixels.1.saturating_sub(1))) * f64::from(logical.1)
-                / f64::from(pixels.1),
-        )],
+        InputEvent::Pointer { x, y, .. } => {
+            if pixels.0 == 0 || pixels.1 == 0 {
+                return Err(vnilink::Error::InputFailed(
+                    "the pointer is outside the desktop",
+                ));
+            }
+            let local_x = x.checked_sub(origin.0).ok_or(vnilink::Error::InputFailed(
+                "the pointer is outside the desktop",
+            ))?;
+            let local_y = y.checked_sub(origin.1).ok_or(vnilink::Error::InputFailed(
+                "the pointer is outside the desktop",
+            ))?;
+            if local_x < 0
+                || local_y < 0
+                || u32::try_from(local_x).ok() >= Some(u32::from(pixels.0))
+                || u32::try_from(local_y).ok() >= Some(u32::from(pixels.1))
+            {
+                return Err(vnilink::Error::InputFailed(
+                    "the pointer is outside the desktop",
+                ));
+            }
+            vec![Notify::Pointer(
+                f64::from(local_x) * f64::from(logical.0) / f64::from(pixels.0),
+                f64::from(local_y) * f64::from(logical.1) / f64::from(pixels.1),
+            )]
+        }
+        InputEvent::Motion { dx, dy } => vec![Notify::Motion(f64::from(dx), f64::from(dy))],
+        InputEvent::PreciseWheel { dx, dy } => {
+            if dx.unsigned_abs() > vnilink::MAX_PRECISE_WHEEL as u32
+                || dy.unsigned_abs() > vnilink::MAX_PRECISE_WHEEL as u32
+            {
+                return Err(vnilink::Error::InputFailed(
+                    "scroll delta is outside the supported range",
+                ));
+            }
+            // Portal continuous axes use logical displacement. One detent is
+            // ten logical units, matching the Core Graphics line convention.
+            vec![Notify::PreciseWheel(
+                f64::from(dx) / 12.0,
+                f64::from(dy) / 12.0,
+            )]
+        }
         InputEvent::Wheel { dx, dy } => {
             let mut out = Vec::new();
             if dx != 0 {

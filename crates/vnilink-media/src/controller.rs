@@ -22,8 +22,18 @@ use crate::pump::VideoDecoder;
 /// What the controller did with one encoded frame.
 #[derive(Debug)]
 pub enum ControllerOutput {
-    Decoded(RawFrame),
+    Decoded(DecodedFrame),
     Skipped,
+}
+
+/// A decoded picture with the source its encoded frame attested: topology
+/// display id and revision. Viewers map pointer input by this id instead
+/// of guessing from picture dimensions.
+#[derive(Debug, Clone)]
+pub struct DecodedFrame {
+    pub frame: RawFrame,
+    pub display_id: u64,
+    pub revision: u64,
 }
 
 /// Decoder for one controlling session.
@@ -48,7 +58,11 @@ impl<D: VideoDecoder> ControllerVideo<D> {
         match self.decoder.decode(frame) {
             Ok(picture) => {
                 self.decoded += 1;
-                Ok(ControllerOutput::Decoded(picture))
+                Ok(ControllerOutput::Decoded(DecodedFrame {
+                    frame: picture,
+                    display_id: frame.display_id,
+                    revision: frame.revision,
+                }))
             }
             Err(Error::DecodeRejected(_)) => {
                 self.skipped += 1;
@@ -68,7 +82,7 @@ impl<D: VideoDecoder> ControllerVideo<D> {
 }
 
 /// Pulls encoded frames until `stop` is set, decodes each, and hands BGRA
-/// pictures to `paint`.
+/// pictures with their attested source to `paint`.
 ///
 /// `paint` runs on the caller's thread; it must copy or hand off the pixels
 /// without blocking the loop for long.
@@ -76,7 +90,7 @@ pub fn serve_controller<D, N>(
     next: &mut N,
     controller: &mut ControllerVideo<D>,
     stop: &AtomicBool,
-    mut paint: impl FnMut(&RawFrame),
+    mut paint: impl FnMut(&DecodedFrame),
 ) -> Result<(), Error>
 where
     D: VideoDecoder,
@@ -90,7 +104,7 @@ where
             continue;
         };
         match controller.push(&frame)? {
-            ControllerOutput::Decoded(picture) => paint(&picture),
+            ControllerOutput::Decoded(decoded) => paint(&decoded),
             ControllerOutput::Skipped => {}
         }
     }

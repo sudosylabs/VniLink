@@ -11,6 +11,10 @@
 //! VideoToolbox emits length-prefixed NALs. Keyframes are converted to Annex-B
 //! with SPS and PPS in front so another operating system can decode them.
 
+#[cfg(target_os = "macos")]
+mod camera;
+#[cfg(target_os = "macos")]
+pub use camera::{camera_devices, microphone_authorized, MacCameraFactory};
 mod capture;
 #[cfg(target_os = "macos")]
 mod decode;
@@ -18,15 +22,15 @@ mod encode;
 mod host;
 mod pixels;
 
+pub use capture::{display_scale, ScreenPlan, FILEVAULT_PREBOOT_SUPPORTED};
 #[cfg(target_os = "macos")]
-pub use capture::ScreenCapture;
-pub use capture::{ScreenPlan, FILEVAULT_PREBOOT_SUPPORTED};
+pub use capture::{list_displays, ScreenCapture};
 #[cfg(target_os = "macos")]
 pub use decode::MacDecoder;
 pub use encode::MacEncoder;
 pub use host::HostSession;
 #[cfg(target_os = "macos")]
-pub use host::{serve_desktop, serve_stream};
+pub use host::{serve_desktop, serve_shared, serve_stream};
 pub use pixels::raw_frame_from_bgra;
 #[cfg(target_os = "macos")]
 pub use pixels::raw_frame_from_pixel_buffer;
@@ -34,3 +38,17 @@ pub use pixels::raw_frame_from_pixel_buffer;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(target_os = "macos")]
+mod power;
+#[cfg(target_os = "macos")]
+pub use power::MacPowerFactory;
+#[cfg(target_os = "macos")]
+mod system;
+#[cfg(target_os = "macos")]
+pub use system::MacSystemActions;
+
+#[cfg(target_os = "macos")]
+mod audio;
+#[cfg(target_os = "macos")]
+pub use audio::{system_audio_devices, MacSystemAudio};

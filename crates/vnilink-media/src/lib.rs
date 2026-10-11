@@ -16,17 +16,33 @@ mod controller;
 mod cursor;
 mod desktop;
 mod error;
+mod fanout;
 mod frame;
 mod host;
 mod nv12;
 mod pump;
 mod rate;
+mod recording;
+mod recording_segments;
+pub use recording_segments::{
+    RecordingFailure, RecordingRetention, RecordingSnapshot, SegmentWriter,
+};
+mod recording_worker;
+pub use recording_worker::{
+    recover_desktop_recording, DesktopRecorder, RecordingPhase, RecordingStatus,
+};
+mod recording_recovery;
+pub use recording_recovery::{scan_recording_prefix, RecordingRecovery};
+mod sps;
+pub use recording::{MatroskaRecorder, RecordingError, RecordingLimits};
+pub use sps::h264_picture_size;
 
 pub use annexb::{parse_annex_b, to_annex_b, AvccAccessUnit, NalUnit, ParsedAccessUnit};
 pub use channel::{ChannelSlot, FrameChannel};
-pub use controller::{serve_controller, ControllerOutput, ControllerVideo};
+pub use controller::{serve_controller, ControllerOutput, ControllerVideo, DecodedFrame};
 pub use desktop::{CapturePlan, CursorPolicy, DesktopKind, MonitorSize};
 pub use error::{Error, PublishError};
+pub use fanout::serve_shared_capture;
 pub use frame::{encoded_size, scale_bgra, RawFrame};
 pub use host::{serve_capture, serve_desktop_capture, FrameSource, HostSession, OpenEncoder};
 pub use nv12::{bgra_to_nv12, nv12_to_bgra, Nv12};
@@ -34,7 +50,7 @@ pub use pump::{
     CoreSink, EncodeParams, EncodedSample, FramePump, FrameSink, HostVideo, PumpOutput,
     VideoDecoder, VideoEncoder,
 };
-pub use rate::{suggest_quality, Congestion, EncoderSettings, RateController};
+pub use rate::{EncoderSettings, RateController};
 pub use vnilink::Quality;
 
 #[cfg(test)]

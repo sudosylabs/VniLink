@@ -75,18 +75,70 @@ fn solid(width: u16, height: u16, timestamp_us: u64) -> RawFrame {
 
 #[test]
 fn neutral_capture_worker_stops_when_its_desktop_owner_closes() {
+    capture_worker_exit(false, CaptureExit::Owner);
+}
+
+#[derive(Clone, Copy)]
+enum CaptureExit {
+    Owner,
+    Parent,
+    Revoke,
+    Stop,
+    Shutdown,
+    DuringRead,
+}
+
+#[test]
+fn idle_capture_stops_on_owner_close_before_the_first_picture() {
+    capture_worker_exit(true, CaptureExit::Owner);
+}
+#[test]
+fn idle_capture_stops_on_parent_loss_before_the_first_picture() {
+    capture_worker_exit(true, CaptureExit::Parent);
+}
+#[test]
+fn idle_capture_stops_on_revoke_before_the_first_picture() {
+    capture_worker_exit(true, CaptureExit::Revoke);
+}
+#[test]
+fn idle_capture_stops_on_caller_stop_before_the_first_picture() {
+    capture_worker_exit(true, CaptureExit::Stop);
+}
+#[test]
+fn idle_capture_stops_on_core_shutdown_before_the_first_picture() {
+    capture_worker_exit(true, CaptureExit::Shutdown);
+}
+
+#[test]
+fn shutdown_during_capture_read_does_not_publish_or_report_a_capture_fault() {
+    capture_worker_exit(false, CaptureExit::DuringRead);
+}
+
+fn capture_worker_exit(idle: bool, exit: CaptureExit) {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
     use vnilink::{
         Core, CoreConfig, CustomRelay, Grants, Listen, RelaySettings, ServiceKind, SessionPhase,
     };
-    struct Source;
+    struct Source {
+        idle: bool,
+        polled: Arc<AtomicBool>,
+        shutdown: Option<std::sync::Weak<Core>>,
+    }
     impl crate::FrameSource for Source {
         fn size(&self) -> (u16, u16) {
             (64, 64)
         }
-        fn next_frame(&self, timestamp: u64) -> Result<RawFrame, Error> {
-            Ok(solid(64, 64, timestamp))
+        fn poll_frame(&self, timestamp: u64) -> Result<Option<RawFrame>, Error> {
+            self.polled.store(true, Ordering::Release);
+            if let Some(core) = self.shutdown.as_ref().and_then(std::sync::Weak::upgrade) {
+                core.shutdown();
+            }
+            if self.idle {
+                Ok(None)
+            } else {
+                Ok(Some(solid(64, 64, timestamp)))
+            }
         }
     }
     impl vnilink::HostCapture for Source {
@@ -123,9 +175,18 @@ fn neutral_capture_worker_stops_when_its_desktop_owner_closes() {
     };
     let host = Arc::new(boot());
     let controller = boot();
-    host.set_capture(Box::new(Source)).unwrap();
-    host.set_h264_support(true, true).unwrap();
-    controller.set_h264_support(true, true).unwrap();
+    let polled = Arc::new(AtomicBool::new(false));
+    host.set_capture(Box::new(Source {
+        idle,
+        polled: polled.clone(),
+        shutdown: None,
+    }))
+    .unwrap();
+    host.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .unwrap();
+    controller
+        .set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .unwrap();
     controller
         .accept_invitation(&host.create_invitation(Duration::from_secs(60)).unwrap())
         .unwrap();
@@ -138,6 +199,7 @@ fn neutral_capture_worker_stops_when_its_desktop_owner_closes() {
     host.authorize(
         &controller.endpoint_id(),
         Grants {
+            view: true,
             control: true,
             clipboard: false,
             transfer: false,
@@ -175,9 +237,15 @@ fn neutral_capture_worker_stops_when_its_desktop_owner_closes() {
     let worker_stop = stop.clone();
     let worker_drops = drops.clone();
     let worker_opens = opens.clone();
+    let worker_polled = polled.clone();
     let worker = std::thread::spawn(move || {
         let result = crate::serve_desktop_capture(
-            &Source,
+            &Source {
+                idle,
+                polled: worker_polled,
+                shutdown: matches!(exit, CaptureExit::DuringRead)
+                    .then(|| Arc::downgrade(&worker_host)),
+            },
             &worker_host,
             remote.id,
             remote.generation,
@@ -191,11 +259,29 @@ fn neutral_capture_worker_stops_when_its_desktop_owner_closes() {
         );
         done_tx.send(result).unwrap();
     });
-    let picture = frames
-        .recv_timeout(Duration::from_secs(5))
-        .expect("scoped capture frame");
-    assert!(parse_annex_b(&picture.payload).unwrap().has_idr());
-    handle.close();
+    if idle || matches!(exit, CaptureExit::DuringRead) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !polled.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline, "capture never polled");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(frames.recv_timeout(Duration::from_millis(20)).is_none());
+    } else {
+        let picture = frames
+            .recv_timeout(Duration::from_secs(5))
+            .expect("scoped capture frame");
+        assert!(parse_annex_b(&picture.payload).unwrap().has_idr());
+    }
+    match exit {
+        CaptureExit::Owner => handle.close(),
+        CaptureExit::Parent => controller.disconnect_session(parent.id).unwrap(),
+        CaptureExit::Revoke => host
+            .authorize_service(&controller.endpoint_id(), ServiceKind::Desktop, false)
+            .unwrap(),
+        CaptureExit::Stop => stop.store(true, Ordering::Release),
+        CaptureExit::Shutdown => host.shutdown(),
+        CaptureExit::DuringRead => {}
+    }
     let result = done_rx.recv_timeout(Duration::from_secs(5));
     stop.store(true, Ordering::Relaxed);
     worker.join().unwrap();
@@ -203,10 +289,15 @@ fn neutral_capture_worker_stops_when_its_desktop_owner_closes() {
         .expect("owner close must stop capture without the caller stop flag")
         .unwrap();
     assert_eq!(drops.load(Ordering::Relaxed), *opens.lock().unwrap());
-    assert_eq!(
-        controller.controller_session(parent.id).unwrap().phase,
-        SessionPhase::Active
-    );
+    if !matches!(
+        exit,
+        CaptureExit::Parent | CaptureExit::Shutdown | CaptureExit::DuringRead
+    ) {
+        assert_eq!(
+            controller.controller_session(parent.id).unwrap().phase,
+            SessionPhase::Active
+        );
+    }
 }
 
 fn session(capture: (u16, u16), quality: Quality, opens: &Arc<Mutex<usize>>) -> HostSession<Fake> {

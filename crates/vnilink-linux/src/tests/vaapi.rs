@@ -52,6 +52,6 @@ fn constrained_baseline_prefers_low_power_then_slice() {
 fn availability_probes_do_not_fail_without_hardware() {
     // Either answer is valid; the point is the probe reports a decision
     // instead of the session failing silently later.
-    let _encode = crate::h264_encode_available();
-    let _decode = crate::h264_decode_available();
+    let caps = crate::video_codec_caps();
+    let _ = (caps.encode_baseline, caps.decode_baseline);
 }

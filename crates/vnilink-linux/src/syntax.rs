@@ -677,27 +677,25 @@ impl Slice {
             // Modification operations are consumed so the reader stays
             // aligned, then refused: reordering needs long-term bookkeeping
             // this decoder does not keep.
-            loop {
-                match bits.ue().ok_or_else(truncated)? {
-                    3 => break,
-                    0 | 1 => {
-                        let _ = bits.ue().ok_or_else(truncated)?;
-                        let _ = bits.ue().ok_or_else(truncated)?;
-                        return Err(Error::Unsupported(
-                            "H.264 reference list modification is not supported",
-                        ));
-                    }
-                    2 => {
-                        let _ = bits.ue().ok_or_else(truncated)?;
-                        return Err(Error::Unsupported(
-                            "H.264 long-term references are not supported",
-                        ));
-                    }
-                    _ => {
-                        return Err(Error::InvalidFrame(
-                            "H.264 reference modification is unknown",
-                        ));
-                    }
+            match bits.ue().ok_or_else(truncated)? {
+                3 => {}
+                0 | 1 => {
+                    let _ = bits.ue().ok_or_else(truncated)?;
+                    let _ = bits.ue().ok_or_else(truncated)?;
+                    return Err(Error::Unsupported(
+                        "H.264 reference list modification is not supported",
+                    ));
+                }
+                2 => {
+                    let _ = bits.ue().ok_or_else(truncated)?;
+                    return Err(Error::Unsupported(
+                        "H.264 long-term references are not supported",
+                    ));
+                }
+                _ => {
+                    return Err(Error::InvalidFrame(
+                        "H.264 reference modification is unknown",
+                    ));
                 }
             }
         }

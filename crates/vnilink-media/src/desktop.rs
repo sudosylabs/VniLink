@@ -53,7 +53,7 @@ impl DesktopKind {
             }
             Self::LinuxX11 => "X11 capture uses the current X session. It does not see a Wayland session.",
             Self::LinuxWayland => {
-                "A portal session is one compositor's permission. It is not universal unattended access."
+                "The portal grants one source and does not enumerate other monitors. It is not universal unattended access."
             }
         }
     }
@@ -68,10 +68,10 @@ pub enum CursorPolicy {
     InFrame,
 }
 
-/// One monitor, at the even size and frame rate taken from [`Quality`].
+/// One selected display, at the even size and frame rate taken from [`Quality`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapturePlan {
-    monitor_index: u32,
+    display_id: u64,
     width: u16,
     height: u16,
     frame_rate: u8,
@@ -79,13 +79,10 @@ pub struct CapturePlan {
 }
 
 impl CapturePlan {
-    pub fn one_monitor(quality: Quality) -> Result<Self, Error> {
-        Self::for_monitor(0, quality)
-    }
-
-    pub fn for_monitor(monitor_index: u32, quality: Quality) -> Result<Self, Error> {
-        if monitor_index != 0 {
-            return Err(Error::Unsupported("only one monitor is supported"));
+    /// Capture settings for one stable display id. Id zero is not a display.
+    pub fn for_display(display_id: u64, quality: Quality) -> Result<Self, Error> {
+        if display_id == 0 {
+            return Err(Error::InvalidSetting("a display id is invalid"));
         }
         let (width, height) = encoded_size(
             quality.max_width,
@@ -94,7 +91,7 @@ impl CapturePlan {
             quality.max_height,
         )?;
         Ok(Self {
-            monitor_index,
+            display_id,
             width,
             height,
             frame_rate: quality.max_frame_rate,
@@ -107,8 +104,8 @@ impl CapturePlan {
         self
     }
 
-    pub fn monitor_index(&self) -> u32 {
-        self.monitor_index
+    pub fn display_id(&self) -> u64 {
+        self.display_id
     }
 
     pub fn width(&self) -> u16 {

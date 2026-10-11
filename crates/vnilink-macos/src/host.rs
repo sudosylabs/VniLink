@@ -7,7 +7,7 @@
 //! does not draw. Frame bytes are not logged.
 
 #[cfg(target_os = "macos")]
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub use vnilink_media::HostSession;
 #[cfg(target_os = "macos")]
@@ -22,8 +22,8 @@ impl FrameSource for crate::capture::ScreenCapture {
         self.size()
     }
 
-    fn next_frame(&self, timestamp_us: u64) -> Result<RawFrame, Error> {
-        self.next_frame(timestamp_us)
+    fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
+        self.poll_frame(timestamp_us)
     }
 }
 
@@ -53,6 +53,71 @@ pub fn serve_stream(
         stop,
         move |w, h, fps, bps| MacEncoder::open(w, h, fps, bps, high),
     )
+}
+
+/// Encode every live viewer from one ScreenCaptureKit stream.
+///
+/// `exit_when_idle` returns once no consumer remains so the caller can drop
+/// the capture. Each viewer still has its own encoder. The cursor flag is
+/// updated when the set of consumers changes: an embedded-cursor viewer burns
+/// the cursor into the shared pictures, and a metadata viewer does not.
+#[cfg(target_os = "macos")]
+pub fn serve_shared(
+    capture: &crate::capture::ScreenCapture,
+    core: &vnilink::Core,
+    stop: &AtomicBool,
+    exit_when_idle: bool,
+    capture_display: u64,
+) -> Result<(), PublishError> {
+    let embedded = std::sync::Arc::new(AtomicBool::new(false));
+    let source = SharedSource {
+        inner: capture,
+        embedded: std::sync::Arc::clone(&embedded),
+        applied: AtomicBool::new(false),
+        known: AtomicBool::new(false),
+    };
+    vnilink_media::serve_shared_capture(
+        &source,
+        core,
+        stop,
+        exit_when_idle,
+        capture_display,
+        move |targets| {
+            embedded.store(
+                targets.iter().any(|target| !target.separate_cursor),
+                Ordering::Relaxed,
+            );
+        },
+        |target, width, height, fps, bps| {
+            let high = target.codec == vnilink::CODEC_H264_HIGH;
+            MacEncoder::open(width, height, fps, bps, high)
+        },
+    )
+}
+
+#[cfg(target_os = "macos")]
+struct SharedSource<'a> {
+    inner: &'a crate::capture::ScreenCapture,
+    embedded: std::sync::Arc<AtomicBool>,
+    applied: AtomicBool,
+    known: AtomicBool,
+}
+
+#[cfg(target_os = "macos")]
+impl FrameSource for SharedSource<'_> {
+    fn size(&self) -> (u16, u16) {
+        self.inner.size()
+    }
+
+    fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
+        let embedded = self.embedded.load(Ordering::Relaxed);
+        let first = !self.known.swap(true, Ordering::Relaxed);
+        let previous = self.applied.swap(embedded, Ordering::Relaxed);
+        if first || previous != embedded {
+            self.inner.set_shows_cursor(embedded)?;
+        }
+        self.inner.poll_frame(timestamp_us)
+    }
 }
 
 /// Encode for one admitted Desktop service, stopping when that owner ends.

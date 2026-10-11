@@ -3,7 +3,7 @@ use vnilink::usage;
 
 #[test]
 fn physical_keys_buttons_scroll_and_scaled_pointer_map_to_portal_events() {
-    let map = |event| notifications(event, (3840, 2160), (1920, 1080)).unwrap();
+    let map = |event| notifications(event, (3840, 2160), (1920, 1080), (0, 0)).unwrap();
     assert_eq!(
         map(InputEvent::key_down(usage::A)),
         vec![Notify::Key(30, true)]
@@ -12,15 +12,42 @@ fn physical_keys_buttons_scroll_and_scaled_pointer_map_to_portal_events() {
         map(InputEvent::key_up(usage::RIGHT_CONTROL)),
         vec![Notify::Key(97, false)]
     );
-    assert!(notifications(InputEvent::key_down(0xffff), (2, 2), (2, 2)).is_err());
+    assert!(notifications(InputEvent::key_down(0xffff), (2, 2), (2, 2), (0, 0)).is_err());
     assert_eq!(
-        map(InputEvent::pointer(1920, 1080)),
+        map(InputEvent::pointer(1920, 1080, 1, 1)),
         vec![Notify::Pointer(960.0, 540.0)]
     );
+    assert!(notifications(
+        InputEvent::pointer(65535, 65535, 1, 1),
+        (3840, 2160),
+        (1920, 1080),
+        (0, 0)
+    )
+    .is_err());
+    assert!(notifications(
+        InputEvent::pointer(-1, 0, 1, 1),
+        (3840, 2160),
+        (1920, 1080),
+        (0, 0)
+    )
+    .is_err());
     assert_eq!(
-        map(InputEvent::pointer(65535, 65535)),
-        vec![Notify::Pointer(1919.5, 1079.5)]
+        notifications(
+            InputEvent::pointer(110, 24, 1, 1),
+            (100, 50),
+            (100, 50),
+            (100, 20)
+        )
+        .unwrap(),
+        vec![Notify::Pointer(10.0, 4.0)]
     );
+    assert!(notifications(
+        InputEvent::pointer(10, 4, 1, 1),
+        (100, 50),
+        (100, 50),
+        (100, 20)
+    )
+    .is_err());
     for (button, code) in [
         (PointerButton::Left, 272),
         (PointerButton::Right, 273),
@@ -56,6 +83,7 @@ fn adapter_orders_text_events_and_refuses_input_after_revocation() {
         connection: connection.clone(),
         pixels: (1920, 1080),
         logical: (1920, 1080),
+        origin: (0, 0),
     };
     let thread = std::thread::spawn(move || match rx.recv().unwrap() {
         Command::Input(events, reply) => {
@@ -97,6 +125,8 @@ struct FakePortal(
     Arc<Mutex<Vec<Notify>>>,
     Arc<AtomicBool>,
     Arc<std::sync::atomic::AtomicU32>,
+    Arc<AtomicBool>,
+    Arc<AtomicBool>,
 );
 #[zbus::interface(name = "org.freedesktop.portal.RemoteDesktop")]
 impl FakePortal {
@@ -159,6 +189,20 @@ impl FakePortal {
             u32::try_from(options["persist_mode"].try_clone().unwrap()).unwrap(),
             0
         );
+        if self.3.load(Ordering::Acquire) {
+            self.4.store(true, Ordering::Release);
+            let sender = header
+                .sender()
+                .unwrap()
+                .as_str()
+                .trim_start_matches(':')
+                .replace('.', "_");
+            let token = String::try_from(options["handle_token"].try_clone().unwrap()).unwrap();
+            return Ok(OwnedObjectPath::try_from(format!(
+                "/org/freedesktop/portal/desktop/request/{sender}/{token}"
+            ))
+            .unwrap());
+        }
         response(connection, header, &options, HashMap::new()).await
     }
     async fn start(
@@ -232,6 +276,24 @@ impl FakePortal {
     ) {
         assert_eq!(stream, 42);
         self.0.lock().unwrap().push(Notify::Pointer(x, y));
+    }
+    fn notify_pointer_motion(
+        &self,
+        _session: OwnedObjectPath,
+        _options: HashMap<String, OwnedValue>,
+        dx: f64,
+        dy: f64,
+    ) {
+        self.0.lock().unwrap().push(Notify::Motion(dx, dy));
+    }
+    fn notify_pointer_axis(
+        &self,
+        _session: OwnedObjectPath,
+        _options: HashMap<String, OwnedValue>,
+        dx: f64,
+        dy: f64,
+    ) {
+        self.0.lock().unwrap().push(Notify::PreciseWheel(dx, dy));
     }
     fn notify_pointer_button(
         &self,
@@ -355,6 +417,8 @@ fn real_portal_notify_transport_preserves_all_events() {
             let recorded = Arc::new(Mutex::new(Vec::new()));
             let granted = Arc::new(AtomicBool::new(true));
             let closed = Arc::new(std::sync::atomic::AtomicU32::new(0));
+            let stall = Arc::new(AtomicBool::new(false));
+            let entered = Arc::new(AtomicBool::new(false));
             let cursor_modes = Arc::new(std::sync::atomic::AtomicU32::new(6));
             let _service = zbus::connection::Builder::session()
                 .unwrap()
@@ -362,7 +426,13 @@ fn real_portal_notify_transport_preserves_all_events() {
                 .unwrap()
                 .serve_at(
                     "/org/freedesktop/portal/desktop",
-                    FakePortal(recorded.clone(), granted.clone(), closed.clone()),
+                    FakePortal(
+                        recorded.clone(),
+                        granted.clone(),
+                        closed.clone(),
+                        stall.clone(),
+                        entered.clone(),
+                    ),
                 )
                 .unwrap()
                 .serve_at(
@@ -386,12 +456,18 @@ fn real_portal_notify_transport_preserves_all_events() {
                 Notify::Button(272, false),
                 Notify::Wheel(Axis::Horizontal, -2),
                 Notify::Wheel(Axis::Vertical, 3),
+                Notify::Motion(-2.0, 3.0),
+                Notify::PreciseWheel(1.25, -2.5),
+                Notify::Button(278, true),
+                Notify::Button(278, false),
             ];
             deliver(&proxy, &session, 42, expected.clone())
                 .await
                 .unwrap();
             assert_eq!(*recorded.lock().unwrap(), expected);
-            let grant = open_grant().await.unwrap();
+            let grant = open_grant(&vnilink::BackendStartup::new(Duration::from_secs(5)))
+                .await
+                .unwrap();
             assert!(grant.cursor_metadata);
             assert_eq!(grant.logical, (1920, 1080));
             assert_eq!(grant.node, 42);
@@ -407,7 +483,14 @@ fn real_portal_notify_transport_preserves_all_events() {
                     });
                     let worker = connection.clone();
                     let (ready_tx, ready_rx) = mpsc::channel();
-                    let thread = std::thread::spawn(move || worker_main(worker, rx, ready_tx));
+                    let thread = std::thread::spawn(move || {
+                        worker_main(
+                            worker,
+                            rx,
+                            ready_tx,
+                            vnilink::BackendStartup::new(Duration::from_secs(5)),
+                        )
+                    });
                     let (_fd, node, logical, _) = ready_rx
                         .recv_timeout(Duration::from_secs(2))
                         .unwrap()
@@ -417,6 +500,7 @@ fn real_portal_notify_transport_preserves_all_events() {
                         connection,
                         pixels: (3840, 2160),
                         logical,
+                        origin: (0, 0),
                     };
                     input.apply(InputEvent::key_down(usage::A)).unwrap();
                     input.apply(InputEvent::key_up(usage::A)).unwrap();
@@ -441,7 +525,11 @@ fn real_portal_notify_transport_preserves_all_events() {
             }
             assert_eq!(closed.load(Ordering::Relaxed), 3);
             granted.store(false, Ordering::Relaxed);
-            assert!(open_grant().await.is_err());
+            assert!(
+                open_grant(&vnilink::BackendStartup::new(Duration::from_secs(5)))
+                    .await
+                    .is_err()
+            );
             assert_eq!(
                 closed.load(Ordering::Relaxed),
                 4,
@@ -449,12 +537,50 @@ fn real_portal_notify_transport_preserves_all_events() {
             );
             granted.store(true, Ordering::Relaxed);
             cursor_modes.store(2, Ordering::Relaxed);
-            let embedded = open_grant().await.unwrap();
+            let embedded = open_grant(&vnilink::BackendStartup::new(Duration::from_secs(5)))
+                .await
+                .unwrap();
             assert!(!embedded.cursor_metadata);
             embedded.session.close().await.unwrap();
             assert_eq!(closed.load(Ordering::Relaxed), 5);
+            // Permission response is intentionally never emitted. Cancellation
+            // must close the actual portal Session rather than await consent.
+            stall.store(true, Ordering::Release);
+            let stop = Arc::new(AtomicBool::new(false));
+            let startup = vnilink::BackendStartup::with_stop(stop.clone(), Duration::from_secs(5));
+            let cancel = async {
+                while !entered.load(Ordering::Acquire) {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                stop.store(true, Ordering::Release);
+            };
+            let (result, ()) = tokio::join!(open_grant(&startup), cancel);
+            assert!(result.is_err());
+            assert_eq!(closed.load(Ordering::Relaxed), 6);
         })
         .await
         .unwrap();
     });
+}
+
+#[test]
+fn fractional_scroll_relative_motion_and_side_buttons_map_without_rounding() {
+    let map = |event| notifications(event, (3840, 2160), (1920, 1080), (0, 0)).unwrap();
+    assert_eq!(
+        map(InputEvent::precise_wheel(15, -30)),
+        vec![Notify::PreciseWheel(1.25, -2.5)]
+    );
+    assert_eq!(
+        map(InputEvent::motion(-2, 3)),
+        vec![Notify::Motion(-2.0, 3.0)]
+    );
+    assert_eq!(
+        map(InputEvent::button_down(PointerButton::Back)),
+        vec![Notify::Button(278, true)]
+    );
+    assert_eq!(
+        map(InputEvent::button_up(PointerButton::Forward)),
+        vec![Notify::Button(277, false)]
+    );
+    assert!(notifications(InputEvent::precise_wheel(9000, 0), (1, 1), (1, 1), (0, 0)).is_err());
 }

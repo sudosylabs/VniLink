@@ -16,15 +16,16 @@ fn idle_portal_keeps_the_picture_and_propagates_capture_failure() {
             buffer: PortalBuffer::Memory,
         })),
     };
+    assert!(wait_frame(&mainloop, &shared, 0).unwrap().is_none());
     shared.channel.push(ChannelSlot {
         width: 2,
         height: 2,
         stride: 8,
         bytes: vec![40; 16],
     });
-    let (first, _) = wait_frame(&mainloop, &shared, 0).unwrap();
+    let (first, _) = wait_frame(&mainloop, &shared, 0).unwrap().unwrap();
     // PipeWire can send nothing further when the monitor has no damage.
-    let (idle, _) = wait_frame(&mainloop, &shared, 33_333).unwrap();
+    let (idle, _) = wait_frame(&mainloop, &shared, 33_333).unwrap().unwrap();
     assert_eq!(first.row(0), idle.row(0));
     assert_eq!(idle.timestamp_us(), 33_333);
     shared.channel.fail("portal closed");

@@ -8,5 +8,8 @@ mod host_tests;
 #[path = "tests/pixels.rs"]
 mod pixels_tests;
 #[cfg(target_os = "macos")]
+#[path = "tests/system.rs"]
+mod system_tests;
+#[cfg(target_os = "macos")]
 #[path = "tests/videotoolbox.rs"]
 mod videotoolbox_tests;

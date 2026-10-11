@@ -4,7 +4,8 @@
 //! [`RateController`] derives from the session quality, then paces pictures
 //! through [`HostVideo`]. [`serve_capture`] reads a capture that is already
 //! open. It does not ask for capture permission and does not draw. Frame bytes
-//! are not logged. Stop is noticed between pictures. A session that is no
+//! are not logged. Stop is noticed between bounded reads, even before the
+//! first picture. A session that is no
 //! longer active ends the loop.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,9 +22,21 @@ use crate::Quality;
 /// Where paced pictures come from. Both portal and ScreenCaptureKit captures satisfy it.
 pub trait FrameSource {
     fn size(&self) -> (u16, u16);
-    fn next_frame(&self, timestamp_us: u64) -> Result<RawFrame, Error>;
+    /// One bounded native read. `None` means no first picture yet, not failure.
+    /// An idle source may return its cached picture with the new timestamp.
+    /// Implementations must not wait indefinitely for desktop damage: owners
+    /// and shutdown are checked between reads. Healthy native reads finish
+    /// within 100 ms; native API/device failure is returned as an error.
+    fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error>;
     fn cursor(&self) -> Option<vnilink::CursorState> {
         None
+    }
+    /// Shared topology revision the polled pictures attest, read live
+    /// for every published frame. 0 means unknown: the fanout stamps the
+    /// current topology revision instead. Captures whose geometry is
+    /// re-attested without reopening share this with their supervisor.
+    fn capture_revision(&self) -> std::sync::Arc<std::sync::atomic::AtomicU64> {
+        std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0))
     }
 }
 
@@ -132,7 +145,7 @@ pub(crate) fn event_session(event: &CoreEvent) -> Option<u64> {
         | CoreEvent::KeyframeRequested { id }
         | CoreEvent::InputFailed { id, .. }
         | CoreEvent::ClipboardReceived { id }
-        | CoreEvent::TransferCompleted { id } => Some(*id),
+        | CoreEvent::ClipboardFilesReceived { id } => Some(*id),
         CoreEvent::SessionChanged { id, .. } => Some(*id),
         _ => None,
     }
@@ -170,8 +183,10 @@ where
         if stop.load(Ordering::Relaxed) {
             return Ok(());
         }
-        if !core.host_desktop_active(session_id, generation)? {
-            return Ok(());
+        match core.host_desktop_active(session_id, generation) {
+            Ok(true) => {}
+            Ok(false) | Err(vnilink::Error::ShutDown) => return Ok(()),
+            Err(error) => return Err(error.into()),
         }
         while let Some(event) = events.try_recv() {
             // One installation can host while it controls another: a quality
@@ -187,12 +202,19 @@ where
             1_000_000 / u64::from(session.control.settings().frame_rate),
         );
         let timestamp_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
-        let mut frame = capture.next_frame(timestamp_us)?;
+        let Some(mut frame) = capture.poll_frame(timestamp_us)? else {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            continue;
+        };
         if let Some(cursor) = capture.cursor() {
             if separate_cursor {
                 match core.publish_cursor(session_id, generation, cursor) {
                     Ok(()) => {}
-                    Err(vnilink::Error::NoSession) => return Ok(()),
+                    Err(
+                        vnilink::Error::NoSession
+                        | vnilink::Error::StaleSession
+                        | vnilink::Error::ShutDown,
+                    ) => return Ok(()),
                     Err(error) => return Err(error.into()),
                 }
             } else {
@@ -201,7 +223,9 @@ where
         }
         match session.publish(&frame, &mut sink, session_id) {
             Ok(_) => {}
-            Err(PublishError::Session(vnilink::Error::NoSession)) => return Ok(()),
+            Err(PublishError::Session(
+                vnilink::Error::NoSession | vnilink::Error::StaleSession | vnilink::Error::ShutDown,
+            )) => return Ok(()),
             Err(err) => return Err(err),
         }
         // A cached idle picture can be returned immediately. Pace requests,
@@ -255,7 +279,9 @@ where
         }
         let current = match core.hosted_desktop_info(service_id, generation) {
             Ok(info) => info,
-            Err(vnilink::Error::NoSession | vnilink::Error::StaleSession) => return Ok(()),
+            Err(
+                vnilink::Error::NoSession | vnilink::Error::StaleSession | vnilink::Error::ShutDown,
+            ) => return Ok(()),
             Err(error) => return Err(error.into()),
         };
         if current.quality != info.quality {
@@ -273,12 +299,19 @@ where
         }
         let capture_started = std::time::Instant::now();
         let timestamp = started.elapsed().as_micros().try_into().unwrap_or(u64::MAX);
-        let mut frame = capture.next_frame(timestamp)?;
+        let Some(mut frame) = capture.poll_frame(timestamp)? else {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            continue;
+        };
         if let Some(cursor) = capture.cursor() {
             if info.separate_cursor {
                 match core.publish_desktop_cursor(service_id, generation, cursor) {
                     Ok(()) => {}
-                    Err(vnilink::Error::NoSession | vnilink::Error::StaleSession) => return Ok(()),
+                    Err(
+                        vnilink::Error::NoSession
+                        | vnilink::Error::StaleSession
+                        | vnilink::Error::ShutDown,
+                    ) => return Ok(()),
                     Err(error) => return Err(error.into()),
                 }
             } else {
@@ -288,7 +321,7 @@ where
         match session.publish(&frame, &mut sink, service_id) {
             Ok(_) => {}
             Err(PublishError::Session(
-                vnilink::Error::NoSession | vnilink::Error::StaleSession,
+                vnilink::Error::NoSession | vnilink::Error::StaleSession | vnilink::Error::ShutDown,
             )) => return Ok(()),
             Err(error) => return Err(error),
         }

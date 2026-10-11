@@ -17,14 +17,24 @@ mod dbus;
 #[cfg(target_os = "linux")]
 mod decode;
 // GBM import remains an isolated hardware experiment, not live portal capture.
+// The camera continuity logic (identity, hold, retirement) is platform-free:
+// tests build it everywhere while V4L2 capture stays Linux-only.
+#[cfg(any(target_os = "linux", test))]
+mod camera;
 #[cfg(all(target_os = "linux", test))]
 mod dmabuf;
+#[cfg(target_os = "linux")]
+pub use camera::camera_devices;
+#[cfg(any(target_os = "linux", test))]
+pub use camera::LinuxCameraFactory;
 mod encode;
 mod host;
+mod owners;
 mod parameter_set;
 #[cfg(target_os = "linux")]
 mod pipewire;
 mod pixels;
+mod pointer;
 mod portal;
 mod syntax;
 #[cfg(target_os = "linux")]
@@ -37,27 +47,23 @@ mod x11;
 pub use decode::LinuxDecoder;
 pub use encode::LinuxEncoder;
 #[cfg(target_os = "linux")]
-pub use vaapi::{h264_decode_available, h264_encode_available, h264_high_available};
-/// Availability probes report false where VA-API cannot exist. The Linux build
-/// above replaces these with the render-node check.
+pub use vaapi::video_codec_caps;
+/// The caps probe reports nothing where VA-API cannot exist. The Linux build
+/// above replaces this with the render-node check.
 #[cfg(not(target_os = "linux"))]
-pub fn h264_encode_available() -> bool {
-    false
-}
-/// See [`h264_encode_available`].
-#[cfg(not(target_os = "linux"))]
-pub fn h264_high_available() -> bool {
-    false
-}
-/// See [`h264_encode_available`].
-#[cfg(not(target_os = "linux"))]
-pub fn h264_decode_available() -> bool {
-    false
+pub fn video_codec_caps() -> vnilink::VideoCodecCaps {
+    vnilink::VideoCodecCaps::default()
 }
 pub use host::HostSession;
 #[cfg(target_os = "linux")]
 pub use host::{serve_desktop, serve_portal};
+pub use owners::{
+    stale_owners, topology_signature, wanted_owners, GeometryFingerprint, SourceOwner, SourceOwners,
+};
 pub use pixels::{raw_frame_from_bgra, raw_frame_from_bgrx};
+pub use pointer::{
+    display_for_frame, display_for_frame_id, display_for_picture, place_on_display, pointer,
+};
 pub use portal::{PortalPhase, PortalSession, ONE_PORTAL_SESSION_IS_UNIVERSAL};
 pub use x11::{raw_frame_from_ximage, X11Capture, X11Image, X11Plan};
 
@@ -73,3 +79,12 @@ pub use wayland::{WaylandCapture, WaylandInput};
 mod tests;
 
 mod cursor;
+
+#[cfg(target_os = "linux")]
+mod power;
+#[cfg(target_os = "linux")]
+pub use power::LinuxPowerFactory;
+#[cfg(target_os = "linux")]
+mod system;
+#[cfg(target_os = "linux")]
+pub use system::LinuxSystemActions;
