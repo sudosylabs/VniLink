@@ -1,0 +1,22 @@
+[package]
+name = "vnilink-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Bounded Opus audio clock and playback engine for VniLink"
+publish = false
+
+[features]
+default = []
+native = ["dep:cpal"]
+
+[dependencies]
+opus = "=0.4.0"
+thiserror = "2"
+rubato = { version = "=0.16.2", default-features = false }
+rtrb = "=0.3.2"
+cpal = { version = "=0.18.2", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = { version = "=0.18.2", features = ["pulseaudio"], optional = true }

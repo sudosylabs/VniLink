@@ -3,6 +3,7 @@ members = [
     "crates/vnilink",
     "crates/vnilink-rename",
     "crates/vnilink-media",
+    "crates/vnilink-audio",
     "crates/vnilink-macos",
     "crates/vnilink-windows",
     "crates/vnilink-linux",
@@ -24,3 +25,4 @@ debug = "line-tables-only"
 # Enigo 0.6.1 with a macOS local-input coexistence fix; see vendor/enigo/VNILINK.md.
 [patch.crates-io]
 enigo = { path = "vendor/enigo" }
+cpal = { path = "vendor/cpal" }
