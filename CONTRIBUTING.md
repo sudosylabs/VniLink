@@ -36,9 +36,10 @@ Platform work requires the native host and libraries for that platform.
 macOS capture and codec work requires Xcode's developer tools; Windows work
 requires the MSVC toolchain and Windows SDK. Linux capture and media builds
 require the development libraries for PipeWire, VA-API, GBM, and their build
-dependencies. The GNOME application additionally requires GTK 4.10+,
-libadwaita 1.5+, and a session Secret Service. See the
-[Linux application guide](linux/README.md) for the app entry point.
+dependencies. The shared desktop application uses Electron and vanilla TypeScript/CSS.
+Install Node 22.19 or later, run `npm ci` from the repository root, then
+`npm start`. `npm run build` and `npm test` verify the shell; the Rust bridge
+is not implemented yet.
 
 ## Find the owning component
 
@@ -49,11 +50,13 @@ libadwaita 1.5+, and a session Secret Service. See the
 | `crates/vnilink-macos/` | macOS capture and VideoToolbox adapters |
 | `crates/vnilink-windows/` | Windows capture and Media Foundation adapters |
 | `crates/vnilink-linux/` | X11, Wayland portal, PipeWire, and VA-API adapters |
-| `linux/` | Native GTK/libadwaita application and keyring integration |
-| `assets/`, `apple/` | Artwork and the Apple Icon Composer resource; not evidence of a completed Apple app |
+| `src/app/`, `src/platform/` | Electron lifecycle, windows, IPC and desktop service boundaries |
+| `src/workbench/`, `src/base/browser/` | Browser interface and reusable DOM controls |
+| `build/`, `scripts/`, `test/` | Application build, development and smoke verification |
+| `assets/` | Branding and icons |
 | `docs/validation/` | Reproducible validation methods, results, and remaining cases |
 
-Native applications host the shared Rust library. Keep platform capture,
+The shared Electron application will host the Rust library through a defined bridge. Keep platform capture,
 rendering, and credential-store integration in their owning adapters or apps.
 Follow nearby code style and explain non-obvious invariants in comments.
 
@@ -72,6 +75,40 @@ Read the relevant [pairing](crates/vnilink/PAIRING.md),
 [transfer](crates/vnilink/TRANSFER.md) contracts before changing those paths.
 Update contracts and regression coverage in the same pull request when
 behavior changes.
+
+## TypeScript, CSS and formatting
+
+The application follows VS Code's separation of formatting, semantic lint and
+architecture checks, adapted to this smaller codebase. TypeScript/JavaScript use
+the TypeScript language-service formatter with `tsfmt.json`: tabs at width 4,
+spaces around operators and same-line opening braces. ESLint enforces single
+quotes, semicolons, braces, strict equality, explicit type imports and correct
+promise handling. JSON uses two spaces. CSS/HTML/JSON use Prettier, with CSS
+correctness checked by Stylelint. Rust continues to use `rustfmt`; generated,
+vendored and historical evidence files are outside the JavaScript formatter.
+
+```sh
+npm run format          # Format application and tooling files
+npm run lint:fix        # Fix supported lint findings
+npm run check           # Formatting, ESLint, CSS lint, types and tooling tests
+npm test                # Actual Electron shell smoke test
+```
+
+The flat ESLint configuration and `build/lint/layers.mjs` enforce dependency
+boundaries: browser/common code cannot import Node/Electron or privileged
+implementations, base controls cannot depend on features/services, platform
+services cannot depend on the workbench/application, and Electron application
+code cannot import browser implementation. Add a narrow preload operation instead
+of reaching across those boundaries. The rule covers imports, re-exports,
+dynamic imports and literal require calls. Layer tests include deliberately
+invalid dependencies; formatter tests check idempotence and literal preservation.
+
+Workspace editor settings recommend ESLint, Prettier and Stylelint integrations.
+They use the built-in TypeScript formatter and the project TypeScript SDK.
+Dependencies are pinned. TypeScript 6.0.3 is used because the current
+`typescript-eslint` release supports TypeScript below 6.1; don't move the compiler
+outside its supported range without validating the lint tooling too. VS Code's
+extension-specific, localization and dependency-injection rules are not copied.
 
 ## Verify the change
 
@@ -99,10 +136,10 @@ cargo test --locked --workspace
 cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
 
-For GNOME changes, also build and run `cargo run --locked -p vnilink-gnome`
-in a Linux graphical session and inspect the affected flow. Capture and input
-checks may access real devices or request operating-system permission; use a
-test environment you control.
+For Electron changes, run `npm run build` and `npm test`, then inspect the
+affected flow in `npm start`. Validate platform-specific window/input/media
+behavior on its real OS. Capture/input checks can access devices or request
+OS permissions; use a test environment you control.
 
 A build on macOS does not exercise Windows or Linux native code. Synthetic
 frames and loopback sessions do not prove an interactive remote desktop across

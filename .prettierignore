@@ -1,0 +1,9 @@
+node_modules/
+out/
+dist/
+target/
+vendor/
+crates/
+docs/
+assets/
+package-lock.json
