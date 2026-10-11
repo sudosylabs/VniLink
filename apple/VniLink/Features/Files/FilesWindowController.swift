@@ -3,17 +3,18 @@ import SwiftUI
 import VnilinkCore
 
 @MainActor final class FilesWindowController: NSWindowController, NSWindowDelegate {
-    private final class WeakWindow { weak var value: FilesWindowController?; init(_ value: FilesWindowController) { self.value = value } }
-    private static var windows: [String: WeakWindow] = [:]
+    // A Files owner survives closing the Desktop tab which originally opened it.
+    private static var windows: [String: FilesWindowController] = [:]
+    private var registryKey: String?
     static func open(core: VnilinkCore, session: @MainActor @escaping () -> FfiSessionInfo?, peerId: String, localName: String, remoteName: String) -> FilesWindowController {
-        windows = windows.filter { $0.value.value != nil }
         let key = "\(core.endpointId()):\(peerId)"
-        if let existing = windows[key]?.value, existing.window?.isVisible == true {
+        if let existing = windows[key], existing.window?.isVisible == true {
             existing.window?.makeKeyAndOrderFront(nil)
             return existing
         }
         let controller = FilesWindowController(core: core, session: session, peerId: peerId, localName: localName, remoteName: remoteName)
-        windows[key] = WeakWindow(controller)
+        controller.registryKey = key
+        windows[key] = controller
         return controller
     }
     private let model: FilesModel
@@ -31,5 +32,8 @@ import VnilinkCore
     }
     func selectUpload(_ url: URL) { model.selectUpload(url) }
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
-    func windowWillClose(_ notification: Notification) { model.stop() }
+    func windowWillClose(_ notification: Notification) {
+        model.stop()
+        if let registryKey, Self.windows[registryKey] === self { Self.windows.removeValue(forKey: registryKey) }
+    }
 }

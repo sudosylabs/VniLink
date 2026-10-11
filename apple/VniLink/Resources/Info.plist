@@ -10,6 +10,7 @@
 <key>LSMinimumSystemVersion</key><string>15.0</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>NSMicrophoneUsageDescription</key><string>Share microphone audio with a paired computer when you allow it.</string>
 <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
 <key>CFBundleDocumentTypes</key><array><dict>
 <key>CFBundleTypeName</key><string>VniLink pairing file</string>

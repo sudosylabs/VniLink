@@ -97,7 +97,7 @@ struct DeviceInspector: View {
                 Toggle("Clipboard text", isOn: $clipboard)
                 Toggle("File transfer", isOn: $files)
                 Button("Save permissions") {
-                    model.perform({ try $0.authorize(endpointId: device.id, control: control, clipboard: clipboard, transfer: files) }, success: "Device permissions saved.")
+                    model.perform({ try $0.authorize(endpointId: device.id, view: control, control: control, clipboard: clipboard, transfer: files) }, success: "Device permissions saved.")
                 }.disabled(control == device.grants.control && clipboard == device.grants.clipboard && files == device.grants.transfer)
                 Button("Revoke access") { model.perform { try $0.revoke(endpointId: device.id) } }
                     .disabled(!device.grants.control && !device.grants.clipboard && !device.grants.transfer)

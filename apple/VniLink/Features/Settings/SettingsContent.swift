@@ -157,22 +157,15 @@ private struct FileSettings: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
         Form {
-            Section("Received files") {
-                LabeledContent("Folder", value: model.receiveFolder.path)
-                Text("Files arrive here automatically when file transfer is allowed for the connected computer. Transfers are limited to 8 MiB.").foregroundStyle(.secondary)
-                Button("Choose folder…") { model.chooseReceiveFolder() }
-                    .disabled(model.snapshot?.incoming?.phase == .active)
-                Button("Show in Finder") { NSWorkspace.shared.open(model.receiveFolder) }
-                if model.snapshot?.incoming?.phase == .active {
-                    Button(model.sendingHostFile ? "Sending file…" : "Send file to connected computer…") { model.sendHostFile() }
-                        .disabled(model.sendingHostFile)
-                }
-            }
             Section("File manager") {
                 ForEach(model.fileRoots, id: \.self) { root in
                     LabeledContent("Shared folder", value: root)
                 }
                 Text("The Files window browses these folders on this Mac, and paired computers see only these folders. Narrow the list to share less.").foregroundStyle(.secondary)
+                Text("Use a paired computer’s Files window to choose the source and destination folders and follow transfer progress.").foregroundStyle(.secondary)
+                if model.snapshot?.incoming?.phase == .active {
+                    Button("Open Files for connected computer…") { model.openHostedPeerFiles() }
+                }
                 Button("Choose folders…") { model.chooseFileRoots() }
                     .disabled(model.snapshot?.incoming?.phase == .active)
             }

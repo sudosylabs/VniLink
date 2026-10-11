@@ -28,7 +28,6 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
     @Published var sharing = false
     @Published var changingSharing = false
     @Published var inputEnabled = false
-    @Published private(set) var receiveFolder = UserDefaults.standard.url(forKey: "receiveFolder") ?? DesktopFiles.defaultFolder
     @Published private(set) var fileRoots = AppModel.defaultFileRoots
     static var blobDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -49,11 +48,10 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
     private var clipboardSession: String?
     private var sendingClipboard = false
     private let clipboardQueue = DispatchQueue(label: "com.vnilink.clipboard", qos: .userInitiated)
-    private let transferQueue = DispatchQueue(label: "com.vnilink.transfer", qos: .userInitiated)
     private let jobWorker = DispatchQueue(label: "com.vnilink.jobs", qos: .userInitiated)
     private var drivingJobs = false
-    @Published private(set) var sendingHostFile = false
-    private var host: MacHost?
+    private var supervisor: MacSourceSupervisor?
+    private var reconcileTimer: DispatchSourceTimer?
     private var cursorTimer: Timer?
     private var cursorSampler: HostCursorSampler?
     private var sendingCursor = false
@@ -68,36 +66,81 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
             }
         }
         changingSharing = true
-        let old = host
-        let display = CGMainDisplayID(), bounds = CGDisplayBounds(CGMainDisplayID())
-        let mode = CGDisplayCopyDisplayMode(display)
-        let pixelWidth = mode?.pixelWidth ?? Int(bounds.width)
-        let pixelHeight = mode?.pixelHeight ?? Int(bounds.height)
+        // Cancel first, synchronously: the timer targets the serial host
+        // queue, so an in-flight reconcile always finishes before the
+        // stop below, and no later pass can reopen a retired supervisor.
+        reconcileTimer?.cancel(); reconcileTimer = nil
+        let old = supervisor
+        supervisor = nil
         // If the public system-cursor API is unavailable, retain embedded
         // ScreenCaptureKit cursors rather than negotiating an empty channel.
         let sampler = enabled ? HostCursorSampler() : nil
         let cursorSupported = sampler?.available == true
         hostQueue.async {
-            let result = Result { () -> MacHost? in
+            let result = Result { () -> MacSourceSupervisor? in
                 if enabled {
-                    guard bounds.width >= 2, bounds.height >= 2, bounds.width <= 65535, bounds.height <= 65535, pixelWidth >= 2, pixelHeight >= 2, pixelWidth <= 65535, pixelHeight <= 65535 else {
+                    let supervisor = MacSourceSupervisor(
+                        requestedIds: { (try? core.captureDisplays()) ?? [] },
+                        liveDisplays: Self.liveDisplayDescs,
+                        producer: CoreMacDisplayProducer(core: core),
+                        cursorSupported: cursorSupported,
+                        sourceFailed: { id, reason in
+                            try? core.failMacDisplay(displayId: id, message: reason)
+                        })
+                    supervisor.reconcile()
+                    guard !supervisor.currentIds.isEmpty else {
                         throw FfiError.Unsupported(message: "This main display is not supported")
                     }
-                    return try core.macHost(displayId: display, width: UInt16(bounds.width), height: UInt16(bounds.height), pixelWidth: UInt16(pixelWidth), pixelHeight: UInt16(pixelHeight), cursorSupported: cursorSupported)
+                    return supervisor
                 }
-                old?.stop(); return nil
+                old?.stopAll()
+                try core.stopMacDesktopSharing()
+                return nil
             }
             DispatchQueue.main.async {
                 self.changingSharing = false
                 switch result {
-                case .success(let host):
-                    self.host = host; self.sharing = enabled
+                case .success(let supervisor):
+                    self.supervisor = supervisor; self.sharing = enabled
                     self.startCursorUpdates(cursorSupported ? sampler : nil)
+                    if let supervisor, enabled { self.startReconciling(supervisor) }
                     if enabled && resumeHosting { self.perform { try $0.startHosting() } }
                 case .failure(let error): self.error = Self.message(error)
                 }
             }
         }
+    }
+    /// Supported live displays, main first: only validated geometry is
+    /// ever offered to the supervisor, so it holds exact supported ids.
+    static func liveDisplayDescs() -> [MacSourceSupervisor.Display] {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return [] }
+        let main = CGMainDisplayID()
+        return ([main] + ids.filter { $0 != main }).compactMap { display in
+            let bounds = CGDisplayBounds(display)
+            let mode = CGDisplayCopyDisplayMode(display)
+            let pixelWidth = mode?.pixelWidth ?? Int(bounds.width)
+            let pixelHeight = mode?.pixelHeight ?? Int(bounds.height)
+            guard bounds.width >= 2, bounds.height >= 2, bounds.width <= 65535, bounds.height <= 65535, pixelWidth >= 2, pixelHeight >= 2, pixelWidth <= 65535, pixelHeight <= 65535 else {
+                return nil
+            }
+            return MacSourceSupervisor.Display(id: display, width: UInt16(bounds.width), height: UInt16(bounds.height), pixelWidth: UInt16(pixelWidth), pixelHeight: UInt16(pixelHeight))
+        }
+    }
+    /// Reconciles requested selections against live displays while
+    /// sharing, so a secondary Desktop selection opens its own capture
+    /// and a deselected source is retired. The timer captures only the
+    /// supervisor: stopping sharing cancels the timer and the retired
+    /// supervisor.
+    private func startReconciling(_ supervisor: MacSourceSupervisor) {
+        reconcileTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: hostQueue)
+        timer.schedule(deadline: .now() + 2, repeating: 2.0)
+        timer.setEventHandler { supervisor.reconcile() }
+        timer.resume()
+        reconcileTimer = timer
     }
     private func startCursorUpdates(_ sampler: HostCursorSampler?) {
         cursorTimer?.invalidate(); cursorTimer = nil; cursorSampler = sampler
@@ -105,11 +148,11 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
         let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
             // This timer is installed exclusively on the main run loop.
             MainActor.assumeIsolated {
-                guard let self, !self.sendingCursor, let host = self.host,
+                guard let self, !self.sendingCursor, let supervisor = self.supervisor,
                       let update = self.cursorSampler?.sample() else { return }
                 self.sendingCursor = true
                 self.hostQueue.async {
-                    try? host.updateCursor(update: update)
+                    supervisor.forEachHost { try? $0.updateCursor(update: update) }
                     DispatchQueue.main.async { self.sendingCursor = false }
                 }
             }
@@ -182,7 +225,7 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
             let result = Result { () -> Void in
                 let sessions = try core.controllerSessions()
                 if !sessions.contains(where: { $0.peerId == device.id && $0.phase != .closed && !$0.phase.isFailed }) {
-                    _ = try core.beginConnectFiles(endpointId: device.id)
+                    _ = try core.beginConnectServices(endpointId: device.id)
                 }
             }
             DispatchQueue.main.async {
@@ -215,7 +258,7 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
         guard core == nil, !starting else { return }
         starting = true
         let previewMode = isPreview
-        let clipboard = MacClipboard.shared, receiveFolder = receiveFolder
+        let clipboard = MacClipboard.shared
         let savedMode = UserDefaults.standard.integer(forKey: "keyboardMode")
         let savedKeyboardMode: FfiKeyboardMode = savedMode == 1 ? .map : savedMode == 2 ? .translate : .character
         let savedSwap = UserDefaults.standard.bool(forKey: "swapControlAndCommand")
@@ -227,8 +270,8 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
                 let core = try VnilinkCore.openPersistent(store: KeychainStore())
                 do {
                     try core.prepareMacVideo()
+                    try core.enableNativePower(enabled: true)
                     try core.installClipboard(writer: clipboard)
-                    try core.setTransferDirectory(path: receiveFolder.path)
                     try core.setBlobDirectory(path: Self.blobDirectory.path)
                     try core.setFileRoots(paths: Self.fileRoots)
                     try core.setKeyboardMode(mode: savedKeyboardMode)
@@ -332,50 +375,50 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
     func refresh() {
         guard let core, !refreshing else { return }
         refreshing = true
-        let host = host
+        let supervisor = supervisor
         let events = events
-        let selectedId = viewerTabs.first { $0.id == selectedTab }?.session?.id
-        worker.async {
-            let result = Result { (try core.snapshot(), try core.controlRequest(), try core.savedRelays(), try core.keyboardMode(), try core.swapControlAndCommand(), host?.error(), events?.poll(maxEvents: 128) ?? [], selectedId.flatMap { id -> String? in
-                guard let session = try? core.controllerSession(sessionId: id), session.phase == .active else { return nil }
-                return try? core.sessionClipboardText(sessionId: id, generation: session.generation)
-            }, try core.controllerSessions()) }
-            DispatchQueue.main.async {
-                self.refreshing = false
-                switch result {
-                case .success(let data):
-                    self.controllerSessions = data.8
-                    if self.snapshot != data.0 { self.snapshot = data.0 }
-                    if self.request != data.1 { self.request = data.1 }
-                    if self.savedRelays != data.2 { self.savedRelays = data.2 }
-                    if self.keyboardMode != data.3 { self.keyboardMode = data.3 }
-                    if self.swapModifiers != data.4 { self.swapModifiers = data.4 }
-                    if let error = data.5, self.sharing, !self.changingSharing {
-                        self.setSharing(false); self.error = error
+        let selectedDesktop = viewerTabs.first { $0.id == selectedTab }?.desktop
+        let selectedInfo = selectedDesktop?.info()
+        hostQueue.async {
+            let hostError = supervisor?.refreshSnapshot()
+            self.worker.async {
+                let result = Result { (try core.snapshot(), try core.controlRequest(), try core.savedRelays(), try core.keyboardMode(), try core.swapControlAndCommand(), hostError, events?.poll(maxEvents: 128) ?? [], selectedDesktop.flatMap { try? $0.clipboardText() }, try core.controllerSessions()) }
+                DispatchQueue.main.async {
+                    self.refreshing = false
+                    switch result {
+                    case .success(let data):
+                        self.controllerSessions = data.8
+                        if self.snapshot != data.0 { self.snapshot = data.0 }
+                        if self.request != data.1 { self.request = data.1 }
+                        if self.savedRelays != data.2 { self.savedRelays = data.2 }
+                        if self.keyboardMode != data.3 { self.keyboardMode = data.3 }
+                        if self.swapModifiers != data.4 { self.swapModifiers = data.4 }
+                        if let error = data.5?.message(ifCurrent: self.supervisor?.generation), self.sharing, !self.changingSharing {
+                            self.error = error
+                        }
+                        if let selected = self.selectedDeviceID, !data.0.devices.contains(where: { $0.id == selected }) { self.selectedDeviceID = nil }
+                        let clipboardReceived = data.6.contains { event in
+                            if case .desktopClipboardReceived(let service) = event { return service.id == selectedInfo?.id && service.generation == selectedInfo?.generation }
+                            return false
+                        }
+                        if selectedInfo == self.viewerTabs.first(where: { $0.id == self.selectedTab })?.desktop?.info() {
+                            self.syncClipboard(core: core, snapshot: data.0, outgoing: selectedDesktop, remote: data.7, received: clipboardReceived)
+                        }
+                    case .failure(let error): self.error = Self.message(error)
                     }
-                    if let selected = self.selectedDeviceID, !data.0.devices.contains(where: { $0.id == selected }) { self.selectedDeviceID = nil }
-                    let clipboardReceived = data.6.contains { event in
-                        if case .clipboardReceived(let id) = event { return id == selectedId }
-                        return false
-                    }
-                    if selectedId == self.viewerTabs.first(where: { $0.id == self.selectedTab })?.session?.id {
-                        self.syncClipboard(core: core, snapshot: data.0, outgoing: data.8.first { $0.id == selectedId && $0.phase == .active }, remote: data.7, received: clipboardReceived)
-                    }
-                    for event in data.6 {
-                        if case .transferCompleted = event { self.notice = "File received in \(self.receiveFolder.lastPathComponent)." }
-                    }
-                case .failure(let error): self.error = Self.message(error)
                 }
             }
         }
     }
-    private func syncClipboard(core: VnilinkCore, snapshot: FfiSnapshot, outgoing: FfiSessionInfo?, remote: String?, received: Bool) {
-        let incoming = snapshot.incoming.flatMap { session -> FfiSessionInfo? in
+    private func syncClipboard(core: VnilinkCore, snapshot: FfiSnapshot, outgoing: DesktopService?, remote: String?, received: Bool) {
+        let incoming = (outgoing == nil ? snapshot.incoming : nil).flatMap { session -> FfiServiceInfo? in
             guard session.phase == .active,
                   snapshot.devices.contains(where: { $0.endpointId == session.peerId && $0.grants.clipboard }) else { return nil }
-            return session
+            return try? core.hostedServices().first {
+                $0.connectionId == session.id && $0.generation == session.generation && $0.kind == .desktop && $0.phase == .active
+            }
         }
-        let stamp = outgoing.map { "out:\($0.id):\($0.generation)" } ?? incoming.map { "in:\($0.id):\($0.generation)" }
+        let stamp = outgoing.map { "out:\($0.info().id):\($0.info().generation)" } ?? incoming.map { "in:\($0.id):\($0.generation)" }
         if clipboardSession != stamp {
             clipboardSession = stamp; lastRemoteClipboard = nil
             MacClipboard.shared.baseline()
@@ -389,17 +432,9 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
         guard !sendingClipboard, let text = MacClipboard.shared.localChange(), text.utf8.count <= 256 * 1024 else { return }
         sendingClipboard = true
         clipboardQueue.async {
-            if let outgoing { try? core.submitClipboard(sessionId: outgoing.id, generation: outgoing.generation, text: text) }
-            if let incoming { try? core.publishClipboard(sessionId: incoming.id, text: text) }
+            if let outgoing { try? outgoing.submitClipboard(text: text) }
+            if let incoming { try? core.publishDesktopClipboard(id: incoming.id, generation: incoming.generation, text: text) }
             DispatchQueue.main.async { self.sendingClipboard = false }
-        }
-    }
-    func chooseReceiveFolder() {
-        let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url {
-            perform({ try $0.setTransferDirectory(path: url.path) }, success: "Receive folder saved.", completed: {
-                self.receiveFolder = url; UserDefaults.standard.set(url, forKey: "receiveFolder")
-            })
         }
     }
     func chooseFileRoots() {
@@ -422,22 +457,10 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
             UserDefaults.standard.set(enabled, forKey: "swapControlAndCommand")
         })
     }
-    func sendHostFile() {
-        guard let core, let session = snapshot?.incoming, session.phase == .active, !sendingHostFile else { return }
-        let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        sendingHostFile = true; notice = "Sending \(url.lastPathComponent)…"
-        transferQueue.async {
-            let result = Result { try core.publishFile(sessionId: session.id, name: url.lastPathComponent,
-                bytes: DesktopFiles.read(url), replace: false) }
-            DispatchQueue.main.async {
-                self.sendingHostFile = false
-                switch result {
-                case .success: self.notice = "\(url.lastPathComponent) received by the connected computer."
-                case .failure(let error): self.error = Self.message(error)
-                }
-            }
-        }
+    func openHostedPeerFiles() {
+        guard let peer = snapshot?.incoming?.peerId,
+              let device = snapshot?.devices.first(where: { $0.id == peer }) else { return }
+        openFiles(device)
     }
     func perform(_ work: @escaping (VnilinkCore) throws -> Void, success: String? = nil, completed: (() -> Void)? = nil) {
         guard let core else { return }
@@ -533,8 +556,9 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
         guard !changingSharing else { error = "Wait for screen sharing to finish updating, then reset the identity."; return }
         closeAllTabs()
         startCursorUpdates(nil)
-        let oldHost = host; host = nil; sharing = false; inputEnabled = false
-        hostQueue.async { oldHost?.stop() }
+        reconcileTimer?.cancel(); reconcileTimer = nil
+        let oldSupervisor = supervisor; supervisor = nil; sharing = false; inputEnabled = false
+        hostQueue.async { oldSupervisor?.stopAll() }
         worker.async {
             let result = Result { try core.resetIdentity() }
             DispatchQueue.main.async {
@@ -553,10 +577,11 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
     func shutdown(_ completion: @escaping () -> Void) {
         startCursorUpdates(nil)
         timer?.invalidate()
+        reconcileTimer?.cancel(); reconcileTimer = nil
         closeAllTabs()
-        let core = core, host = host
+        let core = core, supervisor = supervisor
         hostQueue.async {
-            host?.stop()
+            supervisor?.stopAll()
             self.worker.async { core?.shutdown(); DispatchQueue.main.async(execute: completion) }
         }
     }
@@ -580,6 +605,7 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
 /// cross FFI; position samples are independent of capture and video decoding.
 @MainActor private final class HostCursorSampler {
     let available: Bool
+    private var lastImage: MacCursorImage?
     private var previousPixels: Data?
     private var previousHotspot: NSPoint?
     private var previousSize: NSSize?
@@ -610,9 +636,10 @@ extension UTType { static let pairing = UTType(exportedAs: "com.vnilink.pairing"
                 hotspotX: UInt16(max(0, min(width - 1, Int(cursor.hotSpot.x)))),
                 hotspotY: UInt16(max(0, min(height - 1, Int(cursor.hotSpot.y)))), bgra: pixels)
             previousPixels = pixels; previousHotspot = cursor.hotSpot; previousSize = image.size
+            lastImage = shape
         }
         return MacCursorUpdate(x: Int32(location.x.rounded()), y: Int32(location.y.rounded()),
-            visible: true, image: shape)
+            visible: true, image: lastImage)
     }
 }
 

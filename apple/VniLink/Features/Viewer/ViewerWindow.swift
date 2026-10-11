@@ -17,7 +17,21 @@ enum DesktopSizing: Int {
     @Published var status = "Connecting…"
     @Published var failure: String?
     @Published var code: String?
-    @Published var controlling = true
+    @Published var controlling = true {
+        didSet {
+            guard oldValue != controlling, let desktop else { return }
+            let desired = controlling
+            inputQueue.async {
+                if desired { try? desktop.acquireControl() }
+                else { try? desktop.yieldControl() }
+            }
+        }
+    }
+    private(set) var desktopInfo: FfiDesktopInfo?
+    private(set) var frameSourceId: UInt64 = 0
+    private(set) var frameSourceRevision: UInt64 = 0
+    private(set) var desktop: DesktopService?
+    private let backend: ServiceDesktopBackend
     @Published var notice: String?
     let id = UUID()
     let name: String
@@ -29,7 +43,6 @@ enum DesktopSizing: Int {
     private let videoQueue = DispatchQueue(label: "com.vnilink.viewer.video", qos: .userInitiated)
     private let inputQueue = DispatchQueue(label: "com.vnilink.viewer.input", qos: .userInteractive)
     private let connectionQueue = DispatchQueue(label: "com.vnilink.viewer.connection", qos: .userInitiated)
-    private let interruptQueue = DispatchQueue(label: "com.vnilink.viewer.interrupt", qos: .userInteractive)
     private var displayLink: CADisplayLink?
     private var poller: MacViewer?
     private var updating = false
@@ -41,7 +54,7 @@ enum DesktopSizing: Int {
     private var nextSessionCheck = 0.0
 
     init(core: VnilinkCore, device: FfiDeviceInfo, preview: Bool = false) {
-        self.core = core; name = device.name; deviceId = device.id
+        self.core = core; backend = ServiceDesktopBackend(core: core); name = device.name; deviceId = device.id
         super.init()
         if preview {
             status = "Disconnected"; failure = "Preview session"; notice = "Preview only · no remote connection"; controlling = false
@@ -49,24 +62,13 @@ enum DesktopSizing: Int {
         }
         connectionQueue.async {
             let result = Result {
-                // A files-only connection cannot supply a desktop. Replace only
-                // this peer's connection, retaining other computers' sessions.
-                if let existing = try core.controllerSessions().first(where: { $0.peerId == device.id && $0.phase != .closed && !$0.phase.isFailed }) {
-                    try core.disconnectSession(sessionId: existing.id)
-                    for _ in 0..<100 {
-                        let current = try core.controllerSession(sessionId: existing.id)
-                        if current.phase == .closed || current.phase.isFailed { break }
-                        Thread.sleep(forTimeInterval: 0.02)
-                    }
-                    try? core.forgetControllerSession(sessionId: existing.id)
-                }
-                return try core.beginConnect(endpointId: device.id)
+                try core.beginConnectServices(endpointId: device.id)
             }
             DispatchQueue.main.async {
                 switch result {
                 case .success(let session):
                     self.sessionId = session.id
-                    if self.closed { self.cleanup(session.id) }
+                    if self.closed { self.backend.close() }
                     else { self.session = session; self.update() }
                 case .failure(let error):
                     if !self.closed { self.failure = AppModel.message(error); self.status = "Connection failed" }
@@ -93,6 +95,8 @@ enum DesktopSizing: Int {
         // Polling only takes ownership of the latest decoded frame; no pixel copy or decode.
         if let session, session.phase == .active, let frame = poller?.poll() {
             picture = Self.image(frame)
+            frameSourceId = frame.displayId()
+            frameSourceRevision = frame.revision()
         }
         // Session snapshots run off-thread and do not delay the display cadence.
         if link.timestamp >= nextSessionCheck {
@@ -141,14 +145,22 @@ enum DesktopSizing: Int {
         decodingGeneration = session.generation
         let epoch = epoch
         videoQueue.async {
-            let result = Result { try self.core.macViewer(sessionId: session.id, generation: session.generation) }
+            let result = Result {
+                let desktop = try self.backend.open(session)
+                let info = try desktop.desktopInfo()
+                let poller = try self.core.macDesktopViewer(desktop: desktop)
+                return (desktop, info, poller)
+            }
             DispatchQueue.main.async {
                 guard !self.closed, epoch == self.epoch else {
-                    if case .success(let poller) = result { self.videoQueue.async { poller.stop() } }
+                    if case .success(let data) = result { self.videoQueue.async { data.2.stop(); data.0.close() } }
                     return
                 }
                 switch result {
-                case .success(let poller): self.poller = poller; self.separateCursor = poller.separateCursor()
+                case .success(let data):
+                    self.desktop = data.0; self.desktopInfo = data.1
+                    self.poller = data.2; self.separateCursor = data.2.separateCursor()
+                    if self.controlling { self.inputQueue.async { try? data.0.acquireControl() } }
                 case .failure(let error): self.failure = AppModel.message(error)
                 }
             }
@@ -157,14 +169,19 @@ enum DesktopSizing: Int {
     private func stopDecoder() {
         epoch += 1
         let old = poller; poller = nil; decodingGeneration = nil; picture = nil; separateCursor = false; cursor = nil
+        desktop = nil; desktopInfo = nil; frameSourceId = 0; frameSourceRevision = 0
+        backend.retire()
         videoQueue.async { old?.stop() }
     }
-    func send(release: Bool = false, _ operation: @escaping (VnilinkCore, FfiSessionInfo) throws -> Void) {
-        guard !closed, ((controlling && visible) || release), let session, session.phase == .active else { return }
+    func send(release: Bool = false, _ operation: @escaping (DesktopService) throws -> Void) {
+        guard !closed, ((controlling && visible) || release), let desktop, !desktop.isCancelled() else { return }
         guard pendingInput < 128 else { failure = "Input fell behind. Reconnect to continue."; close(); return }
         pendingInput += 1
         inputQueue.async {
-            let result = Result { try operation(self.core, session) }
+            let result = Result {
+                guard try release || desktop.controlState() == .controlling else { return }
+                try operation(desktop)
+            }
             DispatchQueue.main.async {
                 self.pendingInput -= 1
                 if case .failure(let error) = result, !self.closed {
@@ -172,6 +189,8 @@ enum DesktopSizing: Int {
                     // it rather than closing the replacement connection.
                     if case FfiError.StaleSession = error { return }
                     if case FfiError.NoSession = error { return }
+                    if case FfiError.Unauthorized = error { self.notice = "Viewing only: control is not granted."; return }
+                    if case FfiError.Busy = error { self.notice = "Control belongs to another viewer."; return }
                     self.failure = AppModel.message(error); self.close()
                 }
             }
@@ -188,25 +207,25 @@ enum DesktopSizing: Int {
         }
     }
     func sendClipboard() {
-        guard let session, session.phase == .active else { notice = "Connect to a computer first."; return }
+        guard let desktop, !desktop.isCancelled() else { notice = "Connect to a computer first."; return }
         guard let text = NSPasteboard.general.string(forType: .string) else { notice = "The clipboard does not contain text."; return }
-        action({ try $0.submitClipboard(sessionId: session.id, generation: session.generation, text: text) }, success: "Clipboard text sent.")
+        action({ _ in try desktop.submitClipboard(text: text) }, success: "Clipboard text sent.")
     }
     func sendKey(_ key: DesktopKey, release: Bool = false, paste: Bool = false) {
         let clipboard = paste ? NSPasteboard.general.string(forType: .string) : nil
-        send(release: release) { core, session in
+        send(release: release) { desktop in
             if let clipboard {
                 // The clipboard stream acknowledges the host write before V is queued.
                 // Keep input usable if clipboard has not been granted separately.
-                do { try core.submitClipboard(sessionId: session.id, generation: session.generation, text: clipboard) }
+                do { try desktop.submitClipboard(text: clipboard) }
                 catch { DispatchQueue.main.async { self.notice = AppModel.message(error) } }
             }
             switch key.route {
             case .local:
-                try core.submitLocalKey(sessionId: session.id, generation: session.generation,
+                try desktop.submitLocalKey(
                     usage: key.usage, down: key.down, text: key.text)
             case .physical:
-                try core.submitKey(sessionId: session.id, generation: session.generation,
+                try desktop.submitKey(
                     usage: key.usage, down: key.down)
             }
         }
@@ -221,7 +240,10 @@ enum DesktopSizing: Int {
             filesWindow.window?.makeKeyAndOrderFront(nil)
             return
         }
-        let files = FilesWindowController.open(core: core, session: { [weak self] in self?.session }, peerId: deviceId, localName: Host.current().localizedName ?? "This Mac", remoteName: name)
+        let core = core, peer = deviceId
+        let files = FilesWindowController.open(core: core, session: {
+            try? core.controllerSessions().first { $0.peerId == peer && $0.phase == .active }
+        }, peerId: deviceId, localName: Host.current().localizedName ?? "This Mac", remoteName: name)
         filesWindow = files
         files.showWindow(nil)
         files.window?.makeKeyAndOrderFront(nil)
@@ -232,11 +254,11 @@ enum DesktopSizing: Int {
         if !visible { releaseInput() }
     }
     func releaseInput() {
-        guard !closed, let session, session.phase == .active else { return }
+        guard !closed, let desktop, !desktop.isCancelled() else { return }
         inputQueue.async {
             // Run after previously queued key/button events; retry a busy core queue.
             for _ in 0..<20 {
-                do { try self.core.releaseSessionInput(sessionId: session.id, generation: session.generation); return }
+                do { try desktop.releaseInput(); return }
                 catch FfiError.Busy { Thread.sleep(forTimeInterval: 0.01) }
                 catch { return }
             }
@@ -244,22 +266,9 @@ enum DesktopSizing: Int {
     }
     func close() {
         guard !closed else { return }
-        closed = true; filesWindow?.close(); filesWindow = nil; sessionTimer?.invalidate(); sessionTimer = nil
+        closed = true; filesWindow = nil; backend.close(); sessionTimer?.invalidate(); sessionTimer = nil
         displayLink?.invalidate(); displayLink = nil; stopDecoder(); status = "Disconnected"; code = nil; session = nil
-        if let sessionId { cleanup(sessionId) }
-        // A still-pending beginConnect result performs its own cleanup above.
-    }
-    private func cleanup(_ id: UInt64) {
-        interruptQueue.async {
-            try? self.core.disconnectSession(sessionId: id)
-            for _ in 0..<100 {
-                guard let session = try? self.core.controllerSession(sessionId: id) else { return }
-                switch session.phase {
-                case .closed, .failed: try? self.core.forgetControllerSession(sessionId: id); return
-                default: Thread.sleep(forTimeInterval: 0.05)
-                }
-            }
-        }
+        // The peer connection remains available to independent service owners.
     }
     static func image(_ frame: MacFrame) -> CGImage? {
         let buffer = frame.buffer()
@@ -413,6 +422,15 @@ final class DesktopView: NSView {
     }
     private var keyboard = DesktopKeyboard()
     private var buttons = Set<Int>()
+    /// Pointer source bound to the displayed frame. The host streams exactly
+    /// the display chosen at share time and reports its size in the accept
+    /// handshake; the source is the unique topology display matching that
+    /// geometry, never the first list item. Keyed by owner identity so a
+    /// replacement owner reselects, and by topology revision so hotplug
+    /// rebinds. Confined to the input queue, which is serial.
+    private var pointerSourceOwner: ObjectIdentifier?
+    private var pointerSourceId: UInt64?
+    private var pointerSourceRevision: UInt64?
     private var tracking: NSTrackingArea?
     private var inactiveObserver: NSObjectProtocol?
     init(model: ViewerModel) {
@@ -548,12 +566,36 @@ final class DesktopView: NSView {
     }
     deinit { if let inactiveObserver { NotificationCenter.default.removeObserver(inactiveObserver) } }
     private func pointer(_ event: NSEvent) -> Bool {
-        guard controlling, let session = model.session, session.monitorWidth > 0, session.monitorHeight > 0 else { return false }
+        guard controlling, let desktop = model.desktopInfo, desktop.monitorWidth > 0, desktop.monitorHeight > 0 else { return false }
         let point = convert(event.locationInWindow, from: nil), rect = imageRect
-        guard rect.width > 0, rect.height > 0, rect.contains(point) else { return false }
-        let x = UInt16(min(CGFloat(session.monitorWidth-1), max(0, (point.x-rect.minX)/rect.width * CGFloat(session.monitorWidth))))
-        let y = UInt16(min(CGFloat(session.monitorHeight-1), max(0, (point.y-rect.minY)/rect.height * CGFloat(session.monitorHeight))))
-        model.send { try $0.submitPointer(sessionId: $1.id, generation: $1.generation, x: x, y: y) }
+        guard let (fractionX, fractionY) = PointerSource.fraction(point: point, in: rect) else { return false }
+        let frameWidth = desktop.monitorWidth, frameHeight = desktop.monitorHeight
+        let frameSourceId = model.frameSourceId, frameSourceRevision = model.frameSourceRevision
+        model.send { desktop in
+            // The host rejects pointer input until this owner selects the
+            // display it names. Select the frame's stamped source before
+            // sending; a missing, ambiguous or revision-mismatched source
+            // fences the pointer until matching pixels arrive. The picture
+            // fraction scales onto the selected source's extent, never
+            // onto the handshake monitor.
+            guard let source = PointerSource.select(
+                displays: try desktop.topology(),
+                frameDisplayId: frameSourceId, frameRevision: frameSourceRevision,
+                frameWidth: frameWidth, frameHeight: frameHeight) else { return }
+            let owner = ObjectIdentifier(desktop)
+            if self.pointerSourceOwner != owner || self.pointerSourceId != source.id
+                || self.pointerSourceRevision != source.revision {
+                try desktop.selectDisplays(ids: [source.id])
+                self.pointerSourceOwner = owner
+                self.pointerSourceId = source.id
+                self.pointerSourceRevision = source.revision
+            }
+            let (x, y) = source.normalize(fractionX: fractionX, fractionY: fractionY)
+            guard let (mappedX, mappedY) = source.map(x: x, y: y) else { return }
+            try desktop.submitPointer(
+                x: mappedX, y: mappedY,
+                display: source.id, revision: source.revision)
+        }
         return true
     }
     override func mouseMoved(with event: NSEvent) { _ = pointer(event) }
@@ -561,13 +603,13 @@ final class DesktopView: NSView {
     override func rightMouseDragged(with event: NSEvent) { _ = pointer(event) }
     override func otherMouseDragged(with event: NSEvent) { _ = pointer(event) }
     private func button(_ event: NSEvent, down: Bool) {
-        guard event.buttonNumber <= 2 else { return }
+        guard (0...4).contains(event.buttonNumber) else { return }
         if down {
             guard pointer(event) else { return }
             window?.makeFirstResponder(self); buttons.insert(event.buttonNumber)
         } else { guard buttons.remove(event.buttonNumber) != nil else { return } }
-        let button: FfiPointerButton = event.buttonNumber == 0 ? .left : event.buttonNumber == 1 ? .right : .middle
-        model.send { try $0.submitButton(sessionId: $1.id, generation: $1.generation, button: button, down: down) }
+        let button: FfiPointerButton = event.buttonNumber == 0 ? .left : event.buttonNumber == 1 ? .right : event.buttonNumber == 2 ? .middle : event.buttonNumber == 3 ? .back : .forward
+        model.send { try $0.submitButton(button: button, down: down) }
     }
     override func mouseDown(with event: NSEvent) { button(event, down: true) }
     override func mouseUp(with event: NSEvent) { button(event, down: false) }
@@ -575,11 +617,22 @@ final class DesktopView: NSView {
     override func rightMouseUp(with event: NSEvent) { button(event, down: false) }
     override func otherMouseDown(with event: NSEvent) { button(event, down: true) }
     override func otherMouseUp(with event: NSEvent) { button(event, down: false) }
+    private var scrollRemainder = (x: 0.0, y: 0.0)
     override func scrollWheel(with event: NSEvent) {
         guard pointer(event) else { return }
-        let dx = Int16(max(-32767, min(32767, event.scrollingDeltaX.rounded())))
-        let dy = Int16(max(-32767, min(32767, event.scrollingDeltaY.rounded())))
-        model.send { try $0.submitWheel(sessionId: $1.id, generation: $1.generation, dx: dx, dy: dy) }
+        // AppKit precise deltas are points; ordinary wheel deltas are lines.
+        let scale = event.hasPreciseScrollingDeltas ? 12.0 : 120.0
+        func convert(_ delta: Double, remainder: inout Double) -> Int32 {
+            guard delta.isFinite else { return 0 }
+            let total = max(-7680.0, min(7680.0, delta * scale + remainder))
+            let whole = total.rounded(.towardZero)
+            remainder = total - whole
+            return Int32(whole)
+        }
+        let dx = convert(event.scrollingDeltaX, remainder: &scrollRemainder.x)
+        let dy = convert(event.scrollingDeltaY, remainder: &scrollRemainder.y)
+        guard dx != 0 || dy != 0 else { return }
+        model.send { try $0.submitPreciseWheel(dx: dx, dy: dy) }
     }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard controlling, window?.firstResponder === self, event.modifierFlags.contains(.command) else { return false }
@@ -608,10 +661,11 @@ final class DesktopView: NSView {
         sendKey(key)
     }
     private func releaseInput() {
+        scrollRemainder = (0, 0)
         for key in keyboard.release() { sendKey(key, release: true) }
         for number in buttons {
-            let button: FfiPointerButton = number == 0 ? .left : number == 1 ? .right : .middle
-            model.send(release: true) { try $0.submitButton(sessionId: $1.id, generation: $1.generation, button: button, down: false) }
+            let button: FfiPointerButton = number == 0 ? .left : number == 1 ? .right : number == 2 ? .middle : number == 3 ? .back : .forward
+            model.send(release: true) { try $0.submitButton(button: button, down: false) }
         }
         buttons.removeAll()
     }
