@@ -1,11 +1,6 @@
 /target
 docs/**
-/apple/.generated/
-/apple/Local.xcconfig
-/apple/.build/
-/apple/.build-xcode/
-/apple/VnilinkCore/.build/
-/apple/VnilinkCore/.swiftpm/
-/apple/*.xcodeproj/
-/apple/VnilinkCore/vnilink_ffiFFI.xcframework/
-/apple/VnilinkCore/Sources/VnilinkCore/vnilink_ffi.swift
+/node_modules/
+/out/
+/dist/
+/.build/

@@ -9,7 +9,6 @@ members = [
     "crates/vnilink-linux",
     "crates/vnilink-ffi",
     "crates/uniffi-bindgen",
-    "linux",
 ]
 resolver = "2"
 
