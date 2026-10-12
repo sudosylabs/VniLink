@@ -21,6 +21,7 @@
     "src/renderer.ts",
     "src/preload.ts",
     "src/platform/engine/electron-utility/engineHost.ts",
+    "src/platform/secrets/common/secrets.ts",
     "src/assets.d.ts",
     "src/typings/desktop.d.ts",
     "test/**/*.ts",
