@@ -3,9 +3,9 @@
 
 use vnilink::Error;
 
-/// Errors a Swift/C# caller can match on. Carried strings name the reason;
+/// Errors an application adapter caller can match on. Carried strings name the reason;
 /// they never contain secrets, pixels, or bitstreams.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum FfiError {
     #[error("the core has shut down")]
     ShutDown,

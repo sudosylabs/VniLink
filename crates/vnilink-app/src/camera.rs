@@ -1,12 +1,12 @@
 //! Native capture callbacks and independently owned encoded camera streams.
 use crate::{error::map_error, FfiEncodedFrame, FfiError, FfiServiceInfo, VnilinkCore};
 use std::sync::Arc;
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiCameraDevice {
     pub id: String,
     pub name: String,
 }
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiCameraConfig {
     pub device_id: String,
     pub width: u16,
@@ -35,7 +35,7 @@ impl From<vnilink::camera::CameraConfig> for FfiCameraConfig {
 }
 /// Called on background workers. Capture/OS consent belongs to the native
 /// provider; do not call Core inside these callbacks. Open returns a fresh source.
-#[uniffi::export(callback_interface)]
+
 pub trait CameraProvider: Send + Sync {
     fn devices(&self) -> Result<Vec<FfiCameraDevice>, FfiError>;
     fn start_capture(
@@ -46,11 +46,10 @@ pub trait CameraProvider: Send + Sync {
 }
 /// Poll while acquiring the native camera. Cancellation/deadline applies only
 /// to startup; use CameraSource.is_cancelled after Open succeeds.
-#[derive(uniffi::Object)]
 pub struct BackendStartup {
     pub(crate) inner: vnilink::BackendStartup,
 }
-#[uniffi::export]
+
 impl BackendStartup {
     pub fn is_cancelled(&self) -> bool {
         self.inner.is_cancelled()
@@ -59,14 +58,12 @@ impl BackendStartup {
         self.inner.check().map_err(map_error)
     }
 }
-#[derive(uniffi::Object)]
 pub struct CameraSource {
     config: vnilink::camera::CameraConfig,
     inner: Arc<vnilink::camera::CameraSource>,
 }
-#[uniffi::export]
+
 impl CameraSource {
-    #[uniffi::constructor]
     pub fn new(config: FfiCameraConfig) -> Result<Arc<Self>, FfiError> {
         let config: vnilink::camera::CameraConfig = config.into();
         config.validate().map_err(map_error)?;
@@ -134,11 +131,10 @@ impl vnilink::camera::HostCameraFactory for NativeCamera {
         vnilink::camera::CameraBackend::new(source.config.clone(), source.inner.clone())
     }
 }
-#[derive(uniffi::Object)]
 pub struct CameraService {
     inner: vnilink::RemoteCameraService,
 }
-#[uniffi::export]
+
 impl CameraService {
     pub fn info(&self) -> FfiServiceInfo {
         self.inner.info().clone().into()
@@ -165,7 +161,7 @@ impl CameraService {
         self.inner.close();
     }
 }
-#[uniffi::export]
+
 impl VnilinkCore {
     pub fn install_camera_provider(
         &self,
@@ -208,7 +204,6 @@ impl VnilinkCore {
     }
 }
 
-#[uniffi::export]
 impl VnilinkCore {
     /// Local device metadata. Does not request consent or start capture.
     pub fn native_camera_devices(&self) -> Result<Vec<FfiCameraDevice>, FfiError> {

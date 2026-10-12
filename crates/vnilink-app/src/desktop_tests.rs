@@ -84,7 +84,7 @@ fn service_handles_and_cancellation_cross_the_ffi_boundary() {
         }
     }
     let scratch = Scratch(std::env::temp_dir().join(format!(
-            "vnilink-ffi-service-{}-{}",
+            "vnilink-app-service-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -366,7 +366,7 @@ fn service_jobs_cross_the_ffi_boundary() {
         }
     }
     let scratch = Scratch(std::env::temp_dir().join(format!(
-            "vnilink-ffi-owned-jobs-{}-{}",
+            "vnilink-app-owned-jobs-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -651,7 +651,7 @@ fn recording_ffi_checks_installation_and_consent_before_creating_files() {
         .open_desktop_service(owner.id, owner.generation)
         .unwrap();
     let folder = std::env::temp_dir().join(format!(
-        "vnilink-ffi-recording-{}-{}",
+        "vnilink-app-recording-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -949,7 +949,7 @@ fn files_handle_owns_submission_queue_and_cleanup() {
         .authorize(host.endpoint_id(), false, false, false, true)
         .unwrap();
     let directory = std::env::temp_dir().join(format!(
-        "vnilink-ffi-owned-jobs-{}-{}",
+        "vnilink-app-owned-jobs-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1527,7 +1527,7 @@ fn clipboard_files_cross_the_ffi_boundary() {
     let host = core();
     let controller = core();
     let scratch = Scratch(std::env::temp_dir().join(format!(
-        "vnilink-ffi-paste-{}-{}",
+        "vnilink-app-paste-{}-{}",
         std::process::id(),
         host.endpoint_id()
     )));

@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Instant,
 };
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiAudioKind {
     System,
     Microphone,
@@ -25,19 +25,19 @@ impl From<vnilink::audio::AudioKind> for FfiAudioKind {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiAudioDevice {
     pub id: String,
     pub name: String,
     pub kind: FfiAudioKind,
 }
 /// A local playback destination, independent of the remote capture kind.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiAudioOutputDevice {
     pub id: String,
     pub name: String,
 }
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiAudioConfig {
     pub device_id: String,
     pub kind: FfiAudioKind,
@@ -64,20 +64,20 @@ impl From<vnilink::audio::AudioConfig> for FfiAudioConfig {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiAudioPacket {
     pub sequence: u64,
     pub timestamp: u64,
     pub channels: u8,
     pub payload: Vec<u8>,
 }
-#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FfiAudioBlock {
     pub timestamp: u64,
     pub concealed: bool,
     pub samples: Vec<f32>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiAudioPlaybackStats {
     pub received: u64,
     pub late: u64,
@@ -88,7 +88,6 @@ pub struct FfiAudioPlaybackStats {
     pub queued: u32,
 }
 
-#[uniffi::export(callback_interface)]
 pub trait AudioProvider: Send + Sync {
     fn supports(&self, kind: FfiAudioKind) -> bool;
     fn devices(&self) -> Result<Vec<FfiAudioDevice>, FfiError>;
@@ -98,14 +97,12 @@ pub trait AudioProvider: Send + Sync {
         startup: Arc<BackendStartup>,
     ) -> Result<Arc<AudioSource>, FfiError>;
 }
-#[derive(uniffi::Object)]
 pub struct AudioSource {
     config: vnilink::audio::AudioConfig,
     inner: Arc<vnilink::audio::AudioSource>,
 }
-#[uniffi::export]
+
 impl AudioSource {
-    #[uniffi::constructor]
     pub fn new(config: FfiAudioConfig) -> Result<Arc<Self>, FfiError> {
         let config: vnilink::audio::AudioConfig = config.into();
         config.validate().map_err(map_error)?;
@@ -187,14 +184,13 @@ impl vnilink::audio::HostAudioFactory for ProviderAdapter {
         backend
     }
 }
-#[derive(uniffi::Object)]
 pub struct AudioService {
     inner: vnilink::RemoteAudioService,
     pub(crate) core: Arc<vnilink::Core>,
     pub(crate) playback_claimed: std::sync::atomic::AtomicBool,
     playback: Mutex<vnilink_audio::AudioPlayback>,
 }
-#[uniffi::export]
+
 impl AudioService {
     pub fn info(&self) -> FfiServiceInfo {
         self.inner.info().clone().into()
@@ -271,7 +267,7 @@ impl AudioService {
             .map_err(|_| map_error(vnilink::Error::Malformed))
     }
 }
-#[uniffi::export]
+
 impl VnilinkCore {
     pub fn set_audio_provider(
         &self,

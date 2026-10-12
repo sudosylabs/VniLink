@@ -2,7 +2,7 @@
 use crate::{error::map_error, FfiError, FfiServiceInfo, VnilinkCore};
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiTerminalSize {
     pub rows: u16,
     pub columns: u16,
@@ -15,18 +15,17 @@ impl From<FfiTerminalSize> for vnilink::terminal::TerminalSize {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FfiTerminalEvent {
     Output { bytes: Vec<u8> },
     Exited { code: u32 },
     Failed { message: String },
     OutputGap { lost_bytes: u64 },
 }
-#[derive(uniffi::Object)]
 pub struct TerminalService {
     inner: vnilink::RemoteTerminalService,
 }
-#[uniffi::export]
+
 impl TerminalService {
     pub fn info(&self) -> FfiServiceInfo {
         self.inner.info().clone().into()
@@ -56,7 +55,7 @@ impl TerminalService {
         self.inner.close();
     }
 }
-#[uniffi::export]
+
 impl VnilinkCore {
     /// Host chooses an absolute shell and working directory. This does not grant
     /// any peer permission and is not enabled at application startup.
@@ -107,7 +106,7 @@ impl VnilinkCore {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiTerminalSessionInfo {
     pub id: String,
     pub process_id: u32,
@@ -130,13 +129,13 @@ impl From<vnilink::terminal::TerminalSessionInfo> for FfiTerminalSessionInfo {
         }
     }
 }
-#[uniffi::export]
+
 impl TerminalService {
     pub fn session(&self) -> FfiTerminalSessionInfo {
         self.inner.session().into()
     }
 }
-#[uniffi::export]
+
 impl VnilinkCore {
     pub fn open_persistent_terminal_service(
         &self,
@@ -169,7 +168,6 @@ impl VnilinkCore {
     }
 }
 
-#[uniffi::export]
 impl VnilinkCore {
     pub fn remote_terminal_sessions(
         &self,
@@ -193,7 +191,6 @@ impl VnilinkCore {
     }
 }
 
-#[uniffi::export]
 impl VnilinkCore {
     pub fn enable_default_native_terminal(&self) -> Result<(), FfiError> {
         #[cfg(unix)]
@@ -223,7 +220,7 @@ impl VnilinkCore {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiTerminalPolicy {
     pub allow_persistence: bool,
     pub max_sessions: u16,
@@ -256,7 +253,7 @@ impl From<FfiTerminalPolicy> for vnilink::terminal::TerminalPolicy {
         }
     }
 }
-#[uniffi::export]
+
 impl VnilinkCore {
     pub fn terminal_policy(&self) -> Result<FfiTerminalPolicy, FfiError> {
         self.inner

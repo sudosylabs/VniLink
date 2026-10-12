@@ -278,12 +278,11 @@ impl HostAudioFactory for NativeFactory {
     }
 }
 
-#[derive(uniffi::Object)]
 pub struct NativeAudioPlayback {
     stop: Arc<AtomicBool>,
     service: Arc<AudioService>,
 }
-#[uniffi::export]
+
 impl NativeAudioPlayback {
     pub fn close(&self) {
         self.stop.store(true, Ordering::Release);
@@ -298,7 +297,7 @@ impl Drop for NativeAudioPlayback {
         self.close();
     }
 }
-#[uniffi::export]
+
 impl VnilinkCore {
     pub fn native_audio_output_devices(&self) -> Result<Vec<FfiAudioOutputDevice>, FfiError> {
         let available = vnilink_audio::audio_devices()

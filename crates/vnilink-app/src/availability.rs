@@ -2,7 +2,7 @@
 
 use crate::{error::map_error, FfiError, VnilinkCore};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiCapability {
     DesktopView,
     DesktopControl,
@@ -59,7 +59,7 @@ impl From<vnilink::Capability> for FfiCapability {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FfiAvailabilityReason {
     MissingImplementation,
     DeniedOsPermission,
@@ -86,7 +86,7 @@ impl From<vnilink::AvailabilityReason> for FfiAvailabilityReason {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiAvailability {
     pub capability: FfiCapability,
     pub available: bool,
@@ -96,7 +96,7 @@ pub struct FfiAvailability {
 
 /// Last-known backend facts for one capability. Native adapters publish OS
 /// consent and device presence they observe; unknown stays unpublished.
-#[derive(Debug, Clone, Default, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FfiBackendState {
     pub os_denied: bool,
     pub device_missing: bool,
@@ -113,7 +113,7 @@ impl From<FfiBackendState> for vnilink::BackendState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiPolicyChangeScope {
     Immediate,
     NextOwner,
@@ -130,14 +130,13 @@ impl From<vnilink::PolicyChangeScope> for FfiPolicyChangeScope {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiPolicyDescriptor {
     pub name: String,
     pub scope: FfiPolicyChangeScope,
     pub summary: String,
 }
 
-#[uniffi::export]
 impl VnilinkCore {
     /// Effective availability of one capability. `endpoint_id` selects the
     /// peer whose grant is evaluated; `None` reports this installation's

@@ -1,38 +1,18 @@
-//! UniFFI control-plane bindings for VniLink.
+//! Application adapters for the VniLink shared Rust core.
 //!
-//! SwiftUI (Swift) and WinUI (C#) host the shared Rust core through this
-//! crate. Only value types cross the boundary: records, enums, byte vectors,
-//! and strings. Media stays in Rust behind [`vnilink_media`] — encoded
-//! frames cross as byte vectors, never as shared surfaces.
+//! This crate preserves the platform coordination, control API and regression
+//! coverage formerly hosted by the native-app binding layer. It is ordinary Rust;
+//! language bindings belong in a separate adapter crate.
 //!
 //! # Threading
 //!
-//! [`VnilinkCore`] owns the same Tokio runtime as [`vnilink::Core`]. Call
-//! every method from a background thread, never from an async executor or
-//! the UI thread: [`VnilinkCore::connect`] blocks up to 75 seconds. Poll
-//! [`EventPoller`] and [`VideoPoller`] on a timer and marshal results onto
-//! the UI thread in the app.
+//! Call blocking methods from background threads. The core owns a Tokio runtime;
+//! calling its blocking control methods from an async executor is unsupported.
+//! Persistent installations require a credential store before opening the core.
+//! Store records contain secrets and must never be logged or exposed to the UI.
 //!
-//! # Errors
-//!
-//! Every fallible method returns [`FfiError`], a flat mapping of
-//! [`vnilink::Error`] that keeps each distinguishable reason. Messages name
-//! the reason only; they never carry secrets, pixels, or bitstreams.
-//!
-//! # Out of scope for v1
-//!
-//! Desktop/capture adapter installation stays in platform Rust. Native UI
-//! pasteboards implement `ClipboardWriter`; `install_clipboard` installs that
-//! callback before hosting, while received files land under `set_file_roots`.
-//! The file manager owns more surface: `set_blob_directory` for the job
-//! store, `set_file_roots` for browsing, `list_dir`/`create_dir`/
-//! `rename_entry` locally, `fs_*` against a live session, and the
-//! `job_submit_*`/`job_poll`/`job_resolve` queue. File and job calls block;
-//! make them all from a background thread, never the UI thread.
-//! The persistent
-//! installation store (`Core::open`) needs the platform credential store
-//! first. `open_persistent` delegates opaque record storage to the native
-//! credential-store callback; saved relay credentials are never read back.
+//! Media adapters remain available to Rust callers. Electron media transport and
+//! presentation are deliberately outside the current control-bridge work.
 
 mod audio;
 mod audio_native;
@@ -114,7 +94,6 @@ use vnilink::{Core, CoreConfig, CustomRelay, Listen, LocalKey, RelaySettings};
 use error::map_error;
 
 /// Owned core for one installation. See the module docs for threading.
-#[derive(uniffi::Object)]
 pub struct VnilinkCore {
     inner: std::sync::Arc<Core>,
     previews: Mutex<HashMap<u64, vnilink::PairingPreview>>,
@@ -122,11 +101,10 @@ pub struct VnilinkCore {
     audio_coordinator: Arc<audio_native::AudioCoordinator>,
 }
 
-#[uniffi::export]
 impl VnilinkCore {
     /// Opens a process-local core. `custom_relays` replaces the public
     /// default; an empty list with `public_relay` false is rejected.
-    #[uniffi::constructor]
+
     pub fn create(public_relay: bool, custom_relays: Vec<String>) -> Result<Self, FfiError> {
         let relay = if public_relay {
             RelaySettings::public_n0()
@@ -153,7 +131,7 @@ impl VnilinkCore {
     }
 
     /// Opens the persistent installation using a native credential store.
-    #[uniffi::constructor]
+
     pub fn open_persistent(store: Box<dyn CredentialStore>) -> Result<Self, FfiError> {
         let core = Core::open(
             std::sync::Arc::new(storage::NativeStore(store.into())),
@@ -850,8 +828,6 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 }
-
-uniffi::setup_scaffolding!();
 
 #[cfg(test)]
 #[path = "tests.rs"]

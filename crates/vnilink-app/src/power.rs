@@ -3,7 +3,7 @@ use crate::{error::map_error, FfiError, VnilinkCore};
 use std::sync::Arc;
 use vnilink::power::{PowerKind, PowerPhase, PowerPolicy};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiPowerPolicy {
     pub incoming_display: bool,
     pub incoming_system: bool,
@@ -39,12 +39,12 @@ impl From<FfiPowerPolicy> for PowerPolicy {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiPowerKind {
     Display,
     System,
 }
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FfiPowerPhase {
     Idle,
     Unavailable,
@@ -52,13 +52,13 @@ pub enum FfiPowerPhase {
     Active,
     Failed { message: String },
 }
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiPowerStatus {
     pub kind: FfiPowerKind,
     pub owners: u32,
     pub phase: FfiPowerPhase,
 }
-#[uniffi::export]
+
 impl VnilinkCore {
     pub fn power_policy(&self) -> Result<FfiPowerPolicy, FfiError> {
         self.inner.power_policy().map(Into::into).map_err(map_error)

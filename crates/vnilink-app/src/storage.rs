@@ -2,7 +2,6 @@
 use crate::FfiError;
 use std::sync::Arc;
 
-#[uniffi::export(callback_interface)]
 pub trait CredentialStore: Send + Sync {
     fn load(&self) -> Result<Option<Vec<u8>>, FfiError>;
     fn save(&self, record: Vec<u8>) -> Result<(), FfiError>;
@@ -24,12 +23,12 @@ impl vnilink::InstallationStore for NativeStore {
     }
 }
 
-#[derive(Clone, Debug, uniffi::Record)]
+#[derive(Clone, Debug)]
 pub struct FfiRelay {
     pub url: String,
     pub authenticated: bool,
 }
-#[derive(Clone, uniffi::Record)]
+#[derive(Clone)]
 pub struct FfiRelayInput {
     pub url: String,
     pub authenticated: bool,

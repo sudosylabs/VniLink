@@ -11,7 +11,6 @@ use vnilink_media::{
     ControllerOutput, ControllerVideo, EncodeParams, RawFrame, VideoDecoder, VideoEncoder,
 };
 
-#[derive(uniffi::Record)]
 pub struct MacFrameBuffer {
     pub width: u16,
     pub height: u16,
@@ -22,15 +21,13 @@ pub struct MacFrameBuffer {
 
 /// Immutable decoded pixels owned by this in-process object. The native image
 /// provider retains the object until it finishes drawing; pixels never travel
-/// through UniFFI's byte-by-byte record serialization.
-#[derive(uniffi::Object)]
+/// through byte-by-byte language-binding serialization.
 pub struct MacFrame {
     picture: RawFrame,
     display_id: u64,
     revision: u64,
 }
 
-#[uniffi::export]
 impl MacFrame {
     /// Read-only BGRA memory, valid for as long as this frame is retained.
     /// Only the native macOS adapter may use this process-local address.
@@ -54,7 +51,6 @@ impl MacFrame {
     }
 }
 
-#[derive(uniffi::Record)]
 pub struct MacCursorImage {
     pub width: u16,
     pub height: u16,
@@ -62,7 +58,6 @@ pub struct MacCursorImage {
     pub hotspot_y: u16,
     pub bgra: Vec<u8>,
 }
-#[derive(uniffi::Record)]
 pub struct MacCursorUpdate {
     pub x: i32,
     pub y: i32,
@@ -121,7 +116,6 @@ struct ViewerState {
     error: Option<String>,
 }
 
-#[derive(uniffi::Object)]
 pub struct MacViewer {
     stop: Arc<AtomicBool>,
     state: Arc<Mutex<ViewerState>>,
@@ -133,7 +127,6 @@ pub struct MacViewer {
     cursor: Mutex<Option<Arc<vnilink::CursorState>>>,
 }
 
-#[uniffi::export]
 impl MacViewer {
     pub fn separate_cursor(&self) -> bool {
         if let Some(desktop) = &self.desktop {
@@ -263,7 +256,6 @@ fn probe_caps() -> Result<vnilink::VideoCodecCaps, FfiError> {
         })
 }
 
-#[uniffi::export]
 impl VnilinkCore {
     pub fn prepare_mac_video(&self) -> Result<(), FfiError> {
         let caps = probe_caps()?;
@@ -452,7 +444,6 @@ mod tests {
 
 /// Sharing configuration with a capture resource opened for each Desktop instance.
 /// Dropping it retires capture; peer and service teardown is owned by the caller.
-#[derive(uniffi::Object)]
 pub struct MacHost {
     core: Arc<Core>,
     display_id: u64,
@@ -535,7 +526,6 @@ impl vnilink::HostCapture for MacCaptureDescriptor {
     }
 }
 
-#[uniffi::export]
 impl MacHost {
     /// Cursor updates never inject input. Retain a shape across position-only
     /// samples and resend it when a new hosted generation negotiates metadata.
@@ -621,7 +611,6 @@ impl Drop for MacHost {
     }
 }
 
-#[uniffi::export]
 impl VnilinkCore {
     /// Call only after the user enables sharing and grants Screen Recording.
     /// Input coordinates use main-display logical points. Capture dimensions

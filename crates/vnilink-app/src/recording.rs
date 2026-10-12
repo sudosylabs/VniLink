@@ -2,24 +2,24 @@
 use crate::{error::map_error, DesktopService, FfiError, VnilinkCore};
 use std::{path::Path, sync::Arc};
 
-#[derive(Clone, Copy, Debug, uniffi::Record)]
+#[derive(Clone, Copy, Debug)]
 pub struct FfiRecordingLimits {
     pub max_bytes: u64,
     pub max_duration_ms: u64,
 }
-#[derive(Clone, Copy, Debug, uniffi::Record)]
+#[derive(Clone, Copy, Debug)]
 pub struct FfiRecordingRetention {
     pub max_segments: u32,
     pub max_total_bytes: u64,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FfiRecordingPhase {
     Starting,
     Recording,
     Finished,
     Failed,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FfiRecordingFailure {
     Startup,
     Media,
@@ -28,7 +28,7 @@ pub enum FfiRecordingFailure {
     SlowStorage,
     FormatChanged,
 }
-#[derive(Clone, Debug, uniffi::Record)]
+#[derive(Clone, Debug)]
 pub struct FfiRecordingStatus {
     pub phase: FfiRecordingPhase,
     pub failure: Option<FfiRecordingFailure>,
@@ -37,7 +37,7 @@ pub struct FfiRecordingStatus {
     pub duration_ms: u64,
     pub segments: u32,
 }
-#[derive(Clone, Debug, uniffi::Record)]
+#[derive(Clone, Debug)]
 pub struct FfiRecordingRecovery {
     pub complete_bytes: u64,
     pub frames: u64,
@@ -45,7 +45,7 @@ pub struct FfiRecordingRecovery {
 }
 /// Explicit locally selected recovery; call on a background thread. Interrupted
 /// output has no cue index and is reported separately from normal finalization.
-#[uniffi::export]
+
 pub fn recover_desktop_recording(destination: String) -> Result<FfiRecordingRecovery, FfiError> {
     let recovered = vnilink_media::recover_desktop_recording(Path::new(&destination))
         .map_err(recording_error)?;
@@ -55,11 +55,10 @@ pub fn recover_desktop_recording(destination: String) -> Result<FfiRecordingReco
         duration_ms: recovered.last_timestamp_ms,
     })
 }
-#[derive(uniffi::Object)]
 pub struct RecordingHandle {
     inner: vnilink_media::DesktopRecorder,
 }
-#[uniffi::export]
+
 impl RecordingHandle {
     /// Requests finalization without waiting on storage. Poll for Finished or Failed.
     pub fn stop(&self) {
@@ -90,7 +89,7 @@ impl RecordingHandle {
         }
     }
 }
-#[uniffi::export]
+
 impl VnilinkCore {
     /// Call on a background thread: admission reserves a locally selected
     /// stem; segments land as `stem.000001.mkv`, ... once frames arrive.

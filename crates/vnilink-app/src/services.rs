@@ -3,7 +3,7 @@
 use crate::{error::map_error, FfiError, FfiSessionInfo, VnilinkCore};
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiServiceKind {
     Desktop,
     Files,
@@ -42,7 +42,7 @@ impl From<vnilink::ServiceKind> for FfiServiceKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiDesktopControlState {
     Viewing,
     Controlling,
@@ -58,7 +58,7 @@ impl From<vnilink::DesktopControlState> for FfiDesktopControlState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiCloseCause {
     OwnerClose,
     ParentLoss,
@@ -85,7 +85,7 @@ impl From<vnilink::CloseCause> for FfiCloseCause {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FfiServicePhase {
     Waiting,
     Active,
@@ -94,7 +94,7 @@ pub enum FfiServicePhase {
     Failed { message: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiServiceInfo {
     pub id: u64,
     pub connection_id: u64,
@@ -125,7 +125,7 @@ impl From<vnilink::ServiceInfo> for FfiServiceInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiServiceSupport {
     pub desktop: bool,
     pub files: bool,
@@ -137,7 +137,7 @@ pub struct FfiServiceSupport {
 }
 
 /// Permissions this installation grants the paired peer; not remote support.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiServicePermissions {
     pub recording: bool,
     pub desktop: bool,
@@ -151,12 +151,10 @@ pub struct FfiServicePermissions {
 
 /// Pollable cancellation for one service generation. An old lease stays
 /// cancelled after reconnection. Holding it never keeps the core alive.
-#[derive(uniffi::Object)]
 pub struct ServiceLeasePoller {
     inner: vnilink::ServiceLease,
 }
 
-#[uniffi::export]
 impl ServiceLeasePoller {
     pub fn is_cancelled(&self) -> bool {
         self.inner.is_cancelled()
@@ -166,7 +164,6 @@ impl ServiceLeasePoller {
     }
 }
 
-#[uniffi::export]
 impl VnilinkCore {
     pub fn transfer_desktop_control(
         &self,
@@ -400,19 +397,16 @@ impl VnilinkCore {
     }
 }
 
-#[derive(uniffi::Object)]
 pub struct FilesService {
     inner: vnilink::RemoteFilesService,
     core: std::sync::Weak<vnilink::Core>,
 }
 
-#[derive(uniffi::Object)]
 pub struct DesktopService {
     pub(crate) inner: Arc<vnilink::RemoteDesktopService>,
     pub(crate) core: std::sync::Weak<vnilink::Core>,
 }
 
-#[uniffi::export]
 impl DesktopService {
     pub fn control_state(&self) -> Result<FfiDesktopControlState, FfiError> {
         self.inner
@@ -477,7 +471,7 @@ impl FilesService {
         self.core.upgrade().ok_or(FfiError::ShutDown)
     }
 }
-#[uniffi::export]
+
 impl FilesService {
     pub fn upload(
         &self,
@@ -618,7 +612,7 @@ impl FilesService {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiDesktopInfo {
     pub service: FfiServiceInfo,
     pub monitor_width: u16,
@@ -639,7 +633,7 @@ impl From<vnilink::DesktopInfo> for FfiDesktopInfo {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiDesktopCursorImage {
     pub width: u16,
     pub height: u16,
@@ -647,7 +641,7 @@ pub struct FfiDesktopCursorImage {
     pub hotspot_y: u16,
     pub pixels: Vec<u8>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiDesktopCursor {
     pub x: i32,
     pub y: i32,
@@ -670,7 +664,7 @@ impl From<&vnilink::CursorState> for FfiDesktopCursor {
         }
     }
 }
-#[uniffi::export]
+
 impl VnilinkCore {
     pub fn hosted_desktop_info(
         &self,
@@ -762,7 +756,7 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 }
-#[uniffi::export]
+
 impl DesktopService {
     pub fn desktop_info(&self) -> Result<FfiDesktopInfo, FfiError> {
         self.inner.desktop_info().map(Into::into).map_err(map_error)
@@ -865,7 +859,6 @@ impl DesktopService {
     }
 }
 
-#[uniffi::export]
 impl VnilinkCore {
     pub fn files_service_adopt_job(
         &self,
@@ -880,7 +873,6 @@ impl VnilinkCore {
     }
 }
 
-#[uniffi::export]
 impl FilesService {
     pub fn adopt_job(&self, job: u64) -> Result<crate::FfiJobSnapshot, FfiError> {
         let info = self.inner.info();
@@ -891,7 +883,7 @@ impl FilesService {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiAdaptationReason {
     WarmingUp,
     Stable,
@@ -901,7 +893,7 @@ pub enum FfiAdaptationReason {
     Recovering,
     Idle,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiDesktopMediaStatus {
     pub reason: FfiAdaptationReason,
     pub received_kbps: u32,
@@ -939,7 +931,7 @@ impl From<vnilink::DesktopMediaStatus> for FfiDesktopMediaStatus {
         }
     }
 }
-#[uniffi::export]
+
 impl DesktopService {
     pub fn report_decode_duration(&self, microseconds: u64) -> Result<(), FfiError> {
         self.inner

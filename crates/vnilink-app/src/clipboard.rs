@@ -2,7 +2,6 @@
 use crate::{error::map_error, FfiError, VnilinkCore};
 use std::sync::Arc;
 
-#[uniffi::export(callback_interface)]
 pub trait ClipboardWriter: Send + Sync {
     /// Called on a core worker, never the UI thread. Do not call back into Core.
     fn set_text(&self, text: String) -> Result<(), FfiError>;
@@ -17,32 +16,32 @@ impl vnilink::HostClipboard for NativeClipboard {
     }
 }
 
-#[derive(Clone, Debug, uniffi::Record)]
+#[derive(Clone, Debug)]
 pub struct FfiClipboardFileEntry {
     pub path: String,
     pub size: u64,
     pub dir: bool,
 }
 
-#[derive(Clone, Debug, Default, uniffi::Record)]
+#[derive(Clone, Debug, Default)]
 pub struct FfiFileSelection {
     pub entries: Vec<FfiClipboardFileEntry>,
 }
 
-#[derive(Clone, Debug, uniffi::Record)]
+#[derive(Clone, Debug)]
 pub struct FfiStoredFileSelection {
     pub revision: u64,
     pub selection: FfiFileSelection,
 }
 
-#[derive(Clone, Debug, uniffi::Record)]
+#[derive(Clone, Debug)]
 pub struct FfiPreparedFile {
     pub path: String,
     pub hash: Vec<u8>,
     pub size: u64,
 }
 
-#[derive(Clone, Debug, Default, uniffi::Record)]
+#[derive(Clone, Debug, Default)]
 pub struct FfiPreparedPaste {
     pub files: Vec<FfiPreparedFile>,
 }
@@ -100,7 +99,7 @@ fn from_prepared(prepared: vnilink::PreparedPaste) -> FfiPreparedPaste {
 /// preparation workers, never the UI thread. Resolve only paths the user
 /// actually selected; canonicalize and refuse escapes. Do not call back
 /// into Core. See `vnilink::HostClipboardFiles` for the contract.
-#[uniffi::export(callback_interface)]
+
 pub trait ClipboardFileSource: Send + Sync {
     fn resolve_source(&self, path: String) -> Result<String, FfiError>;
 }
@@ -115,7 +114,6 @@ impl vnilink::HostClipboardFiles for NativeFileSource {
     }
 }
 
-#[uniffi::export]
 impl VnilinkCore {
     pub fn install_clipboard(&self, writer: Box<dyn ClipboardWriter>) -> Result<(), FfiError> {
         self.inner

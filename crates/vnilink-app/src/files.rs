@@ -1,4 +1,4 @@
-//! File-manager surface for Swift/C#: roots, listings, rename and jobs.
+//! Application file-manager surface: roots, listings, rename and jobs.
 //!
 //! Every method follows the crate threading rule: call from a background
 //! thread, never the UI thread. `job_poll` advances at most one file but
@@ -10,13 +10,13 @@
 use crate::{error::map_error, FfiError, VnilinkCore};
 
 /// One owner-approved root: the id from `file_roots` plus its path.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiFileRoot {
     pub id: u64,
     pub path: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiEntryKind {
     File,
     Dir,
@@ -26,13 +26,13 @@ pub enum FfiEntryKind {
 
 /// Listing identity for rename fencing. Absent fields mean the platform
 /// could not report an identity; the core treats the token as weak.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiEntryToken {
     pub dev: Option<u64>,
     pub ino: Option<u64>,
 }
 
-#[derive(Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct FfiFsEntry {
     pub name: String,
     pub kind: FfiEntryKind,
@@ -51,7 +51,7 @@ impl std::fmt::Debug for FfiFsEntry {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct FfiDirPage {
     pub entries: Vec<FfiFsEntry>,
     pub total: u64,
@@ -71,7 +71,7 @@ impl std::fmt::Debug for FfiDirPage {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiJobState {
     Preparing,
     Serving,
@@ -83,20 +83,20 @@ pub enum FfiJobState {
     Complete,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiJobDirection {
     Upload,
     Download,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiConflictChoice {
     Skip,
     Replace,
     KeepBoth,
 }
 
-#[derive(Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct FfiJobSnapshot {
     pub id: u64,
     pub peer: String,
@@ -218,7 +218,6 @@ pub(crate) fn job_snapshot(snapshot: vnilink::JobSnapshot) -> FfiJobSnapshot {
     }
 }
 
-#[uniffi::export]
 impl VnilinkCore {
     /// Chooses the managed directory for blob storage. Refused while a
     /// controlling session is active.
@@ -481,7 +480,7 @@ mod tests {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiFileRetentionPolicy {
     pub resume_cache_bytes: u64,
     pub resume_cache_age_secs: u64,
@@ -508,7 +507,7 @@ impl From<FfiFileRetentionPolicy> for vnilink::job::FileRetentionPolicy {
         }
     }
 }
-#[uniffi::export]
+
 impl VnilinkCore {
     pub fn file_retention_policy(&self) -> Result<FfiFileRetentionPolicy, FfiError> {
         self.inner
@@ -526,7 +525,7 @@ impl VnilinkCore {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiFileResourcePolicy {
     pub max_concurrent_receivers: u16,
     pub max_reserved_bytes: u64,
@@ -550,7 +549,7 @@ impl From<FfiFileResourcePolicy> for vnilink::job::FileResourcePolicy {
         }
     }
 }
-#[uniffi::export]
+
 impl VnilinkCore {
     pub fn file_resource_policy(&self) -> Result<FfiFileResourcePolicy, FfiError> {
         self.inner

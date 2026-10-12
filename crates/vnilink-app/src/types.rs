@@ -1,10 +1,10 @@
-//! Value types shared with Swift/C#. Every type is records, enums, strings,
+//! Application adapter value types. Every type is records, enums, strings,
 //! numbers, bytes, options, and vectors only.
 
 use crate::error::{map_error, FfiError};
 
 /// Directional grants. Pairing alone sets none of them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct FfiGrants {
     pub view: bool,
     pub control: bool,
@@ -13,7 +13,7 @@ pub struct FfiGrants {
 }
 
 /// What this installation can do today. Audio stays false.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct FfiCapabilities {
     pub desktop_capture: bool,
     pub keyboard: bool,
@@ -28,7 +28,7 @@ pub struct FfiCapabilities {
 
 /// Probe-validated H.264 abilities. Every set bit means a backend
 /// initialized and processed a sample.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiVideoCodecCaps {
     pub encode_baseline: bool,
     pub encode_high: bool,
@@ -74,7 +74,7 @@ impl From<FfiVideoCodecCaps> for vnilink::VideoCodecCaps {
 }
 
 /// Preferred limits for the platform encoder.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct FfiQuality {
     pub max_bitrate_kbps: u32,
     pub max_frame_rate: u8,
@@ -99,13 +99,13 @@ pub fn new_quality(
 }
 
 /// Which side of a session this installation is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum FfiSessionRole {
     Controller,
     Host,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub enum FfiSessionPhase {
     Connecting,
     Authenticated,
@@ -118,9 +118,11 @@ pub enum FfiSessionPhase {
     Failed { message: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct FfiSessionInfo {
+    #[serde(serialize_with = "crate::types::serialize_u64")]
     pub id: u64,
+    #[serde(serialize_with = "crate::types::serialize_u64")]
     pub generation: u64,
     pub role: FfiSessionRole,
     pub phase: FfiSessionPhase,
@@ -130,7 +132,7 @@ pub struct FfiSessionInfo {
     pub monitor_height: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct FfiDeviceInfo {
     pub endpoint_id: String,
     pub hostname: Option<String>,
@@ -140,7 +142,7 @@ pub struct FfiDeviceInfo {
     pub grants: FfiGrants,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct FfiSnapshot {
     pub endpoint_id: String,
     pub public_relay: bool,
@@ -152,30 +154,33 @@ pub struct FfiSnapshot {
     pub capabilities: FfiCapabilities,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct FfiPairingFile {
     pub bytes: Vec<u8>,
     pub check: String,
+    #[serde(serialize_with = "crate::types::serialize_u64")]
     pub expires_at_ms: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct FfiPairingPreview {
     /// Opaque handle for `confirm_pairing`. The invitation token never
     /// crosses the FFI.
+    #[serde(serialize_with = "crate::types::serialize_u64")]
     pub id: u64,
     pub endpoint_id: String,
     pub check: String,
+    #[serde(serialize_with = "crate::types::serialize_u64")]
     pub expires_at_ms: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct FfiControlRequest {
     pub endpoint_id: String,
     pub check: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiSessionPath {
     pub relay: bool,
     pub selected: bool,
@@ -189,7 +194,7 @@ pub struct FfiSessionPath {
 /// `display_id`/`revision` attest the captured source (topology display id
 /// and revision); zero means unstamped. Viewers map pointer input by this
 /// id instead of guessing from picture dimensions.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiEncodedFrame {
     pub keyframe: bool,
     pub timestamp_us: u64,
@@ -198,14 +203,14 @@ pub struct FfiEncodedFrame {
     pub revision: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiKeyboardMode {
     Character,
     Map,
     Translate,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiPointerButton {
     Left,
     Right,
@@ -214,7 +219,7 @@ pub enum FfiPointerButton {
     Forward,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FfiEvent {
     HostingChanged {
         hosting: bool,
@@ -284,7 +289,7 @@ pub enum FfiEvent {
 }
 
 /// One display in a host snapshot. Origins are desktop pixels and may be negative.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiDisplay {
     pub id: u64,
     pub origin_x: i32,
@@ -550,7 +555,7 @@ pub(crate) fn display_info(display: &FfiDisplay) -> vnilink::DisplayInfo {
 }
 
 /// Per-owner pointer policy; 100 percent leaves relative device counts unchanged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiPointerSettings {
     pub sensitivity_percent: u16,
     pub reverse_wheel: bool,
@@ -572,5 +577,42 @@ impl From<vnilink::PointerSettings> for FfiPointerSettings {
             reverse_wheel: value.reverse_wheel,
             swap_buttons: value.swap_buttons,
         }
+    }
+}
+
+fn serialize_u64<S: serde::Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&value.to_string())
+}
+
+#[cfg(test)]
+mod bridge_serialization_tests {
+    use super::*;
+    #[test]
+    fn pairing_handles_and_expiry_are_lossless_strings() {
+        let preview = FfiPairingPreview {
+            id: u64::MAX,
+            endpoint_id: "peer".into(),
+            check: "123".into(),
+            expires_at_ms: u64::MAX,
+        };
+        let value = serde_json::to_value(preview).unwrap();
+        assert_eq!(value["id"], u64::MAX.to_string());
+        assert_eq!(value["expires_at_ms"], u64::MAX.to_string());
+    }
+    #[test]
+    fn session_ownership_is_lossless_across_json() {
+        let session = FfiSessionInfo {
+            id: u64::MAX,
+            generation: u64::MAX,
+            role: FfiSessionRole::Controller,
+            phase: FfiSessionPhase::Active,
+            peer_id: "peer".into(),
+            quality: None,
+            monitor_width: 0,
+            monitor_height: 0,
+        };
+        let value = serde_json::to_value(session).unwrap();
+        assert_eq!(value["id"], u64::MAX.to_string());
+        assert_eq!(value["generation"], u64::MAX.to_string());
     }
 }

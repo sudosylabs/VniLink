@@ -3,7 +3,7 @@
 use crate::{error::map_error, FfiError, VnilinkCore};
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiSystemAction {
     Lock,
     Restart,
@@ -30,7 +30,7 @@ impl From<vnilink::SystemAction> for FfiSystemAction {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiOperationState {
     Admitted,
     Refused,
@@ -49,7 +49,7 @@ impl From<vnilink::OperationState> for FfiOperationState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiSystemOperation {
     pub id: u64,
     pub action: FfiSystemAction,
@@ -70,7 +70,7 @@ impl From<vnilink::SystemOperation> for FfiSystemOperation {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiSystemSupport {
     pub lock: bool,
     pub restart: bool,
@@ -91,7 +91,7 @@ impl From<vnilink::SystemSupport> for FfiSystemSupport {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiSessionState {
     pub locked: Option<bool>,
     pub login_screen: Option<bool>,
@@ -110,13 +110,13 @@ impl From<vnilink::HostSessionState> for FfiSessionState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiHostSystemReport {
     pub support: FfiSystemSupport,
     pub session: FfiSessionState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiSystemPolicy {
     pub allow_lock: bool,
     pub allow_restart: bool,
@@ -146,7 +146,7 @@ impl From<vnilink::SystemPolicy> for FfiSystemPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiPrivacyState {
     pub display_private: bool,
     pub input_blocked: bool,
@@ -165,12 +165,10 @@ impl From<vnilink::PrivacyState> for FfiPrivacyState {
 
 /// One opened System pipe. Dropping it ends only this owner; close it
 /// explicitly to release a held privacy lease deterministically.
-#[derive(uniffi::Object)]
 pub struct SystemServiceHandle {
     inner: vnilink::RemoteSystemService,
 }
 
-#[uniffi::export]
 impl SystemServiceHandle {
     pub fn is_cancelled(&self) -> bool {
         self.inner.is_cancelled()
@@ -217,7 +215,6 @@ impl SystemServiceHandle {
     }
 }
 
-#[uniffi::export]
 impl VnilinkCore {
     pub fn open_system_service(
         &self,

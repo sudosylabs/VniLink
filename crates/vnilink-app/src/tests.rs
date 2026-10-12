@@ -380,7 +380,7 @@ fn native_store_keeps_identity_names_and_opaque_relay_credentials() {
 fn file_roots_and_local_operations_cross_the_ffi() {
     use crate::{FfiConflictChoice, FfiEntryKind, FfiJobState};
 
-    let dir = std::env::temp_dir().join(format!("vnilink-ffi-files-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("vnilink-app-files-{}", std::process::id()));
     std::fs::create_dir_all(dir.join("root")).unwrap();
     std::fs::write(dir.join("root/notes.txt"), b"ffi-bytes").unwrap();
     let core = open_core();

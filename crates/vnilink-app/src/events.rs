@@ -6,7 +6,6 @@ use crate::types::{self, FfiEncodedFrame, FfiEvent};
 
 /// Bounded event queue polled from a background thread. A full queue drops
 /// for this poller and bumps `lagged` instead of blocking the connection.
-#[derive(uniffi::Object)]
 pub struct EventPoller {
     inner: std::sync::Mutex<vnilink::EventSubscription>,
 }
@@ -19,7 +18,6 @@ impl EventPoller {
     }
 }
 
-#[uniffi::export]
 impl EventPoller {
     /// Drains up to `max_events` without blocking.
     pub fn poll(&self, max_events: u32) -> Vec<FfiEvent> {
@@ -47,7 +45,6 @@ impl EventPoller {
 
 /// One video subscription. Frames arrive in decode order; the app decodes
 /// them with its platform decoder and paints the BGRA pictures.
-#[derive(uniffi::Object)]
 pub struct VideoPoller {
     inner: vnilink::VideoSubscription,
 }
@@ -58,7 +55,6 @@ impl VideoPoller {
     }
 }
 
-#[uniffi::export]
 impl VideoPoller {
     /// Waits up to `timeout_ms` for the next frame. Returns none on timeout
     /// so the caller can check its stop flag.
