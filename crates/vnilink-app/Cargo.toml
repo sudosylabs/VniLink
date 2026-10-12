@@ -11,6 +11,10 @@ publish = false
 name = "vnilink_app"
 crate-type = ["rlib"]
 
+[features]
+# Temporary loopback fixtures, unavailable in normal application builds.
+test-support = []
+
 [dependencies]
 vnilink = { path = "../vnilink" }
 vnilink-audio = { path = "../vnilink-audio", features = ["native"] }

@@ -20,6 +20,11 @@ test('control commands reject privileged methods, malformed IDs and extra author
 	assert.equal(isEngineCommand({ type: 'authorize', endpointId: 'peer', view: true, control: true, clipboard: false }), false);
 	assert.equal(isEngineCommand({ type: 'connect', endpointId: 'peer' }), true);
 	assert.equal(isEngineCommand({ type: 'beginConnect', endpointId: 'peer' }), true);
+	assert.equal(isEngineCommand({ type: 'beginConnectServices', endpointId: 'peer' }), true);
+	assert.equal(isEngineCommand({ type: 'beginConnectServices' }), false);
+	assert.equal(isEngineCommand({ type: 'beginConnectServices', endpointId: 'peer', allowed: true }), false);
+	assert.equal(isEngineCommand({ type: 'setTerminalEnabled', enabled: true }), false);
+	assert.equal(isEngineCommand({ type: 'authorizeTerminal', endpointId: 'peer', allowed: true }), false);
 	assert.equal(isEngineCommand({ type: 'connect' }), false);
 	assert.equal(isEngineCommand({ type: 'disconnect' }), true);
 	assert.equal(isEngineCommand({ type: 'disconnectSession', sessionId: '1' }), true);

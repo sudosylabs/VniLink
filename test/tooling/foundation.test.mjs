@@ -81,3 +81,22 @@ test('performance marks record and clear', () => {
 	performance.clearMarks('vnilink/test-mark');
 	assert.equal(performance.getMarks().filter(mark => mark.name === 'vnilink/test-mark').length, 0);
 });
+
+test('message logging preserves error arguments and falls back safely for circular values', () => {
+	const circular = {}; circular.self = circular;
+	assert.equal(log.format([circular, Symbol('value')]), '[object Object] Symbol(value)');
+	class CaptureLogger extends log.AbstractMessageLogger {
+		messages = [];
+		log(level, message) {
+			this.messages.push({ level, message });
+		}
+	}
+	const logger = new CaptureLogger(false);
+	logger.setLevel(log.LogLevel.Info);
+	logger.info('visible');
+	logger.error(new Error('failure'), { detail: 'context' });
+	assert.equal(logger.messages.length, 2);
+	assert.match(logger.messages[1].message, /failure/);
+	assert.match(logger.messages[1].message, /"detail":"context"/);
+	logger.dispose();
+});

@@ -28,6 +28,8 @@
     "src/typings/base-common.d.ts",
     "src/typings/thenable.d.ts",
     "src/typings/vscode-globals-nls.d.ts",
-    "src/typings/vscode-globals-product.d.ts"
+    "src/typings/vscode-globals-product.d.ts",
+    "src/platform/engine/browser/dataChannelClient.ts",
+    "src/platform/log/common/bufferLog.ts"
   ]
 }

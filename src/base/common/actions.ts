@@ -63,8 +63,8 @@ export class Action extends Disposable implements IAction {
 
 	protected _onDidChange = this._register(new Emitter<IActionChangeEvent>());
 	public get onDidChange() {
- return this._onDidChange.event; 
-}
+		return this._onDidChange.event;
+	}
 
 	protected readonly _id: string;
 	protected _label: string;
@@ -178,13 +178,13 @@ export class ActionRunner extends Disposable implements IActionRunner {
 
 	private readonly _onWillRun = this._register(new Emitter<IRunEvent>());
 	public get onWillRun() {
- return this._onWillRun.event; 
-}
+		return this._onWillRun.event;
+	}
 
 	private readonly _onDidRun = this._register(new Emitter<IRunEvent>());
 	public get onDidRun() {
- return this._onDidRun.event; 
-}
+		return this._onDidRun.event;
+	}
 
 	public async run(action: IAction, context?: unknown): Promise<void> {
 		if (!action.enabled) {
@@ -269,8 +269,8 @@ export class SubmenuAction implements IAction {
 
 	private readonly _actions: readonly IAction[];
 	public get actions(): readonly IAction[] {
- return this._actions; 
-}
+		return this._actions;
+	}
 
 	constructor(id: string, label: string, actions: readonly IAction[], cssClass?: string) {
 		this.id = id;

@@ -7,7 +7,9 @@ import type { EncryptionMainService } from '../../encryption/electron-main/encry
 import { isEncryptionText } from '../../encryption/common/encryption.js';
 import { isEngineCommand } from '../../engine/common/engine.js';
 import type { BrowserWindow } from 'electron';
-import { app, ipcMain } from 'electron';
+import { isChannelRequest } from '../../engine/common/dataChannel.js';
+import { randomUUID } from 'node:crypto';
+import { app, ipcMain, MessageChannelMain } from 'electron';
 import type { AppInfo } from '../common/desktopApi.js';
 
 export function registerDesktopHandlers(
@@ -28,6 +30,40 @@ export function registerDesktopHandlers(
 		}
 		return window;
 	}
+	const owners = new Map<number, string>();
+	ipcMain.handle('engine:open-data-channel', (event, request: unknown) => {
+		const window = trusted(event);
+		if (!isChannelRequest(request)) {
+			throw new Error('Invalid data channel request');
+		}
+		let owner = owners.get(window.id);
+		if (!owner) {
+			owner = randomUUID(); owners.set(window.id, owner);
+			const channelOwner = owner;
+			const navigate = (_event: Electron.Event, _url: string, _inPlace: boolean, mainFrame: boolean): void => {
+				if (mainFrame) {
+					release();
+				}
+			};
+			const release = (): void => {
+				if (owners.get(window.id) === channelOwner) {
+					engine.closeChannels(channelOwner); owners.delete(window.id);
+				}
+				window.webContents.removeListener('destroyed', release);
+				window.webContents.removeListener('render-process-gone', release);
+				window.webContents.removeListener('did-start-navigation', navigate);
+			};
+			window.webContents.once('destroyed', release);
+			window.webContents.once('render-process-gone', release);
+			window.webContents.on('did-start-navigation', navigate);
+		}
+		const { port1, port2 } = new MessageChannelMain();
+		try {
+			engine.attachChannel(port1, request, owner); window.webContents.postMessage('engine:data-port', request.requestId, [port2]);
+		} catch (error) {
+			port1.close(); port2.close(); throw error;
+		}
+	});
 	ipcMain.handle('engine:command', async (event, command: unknown) => {
 		trusted(event);
 		if (!isEngineCommand(command)) {

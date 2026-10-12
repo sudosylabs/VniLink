@@ -53,7 +53,7 @@ async function verify(window: BrowserWindow): Promise<void> {
 		result.title !== 'Your computers' ||
 		!('api' in result) ||
 		JSON.stringify(result.api) !==
-		JSON.stringify(['decryptText', 'encryptText', 'engineCommand', 'getAppInfo', 'getKeyStorageProvider', 'isEncryptionAvailable', 'nativeHostCommand', 'onWindowStateChanged'])
+		JSON.stringify(['decryptText', 'encryptText', 'engineCommand', 'getAppInfo', 'getKeyStorageProvider', 'isEncryptionAvailable', 'nativeHostCommand', 'onWindowStateChanged', 'openDataChannel'])
 	) {
 		throw new Error(`Unexpected renderer state: ${JSON.stringify(result)}`);
 	}
@@ -65,6 +65,8 @@ async function verify(window: BrowserWindow): Promise<void> {
 	const tabTests = readFileSync(join(__dirname, 'tab-tests.js'), 'utf8');
 	const tabsVerified: unknown = await window.webContents.executeJavaScript(`${tabTests}\ntabTests.verifyTabs()`);
 	assert.equal(tabsVerified, true);
+	const dataChannelTests = readFileSync(join(__dirname, 'data-channel-tests.js'), 'utf8');
+	assert.equal(await window.webContents.executeJavaScript(`${dataChannelTests}\ndataChannelTests.verifyDataChannels()`), true);
 	const engine: unknown = await window.webContents.executeJavaScript(`(async () => {
     const snapshot = await window.vnilink.engineCommand({ type: 'snapshot' });
     const invitation = await window.vnilink.engineCommand({ type: 'createInvitation', ttlSeconds: 60 });

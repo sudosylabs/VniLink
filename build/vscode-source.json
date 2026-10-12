@@ -539,7 +539,7 @@
     {
       "path": "src/platform/window/common/window.ts",
       "upstreamPath": "src/vs/platform/window/common/window.ts",
-      "sha256": "a7568d46d35d20839a24a6db81d36c6ec6724d8ed7b6bbffb2d4cc59187231d8",
+      "sha256": "bb59de1bf41782bfb3c51afba1772a57882f4582a7b21bc34e0356bd74ac2239",
       "changedImports": 0,
       "adapted": true
     },
@@ -547,13 +547,13 @@
       "path": "src/platform/windows/electron-main/windowImpl.ts",
       "upstreamPath": "src/vs/platform/windows/electron-main/windowImpl.ts",
       "adapted": true,
-      "sha256": "efcdda43a4715801acb46b9df17c69f431df1f7e4505f6ea7eb5d6b932553f20"
+      "sha256": "e9220d515bcbdcc211c812726887b3584320e84f92c17bf94108c828be36cd58"
     },
     {
       "path": "src/platform/windows/electron-main/windows.ts",
       "upstreamPath": "src/vs/platform/windows/electron-main/windows.ts",
       "adapted": true,
-      "sha256": "b6240981d99c558355b4a75da53d30e8e1089b1a4864c344ebbb5a4cdc95389f"
+      "sha256": "b43b9cf526991323f60543a4c772669be53dfd0c11849c7a9d11bda309060376"
     },
     {
       "path": "src/typings/base-common.d.ts",
@@ -652,6 +652,11 @@
   "dependencyEdges": [
     {
       "from": "src/platform/windows/electron-main/windows.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/windows/electron-main/windows.ts",
       "to": "src/platform/window/common/window.ts",
       "kind": "import"
     },
@@ -688,6 +693,11 @@
     {
       "from": "src/platform/native/electron-main/nativeHostMainService.ts",
       "to": "src/platform/windows/electron-main/windowImpl.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/windows/electron-main/windowImpl.ts",
+      "to": "src/base/common/platform.ts",
       "kind": "import"
     },
     {

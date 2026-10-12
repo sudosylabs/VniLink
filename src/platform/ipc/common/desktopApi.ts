@@ -1,3 +1,4 @@
+import type { DataChannelRequest } from '../../engine/common/dataChannel.js';
 import type { NativeHostMethod, IWindowState } from '../../native/common/native.js';
 import type { EngineCommand, EngineReply } from '../../engine/common/engine.js';
 export interface AppInfo {
@@ -9,6 +10,7 @@ export interface AppInfo {
 }
 
 export interface DesktopApi {
+	openDataChannel(request: DataChannelRequest): Promise<void>;
 	getAppInfo(): Promise<AppInfo>;
 	nativeHostCommand(method: NativeHostMethod, args: unknown[]): Promise<unknown>;
 	onWindowStateChanged(listener: (state: IWindowState) => void): () => void;

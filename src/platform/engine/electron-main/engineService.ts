@@ -1,5 +1,6 @@
 import { utilityProcess } from 'electron';
-import type { UtilityProcess } from 'electron';
+import type { DataChannelRequest } from '../common/dataChannel.js';
+import type { MessagePortMain, UtilityProcess } from 'electron';
 import { join } from 'node:path';
 import type { EngineCommand, EngineReply } from '../common/engine.js';
 import { isEngineReply, record } from '../common/engine.js';
@@ -144,6 +145,15 @@ export class EngineService {
 				reject(new Error('Engine unavailable'));
 			}
 		});
+	}
+	public attachChannel(port: MessagePortMain, request: DataChannelRequest, owner: string): void {
+		if (!this.child || !this.available) {
+			port.close(); throw new Error('Engine unavailable');
+		}
+		this.child.postMessage({ type: 'attachDataChannel', request, owner }, [port]);
+	}
+	public closeChannels(owner: string): void {
+		this.child?.postMessage({ type: 'closeDataChannels', owner });
 	}
 	public async stop(): Promise<void> {
 		if (this.closing) {

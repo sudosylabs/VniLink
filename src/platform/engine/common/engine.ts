@@ -54,6 +54,7 @@ export interface ControlRequestInfo { endpoint_id: string; check: string; }
 export interface EngineSnapshot { endpoint_id: string; hosting: boolean; public_relay: boolean; relay_urls: string[]; devices: Device[]; capabilities: Capabilities; incoming: SessionInfo | null; outgoing: SessionInfo | null; }
 
 export type EngineCommand =
+	| { type: 'beginConnectServices'; endpointId: string }
 	| { type: 'snapshot' }
 	| { type: 'endpoint' | 'capabilities' | 'videoCodecs' | 'clipboardOwnerSession' | 'subscribeEvents' | 'subscribeVideo' }
 	| { type: 'setVideoCodecs'; codecs: VideoCodecCaps }
@@ -344,6 +345,7 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 	let keys: string[];
 	let valid = false;
 	switch (value.type) {
+		case 'beginConnectServices': keys = ['endpointId']; valid = text(value.endpointId); break;
 		case 'snapshot': keys = []; valid = true; break;
 		case 'endpoint': case 'capabilities': case 'videoCodecs': case 'clipboardOwnerSession':
 		case 'subscribeEvents': case 'subscribeVideo': keys = []; valid = true; break;

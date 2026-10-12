@@ -1,7 +1,10 @@
 //! Node-API control bridge. Input, session, and video-frame polling cross
 //! here as JSON; callers transfer frame bytes as base64. Poll stateful video
 //! subscriptions instead of holding pollers in JavaScript.
-//! All core calls run on libuv workers, outside the JavaScript event loop.
+//! Management calls run on libuv workers. The separate data module uses
+//! bounded, nonblocking native drains and input queues outside this mutex.
+mod data;
+
 use napi::{bindgen_prelude::AsyncTask, Env, Error, Result, Status, Task};
 use napi_derive::napi;
 use serde::{Deserialize, Serialize};
@@ -383,6 +386,10 @@ impl CredentialStore for NativeStore {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 enum Command {
+    BeginConnectServices {
+        #[serde(rename = "endpointId")]
+        endpoint_id: String,
+    },
     Snapshot,
     Endpoint,
     Capabilities,
@@ -766,7 +773,7 @@ enum Reply {
 // Video pollers stay here behind subscription ids because pollers cannot
 // cross the JSON bridge; callers poll and release them by id.
 struct State {
-    core: VnilinkCore,
+    core: Arc<VnilinkCore>,
     closed: bool,
     video: HashMap<u64, VideoPoller>,
     events: HashMap<u64, EventPoller>,
@@ -774,6 +781,7 @@ struct State {
 }
 #[napi]
 pub struct Engine {
+    core: Arc<VnilinkCore>,
     state: Arc<Mutex<State>>,
 }
 
@@ -792,7 +800,9 @@ impl Task for OpenTask {
         result.map_err(core_error)
     }
     fn resolve(&mut self, _: Env, core: Self::Output) -> Result<Engine> {
+        let core = Arc::new(core);
         Ok(Engine {
+            core: core.clone(),
             state: Arc::new(Mutex::new(State {
                 core,
                 closed: false,
@@ -1268,6 +1278,11 @@ impl EngineBridge {
     /// Commands that dial, list, and tear down sessions.
     fn sessions(core: &VnilinkCore, command: &Command) -> Result<Reply> {
         let reply: Reply = match command {
+            Command::BeginConnectServices { endpoint_id } => Reply::Session {
+                session: core
+                    .begin_connect_services(endpoint_id.clone())
+                    .map_err(core_error)?,
+            },
             Command::Connect { endpoint_id } => Reply::Session {
                 session: core.connect(endpoint_id.clone()).map_err(core_error)?,
             },
@@ -1576,7 +1591,8 @@ impl EngineBridge {
                 let core = &state.core;
                 Self::access(core, command)
             }
-            Command::Connect { .. }
+            Command::BeginConnectServices { .. }
+            | Command::Connect { .. }
             | Command::ConnectFiles { .. }
             | Command::BeginConnect { .. }
             | Command::BeginConnectFiles { .. }
@@ -1711,6 +1727,7 @@ impl CommandShape {
             | "clipboardOwnerSession"
             | "subscribeEvents"
             | "subscribeVideo" => &["type"],
+            "beginConnectServices" => &["type", "endpointId"],
             "setVideoCodecs" => &["type", "codecs"],
             "saveCustomRelays" => &["type", "relays"],
             "peerHostname" => &["type", "endpointId"],

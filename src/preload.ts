@@ -1,3 +1,4 @@
+import { isChannelRequest } from './platform/engine/common/dataChannel.js';
 import { isNativeHostRequest, isWindowState } from './platform/native/common/native.js';
 import { isEngineCommand, isEngineReply } from './platform/engine/common/engine.js';
 import { isEncryptionText } from './platform/encryption/common/encryption.js';
@@ -7,7 +8,27 @@ import type { DesktopApi } from './platform/ipc/common/desktopApi.js';
 if (!process.sandboxed || !process.contextIsolated) {
 	throw new Error('Renderer isolation required');
 }
+const channelRequests = new Set<string>();
+ipcRenderer.on('engine:data-port', (event, requestId: unknown) => {
+	if (typeof requestId !== 'string' || !channelRequests.delete(requestId)) {
+		for (const port of event.ports) {
+			port.close();
+		} return;
+	}
+	window.postMessage({ type: 'vnilink:data-port', requestId }, location.origin, event.ports);
+});
 const api: DesktopApi = {
+	openDataChannel: async request => {
+		if (!isChannelRequest(request) || channelRequests.size >= 8 || channelRequests.has(request.requestId)) {
+			throw new Error('Invalid data channel request');
+		}
+		channelRequests.add(request.requestId);
+		try {
+			await ipcRenderer.invoke('engine:open-data-channel', request);
+		} catch (error) {
+			channelRequests.delete(request.requestId); throw error;
+		}
+	},
 	engineCommand: async (command) => {
 		if (!isEngineCommand(command)) {
 			throw new Error('Invalid engine command');

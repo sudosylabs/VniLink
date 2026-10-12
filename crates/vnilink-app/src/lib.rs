@@ -130,6 +130,22 @@ impl VnilinkCore {
         })
     }
 
+    /// Temporary loopback-only fixture; never exposed through the desktop bridge.
+    #[cfg(feature = "test-support")]
+    pub fn create_loopback_for_test() -> Result<Self, FfiError> {
+        let core = Core::start(CoreConfig {
+            listen: Listen::Loopback,
+            ..CoreConfig::default()
+        })
+        .map_err(map_error)?;
+        Ok(Self {
+            inner: Arc::new(core),
+            previews: Mutex::new(HashMap::new()),
+            next_preview: AtomicU64::new(1),
+            audio_coordinator: Arc::new(audio_native::AudioCoordinator::default()),
+        })
+    }
+
     /// Opens the persistent installation using a native credential store.
 
     pub fn open_persistent(store: Box<dyn CredentialStore>) -> Result<Self, FfiError> {

@@ -213,7 +213,7 @@ export class StringSHA1 {
 			offset = 0;
 		}
 
-		for (;;) {
+		for (; ;) {
 			let codePoint = charCode;
 			if (strings.isHighSurrogate(charCode)) {
 				if (offset + 1 < strLen) {

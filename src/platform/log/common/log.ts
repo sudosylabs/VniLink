@@ -8,12 +8,12 @@ import { toErrorMessage } from '../../../base/common/errorMessage.js';
 import type { Event } from '../../../base/common/event.js';
 import { Emitter } from '../../../base/common/event.js';
 import { hash } from '../../../base/common/hash.js';
-import type { IDisposable} from '../../../base/common/lifecycle.js';
+import type { IDisposable } from '../../../base/common/lifecycle.js';
 import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { ResourceMap } from '../../../base/common/map.js';
 import { isWindows } from '../../../base/common/platform.js';
 import { joinPath } from '../../../base/common/resources.js';
-import type { Mutable} from '../../../base/common/types.js';
+import type { Mutable } from '../../../base/common/types.js';
 import { isNumber, isString } from '../../../base/common/types.js';
 import { URI } from '../../../base/common/uri.js';
 import type { ILocalizedString } from '../../../nls.js';
@@ -70,7 +70,7 @@ export function log(logger: ILogger, level: LogLevel, message: string): void {
 		case LogLevel.Warning: logger.warn(message); break;
 		case LogLevel.Error: logger.error(message); break;
 		case LogLevel.Off: /* do nothing */ break;
-		default: throw new Error(`Invalid log level ${level}`);
+		default: throw new Error(`Invalid log level ${String(level)}`);
 	}
 }
 
@@ -173,20 +173,20 @@ export function registerDevConsoleLogForwarder(logService: ILogService): IDispos
 
 	const wrappers: Record<ConsoleMethod, ConsoleMethodFn> = {
 		debug: (...args: unknown[]) => {
- forward('debug', LogLevel.Debug, args); 
-},
+			forward('debug', LogLevel.Debug, args);
+		},
 		error: (...args: unknown[]) => {
- forward('error', LogLevel.Error, args); 
-},
+			forward('error', LogLevel.Error, args);
+		},
 		info: (...args: unknown[]) => {
- forward('info', LogLevel.Info, args); 
-},
+			forward('info', LogLevel.Info, args);
+		},
 		log: (...args: unknown[]) => {
- forward('log', LogLevel.Info, args); 
-},
+			forward('log', LogLevel.Info, args);
+		},
 		warn: (...args: unknown[]) => {
- forward('warn', LogLevel.Warning, args); 
-}
+			forward('warn', LogLevel.Warning, args);
+		}
 	};
 
 	setConsoleMethod('debug', wrappers.debug);
@@ -214,7 +214,7 @@ export function registerDevConsoleLogForwarder(logService: ILogService): IDispos
 	});
 }
 
-export function format(args: any, verbose = false): string {
+export function format(args: readonly unknown[], verbose = false): string {
 	let result = '';
 
 	for (let i = 0; i < args.length; i++) {
@@ -227,10 +227,10 @@ export function format(args: any, verbose = false): string {
 		if (typeof a === 'object') {
 			try {
 				a = JSON.stringify(a);
-			} catch (e) { }
+			} catch { /* Circular values fall back to their string representation. */ }
 		}
 
-		result += (i > 0 ? ' ' : '') + a;
+		result += (i > 0 ? ' ' : '') + String(a);
 	}
 
 	return result;
@@ -399,8 +399,8 @@ export abstract class AbstractLogger extends Disposable implements ILogger {
 	private level: LogLevel = DEFAULT_LOG_LEVEL;
 	private readonly _onDidChangeLogLevel: Emitter<LogLevel> = this._register(new Emitter<LogLevel>());
 	public get onDidChangeLogLevel(): Event<LogLevel> {
- return this._onDidChangeLogLevel.event; 
-}
+		return this._onDidChangeLogLevel.event;
+	}
 
 	public setLevel(level: LogLevel): void {
 		if (this.level !== level) {
@@ -439,7 +439,7 @@ export abstract class AbstractMessageLogger extends AbstractLogger implements IL
 	}
 
 	protected override checkLogLevel(level: LogLevel): boolean {
-		return this.logAlways || super.checkLogLevel(level);
+		return this.logAlways === true || super.checkLogLevel(level);
 	}
 
 	public trace(message: string, ...args: unknown[]): void {
@@ -469,16 +469,14 @@ export abstract class AbstractMessageLogger extends AbstractLogger implements IL
 	public error(message: string | Error, ...args: unknown[]): void {
 		if (this.canLog(LogLevel.Error)) {
 			if (message instanceof Error) {
-				const array = Array.prototype.slice.call(arguments);
-				array[0] = message.stack;
-				this.log(LogLevel.Error, format(array));
+				this.log(LogLevel.Error, format([message.stack, ...args]));
 			} else {
 				this.log(LogLevel.Error, format([message, ...args]));
 			}
 		}
 	}
 
-	public flush(): void { }
+	public flush(): void { /* No buffered output. */ }
 
 	protected abstract log(level: LogLevel, message: string): void;
 }
@@ -615,7 +613,7 @@ export class ConsoleLogger extends AbstractLogger implements ILogger {
 
 export class AdapterLogger extends AbstractLogger implements ILogger {
 
-	constructor(private readonly adapter: { log: (logLevel: LogLevel, args: any[]) => void }, logLevel: LogLevel = DEFAULT_LOG_LEVEL) {
+	constructor(private readonly adapter: { log: (logLevel: LogLevel, args: unknown[]) => void }, logLevel: LogLevel = DEFAULT_LOG_LEVEL) {
 		super();
 		this.setLevel(logLevel);
 	}
@@ -769,9 +767,7 @@ export abstract class AbstractLoggerService extends Disposable implements ILogge
 		const id = isString(idOrResource) ? idOrResource : (options?.id ?? hash(resource.toString()).toString(16));
 		let logger = this._loggers.get(resource)?.logger;
 		const logLevel = options?.logLevel === 'always' ? LogLevel.Trace : options?.logLevel;
-		if (!logger) {
-			logger = this.doCreateLogger(resource, logLevel ?? this.getLogLevel(resource) ?? this.logLevel, { ...options, id });
-		}
+		logger ??= this.doCreateLogger(resource, logLevel ?? this.getLogLevel(resource), { ...options, id });
 		const loggerEntry: LoggerEntry = {
 			logger,
 			info: {
@@ -797,8 +793,11 @@ export abstract class AbstractLoggerService extends Disposable implements ILogge
 
 	public setLogLevel(logLevel: LogLevel): void;
 	public setLogLevel(resource: URI, logLevel: LogLevel): void;
-	public setLogLevel(arg1: any, arg2?: any): void {
+	public setLogLevel(arg1: URI | LogLevel, arg2?: LogLevel): void {
 		if (URI.isUri(arg1)) {
+			if (arg2 === undefined) {
+				throw new Error('Missing resource log level');
+			}
 			const resource = arg1;
 			const logLevel = arg2;
 			const logger = this._loggers.get(resource);
@@ -881,18 +880,25 @@ export abstract class AbstractLoggerService extends Disposable implements ILogge
 
 export class NullLogger implements ILogger {
 	public readonly onDidChangeLogLevel: Event<LogLevel> = new Emitter<LogLevel>().event;
-	public setLevel(level: LogLevel): void { }
+	public setLevel(level: LogLevel): void;
+	public setLevel(): void { /* Null logger ignores levels. */ }
 	public getLevel(): LogLevel {
- return LogLevel.Info; 
-}
-	public trace(message: string, ...args: unknown[]): void { }
-	public debug(message: string, ...args: unknown[]): void { }
-	public info(message: string, ...args: unknown[]): void { }
-	public warn(message: string, ...args: unknown[]): void { }
-	public error(message: string | Error, ...args: unknown[]): void { }
-	public critical(message: string | Error, ...args: unknown[]): void { }
-	public dispose(): void { }
-	public flush(): void { }
+		return LogLevel.Info;
+	}
+	public trace(message: string, ...args: unknown[]): void;
+	public trace(): void { /* Null logger discards output. */ }
+	public debug(message: string, ...args: unknown[]): void;
+	public debug(): void { /* Null logger discards output. */ }
+	public info(message: string, ...args: unknown[]): void;
+	public info(): void { /* Null logger discards output. */ }
+	public warn(message: string, ...args: unknown[]): void;
+	public warn(): void { /* Null logger discards output. */ }
+	public error(message: string | Error, ...args: unknown[]): void;
+	public error(): void { /* Null logger discards output. */ }
+	public critical(message: string | Error, ...args: unknown[]): void;
+	public critical(): void { /* Null logger discards output. */ }
+	public dispose(): void { /* No resources. */ }
+	public flush(): void { /* No buffered output. */ }
 }
 
 export class NullLogService extends NullLogger implements ILogService {
@@ -903,7 +909,7 @@ export class NullLoggerService extends AbstractLoggerService {
 	constructor() {
 		super(LogLevel.Off, URI.parse('log:///log'));
 	}
-	protected override doCreateLogger(resource: URI, logLevel: LogLevel, options?: ILoggerOptions): ILogger {
+	protected override doCreateLogger(): ILogger {
 		return new NullLogger();
 	}
 }

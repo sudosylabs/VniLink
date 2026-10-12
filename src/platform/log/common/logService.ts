@@ -5,7 +5,7 @@
 
 import { Disposable } from '../../../base/common/lifecycle.js';
 import type { Event } from '../../../base/common/event.js';
-import type { ILogger, ILogService, LogLevel} from './log.js';
+import type { ILogger, ILogService, LogLevel } from './log.js';
 import { MultiplexLogger } from './log.js';
 
 export class LogService extends Disposable implements ILogService {
@@ -18,8 +18,8 @@ export class LogService extends Disposable implements ILogService {
 		super();
 		this.logger = new MultiplexLogger([primaryLogger, ...otherLoggers]);
 		this._register(primaryLogger.onDidChangeLogLevel(level => {
- this.setLevel(level); 
-}));
+			this.setLevel(level);
+		}));
 	}
 
 	public get onDidChangeLogLevel(): Event<LogLevel> {

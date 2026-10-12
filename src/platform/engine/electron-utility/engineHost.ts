@@ -1,8 +1,11 @@
+import { isChannelRequest } from '../common/dataChannel.js';
+import { DataChannelHost } from './dataChannelHost.js';
+import type { NativeDataChannel } from './dataChannelHost.js';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { record } from '../common/engine.js';
 
-interface NativeEngine { execute(command: string): Promise<string>; }
+interface NativeEngine { execute(command: string): Promise<string>; openDataChannel(kind: string, sessionId: string, generation: string, rows: number, columns: number): Promise<NativeDataChannel>; }
 interface Addon { openEngine(): Promise<NativeEngine>; openTemporaryEngine(): Promise<NativeEngine>; }
 
 function isAddon(value: unknown): value is Addon {
@@ -11,9 +14,49 @@ function isAddon(value: unknown): value is Addon {
 
 export class EngineHost {
 	private engine: NativeEngine | undefined;
+	private readonly inputSessions = new Set<string>();
+	private readonly channels = new Map<string, Set<DataChannelHost>>();
 	constructor(private readonly port: Electron.ParentPort) { }
 	public listen(): void {
-		this.port.on('message', (event: { data: unknown }) => {
+		this.port.on('message', (event: { data: unknown; ports: Electron.MessagePortMain[] }) => {
+			if (record(event.data) && event.data.type === 'closeDataChannels' && typeof event.data.owner === 'string') {
+				for (const channel of this.channels.get(event.data.owner) ?? []) {
+					channel.close();
+				} this.channels.delete(event.data.owner); return;
+			}
+			if (record(event.data) && event.data.type === 'attachDataChannel') {
+				const request = event.data.request; const owner = event.data.owner; const port = event.ports[0];
+				if (!this.engine || typeof owner !== 'string' || !isChannelRequest(request)) {
+					for (const port of event.ports) {
+						port.close();
+					} return;
+				}
+				const channels = this.channels.get(owner) ?? new Set<DataChannelHost>();
+				if (channels.size >= 8) {
+					port.postMessage({ type: 'error' }); port.close(); return;
+				}
+				const inputKey = `${request.sessionId}:${request.generation}`;
+				if (request.kind === 'input' && this.inputSessions.has(inputKey)) {
+					port.postMessage({ type: 'error' }); port.close(); return;
+				}
+				if (request.kind === 'input') {
+					this.inputSessions.add(inputKey);
+				}
+				this.channels.set(owner, channels);
+				const channel = new DataChannelHost(port, request, () => {
+					channels.delete(channel);
+					if (request.kind === 'input') {
+						this.inputSessions.delete(inputKey);
+					} if (channels.size === 0) {
+						this.channels.delete(owner);
+					}
+				}); channels.add(channel);
+				void this.engine.openDataChannel(request.kind, request.sessionId, request.generation, request.rows ?? 24, request.columns ?? 80).then(native => {
+					channel.start(native);
+				}, () => {
+					channel.fail();
+				}); return;
+			}
 			this.onMessage(event.data);
 		});
 	}

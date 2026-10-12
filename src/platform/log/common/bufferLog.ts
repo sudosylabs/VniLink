@@ -4,7 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { MutableDisposable } from '../../../base/common/lifecycle.js';
-import { AbstractMessageLogger, DEFAULT_LOG_LEVEL, ILogger, log, LogLevel } from './log.js';
+import type { ILogger, LogLevel } from './log.js';
+import { AbstractMessageLogger, DEFAULT_LOG_LEVEL, log } from './log.js';
 
 interface ILog {
 	level: LogLevel;
@@ -13,7 +14,7 @@ interface ILog {
 
 export class BufferLogger extends AbstractMessageLogger {
 
-	declare readonly _serviceBrand: undefined;
+	declare public readonly _serviceBrand: undefined;
 	private buffer: ILog[] = [];
 	private _logger: ILogger | undefined = undefined;
 	private readonly _logLevelDisposable = this._register(new MutableDisposable());
@@ -23,10 +24,12 @@ export class BufferLogger extends AbstractMessageLogger {
 		this.setLevel(logLevel);
 	}
 
-	set logger(logger: ILogger) {
+	public set logger(logger: ILogger) {
 		this._logger = logger;
 		this.setLevel(logger.getLevel());
-		this._logLevelDisposable.value = logger.onDidChangeLogLevel(this.setLevel, this);
+		this._logLevelDisposable.value = logger.onDidChangeLogLevel(level => {
+			this.setLevel(level);
+		});
 
 		for (const { level, message } of this.buffer) {
 			log(logger, level, message);
@@ -43,12 +46,12 @@ export class BufferLogger extends AbstractMessageLogger {
 		}
 	}
 
-	override dispose(): void {
+	public override dispose(): void {
 		this._logger?.dispose();
 		super.dispose();
 	}
 
-	override flush(): void {
+	public override flush(): void {
 		this._logger?.flush();
 	}
 }
