@@ -9,8 +9,12 @@ tester.run('vnilink/layers', layersRule, {
 		{ filename: 'src/base/browser/ui/button.ts', code: "export const button = document.createElement('button');" },
 	],
 	invalid: [
+		{ filename: 'src/platform/engine/node/service.ts', code: "import '../electron-main/service.js';", errors: [{ messageId: 'boundary' }] },
+		{ filename: 'src/platform/ipc/common/types.ts', code: "type X = import('../../../preload.js').X;", errors: [{ messageId: 'boundary' }] },
+		{ filename: 'src/platform/engine/electron-utility/host.ts', code: "import '../electron-main/service.js';", errors: [{ messageId: 'boundary' }] },
+		{ filename: 'src/platform/ipc/common/types.ts', code: "import('../../../preload.js');", errors: [{ messageId: 'boundary' }] },
 		{ filename: 'src/workbench/browser/workbench.ts', code: "const fs = require('fs');", errors: [{ messageId: 'boundary' }] },
-		{ filename: 'src/platform/ipc/common/types.ts', code: "import '../../../renderer.ts';", errors: [{ messageId: 'boundary' }] },
+		{ filename: 'src/platform/ipc/common/types.ts', code: "import '../../../renderer.js';", errors: [{ messageId: 'boundary' }] },
 		{ filename: 'src/workbench/browser/workbench.ts', code: "import fs from 'node:fs';", errors: [{ messageId: 'boundary' }] },
 		{ filename: 'src/workbench/browser/workbench.ts', code: "export { app } from 'electron';", errors: [{ messageId: 'boundary' }] },
 		{ filename: 'src/workbench/browser/workbench.ts', code: "const x = import('../../platform/ipc/electron-main/handlers');", errors: [{ messageId: 'boundary' }] },

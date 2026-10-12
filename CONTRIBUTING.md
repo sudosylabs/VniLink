@@ -84,7 +84,11 @@ architecture checks, adapted to this smaller codebase. TypeScript/JavaScript use
 the TypeScript language-service formatter with `tsfmt.json`: tabs at width 4,
 spaces around operators and same-line opening braces. ESLint enforces single
 quotes, semicolons, braces, strict equality, explicit type imports and correct
-promise handling. JSON uses two spaces. CSS/HTML/JSON use Prettier, with CSS
+promise handling. Relative TypeScript imports always use the emitted `.js` suffix,
+including type imports and re-exports; stylesheet imports retain `.css`. NodeNext
+resolution checks these paths. The strict type-aware preset also checks unsafe
+assignments/assertions, unnecessary conditions, exhaustive switches and explicit
+member visibility. Production processes must use asynchronous filesystem APIs. JSON uses two spaces. CSS/HTML/JSON use Prettier, with CSS
 correctness checked by Stylelint. Rust continues to use `rustfmt`; generated,
 vendored and historical evidence files are outside the JavaScript formatter.
 
@@ -103,6 +107,15 @@ code cannot import browser implementation. Add a narrow preload operation instea
 of reaching across those boundaries. The rule covers imports, re-exports,
 dynamic imports and literal require calls. Layer tests include deliberately
 invalid dependencies; formatter tests check idempotence and literal preservation.
+
+`npm ci` installs the Husky pre-commit hook automatically. It runs lint-staged
+with its default backup and partial-staging safeguards: supported staged files
+are lint-fixed and formatted without staging unrelated edits. It then runs the
+full `npm run check`, Rust formatting checks and `npm test` (native bridge plus
+Electron smoke). Any failure blocks the commit. Fix errors and retry; the hook
+requires the same native build dependencies as the app. Rust files are checked
+but not automatically rewritten; use `cargo fmt --all` before committing.
+Ignored docs, vendor files and generated output stay outside formatting scope.
 
 Workspace editor settings recommend ESLint, Prettier and Stylelint integrations.
 They use the built-in TypeScript formatter and the project TypeScript SDK.

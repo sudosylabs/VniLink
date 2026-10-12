@@ -44,5 +44,7 @@
   "js/ts.format.placeOpenBraceOnNewLineForControlBlocks": false,
   "editor.codeActionsOnSave": {
     "source.fixAll.eslint": "explicit"
-  }
+  },
+  "typescript.preferences.importModuleSpecifierEnding": "js",
+  "javascript.preferences.importModuleSpecifierEnding": "js"
 }
