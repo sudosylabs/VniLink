@@ -1,12 +1,12 @@
+import { defaultBrowserWindowOptions } from '../../platform/windows/electron-main/windows.js';
 import { BrowserWindow } from 'electron';
 import { join } from 'node:path';
 export function createMainWindow(): BrowserWindow {
-	const window = new BrowserWindow({
-		title: 'VniLink', width: 1120, height: 760, minWidth: 760, minHeight: 520,
-		show: false, backgroundColor: '#f7f7f8', titleBarStyle: 'hidden', frame: process.platform === 'darwin',
-		...(process.platform === 'darwin' ? { trafficLightPosition: { x: 18, y: 18 } } : {}),
-		webPreferences: { preload: join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false },
-	});
+	const options = defaultBrowserWindowOptions();
+	const window = new BrowserWindow({ ...options, webPreferences: { ...options.webPreferences, preload: join(__dirname, 'preload.cjs') } });
+	if (process.platform !== 'darwin') {
+		window.removeMenu();
+	}
 	window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 	window.webContents.on('will-navigate', (event) => {
 		event.preventDefault();

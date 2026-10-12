@@ -3,6 +3,7 @@ import prettier from 'prettier';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { resolve, extname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isApplicationFile } from './sourceScope.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const settings = JSON.parse(await readFile(new URL('../tsfmt.json', import.meta.url), 'utf8'));
 export function formatTypeScript(filename, text) {
@@ -30,7 +31,7 @@ async function collect(directory) {
 		const path = resolve(directory, entry.name);
 		if (entry.isDirectory()) {
 			files.push(...await collect(path));
-		} else if (/\.(ts|mjs|css|html|json)$/.test(entry.name)) {
+		} else if (/\.(ts|mjs|css|html|json)$/.test(entry.name) && isApplicationFile(path)) {
 			files.push(path);
 		}
 	}

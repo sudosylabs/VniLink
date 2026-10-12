@@ -1,4 +1,6 @@
+import { upstreamIgnores } from './build/sourceScope.mjs';
 export default {
+	ignoreFiles: upstreamIgnores,
 	extends: ['stylelint-config-standard'],
 	rules: {
 		'property-no-unknown': [true, { ignoreProperties: ['app-region', '-webkit-app-region'] }],

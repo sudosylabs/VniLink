@@ -124,6 +124,56 @@ Dependencies are pinned. TypeScript 6.0.3 is used because the current
 outside its supported range without validating the lint tooling too. VS Code's
 extension-specific, localization and dependency-injection rules are not copied.
 
+## Interface icons
+
+Use `Icons` from `src/base/common/icons.ts` and `renderIcon` from
+`src/base/browser/ui/icon/icon.ts`. Components use product names, never provider
+names or file paths. `renderIcon(Icons.home, { variant: 'filled' })` selects a
+filled icon; the default is outlined. Buttons accept an options object, for
+example `button('Back', 'nav-item', { icon: Icons.back, onClick: goBack })`.
+
+Icons inherit text color and use `--icon-size` (16px by default). Decorative
+icons are hidden from assistive technology. Name icon-only buttons with an
+`aria-label` on the button; use the icon's `label` option only when the icon
+itself conveys information outside a labeled control.
+
+Add icon IDs to the shared registry and map both variants in `iconAssets.ts`.
+Only that provider may import Phosphor. The build bundles the selected SVGs
+from the pinned `@phosphor-icons/core` dependency, requires no network requests
+or icon font, and copies its MIT license to `out/licenses/phosphor-icons.txt`.
+The Electron smoke test verifies every registered variant, sizing, color
+inheritance, accessibility, independent DOM instances and button behavior.
+
+## Imported VS Code source
+
+The titlebar and native-window adapters follow Microsoft's VS Code release
+`1.141.0`, with `src/vs` flattened into `src`. The running shell registers
+services with `ServiceCollection`, `SyncDescriptor`, `registerSingleton` and
+`InstantiationService`, then mounts `NativeTitlebarPart`. Electron owns the
+native window controls; the renderer owns the empty draggable titlebar and its
+theme. Rust remains responsible for the application engine.
+
+The titlebar's editor, command-center, menu, toolbar and window-title code has
+been removed. Its dependency closure contains only the remaining adapters,
+service-container implementation and their required libraries and declarations.
+`build/vscode-source.json` records the release, original paths, dependency edges
+and hashes. Files marked `adapted` contain VniLink-specific changes and receive
+normal formatting, linting and staged fixes. Unchanged upstream files retain
+their source formatting. Preserve the Microsoft copyright headers,
+`LICENSE.vscode.txt` and `ThirdPartyNotices.vscode.txt` when redistributing them.
+
+`npm run check:upstream` verifies hashes and the complete dependency closure.
+When intentionally changing an adapted module, update its reviewed hash and
+regenerate dependency edges in the manifest. New application dependencies must
+be explicitly listed rather than silently excluded from the graph.
+
+Both TypeScript projects use legacy parameter decorators and compatible compiler
+settings. `src/tsconfig.json` checks every retained upstream and adapted module;
+the root configuration checks the application entry points and tests. CSS imports
+are declared in `src/assets.d.ts`. `npm run typecheck` checks both projects.
+The Electron smoke test exercises native controls, window-state IPC, theme
+updates, fullscreen layout and request validation on the current platform.
+
 ## Verify the change
 
 Run checks from the repository root. Start with the affected crate's tests,

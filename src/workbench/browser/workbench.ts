@@ -1,9 +1,11 @@
 import './styles/workbench.css';
 import type { AppInfo, DesktopApi } from '../../platform/ipc/common/desktopApi.js';
-import { createTitlebar } from './parts/titlebar/titlebar.js';
+import { createWorkbenchServices } from '../electron-browser/desktop.main.js';
+import { NativeTitlebarPart } from '../electron-browser/parts/titlebar/titlebarPart.js';
+import { ensureCodeWindow } from '../../base/browser/window.js';
 import { createSidebar } from './parts/sidebar/sidebar.js';
 import { createComputersPage } from './features/computers/computers.js';
-export function renderWorkbench(info: AppInfo, api: DesktopApi): void {
+export async function renderWorkbench(info: AppInfo, api: DesktopApi): Promise<void> {
 	document.documentElement.dataset.platform = info.platform;
 	const status = document.createElement('footer'); status.className = 'status'; status.setAttribute('role', 'status');
 	status.textContent = info.engineConnected ? `Engine ready · ${info.version}` : 'Engine unavailable — secure storage could not be opened';
@@ -14,7 +16,17 @@ export function renderWorkbench(info: AppInfo, api: DesktopApi): void {
 	const workspace = document.createElement('div'); workspace.className = 'workspace';
 	const page = createComputersPage(); page.append(status);
 	workspace.append(createSidebar(), page);
-	document.body.replaceChildren(createTitlebar(info, api, showError), workspace);
+	ensureCodeWindow(window, info.windowId);
+	const services = createWorkbenchServices(api, info);
+	const titlebar = services.createInstance(NativeTitlebarPart, info.osRelease, showError);
+	const header = document.createElement('header');
+	titlebar.create(header);
+	document.body.replaceChildren(header, workspace);
+	window.addEventListener('pagehide', () => {
+		titlebar.dispose(); services.dispose();
+	}, { once: true });
+	await titlebar.initialize();
+	document.documentElement.dataset.workbenchReady = 'true';
 	if (info.engineConnected) {
 		void api.engineCommand({ type: 'snapshot' }).then(reply => {
 			if (reply.type !== 'snapshot') {

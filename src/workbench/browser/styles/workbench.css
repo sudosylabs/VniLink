@@ -29,6 +29,9 @@ body {
 }
 
 button {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
 	font: inherit;
 	color: inherit;
 	border: 0;
@@ -40,71 +43,8 @@ button:focus-visible {
 	outline-offset: -2px;
 }
 
-.titlebar {
-	height: 52px;
-	display: flex;
-	align-items: end;
-	padding: 0 14px 0 92px;
-	background: var(--chrome);
-	border-bottom: 1px solid var(--line);
-	-webkit-app-region: drag;
-	user-select: none;
-}
-
-.tabs {
-	display: flex;
-	align-self: stretch;
-	align-items: end;
-	gap: 4px;
-	-webkit-app-region: no-drag;
-}
-
-.tab {
-	height: 36px;
-	min-width: 146px;
-	padding: 0 20px;
-	text-align: left;
-	background: var(--canvas);
-	border: 1px solid var(--line);
-	border-bottom: 0;
-	border-radius: 9px 9px 0 0;
-	font-weight: 500;
-}
-
-.window-controls {
-	margin-left: auto;
-	align-self: stretch;
-	display: flex;
-	-webkit-app-region: no-drag;
-}
-
-.window-controls[hidden] {
-	display: none;
-}
-
-.window-controls button {
-	width: 44px;
-	background: transparent;
-	font-size: 19px;
-}
-
-.window-controls button:hover {
-	background: var(--line);
-}
-
-.window-controls button:last-child:hover {
-	background: #cf3434;
-	color: #fff;
-}
-
-:root[data-platform='win32'] .titlebar,
-:root[data-platform='linux'] .titlebar {
-	padding-left: 14px;
-	padding-right: 0;
-}
-
 .workspace {
-	height: calc(100vh - 52px);
+	height: calc(100vh - var(--titlebar-height, 28px));
 	display: grid;
 	grid-template-columns: 218px minmax(0, 1fr);
 }
@@ -175,10 +115,9 @@ h1 {
 }
 
 .computer {
-	width: 56px;
-	height: 56px;
-	stroke: var(--muted);
-	stroke-width: 1.5;
+	--icon-size: 56px;
+
+	color: var(--muted);
 }
 
 h2 {

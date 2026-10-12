@@ -18,7 +18,9 @@ export const layersRule = {
 			const native = specifier === 'electron' || specifier.startsWith('electron/') || specifier.startsWith('node:') || builtins.has(specifier);
 			const target = specifier.startsWith('.') ? relative(process.cwd(), resolve(dirname(filename), specifier.replace(/\.js$/, '.ts'))).split(sep).join('/') : specifier;
 			let reason;
-			if ((browser || common) && native) {
+			if (specifier.startsWith('@phosphor-icons/') && source !== 'src/base/browser/ui/icon/iconAssets.ts') {
+				reason = 'Use product icons through the shared icon helper';
+			} else if ((browser || common) && native) {
 				reason = 'Browser/common code cannot import Node or Electron';
 			} else if ((browser || common) && (target.startsWith('src/app/') || target.includes('/electron-main/') || target.includes('/electron-utility/') || (target === 'src/preload' || target === 'src/preload.ts'))) {
 				reason = 'Browser/common code cannot import privileged implementation';

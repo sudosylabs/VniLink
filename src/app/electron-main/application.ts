@@ -1,3 +1,7 @@
+import { InstantiationService } from '../../platform/instantiation/common/instantiationService.js';
+import { ServiceCollection } from '../../platform/instantiation/common/serviceCollection.js';
+import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.js';
+import { INativeHostMainService, NativeHostMainService } from '../../platform/native/electron-main/nativeHostMainService.js';
 import { EngineService } from '../../platform/engine/electron-main/engineService.js';
 import { app, BrowserWindow, net, protocol, session } from 'electron';
 import { join } from 'node:path';
@@ -18,6 +22,16 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 	protocol.registerSchemesAsPrivileged([{ scheme: 'vnilink', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 	let window: BrowserWindow | null = null;
 	const engine = new EngineService();
+	const services = new InstantiationService(new ServiceCollection([INativeHostMainService, new SyncDescriptor(NativeHostMainService, [() => window])]), true);
+	const nativeHost = services.invokeFunction(accessor => accessor.get(INativeHostMainService));
+	nativeHost.onDidChangeWindowState(state => {
+		if (window && !window.isDestroyed() && state.windowId === window.id && window.webContents.mainFrame.url === applicationUrl) {
+			window.webContents.send('nativeHost:state', state);
+		}
+	});
+	app.on('will-quit', () => {
+		services.dispose();
+	});
 	app.on('second-instance', () => {
 		if (window?.isMinimized()) {
 			window.restore();
@@ -40,6 +54,7 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 	async function openWindow(): Promise<BrowserWindow> {
 		const current = createMainWindow();
 		window = current;
+		nativeHost.registerWindow(current);
 		current.on('closed', () => {
 			if (window === current) {
 				window = null;
@@ -77,7 +92,7 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 			callback(false);
 		});
 		session.defaultSession.setPermissionCheckHandler(() => false);
-		registerDesktopHandlers(() => window, applicationUrl, engine);
+		registerDesktopHandlers(() => window, applicationUrl, engine, nativeHost);
 		try {
 			await engine.start(options.temporaryEngine ?? false);
 		} catch {

@@ -4,11 +4,13 @@ import { layersRule } from '../../build/lint/layers.mjs';
 const tester = new RuleTester({ languageOptions: { parser: tseslint.parser } });
 tester.run('vnilink/layers', layersRule, {
 	valid: [
+		{ filename: 'src/base/browser/ui/icon/iconAssets.ts', code: "import svg from '@phosphor-icons/core/assets/regular/house.svg';" },
 		{ filename: 'src/workbench/browser/workbench.ts', code: "import type { DesktopApi } from '../../platform/ipc/common/desktopApi';" },
 		{ filename: 'src/app/electron-main/application.ts', code: "import { app } from 'electron';" },
 		{ filename: 'src/base/browser/ui/button.ts', code: "export const button = document.createElement('button');" },
 	],
 	invalid: [
+		{ filename: 'src/workbench/browser/workbench.ts', code: "import svg from '@phosphor-icons/core/assets/regular/house.svg';", errors: [{ messageId: 'boundary' }] },
 		{ filename: 'src/platform/engine/node/service.ts', code: "import '../electron-main/service.js';", errors: [{ messageId: 'boundary' }] },
 		{ filename: 'src/platform/ipc/common/types.ts', code: "type X = import('../../../preload.js').X;", errors: [{ messageId: 'boundary' }] },
 		{ filename: 'src/platform/engine/electron-utility/host.ts', code: "import '../electron-main/service.js';", errors: [{ messageId: 'boundary' }] },

@@ -1,0 +1,2479 @@
+{
+  "repository": "https://github.com/microsoft/vscode",
+  "ref": "1.141.0",
+  "commit": "2a59476c9bfcb90b3ddc372c36762471b7dfad1c",
+  "sourceModifications": "Import specifiers flattened into src; adapted modules retain window-control behavior and service registration, removing editor and unrelated application services. Each adapted file is marked.",
+  "runtimeIntegrated": true,
+  "files": [
+    {
+      "path": "src/base/common/arrays.ts",
+      "upstreamPath": "src/vs/base/common/arrays.ts",
+      "sha256": "e9a08190d445f28485a24c8b2701b5d91fda0702f3999f96d53f0cfebc032c0a",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/arraysFind.ts",
+      "upstreamPath": "src/vs/base/common/arraysFind.ts",
+      "sha256": "b170eb4ef83d61dabeb8aaa3355b006a95f575c6e5a9bba3176ac67f8b446a8b",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/assert.ts",
+      "upstreamPath": "src/vs/base/common/assert.ts",
+      "sha256": "16b9d0b4b5abe860fa90388d9db8202bc157efab7104acb5964e58dc25c020ad",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/async.ts",
+      "upstreamPath": "src/vs/base/common/async.ts",
+      "sha256": "264987516867959d71cc650421a7edd78d49ea2f170f94c74b28e7b2dbc98b84",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/buffer.ts",
+      "upstreamPath": "src/vs/base/common/buffer.ts",
+      "sha256": "5f374d79479cb42c15ea1c4bbf54f8fcf88a17541c8e2192a533aecb8698319c",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/cache.ts",
+      "upstreamPath": "src/vs/base/common/cache.ts",
+      "sha256": "42019b6f65cb6d0d10a74b8d74e5aa3e7099dc018044337ef826f8d76f925591",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/cancellation.ts",
+      "upstreamPath": "src/vs/base/common/cancellation.ts",
+      "sha256": "0ed0f0be5f9ac280fe1e45c0e81568825283d2c8dd17d2c2b03c21c1912a8c3b",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/charCode.ts",
+      "upstreamPath": "src/vs/base/common/charCode.ts",
+      "sha256": "ddb45e08c0f66a253a52ca5eaafc705687ceda45229ce5c9a1aa64d0fb34e510",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/collections.ts",
+      "upstreamPath": "src/vs/base/common/collections.ts",
+      "sha256": "643a53c117abaa383e2a3d047589d5b79a826c280df1974cdd64be4d8f7835a9",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/decorators.ts",
+      "upstreamPath": "src/vs/base/common/decorators.ts",
+      "sha256": "966ab56fac588cfc8248a1548958f26f98b55d9221c8c675992dbd77f5663da9",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/decorators/cancelPreviousCalls.ts",
+      "upstreamPath": "src/vs/base/common/decorators/cancelPreviousCalls.ts",
+      "sha256": "651e601166c89f65a3b0287a239faf97a75b4b28ef4c71378ae36f5aceca21ab",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/equals.ts",
+      "upstreamPath": "src/vs/base/common/equals.ts",
+      "sha256": "62a7350742a35570062837d8ef3df1889d4faf48dd66b614162e6418aa36414c",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/errors.ts",
+      "upstreamPath": "src/vs/base/common/errors.ts",
+      "sha256": "4771945225f0689ea9feef5fcf148dc493791edaf8693d5e11b057ce4a8d0b6e",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/event.ts",
+      "upstreamPath": "src/vs/base/common/event.ts",
+      "sha256": "90252004ebb0dcb55cf7a544c314a76d674c1a55dd2e0c4a74f395c8e7da87b2",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/extpath.ts",
+      "upstreamPath": "src/vs/base/common/extpath.ts",
+      "sha256": "0c8ee50b4d29423eb2d400850a6dc156fc9a6da0db0d4859e606c2bd38e1dbc3",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/functional.ts",
+      "upstreamPath": "src/vs/base/common/functional.ts",
+      "sha256": "976c27e04b82913ad0e068cce30d74212c2c86a86f866038156b6fd9dca27610",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/iterator.ts",
+      "upstreamPath": "src/vs/base/common/iterator.ts",
+      "sha256": "a787d959a2904785ea351dba98bffdcd37fcb367c0eb97f065277add1ce86aa6",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/lazy.ts",
+      "upstreamPath": "src/vs/base/common/lazy.ts",
+      "sha256": "c24572ac4d39148c814f914e69c9fc40a7ce66836ef9eda65f80ce47f2357893",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/lifecycle.ts",
+      "upstreamPath": "src/vs/base/common/lifecycle.ts",
+      "sha256": "3ce8457a9317bf4b5008a22ddd9fe43a6d68b3069d57f8ec7549d3188e80d424",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/linkedList.ts",
+      "upstreamPath": "src/vs/base/common/linkedList.ts",
+      "sha256": "fc6120f8be8fb3198daf3c214eedd777001a608a6721642ce7f7e888fd9c0df1",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/map.ts",
+      "upstreamPath": "src/vs/base/common/map.ts",
+      "sha256": "54d5814a5f86b4900ebb64ef9b9513d468b2b72a57bbf6ac4fa189dd457a9f0d",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/marshalling.ts",
+      "upstreamPath": "src/vs/base/common/marshalling.ts",
+      "sha256": "5f853ab37f0c9a4793ade19ec2c5a4232ca8aa3707be497b7fbda492d0b327d2",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/marshallingIds.ts",
+      "upstreamPath": "src/vs/base/common/marshallingIds.ts",
+      "sha256": "3048bf85eed631d42e32ef8684a64019bcc5befe9e7eb94de445fd4c66cb9acd",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/network.ts",
+      "upstreamPath": "src/vs/base/common/network.ts",
+      "sha256": "bc7ceb5ac95baa7d0d222861244cacaf4617dfc73d8fa5ce5e7c33242eafee51",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observable.ts",
+      "upstreamPath": "src/vs/base/common/observable.ts",
+      "sha256": "2789ae708aa659732c5f7aa2ff2d6d6ca36e913ad07d321cb16525a9418fc6ec",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/base.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/base.ts",
+      "sha256": "2b33a3a37115c2baa7260e95c48b1575b06404d94f8b8a410f457deea0e2e7af",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/changeTracker.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/changeTracker.ts",
+      "sha256": "c84d7cdaba852e9cdc1da2ea7e397b7fd38b13239b1dcb41ffdfddef0372f3ec",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/commonFacade/cancellation.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/commonFacade/cancellation.ts",
+      "sha256": "953efad5e35be59e9bde653a3321203acddd426985501bd228298d0dd3747aad",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/commonFacade/deps.ts",
+      "sha256": "8676718612b9c9ecccd0b701c4afdecc56a290785821621df31a504d06deaa1d",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/debugLocation.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/debugLocation.ts",
+      "sha256": "9997049ec028cb4b16823b047e687e0a036a926909afa31b05a0a62a46f921da",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/debugName.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/debugName.ts",
+      "sha256": "c189ccb5af926454e6544da951f62c86a2ebd323b72d7012ac4644696487ff63",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/experimental/utils.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/experimental/utils.ts",
+      "sha256": "8ab49ef66bac79bc9d95f855eda8a789f7c4de2d35fc3618e2fcc9bcc12fadf7",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/index.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/index.ts",
+      "sha256": "8390e720a73bfe7e4273d95138ac78235b9a34a306433ae5fda7a05a2912f959",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/logging/consoleObservableLogger.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/logging/consoleObservableLogger.ts",
+      "sha256": "c28481bcc671bacc76c317578645fb7f597726b5e05d6331d1e4a659ef6789ae",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/logging/debugger/debuggerApi.d.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/logging/debugger/debuggerApi.d.ts",
+      "sha256": "2e08910eaf64d463874ffc58c08c4ec713c9d7ae63571fc92026c690a857399e",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/logging/debugger/debuggerRpc.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/logging/debugger/debuggerRpc.ts",
+      "sha256": "3a2b1bb3a1109c2049cf75eb40a4b3b3840fb25a2b26cff199cbff29496afe52",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "sha256": "e98831cfdaf1b138aa7a90b39976070a2ce0955f8f87afb1e784044999d52d05",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/logging/debugger/rpc.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/logging/debugger/rpc.ts",
+      "sha256": "ee59fcd74e6a13e70d7e91318cbd5dcd77f362396bda6a1fc2ea0b6e8e1ebe90",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/logging/debugger/utils.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/logging/debugger/utils.ts",
+      "sha256": "dcd6d1fca50c3239144d45a5d053e1293769a98a6ed44da7e09d84088c922cb3",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/logging/debugGetDependencyGraph.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/logging/debugGetDependencyGraph.ts",
+      "sha256": "38569729ed77f3f9cab9fafa1b3ebce7997c6ce48f32394b06cfb02563309f6d",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/logging/logging.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/logging/logging.ts",
+      "sha256": "145ed349d1b498418d17a71baeb44d07740fa0f2512060ff1c4b81b599d8efc7",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/map.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/map.ts",
+      "sha256": "fbfc7c6a54414bbdbf9f85755006d1c0fb6e8260b99e0e1c66514759bd2689fd",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/observables/baseObservable.ts",
+      "sha256": "52abe21ddc6a3cdc117a83d1b581fefa23d901365f51a676add325c1947e0d25",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/observables/constObservable.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/observables/constObservable.ts",
+      "sha256": "1418d6cb4b9227b7062a36ff454b2595d090ded5d9c6f59497c2bff4c7803586",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/observables/derived.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/observables/derived.ts",
+      "sha256": "526d7f71676220361b2072879f97efdaa5dc834f73815d6008beeccdbbea7d61",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/observables/derivedImpl.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/observables/derivedImpl.ts",
+      "sha256": "35042039fe1675d6b3f61f65beecd5fb803249ef16eb6b9e9f05e29af0d8123f",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/observables/lazyObservableValue.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/observables/lazyObservableValue.ts",
+      "sha256": "24e3acca8dbf3be09ad943fe98bdd837219f380bd2579f6b2cf61d4b59c07ffd",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/observables/observableFromEvent.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/observables/observableFromEvent.ts",
+      "sha256": "15788b83574263c136a22866ca970602c67eaaa9dbb738cceafd3244074ee907",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/observables/observableSignal.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/observables/observableSignal.ts",
+      "sha256": "e5a506e8f6eb95806b028bf88404574f70a71e9b4981cdf83c1bf1dde33bccb4",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/observables/observableSignalFromEvent.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/observables/observableSignalFromEvent.ts",
+      "sha256": "038a0c075663a4df41a0afe6574506f4ac1d2a4ac79614174f6a3c4411233cf8",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/observables/observableValue.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/observables/observableValue.ts",
+      "sha256": "7fc6638016f296c6de3b60f401c70c89baa4d15da2558c1f75c3901f195c80f9",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/observables/observableValueOpts.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/observables/observableValueOpts.ts",
+      "sha256": "5c6663467cebd5b6dee1b5e8d1b6897d6ec6b24ed8c17436285f9877d338e47a",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/reactions/autorun.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/reactions/autorun.ts",
+      "sha256": "7c6687191a86b7bd806d555e9154a58f35078872bf58a7246884509aa39be340",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/reactions/autorunImpl.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/reactions/autorunImpl.ts",
+      "sha256": "fee3dd32f467a8af34e8d44cd6513718efd47e4de651c01059840b0624e5eee5",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/set.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/set.ts",
+      "sha256": "0629f0810a0f7cb3423afb25a144488017e9a0b7f5b1d4b35f0c20507853635e",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/transaction.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/transaction.ts",
+      "sha256": "329d852ced6fbe47c88f2d12c78b5c2f2fd8b369af519425052b196c7cf61010",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/utils/promise.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/utils/promise.ts",
+      "sha256": "2b3d043ad4bb02a4020186a302cac62b6e51aee02701ca0215980798ef8d9369",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/utils/runOnChange.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/utils/runOnChange.ts",
+      "sha256": "452e367a8a604698f397f149cbf4796f16027211ac4d9cd08789c6cbb09e1d20",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/utils/utils.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/utils/utils.ts",
+      "sha256": "e32165425e1650fed409ef9b2adda9f836c46ec3157ce4520a5247bfcadd1fb5",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/utils/utilsCancellation.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/utils/utilsCancellation.ts",
+      "sha256": "a9818704b05c2aaec992ff222926c3e9a4ed32325b4284ad824598a697dcadb2",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/observableInternal/utils/valueWithChangeEvent.ts",
+      "upstreamPath": "src/vs/base/common/observableInternal/utils/valueWithChangeEvent.ts",
+      "sha256": "754910861dbaa88fe0ea553e652049ce55ce1193a359b6bdd68903544cbd550e",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/path.ts",
+      "upstreamPath": "src/vs/base/common/path.ts",
+      "sha256": "3ee9852efa3c404fbb5b8015b9633f5b17b38b9ed619cfbbc38a89d2169dbacf",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/platform.ts",
+      "upstreamPath": "src/vs/base/common/platform.ts",
+      "sha256": "c6e8f86c52ca1b521ec5a3a852791e621a632b96e63325fc2892eea281f90d98",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/process.ts",
+      "upstreamPath": "src/vs/base/common/process.ts",
+      "sha256": "c72b499f137a9f52134cd816db076f02712b7ee279f2957b53740639f80d9083",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/resources.ts",
+      "upstreamPath": "src/vs/base/common/resources.ts",
+      "sha256": "d9035c23736ebee9d42878496d6f682c8993cdadab01ae3ffa4046c0ea39c01b",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/sequence.ts",
+      "upstreamPath": "src/vs/base/common/sequence.ts",
+      "sha256": "9f7a0e0ec46e0665af3a2927b99d4b34231b0026dc2124cf72f0356456347326",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/stopwatch.ts",
+      "upstreamPath": "src/vs/base/common/stopwatch.ts",
+      "sha256": "e56bb28c1a532616d5e85ff3576d2cfaa57d0a42f8382999e6e13859869bfae8",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/stream.ts",
+      "upstreamPath": "src/vs/base/common/stream.ts",
+      "sha256": "85d62100a2eea468dc23b35ea16439f2a383b618878a24b1352e302fb15773e9",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/strings.ts",
+      "upstreamPath": "src/vs/base/common/strings.ts",
+      "sha256": "41a86465c9bb64edc600a7950596c73aa71fd901568f3075b69e6865753587ab",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/symbols.ts",
+      "upstreamPath": "src/vs/base/common/symbols.ts",
+      "sha256": "bf83fa91c9eac09fd8f8da74111f12784978ff154d00c48f11c8bcce04f348d2",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/types.ts",
+      "upstreamPath": "src/vs/base/common/types.ts",
+      "sha256": "0a17b8d00093ff63b8387508fcacfe82dfb1838ddcc44bd8315eabfd48c32076",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/uint.ts",
+      "upstreamPath": "src/vs/base/common/uint.ts",
+      "sha256": "0b1102ade974b21bd46bd789027c2dd7959366202e9b87287b13be0a8cf3b05a",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/uri.ts",
+      "upstreamPath": "src/vs/base/common/uri.ts",
+      "sha256": "65bc6eefd07704297435d71a9da87dec1ca9103c0575bf29ce00f291a24114c9",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/parts/ipc/common/ipc.ts",
+      "upstreamPath": "src/vs/base/parts/ipc/common/ipc.ts",
+      "sha256": "300fc458ad994f887fce88757ff5352fd93acc0b0bdc265312c0b3aac75d864b",
+      "changedImports": 0
+    },
+    {
+      "path": "src/nls.ts",
+      "upstreamPath": "src/vs/nls.ts",
+      "sha256": "48840e7c0453b4998e3b2e1eb881f42ca78fb54e807589f1e0fe218a03de5616",
+      "changedImports": 0
+    },
+    {
+      "path": "src/platform/instantiation/common/descriptors.ts",
+      "upstreamPath": "src/vs/platform/instantiation/common/descriptors.ts",
+      "sha256": "3822bb2986b64bbf1eb4f644eaf5a83056a7537b9d0450bea83a552dd8c48975",
+      "changedImports": 0
+    },
+    {
+      "path": "src/platform/instantiation/common/extensions.ts",
+      "upstreamPath": "src/vs/platform/instantiation/common/extensions.ts",
+      "sha256": "40de914f6ca92f36c0dde943616e0b573c9a5e6f6df29213d7ec7348a388cf5d",
+      "changedImports": 0
+    },
+    {
+      "path": "src/platform/instantiation/common/graph.ts",
+      "upstreamPath": "src/vs/platform/instantiation/common/graph.ts",
+      "sha256": "b8ae77bb498c985066239a4c819882530a933768ae0e4bb399bc43de78f71f42",
+      "changedImports": 0
+    },
+    {
+      "path": "src/platform/instantiation/common/instantiation.ts",
+      "upstreamPath": "src/vs/platform/instantiation/common/instantiation.ts",
+      "sha256": "87247ec79a014320fd3d3d7a4a763308b94219c95a9cf58b53c3e3a1e3aa89a6",
+      "changedImports": 0
+    },
+    {
+      "path": "src/platform/instantiation/common/instantiationService.ts",
+      "upstreamPath": "src/vs/platform/instantiation/common/instantiationService.ts",
+      "sha256": "c28e1155e8fe44d81603e2779c2a474e01e234665621658f4da1a79f39aa5d71",
+      "changedImports": 0
+    },
+    {
+      "path": "src/platform/instantiation/common/serviceCollection.ts",
+      "upstreamPath": "src/vs/platform/instantiation/common/serviceCollection.ts",
+      "sha256": "be9a3d6b1d53412f259aa39e23eada52fcf81af45d5d2113686965251e21d38f",
+      "changedImports": 0
+    },
+    {
+      "path": "src/platform/ipc/common/mainProcessService.ts",
+      "upstreamPath": "src/vs/platform/ipc/common/mainProcessService.ts",
+      "adapted": true,
+      "sha256": "2e1ab6199be2796a9df329c36bd210f5025c7df17b972620cc30e29e50bc7f3c"
+    },
+    {
+      "path": "src/platform/ipc/electron-browser/mainProcessService.ts",
+      "upstreamPath": "src/vs/platform/ipc/electron-browser/mainProcessService.ts",
+      "adapted": true,
+      "sha256": "09901fcea861345d2a78633e3173200010787cff0d17e5fa9ce14875464ed02c"
+    },
+    {
+      "path": "src/platform/native/common/native.ts",
+      "upstreamPath": "src/vs/platform/native/common/native.ts",
+      "sha256": "3916682b03113e174dc147720a6f915ac5cbc8da38b10abad87d7441c2fd23da",
+      "changedImports": 0,
+      "adapted": true
+    },
+    {
+      "path": "src/platform/native/common/nativeHostService.ts",
+      "upstreamPath": "src/vs/platform/native/common/nativeHostService.ts",
+      "adapted": true,
+      "sha256": "3ab246f2a93a65238c242cec060518266ae7be93026cec31071ff31dd22b5c6f"
+    },
+    {
+      "path": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "upstreamPath": "src/vs/platform/native/electron-main/nativeHostMainService.ts",
+      "adapted": true,
+      "sha256": "fa365d8de7b149712ec732cc22e55ee2a06f4d539fc424f17eb0be6383c34f61"
+    },
+    {
+      "path": "src/platform/theme/browser/themeService.ts",
+      "upstreamPath": "src/vs/workbench/services/themes/browser/workbenchThemeService.ts",
+      "adapted": true,
+      "sha256": "e0a98cffbf42bb32f3b677b258f9cb112dcc9e741e2fe585210b3caa2a12038a",
+      "adaptation": "New system-theme adapter using the upstream theme-service registration pattern."
+    },
+    {
+      "path": "src/platform/theme/common/themeService.ts",
+      "upstreamPath": "src/vs/platform/theme/common/themeService.ts",
+      "sha256": "362c87ea690454b86faaf9225b544ce9fd831b6f2992d8e8e780d243a5bf1006",
+      "changedImports": 0,
+      "adapted": true
+    },
+    {
+      "path": "src/platform/window/common/window.ts",
+      "upstreamPath": "src/vs/platform/window/common/window.ts",
+      "sha256": "105566bb3ba944b9ca032670532d5fa83580b5602543ce9750c751366d421141",
+      "changedImports": 0,
+      "adapted": true
+    },
+    {
+      "path": "src/platform/windows/electron-main/windowImpl.ts",
+      "upstreamPath": "src/vs/platform/windows/electron-main/windowImpl.ts",
+      "adapted": true,
+      "sha256": "cc2193de4ee7c02b009ce30d0bcdc6a423dff375824c3861d5bb5391dae8152b"
+    },
+    {
+      "path": "src/platform/windows/electron-main/windows.ts",
+      "upstreamPath": "src/vs/platform/windows/electron-main/windows.ts",
+      "adapted": true,
+      "sha256": "c0cb4951caf72c90504870da1562bf3a667c9fecb0d908e89b9068c763ef2d38"
+    },
+    {
+      "path": "src/typings/base-common.d.ts",
+      "upstreamPath": "src/typings/base-common.d.ts",
+      "sha256": "42df13345002aa1175da2b03d283690b027ee1ea0804126a831666f916e819f9",
+      "changedImports": 0,
+      "adapted": true
+    },
+    {
+      "path": "src/typings/thenable.d.ts",
+      "upstreamPath": "src/typings/thenable.d.ts",
+      "sha256": "6c46bfeba3e7a0183f0d4e979a4d036ba75ed53250d396d1475aea6944e6e2db",
+      "changedImports": 0
+    },
+    {
+      "path": "src/typings/vscode-globals-nls.d.ts",
+      "upstreamPath": "src/typings/vscode-globals-nls.d.ts",
+      "sha256": "f66baed0a13192b8f4996bf642b8658651dc22653a8c3a4d95b2452baf7680bc",
+      "changedImports": 0
+    },
+    {
+      "path": "src/typings/vscode-globals-product.d.ts",
+      "upstreamPath": "src/typings/vscode-globals-product.d.ts",
+      "sha256": "f9d9755bc978c0c1964d378a80fa59495fef85307c6d83d2ad5a51a2a8c3f17c",
+      "changedImports": 0
+    },
+    {
+      "path": "src/workbench/browser/parts/titlebar/media/titlebarpart.css",
+      "upstreamPath": "src/vs/workbench/browser/parts/titlebar/media/titlebarpart.css",
+      "sha256": "854a5d8c551d2258fa25430ede51a4fc88b93f3342e800b78bb28f6a4ae89656",
+      "changedImports": 0,
+      "adapted": true
+    },
+    {
+      "path": "src/workbench/browser/parts/titlebar/titlebarPart.ts",
+      "upstreamPath": "src/vs/workbench/browser/parts/titlebar/titlebarPart.ts",
+      "sha256": "c7eeee243fa89aa9cdea38633a851e516dda6fec71ee7283002bee902c05d424",
+      "changedImports": 0,
+      "adapted": true
+    },
+    {
+      "path": "src/workbench/electron-browser/desktop.main.ts",
+      "upstreamPath": "src/vs/workbench/electron-browser/desktop.main.ts",
+      "adapted": true,
+      "sha256": "64e1f04d8e7a63fec619c8d7d1725765cc8d7ee60aa2e2c0b5dc5cc0935686ce"
+    },
+    {
+      "path": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
+      "upstreamPath": "src/vs/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
+      "sha256": "f876c48182e2345a3c5e13f7fa613551ac005f4ab780688a411e3f2f03dfc0ee",
+      "changedImports": 0,
+      "adapted": true
+    },
+    {
+      "path": "src/workbench/services/host/browser/host.ts",
+      "upstreamPath": "src/vs/workbench/services/host/browser/host.ts",
+      "sha256": "b85c3e37ff71e97e8c61f5cf2ae5d8b0ee024a35a21baed06a2f580acce0325f",
+      "changedImports": 0,
+      "adapted": true
+    },
+    {
+      "path": "src/workbench/services/host/electron-browser/nativeHostService.ts",
+      "upstreamPath": "src/vs/workbench/services/host/electron-browser/nativeHostService.ts",
+      "adapted": true,
+      "sha256": "6d3207d88987cd1e8903b4e3b83a4f1cfa04b6ac9d6043ab809e548d552ef287"
+    },
+    {
+      "path": "src/base/browser/window.ts",
+      "upstreamPath": "src/vs/base/browser/window.ts",
+      "sha256": "8003fc60f1f022d1ae4abfa8773385399ab5a7413dccbffb825f1c0c8bdef13b",
+      "changedImports": 0
+    }
+  ],
+  "scope": "Native window controls, titlebar presentation, DI registration and their recursive dependencies",
+  "roots": [
+    "src/base/browser/window.ts",
+    "src/platform/native/electron-main/nativeHostMainService.ts",
+    "src/platform/windows/electron-main/windows.ts",
+    "src/typings/base-common.d.ts",
+    "src/typings/thenable.d.ts",
+    "src/typings/vscode-globals-nls.d.ts",
+    "src/typings/vscode-globals-product.d.ts",
+    "src/workbench/electron-browser/desktop.main.ts",
+    "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts"
+  ],
+  "externalDependencies": [
+    "electron",
+    "node:os"
+  ],
+  "dependencyEdges": [
+    {
+      "from": "src/platform/windows/electron-main/windows.ts",
+      "to": "src/platform/window/common/window.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/window/common/window.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/platform.ts",
+      "to": "src/nls.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/platform/native/common/native.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/platform/windows/electron-main/windowImpl.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/windows/electron-main/windowImpl.ts",
+      "to": "src/platform/window/common/window.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/windows/electron-main/windowImpl.ts",
+      "to": "src/platform/native/common/native.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/common/native.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/common/native.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiation.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiation.ts",
+      "to": "src/platform/instantiation/common/descriptors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiation.ts",
+      "to": "src/platform/instantiation/common/serviceCollection.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/serviceCollection.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/serviceCollection.ts",
+      "to": "src/platform/instantiation/common/descriptors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/lifecycle.ts",
+      "to": "src/base/common/arrays.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/lifecycle.ts",
+      "to": "src/base/common/collections.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/lifecycle.ts",
+      "to": "src/base/common/map.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/lifecycle.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/lifecycle.ts",
+      "to": "src/base/common/functional.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/lifecycle.ts",
+      "to": "src/base/common/iterator.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/lifecycle.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/iterator.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/types.ts",
+      "to": "src/base/common/assert.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/assert.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/uri.ts",
+      "to": "src/base/common/charCode.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/uri.ts",
+      "to": "src/base/common/marshallingIds.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/uri.ts",
+      "to": "src/base/common/path.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/uri.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/path.ts",
+      "to": "src/base/common/process.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/process.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/map.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/arrays.ts",
+      "to": "src/base/common/arraysFind.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/arrays.ts",
+      "to": "src/base/common/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/arrays.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/arrays.ts",
+      "to": "src/base/common/sequence.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/sequence.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/event.ts",
+      "to": "src/base/common/async.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/event.ts",
+      "to": "src/base/common/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/event.ts",
+      "to": "src/base/common/collections.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/event.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/event.ts",
+      "to": "src/base/common/functional.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/event.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/event.ts",
+      "to": "src/base/common/linkedList.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/event.ts",
+      "to": "src/base/common/observable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/event.ts",
+      "to": "src/base/common/process.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/event.ts",
+      "to": "src/base/common/stopwatch.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/event.ts",
+      "to": "src/base/common/symbols.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observable.ts",
+      "to": "src/base/common/observableInternal/index.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/observables/observableValueOpts.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/reactions/autorun.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/observables/observableValue.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/observables/derived.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/observables/derivedImpl.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/utils/promise.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/utils/utilsCancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/utils/utils.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/changeTracker.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/observables/constObservable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/observables/observableSignal.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/observables/observableFromEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/observables/observableSignalFromEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/transaction.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/utils/valueWithChangeEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/utils/runOnChange.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/experimental/utils.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/observables/observableFromEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/observables/observableValue.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/set.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/map.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/debugLocation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/logging/logging.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/logging/consoleObservableLogger.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/process.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/index.ts",
+      "to": "src/base/common/observableInternal/logging/debugGetDependencyGraph.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugGetDependencyGraph.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugGetDependencyGraph.ts",
+      "to": "src/base/common/observableInternal/observables/derivedImpl.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugGetDependencyGraph.ts",
+      "to": "src/base/common/observableInternal/observables/observableFromEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugGetDependencyGraph.ts",
+      "to": "src/base/common/observableInternal/observables/observableValue.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugGetDependencyGraph.ts",
+      "to": "src/base/common/observableInternal/reactions/autorunImpl.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugGetDependencyGraph.ts",
+      "to": "src/base/common/observableInternal/logging/consoleObservableLogger.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/consoleObservableLogger.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/consoleObservableLogger.ts",
+      "to": "src/base/common/observableInternal/transaction.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/consoleObservableLogger.ts",
+      "to": "src/base/common/observableInternal/logging/logging.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/consoleObservableLogger.ts",
+      "to": "src/base/common/observableInternal/observables/observableFromEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/consoleObservableLogger.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/consoleObservableLogger.ts",
+      "to": "src/base/common/observableInternal/observables/derivedImpl.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/consoleObservableLogger.ts",
+      "to": "src/base/common/observableInternal/reactions/autorunImpl.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/reactions/autorunImpl.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/reactions/autorunImpl.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/reactions/autorunImpl.ts",
+      "to": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/reactions/autorunImpl.ts",
+      "to": "src/base/common/observableInternal/logging/logging.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/reactions/autorunImpl.ts",
+      "to": "src/base/common/observableInternal/changeTracker.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/reactions/autorunImpl.ts",
+      "to": "src/base/common/observableInternal/debugLocation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/changeTracker.ts",
+      "to": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/changeTracker.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/base.ts",
+      "to": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "to": "src/base/common/assert.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "to": "src/base/common/equals.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/equals.ts",
+      "to": "src/base/common/arrays.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/logging.ts",
+      "to": "src/base/common/observableInternal/reactions/autorunImpl.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/logging.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/logging.ts",
+      "to": "src/base/common/observableInternal/transaction.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/logging.ts",
+      "to": "src/base/common/observableInternal/observables/derivedImpl.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/logging.ts",
+      "to": "src/base/common/observableInternal/debugLocation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/derivedImpl.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/derivedImpl.ts",
+      "to": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/derivedImpl.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/derivedImpl.ts",
+      "to": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/derivedImpl.ts",
+      "to": "src/base/common/observableInternal/logging/logging.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/derivedImpl.ts",
+      "to": "src/base/common/observableInternal/changeTracker.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/derivedImpl.ts",
+      "to": "src/base/common/observableInternal/debugLocation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "to": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "to": "src/base/common/observableInternal/debugLocation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "to": "src/base/common/observableInternal/logging/debugGetDependencyGraph.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "to": "src/base/common/observableInternal/logging/logging.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "to": "src/base/common/observableInternal/utils/utils.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "to": "src/base/common/observableInternal/observables/derived.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/derived.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/derived.ts",
+      "to": "src/base/common/observableInternal/changeTracker.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/derived.ts",
+      "to": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/derived.ts",
+      "to": "src/base/common/observableInternal/debugLocation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/derived.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/derived.ts",
+      "to": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/derived.ts",
+      "to": "src/base/common/observableInternal/observables/derivedImpl.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/utils.ts",
+      "to": "src/base/common/observableInternal/reactions/autorun.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/utils.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/utils.ts",
+      "to": "src/base/common/observableInternal/observables/observableValue.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/utils.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/utils.ts",
+      "to": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/utils.ts",
+      "to": "src/base/common/observableInternal/observables/derived.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/utils.ts",
+      "to": "src/base/common/observableInternal/observables/observableFromEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/utils.ts",
+      "to": "src/base/common/observableInternal/observables/observableSignal.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/utils.ts",
+      "to": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/utils.ts",
+      "to": "src/base/common/observableInternal/debugLocation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableSignal.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableSignal.ts",
+      "to": "src/base/common/observableInternal/transaction.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableSignal.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableSignal.ts",
+      "to": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableSignal.ts",
+      "to": "src/base/common/observableInternal/debugLocation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/transaction.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/transaction.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/transaction.ts",
+      "to": "src/base/common/observableInternal/logging/logging.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableFromEvent.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableFromEvent.ts",
+      "to": "src/base/common/observableInternal/transaction.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableFromEvent.ts",
+      "to": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableFromEvent.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableFromEvent.ts",
+      "to": "src/base/common/observableInternal/logging/logging.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableFromEvent.ts",
+      "to": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableFromEvent.ts",
+      "to": "src/base/common/observableInternal/debugLocation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableValue.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableValue.ts",
+      "to": "src/base/common/observableInternal/transaction.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableValue.ts",
+      "to": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableValue.ts",
+      "to": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableValue.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableValue.ts",
+      "to": "src/base/common/observableInternal/logging/logging.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableValue.ts",
+      "to": "src/base/common/observableInternal/debugLocation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/reactions/autorun.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/reactions/autorun.ts",
+      "to": "src/base/common/observableInternal/changeTracker.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/reactions/autorun.ts",
+      "to": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/reactions/autorun.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/reactions/autorun.ts",
+      "to": "src/base/common/observableInternal/reactions/autorunImpl.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/reactions/autorun.ts",
+      "to": "src/base/common/observableInternal/debugLocation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/reactions/autorun.ts",
+      "to": "src/base/common/observableInternal/observables/observableValue.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/reactions/autorun.ts",
+      "to": "src/base/common/observableInternal/transaction.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "to": "src/base/common/observableInternal/reactions/autorunImpl.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "to": "src/base/common/observableInternal/transaction.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "to": "src/base/common/observableInternal/logging/logging.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "to": "src/base/common/observableInternal/logging/consoleObservableLogger.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "to": "src/base/common/observableInternal/logging/debugger/debuggerApi.d.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "to": "src/base/common/observableInternal/logging/debugger/debuggerRpc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "to": "src/base/common/observableInternal/logging/debugger/utils.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "to": "src/base/common/observableInternal/observables/observableFromEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "to": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "to": "src/base/common/observableInternal/observables/derivedImpl.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "to": "src/base/common/observableInternal/observables/observableValue.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
+      "to": "src/base/common/observableInternal/debugLocation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugger/utils.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/logging/debugger/debuggerRpc.ts",
+      "to": "src/base/common/observableInternal/logging/debugger/rpc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/map.ts",
+      "to": "src/base/common/observable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/map.ts",
+      "to": "src/base/common/observableInternal/observables/observableValueOpts.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableValueOpts.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableValueOpts.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableValueOpts.ts",
+      "to": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableValueOpts.ts",
+      "to": "src/base/common/observableInternal/observables/observableValue.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableValueOpts.ts",
+      "to": "src/base/common/observableInternal/observables/lazyObservableValue.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableValueOpts.ts",
+      "to": "src/base/common/observableInternal/debugLocation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/lazyObservableValue.ts",
+      "to": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/lazyObservableValue.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/lazyObservableValue.ts",
+      "to": "src/base/common/observableInternal/transaction.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/lazyObservableValue.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/lazyObservableValue.ts",
+      "to": "src/base/common/observableInternal/logging/logging.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/lazyObservableValue.ts",
+      "to": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/lazyObservableValue.ts",
+      "to": "src/base/common/observableInternal/debugLocation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/set.ts",
+      "to": "src/base/common/observable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/set.ts",
+      "to": "src/base/common/observableInternal/observables/observableValueOpts.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/experimental/utils.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/experimental/utils.ts",
+      "to": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/experimental/utils.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/experimental/utils.ts",
+      "to": "src/base/common/observableInternal/observables/observableFromEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/experimental/utils.ts",
+      "to": "src/base/common/observableInternal/reactions/autorun.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/experimental/utils.ts",
+      "to": "src/base/common/observableInternal/utils/utils.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/runOnChange.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/runOnChange.ts",
+      "to": "src/base/common/observableInternal/commonFacade/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/runOnChange.ts",
+      "to": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/runOnChange.ts",
+      "to": "src/base/common/observableInternal/reactions/autorun.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/commonFacade/cancellation.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/commonFacade/cancellation.ts",
+      "to": "src/base/common/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/cancellation.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/cancellation.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/valueWithChangeEvent.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/valueWithChangeEvent.ts",
+      "to": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/valueWithChangeEvent.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/valueWithChangeEvent.ts",
+      "to": "src/base/common/observableInternal/observables/observableFromEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableSignalFromEvent.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableSignalFromEvent.ts",
+      "to": "src/base/common/observableInternal/transaction.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableSignalFromEvent.ts",
+      "to": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableSignalFromEvent.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableSignalFromEvent.ts",
+      "to": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/observableSignalFromEvent.ts",
+      "to": "src/base/common/observableInternal/debugLocation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/constObservable.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/observables/constObservable.ts",
+      "to": "src/base/common/observableInternal/observables/baseObservable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/utilsCancellation.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/utilsCancellation.ts",
+      "to": "src/base/common/observableInternal/debugName.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/utilsCancellation.ts",
+      "to": "src/base/common/observableInternal/commonFacade/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/utilsCancellation.ts",
+      "to": "src/base/common/observableInternal/commonFacade/deps.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/utilsCancellation.ts",
+      "to": "src/base/common/observableInternal/reactions/autorun.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/utilsCancellation.ts",
+      "to": "src/base/common/observableInternal/observables/derivedImpl.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/utilsCancellation.ts",
+      "to": "src/base/common/observableInternal/debugLocation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/promise.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/promise.ts",
+      "to": "src/base/common/observableInternal/base.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/promise.ts",
+      "to": "src/base/common/observableInternal/reactions/autorun.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/promise.ts",
+      "to": "src/base/common/observableInternal/transaction.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/promise.ts",
+      "to": "src/base/common/observableInternal/observables/derived.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/observableInternal/utils/promise.ts",
+      "to": "src/base/common/observableInternal/observables/observableValue.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/async.ts",
+      "to": "src/base/common/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/async.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/async.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/async.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/async.ts",
+      "to": "src/base/common/resources.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/async.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/async.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/async.ts",
+      "to": "src/base/common/symbols.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/async.ts",
+      "to": "src/base/common/lazy.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/resources.ts",
+      "to": "src/base/common/charCode.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/resources.ts",
+      "to": "src/base/common/extpath.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/resources.ts",
+      "to": "src/base/common/network.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/resources.ts",
+      "to": "src/base/common/path.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/resources.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/resources.ts",
+      "to": "src/base/common/strings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/resources.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/strings.ts",
+      "to": "src/base/common/cache.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/strings.ts",
+      "to": "src/base/common/charCode.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/strings.ts",
+      "to": "src/base/common/lazy.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/strings.ts",
+      "to": "src/base/common/uint.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/cache.ts",
+      "to": "src/base/common/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/cache.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/network.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/network.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/network.ts",
+      "to": "src/base/common/strings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/network.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/network.ts",
+      "to": "src/base/common/path.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/extpath.ts",
+      "to": "src/base/common/charCode.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/extpath.ts",
+      "to": "src/base/common/path.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/extpath.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/extpath.ts",
+      "to": "src/base/common/strings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/extpath.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/arraysFind.ts",
+      "to": "src/base/common/arrays.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
+      "to": "src/workbench/browser/parts/titlebar/titlebarPart.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
+      "to": "src/platform/theme/common/themeService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
+      "to": "src/workbench/services/host/browser/host.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
+      "to": "src/platform/native/common/native.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
+      "to": "src/platform/window/common/window.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/services/host/browser/host.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/services/host/browser/host.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/theme/common/themeService.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/theme/common/themeService.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/browser/parts/titlebar/titlebarPart.ts",
+      "to": "src/workbench/browser/parts/titlebar/media/titlebarpart.css",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/browser/parts/titlebar/titlebarPart.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/browser/parts/titlebar/titlebarPart.ts",
+      "to": "src/platform/theme/common/themeService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/browser/parts/titlebar/titlebarPart.ts",
+      "to": "src/workbench/services/host/browser/host.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/platform/theme/browser/themeService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/host/electron-browser/nativeHostService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/platform/instantiation/common/instantiationService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/platform/instantiation/common/serviceCollection.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/platform/instantiation/common/descriptors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/platform/instantiation/common/extensions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/platform/ipc/common/mainProcessService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/platform/ipc/electron-browser/mainProcessService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/platform/native/common/native.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/platform/native/common/nativeHostService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/platform/ipc/common/desktopApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/common/nativeHostService.ts",
+      "to": "src/base/parts/ipc/common/ipc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/common/nativeHostService.ts",
+      "to": "src/platform/ipc/common/mainProcessService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/common/nativeHostService.ts",
+      "to": "src/platform/native/common/native.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/ipc/common/mainProcessService.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/ipc/common/mainProcessService.ts",
+      "to": "src/base/parts/ipc/common/ipc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/arrays.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/async.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/buffer.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/decorators.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/functional.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/marshalling.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/strings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/marshalling.ts",
+      "to": "src/base/common/buffer.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/marshalling.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/marshalling.ts",
+      "to": "src/base/common/marshallingIds.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/buffer.ts",
+      "to": "src/base/common/lazy.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/buffer.ts",
+      "to": "src/base/common/stream.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/stream.ts",
+      "to": "src/base/common/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/stream.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/stream.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/decorators.ts",
+      "to": "src/base/common/decorators/cancelPreviousCalls.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/decorators/cancelPreviousCalls.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/decorators/cancelPreviousCalls.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/decorators/cancelPreviousCalls.ts",
+      "to": "src/base/common/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
+      "to": "src/base/parts/ipc/common/ipc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
+      "to": "src/platform/ipc/common/mainProcessService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
+      "to": "src/platform/ipc/common/desktopApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
+      "to": "src/platform/native/common/native.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/extensions.ts",
+      "to": "src/platform/instantiation/common/descriptors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/extensions.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/base/common/async.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/platform/instantiation/common/descriptors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/platform/instantiation/common/graph.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/platform/instantiation/common/serviceCollection.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/base/common/linkedList.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/services/host/electron-browser/nativeHostService.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/services/host/electron-browser/nativeHostService.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/services/host/electron-browser/nativeHostService.ts",
+      "to": "src/platform/native/common/native.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/services/host/electron-browser/nativeHostService.ts",
+      "to": "src/workbench/services/host/browser/host.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/services/host/electron-browser/nativeHostService.ts",
+      "to": "src/platform/instantiation/common/extensions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/theme/browser/themeService.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/theme/browser/themeService.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/theme/browser/themeService.ts",
+      "to": "src/platform/theme/common/themeService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/theme/browser/themeService.ts",
+      "to": "src/platform/instantiation/common/extensions.ts",
+      "kind": "import"
+    }
+  ],
+  "compilerSupport": [
+    "src/typings/base-common.d.ts",
+    "src/typings/thenable.d.ts",
+    "src/typings/vscode-globals-nls.d.ts",
+    "src/typings/vscode-globals-product.d.ts"
+  ],
+  "entryPoints": [
+    "src/workbench/electron-browser/desktop.main.ts",
+    "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
+    "src/platform/native/electron-main/nativeHostMainService.ts",
+    "src/platform/windows/electron-main/windows.ts",
+    "src/base/browser/window.ts"
+  ],
+  "applicationDependencies": [
+    "src/platform/ipc/common/desktopApi.ts"
+  ]
+}

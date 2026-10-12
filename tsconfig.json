@@ -1,17 +1,32 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
+    "target": "ES2024",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": ["ES2024", "ESNext.Disposable", "DOM", "DOM.Iterable"],
     "types": ["node"],
     "strict": true,
-    "noUncheckedIndexedAccess": true,
+    "noUncheckedIndexedAccess": false,
     "noEmit": true,
     "skipLibCheck": true,
-    "verbatimModuleSyntax": true,
+    "verbatimModuleSyntax": false,
     "noImplicitOverride": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+    "useUnknownInCatchVariables": false
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": [
+    "src/main.ts",
+    "src/renderer.ts",
+    "src/preload.ts",
+    "src/platform/engine/electron-utility/engineHost.ts",
+    "src/assets.d.ts",
+    "src/typings/desktop.d.ts",
+    "test/**/*.ts",
+    "src/typings/base-common.d.ts",
+    "src/typings/thenable.d.ts",
+    "src/typings/vscode-globals-nls.d.ts",
+    "src/typings/vscode-globals-product.d.ts"
+  ]
 }

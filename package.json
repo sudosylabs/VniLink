@@ -7,7 +7,8 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && npm run typecheck:upstream",
+    "typecheck:upstream": "tsc -p src/tsconfig.json --noEmit",
     "build": "npm run typecheck && node build/build.mjs",
     "start": "npm run build && node scripts/start.mjs",
     "dev": "npm start",
@@ -19,13 +20,15 @@
     "lint": "npm run lint:ts && npm run lint:css",
     "lint:fix": "eslint . --fix && stylelint \"src/**/*.css\" --fix",
     "test:tooling": "node --test test/tooling/*.test.mjs",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test:tooling",
+    "check:upstream": "node build/check-vscode-source.mjs",
+    "check": "npm run check:upstream && npm run format:check && npm run lint && npm run typecheck && npm run test:tooling",
     "test:native": "node --test test/native/*.test.mjs",
     "prepare": "husky",
     "precommit": "npm run check && cargo fmt --all -- --check && npm test"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@phosphor-icons/core": "2.1.1",
     "@stylistic/eslint-plugin": "5.10.0",
     "@types/node": "22.20.5",
     "electron": "44.7.0",

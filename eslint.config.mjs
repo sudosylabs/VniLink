@@ -5,8 +5,9 @@ import globals from 'globals';
 import layers from './build/lint/layers.mjs';
 import imports from './build/lint/imports.mjs';
 import synchronousFs from './build/lint/synchronousFs.mjs';
+import { upstreamIgnores } from './build/sourceScope.mjs';
 export default [
-	{ ignores: ['node_modules/**', 'out/**', 'dist/**', 'target/**', 'vendor/**', 'crates/**', 'docs/**', 'assets/**'] },
+	{ ignores: ['node_modules/**', 'out/**', 'dist/**', 'target/**', 'vendor/**', 'crates/**', 'docs/**', 'assets/**', ...upstreamIgnores] },
 	{ ...js.configs.recommended, files: ['**/*.mjs'] },
 	...[...tseslint.configs.strictTypeChecked, ...tseslint.configs.stylisticTypeChecked].map(config => ({ ...config, files: ['src/**/*.ts', 'test/**/*.ts'] })),
 	{
@@ -24,7 +25,7 @@ export default [
 	},
 	{
 		files: ['src/**/*.ts', 'test/**/*.ts'],
-		languageOptions: { parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname } },
+		languageOptions: { parserOptions: { project: './tsconfig.json', tsconfigRootDir: import.meta.dirname } },
 		rules: {
 			'vnilink/import-extensions': 'error',
 			'no-restricted-syntax': ['error', { selector: 'TSAsExpression > TSAsExpression', message: 'Avoid chained type assertions; validate unknown data with a type guard.' }],

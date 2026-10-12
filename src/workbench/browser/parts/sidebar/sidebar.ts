@@ -1,4 +1,5 @@
-import { button } from '../../../../base/browser/ui/button/button.js';
+import { Icons } from '../../../../base/common/icons.js';
+import { button } from '../../../../base/browser/ui/button/vnilinkButton.js';
 export function createSidebar(): HTMLElement {
 	const sidebar = document.createElement('aside');
 	sidebar.className = 'sidebar';
@@ -9,7 +10,7 @@ export function createSidebar(): HTMLElement {
 	const name = document.createElement('span'); name.textContent = 'VniLink';
 	brand.append(logo, name);
 	const nav = document.createElement('nav'); nav.setAttribute('aria-label', 'Home navigation');
-	const computers = button('Computers', 'nav-item selected'); computers.setAttribute('aria-current', 'page');
+	const computers = button('Computers', 'nav-item selected', { icon: Icons.computers, variant: 'filled' }); computers.setAttribute('aria-current', 'page');
 	nav.append(computers);
 	sidebar.append(brand, nav);
 	return sidebar;
