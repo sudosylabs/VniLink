@@ -1,3 +1,4 @@
+import * as nls from '../../../../nls.js';
 import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { Icons } from '../../../../base/common/icons.js';
 import { renderIcon } from '../../../../base/browser/ui/icon/icon.js';
@@ -10,6 +11,7 @@ export class TitlebarTabsControl extends Disposable {
 	private readonly actions = document.createElement('div');
 	private dragged: string | undefined;
 	private selectedId: string | undefined;
+
 	constructor(
 		parent: HTMLElement,
 		private readonly onError: (error: unknown) => void,
@@ -21,7 +23,7 @@ export class TitlebarTabsControl extends Disposable {
 		this.scrollable.className = 'tabs-scrollable';
 		this.tablist.className = 'tabs-container';
 		this.tablist.setAttribute('role', 'tablist');
-		this.tablist.setAttribute('aria-label', 'Open views');
+		this.tablist.setAttribute('aria-label', nls.localize('tabs.openViews', 'Open views'));
 		this.actions.className = 'view-actions';
 		this.actions.setAttribute('role', 'toolbar');
 		this.scrollable.append(this.tablist);
@@ -145,6 +147,7 @@ export class TitlebarTabsControl extends Disposable {
 		);
 		this.render();
 	}
+
 	private listen(target: HTMLElement, type: string, listener: (event: Event) => void): void {
 		target.addEventListener(type, listener);
 		this._register(
@@ -153,9 +156,11 @@ export class TitlebarTabsControl extends Disposable {
 			}),
 		);
 	}
+
 	private target(event: Event): HTMLElement | null {
 		return event.target instanceof Element ? event.target.closest<HTMLElement>('[role="tab"]') : null;
 	}
+
 	private onKeyDown(event: KeyboardEvent): void {
 		const target = this.target(event);
 		if (!target) {
@@ -185,6 +190,7 @@ export class TitlebarTabsControl extends Disposable {
 			this.tablist.querySelector<HTMLElement>('[aria-selected="true"]')?.focus();
 		}
 	}
+
 	private render(): void {
 		const focused = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
 		const tabFocus = focused?.closest<HTMLElement>('[role="tab"]')?.dataset.tabId;
@@ -216,14 +222,14 @@ export class TitlebarTabsControl extends Disposable {
 			close.type = 'button';
 			close.className = 'tab-close';
 			close.tabIndex = -1;
-			close.setAttribute('aria-label', `Close ${tab.label}`);
+			close.setAttribute('aria-label', nls.localize('tabs.close', 'Close {0}', tab.label));
 			close.append(renderIcon(Icons.close));
 			element.append(label, close);
 			this.tablist.append(element);
 		}
 		this.actions.replaceChildren();
 		const active = this.service.activeTab;
-		this.actions.setAttribute('aria-label', active ? `${active.label} actions` : 'View actions');
+		this.actions.setAttribute('aria-label', active ? nls.localize('tabs.tabActions', '{0} actions', active.label) : nls.localize('tabs.viewActions', 'View actions'));
 		for (const action of active?.actions ?? []) {
 			const button = document.createElement('button');
 			button.type = 'button';
@@ -258,6 +264,7 @@ export class TitlebarTabsControl extends Disposable {
 			this.revealSelected();
 		}
 	}
+
 	private revealSelected(): void {
 		const selected = this.tablist.querySelector<HTMLElement>('[aria-selected="true"]');
 		if (selected) {

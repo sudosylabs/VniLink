@@ -1,3 +1,4 @@
+import * as nls from '../../../../nls.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import type { TabAction } from '../../../services/tabs/common/tabService.js';
 import type { WorkbenchView } from '../../parts/views/viewHost.js';
@@ -5,12 +6,13 @@ import type { DesktopApi } from '../../../../platform/ipc/common/desktopApi.js';
 import { createSidebar } from '../../parts/sidebar/sidebar.js';
 import { Icons } from '../../../../base/common/icons.js';
 import { renderIcon } from '../../../../base/browser/ui/icon/icon.js';
+
 export function createComputersPage(): HTMLElement {
 	const page = document.createElement('main');
 	// This static markup contains no engine/device data. Future labels use textContent.
-	page.innerHTML = `<header class="page-heading"><h1>Your computers</h1><p>A place for the computers you connect to.</p></header>
-    <section class="empty-state" aria-label="Computers">
-      <h2>No computers yet</h2><p>Paired computers will appear here.</p>
+	page.innerHTML = `<header class="page-heading"><h1>${nls.localize('computers.heading', 'Your computers')}</h1><p>${nls.localize('computers.subheading', 'A place for the computers you connect to.')}</p></header>
+    <section class="empty-state" aria-label="${nls.localize('computers.sectionLabel', 'Computers')}">
+      <h2>${nls.localize('computers.emptyTitle', 'No computers yet')}</h2><p>${nls.localize('computers.emptyDescription', 'Paired computers will appear here.')}</p>
     </section>`;
 	const icon = renderIcon(Icons.computers);
 	icon.classList.add('computer');
@@ -20,10 +22,11 @@ export function createComputersPage(): HTMLElement {
 
 export class ComputersView extends Disposable implements WorkbenchView {
 	public readonly id = 'computers';
-	public readonly label = 'Computers';
+	public readonly label = nls.localize('computers.viewLabel', 'Computers');
 	public readonly icon = Icons.computers;
 	public readonly element = document.createElement('div');
 	public readonly actions: readonly TabAction[];
+
 	constructor(
 		private readonly api: DesktopApi,
 		connected: boolean,
@@ -39,7 +42,7 @@ export class ComputersView extends Disposable implements WorkbenchView {
 		this.actions = [
 			{
 				id: 'refresh',
-				label: 'Refresh computers',
+				label: nls.localize('computers.refreshLabel', 'Refresh computers'),
 				icon: Icons.refresh,
 				enabled: connected,
 				run: async (signal) => {
@@ -48,6 +51,7 @@ export class ComputersView extends Disposable implements WorkbenchView {
 			},
 		];
 	}
+
 	private async refresh(signal: AbortSignal): Promise<void> {
 		const reply = await this.api.engineCommand({ type: 'snapshot' });
 		if (signal.aborted || this._store.isDisposed) {
@@ -72,6 +76,7 @@ export class ComputersView extends Disposable implements WorkbenchView {
 			state.append(label);
 		}
 	}
+
 	public override dispose(): void {
 		this.element.remove();
 		super.dispose();

@@ -6,15 +6,18 @@
 
 import type { BrowserWindow } from 'electron';
 import { release } from 'node:os';
+import { isMacintosh } from '../../../base/common/platform.js';
 import { getMacOSWindowControlsPosition } from '../../window/common/window.js';
 import type { IWindowControlsOptions } from '../../native/common/native.js';
+
 export class CodeWindow {
 	constructor(public readonly win: BrowserWindow) { }
+
 	public updateWindowControls(options: IWindowControlsOptions): void {
 		if (this.win.isDestroyed()) {
 			return;
 		}
-		if (process.platform === 'darwin') {
+		if (isMacintosh) {
 			if (options.height !== undefined) {
 				this.win.setWindowButtonPosition(
 					getMacOSWindowControlsPosition(options.height, release(), options.horizontalInset),

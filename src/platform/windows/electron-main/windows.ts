@@ -7,10 +7,12 @@
 import { nativeTheme } from 'electron';
 import type { BrowserWindowConstructorOptions } from 'electron';
 import { release } from 'node:os';
+import { isMacintosh } from '../../../base/common/platform.js';
 import { getMacOSWindowControlsPosition, getNativeTitlebarHeight } from '../../window/common/window.js';
+
 export function defaultBrowserWindowOptions(): BrowserWindowConstructorOptions {
 	const dark = nativeTheme.shouldUseDarkColors;
-	const height = Math.max(35, getNativeTitlebarHeight(process.platform, release()));
+	const height = Math.max(35, getNativeTitlebarHeight(release()));
 	const options: BrowserWindowConstructorOptions = {
 		title: 'VniLink',
 		width: 1120,
@@ -29,7 +31,7 @@ export function defaultBrowserWindowOptions(): BrowserWindowConstructorOptions {
 			autoplayPolicy: 'user-gesture-required',
 		},
 	};
-	if (process.platform === 'darwin') {
+	if (isMacintosh) {
 		options.acceptFirstMouse = true;
 		options.titleBarOverlay = true;
 		options.trafficLightPosition = getMacOSWindowControlsPosition(height, release()) ?? undefined;

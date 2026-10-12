@@ -4,11 +4,13 @@
  *  Adapted for VniLink: native window controls and window state only.
  *--------------------------------------------------------------------------------------------*/
 
-import { isTahoeOrNewer } from '../../../base/common/platform.js';
+import { isMacintosh, isTahoeOrNewer } from '../../../base/common/platform.js';
+
 export interface IPoint {
 	readonly x: number;
 	readonly y: number;
 }
+
 export function getMacOSWindowControlsPosition(
 	height: number,
 	osVersion: string,
@@ -18,6 +20,6 @@ export function getMacOSWindowControlsPosition(
 	const offset = Math.floor((height - buttonHeight) / 2);
 	return !offset && horizontalInset === undefined ? null : { x: horizontalInset ?? offset + 1, y: offset };
 }
-export function getNativeTitlebarHeight(platform: string, osVersion: string): number {
-	return platform === 'darwin' ? (isTahoeOrNewer(osVersion) ? 32 : 28) : 30;
+export function getNativeTitlebarHeight(osVersion: string): number {
+	return isMacintosh ? (isTahoeOrNewer(osVersion) ? 32 : 28) : 30;
 }

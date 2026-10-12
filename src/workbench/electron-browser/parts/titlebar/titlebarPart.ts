@@ -24,7 +24,7 @@ export class NativeTitlebarPart extends BrowserTitlebarPart {
 		@IInstantiationService instantiationService: IInstantiationService,
 	) {
 		super(onError, themeService, hostService, instantiationService);
-		this.height = Math.max(35, getNativeTitlebarHeight(document.documentElement.dataset.platform ?? '', osRelease));
+		this.height = Math.max(35, getNativeTitlebarHeight(osRelease));
 		this._register(
 			nativeHostService.onDidChangeWindowState((state) => {
 				this.acceptState(state);

@@ -1,3 +1,4 @@
+import * as nls from '../../nls.js';
 import { ITabService } from '../services/tabs/common/tabService.js';
 import { ViewHost } from './parts/views/viewHost.js';
 import './styles/workbench.css';
@@ -6,17 +7,18 @@ import { createWorkbenchServices } from '../electron-browser/desktop.main.js';
 import { NativeTitlebarPart } from '../electron-browser/parts/titlebar/titlebarPart.js';
 import { ensureCodeWindow } from '../../base/browser/window.js';
 import { ComputersView } from './features/computers/computers.js';
+
 export async function renderWorkbench(info: AppInfo, api: DesktopApi): Promise<void> {
 	document.documentElement.dataset.platform = info.platform;
 	const status = document.createElement('footer');
 	status.className = 'status';
 	status.setAttribute('role', 'status');
 	status.textContent = info.engineConnected
-		? `Engine ready · ${info.version}`
-		: 'Engine unavailable — secure storage could not be opened';
+		? nls.localize('workbench.engineReady', 'Engine ready · {0}', info.version)
+		: nls.localize('workbench.engineUnavailable', 'Engine unavailable — secure storage could not be opened');
 	function showError(error: unknown): void {
 		console.error(error);
-		status.textContent = 'The desktop could not complete the action. Close the window and try again.';
+		status.textContent = nls.localize('workbench.actionFailed', 'The desktop could not complete the action. Close the window and try again.');
 	}
 	const workspace = document.createElement('div');
 	workspace.className = 'workspace';

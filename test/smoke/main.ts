@@ -6,8 +6,10 @@ import { app, net, nativeTheme } from 'electron';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, release } from 'node:os';
+import { isMacintosh } from '../../src/base/common/platform.js';
 import { isAppInfo } from '../../src/platform/ipc/common/desktopApi.js';
 import { startApplication } from '../../src/app/electron-main/application.js';
+
 const profile = mkdtempSync(join(tmpdir(), 'vnilink-electron-smoke-'));
 app.setPath('userData', profile);
 app.on('web-contents-created', (_event, contents) => {
@@ -51,7 +53,7 @@ async function verify(window: BrowserWindow): Promise<void> {
 		result.title !== 'Your computers' ||
 		!('api' in result) ||
 		JSON.stringify(result.api) !==
-		JSON.stringify(['engineCommand', 'getAppInfo', 'nativeHostCommand', 'onWindowStateChanged'])
+		JSON.stringify(['decryptText', 'encryptText', 'engineCommand', 'getAppInfo', 'getKeyStorageProvider', 'isEncryptionAvailable', 'nativeHostCommand', 'onWindowStateChanged'])
 	) {
 		throw new Error(`Unexpected renderer state: ${JSON.stringify(result)}`);
 	}
@@ -68,7 +70,11 @@ async function verify(window: BrowserWindow): Promise<void> {
     const invitation = await window.vnilink.engineCommand({ type: 'createInvitation', ttlSeconds: 60 });
     let invalidRejected = false;
     try { await window.vnilink.engineCommand({ type: 'shutdown' }); } catch { invalidRejected = true; }
-    return { snapshot, invitation, invalidRejected };
+    let sessionError = '';
+    try { await window.vnilink.engineCommand({ type: 'disconnect' }); } catch (error) { sessionError = String(error); }
+    const afterError = await window.vnilink.engineCommand({ type: 'snapshot' });
+    const encryptionAvailable = await window.vnilink.isEncryptionAvailable();
+    return { snapshot, invitation, invalidRejected, sessionError, afterError, encryptionAvailable };
   })()`);
 	if (
 		!record(engine) ||
@@ -79,7 +85,12 @@ async function verify(window: BrowserWindow): Promise<void> {
 		!isEngineReply(engine.invitation) ||
 		engine.invitation.type !== 'invitation' ||
 		!engine.invitation.token ||
-		engine.invalidRejected !== true
+		engine.invalidRejected !== true ||
+		typeof engine.sessionError !== 'string' ||
+		!engine.sessionError.includes('NoSession') ||
+		!isEngineReply(engine.afterError) ||
+		engine.afterError.type !== 'snapshot' ||
+		typeof engine.encryptionAvailable !== 'boolean'
 	) {
 		throw new Error('Native control bridge failed');
 	}
@@ -102,12 +113,12 @@ async function verify(window: BrowserWindow): Promise<void> {
 	app.quit();
 }
 async function verifyTitlebar(window: BrowserWindow): Promise<void> {
-	const height = Math.max(35, getNativeTitlebarHeight(process.platform, release()));
+	const height = Math.max(35, getNativeTitlebarHeight(release()));
 	const presentation: unknown = await window.webContents.executeJavaScript(
 		`({ height: document.querySelector('.part.titlebar').getBoundingClientRect().height, drag: getComputedStyle(document.querySelector('.titlebar-drag-region')).getPropertyValue('-webkit-app-region'), unwanted: document.querySelectorAll('.window-controls, .titlebar-center, .menubar').length })`,
 	);
 	assert.deepEqual(presentation, { height, drag: 'drag', unwanted: 0 });
-	if (process.platform === 'darwin') {
+	if (isMacintosh) {
 		assert.deepEqual(window.getWindowButtonPosition(), getMacOSWindowControlsPosition(height, release()));
 	}
 	for (const zoom of [1.25, 1]) {

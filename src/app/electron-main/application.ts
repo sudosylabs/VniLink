@@ -1,20 +1,30 @@
+import { mark } from '../../base/common/performance.js';
+import { isMacintosh } from '../../base/common/platform.js';
 import { InstantiationService } from '../../platform/instantiation/common/instantiationService.js';
+import { LogService } from '../../platform/log/common/logService.js';
+import { ConsoleLogger, LogLevel } from '../../platform/log/common/log.js';
 import { ServiceCollection } from '../../platform/instantiation/common/serviceCollection.js';
 import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.js';
 import { INativeHostMainService, NativeHostMainService } from '../../platform/native/electron-main/nativeHostMainService.js';
 import { EngineService } from '../../platform/engine/electron-main/engineService.js';
+import { EncryptionMainService } from '../../platform/encryption/electron-main/encryptionMainService.js';
 import { app, BrowserWindow, net, protocol, session } from 'electron';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createMainWindow } from './windows.js';
 import { registerDesktopHandlers } from '../../platform/ipc/electron-main/handlers.js';
+
 export const applicationUrl = 'vnilink://app/index.html';
+
 interface ApplicationOptions {
 	showWindow?: boolean;
 	temporaryEngine?: boolean;
 	onReady?: (window: BrowserWindow) => Promise<void>;
 }
 export async function startApplication(options: ApplicationOptions = {}): Promise<void> {
+	mark('vnilink/mainStart');
+	// `--verbose` maps to trace until the environment platform owns log levels.
+	const logService = new LogService(new ConsoleLogger(process.argv.includes('--verbose') ? LogLevel.Trace : LogLevel.Info));
 	app.setName('VniLink');
 	if (!app.requestSingleInstanceLock()) {
 		app.quit(); return;
@@ -22,6 +32,7 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 	protocol.registerSchemesAsPrivileged([{ scheme: 'vnilink', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 	let window: BrowserWindow | null = null;
 	const engine = new EngineService();
+	const encryption = new EncryptionMainService();
 	const services = new InstantiationService(new ServiceCollection([INativeHostMainService, new SyncDescriptor(NativeHostMainService, [() => window])]), true);
 	const nativeHost = services.invokeFunction(accessor => accessor.get(INativeHostMainService));
 	nativeHost.onDidChangeWindowState(state => {
@@ -31,6 +42,7 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 	});
 	app.on('will-quit', () => {
 		services.dispose();
+		logService.dispose();
 	});
 	app.on('second-instance', () => {
 		if (window?.isMinimized()) {
@@ -46,7 +58,7 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 		event.preventDefault();
 		quitting = true;
 		void engine.stop().catch(() => {
-			console.error('Engine shutdown failed');
+			logService.error('Engine shutdown failed');
 		}).finally(() => {
 			app.quit();
 		});
@@ -69,17 +81,18 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 	app.on('activate', () => {
 		if (BrowserWindow.getAllWindows().length === 0) {
 			void openWindow().catch((error: unknown) => {
-				console.error(error);
+				logService.error(error instanceof Error ? error : new Error(String(error)));
 			});
 		}
 	});
 	app.on('window-all-closed', () => {
-		if (process.platform !== 'darwin') {
+		if (!isMacintosh) {
 			app.quit();
 		}
 	});
 	try {
 		await app.whenReady();
+		mark('vnilink/appReady');
 		protocol.handle('vnilink', (request) => {
 			const url = new URL(request.url);
 			const allowed = new Set(['/index.html', '/renderer.js', '/renderer.css', '/app-icon.svg']);
@@ -92,15 +105,17 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 			callback(false);
 		});
 		session.defaultSession.setPermissionCheckHandler(() => false);
-		registerDesktopHandlers(() => window, applicationUrl, engine, nativeHost);
+		registerDesktopHandlers(() => window, applicationUrl, engine, nativeHost, encryption);
 		try {
 			await engine.start(options.temporaryEngine ?? false);
+			mark('vnilink/engineReady');
 		} catch {
-			console.error('VniLink engine unavailable; secure installation could not be opened.');
+			logService.error('VniLink engine unavailable; secure installation could not be opened.');
 		}
 		const current = await openWindow();
+		mark('vnilink/windowReady');
 		await options.onReady?.(current);
 	} catch (error) {
-		console.error(error); app.exit(1);
+		logService.error(error instanceof Error ? error : new Error(String(error))); app.exit(1);
 	}
 }

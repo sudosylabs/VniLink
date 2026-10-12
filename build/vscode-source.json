@@ -539,7 +539,7 @@
     {
       "path": "src/platform/window/common/window.ts",
       "upstreamPath": "src/vs/platform/window/common/window.ts",
-      "sha256": "105566bb3ba944b9ca032670532d5fa83580b5602543ce9750c751366d421141",
+      "sha256": "a7568d46d35d20839a24a6db81d36c6ec6724d8ed7b6bbffb2d4cc59187231d8",
       "changedImports": 0,
       "adapted": true
     },
@@ -547,13 +547,13 @@
       "path": "src/platform/windows/electron-main/windowImpl.ts",
       "upstreamPath": "src/vs/platform/windows/electron-main/windowImpl.ts",
       "adapted": true,
-      "sha256": "cc2193de4ee7c02b009ce30d0bcdc6a423dff375824c3861d5bb5391dae8152b"
+      "sha256": "efcdda43a4715801acb46b9df17c69f431df1f7e4505f6ea7eb5d6b932553f20"
     },
     {
       "path": "src/platform/windows/electron-main/windows.ts",
       "upstreamPath": "src/vs/platform/windows/electron-main/windows.ts",
       "adapted": true,
-      "sha256": "96bb081c27217c1816e03d3a1aad868e3c06de8b270398a1cc5a537d8d91e4df"
+      "sha256": "b6240981d99c558355b4a75da53d30e8e1089b1a4864c344ebbb5a4cdc95389f"
     },
     {
       "path": "src/typings/base-common.d.ts",
@@ -603,7 +603,7 @@
     {
       "path": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
-      "sha256": "e101f0eb36b2914b2560ab9cfeb0a1280330234a2233d49164ef24b0b1d57bc7",
+      "sha256": "99566477c196d60868b88e8c9f6457b71cc255b5a464dae02c76dc94ebffd179",
       "changedImports": 0,
       "adapted": true
     },
