@@ -21,10 +21,35 @@ export interface VideoCodecCaps {
 
 export interface RelayInput { url: string; authenticated: boolean; replacementToken: string; }
 
+export type ServiceKind = 'Desktop' | 'Files' | 'Terminal' | 'Camera' | 'SystemAudio' | 'Microphone' | 'System';
+
 export interface ServiceSummary {
 	id: string; connectionId: string; generation: string; peer_id: string;
-	kind: 'Desktop' | 'Files' | 'Terminal' | 'Camera' | 'SystemAudio' | 'Microphone' | 'System';
+	kind: ServiceKind;
 	phase: string | { Closed: { cause: string } } | { Failed: { message: string } };
+}
+
+export interface ServicePermissions {
+	desktop: boolean; files: boolean; terminal: boolean; camera: boolean;
+	system_audio: boolean; microphone: boolean; recording: boolean; system_actions: boolean;
+}
+
+export interface TerminalPolicy {
+	allow_persistence: boolean; max_sessions: number; max_sessions_per_peer: number;
+	history_bytes: number; replay_bytes: number; detached_timeout_secs: number;
+}
+
+export interface TerminalSession {
+	id: string; process_id: number; shell: string; rows: number; columns: number;
+	persistent: boolean; attached: boolean;
+}
+
+export interface FileJob {
+	id: string; peer: string; label: string; direction: 'Upload' | 'Download'; sender: boolean;
+	state: 'Preparing' | 'Serving' | 'Transferring' | 'WaitingDecision' | 'Interrupted' | 'Cancelled' | 'Failed' | 'Complete';
+	total_bytes: string; done_bytes: string; files_total: string; files_done: string;
+	resumed_files: string; skipped_files: string; skipped_symlinks: string;
+	waiting_file: string | null; error: string | null;
 }
 
 export type EngineEvent =
@@ -67,6 +92,19 @@ export type EngineCommand =
 	| { type: 'controllerSessionPaths'; sessionId: string }
 	| { type: 'pollEvents'; subscriptionId: string; maxEvents: number }
 	| { type: 'releaseEvents'; subscriptionId: string }
+	| { type: 'servicePermissions'; endpointId: string }
+	| { type: 'authorizeService'; endpointId: string; kind: ServiceKind; allowed: boolean }
+	| { type: 'authorizeRecording'; endpointId: string; allowed: boolean }
+	| { type: 'terminalPolicy' }
+	| { type: 'setTerminalPolicy'; policy: TerminalPolicy }
+	| { type: 'enableNativeTerminal'; program: string; directory: string }
+	| { type: 'enableDefaultNativeTerminal' | 'disableTerminal' | 'hostedTerminalSessions' }
+	| { type: 'remoteTerminalSessions'; connectionId: string; generation: string }
+	| { type: 'closeRemoteTerminalSession'; connectionId: string; generation: string; id: string }
+	| { type: 'closeTerminalSession'; id: string }
+	| { type: 'subscribeFilesJobs'; sessionId: string; generation: string }
+	| { type: 'pollFilesJobs' | 'releaseFilesJobs'; subscriptionId: string }
+	| { type: 'filesJobCancel' | 'filesJobResume'; subscriptionId: string; jobId: string }
 	| { type: 'createInvitation'; ttlSeconds: number }
 	| { type: 'acceptInvitation'; token: string }
 	| { type: 'exportPairingFile'; ttlSeconds: number; allowControl: boolean }
@@ -143,6 +181,12 @@ export type EngineReply =
 	| { type: 'ownerSession'; session: SessionInfo | null }
 	| { type: 'eventSubscription'; subscriptionId: string }
 	| { type: 'events'; events: EngineEvent[]; lagged: string }
+	| { type: 'servicePermissions'; permissions: ServicePermissions }
+	| { type: 'terminalPolicy'; policy: TerminalPolicy }
+	| { type: 'terminalSessions'; sessions: TerminalSession[] }
+	| { type: 'jobs'; jobs: FileJob[] }
+	| { type: 'job'; job: FileJob }
+	| { type: 'fileJobsSubscription'; subscriptionId: string }
 	| { type: 'done' };
 
 export function record(value: unknown): value is Record<string, unknown> {
@@ -239,6 +283,46 @@ function relayInputs(value: unknown): value is RelayInput[] {
 function serviceKind(value: unknown): value is ServiceSummary['kind'] {
 	return value === 'Desktop' || value === 'Files' || value === 'Terminal' || value === 'Camera'
 		|| value === 'SystemAudio' || value === 'Microphone' || value === 'System';
+}
+
+function servicePermissions(value: unknown): value is ServicePermissions {
+	return record(value) && ['desktop', 'files', 'terminal', 'camera', 'system_audio', 'microphone', 'recording', 'system_actions'].every(key => typeof value[key] === 'boolean') && Object.keys(value).length === 8;
+}
+
+function terminalPolicy(value: unknown): value is TerminalPolicy {
+	return record(value) && typeof value.allow_persistence === 'boolean' && uint(value.max_sessions, 65535)
+		&& uint(value.max_sessions_per_peer, 65535) && uint(value.history_bytes, 4294967295)
+		&& uint(value.replay_bytes, 4294967295) && uint(value.detached_timeout_secs, 4294967295)
+		&& Object.keys(value).length === 6;
+}
+
+function terminalSession(value: unknown): value is TerminalSession {
+	return record(value) && text(value.id) && uint(value.process_id, 4294967295) && text(value.shell)
+		&& uint(value.rows, 65535) && uint(value.columns, 65535) && typeof value.persistent === 'boolean'
+		&& typeof value.attached === 'boolean' && Object.keys(value).length === 7;
+}
+
+function terminalSessions(value: unknown): value is TerminalSession[] {
+	return Array.isArray(value) && value.length <= 256 && value.every((item: unknown) => terminalSession(item));
+}
+
+function fileJobState(value: unknown): value is FileJob['state'] {
+	return value === 'Preparing' || value === 'Serving' || value === 'Transferring' || value === 'WaitingDecision'
+		|| value === 'Interrupted' || value === 'Cancelled' || value === 'Failed' || value === 'Complete';
+}
+
+function fileJob(value: unknown): value is FileJob {
+	return record(value) && text(value.id) && text(value.peer) && text(value.label)
+		&& (value.direction === 'Upload' || value.direction === 'Download') && typeof value.sender === 'boolean'
+		&& fileJobState(value.state) && decimal(value.total_bytes) && decimal(value.done_bytes)
+		&& decimal(value.files_total) && decimal(value.files_done) && decimal(value.resumed_files)
+		&& decimal(value.skipped_files) && decimal(value.skipped_symlinks)
+		&& (value.waiting_file === null || text(value.waiting_file)) && (value.error === null || text(value.error))
+		&& Object.keys(value).length === 15;
+}
+
+function fileJobs(value: unknown): value is FileJob[] {
+	return Array.isArray(value) && value.length <= 256 && value.every((item: unknown) => fileJob(item));
 }
 
 function serviceCause(value: unknown): value is string {
@@ -395,6 +479,19 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'sessionPaths': case 'controllerSessionPaths': keys = ['sessionId']; valid = decimal(value.sessionId); break;
 		case 'pollEvents': keys = ['subscriptionId', 'maxEvents']; valid = decimal(value.subscriptionId) && typeof value.maxEvents === 'number' && Number.isInteger(value.maxEvents) && value.maxEvents >= 1 && value.maxEvents <= 256; break;
 		case 'releaseEvents': keys = ['subscriptionId']; valid = decimal(value.subscriptionId); break;
+		case 'servicePermissions': keys = ['endpointId']; valid = text(value.endpointId); break;
+		case 'authorizeService': keys = ['endpointId', 'kind', 'allowed']; valid = text(value.endpointId) && serviceKind(value.kind) && typeof value.allowed === 'boolean'; break;
+		case 'authorizeRecording': keys = ['endpointId', 'allowed']; valid = text(value.endpointId) && typeof value.allowed === 'boolean'; break;
+		case 'terminalPolicy': keys = []; valid = true; break;
+		case 'setTerminalPolicy': keys = ['policy']; valid = terminalPolicy(value.policy); break;
+		case 'enableNativeTerminal': keys = ['program', 'directory']; valid = text(value.program) && text(value.directory); break;
+		case 'enableDefaultNativeTerminal': case 'disableTerminal': case 'hostedTerminalSessions': keys = []; valid = true; break;
+		case 'remoteTerminalSessions': keys = ['connectionId', 'generation']; valid = decimal(value.connectionId) && decimal(value.generation); break;
+		case 'closeRemoteTerminalSession': keys = ['connectionId', 'generation', 'id']; valid = decimal(value.connectionId) && decimal(value.generation) && text(value.id); break;
+		case 'closeTerminalSession': keys = ['id']; valid = text(value.id); break;
+		case 'subscribeFilesJobs': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
+		case 'pollFilesJobs': case 'releaseFilesJobs': keys = ['subscriptionId']; valid = decimal(value.subscriptionId); break;
+		case 'filesJobCancel': case 'filesJobResume': keys = ['subscriptionId', 'jobId']; valid = decimal(value.subscriptionId) && decimal(value.jobId); break;
 		case 'topology': keys = []; valid = true; break;
 		case 'sessionTopology': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
 		case 'selectDisplays': keys = ['sessionId', 'generation', 'ids']; valid = decimal(value.sessionId) && decimal(value.generation) && decimals(value.ids); break;
@@ -440,6 +537,12 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'ownerSession': return session(value.session) && Object.keys(value).length === 2;
 		case 'eventSubscription': return decimal(value.subscriptionId) && Object.keys(value).length === 2;
 		case 'events': return Array.isArray(value.events) && value.events.length <= 256 && value.events.every((item: unknown) => isEngineEvent(item)) && decimal(value.lagged) && Object.keys(value).length === 3;
+		case 'servicePermissions': return servicePermissions(value.permissions) && Object.keys(value).length === 2;
+		case 'terminalPolicy': return terminalPolicy(value.policy) && Object.keys(value).length === 2;
+		case 'terminalSessions': return terminalSessions(value.sessions) && Object.keys(value).length === 2;
+		case 'jobs': return fileJobs(value.jobs) && Object.keys(value).length === 2;
+		case 'job': return fileJob(value.job) && Object.keys(value).length === 2;
+		case 'fileJobsSubscription': return decimal(value.subscriptionId) && Object.keys(value).length === 2;
 		case 'done': return true;
 		default: return false;
 	}

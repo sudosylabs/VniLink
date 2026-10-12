@@ -146,6 +146,31 @@ impl VnilinkCore {
         })
     }
 
+    /// Synthetic desktop for transport tests; never installs native input/capture hooks.
+    #[cfg(feature = "test-support")]
+    pub fn install_test_desktop(&self) -> Result<Arc<std::sync::atomic::AtomicUsize>, FfiError> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Desktop(Arc<AtomicUsize>);
+        impl vnilink::HostDesktop for Desktop {
+            fn apply(&mut self, _: vnilink::InputEvent) -> Result<(), vnilink::Error> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            fn type_text(&mut self, _: &str) -> Result<(), vnilink::Error> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            fn monitor(&self) -> (u16, u16) {
+                (1920, 1080)
+            }
+        }
+        let applied = Arc::new(AtomicUsize::new(0));
+        self.inner
+            .set_desktop(Box::new(Desktop(applied.clone())))
+            .map_err(map_error)?;
+        Ok(applied)
+    }
+
     /// Opens the persistent installation using a native credential store.
 
     pub fn open_persistent(store: Box<dyn CredentialStore>) -> Result<Self, FfiError> {

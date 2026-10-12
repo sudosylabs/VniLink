@@ -30,6 +30,7 @@ export class DataChannelHost {
 	private sentAt = 0;
 	private lastAckMs = 0;
 	private fileBusy = false;
+	private cancelBusy = false;
 	constructor(
 		private readonly port: DataPort,
 		private readonly request: DataChannelRequest,
@@ -121,23 +122,36 @@ export class DataChannelHost {
 				message.type === 'file' &&
 				this.request.kind === 'files' &&
 				record(message.operation) &&
-				!this.fileBusy &&
+				!(message.operation.type === 'cancel' ? this.cancelBusy : this.fileBusy) &&
 				Number.isSafeInteger(message.id)
 			) {
 				const command = JSON.stringify(message.operation);
 				if (command.length > 16384) {
 					throw new Error('File operation too large');
 				}
-				this.fileBusy = true;
+				const cancel = message.operation.type === 'cancel';
+				if (cancel) {
+					this.cancelBusy = true;
+				} else {
+					this.fileBusy = true;
+				}
 				void this.native.fileOperation(command).then(
 					(metadata) => {
-						this.fileBusy = false;
+						if (cancel) {
+							this.cancelBusy = false;
+						} else {
+							this.fileBusy = false;
+						}
 						if (!this.closed) {
 							this.port.postMessage({ type: 'fileReply', id: message.id, metadata });
 						}
 					},
 					() => {
-						this.fileBusy = false;
+						if (cancel) {
+							this.cancelBusy = false;
+						} else {
+							this.fileBusy = false;
+						}
 						this.fail();
 					},
 				);

@@ -219,6 +219,11 @@ pub(crate) fn job_snapshot(snapshot: vnilink::JobSnapshot) -> FfiJobSnapshot {
 }
 
 impl VnilinkCore {
+    /// Start once per application core; progress reads do not drive network I/O.
+    pub fn start_file_job_driver(&self) {
+        self.inner.start_job_driver();
+    }
+
     /// Chooses the managed directory for blob storage. Refused while a
     /// controlling session is active.
     pub fn set_blob_directory(&self, path: String) -> Result<(), FfiError> {

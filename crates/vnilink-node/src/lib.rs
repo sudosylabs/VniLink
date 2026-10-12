@@ -10,7 +10,9 @@ use napi_derive::napi;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use vnilink_app::{CredentialStore, EventPoller, FfiError, VideoPoller, VnilinkCore};
+use vnilink_app::{
+    CredentialStore, EventPoller, FfiError, FfiServiceKind, FilesService, VideoPoller, VnilinkCore,
+};
 
 /// Largest accepted command body. Clipboard text reaches 256 KiB and encoded
 /// frames cross as base64, so this must clear a ~1 MiB frame plus JSON shape.
@@ -82,6 +84,109 @@ struct TransferVideoCodecCaps {
     chroma444: bool,
 }
 
+#[derive(Serialize)]
+struct TransferServicePermissions {
+    desktop: bool,
+    files: bool,
+    terminal: bool,
+    camera: bool,
+    system_audio: bool,
+    microphone: bool,
+    recording: bool,
+    system_actions: bool,
+}
+
+#[derive(Deserialize, Serialize, Clone)]
+struct TransferTerminalPolicy {
+    allow_persistence: bool,
+    max_sessions: u16,
+    max_sessions_per_peer: u16,
+    history_bytes: u32,
+    replay_bytes: u32,
+    detached_timeout_secs: u32,
+}
+
+#[derive(Serialize)]
+struct TransferTerminalSession {
+    id: String,
+    process_id: u32,
+    shell: String,
+    rows: u16,
+    columns: u16,
+    persistent: bool,
+    attached: bool,
+}
+
+#[derive(Serialize)]
+struct TransferJob {
+    id: String,
+    peer: String,
+    label: String,
+    direction: String,
+    sender: bool,
+    state: String,
+    total_bytes: String,
+    done_bytes: String,
+    files_total: String,
+    files_done: String,
+    resumed_files: String,
+    skipped_files: String,
+    skipped_symlinks: String,
+    waiting_file: Option<String>,
+    error: Option<String>,
+}
+
+fn transfer_job(snapshot: &vnilink_app::FfiJobSnapshot) -> TransferJob {
+    fn direction_name(direction: &vnilink_app::FfiJobDirection) -> &'static str {
+        match direction {
+            vnilink_app::FfiJobDirection::Upload => "Upload",
+            vnilink_app::FfiJobDirection::Download => "Download",
+        }
+    }
+    fn state_name(state: &vnilink_app::FfiJobState) -> &'static str {
+        match state {
+            vnilink_app::FfiJobState::Preparing => "Preparing",
+            vnilink_app::FfiJobState::Serving => "Serving",
+            vnilink_app::FfiJobState::Transferring => "Transferring",
+            vnilink_app::FfiJobState::WaitingDecision => "WaitingDecision",
+            vnilink_app::FfiJobState::Interrupted => "Interrupted",
+            vnilink_app::FfiJobState::Cancelled => "Cancelled",
+            vnilink_app::FfiJobState::Failed => "Failed",
+            vnilink_app::FfiJobState::Complete => "Complete",
+        }
+    }
+    TransferJob {
+        id: snapshot.id.to_string(),
+        peer: snapshot.peer.clone(),
+        label: snapshot.label.clone(),
+        direction: direction_name(&snapshot.direction).into(),
+        sender: snapshot.sender,
+        state: state_name(&snapshot.state).into(),
+        total_bytes: snapshot.total_bytes.to_string(),
+        done_bytes: snapshot.done_bytes.to_string(),
+        files_total: snapshot.files_total.to_string(),
+        files_done: snapshot.files_done.to_string(),
+        resumed_files: snapshot.resumed_files.to_string(),
+        skipped_files: snapshot.skipped_files.to_string(),
+        skipped_symlinks: snapshot.skipped_symlinks.to_string(),
+        waiting_file: snapshot.waiting_file.clone(),
+        error: snapshot.error.clone(),
+    }
+}
+
+fn service_kind(value: &str) -> Result<FfiServiceKind> {
+    match value {
+        "Desktop" => Ok(FfiServiceKind::Desktop),
+        "Files" => Ok(FfiServiceKind::Files),
+        "Terminal" => Ok(FfiServiceKind::Terminal),
+        "Camera" => Ok(FfiServiceKind::Camera),
+        "SystemAudio" => Ok(FfiServiceKind::SystemAudio),
+        "Microphone" => Ok(FfiServiceKind::Microphone),
+        "System" => Ok(FfiServiceKind::System),
+        _ => Err(Error::new(Status::InvalidArg, "Invalid service kind")),
+    }
+}
+
 #[derive(Deserialize, Serialize, Clone)]
 struct TransferRelayInput {
     url: String,
@@ -118,6 +223,32 @@ impl From<TransferVideoCodecCaps> for vnilink_app::FfiVideoCodecCaps {
             hardware: caps.hardware,
             device: caps.device,
             chroma444: caps.chroma444,
+        }
+    }
+}
+
+impl From<vnilink_app::FfiTerminalPolicy> for TransferTerminalPolicy {
+    fn from(policy: vnilink_app::FfiTerminalPolicy) -> Self {
+        Self {
+            allow_persistence: policy.allow_persistence,
+            max_sessions: policy.max_sessions,
+            max_sessions_per_peer: policy.max_sessions_per_peer,
+            history_bytes: policy.history_bytes,
+            replay_bytes: policy.replay_bytes,
+            detached_timeout_secs: policy.detached_timeout_secs,
+        }
+    }
+}
+
+impl From<TransferTerminalPolicy> for vnilink_app::FfiTerminalPolicy {
+    fn from(policy: TransferTerminalPolicy) -> Self {
+        Self {
+            allow_persistence: policy.allow_persistence,
+            max_sessions: policy.max_sessions,
+            max_sessions_per_peer: policy.max_sessions_per_peer,
+            history_bytes: policy.history_bytes,
+            replay_bytes: policy.replay_bytes,
+            detached_timeout_secs: policy.detached_timeout_secs,
         }
     }
 }
@@ -443,6 +574,71 @@ enum Command {
         subscription_id: String,
     },
     SubscribeVideo,
+    ServicePermissions {
+        #[serde(rename = "endpointId")]
+        endpoint_id: String,
+    },
+    AuthorizeService {
+        #[serde(rename = "endpointId")]
+        endpoint_id: String,
+        kind: String,
+        allowed: bool,
+    },
+    AuthorizeRecording {
+        #[serde(rename = "endpointId")]
+        endpoint_id: String,
+        allowed: bool,
+    },
+    TerminalPolicy,
+    SetTerminalPolicy {
+        policy: TransferTerminalPolicy,
+    },
+    EnableNativeTerminal {
+        program: String,
+        directory: String,
+    },
+    EnableDefaultNativeTerminal,
+    DisableTerminal,
+    RemoteTerminalSessions {
+        #[serde(rename = "connectionId")]
+        connection_id: String,
+        generation: String,
+    },
+    CloseRemoteTerminalSession {
+        #[serde(rename = "connectionId")]
+        connection_id: String,
+        generation: String,
+        id: String,
+    },
+    HostedTerminalSessions,
+    CloseTerminalSession {
+        id: String,
+    },
+    SubscribeFilesJobs {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        generation: String,
+    },
+    PollFilesJobs {
+        #[serde(rename = "subscriptionId")]
+        subscription_id: String,
+    },
+    ReleaseFilesJobs {
+        #[serde(rename = "subscriptionId")]
+        subscription_id: String,
+    },
+    FilesJobCancel {
+        #[serde(rename = "subscriptionId")]
+        subscription_id: String,
+        #[serde(rename = "jobId")]
+        job_id: String,
+    },
+    FilesJobResume {
+        #[serde(rename = "subscriptionId")]
+        subscription_id: String,
+        #[serde(rename = "jobId")]
+        job_id: String,
+    },
     CreateInvitation {
         #[serde(rename = "ttlSeconds")]
         ttl_seconds: u32,
@@ -765,6 +961,25 @@ enum Reply {
         events: Vec<serde_json::Value>,
         lagged: String,
     },
+    ServicePermissions {
+        permissions: TransferServicePermissions,
+    },
+    TerminalPolicy {
+        policy: TransferTerminalPolicy,
+    },
+    TerminalSessions {
+        sessions: Vec<TransferTerminalSession>,
+    },
+    Jobs {
+        jobs: Vec<TransferJob>,
+    },
+    Job {
+        job: TransferJob,
+    },
+    FileJobsSubscription {
+        #[serde(rename = "subscriptionId")]
+        subscription_id: String,
+    },
     Done,
 }
 
@@ -777,11 +992,13 @@ struct State {
     closed: bool,
     video: HashMap<u64, VideoPoller>,
     events: HashMap<u64, EventPoller>,
+    files: HashMap<u64, Arc<FilesService>>,
     next_subscription: u64,
 }
 #[napi]
 pub struct Engine {
     core: Arc<VnilinkCore>,
+    desktops: Arc<data::DesktopChannels>,
     state: Arc<Mutex<State>>,
 }
 
@@ -797,17 +1014,21 @@ impl Task for OpenTask {
         } else {
             VnilinkCore::open_persistent(Box::new(NativeStore))
         };
-        result.map_err(core_error)
+        let core = result.map_err(core_error)?;
+        core.start_file_job_driver();
+        Ok(core)
     }
     fn resolve(&mut self, _: Env, core: Self::Output) -> Result<Engine> {
         let core = Arc::new(core);
         Ok(Engine {
             core: core.clone(),
+            desktops: Arc::new(data::DesktopChannels::default()),
             state: Arc::new(Mutex::new(State {
                 core,
                 closed: false,
                 video: HashMap::new(),
                 events: HashMap::new(),
+                files: HashMap::new(),
                 next_subscription: 1,
             })),
         })
@@ -1494,6 +1715,209 @@ impl EngineBridge {
         Ok(reply)
     }
 
+    /// Commands that grant service permissions and inspect terminal and file jobs.
+    fn services(state: &mut State, command: &Command) -> Result<Reply> {
+        let reply: Reply =
+            match command {
+                Command::ServicePermissions { endpoint_id } => {
+                    let permissions = state
+                        .core
+                        .service_permissions(endpoint_id.clone())
+                        .map_err(core_error)?;
+                    Reply::ServicePermissions {
+                        permissions: TransferServicePermissions {
+                            desktop: permissions.desktop,
+                            files: permissions.files,
+                            terminal: permissions.terminal,
+                            camera: permissions.camera,
+                            system_audio: permissions.system_audio,
+                            microphone: permissions.microphone,
+                            recording: permissions.recording,
+                            system_actions: permissions.system_actions,
+                        },
+                    }
+                }
+                Command::AuthorizeService {
+                    endpoint_id,
+                    kind,
+                    allowed,
+                } => {
+                    state
+                        .core
+                        .authorize_service(endpoint_id.clone(), service_kind(kind)?, *allowed)
+                        .map_err(core_error)?;
+                    Reply::Done
+                }
+                Command::AuthorizeRecording {
+                    endpoint_id,
+                    allowed,
+                } => {
+                    state
+                        .core
+                        .authorize_recording(endpoint_id.clone(), *allowed)
+                        .map_err(core_error)?;
+                    Reply::Done
+                }
+                Command::TerminalPolicy => Reply::TerminalPolicy {
+                    policy: TransferTerminalPolicy::from(
+                        state.core.terminal_policy().map_err(core_error)?,
+                    ),
+                },
+                Command::SetTerminalPolicy { policy } => {
+                    state
+                        .core
+                        .set_terminal_policy(policy.clone().into())
+                        .map_err(core_error)?;
+                    Reply::Done
+                }
+                Command::EnableNativeTerminal { program, directory } => {
+                    state
+                        .core
+                        .enable_native_terminal(program.clone(), directory.clone())
+                        .map_err(core_error)?;
+                    Reply::Done
+                }
+                Command::EnableDefaultNativeTerminal => {
+                    state
+                        .core
+                        .enable_default_native_terminal()
+                        .map_err(core_error)?;
+                    Reply::Done
+                }
+                Command::DisableTerminal => {
+                    state.core.disable_terminal().map_err(core_error)?;
+                    Reply::Done
+                }
+                Command::RemoteTerminalSessions {
+                    connection_id,
+                    generation,
+                } => {
+                    let connection = parse_id(connection_id, "Invalid connection ID")?;
+                    let generation = parse_id(generation, "Invalid generation")?;
+                    Reply::TerminalSessions {
+                        sessions: state
+                            .core
+                            .remote_terminal_sessions(connection, generation)
+                            .map_err(core_error)?
+                            .into_iter()
+                            .map(|session| TransferTerminalSession {
+                                id: session.id,
+                                process_id: session.process_id,
+                                shell: session.shell,
+                                rows: session.rows,
+                                columns: session.columns,
+                                persistent: session.persistent,
+                                attached: session.attached,
+                            })
+                            .collect(),
+                    }
+                }
+                Command::CloseRemoteTerminalSession {
+                    connection_id,
+                    generation,
+                    id,
+                } => {
+                    let connection = parse_id(connection_id, "Invalid connection ID")?;
+                    let generation = parse_id(generation, "Invalid generation")?;
+                    state
+                        .core
+                        .close_remote_terminal_session(connection, generation, id.clone())
+                        .map_err(core_error)?;
+                    Reply::Done
+                }
+                Command::HostedTerminalSessions => Reply::TerminalSessions {
+                    sessions: state
+                        .core
+                        .hosted_terminal_sessions()
+                        .map_err(core_error)?
+                        .into_iter()
+                        .map(|session| TransferTerminalSession {
+                            id: session.id,
+                            process_id: session.process_id,
+                            shell: session.shell,
+                            rows: session.rows,
+                            columns: session.columns,
+                            persistent: session.persistent,
+                            attached: session.attached,
+                        })
+                        .collect(),
+                },
+                Command::CloseTerminalSession { id } => {
+                    state
+                        .core
+                        .close_terminal_session(id.clone())
+                        .map_err(core_error)?;
+                    Reply::Done
+                }
+                Command::SubscribeFilesJobs {
+                    session_id,
+                    generation,
+                } => {
+                    let (id, gen) = session_target(session_id, generation)?;
+                    let handle = state.core.open_files_service(id, gen).map_err(core_error)?;
+                    let subscription = state.next_subscription;
+                    state.next_subscription = subscription.saturating_add(1);
+                    state.files.insert(subscription, handle);
+                    Reply::FileJobsSubscription {
+                        subscription_id: subscription.to_string(),
+                    }
+                }
+                Command::PollFilesJobs { subscription_id } => {
+                    let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
+                    let handle = state.files.get(&subscription).ok_or_else(|| {
+                        Error::new(Status::InvalidArg, "Unknown files subscription")
+                    })?;
+                    Reply::Jobs {
+                        jobs: handle
+                            .jobs()
+                            .map_err(core_error)?
+                            .iter()
+                            .map(transfer_job)
+                            .collect(),
+                    }
+                }
+                Command::ReleaseFilesJobs { subscription_id } => {
+                    let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
+                    state.files.remove(&subscription);
+                    Reply::Done
+                }
+                Command::FilesJobCancel {
+                    subscription_id,
+                    job_id,
+                } => {
+                    let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
+                    let handle = state.files.get(&subscription).ok_or_else(|| {
+                        Error::new(Status::InvalidArg, "Unknown files subscription")
+                    })?;
+                    Reply::Job {
+                        job: transfer_job(
+                            &handle
+                                .job_cancel(parse_id(job_id, "Invalid job ID")?)
+                                .map_err(core_error)?,
+                        ),
+                    }
+                }
+                Command::FilesJobResume {
+                    subscription_id,
+                    job_id,
+                } => {
+                    let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
+                    let handle = state.files.get(&subscription).ok_or_else(|| {
+                        Error::new(Status::InvalidArg, "Unknown files subscription")
+                    })?;
+                    Reply::Job {
+                        job: transfer_job(
+                            &handle
+                                .job_resume(parse_id(job_id, "Invalid job ID")?)
+                                .map_err(core_error)?,
+                        ),
+                    }
+                }
+                _ => return Err(Error::new(Status::InvalidArg, "Invalid engine command")),
+            };
+        Ok(reply)
+    }
+
     /// Commands that drain the core event queue into transfer records.
     fn events(state: &mut State, command: &Command) -> Result<Reply> {
         let reply: Reply = match command {
@@ -1658,6 +2082,23 @@ impl EngineBridge {
             Command::SubscribeEvents
             | Command::PollEvents { .. }
             | Command::ReleaseEvents { .. } => Self::events(state, command),
+            Command::ServicePermissions { .. }
+            | Command::AuthorizeService { .. }
+            | Command::AuthorizeRecording { .. }
+            | Command::TerminalPolicy
+            | Command::SetTerminalPolicy { .. }
+            | Command::EnableNativeTerminal { .. }
+            | Command::EnableDefaultNativeTerminal
+            | Command::DisableTerminal
+            | Command::RemoteTerminalSessions { .. }
+            | Command::CloseRemoteTerminalSession { .. }
+            | Command::HostedTerminalSessions
+            | Command::CloseTerminalSession { .. }
+            | Command::SubscribeFilesJobs { .. }
+            | Command::PollFilesJobs { .. }
+            | Command::ReleaseFilesJobs { .. }
+            | Command::FilesJobCancel { .. }
+            | Command::FilesJobResume { .. } => Self::services(state, command),
             Command::Shutdown => {
                 state.closed = true;
                 state.core.shutdown();
@@ -1802,6 +2243,21 @@ impl CommandShape {
             | "controllerSessionPaths" => &["type", "sessionId"],
             "pollEvents" => &["type", "subscriptionId", "maxEvents"],
             "releaseEvents" => &["type", "subscriptionId"],
+            "servicePermissions" => &["type", "endpointId"],
+            "authorizeService" => &["type", "endpointId", "kind", "allowed"],
+            "authorizeRecording" => &["type", "endpointId", "allowed"],
+            "terminalPolicy" => &["type"],
+            "setTerminalPolicy" => &["type", "policy"],
+            "enableNativeTerminal" => &["type", "program", "directory"],
+            "enableDefaultNativeTerminal" | "disableTerminal" | "hostedTerminalSessions" => {
+                &["type"]
+            }
+            "remoteTerminalSessions" => &["type", "connectionId", "generation"],
+            "closeRemoteTerminalSession" => &["type", "connectionId", "generation", "id"],
+            "closeTerminalSession" => &["type", "id"],
+            "subscribeFilesJobs" => &["type", "sessionId", "generation"],
+            "pollFilesJobs" | "releaseFilesJobs" => &["type", "subscriptionId"],
+            "filesJobCancel" | "filesJobResume" => &["type", "subscriptionId", "jobId"],
             "sessionTopology" => &["type", "sessionId", "generation"],
             "selectDisplays" => &["type", "sessionId", "generation", "ids"],
             "setTopology" => &["type", "revision", "displays"],

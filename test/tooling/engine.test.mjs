@@ -96,6 +96,38 @@ test('bridge events keep core names and lossless ids', () => {
 	assert.equal(isEngineEvent({ type: 'hostLocked', locked: true, extra: 1 }), false);
 	assert.equal(isEngineEvent({ type: 'nope' }), false);
 });
+test('service commands validate kinds, policies, sessions and jobs exactly', () => {
+	assert.equal(isEngineCommand({ type: 'servicePermissions', endpointId: 'peer' }), true);
+	assert.equal(isEngineCommand({ type: 'authorizeService', endpointId: 'peer', kind: 'Terminal', allowed: true }), true);
+	assert.equal(isEngineCommand({ type: 'authorizeService', endpointId: 'peer', kind: 'Hologram', allowed: true }), false);
+	assert.equal(isEngineCommand({ type: 'authorizeRecording', endpointId: 'peer', allowed: false }), true);
+	assert.equal(isEngineCommand({ type: 'terminalPolicy' }), true);
+	const policy = { allow_persistence: true, max_sessions: 4, max_sessions_per_peer: 2, history_bytes: 65536, replay_bytes: 16384, detached_timeout_secs: 300 };
+	assert.equal(isEngineCommand({ type: 'setTerminalPolicy', policy }), true);
+	assert.equal(isEngineCommand({ type: 'setTerminalPolicy', policy: { ...policy, max_sessions: 65536 } }), false);
+	assert.equal(isEngineCommand({ type: 'enableNativeTerminal', program: '/bin/zsh', directory: '/tmp' }), true);
+	assert.equal(isEngineCommand({ type: 'enableDefaultNativeTerminal' }), true);
+	assert.equal(isEngineCommand({ type: 'disableTerminal' }), true);
+	assert.equal(isEngineCommand({ type: 'remoteTerminalSessions', connectionId: '1', generation: '2' }), true);
+	assert.equal(isEngineCommand({ type: 'closeRemoteTerminalSession', connectionId: '1', generation: '2', id: 'abc' }), true);
+	assert.equal(isEngineCommand({ type: 'hostedTerminalSessions' }), true);
+	assert.equal(isEngineCommand({ type: 'closeTerminalSession', id: 'abc' }), true);
+	assert.equal(isEngineCommand({ type: 'subscribeFilesJobs', sessionId: '1', generation: '2' }), true);
+	assert.equal(isEngineCommand({ type: 'pollFilesJobs', subscriptionId: '1' }), true);
+	assert.equal(isEngineCommand({ type: 'releaseFilesJobs', subscriptionId: '1' }), true);
+	assert.equal(isEngineCommand({ type: 'filesJobCancel', subscriptionId: '1', jobId: '2' }), true);
+	assert.equal(isEngineCommand({ type: 'filesJobResume', subscriptionId: '1', jobId: '2' }), true);
+	assert.equal(isEngineCommand({ type: 'filesJobCancel', subscriptionId: '1', jobId: 'nope' }), false);
+	assert.equal(isEngineReply({ type: 'servicePermissions', permissions: { desktop: true, files: true, terminal: false, camera: false, system_audio: false, microphone: false, recording: false, system_actions: false } }), true);
+	assert.equal(isEngineReply({ type: 'terminalPolicy', policy }), true);
+	assert.equal(isEngineReply({ type: 'terminalSessions', sessions: [] }), true);
+	assert.equal(isEngineReply({ type: 'terminalSessions', sessions: [{ id: 'a', process_id: 42, shell: '/bin/zsh', rows: 24, columns: 80, persistent: true, attached: true }] }), true);
+	const job = { id: '7', peer: 'p', label: 'l', direction: 'Upload', sender: true, state: 'Transferring', total_bytes: '100', done_bytes: '10', files_total: '2', files_done: '0', resumed_files: '0', skipped_files: '0', skipped_symlinks: '0', waiting_file: null, error: null };
+	assert.equal(isEngineReply({ type: 'jobs', jobs: [job] }), true);
+	assert.equal(isEngineReply({ type: 'job', job }), true);
+	assert.equal(isEngineReply({ type: 'job', job: { ...job, state: 'Warping' } }), false);
+	assert.equal(isEngineReply({ type: 'fileJobsSubscription', subscriptionId: '5' }), true);
+});
 test('pairing handles cross the bridge as lossless decimal strings', () => {
 	const preview = { id: '18446744073709551615', endpoint_id: 'peer', check: '123', expires_at_ms: '18446744073709551615' };
 	assert.equal(isEngineReply({ type: 'pairingPreview', preview }), true);

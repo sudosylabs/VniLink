@@ -1,12 +1,58 @@
 //! Session-scoped binary data plane. Never takes the JSON bridge's State mutex.
-use super::{core_error, parse_id, Command, CommandShape, Engine, EngineBridge};
+use super::{core_error, parse_id, Command, CommandShape, Engine};
 use napi::{
     bindgen_prelude::{AsyncTask, Buffer},
     Env, Error, Result, Task,
 };
 use napi_derive::napi;
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, Weak};
 use vnilink_app::{FfiTerminalEvent, FfiTerminalSize, TerminalService, VideoPoller, VnilinkCore};
+
+/// Video and input share one Desktop owner, without holding the command mutex.
+#[derive(Default)]
+pub(crate) struct DesktopChannels(Mutex<HashMap<(u64, u64), Weak<DesktopOwner>>>);
+struct DesktopOwner {
+    core: Arc<VnilinkCore>,
+    service: Arc<vnilink_app::DesktopService>,
+}
+impl Drop for DesktopOwner {
+    fn drop(&mut self) {
+        self.service.close();
+        let info = self.service.info();
+        let _ = self.core.close_controller_service(info.id, info.generation);
+    }
+}
+impl DesktopChannels {
+    fn open(&self, core: &Arc<VnilinkCore>, id: u64, generation: u64) -> Result<Arc<DesktopOwner>> {
+        let mut channels = self
+            .0
+            .lock()
+            .map_err(|_| Error::from_reason("Desktop channels unavailable"))?;
+        channels.retain(|_, handle| handle.strong_count() > 0);
+        if let Some(handle) = channels.get(&(id, generation)).and_then(Weak::upgrade) {
+            if !handle.service.is_cancelled() {
+                return Ok(handle);
+            }
+        }
+        let owner = core
+            .attach_controller_service(id, generation, vnilink_app::FfiServiceKind::Desktop)
+            .map_err(core_error)?;
+        let service = match core.open_desktop_service(owner.id, owner.generation) {
+            Ok(service) => service,
+            Err(error) => {
+                let _ = core.close_controller_service(owner.id, owner.generation);
+                return Err(core_error(error));
+            }
+        };
+        let handle = Arc::new(DesktopOwner {
+            core: core.clone(),
+            service,
+        });
+        channels.insert((id, generation), Arc::downgrade(&handle));
+        Ok(handle)
+    }
+}
 
 #[napi(object)]
 pub struct DataEvent {
@@ -26,6 +72,7 @@ pub struct DataChannel {
     files: Mutex<Option<Arc<vnilink_app::FilesService>>>,
     jobs: Arc<Mutex<Vec<u64>>>,
     video: Mutex<Option<VideoPoller>>,
+    desktop: Mutex<Option<Arc<DesktopOwner>>>,
     terminal: Mutex<Option<Arc<TerminalService>>>,
     closed: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -61,6 +108,16 @@ impl DataChannel {
                 || !(matches!(service.phase, vnilink_app::FfiServicePhase::Active) || readable_exit)
             {
                 return Err(Error::from_reason("Service closed"));
+            }
+        }
+        if let Some(desktop) = self
+            .desktop
+            .lock()
+            .map_err(|_| Error::from_reason("Channel unavailable"))?
+            .as_ref()
+        {
+            if desktop.service.is_cancelled() {
+                return Err(Error::from_reason("Desktop service closed"));
             }
         }
         Ok(())
@@ -182,7 +239,42 @@ impl DataChannel {
         }
         self.input_used
             .store(true, std::sync::atomic::Ordering::Release);
-        EngineBridge::input(&self.core, &decoded)?;
+        let desktop = self
+            .desktop
+            .lock()
+            .map_err(|_| Error::from_reason("Channel unavailable"))?;
+        let service = &desktop
+            .as_ref()
+            .ok_or_else(|| Error::from_reason("Missing desktop owner"))?
+            .service;
+        match decoded {
+            Command::SubmitKey { usage, down, .. } => service.submit_key(usage, down),
+            Command::SubmitPointer {
+                x,
+                y,
+                display,
+                revision,
+                ..
+            } => service.submit_pointer(
+                x,
+                y,
+                parse_id(&display, "Invalid display ID")?,
+                parse_id(&revision, "Invalid topology revision")?,
+            ),
+            Command::SubmitButton { button, down, .. } => {
+                service.submit_button(super::pointer_button(&button)?, down)
+            }
+            Command::SubmitWheel { dx, dy, .. } => service.submit_wheel(dx, dy),
+            Command::SubmitMotion { dx, dy, .. } => service.submit_motion(dx, dy),
+            Command::SubmitPreciseWheel { dx, dy, .. } => service.submit_precise_wheel(dx, dy),
+            Command::SubmitText { text, .. } => service.submit_text(text),
+            Command::SubmitLocalKey {
+                usage, down, text, ..
+            } => service.submit_local_key(usage, down, text),
+            Command::ReleaseSessionInput { .. } => service.release_input(),
+            _ => unreachable!("input allowlist checked above"),
+        }
+        .map_err(core_error)?;
         Ok(())
     }
 
@@ -225,9 +317,11 @@ impl DataChannel {
                 .input_used
                 .swap(false, std::sync::atomic::Ordering::AcqRel)
         {
-            let _ = self
-                .core
-                .release_session_input(self.session_id, self.generation);
+            if let Ok(desktop) = self.desktop.lock() {
+                if let Some(desktop) = desktop.as_ref() {
+                    let _ = desktop.service.release_input();
+                }
+            }
         }
         let jobs = if already {
             Vec::new()
@@ -257,6 +351,14 @@ impl DataChannel {
             owner: if already { None } else { self.owner },
             jobs,
             files,
+            desktop: if already {
+                None
+            } else {
+                self.desktop
+                    .lock()
+                    .ok()
+                    .and_then(|mut desktop| desktop.take())
+            },
         }
     }
 }
@@ -272,18 +374,30 @@ pub struct CloseTask {
     owner: Option<(u64, u64)>,
     jobs: Vec<u64>,
     files: Option<Arc<vnilink_app::FilesService>>,
+    desktop: Option<Arc<DesktopOwner>>,
 }
 impl Task for CloseTask {
     type Output = ();
     type JsValue = ();
     fn compute(&mut self) -> Result<()> {
         for job in self.jobs.drain(..) {
+            if self.core.job_snapshot(job).is_ok_and(|snapshot| {
+                matches!(
+                    snapshot.state,
+                    vnilink_app::FfiJobState::Cancelled
+                        | vnilink_app::FfiJobState::Failed
+                        | vnilink_app::FfiJobState::Complete
+                )
+            }) {
+                continue;
+            }
             let _ = self.core.job_cancel(job);
         }
         if let Some((id, generation)) = self.owner.take() {
             let _ = self.core.close_controller_service(id, generation);
         }
         self.files.take();
+        self.desktop.take();
         Ok(())
     }
     fn resolve(&mut self, _: Env, _: ()) -> Result<()> {
@@ -293,6 +407,7 @@ impl Task for CloseTask {
 
 pub struct OpenChannelTask {
     core: Arc<VnilinkCore>,
+    desktops: Arc<DesktopChannels>,
     id: u64,
     generation: u64,
     kind: String,
@@ -309,10 +424,18 @@ impl Task for OpenChannelTask {
         {
             return Err(Error::from_reason("Stale session generation"));
         }
+        let desktop = if matches!(self.kind.as_str(), "video" | "input") {
+            Some(self.desktops.open(&self.core, self.id, self.generation)?)
+        } else {
+            None
+        };
         let video = if self.kind == "video" {
             Some(
-                self.core
-                    .subscribe_session_video(self.id, self.generation)
+                desktop
+                    .as_ref()
+                    .unwrap()
+                    .service
+                    .subscribe_video()
                     .map_err(core_error)?,
             )
         } else {
@@ -373,6 +496,7 @@ impl Task for OpenChannelTask {
             files: Mutex::new(files),
             jobs: Arc::new(Mutex::new(Vec::new())),
             video: Mutex::new(video),
+            desktop: Mutex::new(desktop),
             terminal: Mutex::new(terminal),
             closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
@@ -397,6 +521,7 @@ impl Engine {
         }
         Ok(AsyncTask::new(OpenChannelTask {
             core: self.core.clone(),
+            desktops: self.desktops.clone(),
             id: parse_id(&session_id, "Invalid session ID")?,
             generation: parse_id(&generation, "Invalid generation")?,
             kind,
@@ -462,12 +587,27 @@ impl Task for FileTask {
                 dst_root,
                 dst_path,
             } => {
-                if self
+                let owned = self
                     .jobs
                     .lock()
                     .map_err(|_| Error::from_reason("Channel unavailable"))?
-                    .len()
-                    >= 8
+                    .clone();
+                // Keep completed identities for a cancellation racing its final progress read.
+                // Bound both retained history and simultaneous active transfers.
+                if owned.len() >= 256
+                    || owned
+                        .iter()
+                        .filter_map(|id| self.files.job_snapshot(*id).ok())
+                        .filter(|job| {
+                            !matches!(
+                                job.state,
+                                vnilink_app::FfiJobState::Cancelled
+                                    | vnilink_app::FfiJobState::Failed
+                                    | vnilink_app::FfiJobState::Complete
+                            )
+                        })
+                        .count()
+                        >= 8
                 {
                     return Err(Error::from_reason("File job limit"));
                 }
@@ -507,24 +647,13 @@ impl Task for FileTask {
                     return Err(Error::from_reason("Job belongs to another channel"));
                 }
                 match &self.operation {
-                    FileOperation::Poll { .. } => self.files.job_poll(job),
+                    FileOperation::Poll { .. } => self.files.job_snapshot(job),
                     _ => self.files.job_cancel(job),
                 }
                 .map_err(core_error)?
             }
         };
         let state = format!("{:?}", snapshot.state);
-        if matches!(
-            snapshot.state,
-            vnilink_app::FfiJobState::Cancelled
-                | vnilink_app::FfiJobState::Failed
-                | vnilink_app::FfiJobState::Complete
-        ) {
-            self.jobs
-                .lock()
-                .map_err(|_| Error::from_reason("Channel unavailable"))?
-                .retain(|id| *id != snapshot.id);
-        }
         Ok(serde_json::json!({"jobId":snapshot.id.to_string(),"state":state,"doneBytes":snapshot.done_bytes.to_string(),"totalBytes":snapshot.total_bytes.to_string(),"filesDone":snapshot.files_done.to_string(),"filesTotal":snapshot.files_total.to_string()}).to_string())
     }
     fn resolve(&mut self, _: Env, value: String) -> Result<String> {
@@ -541,6 +670,167 @@ mod tests {
         let preview = to.open_pairing_file(file.bytes).unwrap();
         to.confirm_pairing(preview.id, file.check).unwrap();
     }
+    #[test]
+    fn neutral_desktop_channels_share_owner_and_retire_independently() {
+        use std::sync::atomic::Ordering;
+        let controller = Arc::new(VnilinkCore::create_loopback_for_test().unwrap());
+        let host = VnilinkCore::create_loopback_for_test().unwrap();
+        let applied = host.install_test_desktop().unwrap();
+        let caps = vnilink_app::FfiVideoCodecCaps {
+            encode_baseline: true,
+            encode_high: true,
+            decode_baseline: true,
+            decode_high: true,
+            max_width: 4096,
+            max_height: 4096,
+            hardware: false,
+            device: "test".into(),
+            chroma444: false,
+        };
+        controller.set_video_codecs(caps.clone()).unwrap();
+        host.set_video_codecs(caps).unwrap();
+        pair(&host, &controller);
+        pair(&controller, &host);
+        host.authorize(controller.endpoint_id(), true, true, false, false)
+            .unwrap();
+        host.start_hosting().unwrap();
+        let pending = controller
+            .begin_connect_services(host.endpoint_id())
+            .unwrap();
+        let end = Instant::now() + Duration::from_secs(10);
+        while controller.controller_session(pending.id).unwrap().phase
+            != vnilink_app::FfiSessionPhase::Active
+        {
+            assert!(Instant::now() < end);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let session = controller.controller_session(pending.id).unwrap();
+        let desktops = Arc::new(DesktopChannels::default());
+        let mut open = OpenChannelTask {
+            core: controller.clone(),
+            desktops,
+            id: session.id,
+            generation: session.generation,
+            kind: "video".into(),
+            rows: 24,
+            columns: 80,
+        };
+        host.authorize_service(
+            controller.endpoint_id(),
+            vnilink_app::FfiServiceKind::Desktop,
+            false,
+        )
+        .unwrap();
+        assert!(
+            open.compute().is_err(),
+            "a neutral connection must not bypass Desktop authorization"
+        );
+        host.authorize_service(
+            controller.endpoint_id(),
+            vnilink_app::FfiServiceKind::Desktop,
+            true,
+        )
+        .unwrap();
+        let video = open.compute().unwrap();
+        assert!(
+            open.compute().is_err(),
+            "duplicate video subscribers must be rejected"
+        );
+        open.generation += 1;
+        assert!(
+            open.compute().is_err(),
+            "a stale generation must be rejected"
+        );
+        open.generation = session.generation;
+        open.kind = "input".into();
+        let input = open.compute().unwrap();
+        let owner = video
+            .desktop
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .service
+            .info();
+        assert_eq!(
+            input
+                .desktop
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .service
+                .info()
+                .id,
+            owner.id
+        );
+        let remote = host
+            .hosted_services()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.kind == vnilink_app::FfiServiceKind::Desktop)
+            .unwrap();
+        host.publish_desktop_video(remote.id, remote.generation, true, 10, vec![0, 255, 7])
+            .unwrap();
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(packet) = video.read().unwrap() {
+                assert_eq!(packet.data.unwrap().as_ref(), &[0, 255, 7]);
+                break;
+            }
+            assert!(Instant::now() < end);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let key = serde_json::json!({"type":"submitKey", "sessionId":session.id.to_string(), "generation":session.generation.to_string(), "usage":4, "down":true}).to_string();
+        input.input(key.clone()).unwrap();
+        let end = Instant::now() + Duration::from_secs(5);
+        while applied.load(Ordering::Relaxed) < 1 {
+            assert!(Instant::now() < end);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        input.take_cleanup().compute().unwrap();
+        assert!(input.input(key.clone()).is_err());
+        assert_eq!(
+            controller.controller_service(owner.id).unwrap().phase,
+            vnilink_app::FfiServicePhase::Active
+        );
+        // Closing input releases pressed keys, while video retains the Desktop owner.
+        let end = Instant::now() + Duration::from_secs(5);
+        while applied.load(Ordering::Relaxed) < 2 {
+            assert!(Instant::now() < end);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let replacement = open.compute().unwrap();
+        video.take_cleanup().compute().unwrap();
+        replacement.input(key).unwrap();
+        replacement.take_cleanup().compute().unwrap();
+        assert!(matches!(
+            controller.controller_service(owner.id).unwrap().phase,
+            vnilink_app::FfiServicePhase::Closed { .. }
+        ));
+        assert_eq!(
+            controller.controller_session(session.id).unwrap().phase,
+            vnilink_app::FfiSessionPhase::Active
+        );
+        open.kind = "video".into();
+        let reopened = open.compute().unwrap();
+        assert_ne!(
+            reopened
+                .desktop
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .service
+                .info()
+                .id,
+            owner.id
+        );
+        reopened.take_cleanup().compute().unwrap();
+        controller.shutdown();
+        host.shutdown();
+    }
+
     #[cfg(unix)]
     #[test]
     fn terminal_bytes_use_owned_channel_and_stop_after_close() {
@@ -593,6 +883,9 @@ mod tests {
             true,
         )
         .unwrap();
+        controller
+            .authorize_service(host.endpoint_id(), vnilink_app::FfiServiceKind::Files, true)
+            .unwrap();
         host.enable_native_terminal(
             "/bin/sh".into(),
             std::env::temp_dir().to_string_lossy().into(),
@@ -620,6 +913,7 @@ mod tests {
         let active = controller.controller_session(pending.id).unwrap();
         let mut task = OpenChannelTask {
             core: controller.clone(),
+            desktops: Arc::new(DesktopChannels::default()),
             id: active.id,
             generation: active.generation,
             kind: "terminal".into(),
@@ -665,6 +959,7 @@ mod tests {
         }
         let mut file_open = OpenChannelTask {
             core: controller.clone(),
+            desktops: Arc::new(DesktopChannels::default()),
             id: active.id,
             generation: active.generation,
             kind: "files".into(),
@@ -693,11 +988,58 @@ mod tests {
             progress.get("data").is_none(),
             "File payload crossed the UI boundary"
         );
+        file_task.operation = FileOperation::Poll {
+            job_id: progress["jobId"].as_str().unwrap().into(),
+        };
+        assert!(file_task.compute().is_ok());
         file_task.operation = FileOperation::Cancel {
             job_id: progress["jobId"].as_str().unwrap().into(),
         };
         assert!(file_task.compute().unwrap().contains("Cancelled"));
+        file_task.operation = FileOperation::Poll {
+            job_id: progress["jobId"].as_str().unwrap().into(),
+        };
+        assert!(file_task.compute().unwrap().contains("Cancelled"));
+        // UI progress reads are snapshots. Both cores' workers must still finish the transfer.
+        controller.start_file_job_driver();
+        host.start_file_job_driver();
+        file_task.operation = FileOperation::Submit {
+            direction: "upload".into(),
+            src_root: controller.file_roots().unwrap()[0].id.to_string(),
+            src_path: "test.bin".into(),
+            dst_root: host.file_roots().unwrap()[0].id.to_string(),
+            dst_path: "completed.bin".into(),
+        };
+        let submitted: serde_json::Value =
+            serde_json::from_str(&file_task.compute().unwrap()).unwrap();
+        file_task.operation = FileOperation::Poll {
+            job_id: submitted["jobId"].as_str().unwrap().into(),
+        };
+        let end = Instant::now() + Duration::from_secs(15);
+        loop {
+            let progress: serde_json::Value =
+                serde_json::from_str(&file_task.compute().unwrap()).unwrap();
+            if progress["state"] == "Complete" {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "background transfer did not complete: {progress}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            std::fs::read(destination.join("completed.bin/test.bin")).unwrap(),
+            [0, 255, 17, 42]
+        );
         files.take_cleanup().compute().unwrap();
+        assert_eq!(
+            controller
+                .job_snapshot(submitted["jobId"].as_str().unwrap().parse().unwrap())
+                .unwrap()
+                .state,
+            vnilink_app::FfiJobState::Complete
+        );
         channel.take_cleanup().compute().unwrap();
         channel.take_cleanup().compute().unwrap();
         assert!(channel.read().is_err());

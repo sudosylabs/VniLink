@@ -116,3 +116,61 @@ test('renderer acknowledges only after consumption and coalesces positions witho
 		client.close(); port2.close();
 	}
 });
+
+test('intentional close with unacknowledged input does not report a failure', async () => {
+	const { port1, port2 } = new MessageChannel();
+	const messages = [];
+	const errors = [];
+	port2.on('message', message => messages.push(message));
+	const client = new DataChannelClient(port1, () => { }, error => errors.push(error));
+	try {
+		client.input({ type: 'submitKey', sessionId: '1', generation: '2', usage: 4, down: true });
+		await until(() => messages.some(message => message.type === 'input'));
+		client.close();
+		await new Promise(resolve => setImmediate(resolve));
+		assert.deepEqual(errors, []);
+	} finally {
+		client.close(); port2.close();
+	}
+});
+
+test('cancel passes through renderer and utility while progress is pending', async () => {
+	const { port1, port2 } = new MessageChannel();
+	let resolvePoll;
+	const operations = [];
+	const errors = [];
+	const native = {
+		close() { }, fileOperation: command => {
+			const operation = JSON.parse(command);
+			operations.push(operation);
+			if (operation.type === 'poll') {
+				return new Promise(resolve => {
+					resolvePoll = resolve;
+				});
+			}
+			return Promise.resolve('{"state":"Cancelled"}');
+		}
+	};
+	const port = { on: (name, listener) => port2.on(name, name === 'message' ? data => listener({ data }) : listener), start() { }, close: () => port2.close(), postMessage: message => port2.postMessage(message) };
+	const host = new DataChannelHost(port, { ...request, kind: 'files' }, () => { });
+	host.start(native);
+	// The startup handshake is handled by open(), outside the client constructor.
+	await new Promise(resolve => port1.once('message', resolve));
+	const client = new DataChannelClient(port1, () => { }, error => errors.push(error));
+	let poll;
+	try {
+		poll = client.fileOperation({ type: 'poll', jobId: '1' });
+		await until(() => resolvePoll !== undefined);
+		await assert.rejects(client.fileOperation({ type: 'poll', jobId: '2' }), /backpressure/);
+		assert.equal(await client.fileOperation({ type: 'cancel', jobId: '1' }), '{"state":"Cancelled"}');
+		assert.deepEqual(operations.map(operation => operation.type), ['poll', 'cancel']);
+		resolvePoll('{"state":"Cancelled"}');
+		assert.equal(await poll, '{"state":"Cancelled"}');
+		assert.deepEqual(errors, []);
+	} finally {
+		client.close(); host.close();
+		if (poll) {
+			await poll.catch(() => { });
+		}
+	}
+});
