@@ -2,16 +2,27 @@ import { utilityProcess } from 'electron';
 import type { UtilityProcess } from 'electron';
 import { join } from 'node:path';
 import type { EngineCommand, EngineReply } from '../common/engine.js';
-import { isEngineCommand, isEngineReply, record } from '../common/engine.js';
+import { isEngineReply, record } from '../common/engine.js';
+
+interface PendingReply { resolve(value: EngineReply): void; reject(error: Error): void; }
+
+function timeoutFor(command: EngineCommand | { type: 'shutdown' }): number {
+	// Core dials block up to 75 seconds; every other call answers quickly.
+	return command.type === 'connect' || command.type === 'connectFiles' ? 90000 : 10000;
+}
+
 export class EngineService {
 	private child: UtilityProcess | undefined;
 	private connected = false;
 	private started = false;
 	private closing = false;
-	private queue: Promise<void> = Promise.resolve();
+	private fastQueue: Promise<void> = Promise.resolve();
+	private slowQueue: Promise<void> = Promise.resolve();
 	private pending = 0;
 	private nextId = 0;
-	private reply: { id: number; resolve(value: EngineReply): void; reject(error: Error): void } | undefined;
+	private waiting = new Map<number, PendingReply>();
+	private inflightSnapshot: Promise<EngineReply> | undefined;
+
 	public get available(): boolean {
 		return this.connected && !this.closing;
 	}
@@ -24,59 +35,87 @@ export class EngineService {
 		this.child = child;
 		await new Promise<void>((resolve, reject) => {
 			const timeout = setTimeout(() => {
-				this.fail(); reject(new Error('Engine startup timed out'));
+				this.fail(new Error('Engine startup timed out')); reject(new Error('Engine startup timed out'));
 			}, 15000);
 			child.on('message', (message: unknown) => {
 				if (this.child !== child) {
 					return;
 				}
 				if (!record(message)) {
-					this.fail(); return;
+					return;
 				}
 				if ('ready' in message) {
 					clearTimeout(timeout);
 					if (message.ready === true && !this.connected) {
 						this.connected = true; resolve();
 					} else {
-						this.fail(); reject(new Error('Engine could not open its secure installation'));
+						this.fail(new Error('Engine could not open its secure installation')); reject(new Error('Engine could not open its secure installation'));
 					}
 					return;
 				}
-				if (!this.reply || message.id !== this.reply.id) {
-					this.fail(); return;
-				}
-				const pending = this.reply; this.reply = undefined;
-				if (isEngineReply(message.reply)) {
-					pending.resolve(message.reply);
-				} else if (typeof message.error === 'string') {
-					pending.reject(new Error('Engine operation failed'));
-				} else {
-					pending.reject(new Error('Invalid engine reply')); this.fail();
-				}
+				this.deliver(message);
 			});
 			child.once('exit', () => {
-				clearTimeout(timeout); this.fail(); reject(new Error('Engine exited'));
+				clearTimeout(timeout); this.fail(new Error('Engine exited')); reject(new Error('Engine exited'));
 			});
 		});
 	}
 	public execute(command: EngineCommand): Promise<EngineReply> {
-		if (!isEngineCommand(command)) {
-			return Promise.reject(new Error('Invalid engine command'));
+		// Validated at the IPC boundary and in the Rust bridge; this queue
+		// stays typed-only so slow pairing work cannot hide a second check.
+		if (command.type === 'snapshot') {
+			const running = this.inflightSnapshot;
+			if (running) {
+				return running;
+			}
+			const coalesced = this.enqueue(command, this.fastQueue, queue => {
+				this.fastQueue = queue;
+			});
+			this.inflightSnapshot = coalesced;
+			const clear = (): void => {
+				if (this.inflightSnapshot === coalesced) {
+					this.inflightSnapshot = undefined;
+				}
+			};
+			coalesced.then(clear, clear);
+			return coalesced;
 		}
-		return this.enqueue(command);
+		return this.enqueue(command, this.slowQueue, queue => {
+			this.slowQueue = queue;
+		});
 	}
-	private enqueue(command: EngineCommand | { type: 'shutdown' }): Promise<EngineReply> {
+	private enqueue(command: EngineCommand | { type: 'shutdown' }, lane: Promise<void>, advance: (queue: Promise<void>) => void): Promise<EngineReply> {
 		if (!this.connected || this.pending >= 64 || (this.closing && command.type !== 'shutdown')) {
 			return Promise.reject(new Error('Engine unavailable'));
 		}
 		this.pending++;
-		const result = this.queue.then(() => this.send(command));
-		this.queue = result.then(() => {
+		const result = lane.then(() => this.send(command));
+		const tracked = result.then(value => {
 			this.pending--;
-		}, () => {
+			return value;
+		}, (error: unknown) => {
 			this.pending--;
+			throw error;
 		});
-		return result;
+		advance(tracked.then(() => undefined, () => undefined));
+		return tracked;
+	}
+	private deliver(message: Record<string, unknown>): void {
+		if (typeof message.id !== 'number' || !Number.isSafeInteger(message.id)) {
+			return;
+		}
+		const pending = this.waiting.get(message.id);
+		if (!pending) {
+			return;
+		}
+		this.waiting.delete(message.id);
+		if (isEngineReply(message.reply)) {
+			pending.resolve(message.reply);
+		} else if (typeof message.error === 'string' && message.error.length > 0) {
+			pending.reject(new Error(message.error.slice(0, 512)));
+		} else {
+			pending.reject(new Error('Invalid engine reply'));
+		}
 	}
 	private send(command: EngineCommand | { type: 'shutdown' }): Promise<EngineReply> {
 		if (!this.child || !this.connected || (this.closing && command.type !== 'shutdown')) {
@@ -86,19 +125,23 @@ export class EngineService {
 		return new Promise((resolve, reject) => {
 			const id = ++this.nextId;
 			const timeout = setTimeout(() => {
-				this.fail(); reject(new Error('Engine operation timed out'));
-			}, 10000);
-			this.reply = {
-				id, resolve: value => {
+				// A slow call fails alone; the engine stays up for the rest.
+				this.waiting.delete(id);
+				reject(new Error('Engine operation timed out'));
+			}, timeoutFor(command));
+			this.waiting.set(id, {
+				resolve: value => {
 					clearTimeout(timeout); resolve(value);
 				}, reject: error => {
 					clearTimeout(timeout); reject(error);
 				}
-			};
+			});
 			try {
 				child.postMessage({ id, command });
 			} catch {
-				clearTimeout(timeout); this.fail(); reject(new Error('Engine unavailable'));
+				clearTimeout(timeout);
+				this.waiting.delete(id);
+				reject(new Error('Engine unavailable'));
 			}
 		});
 	}
@@ -109,16 +152,20 @@ export class EngineService {
 		this.closing = true;
 		try {
 			if (this.connected) {
-				await this.enqueue({ type: 'shutdown' });
+				await this.enqueue({ type: 'shutdown' }, this.slowQueue, queue => {
+					this.slowQueue = queue;
+				});
 			}
 		} finally {
-			this.fail();
+			this.fail(new Error('Engine unavailable'));
 		}
 	}
-	private fail(): void {
+	private fail(error: Error): void {
 		this.connected = false;
-		const pending = this.reply; this.reply = undefined;
-		pending?.reject(new Error('Engine unavailable'));
+		for (const pending of this.waiting.values()) {
+			pending.reject(error);
+		}
+		this.waiting.clear();
 		const child = this.child; this.child = undefined;
 		child?.kill();
 	}
