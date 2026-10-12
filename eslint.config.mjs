@@ -38,6 +38,13 @@ export default [
 	},
 	{ files: ['src/**/*.ts'], rules: { 'vnilink/no-sync-fs': 'error' } },
 	{
+		// Upstream-faithful adaptive copy: the async contract methods are
+		// synchronous in implementation and the CLI switch is compared
+		// against its enum, matching VS Code.
+		files: ['src/platform/encryption/electron-main/encryptionMainService.ts'],
+		rules: { '@typescript-eslint/require-await': 'off', '@typescript-eslint/no-unsafe-enum-assignment': 'off', '@typescript-eslint/no-unsafe-enum-comparison': 'off' },
+	},
+	{
 		files: ['src/renderer.ts', 'src/**/browser/**/*.ts'],
 		languageOptions: { globals: { ...Object.fromEntries(Object.keys(globals.node).map(name => [name, 'off'])), ...globals.browser } },
 		rules: { 'no-restricted-globals': ['error', 'process', 'Buffer', 'require', '__dirname', '__filename', 'module', 'exports', 'global', 'setImmediate', 'clearImmediate'] },

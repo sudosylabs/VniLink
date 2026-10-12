@@ -10,6 +10,15 @@ export interface IEncryptionMainService extends ICommonEncryptionService {
 	setUsePlainTextEncryption(): Promise<void>;
 	getKeyStorageProvider(): Promise<KnownStorageProvider>;
 }
+// The values provided to the `password-store` command line switch.
+// Notice that they are not the same as the values returned by
+// `getSelectedStorageBackend` in the `safeStorage` API.
+export const enum PasswordStoreCLIOption {
+	kwallet = 'kwallet',
+	kwallet5 = 'kwallet5',
+	gnomeLibsecret = 'gnome-libsecret',
+	basic = 'basic'
+}
 export const enum KnownStorageProvider {
 	unknown = 'unknown',
 	basicText = 'basic_text',

@@ -32,7 +32,7 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 	protocol.registerSchemesAsPrivileged([{ scheme: 'vnilink', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 	let window: BrowserWindow | null = null;
 	const engine = new EngineService();
-	const encryption = new EncryptionMainService();
+	const encryption = new EncryptionMainService(logService);
 	const services = new InstantiationService(new ServiceCollection([INativeHostMainService, new SyncDescriptor(NativeHostMainService, [() => window])]), true);
 	const nativeHost = services.invokeFunction(accessor => accessor.get(INativeHostMainService));
 	nativeHost.onDidChangeWindowState(state => {
