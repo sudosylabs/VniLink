@@ -13,6 +13,10 @@ export interface DesktopApi {
 	nativeHostCommand(method: NativeHostMethod, args: unknown[]): Promise<unknown>;
 	onWindowStateChanged(listener: (state: IWindowState) => void): () => void;
 	engineCommand(command: EngineCommand): Promise<EngineReply>;
+	encryptText(value: string): Promise<string>;
+	decryptText(value: string): Promise<string>;
+	isEncryptionAvailable(): Promise<boolean>;
+	getKeyStorageProvider(): Promise<string>;
 }
 
 export function isAppInfo(value: unknown): value is AppInfo {
