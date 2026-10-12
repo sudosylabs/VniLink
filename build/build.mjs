@@ -31,6 +31,7 @@ await Promise.all([
 	cp(`${root}LICENSE.vscode.txt`, `${root}out/licenses/vscode.txt`),
 	cp(`${root}ThirdPartyNotices.vscode.txt`, `${root}out/licenses/vscode-third-party.txt`),
 	build({ entryPoints: [`${root}test/browser/icons.ts`], outfile: `${root}out/icon-tests.js`, tsconfig: `${root}tsconfig.json`, bundle: true, platform: 'browser', format: 'iife', globalName: 'iconTests', target: 'chrome144', loader: { '.svg': 'text' } }),
+	build({ entryPoints: [`${root}test/browser/tabs.ts`], outfile: `${root}out/tab-tests.js`, tsconfig: `${root}tsconfig.json`, bundle: true, platform: 'browser', format: 'iife', globalName: 'tabTests', target: 'chrome144', loader: { '.svg': 'text' } }),
 	cp(`${root}src/workbench/browser/index.html`, `${root}out/renderer/index.html`),
 	cp(`${root}assets/desktop/app-icon.svg`, `${root}out/renderer/app-icon.svg`),
 ]);

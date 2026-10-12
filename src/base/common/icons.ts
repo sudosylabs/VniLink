@@ -2,6 +2,7 @@
 export const Icons = Object.freeze({
 	home: 'home',
 	computers: 'computers',
+	refresh: 'refresh',
 	back: 'back',
 	forward: 'forward',
 	chevronLeft: 'chevronLeft',

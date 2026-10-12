@@ -150,8 +150,8 @@ The titlebar and native-window adapters follow Microsoft's VS Code release
 `1.141.0`, with `src/vs` flattened into `src`. The running shell registers
 services with `ServiceCollection`, `SyncDescriptor`, `registerSingleton` and
 `InstantiationService`, then mounts `NativeTitlebarPart`. Electron owns the
-native window controls; the renderer owns the empty draggable titlebar and its
-theme. Rust remains responsible for the application engine.
+native window controls; the renderer owns the draggable titlebar, view tabs,
+contextual actions and theme. Rust remains responsible for the application engine.
 
 The titlebar's editor, command-center, menu, toolbar and window-title code has
 been removed. Its dependency closure contains only the remaining adapters,
@@ -172,7 +172,20 @@ settings. `src/tsconfig.json` checks every retained upstream and adapted module;
 the root configuration checks the application entry points and tests. CSS imports
 are declared in `src/assets.d.ts`. `npm run typecheck` checks both projects.
 The Electron smoke test exercises native controls, window-state IPC, theme
-updates, fullscreen layout and request validation on the current platform.
+updates, fullscreen layout, tab overflow and request validation on the current platform.
+
+VniLink views implement `WorkbenchView` and open through `ViewHost`. `ITabService`
+owns their lifetimes, selection and order. Switching hides the existing element
+without disposing it; closing calls optional `canClose`, aborts pending actions
+and disposes the view. Each view supplies actions and may emit
+`onDidChangeActions` when their availability changes. Actions receive an
+`AbortSignal` and must avoid applying results after cancellation. The titlebar
+uses a scrolling tab region beside a separate toolbar for the active view.
+Its connected presentation adapts VS Code's `modernUI/browser/media/tabs.css`
+and `connectedEditorTabs.css`: the active tab shares its content surface, with
+curved shoulders and an open bottom edge. A view owns its whole layout,
+including any sidebar; closing Computers removes both its sidebar and page.
+Computers is the first integrated view; stream and terminal views are deferred.
 
 ## Verify the change
 

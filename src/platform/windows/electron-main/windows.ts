@@ -10,7 +10,7 @@ import { release } from 'node:os';
 import { getMacOSWindowControlsPosition, getNativeTitlebarHeight } from '../../window/common/window.js';
 export function defaultBrowserWindowOptions(): BrowserWindowConstructorOptions {
 	const dark = nativeTheme.shouldUseDarkColors;
-	const height = getNativeTitlebarHeight(process.platform, release());
+	const height = Math.max(35, getNativeTitlebarHeight(process.platform, release()));
 	const options: BrowserWindowConstructorOptions = {
 		title: 'VniLink',
 		width: 1120,

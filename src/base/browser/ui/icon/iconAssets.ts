@@ -1,4 +1,6 @@
 import type { IconId, IconVariant } from '../../../common/icons.js';
+import refreshOutlined from '@phosphor-icons/core/assets/regular/arrow-clockwise.svg';
+import refreshFilled from '@phosphor-icons/core/assets/fill/arrow-clockwise-fill.svg';
 import homeOutlined from '@phosphor-icons/core/assets/regular/house.svg';
 import homeFilled from '@phosphor-icons/core/assets/fill/house-fill.svg';
 import computersOutlined from '@phosphor-icons/core/assets/regular/desktop.svg';
@@ -28,6 +30,7 @@ import restoreFilled from '@phosphor-icons/core/assets/fill/copy-fill.svg';
 
 // The only place that knows the icon provider and its filenames.
 const assets: Record<IconId, Record<IconVariant, string>> = {
+	refresh: { outlined: refreshOutlined, filled: refreshFilled },
 	home: { outlined: homeOutlined, filled: homeFilled },
 	computers: { outlined: computersOutlined, filled: computersFilled },
 	back: { outlined: backOutlined, filled: backFilled },

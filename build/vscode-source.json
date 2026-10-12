@@ -2,7 +2,7 @@
   "repository": "https://github.com/microsoft/vscode",
   "ref": "1.141.0",
   "commit": "2a59476c9bfcb90b3ddc372c36762471b7dfad1c",
-  "sourceModifications": "Import specifiers flattened into src; adapted modules retain window-control behavior and service registration, removing editor and unrelated application services. Each adapted file is marked.",
+  "sourceModifications": "Import specifiers flattened into src; adapted modules retain native window controls and service registration, integrating VniLink view tabs and contextual actions while removing editor and unrelated application services. Each adapted file is marked.",
   "runtimeIntegrated": true,
   "files": [
     {
@@ -553,7 +553,7 @@
       "path": "src/platform/windows/electron-main/windows.ts",
       "upstreamPath": "src/vs/platform/windows/electron-main/windows.ts",
       "adapted": true,
-      "sha256": "c0cb4951caf72c90504870da1562bf3a667c9fecb0d908e89b9068c763ef2d38"
+      "sha256": "96bb081c27217c1816e03d3a1aad868e3c06de8b270398a1cc5a537d8d91e4df"
     },
     {
       "path": "src/typings/base-common.d.ts",
@@ -583,14 +583,14 @@
     {
       "path": "src/workbench/browser/parts/titlebar/media/titlebarpart.css",
       "upstreamPath": "src/vs/workbench/browser/parts/titlebar/media/titlebarpart.css",
-      "sha256": "854a5d8c551d2258fa25430ede51a4fc88b93f3342e800b78bb28f6a4ae89656",
+      "sha256": "d049afcdd6436cde574e9bad01a1c75416f7b6e756dc47ac1246287023f8bb2e",
       "changedImports": 0,
       "adapted": true
     },
     {
       "path": "src/workbench/browser/parts/titlebar/titlebarPart.ts",
       "upstreamPath": "src/vs/workbench/browser/parts/titlebar/titlebarPart.ts",
-      "sha256": "c7eeee243fa89aa9cdea38633a851e516dda6fec71ee7283002bee902c05d424",
+      "sha256": "6475423991bd1ef46b41cf19accfc943b9daccef83d4423f9bf6db20d0525485",
       "changedImports": 0,
       "adapted": true
     },
@@ -598,12 +598,12 @@
       "path": "src/workbench/electron-browser/desktop.main.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/desktop.main.ts",
       "adapted": true,
-      "sha256": "64e1f04d8e7a63fec619c8d7d1725765cc8d7ee60aa2e2c0b5dc5cc0935686ce"
+      "sha256": "ec39ed629401941f2db7359d527fcf6de9449971db528b0d03c34dd4cef54204"
     },
     {
       "path": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
-      "sha256": "f876c48182e2345a3c5e13f7fa613551ac005f4ab780688a411e3f2f03dfc0ee",
+      "sha256": "e101f0eb36b2914b2560ab9cfeb0a1280330234a2233d49164ef24b0b1d57bc7",
       "changedImports": 0,
       "adapted": true
     },
@@ -625,6 +625,12 @@
       "upstreamPath": "src/vs/base/browser/window.ts",
       "sha256": "8003fc60f1f022d1ae4abfa8773385399ab5a7413dccbffb825f1c0c8bdef13b",
       "changedImports": 0
+    },
+    {
+      "path": "src/workbench/browser/parts/titlebar/media/modernTabs.css",
+      "upstreamPath": "src/vs/workbench/contrib/modernUI/browser/media/tabs.css",
+      "adapted": true,
+      "sha256": "85ec6f73af4138c1449280502f186b52a1260cdb275219fdf849b482602b9d76"
     }
   ],
   "scope": "Native window controls, titlebar presentation, DI registration and their recursive dependencies",
@@ -2056,6 +2062,11 @@
     },
     {
       "from": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
       "to": "src/base/common/event.ts",
       "kind": "import"
     },
@@ -2111,6 +2122,21 @@
     },
     {
       "from": "src/workbench/browser/parts/titlebar/titlebarPart.ts",
+      "to": "src/workbench/browser/parts/titlebar/media/modernTabs.css",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/browser/parts/titlebar/titlebarPart.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/browser/parts/titlebar/titlebarPart.ts",
+      "to": "src/workbench/browser/parts/titlebar/titlebarTabsControl.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/browser/parts/titlebar/titlebarPart.ts",
       "to": "src/base/common/lifecycle.ts",
       "kind": "import"
     },
@@ -2122,6 +2148,11 @@
     {
       "from": "src/workbench/browser/parts/titlebar/titlebarPart.ts",
       "to": "src/workbench/services/host/browser/host.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/tabs/common/tabServiceImpl.ts",
       "kind": "import"
     },
     {
@@ -2474,6 +2505,8 @@
     "src/base/browser/window.ts"
   ],
   "applicationDependencies": [
-    "src/platform/ipc/common/desktopApi.ts"
+    "src/platform/ipc/common/desktopApi.ts",
+    "src/workbench/browser/parts/titlebar/titlebarTabsControl.ts",
+    "src/workbench/services/tabs/common/tabServiceImpl.ts"
   ]
 }

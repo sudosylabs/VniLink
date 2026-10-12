@@ -60,6 +60,9 @@ async function verify(window: BrowserWindow): Promise<void> {
 	if (iconsVerified !== true) {
 		throw new Error('Icon helper verification failed');
 	}
+	const tabTests = readFileSync(join(__dirname, 'tab-tests.js'), 'utf8');
+	const tabsVerified: unknown = await window.webContents.executeJavaScript(`${tabTests}\ntabTests.verifyTabs()`);
+	assert.equal(tabsVerified, true);
 	const engine: unknown = await window.webContents.executeJavaScript(`(async () => {
     const snapshot = await window.vnilink.engineCommand({ type: 'snapshot' });
     const invitation = await window.vnilink.engineCommand({ type: 'createInvitation', ttlSeconds: 60 });
@@ -99,9 +102,9 @@ async function verify(window: BrowserWindow): Promise<void> {
 	app.quit();
 }
 async function verifyTitlebar(window: BrowserWindow): Promise<void> {
-	const height = getNativeTitlebarHeight(process.platform, release());
+	const height = Math.max(35, getNativeTitlebarHeight(process.platform, release()));
 	const presentation: unknown = await window.webContents.executeJavaScript(
-		`({ height: document.querySelector('.part.titlebar').getBoundingClientRect().height, drag: getComputedStyle(document.querySelector('.titlebar-drag-region')).getPropertyValue('-webkit-app-region'), unwanted: document.querySelectorAll('.part.titlebar button, .tabs, .window-controls, .titlebar-center, .menubar').length })`,
+		`({ height: document.querySelector('.part.titlebar').getBoundingClientRect().height, drag: getComputedStyle(document.querySelector('.titlebar-drag-region')).getPropertyValue('-webkit-app-region'), unwanted: document.querySelectorAll('.window-controls, .titlebar-center, .menubar').length })`,
 	);
 	assert.deepEqual(presentation, { height, drag: 'drag', unwanted: 0 });
 	if (process.platform === 'darwin') {
@@ -169,6 +172,14 @@ async function verifyTitlebar(window: BrowserWindow): Promise<void> {
 		);
 		assert.equal(hidden, fullscreen);
 	}
+	const closedView: unknown = await window.webContents.executeJavaScript(`(async () => {
+    const panel = document.querySelector('.view-host > [role="tabpanel"]');
+    if (!panel?.querySelector('.sidebar')) throw new Error('Sidebar is outside its tab view');
+    document.querySelector('.tabs-container .tab-close').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    return !document.querySelector('.sidebar') && !document.querySelector('[role="tabpanel"]') && !document.querySelector('.view-action');
+  })()`);
+	assert.equal(closedView, true, 'Closing Computers left its interface behind');
 	await call('minimizeWindow');
 	await call('focusWindow');
 	const state: unknown = await call('getWindowState');
