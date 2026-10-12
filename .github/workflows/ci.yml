@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xdg-utils libatspi2.0-0 libdrm2 libxcb1 libxkbcommon0 libsecret-1-0 libdbus-1-dev pkg-config gnome-keyring dbus-x11 xvfb
+
+      - run: npm ci
+
+      - run: npm run check
+
+      - run: cargo fmt --all -- --check
+
+      - name: Test Rust transport
+        run: cargo test --locked --target-dir target/electron -p vnilink-node data::tests
+
+      - name: Test (Linux display and secret service)
+        if: runner.os == 'Linux'
+        run: |
+          eval "$(dbus-launch --sh-syntax)"
+          echo "" | gnome-keyring-daemon --daemonize --unlock --components=secrets || true
+          xvfb-run -a npm test
+
+      - name: Test (macOS and Windows)
+        if: runner.os != 'Linux'
+        run: npm test

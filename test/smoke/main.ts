@@ -9,6 +9,7 @@ import { tmpdir, release } from 'node:os';
 import { isMacintosh } from '../../src/base/common/platform.js';
 import { isAppInfo } from '../../src/platform/ipc/common/desktopApi.js';
 import { startApplication } from '../../src/app/electron-main/application.js';
+import { registerDevelopmentWindow } from '../../src/app/electron-main/development.js';
 
 const profile = mkdtempSync(join(tmpdir(), 'vnilink-electron-smoke-'));
 app.setPath('userData', profile);
@@ -109,10 +110,45 @@ async function verify(window: BrowserWindow): Promise<void> {
 		throw new Error('Unlisted asset accessible');
 	}
 	await verifyTitlebar(window);
+	await verifyDevelopmentReload(window, engine.snapshot.snapshot.endpoint_id);
 	console.log(
-		'PASS: icon variants, accessibility, theming and buttons verified; native titlebar, theme, window state and controls verified; application loaded, typed bridge works, renderer isolated, invalid action rejected, native Rust state and invitations work, privileged shutdown rejected.',
+		'PASS: icon variants, accessibility, theming and buttons verified; native titlebar, theme, window state and controls verified; application loaded, typed bridge works, renderer isolated, invalid action rejected, native Rust state and invitations work, privileged shutdown rejected; development reload preserves the native engine.',
 	);
 	app.quit();
+}
+async function verifyDevelopmentReload(window: BrowserWindow, endpointId: string): Promise<void> {
+	const previous = process.env.VNILINK_DEV;
+	process.env.VNILINK_DEV = '1';
+	try {
+		registerDevelopmentWindow(window);
+	} finally {
+		if (previous === undefined) {
+			delete process.env.VNILINK_DEV;
+		} else {
+			process.env.VNILINK_DEV = previous;
+		}
+	}
+	const loaded = new Promise<void>((resolve, reject) => {
+		const timer = setTimeout(() => {
+			window.webContents.removeListener('did-finish-load', done);
+			reject(new Error('Development reload timed out'));
+		}, 5000);
+		function done(): void {
+			clearTimeout(timer);
+			resolve();
+		}
+		window.webContents.once('did-finish-load', done);
+	});
+	let prevented = false;
+	window.webContents.emit('before-input-event', {
+		preventDefault: () => {
+			prevented = true;
+		}
+	}, { type: 'keyDown', key: 'r', meta: isMacintosh, control: !isMacintosh, alt: false, shift: false });
+	await loaded;
+	assert.equal(prevented, true);
+	const snapshot: unknown = await window.webContents.executeJavaScript(`window.vnilink.engineCommand({ type: 'snapshot' })`);
+	assert.ok(isEngineReply(snapshot) && snapshot.type === 'snapshot' && snapshot.snapshot.endpoint_id === endpointId, 'Reload replaced the native engine');
 }
 async function verifyTitlebar(window: BrowserWindow): Promise<void> {
 	const height = Math.max(35, getNativeTitlebarHeight(release()));

@@ -11,7 +11,7 @@
     "typecheck:upstream": "tsc -p src/tsconfig.json --noEmit",
     "build": "npm run typecheck && node build/build.mjs",
     "start": "npm run build && node scripts/start.mjs",
-    "dev": "npm start",
+    "dev": "node scripts/dev.mjs",
     "test": "npm run build && npm run test:native && electron out/smoke.cjs",
     "format": "node build/format.mjs --write",
     "format:check": "node build/format.mjs --check",
@@ -24,7 +24,8 @@
     "check": "npm run check:upstream && npm run format:check && npm run lint && npm run typecheck && npm run test:tooling",
     "test:native": "node --test test/native/*.test.mjs",
     "prepare": "husky",
-    "precommit": "npm run check && cargo fmt --all -- --check && npm test"
+    "precommit": "npm run check && cargo fmt --all -- --check && npm test",
+    "watch": "node scripts/dev.mjs --watch-only"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

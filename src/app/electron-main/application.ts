@@ -12,6 +12,7 @@ import { app, BrowserWindow, net, protocol, session } from 'electron';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createMainWindow } from './windows.js';
+import { registerDevelopmentWindow } from './development.js';
 import { registerDesktopHandlers } from '../../platform/ipc/electron-main/handlers.js';
 
 export const applicationUrl = 'vnilink://app/index.html';
@@ -65,6 +66,7 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 	});
 	async function openWindow(): Promise<BrowserWindow> {
 		const current = createMainWindow();
+		registerDevelopmentWindow(current);
 		window = current;
 		nativeHost.registerWindow(current);
 		current.on('closed', () => {
