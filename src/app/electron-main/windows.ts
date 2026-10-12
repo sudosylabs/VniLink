@@ -8,7 +8,11 @@ export function createMainWindow(): BrowserWindow {
 		webPreferences: { preload: join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false },
 	});
 	window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-	window.webContents.on('will-navigate', (event) => event.preventDefault());
-	window.webContents.on('will-redirect', (event) => event.preventDefault());
+	window.webContents.on('will-navigate', (event) => {
+		event.preventDefault();
+	});
+	window.webContents.on('will-redirect', (event) => {
+		event.preventDefault();
+	});
 	return window;
 }

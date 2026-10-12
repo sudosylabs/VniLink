@@ -3,6 +3,8 @@ export function button(label: string, className: string, action?: () => void): H
 	element.type = 'button';
 	element.className = className;
 	element.textContent = label;
-	if (action) { element.addEventListener('click', action); }
+	if (action) {
+		element.addEventListener('click', action);
+	}
 	return element;
 }

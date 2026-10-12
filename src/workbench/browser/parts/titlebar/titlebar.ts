@@ -1,5 +1,5 @@
-import { button } from '../../../../base/browser/ui/button/button';
-import type { AppInfo, DesktopApi, WindowAction } from '../../../../platform/ipc/common/desktopApi';
+import { button } from '../../../../base/browser/ui/button/button.js';
+import type { AppInfo, DesktopApi, WindowAction } from '../../../../platform/ipc/common/desktopApi.js';
 export function createTitlebar(info: AppInfo, api: DesktopApi, onError: (error: unknown) => void): HTMLElement {
 	const titlebar = document.createElement('header');
 	titlebar.className = 'titlebar';
@@ -15,7 +15,9 @@ export function createTitlebar(info: AppInfo, api: DesktopApi, onError: (error: 
 		controls.className = 'window-controls';
 		const actions: [WindowAction, string, string][] = [['minimize', '−', 'Minimize'], ['maximize', '□', 'Maximize'], ['close', '×', 'Close']];
 		for (const [action, symbol, label] of actions) {
-			const control = button(symbol, '', () => { void api.windowAction(action).catch(onError); });
+			const control = button(symbol, '', () => {
+				void api.windowAction(action).catch(onError);
+			});
 			control.setAttribute('aria-label', label);
 			controls.append(control);
 		}

@@ -1,12 +1,12 @@
 import './styles/workbench.css';
-import type { AppInfo, DesktopApi } from '../../platform/ipc/common/desktopApi';
-import { createTitlebar } from './parts/titlebar/titlebar';
-import { createSidebar } from './parts/sidebar/sidebar';
-import { createComputersPage } from './features/computers/computers';
+import type { AppInfo, DesktopApi } from '../../platform/ipc/common/desktopApi.js';
+import { createTitlebar } from './parts/titlebar/titlebar.js';
+import { createSidebar } from './parts/sidebar/sidebar.js';
+import { createComputersPage } from './features/computers/computers.js';
 export function renderWorkbench(info: AppInfo, api: DesktopApi): void {
 	document.documentElement.dataset.platform = info.platform;
 	const status = document.createElement('footer'); status.className = 'status'; status.setAttribute('role', 'status');
-	status.textContent = `Desktop preview · ${info.version}`;
+	status.textContent = info.engineConnected ? `Engine ready · ${info.version}` : 'Engine unavailable — secure storage could not be opened';
 	function showError(error: unknown): void {
 		console.error(error);
 		status.textContent = 'The desktop could not complete the action. Close the window and try again.';
@@ -15,4 +15,20 @@ export function renderWorkbench(info: AppInfo, api: DesktopApi): void {
 	const page = createComputersPage(); page.append(status);
 	workspace.append(createSidebar(), page);
 	document.body.replaceChildren(createTitlebar(info, api, showError), workspace);
+	if (info.engineConnected) {
+		void api.engineCommand({ type: 'snapshot' }).then(reply => {
+			if (reply.type !== 'snapshot') {
+				throw new Error('Expected engine snapshot');
+			}
+			const state = page.querySelector('.empty-state');
+			if (state && reply.snapshot.devices.length > 0) {
+				state.replaceChildren();
+				for (const device of reply.snapshot.devices) {
+					const label = document.createElement('p');
+					label.textContent = device.pet_name ?? device.hostname ?? device.endpoint_id;
+					state.append(label);
+				}
+			}
+		}).catch(showError);
+	}
 }

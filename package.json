@@ -11,7 +11,7 @@
     "build": "npm run typecheck && node build/build.mjs",
     "start": "npm run build && node scripts/start.mjs",
     "dev": "npm start",
-    "test": "npm run build && electron out/smoke.cjs",
+    "test": "npm run build && npm run test:native && electron out/smoke.cjs",
     "format": "node build/format.mjs --write",
     "format:check": "node build/format.mjs --check",
     "lint:ts": "eslint \"src/**/*.ts\" \"build/**/*.mjs\" \"scripts/**/*.mjs\" \"test/**/*.{ts,mjs}\" \"*.config.mjs\" --max-warnings 0",
@@ -19,7 +19,8 @@
     "lint": "npm run lint:ts && npm run lint:css",
     "lint:fix": "eslint \"src/**/*.ts\" \"build/**/*.mjs\" \"scripts/**/*.mjs\" \"test/**/*.{ts,mjs}\" \"*.config.mjs\" --fix && stylelint \"src/**/*.css\" --fix",
     "test:tooling": "node --test test/tooling/*.test.mjs",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test:tooling"
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test:tooling",
+    "test:native": "node --test test/native/*.test.mjs"
   },
   "devDependencies": {
     "electron": "44.7.0",
@@ -34,5 +35,6 @@
     "prettier": "3.9.10",
     "stylelint": "17.16.0",
     "stylelint-config-standard": "40.0.0"
-  }
+  },
+  "type": "module"
 }

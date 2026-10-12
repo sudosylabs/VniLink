@@ -2,7 +2,7 @@
 
 VniLink is a remote desktop application with a shared Electron interface written in vanilla TypeScript, HTML and CSS, and a shared Rust library with native macOS, Windows and Linux engines.
 
-The Electron application now lives at the repository root. The initial shell opens a sandboxed window with a narrow preload API; it does not yet connect to Rust, pair computers, capture media or access credentials. The old SwiftUI and GTK application folders have been removed. The Rust platform crates and existing UniFFI library remain; the Electron Rust bridge and efficient viewer presentation are follow-up work.
+The Electron application lives at the repository root. Its sandboxed renderer calls a typed preload API; an Electron utility process hosts the Rust Node addon. Installation state and pairing commands are connected, while the full pairing interface, remaining services and media streaming are pending. The old SwiftUI and GTK application folders and UniFFI generator have been removed; the Rust platform and application adapters remain.
 
 ## Development
 
@@ -13,7 +13,7 @@ npm ci
 npm start
 ```
 
-`npm run build` type-checks and compiles the application. `npm test` launches a hidden Electron window with a disposable profile and checks rendering, the preload boundary, invalid actions and restricted local assets. `npm run dev` builds and starts the same shell; quit and rerun after edits until watch/reload is implemented. Generated application code lives in `out/`; `dist/` is reserved for distribution packages.
+`npm run build` type-checks the application, builds the Rust Node addon and compiles the Electron entry points. Native Linux builds require the DBus development libraries for Secret Service. `npm test` launches a hidden Electron window with a disposable profile and temporary Rust identity, checks rendering, the preload boundary, native state/invitations, invalid actions and restricted local assets. It never opens the installation credential store. Normal startup requires the platform credential store; failure does not fall back to a temporary identity. `npm run dev` builds and starts the same shell; quit and rerun after edits until watch/reload is implemented. Generated application code lives in `out/`; `dist/` is reserved for distribution packages.
 
 `npm run format` applies the agreed formatting; `npm run lint:fix` fixes supported lint findings. `npm run check` verifies formatting, code/CSS lint, types and tooling regression tests. See [contributor guidance](CONTRIBUTING.md#typescript-css-and-formatting) for rules and layer boundaries.
 
@@ -96,6 +96,9 @@ vnilink/
     base/browser/ui/           # Reusable DOM controls
     platform/ipc/common/       # Environment-independent API contracts
     platform/ipc/electron-main/ # Validated privileged handlers
+    platform/engine/common/    # Control commands and value validation
+    platform/engine/electron-main/ # Engine ownership and request queue
+    platform/engine/electron-utility/ # Rust addon host
     workbench/browser/         # Layout, parts, feature views and CSS
   crates/                      # Shared core and native engines
   assets/                      # Existing branding
@@ -103,6 +106,7 @@ vnilink/
   build/                       # Build and future packaging tools
   scripts/                     # Development commands
   test/smoke/                  # Actual Electron application checks
+  test/native/                 # Two-engine Rust binding integration checks
   out/                         # Generated application code; ignored
   dist/                        # Future distribution output; ignored
   docs/                        # Local specifications/evidence; ignored
@@ -136,7 +140,7 @@ Service installation does not automatically provide access to a user's graphical
 
 ## 5. Rust bindings and media boundary
 
-`crates/vnilink-ffi` and UniFFI tooling remain as existing library interfaces. The Electron-facing Rust bridge is not implemented yet; its hosting/API and efficient video-presentation path must be validated before migrating remote-session behavior. UI commands and status messages must be separated from high-throughput media delivery.
+`crates/vnilink-app` preserves the tested application adapters as plain Rust. `crates/vnilink-node` exposes a bounded Node-API control interface, hosted by an Electron utility process. UniFFI and its generator have been removed. The bridge currently supports snapshots, invitation/file pairing, grants, revocation, unpairing and peer names; the remaining service APIs and UI flows are not connected yet. Native credentials are stored as an opaque installation record under `com.vnilink.installation` / `primary` (Keychain on macOS, Credential Manager on Windows, Secret Service on Linux). Media streaming and presentation remain deferred.
 
 Document ownership, lifetime, threading, error mapping, and cancellation for each boundary. Do not expose internal async types or networking implementation details as the native API.
 
@@ -303,4 +307,4 @@ Consult current primary documentation when implementing version-dependent behavi
 
 Pin selected dependencies and document the actual supported versions. Replace proposed build layout and instructions with verified commands as implementation lands. Put detailed decisions and evidence in the corresponding docs directories, and keep this README as the entry point describing the final product and remaining scope.
 
-The removed native apps previously implemented background window-close, login startup and sharing controls. Those behaviors are not yet integrated into Electron. Startup sharing, permission onboarding, credential storage and background hosting must be restored through the retained Rust engines and reviewed application services before claiming parity. Earlier native cursor/viewer results above are historical evidence for those implementations, not validation of the new Electron viewer.
+The removed native apps previously implemented background window-close, login startup and sharing controls. Those behaviors are not yet integrated into Electron. Startup sharing, permission onboarding and background hosting must be restored through the retained Rust engines and reviewed application services before claiming parity. Earlier native cursor/viewer results above are historical evidence for those implementations, not validation of the new Electron viewer.

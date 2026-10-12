@@ -1,2 +1,4 @@
-import type { DesktopApi } from '../platform/ipc/common/desktopApi';
-declare global { interface Window { vnilink: DesktopApi; } }
+import type { DesktopApi } from '../platform/ipc/common/desktopApi.js';
+declare global {
+	interface Window { vnilink: DesktopApi; }
+}

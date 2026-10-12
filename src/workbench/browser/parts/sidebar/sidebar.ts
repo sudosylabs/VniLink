@@ -1,4 +1,4 @@
-import { button } from '../../../../base/browser/ui/button/button';
+import { button } from '../../../../base/browser/ui/button/button.js';
 export function createSidebar(): HTMLElement {
 	const sidebar = document.createElement('aside');
 	sidebar.className = 'sidebar';

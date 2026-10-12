@@ -38,8 +38,8 @@ requires the MSVC toolchain and Windows SDK. Linux capture and media builds
 require the development libraries for PipeWire, VA-API, GBM, and their build
 dependencies. The shared desktop application uses Electron and vanilla TypeScript/CSS.
 Install Node 22.19 or later, run `npm ci` from the repository root, then
-`npm start`. `npm run build` and `npm test` verify the shell; the Rust bridge
-is not implemented yet.
+`npm start`. `npm run build` and `npm test` verify the shell; the Rust control bridge
+runs in an Electron utility process; streaming remains deferred.
 
 ## Find the owning component
 
@@ -50,13 +50,14 @@ is not implemented yet.
 | `crates/vnilink-macos/` | macOS capture and VideoToolbox adapters |
 | `crates/vnilink-windows/` | Windows capture and Media Foundation adapters |
 | `crates/vnilink-linux/` | X11, Wayland portal, PipeWire, and VA-API adapters |
+| `crates/vnilink-app/`, `crates/vnilink-node/` | Shared application adapters and Node-API control bindings |
 | `src/app/`, `src/platform/` | Electron lifecycle, windows, IPC and desktop service boundaries |
 | `src/workbench/`, `src/base/browser/` | Browser interface and reusable DOM controls |
 | `build/`, `scripts/`, `test/` | Application build, development and smoke verification |
 | `assets/` | Branding and icons |
 | `docs/validation/` | Reproducible validation methods, results, and remaining cases |
 
-The shared Electron application will host the Rust library through a defined bridge. Keep platform capture,
+The shared Electron application hosts the Rust library through a Node-API control bridge. Keep platform capture,
 rendering, and credential-store integration in their owning adapters or apps.
 Follow nearby code style and explain non-obvious invariants in comments.
 
