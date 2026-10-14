@@ -63,10 +63,11 @@ export class EngineService {
 				}
 				this.deliver(message);
 			});
-			child.once('exit', () => {
+			child.once('exit', code => {
 				clearTimeout(timeout);
-				this.fail(new Error('Engine exited'));
-				reject(new Error('Engine exited'));
+				const error = new Error(`Engine exited (${String(code)})`);
+				this.fail(error);
+				reject(error);
 			});
 		});
 	}

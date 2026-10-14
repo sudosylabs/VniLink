@@ -2,7 +2,7 @@ import { IApplicationService } from '../../src/workbench/services/application/co
 import { IConnectionService } from '../../src/workbench/services/connection/common/connectionService.js';
 import { IConfigurationService, defaultConfiguration } from '../../src/platform/configuration/common/configuration.js';
 import { Event, Emitter } from '../../src/base/common/event.js';
-import { HomeView } from '../../src/workbench/browser/features/home/home.js';
+import { HomeView } from '../../src/workbench/contrib/home/browser/home.js';
 import { IDeviceService, type DeviceSummary } from '../../src/workbench/services/devices/common/deviceService.js';
 import { InstantiationService } from '../../src/platform/instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';

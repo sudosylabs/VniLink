@@ -1,11 +1,9 @@
-import { renderWorkbench } from './workbench/browser/workbench.js';
+import { DesktopMain } from './workbench/electron-browser/desktop.main.js';
 
-async function initialize(): Promise<void> {
-	const info = await window.vnilink.getAppInfo();
-	await renderWorkbench(info, window.vnilink);
-}
-
-void initialize().catch((error: unknown) => {
+void window.vnilink.getAppInfo().then(async info => {
+	const desktop = new DesktopMain(window.vnilink, info);
+	await desktop.open();
+}).catch((error: unknown) => {
 	console.error(error);
 	const status = document.querySelector('[role="status"]');
 	if (status) {

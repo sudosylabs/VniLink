@@ -1,5 +1,5 @@
-import { PeerAccessSection } from '../../src/workbench/browser/features/settings/browser/peerAccessSection.js';
-import { LocalSecuritySection } from '../../src/workbench/browser/features/settings/browser/localSecuritySection.js';
+import { PeerAccessSection } from '../../src/workbench/contrib/settings/browser/peerAccessSection.js';
+import { LocalSecuritySection } from '../../src/workbench/contrib/settings/browser/localSecuritySection.js';
 import type { IAccessService, PeerAccess, AccessPermission, LocalSecurity } from '../../src/workbench/services/access/common/accessService.js';
 
 function assert(condition: boolean, message: string): void {

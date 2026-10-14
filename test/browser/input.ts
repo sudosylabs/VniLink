@@ -1,4 +1,4 @@
-import { InputPage } from '../../src/workbench/browser/features/settings/browser/inputPage.js';
+import { InputPage } from '../../src/workbench/contrib/settings/browser/inputPage.js';
 import { defaultConfiguration, type IConfigurationService, type ConfigurationSnapshot } from '../../src/platform/configuration/common/configuration.js';
 import { Emitter } from '../../src/base/common/event.js';
 

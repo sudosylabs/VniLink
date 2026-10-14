@@ -1,6 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
+ * Adapted for VniLink: explicit value cases and platform-compatible hash conversion.
  *--------------------------------------------------------------------------------------------*/
 
 import { encodeHex, VSBuffer } from './buffer.js';

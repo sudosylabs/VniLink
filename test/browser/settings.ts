@@ -1,7 +1,7 @@
 import { Emitter } from '../../src/base/common/event.js';
 import { defaultConfiguration, type IConfigurationService, type ConfigurationSnapshot } from '../../src/platform/configuration/common/configuration.js';
-import { AppearancePage } from '../../src/workbench/browser/features/settings/browser/appearancePage.js';
-import { ConnectionPage } from '../../src/workbench/browser/features/settings/browser/connectionPage.js';
+import { AppearancePage } from '../../src/workbench/contrib/settings/browser/appearancePage.js';
+import { ConnectionPage } from '../../src/workbench/contrib/settings/browser/connectionPage.js';
 import { ConnectionReadbackError, type ConnectionSettings, type IConnectionService } from '../../src/workbench/services/connection/common/connectionService.js';
 
 function assert(condition: boolean, message: string): void {

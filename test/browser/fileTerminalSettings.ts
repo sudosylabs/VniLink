@@ -1,6 +1,6 @@
 import { Emitter } from '../../src/base/common/event.js';
-import { FilesPage } from '../../src/workbench/browser/features/settings/browser/filesPage.js';
-import { TerminalPage } from '../../src/workbench/browser/features/settings/browser/terminalPage.js';
+import { FilesPage } from '../../src/workbench/contrib/settings/browser/filesPage.js';
+import { TerminalPage } from '../../src/workbench/contrib/settings/browser/terminalPage.js';
 import { defaultConfiguration, type IConfigurationService, type ConfigurationSnapshot } from '../../src/platform/configuration/common/configuration.js';
 import type { ITerminalSettingsService } from '../../src/workbench/services/terminal/common/terminalSettingsService.js';
 

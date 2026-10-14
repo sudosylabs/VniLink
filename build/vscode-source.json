@@ -2,7 +2,7 @@
   "repository": "https://github.com/microsoft/vscode",
   "ref": "1.141.0",
   "commit": "2a59476c9bfcb90b3ddc372c36762471b7dfad1c",
-  "sourceModifications": "Import specifiers flattened into src; adapted modules retain native window controls and service registration, integrating VniLink view tabs and contextual actions while removing editor and unrelated application services. Each adapted file is marked.",
+  "sourceModifications": "Import specifiers flattened into src; adapted modules retain native window controls and service registration, integrating VniLink view tabs and contextual actions while removing editor and unrelated application services. Each adapted file is marked. Desktop composition is class-owned; adapted presentation modules use shared semantic palette variables. ARIA announcements are copied from the pinned upstream revision.",
   "runtimeIntegrated": true,
   "files": [
     {
@@ -526,7 +526,7 @@
       "path": "src/platform/theme/browser/themeService.ts",
       "upstreamPath": "src/vs/workbench/services/themes/browser/workbenchThemeService.ts",
       "adapted": true,
-      "sha256": "910bee77a553b18a97994f7b5ac315a7cebcdecdbef2c4315bed45bd30c45f04",
+      "sha256": "9deef7d380c72d132714aa49a66ab8c1390aebf97cca63dd9d8a399e0f6f7ab8",
       "adaptation": "New system-theme adapter using the upstream theme-service registration pattern."
     },
     {
@@ -598,7 +598,7 @@
       "path": "src/workbench/electron-browser/desktop.main.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/desktop.main.ts",
       "adapted": true,
-      "sha256": "31d6359b6d8b318d7cc4e827fed39dd2fe0732bcd9efee67088fd45edd792ec7"
+      "sha256": "69517fa8244d86842a6fc46dc2815f481b440de9884f63d14c155d2e80d47c68"
     },
     {
       "path": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
@@ -631,14 +631,96 @@
       "upstreamPath": "src/vs/workbench/contrib/modernUI/browser/media/tabs.css",
       "adapted": true,
       "sha256": "e336803fc58083354b0c9741c6e6c3d052fb2d92ff18f7fed96b4215d55e8b0a"
+    },
+    {
+      "path": "src/base/browser/ui/aria/aria.ts",
+      "upstreamPath": "src/vs/base/browser/ui/aria/aria.ts",
+      "sha256": "61098dabc4f0069ff9d51e4b4262147e1c29ca58713eaa0782ef243d3cd63d27",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/ui/aria/aria.css",
+      "upstreamPath": "src/vs/base/browser/ui/aria/aria.css",
+      "sha256": "c6cea3b56d90a2754b2ac362e81792e55495ebae36194e65e35cd655f71f9775",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/dom.ts",
+      "upstreamPath": "src/vs/base/browser/dom.ts",
+      "sha256": "5963e909ab4c16e4810714f39dac72e5e2253d53ed85129b04ce21b90571af8f",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/numbers.ts",
+      "upstreamPath": "src/vs/base/common/numbers.ts",
+      "sha256": "1e197ffa6ca2e60f43eaa25f0930674ad4d348b293ad607a69186d0ddc744ab3",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/keyCodes.ts",
+      "upstreamPath": "src/vs/base/common/keyCodes.ts",
+      "sha256": "7e059bb385cae572916c3aac8770831c86a0f7d4b6da250b9d0d745143bd20f1",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/mouseEvent.ts",
+      "upstreamPath": "src/vs/base/browser/mouseEvent.ts",
+      "sha256": "1294a8d4cba678bbee9ba1e67acf1e8adcc5cfe556800b57637d1748c613c214",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/iframe.ts",
+      "upstreamPath": "src/vs/base/browser/iframe.ts",
+      "sha256": "4bdd13fb9d4e8cc6e60e9a02ae0d627d790077fb568f46d173746d22deda8c20",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/browser.ts",
+      "upstreamPath": "src/vs/base/browser/browser.ts",
+      "sha256": "8dbb98957266777088901ebc896da986eecba73f16db3b8a5929d0394342399a",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/keyboardEvent.ts",
+      "upstreamPath": "src/vs/base/browser/keyboardEvent.ts",
+      "sha256": "c0080f6875ce679e4140d6faeae4ccb2f8d0b26fa2946d0c5f24ec5c39206aba",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/keybindings.ts",
+      "upstreamPath": "src/vs/base/common/keybindings.ts",
+      "sha256": "7d45fe47f4371c0c5513dfc0d544b04ccab88789ef08d5bbbf00ca93928faa49",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/canIUse.ts",
+      "upstreamPath": "src/vs/base/browser/canIUse.ts",
+      "sha256": "0d0e1910902339bb7bc37c2fed83e800dc8ef4d020e9aa79f26f14d5b0383886",
+      "changedImports": 0
+    },
+    {
+      "path": "src/typings/editContext.d.ts",
+      "upstreamPath": "src/typings/editContext.d.ts",
+      "sha256": "348174814b3a7c4c9ad1ac2a6e467cb3fd700c3d452e065eb8875201bb74672e",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/hash.ts",
+      "upstreamPath": "src/vs/base/common/hash.ts",
+      "sha256": "6faa20253ab7162b626f36f73009ebb30c0a22d2277cb9d97926cebb00fbd6bf",
+      "adapted": true,
+      "changedImports": 0
     }
   ],
   "scope": "Native window controls, titlebar presentation, DI registration and their recursive dependencies",
   "roots": [
+    "src/base/browser/ui/aria/aria.ts",
     "src/base/browser/window.ts",
+    "src/platform/instantiation/common/instantiationService.ts",
     "src/platform/native/electron-main/nativeHostMainService.ts",
     "src/platform/windows/electron-main/windows.ts",
     "src/typings/base-common.d.ts",
+    "src/typings/editContext.d.ts",
     "src/typings/thenable.d.ts",
     "src/typings/vscode-globals-nls.d.ts",
     "src/typings/vscode-globals-product.d.ts",
@@ -2620,14 +2702,17 @@
     "src/typings/base-common.d.ts",
     "src/typings/thenable.d.ts",
     "src/typings/vscode-globals-nls.d.ts",
-    "src/typings/vscode-globals-product.d.ts"
+    "src/typings/vscode-globals-product.d.ts",
+    "src/typings/editContext.d.ts"
   ],
   "entryPoints": [
     "src/workbench/electron-browser/desktop.main.ts",
     "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
     "src/platform/native/electron-main/nativeHostMainService.ts",
     "src/platform/windows/electron-main/windows.ts",
-    "src/base/browser/window.ts"
+    "src/base/browser/window.ts",
+    "src/base/browser/ui/aria/aria.ts",
+    "src/platform/instantiation/common/instantiationService.ts"
   ],
   "applicationDependencies": [
     "src/platform/ipc/common/desktopApi.ts",
@@ -2653,6 +2738,7 @@
     "src/workbench/services/terminal/common/terminalSettingsService.ts",
     "src/workbench/services/terminal/electron-browser/terminalSettingsService.ts",
     "src/workbench/services/nativeRuntime/common/nativeRuntimeService.ts",
-    "src/workbench/services/nativeRuntime/electron-browser/nativeRuntimeService.ts"
+    "src/workbench/services/nativeRuntime/electron-browser/nativeRuntimeService.ts",
+    "src/workbench/browser/workbench.ts"
   ]
 }

@@ -1,10 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2024",
+    "allowJs": true,
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2024", "ESNext.Disposable", "DOM", "DOM.Iterable"],
-    "types": ["node"],
+    "types": ["node", "trusted-types"],
     "strict": true,
     "noUncheckedIndexedAccess": false,
     "noEmit": true,
@@ -30,6 +31,7 @@
     "src/typings/vscode-globals-nls.d.ts",
     "src/typings/vscode-globals-product.d.ts",
     "src/platform/engine/browser/dataChannelClient.ts",
-    "src/platform/log/common/bufferLog.ts"
+    "src/platform/log/common/bufferLog.ts",
+    "src/typings/editContext.d.ts"
   ]
 }

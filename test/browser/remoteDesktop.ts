@@ -1,11 +1,11 @@
-import { DesktopCodecSection } from '../../src/workbench/browser/features/settings/browser/desktopCodecSection.js';
-import { DesktopDefaultsSection } from '../../src/workbench/browser/features/settings/browser/desktopDefaultsSection.js';
+import { DesktopCodecSection } from '../../src/workbench/contrib/settings/browser/desktopCodecSection.js';
+import { DesktopDefaultsSection } from '../../src/workbench/contrib/settings/browser/desktopDefaultsSection.js';
 import { InstantiationService } from '../../src/platform/instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
 import { IConfigurationService, defaultConfiguration, type ConfigurationSnapshot } from '../../src/platform/configuration/common/configuration.js';
 import { Event as LifecycleEvent, Emitter } from '../../src/base/common/event.js';
-import { RemoteDesktopPage } from '../../src/workbench/browser/features/settings/browser/remoteDesktopPage.js';
-import { DesktopQualityEditor } from '../../src/workbench/browser/features/settings/browser/desktopQualityEditor.js';
+import { RemoteDesktopPage } from '../../src/workbench/contrib/settings/browser/remoteDesktopPage.js';
+import { DesktopQualityEditor } from '../../src/workbench/contrib/settings/browser/desktopQualityEditor.js';
 import type { IRemoteDesktopService, DesktopSettings, DesktopTarget } from '../../src/workbench/services/remoteDesktop/common/remoteDesktopService.js';
 
 function assert(condition: boolean, message: string): void {

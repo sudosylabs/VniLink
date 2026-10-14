@@ -1,16 +1,9 @@
-import { verifyFileTerminalSettings } from './fileTerminalSettings.js';
-import { verifyInputPage } from './input.js';
-import { verifyRemoteDesktop } from './remoteDesktop.js';
-import { verifyMachinePermissions } from './permissions.js';
 import { TabService } from '../../src/workbench/services/tabs/common/tabServiceImpl.js';
 import type { TabAction } from '../../src/workbench/services/tabs/common/tabService.js';
 import { TitlebarTabsControl } from '../../src/workbench/browser/parts/titlebar/titlebarTabsControl.js';
 import { ViewHost, type WorkbenchView } from '../../src/workbench/browser/parts/views/viewHost.js';
 import { Emitter } from '../../src/base/common/event.js';
 import { Icons } from '../../src/base/common/icons.js';
-import { verifyAccess } from './access.js';
-import { verifySettingsPages } from './settings.js';
-import { verifyHomeLifecycle } from './home.js';
 
 function assert(condition: boolean, message: string): void {
 	if (!condition) {
@@ -19,13 +12,6 @@ function assert(condition: boolean, message: string): void {
 }
 
 export async function verifyTabs(): Promise<boolean> {
-	await verifyFileTerminalSettings();
-	await verifyInputPage();
-	await verifyHomeLifecycle();
-	await verifySettingsPages();
-	await verifyAccess();
-	await verifyMachinePermissions();
-	await verifyRemoteDesktop();
 	const service = new TabService();
 	const fixture = document.createElement('div');
 	fixture.className = 'part titlebar';

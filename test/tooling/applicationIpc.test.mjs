@@ -7,7 +7,7 @@ const output = await build({
 	stdin: { contents: `export { registerDesktopHandlers } from './src/platform/ipc/electron-main/handlers.js'; export { handlers, opened } from 'electron'; export { defaultConfiguration } from './src/platform/configuration/common/configuration.js';`, loader: 'ts', resolveDir: process.cwd() }, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json', plugins: [{
 		name: 'electron-fixture', setup(builder) {
 			builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }));
-			builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: `export const handlers = new Map(); export const opened = []; export const ipcMain = { handle: (name, callback) => handlers.set(name, callback) }; export const app = { isPackaged: false, getVersion: () => 'test' }; export const shell = { openExternal: async url => opened.push(url) }; export const systemPreferences = {}; export const screen = { getAllDisplays: () => [] }; export class MessageChannelMain { constructor() { this.port1 = { close() {} }; this.port2 = { close() {} }; } }` }));
+			builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: `export const handlers = new Map(); export const opened = []; export const ipcMain = { handle: (name, callback) => handlers.set(name, callback), removeHandler: name => handlers.delete(name) }; export const app = { isPackaged: false, getVersion: () => 'test' }; export const shell = { openExternal: async url => opened.push(url) }; export const systemPreferences = {}; export const screen = { getAllDisplays: () => [] }; export class MessageChannelMain { constructor() { this.port1 = { close() {} }; this.port2 = { close() {} }; } }` }));
 		}
 	}]
 });
@@ -154,4 +154,15 @@ test('defaults are applied before disk commit, refused runtime changes do not sa
 	await handlers.get('configuration:update')(event, codec);
 	assert.deepEqual(calls.at(-1), { type: 'setDesktopCodecDefault', codec: 'av1' });
 	assert.equal(snapshot.values['desktop.codec'], 'av1');
+});
+
+test('IPC owner releases registrations and rejects commands after disposal', async () => {
+	const frame = { url: 'vnilink://app/index.html' };
+	const contents = { mainFrame: frame };
+	const controller = registerDesktopHandlers(() => ({ webContents: contents }), frame.url, { available: false }, {}, {}, { snapshot: { values: defaultConfiguration } }, () => { });
+	const handler = handlers.get('configuration:get');
+	assert.equal(handler({ sender: contents, senderFrame: frame }).values, defaultConfiguration);
+	controller.dispose();
+	assert.equal(handlers.size, 0);
+	assert.throws(() => handler({ sender: contents, senderFrame: frame }), /disposed/);
 });

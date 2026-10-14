@@ -130,9 +130,8 @@ export class EngineHost {
 			// untouched so only one boundary parses its shape.
 			const reply: unknown = JSON.parse(await this.engine.execute(JSON.stringify(command)));
 			this.port.postMessage({ id, reply });
-			if (shutdown) {
-				process.exit(0);
-			}
+			// The main-process owner terminates this utility after receiving the
+			// shutdown reply. Exiting here can discard the queued acknowledgement.
 		} catch (error) {
 			// Native error strings name the reason only, never secrets.
 			const reason = error instanceof Error && error.message.length > 0 ? error.message : 'Engine operation failed';

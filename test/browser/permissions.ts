@@ -1,5 +1,5 @@
 import { Emitter } from '../../src/base/common/event.js';
-import { MachinePermissionsSection } from '../../src/workbench/browser/features/settings/browser/machinePermissionsSection.js';
+import { MachinePermissionsSection } from '../../src/workbench/contrib/settings/browser/machinePermissionsSection.js';
 import type { IPermissionService } from '../../src/workbench/services/permissions/common/permissionService.js';
 import { permissionKinds, type PermissionCommand, type PermissionSnapshot } from '../../src/platform/permissions/common/permissions.js';
 
