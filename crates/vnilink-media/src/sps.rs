@@ -67,6 +67,9 @@ pub fn h264_picture_size(sps: &[u8]) -> Result<(u16, u16), Error> {
                 bits.se().ok_or_else(truncated)?;
             }
         }
+        // H.264 7.3.2.1.1: type 2 has no additional picture-order fields.
+        // Media Foundation emits it for low-delay Baseline streams.
+        2 => {}
         _ => return Err(Error::InvalidFrame("H.264 SPS picture order is unknown")),
     }
     bits.ue().ok_or_else(truncated)?;
@@ -203,5 +206,27 @@ impl<'a> Bits<'a> {
         } else {
             Some(i32::try_from(code / 2 + 1).ok()?)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn baseline_type_two_geometry_is_valid_and_unknown_order_is_rejected() {
+        // Baseline, sequence 0, four-bit frame numbers, POC type 2, one
+        // reference, 4x4 macroblocks, progressive, no crop or VUI.
+        let valid = [0x67, 0x42, 0x00, 0x1e, 0xda, 0x10, 0x99];
+        assert_eq!(h264_picture_size(&valid).unwrap(), (64, 64));
+        let unknown = [0x67, 0x42, 0x00, 0x1e, 0xc8, 0x84, 0x26, 0x40];
+        assert!(matches!(
+            h264_picture_size(&unknown),
+            Err(Error::InvalidFrame("H.264 SPS picture order is unknown"))
+        ));
+        assert!(matches!(
+            h264_picture_size(&valid[..5]),
+            Err(Error::InvalidFrame("H.264 SPS is truncated"))
+        ));
     }
 }
