@@ -24,6 +24,7 @@ debug = "line-tables-only"
 
 # Enigo 0.6.1 with a macOS local-input coexistence fix; see vendor/enigo/VNILINK.md.
 [patch.crates-io]
+napi-build = { path = "vendor/napi-build" }
 iroh = { path = "vendor/iroh" }
 enigo = { path = "vendor/enigo" }
 cpal = { path = "vendor/cpal" }
