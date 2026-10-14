@@ -2,7 +2,9 @@ import { isEngineCommand, record } from './engine.js';
 import type { EngineCommand } from './engine.js';
 
 export type DataChannelKind = 'video' | 'terminal' | 'input' | 'files' | 'camera' | 'audio';
+
 export type MediaChannelConfig = { readonly type: 'camera'; readonly deviceId: string; readonly width: number; readonly height: number; readonly fps: number } | { readonly type: 'audio'; readonly deviceId: string; readonly sourceKind: 'Microphone' | 'System'; readonly channels: 1 | 2; readonly voice: boolean };
+
 export interface DataChannelRequest {
 	media?: MediaChannelConfig;
 	requestId: string;
@@ -12,6 +14,7 @@ export interface DataChannelRequest {
 	rows?: number;
 	columns?: number;
 }
+
 export interface DataPacket {
 	type: 'data';
 	sequence: number;
@@ -19,12 +22,14 @@ export interface DataPacket {
 	data?: Uint8Array;
 	metadata: string;
 }
+
 export interface DataChannelMetrics {
 	sent: number;
 	acknowledged: number;
 	pending: number;
 	lastAckMs: number;
 }
+
 export function isChannelRequest(value: unknown): value is DataChannelRequest {
 	return (
 		record(value) &&
@@ -40,12 +45,15 @@ export function isChannelRequest(value: unknown): value is DataChannelRequest {
 		)
 	);
 }
+
 export function id(value: unknown): value is string {
 	return typeof value === 'string' && /^[1-9]\d{0,19}$/.test(value) && BigInt(value) <= 18446744073709551615n;
 }
+
 export function dimension(value: unknown): value is number {
 	return typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 65535;
 }
+
 export function isInputCommand(value: unknown): value is EngineCommand {
 	return (
 		isEngineCommand(value) &&
@@ -62,6 +70,7 @@ export function isInputCommand(value: unknown): value is EngineCommand {
 		].includes(value.type)
 	);
 }
+
 export function isDataPacket(value: unknown): value is DataPacket {
 	return (
 		record(value) &&

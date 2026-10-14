@@ -10,7 +10,6 @@ function _definePolyfillMarks(timeOrigin?: number) {
 	if (typeof timeOrigin === 'number') {
 		_data.push('code/timeOrigin', timeOrigin);
 	}
-
 	function mark(name: string, markOptions?: { startTime?: number }) {
 		_data.push(name, markOptions?.startTime ?? Date.now());
 	}
@@ -78,7 +77,6 @@ function _define() {
 			// safari & webworker: because there is no timeOrigin and no workaround
 			// we use the `Date.now`-based polyfill.
 			return _definePolyfillMarks();
-
 		} else {
 			// use "native" performance for mark and getMarks
 			return {
@@ -107,13 +105,11 @@ function _define() {
 				}
 			};
 		}
-
 	} else if (typeof process === 'object') {
 		// node.js: use the normal polyfill but add the timeOrigin
 		// from the node perf_hooks API as very first mark
 		const timeOrigin = typeof performance === 'object' ? performance.timeOrigin : undefined;
 		return _definePolyfillMarks(timeOrigin);
-
 	} else {
 		// unknown environment
 		console.trace('perf-util loaded in UNKNOWN environment');

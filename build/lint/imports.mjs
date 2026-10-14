@@ -16,9 +16,11 @@ export const importExtensionsRule = {
 			ExportAllDeclaration: node => check(node.source, node.source.value),
 			ImportExpression: node => check(node.source, node.source.value),
 			TSImportType: node => {
-				const literal = node.argument ?? node.source; check(node, literal?.value ?? literal?.literal?.value);
+				const literal = node.argument ?? node.source;
+				check(node, literal?.value ?? literal?.literal?.value);
 			},
 		};
 	},
 };
+
 export default { rules: { 'import-extensions': importExtensionsRule } };

@@ -58,17 +58,23 @@ export class ConnectionPage extends Disposable implements WorkbenchPage {
 		modeSection.className = 'connection-section connection-mode-section';
 		const modeHeading = document.createElement('h2');
 		modeHeading.textContent = nls.localize('connection.mode', 'Relay mode');
-		const modeControls = document.createElement('div'); modeControls.className = 'connection-mode-controls'; modeControls.append(modeHeading, this.mode.element);
+		const modeControls = document.createElement('div');
+		modeControls.className = 'connection-mode-controls';
+		modeControls.append(modeHeading, this.mode.element);
 		this.publicHelp.className = 'connection-description connection-public-help';
 		const explanation = document.createTextNode(nls.localize('connection.publicHelp', 'Uses Iroh’s public relays, operated by n0.computer. Relayed traffic is rate-limited; direct connections bypass these limits. '));
-		const documentation = document.createElement('a'); documentation.href = 'https://docs.iroh.computer/relays/rate-limiting'; documentation.textContent = nls.localize('connection.publicDocs', 'Read Iroh’s relay documentation');
+		const documentation = document.createElement('a');
+		documentation.href = 'https://docs.iroh.computer/relays/rate-limiting';
+		documentation.textContent = nls.localize('connection.publicDocs', 'Read Iroh’s relay documentation');
 		this._register(addDisposableListener(documentation, 'click', event => {
-			event.preventDefault(); void this.application.openRelayDocumentation().catch(() => {
+			event.preventDefault();
+			void this.application.openRelayDocumentation().catch(() => {
 				this.customValidation = false;
 				this.status.textContent = nls.localize('connection.docsFailed', 'Could not open the relay documentation.');
 			});
 		}));
-		this.publicHelp.append(explanation, documentation); modeSection.append(modeControls, this.publicHelp);
+		this.publicHelp.append(explanation, documentation);
+		modeSection.append(modeControls, this.publicHelp);
 		this.custom.className = 'connection-section connection-custom';
 		const customHeader = document.createElement('div');
 		customHeader.className = 'connection-section-header';
@@ -91,9 +97,14 @@ export class ConnectionPage extends Disposable implements WorkbenchPage {
 		const currentLabel = document.createElement('h2');
 		currentLabel.className = 'connection-current-label';
 		currentLabel.textContent = nls.localize('connection.inUse', 'Running configuration');
-		this.pending.className = 'connection-description'; this.pending.hidden = true;
+		this.pending.className = 'connection-description';
+		this.pending.hidden = true;
 		this.pending.textContent = nls.localize('connection.pending', 'Your saved configuration will take effect after restarting VniLink. Use the restart action in the titlebar.');
-		const currentHeader = document.createElement('div'); currentHeader.className = 'connection-section-header'; this.runningState.className = 'connection-runtime-state'; currentHeader.append(currentLabel, this.runningState); current.append(currentHeader, this.active, this.pending);
+		const currentHeader = document.createElement('div');
+		currentHeader.className = 'connection-section-header';
+		this.runningState.className = 'connection-runtime-state';
+		currentHeader.append(currentLabel, this.runningState);
+		current.append(currentHeader, this.active, this.pending);
 		this.form.append(this.fields, this.status, this.retry, current);
 		this.element.append(this.form);
 		this._register(this.mode.onDidChange(() => {
@@ -106,7 +117,8 @@ export class ConnectionPage extends Disposable implements WorkbenchPage {
 			void this.load();
 		}));
 		this._register(addDisposableListener(this.form, 'submit', event => {
-			event.preventDefault(); void this.save();
+			event.preventDefault();
+			void this.save();
 		}));
 		this._register(addDisposableListener(this.form, 'input', () => {
 			this.updateSave();
@@ -123,18 +135,21 @@ export class ConnectionPage extends Disposable implements WorkbenchPage {
 			this.status.textContent = nls.localize('connection.unavailable', 'Connection settings are unavailable because the connection engine could not start. Restart VniLink to try again.');
 		}
 	}
+
 	private addRow(relay?: RelayInfo): void {
 		if (this.rows.length >= 8) {
 			return;
 		}
 		const row = new RelayEditor(relay, () => {
-			this.rows.splice(this.rows.indexOf(row), 1); row.dispose();
+			this.rows.splice(this.rows.indexOf(row), 1);
+			row.dispose();
 			this.updateMode();
 		});
 		this.rows.push(row);
 		this.rowsContainer.append(row.element);
 		this.updateMode();
 	}
+
 	private updateMode(): void {
 		this.custom.hidden = this.mode.value !== 'custom';
 		if (this.customValidation && this.mode.value !== 'custom') {
@@ -148,6 +163,7 @@ export class ConnectionPage extends Disposable implements WorkbenchPage {
 			this.addRow();
 		}
 	}
+
 	private render(settings: ConnectionSettings): void {
 		this.saved = settings;
 		for (const row of this.rows.splice(0)) {
@@ -159,19 +175,25 @@ export class ConnectionPage extends Disposable implements WorkbenchPage {
 		}
 		this.updateMode();
 		this.active.replaceChildren();
-		const label = document.createElement('p'); label.className = 'connection-active-mode';
-		label.textContent = settings.active.publicRelay ? nls.localize('connection.activePublic', 'Iroh public relays') : nls.localize('connection.activeCustom', 'Custom relays'); this.active.append(label);
+		const label = document.createElement('p');
+		label.className = 'connection-active-mode';
+		label.textContent = settings.active.publicRelay ? nls.localize('connection.activePublic', 'Iroh public relays') : nls.localize('connection.activeCustom', 'Custom relays');
+		this.active.append(label);
 		if (!settings.active.publicRelay) {
-			const list = document.createElement('ul'); list.className = 'connection-active-urls';
+			const list = document.createElement('ul');
+			list.className = 'connection-active-urls';
 			for (const url of settings.active.urls) {
-				const item = document.createElement('li'); item.textContent = url; list.append(item);
-			} this.active.append(list);
+				const item = document.createElement('li');
+				item.textContent = url;
+				list.append(item);
+			}
+			this.active.append(list);
 		}
 		this.pending.hidden = !settings.restartRequired;
 		this.runningState.textContent = settings.restartRequired ? nls.localize('connection.restartRequired', 'Restart required') : nls.localize('connection.running', 'Running');
 		this.runningState.dataset.pending = String(settings.restartRequired);
-
 	}
+
 	private async load(): Promise<void> {
 		if (this.busy || this.isDisposed()) {
 			return;
@@ -196,11 +218,13 @@ export class ConnectionPage extends Disposable implements WorkbenchPage {
 		} finally {
 			this.busy = false;
 			if (!this.isDisposed()) {
-				this.fields.disabled = !this.saved; this.updateSave();
+				this.fields.disabled = !this.saved;
+				this.updateSave();
 				this.retry.disabled = false;
 			}
 		}
 	}
+
 	private async save(): Promise<void> {
 		if (this.busy || !this.saved || !this.dirty() || this.isDisposed()) {
 			return;
@@ -212,7 +236,8 @@ export class ConnectionPage extends Disposable implements WorkbenchPage {
 		}
 		if (issues.length) {
 			this.customValidation = true;
-			this.status.textContent = issues[0].message; return;
+			this.status.textContent = issues[0].message;
+			return;
 		}
 		this.customValidation = false;
 		this.busy = true;
@@ -242,19 +267,24 @@ export class ConnectionPage extends Disposable implements WorkbenchPage {
 		} finally {
 			this.busy = false;
 			if (!this.isDisposed()) {
-				this.fields.disabled = !this.saved; this.updateSave();
+				this.fields.disabled = !this.saved;
+				this.updateSave();
 			}
 		}
 	}
+
 	private dirty(): boolean {
 		return !!this.saved && relayDraftChanged(this.saved.saved, this.mode.value === 'public' ? { mode: 'public' } : { mode: 'custom', relays: this.rows.map(row => row.value) });
 	}
+
 	private updateSave(): void {
 		this.saveButton.disabled = this.busy || !this.dirty();
 	}
+
 	private isDisposed(): boolean {
 		return this._store.isDisposed;
 	}
+
 	public override dispose(): void {
 		super.dispose();
 		for (const row of this.rows.splice(0)) {

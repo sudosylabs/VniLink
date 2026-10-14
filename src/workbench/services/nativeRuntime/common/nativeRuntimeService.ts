@@ -1,7 +1,10 @@
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import type { NativeBackend, NativeCapability, NativeDevice, PowerPolicy, PowerStatus, NativeScreenSource, NativeSharingStatus, RecordingStatus, RecordingRetention } from '../../../../platform/engine/common/engine.js';
+
 export interface NativeRuntime { readonly backends: readonly NativeBackend[]; readonly capabilities: readonly NativeCapability[]; }
+
 export const INativeRuntimeService = createDecorator<INativeRuntimeService>('nativeRuntimeService');
+
 export interface INativeRuntimeService {
 	readonly _serviceBrand: undefined;
 	readonly available: boolean;

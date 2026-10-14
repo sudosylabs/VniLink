@@ -21,7 +21,9 @@ export interface WorkbenchTab extends IDisposable {
 	readonly onDidChangeActions?: Event<void>;
 	canClose?(): boolean | Promise<boolean>;
 }
+
 export const ITabService = createDecorator<ITabService>('tabService');
+
 export interface ITabService {
 	readonly _serviceBrand: undefined;
 	readonly tabs: readonly WorkbenchTab[];

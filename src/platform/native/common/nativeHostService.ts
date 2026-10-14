@@ -21,7 +21,6 @@ export class NativeHostService implements INativeHostService {
 				const properties = new Map<string, unknown>();
 				properties.set('windowId', windowId);
 				properties.set('dispose', undefined);
-
 				return properties;
 			})(),
 		});

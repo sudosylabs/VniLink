@@ -9,6 +9,7 @@ export interface SidebarItem {
 	readonly label: string;
 	readonly icon: IconId;
 }
+
 export interface SidebarGroup {
 	readonly label?: string;
 	readonly items: readonly SidebarItem[];

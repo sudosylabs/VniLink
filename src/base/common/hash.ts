@@ -79,7 +79,6 @@ export class ConstantStringHash {
 		for (let remaining = value.length; remaining > 0; remaining--) {
 			multiplier = Math.imul(multiplier, 31);
 		}
-
 		this.multiplier = multiplier;
 		this.addend = stringHash(value, 0);
 	}
@@ -123,7 +122,6 @@ export const hashAsync = (input: string | ArrayBufferView | VSBuffer) => {
 		sha.update(input);
 		return Promise.resolve(sha.digest());
 	}
-
 	let buff: ArrayBufferView;
 	if (typeof input === 'string') {
 		buff = new TextEncoder().encode(input);
@@ -132,7 +130,6 @@ export const hashAsync = (input: string | ArrayBufferView | VSBuffer) => {
 	} else {
 		buff = input;
 	}
-
 	return crypto.subtle.digest('sha-1', buff as ArrayBufferView<ArrayBuffer>).then(toHexString); // CodeQL [SM04514] we use sha1 here for validating old stored client state, not for security
 };
 
@@ -153,12 +150,13 @@ function leftRotate(value: number, bits: number, totalBits = 32): number {
 }
 
 function toHexString(buffer: ArrayBuffer): string;
+
 function toHexString(value: number, bitsize?: number): string;
+
 function toHexString(bufferOrValue: ArrayBuffer | number, bitsize = 32): string {
 	if (bufferOrValue instanceof ArrayBuffer) {
 		return encodeHex(VSBuffer.wrap(new Uint8Array(bufferOrValue)));
 	}
-
 	return (bufferOrValue >>> 0).toString(16).padStart(bitsize / 4, '0');
 }
 
@@ -175,7 +173,6 @@ export class StringSHA1 {
 	private _h2 = 0x98BADCFE;
 	private _h3 = 0x10325476;
 	private _h4 = 0xC3D2E1F0;
-
 	private readonly _buff: Uint8Array;
 	private readonly _buffDV: DataView;
 	private _buffLen: number;
@@ -197,13 +194,11 @@ export class StringSHA1 {
 		if (strLen === 0) {
 			return;
 		}
-
 		const buff = this._buff;
 		let buffLen = this._buffLen;
 		let leftoverHighSurrogate = this._leftoverHighSurrogate;
 		let charCode: number;
 		let offset: number;
-
 		if (leftoverHighSurrogate !== 0) {
 			charCode = leftoverHighSurrogate;
 			offset = -1;
@@ -212,7 +207,6 @@ export class StringSHA1 {
 			charCode = str.charCodeAt(0);
 			offset = 0;
 		}
-
 		for (; ;) {
 			let codePoint = charCode;
 			if (strings.isHighSurrogate(charCode)) {
@@ -234,7 +228,6 @@ export class StringSHA1 {
 				// illegal => unicode replacement character
 				codePoint = SHA1Constant.UNICODE_REPLACEMENT;
 			}
-
 			buffLen = this._push(buff, buffLen, codePoint);
 			offset++;
 			if (offset < strLen) {
@@ -243,7 +236,6 @@ export class StringSHA1 {
 				break;
 			}
 		}
-
 		this._buffLen = buffLen;
 		this._leftoverHighSurrogate = leftoverHighSurrogate;
 	}
@@ -265,7 +257,6 @@ export class StringSHA1 {
 			buff[buffLen++] = 0b10000000 | ((codePoint & 0b00000000000000000000111111000000) >>> 6);
 			buff[buffLen++] = 0b10000000 | ((codePoint & 0b00000000000000000000000000111111) >>> 0);
 		}
-
 		if (buffLen >= blockSize) {
 			this._step();
 			buffLen -= SHA1Constant.BLOCK_SIZE;
@@ -275,7 +266,6 @@ export class StringSHA1 {
 			buff[1] = buff[SHA1Constant.BLOCK_SIZE + 1];
 			buff[2] = buff[SHA1Constant.BLOCK_SIZE + 2];
 		}
-
 		return buffLen;
 	}
 
@@ -290,14 +280,12 @@ export class StringSHA1 {
 			this._totalLen += this._buffLen;
 			this._wrapUp();
 		}
-
 		return toHexString(this._h0) + toHexString(this._h1) + toHexString(this._h2) + toHexString(this._h3) + toHexString(this._h4);
 	}
 
 	private _wrapUp(): void {
 		this._buff[this._buffLen++] = 0x80;
 		this._buff.subarray(this._buffLen).fill(0);
-
 		if (this._buffLen > 56) {
 			this._step();
 			this._buff.fill(0);
@@ -305,34 +293,27 @@ export class StringSHA1 {
 
 		// this will fit because the mantissa can cover up to 52 bits
 		const ml = 8 * this._totalLen;
-
 		this._buffDV.setUint32(56, Math.floor(ml / 4294967296), false);
 		this._buffDV.setUint32(60, ml % 4294967296, false);
-
 		this._step();
 	}
 
 	private _step(): void {
 		const bigBlock32 = StringSHA1._bigBlock32;
 		const data = this._buffDV;
-
 		for (let j = 0; j < 64 /* 16*4 */; j += 4) {
 			bigBlock32.setUint32(j, data.getUint32(j, false), false);
 		}
-
 		for (let j = 64; j < 320 /* 80*4 */; j += 4) {
 			bigBlock32.setUint32(j, leftRotate((bigBlock32.getUint32(j - 12, false) ^ bigBlock32.getUint32(j - 32, false) ^ bigBlock32.getUint32(j - 56, false) ^ bigBlock32.getUint32(j - 64, false)), 1), false);
 		}
-
 		let a = this._h0;
 		let b = this._h1;
 		let c = this._h2;
 		let d = this._h3;
 		let e = this._h4;
-
 		let f: number, k: number;
 		let temp: number;
-
 		for (let j = 0; j < 80; j++) {
 			if (j < 20) {
 				f = (b & c) | ((~b) & d);
@@ -347,7 +328,6 @@ export class StringSHA1 {
 				f = b ^ c ^ d;
 				k = 0xCA62C1D6;
 			}
-
 			temp = (leftRotate(a, 5) + f + e + k + bigBlock32.getUint32(j * 4, false)) & 0xffffffff;
 			e = d;
 			d = c;
@@ -355,7 +335,6 @@ export class StringSHA1 {
 			b = a;
 			a = temp;
 		}
-
 		this._h0 = (this._h0 + a) & 0xffffffff;
 		this._h1 = (this._h1 + b) & 0xffffffff;
 		this._h2 = (this._h2 + c) & 0xffffffff;

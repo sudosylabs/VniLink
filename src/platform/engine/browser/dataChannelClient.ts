@@ -17,6 +17,7 @@ export class DataChannelClient {
 	private readonly pendingWrites = new Map<number, { resolve(): void; reject(error: Error): void }>();
 	private nextWrite = 0;
 	private readonly filePending = new Map<number, { cancel: boolean; resolve(value: string): void; reject(error: Error): void }>();
+
 	constructor(
 		private readonly port: MessagePort,
 		private readonly consume: (packet: DataPacket) => void | Promise<void>,
@@ -37,6 +38,7 @@ export class DataChannelClient {
 			}
 		}, 2000);
 	}
+
 	public static async open(
 		api: DesktopApi,
 		request: Omit<DataChannelRequest, 'requestId'>,
@@ -95,6 +97,7 @@ export class DataChannelClient {
 			});
 		});
 	}
+
 	private async receive(message: unknown): Promise<void> {
 		if (this.closed) {
 			return;
@@ -119,7 +122,8 @@ export class DataChannelClient {
 				return;
 			}
 			if (record(message) && message.type === 'closed') {
-				this.close(); return;
+				this.close();
+				return;
 			}
 			if (record(message) && message.type === 'error') {
 				throw new Error('Data channel unavailable');
@@ -152,6 +156,7 @@ export class DataChannelClient {
 			this.fail(error instanceof Error ? error : new Error('Data consumer failed'));
 		}
 	}
+
 	public input(command: EngineCommand): void {
 		if (this.closed) {
 			throw new Error('Data channel closed');
@@ -171,6 +176,7 @@ export class DataChannelClient {
 			this.flushInput();
 		}, 0);
 	}
+
 	private flushInput(): void {
 		if (this.closed || this.inputFlight) {
 			return;
@@ -194,6 +200,7 @@ export class DataChannelClient {
 			},
 		);
 	}
+
 	public async write(data: Uint8Array): Promise<void> {
 		if (this.closed || data.length < 1 || data.length > 16384 || this.pendingWrites.size >= 16) {
 			throw new Error('Terminal input backpressure');
@@ -204,6 +211,7 @@ export class DataChannelClient {
 			this.port.postMessage({ type: 'write', id, data });
 		});
 	}
+
 	public async fileOperation(operation: FileOperation): Promise<string> {
 		const cancel = operation.type === 'cancel';
 		if (this.closed || [...this.filePending.values()].some(pending => pending.cancel === cancel)) {
@@ -215,11 +223,13 @@ export class DataChannelClient {
 			this.port.postMessage({ type: 'file', id, operation });
 		});
 	}
+
 	public resize(rows: number, columns: number): void {
 		if (!this.closed) {
 			this.port.postMessage({ type: 'resize', rows, columns });
 		}
 	}
+
 	private fail(error: Error): void {
 		if (this.closed) {
 			return;
@@ -227,6 +237,7 @@ export class DataChannelClient {
 		this.close();
 		this.onError(error);
 	}
+
 	public close(): void {
 		if (this.closed) {
 			return;

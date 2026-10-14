@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import test from 'node:test';
+
 const addon = createRequire(import.meta.url)('../../out/native/vnilink.node');
+
 const execute = async (engine, command) => JSON.parse(await engine.execute(JSON.stringify(command)));
+
 test('two Rust engines pair through a signed file, retain grants, and reject commands after shutdown', { timeout: 30000 }, async () => {
 	const first = await addon.openTemporaryEngine();
 	let second;
@@ -28,11 +31,14 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 		assert.equal((await execute(first, { type: 'setFileRoots', paths: [] })).type, 'done');
 		await assert.rejects(execute(first, { type: 'setFileRoots', paths: ['/does-not-exist/vnilink-test'] }));
 		const runtime = await execute(first, { type: 'nativeRuntime' });
-		assert.equal(runtime.type, 'nativeRuntime'); assert.equal(runtime.capabilities.length, 13); assert.equal(runtime.backends.length, 0);
+		assert.equal(runtime.type, 'nativeRuntime');
+		assert.equal(runtime.capabilities.length, 13);
+		assert.equal(runtime.backends.length, 0);
 		assert.equal(runtime.capabilities.find(cap => cap.name === 'camera').available, false);
 		assert.equal((await execute(first, { type: 'setNativeCameraSources', ids: [] })).type, 'done');
 		assert.equal((await execute(first, { type: 'setNativeAudioSources', microphones: [], system: [] })).type, 'done');
-		const power = await execute(first, { type: 'powerPolicy' }); assert.equal(power.type, 'powerPolicy');
+		const power = await execute(first, { type: 'powerPolicy' });
+		assert.equal(power.type, 'powerPolicy');
 		assert.equal((await execute(first, { type: 'setPowerPolicy', policy: power.policy })).type, 'done');
 		await assert.rejects(execute(first, { type: 'setPowerPolicy', policy: { ...power.policy, outgoing_idle_secs: 86401 } }));
 		assert.equal((await execute(first, { type: 'powerStatus' })).type, 'powerStatus');

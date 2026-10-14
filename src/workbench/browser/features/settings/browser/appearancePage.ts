@@ -16,6 +16,7 @@ export class AppearancePage extends Disposable implements WorkbenchPage {
 	private readonly retry = document.createElement('button');
 	private failedChange: ConfigurationUpdate | undefined;
 	private saving = false;
+
 	constructor(@IConfigurationService private readonly configuration: IConfigurationService) {
 		super();
 		this.element.className = 'appearance-page';
@@ -78,6 +79,7 @@ export class AppearancePage extends Disposable implements WorkbenchPage {
 		}));
 		this.render();
 	}
+
 	private render(): void {
 		this.theme.setValue(this.configuration.snapshot.values['appearance.theme']);
 		this.material.checked = this.configuration.snapshot.values['appearance.nativeBackground'];
@@ -87,6 +89,7 @@ export class AppearancePage extends Disposable implements WorkbenchPage {
 			this.status.hidden = false;
 		}
 	}
+
 	private async save(change: ConfigurationUpdate): Promise<void> {
 		if (this.saving || this.isDisposed()) {
 			return;
@@ -123,13 +126,16 @@ export class AppearancePage extends Disposable implements WorkbenchPage {
 			}
 		}
 	}
+
 	private setControlsEnabled(enabled: boolean): void {
 		this.theme.setEnabled(enabled);
 		this.material.disabled = !enabled;
 	}
+
 	private isDisposed(): boolean {
 		return this._store.isDisposed;
 	}
+
 	public override dispose(): void {
 		super.dispose();
 		this.element.remove();

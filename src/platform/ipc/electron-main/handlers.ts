@@ -56,19 +56,23 @@ export function registerDesktopHandlers(
 		return { revision: ++restartRevision, required: reply.required };
 	}
 	ipcMain.handle('app:restart-state', async event => {
-		trusted(event); return await restartState();
+		trusted(event);
+		return await restartState();
 	});
 	ipcMain.handle('app:restart', async event => {
-		trusted(event); if ((await restartState()).required) {
+		trusted(event);
+		if ((await restartState()).required) {
 			requestRestart();
 		}
 	});
 	const captureDisplays = () => safePlatform === 'darwin' ? screen.getAllDisplays().slice(0, 16).map(display => ({ displayId: display.id, width: display.bounds.width, height: display.bounds.height, pixelWidth: Math.round(display.bounds.width * display.scaleFactor), pixelHeight: Math.round(display.bounds.height * display.scaleFactor) })).filter(isNativeScreenSource) : [];
 	ipcMain.handle('app:capture-displays', event => {
-		trusted(event); return captureDisplays();
+		trusted(event);
+		return captureDisplays();
 	});
 	ipcMain.handle('app:relay-documentation', async event => {
-		trusted(event); await shell.openExternal('https://docs.iroh.computer/relays/rate-limiting');
+		trusted(event);
+		await shell.openExternal('https://docs.iroh.computer/relays/rate-limiting');
 	});
 	const owners = new Map<number, string>();
 	ipcMain.handle('configuration:get', event => {
@@ -106,7 +110,8 @@ export function registerDesktopHandlers(
 			try {
 				snapshot = await configuration.updateValue(change);
 			} catch (error) {
-				await runtime(previous); throw error;
+				await runtime(previous);
+				throw error;
 			}
 			if (change.key === 'desktop.quality' && engine.available) {
 				await engine.execute({ type: 'setDesktopQualityDefaults', quality: snapshot.values['desktop.quality'] });
@@ -123,7 +128,8 @@ export function registerDesktopHandlers(
 		}
 		let owner = owners.get(window.id);
 		if (!owner) {
-			owner = randomUUID(); owners.set(window.id, owner);
+			owner = randomUUID();
+			owners.set(window.id, owner);
 			const channelOwner = owner;
 			const contents = window.webContents;
 			const windowId = window.id;
@@ -134,7 +140,8 @@ export function registerDesktopHandlers(
 			};
 			const release = (): void => {
 				if (owners.get(windowId) === channelOwner) {
-					engine.closeChannels(channelOwner); owners.delete(windowId);
+					engine.closeChannels(channelOwner);
+					owners.delete(windowId);
 				}
 				// Native-backed listener removal is invalid after WebContents destruction.
 				if (!contents.isDestroyed()) {
@@ -149,9 +156,12 @@ export function registerDesktopHandlers(
 		}
 		const { port1, port2 } = new MessageChannelMain();
 		try {
-			engine.attachChannel(port1, request, owner); window.webContents.postMessage('engine:data-port', request.requestId, [port2]);
+			engine.attachChannel(port1, request, owner);
+			window.webContents.postMessage('engine:data-port', request.requestId, [port2]);
 		} catch (error) {
-			port1.close(); port2.close(); throw error;
+			port1.close();
+			port2.close();
+			throw error;
 		}
 	});
 	ipcMain.handle('engine:command', async (event, command: unknown) => {
@@ -172,7 +182,8 @@ export function registerDesktopHandlers(
 		const reply = await engine.execute(command);
 		if (reply.type === 'done' && ['saveCustomRelays', 'setRelayPublic', 'setRelayCustom'].includes(command.type)) {
 			await restartState().then(state => {
-				const window = getWindow(); if (window && !window.isDestroyed()) {
+				const window = getWindow();
+				if (window && !window.isDestroyed()) {
 					window.webContents.send('app:restart-state', state);
 				}
 			}, () => { /* The committed command still returns Done; readback reports uncertainty. */ });

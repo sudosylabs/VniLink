@@ -1,6 +1,8 @@
 import { builtinModules } from 'node:module';
 import { dirname, relative, resolve, sep } from 'node:path';
+
 const builtins = new Set(builtinModules.map(name => name.replace(/^node:/, '')));
+
 export const layersRule = {
 	meta: { type: 'problem', schema: [], messages: { boundary: '{{reason}}: {{specifier}}' } },
 	create(context) {
@@ -51,7 +53,8 @@ export const layersRule = {
 			ExportAllDeclaration: node => check(node, node.source.value),
 			ImportExpression: node => check(node, node.source.value),
 			TSImportType: node => {
-				const literal = node.argument ?? node.source; check(node, literal?.value ?? literal?.literal?.value);
+				const literal = node.argument ?? node.source;
+				check(node, literal?.value ?? literal?.literal?.value);
 			},
 			CallExpression: node => {
 				if (node.callee.type === 'Identifier' && node.callee.name === 'require') {
@@ -61,4 +64,5 @@ export const layersRule = {
 		};
 	},
 };
+
 export default { rules: { layers: layersRule } };

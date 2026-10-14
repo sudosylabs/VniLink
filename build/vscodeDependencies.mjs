@@ -1,7 +1,9 @@
 import ts from 'typescript';
 import { readFile } from 'node:fs/promises';
 import { posix } from 'node:path';
+
 const root = new URL('../', import.meta.url);
+
 export async function titlebarDependencies(manifest) {
 	const available = new Set(manifest.files.map(file => file.path));
 	const roots = [...manifest.entryPoints, ...(manifest.compilerSupport || [])];

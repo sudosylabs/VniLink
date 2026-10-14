@@ -30,11 +30,9 @@ export class BufferLogger extends AbstractMessageLogger {
 		this._logLevelDisposable.value = logger.onDidChangeLogLevel(level => {
 			this.setLevel(level);
 		});
-
 		for (const { level, message } of this.buffer) {
 			log(logger, level, message);
 		}
-
 		this.buffer = [];
 	}
 

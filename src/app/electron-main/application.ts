@@ -26,13 +26,15 @@ interface ApplicationOptions {
 	temporaryEngine?: boolean;
 	onReady?: (window: BrowserWindow) => Promise<void>;
 }
+
 export async function startApplication(options: ApplicationOptions = {}): Promise<void> {
 	mark('vnilink/mainStart');
 	// `--verbose` maps to trace until the environment platform owns log levels.
 	const logService = new LogService(new ConsoleLogger(process.argv.includes('--verbose') ? LogLevel.Trace : LogLevel.Info));
 	app.setName('VniLink');
 	if (!app.requestSingleInstanceLock()) {
-		app.quit(); return;
+		app.quit();
+		return;
 	}
 	protocol.registerSchemesAsPrivileged([{ scheme: 'vnilink', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 	let window: BrowserWindow | null = null;
@@ -55,7 +57,8 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 		if (window?.isMinimized()) {
 			window.restore();
 		}
-		window?.show(); window?.focus();
+		window?.show();
+		window?.focus();
 	});
 	let quitting = false;
 	let restarting = false;
@@ -168,6 +171,7 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 		mark('vnilink/windowReady');
 		await options.onReady?.(current);
 	} catch (error) {
-		logService.error(error instanceof Error ? error : new Error(String(error))); app.exit(1);
+		logService.error(error instanceof Error ? error : new Error(String(error)));
+		app.exit(1);
 	}
 }

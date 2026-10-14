@@ -30,6 +30,7 @@ export class EngineService {
 	public get available(): boolean {
 		return this.connected && !this.closing;
 	}
+
 	public async start(temporary = false): Promise<void> {
 		if (this.started || this.closing) {
 			throw new Error('Engine already started');
@@ -39,7 +40,8 @@ export class EngineService {
 		this.child = child;
 		await new Promise<void>((resolve, reject) => {
 			const timeout = setTimeout(() => {
-				this.fail(new Error('Engine startup timed out')); reject(new Error('Engine startup timed out'));
+				this.fail(new Error('Engine startup timed out'));
+				reject(new Error('Engine startup timed out'));
 			}, 60_000);
 			child.on('message', (message: unknown) => {
 				if (this.child !== child) {
@@ -51,19 +53,24 @@ export class EngineService {
 				if ('ready' in message) {
 					clearTimeout(timeout);
 					if (message.ready === true && !this.connected) {
-						this.connected = true; resolve();
+						this.connected = true;
+						resolve();
 					} else {
-						this.fail(new Error('Engine could not open its secure installation')); reject(new Error('Engine could not open its secure installation'));
+						this.fail(new Error('Engine could not open its secure installation'));
+						reject(new Error('Engine could not open its secure installation'));
 					}
 					return;
 				}
 				this.deliver(message);
 			});
 			child.once('exit', () => {
-				clearTimeout(timeout); this.fail(new Error('Engine exited')); reject(new Error('Engine exited'));
+				clearTimeout(timeout);
+				this.fail(new Error('Engine exited'));
+				reject(new Error('Engine exited'));
 			});
 		});
 	}
+
 	public execute(command: EngineCommand): Promise<EngineReply> {
 		// Validated at the IPC boundary and in the Rust bridge; this queue
 		// stays typed-only so slow pairing work cannot hide a second check.
@@ -88,6 +95,7 @@ export class EngineService {
 			this.slowQueue = queue;
 		});
 	}
+
 	private enqueue(command: EngineCommand | { type: 'shutdown' }, lane: Promise<void>, advance: (queue: Promise<void>) => void): Promise<EngineReply> {
 		if (!this.connected || this.pending >= 64 || (this.closing && command.type !== 'shutdown')) {
 			return Promise.reject(new Error('Engine unavailable'));
@@ -104,6 +112,7 @@ export class EngineService {
 		advance(tracked.then(() => undefined, () => undefined));
 		return tracked;
 	}
+
 	private deliver(message: Record<string, unknown>): void {
 		if (typeof message.id !== 'number' || !Number.isSafeInteger(message.id)) {
 			return;
@@ -121,6 +130,7 @@ export class EngineService {
 			pending.reject(new Error('Invalid engine reply'));
 		}
 	}
+
 	private send(command: EngineCommand | { type: 'shutdown' }): Promise<EngineReply> {
 		if (!this.child || !this.connected || (this.closing && command.type !== 'shutdown')) {
 			return Promise.reject(new Error('Engine unavailable'));
@@ -135,9 +145,11 @@ export class EngineService {
 			}, timeoutFor(command));
 			this.waiting.set(id, {
 				resolve: value => {
-					clearTimeout(timeout); resolve(value);
+					clearTimeout(timeout);
+					resolve(value);
 				}, reject: error => {
-					clearTimeout(timeout); reject(error);
+					clearTimeout(timeout);
+					reject(error);
 				}
 			});
 			try {
@@ -149,15 +161,19 @@ export class EngineService {
 			}
 		});
 	}
+
 	public attachChannel(port: MessagePortMain, request: DataChannelRequest, owner: string): void {
 		if (!this.child || !this.available) {
-			port.close(); throw new Error('Engine unavailable');
+			port.close();
+			throw new Error('Engine unavailable');
 		}
 		this.child.postMessage({ type: 'attachDataChannel', request, owner }, [port]);
 	}
+
 	public closeChannels(owner: string): void {
 		this.child?.postMessage({ type: 'closeDataChannels', owner });
 	}
+
 	public async stop(): Promise<void> {
 		if (this.closing) {
 			return;
@@ -173,13 +189,15 @@ export class EngineService {
 			this.fail(new Error('Engine unavailable'));
 		}
 	}
+
 	private fail(error: Error): void {
 		this.connected = false;
 		for (const pending of this.waiting.values()) {
 			pending.reject(error);
 		}
 		this.waiting.clear();
-		const child = this.child; this.child = undefined;
+		const child = this.child;
+		this.child = undefined;
 		child?.kill();
 	}
 }

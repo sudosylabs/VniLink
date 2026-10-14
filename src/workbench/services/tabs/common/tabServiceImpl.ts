@@ -12,12 +12,15 @@ export class TabService extends Disposable implements ITabService {
 	private readonly listeners = new Map<WorkbenchTab, DisposableStore>();
 	private readonly running = new Map<WorkbenchTab, Map<string, AbortController>>();
 	private readonly closing = new Map<string, Promise<boolean>>();
+
 	public get tabs(): readonly WorkbenchTab[] {
 		return this.inputs.slice();
 	}
+
 	public get activeTab(): WorkbenchTab | undefined {
 		return this.selected;
 	}
+
 	public open(tab: WorkbenchTab): void {
 		if (this._store.isDisposed) {
 			tab.dispose();
@@ -52,6 +55,7 @@ export class TabService extends Disposable implements ITabService {
 		this.selected = tab;
 		this.changed.fire();
 	}
+
 	public select(id: string): void {
 		const tab = this.inputs.find((input) => input.id === id);
 		if (tab && tab !== this.selected) {
@@ -59,6 +63,7 @@ export class TabService extends Disposable implements ITabService {
 			this.changed.fire();
 		}
 	}
+
 	public move(id: string, index: number): void {
 		const previous = this.inputs.findIndex((input) => input.id === id);
 		if (previous < 0 || !Number.isInteger(index) || this.inputs[previous].permanent) {
@@ -69,6 +74,7 @@ export class TabService extends Disposable implements ITabService {
 		this.inputs.splice(Math.max(firstMovable, Math.min(index, this.inputs.length)), 0, tab);
 		this.changed.fire();
 	}
+
 	public close(id: string): Promise<boolean> {
 		const pending = this.closing.get(id);
 		if (pending) {
@@ -117,6 +123,7 @@ export class TabService extends Disposable implements ITabService {
 		this.changed.fire();
 		return operation;
 	}
+
 	public isActionEnabled(tab: WorkbenchTab, action: TabAction): boolean {
 		return (
 			!this._store.isDisposed &&
@@ -127,6 +134,7 @@ export class TabService extends Disposable implements ITabService {
 			!this.closing.has(tab.id)
 		);
 	}
+
 	public async executeAction(id: string): Promise<void> {
 		const tab = this.selected;
 		const action = tab?.actions.find((candidate) => candidate.id === id);
@@ -152,6 +160,7 @@ export class TabService extends Disposable implements ITabService {
 			}
 		}
 	}
+
 	public override dispose(): void {
 		if (this._store.isDisposed) {
 			return;
@@ -172,4 +181,5 @@ export class TabService extends Disposable implements ITabService {
 		dispose(tabs);
 	}
 }
+
 registerSingleton(ITabService, TabService, InstantiationType.Delayed);

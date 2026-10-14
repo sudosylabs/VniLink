@@ -11,11 +11,13 @@ import { Icons } from '../../src/base/common/icons.js';
 import { verifyAccess } from './access.js';
 import { verifySettingsPages } from './settings.js';
 import { verifyHomeLifecycle } from './home.js';
+
 function assert(condition: boolean, message: string): void {
 	if (!condition) {
 		throw new Error(message);
 	}
 }
+
 export async function verifyTabs(): Promise<boolean> {
 	await verifyFileTerminalSettings();
 	await verifyInputPage();

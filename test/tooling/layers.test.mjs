@@ -1,7 +1,9 @@
 import { RuleTester } from 'eslint';
 import tseslint from 'typescript-eslint';
 import { layersRule } from '../../build/lint/layers.mjs';
+
 const tester = new RuleTester({ languageOptions: { parser: tseslint.parser } });
+
 tester.run('vnilink/layers', layersRule, {
 	valid: [
 		{ filename: 'src/base/browser/ui/icon/iconAssets.ts', code: "import svg from '@phosphor-icons/core/assets/regular/house.svg';" },

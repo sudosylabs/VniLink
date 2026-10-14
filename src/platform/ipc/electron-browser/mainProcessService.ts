@@ -11,10 +11,12 @@ import type { IChannel } from '../../../base/parts/ipc/common/ipc.js';
 import type { IMainProcessService } from '../common/mainProcessService.js';
 import type { DesktopApi } from '../common/desktopApi.js';
 import { isNativeHostRequest, isWindowState, type IWindowState } from '../../native/common/native.js';
+
 export class MainProcessService extends Disposable implements IMainProcessService {
 	declare public readonly _serviceBrand: undefined;
 	private readonly changed = this._register(new Emitter<IWindowState>());
 	private revision = 0;
+
 	constructor(
 		private readonly api: DesktopApi,
 		private readonly windowId: number,
@@ -24,6 +26,7 @@ export class MainProcessService extends Disposable implements IMainProcessServic
 			this.acceptState(state);
 		})));
 	}
+
 	private acceptState(state: unknown): void {
 		if (isWindowState(state) && state.windowId === this.windowId && state.revision > this.revision) {
 			this.revision = state.revision;

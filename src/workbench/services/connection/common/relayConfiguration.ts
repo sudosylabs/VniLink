@@ -1,5 +1,6 @@
 import type { RelayInfo } from '../../../../platform/engine/common/engine.js';
 import type { ConnectionUpdate } from './connectionService.js';
+
 export function canonicalRelayUrl(url: string): string {
 	try {
 		return new URL(url.trim()).toString();
@@ -7,6 +8,7 @@ export function canonicalRelayUrl(url: string): string {
 		return url.trim();
 	}
 }
+
 function entries(relays: readonly RelayInfo[]): string[] {
 	return relays.map(relay => `${canonicalRelayUrl(relay.url)}|${String(relay.authenticated)}`).sort();
 }

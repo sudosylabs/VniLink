@@ -67,7 +67,6 @@ export class EncryptionMainService implements IEncryptionMainService {
 		} else {
 			throw new Error('[EncryptionMainService] Invalid encrypted value');
 		}
-
 		this.logService.trace('[EncryptionMainService] Decrypting value...');
 		try {
 			const result = safeStorage.decryptString(bufferToDecrypt);
@@ -90,11 +89,9 @@ export class EncryptionMainService implements IEncryptionMainService {
 		if (isWindows) {
 			return Promise.resolve(KnownStorageProvider.dplib);
 		}
-
 		if (isMacintosh) {
 			return Promise.resolve(KnownStorageProvider.keychainAccess);
 		}
-
 		try {
 			this.logService.trace('[EncryptionMainService] Getting selected storage backend...');
 			const backend = safeStorage.getSelectedStorageBackend();
@@ -104,7 +101,6 @@ export class EncryptionMainService implements IEncryptionMainService {
 		} catch (e) {
 			this.logService.error(e instanceof Error ? e : new Error(String(e)));
 		}
-
 		return Promise.resolve(KnownStorageProvider.unknown);
 	}
 
@@ -112,11 +108,9 @@ export class EncryptionMainService implements IEncryptionMainService {
 		if (isWindows) {
 			throw new Error('Setting plain text encryption is not supported on Windows.');
 		}
-
 		if (isMacintosh) {
 			throw new Error('Setting plain text encryption is not supported on macOS.');
 		}
-
 		this.logService.trace('[EncryptionMainService] Setting usePlainTextEncryption to true...');
 		safeStorage.setUsePlainTextEncryption(true);
 		this.logService.trace('[EncryptionMainService] Set usePlainTextEncryption to true');

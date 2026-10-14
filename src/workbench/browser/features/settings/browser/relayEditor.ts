@@ -6,6 +6,7 @@ import { renderIcon } from '../../../../../base/browser/ui/icon/icon.js';
 import { Icons } from '../../../../../base/common/icons.js';
 import { createSetting } from './settingsControls.js';
 import type { RelayValidationIssue } from '../../../../services/connection/common/relayValidation.js';
+
 let nextId = 0;
 
 /** Owns one relay draft. Saved credentials are never read back into this view. */
@@ -15,6 +16,7 @@ export class RelayEditor extends Disposable {
 	private readonly authenticated = document.createElement('input');
 	private readonly token = document.createElement('input');
 	private readonly error = document.createElement('p');
+
 	constructor(relay: RelayInfo | undefined, remove: () => void) {
 		super();
 		this.element.className = 'relay-editor';
@@ -31,7 +33,8 @@ export class RelayEditor extends Disposable {
 		this.token.autocomplete = 'new-password';
 		this.token.spellcheck = false;
 		this.token.disabled = !this.authenticated.checked;
-		const removeButton = document.createElement('button'); removeButton.type = 'button';
+		const removeButton = document.createElement('button');
+		removeButton.type = 'button';
 		removeButton.className = 'relay-remove';
 		const removeLabel = nls.localize('connection.removeRelay', 'Remove relay');
 		removeButton.setAttribute('aria-label', removeLabel);
@@ -66,20 +69,25 @@ export class RelayEditor extends Disposable {
 			}
 		}));
 	}
+
 	public get value(): RelayInput {
 		return { url: this.url.value.trim(), authenticated: this.authenticated.checked, replacementToken: this.authenticated.checked ? this.token.value : '' };
 	}
+
 	public showIssues(issues: readonly RelayValidationIssue[]): void {
 		this.error.textContent = issues.map(issue => issue.message).join(' ');
 		this.error.hidden = !issues.length;
 		this.url.setAttribute('aria-invalid', String(issues.some(issue => issue.field === 'url')));
 		this.token.setAttribute('aria-invalid', String(issues.some(issue => issue.field === 'token')));
 	}
+
 	public clearToken(): void {
 		this.token.value = '';
 	}
+
 	public override dispose(): void {
-		this.clearToken(); super.dispose();
+		this.clearToken();
+		super.dispose();
 		this.element.remove();
 	}
 }

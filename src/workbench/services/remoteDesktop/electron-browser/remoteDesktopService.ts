@@ -1,10 +1,13 @@
 import type { DesktopApi } from '../../../../platform/ipc/common/desktopApi.js';
 import type { QualityLimits, DisplayInfo } from '../../../../platform/engine/common/engine.js';
 import { DesktopReadbackError, desktopTargetKey, isValidDesktopQuality, type DesktopSession, type DesktopSettings, type DesktopTarget, type IRemoteDesktopService } from '../common/remoteDesktopService.js';
+
 export class RemoteDesktopService implements IRemoteDesktopService {
 	declare public readonly _serviceBrand: undefined;
 	private pending: Promise<unknown> = Promise.resolve();
+
 	constructor(private readonly api: Pick<DesktopApi, 'engineCommand'>, public readonly available: boolean) { }
+
 	public async load(): Promise<DesktopSettings> {
 		if (!this.available) {
 			throw new Error('Desktop engine unavailable');
@@ -25,6 +28,7 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 		}
 		return { sessions: Object.freeze(sessions), codecs: Object.freeze({ ...codecs.codecs }) };
 	}
+
 	private async target(target: DesktopTarget): Promise<DesktopSession> {
 		const session = (await this.load()).sessions.find(session => desktopTargetKey(session) === desktopTargetKey(target));
 		if (!session) {
@@ -32,6 +36,7 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 		}
 		return session;
 	}
+
 	public async displays(target: DesktopTarget): Promise<readonly DisplayInfo[]> {
 		await this.target(target);
 		const reply = await this.api.engineCommand(target.role === 'Controller' ? { type: 'sessionTopology', sessionId: target.id, generation: target.generation } : { type: 'topology' });
@@ -40,8 +45,10 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 		}
 		return Object.freeze(reply.displays.map(display => Object.freeze({ ...display })));
 	}
+
 	public apply(target: DesktopTarget, quality: QualityLimits): Promise<DesktopSettings> {
-		const owner = { ...target }; const draft = { ...quality };
+		const owner = { ...target };
+		const draft = { ...quality };
 		const result = this.pending.then(async () => {
 			if (!isValidDesktopQuality(draft)) {
 				throw new Error('Invalid stream limits');
@@ -61,6 +68,7 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 				throw new DesktopReadbackError();
 			}
 		});
-		this.pending = result.catch(() => undefined); return result;
+		this.pending = result.catch(() => undefined);
+		return result;
 	}
 }

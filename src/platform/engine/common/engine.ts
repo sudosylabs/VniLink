@@ -36,6 +36,7 @@ export interface ServicePermissions {
 }
 
 export interface SystemPolicy { allow_lock: boolean; allow_restart: boolean; allow_shutdown: boolean; allow_privacy: boolean; }
+
 export interface SystemSupport { lock: boolean; restart: boolean; shutdown: boolean; privacy: boolean; }
 
 export interface TerminalPolicy {
@@ -75,6 +76,7 @@ export type SessionPhase = string | { Failed: { message: string } };
 export interface SessionPath { relay: boolean; selected: boolean; rtt_ms: string; tx_bytes: string; rx_bytes: string; }
 
 export type VideoCodec = 'h264' | 'h265' | 'vp8' | 'vp9' | 'av1';
+
 export interface VideoFrame { codec: VideoCodec; keyframe: boolean; timestamp_us: string; data: string; display_id: string; revision: string; }
 
 export interface RelayInfo { url: string; authenticated: boolean; }
@@ -319,6 +321,7 @@ function systemPolicy(value: unknown): value is SystemPolicy {
 	return record(value) && typeof value.allow_lock === 'boolean' && typeof value.allow_restart === 'boolean'
 		&& typeof value.allow_shutdown === 'boolean' && typeof value.allow_privacy === 'boolean' && Object.keys(value).length === 4;
 }
+
 function systemSupport(value: unknown): value is SystemSupport {
 	return record(value) && typeof value.lock === 'boolean' && typeof value.restart === 'boolean'
 		&& typeof value.shutdown === 'boolean' && typeof value.privacy === 'boolean' && Object.keys(value).length === 4;
@@ -621,9 +624,13 @@ export function isEngineReply(value: unknown): value is EngineReply {
 }
 
 export const nativeCapabilityNames = ['desktopView', 'desktopControl', 'clipboard', 'files', 'terminal', 'camera', 'systemAudio', 'microphone', 'lock', 'restart', 'shutdown', 'privacy', 'recording'] as const;
+
 export type NativeCapabilityName = typeof nativeCapabilityNames[number];
+
 export interface NativeBackend { readonly name: string; readonly ready: boolean; readonly error: string | null; }
+
 export interface NativeCapability { readonly name: NativeCapabilityName; readonly available: boolean; readonly summary: string; }
+
 function nativeRuntime(value: Record<string, unknown>): boolean {
 	return Array.isArray(value.backends) && value.backends.length <= 32 && value.backends.every((backend: unknown) => record(backend) && typeof backend.name === 'string' && backend.name.length <= 64 && typeof backend.ready === 'boolean' && (backend.error === null || typeof backend.error === 'string' && backend.error.length <= 512) && Object.keys(backend).length === 3)
 		&& Array.isArray(value.capabilities) && value.capabilities.length === nativeCapabilityNames.length && value.capabilities.every((capability: unknown) => record(capability) && typeof capability.name === 'string' && nativeCapabilityNames.some(name => name === capability.name) && typeof capability.available === 'boolean' && typeof capability.summary === 'string' && capability.summary.length <= 512 && Object.keys(capability).length === 3)
@@ -631,44 +638,57 @@ function nativeRuntime(value: Record<string, unknown>): boolean {
 }
 
 export interface NativeDevice { readonly id: string; readonly name: string; readonly kind: 'camera' | 'microphone' | 'system' | 'output'; }
+
 export interface PowerPolicy { incoming_display: boolean; incoming_system: boolean; outgoing_display: boolean; outgoing_system: boolean; incoming_idle_secs: number; outgoing_idle_secs: number; lock_after_control: boolean; }
+
 export interface PowerStatus { readonly kind: 'Display' | 'System'; readonly owners: number; readonly phase: 'Idle' | 'Unavailable' | 'Starting' | 'Active' | 'Failed'; readonly error: string | null; }
+
 function nativeSourceIds(value: unknown): value is string[] {
 	return Array.isArray(value) && value.length <= 32 && value.every((id: unknown) => typeof id === 'string' && id.length > 0 && id.length <= 2048 && !id.includes('\0')) && new Set(value).size === value.length;
 }
+
 function nativeDevice(value: unknown): value is NativeDevice {
 	return record(value) && typeof value.id === 'string' && value.id.length > 0 && value.id.length <= 2048 && typeof value.name === 'string' && value.name.length <= 2048 && ['camera', 'microphone', 'system', 'output'].some(kind => kind === value.kind) && Object.keys(value).length === 3;
 }
+
 function powerPolicy(value: unknown): value is PowerPolicy {
 	return record(value) && ['incoming_display', 'incoming_system', 'outgoing_display', 'outgoing_system', 'lock_after_control'].every(key => typeof value[key] === 'boolean') && uint(value.incoming_idle_secs, 86400) && uint(value.outgoing_idle_secs, 86400) && Object.keys(value).length === 7;
 }
+
 function powerStatus(value: unknown): value is PowerStatus {
 	return record(value) && (value.kind === 'Display' || value.kind === 'System') && uint(value.owners, 4294967295) && ['Idle', 'Unavailable', 'Starting', 'Active', 'Failed'].some(phase => phase === value.phase) && (value.error === null || typeof value.error === 'string' && value.error.length <= 512) && Object.keys(value).length === 4;
 }
 
 export interface RecordingRetention { readonly maxSegments: number; readonly maxTotalBytes: string; }
+
 export interface RecordingStatus { readonly id: string; readonly phase: 'Starting' | 'Recording' | 'Finished' | 'Failed'; readonly failure: 'Startup' | 'Media' | 'Storage' | 'Limit' | 'SlowStorage' | 'FormatChanged' | null; readonly frames: string; readonly bytes: string; readonly durationMs: string; readonly segments: number; }
+
 function recordingRetention(value: unknown): value is RecordingRetention {
 	return record(value) && uint(value.maxSegments, 4294967295) && decimal(value.maxTotalBytes) && Object.keys(value).length === 2;
 }
+
 function recordingStatus(value: unknown): value is RecordingStatus {
 	return record(value) && decimal(value.id) && ['Starting', 'Recording', 'Finished', 'Failed'].some(phase => phase === value.phase) && (value.failure === null || ['Startup', 'Media', 'Storage', 'Limit', 'SlowStorage', 'FormatChanged'].some(failure => failure === value.failure)) && decimal(value.frames) && decimal(value.bytes) && decimal(value.durationMs) && uint(value.segments, 4294967295) && Object.keys(value).length === 7;
 }
 
 export interface NativeSharingStatus { readonly displayId: number; readonly phase: 'Starting' | 'Sharing' | 'Failed'; readonly error: string | null; }
+
 function sharingStatus(value: unknown): value is NativeSharingStatus {
 	return record(value) && uint(value.displayId, 4294967295) && ['Starting', 'Sharing', 'Failed'].some(phase => phase === value.phase) && (value.error === null || typeof value.error === 'string' && value.error.length <= 512) && Object.keys(value).length === 3;
 }
 
 export interface NativeScreenSource { readonly displayId: number; readonly width: number; readonly height: number; readonly pixelWidth: number; readonly pixelHeight: number; }
+
 export function isNativeScreenSource(value: unknown): value is NativeScreenSource {
 	return record(value) && typeof value.displayId === 'number' && uint(value.displayId, 4294967295) && value.displayId > 0 && [value.width, value.height, value.pixelWidth, value.pixelHeight].every(size => typeof size === 'number' && uint(size, 65535) && size >= 2) && Object.keys(value).length === 5;
 }
+
 export function isNativeScreenSources(value: unknown): value is NativeScreenSource[] {
 	return Array.isArray(value) && value.length <= 16 && value.every(isNativeScreenSource);
 }
 
 export type CodecPreference = 'auto' | VideoCodec;
+
 export function isCodecPreference(value: unknown): value is CodecPreference {
 	return typeof value === 'string' && ['auto', 'h264', 'h265', 'vp8', 'vp9', 'av1'].includes(value);
 }

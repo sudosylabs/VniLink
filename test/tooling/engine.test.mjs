@@ -4,6 +4,7 @@ import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 
 const bundle = await build({ entryPoints: [fileURLToPath(new URL('../../src/platform/engine/common/engine.ts', import.meta.url))], bundle: true, write: false, format: 'esm', platform: 'node' });
+
 const { isEngineCommand, isEngineReply, isEngineEvent } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 
 test('control commands reject privileged methods, malformed IDs and extra authority', () => {
@@ -32,6 +33,7 @@ test('control commands reject privileged methods, malformed IDs and extra author
 	assert.equal(isEngineCommand({ type: 'openPairingFileBase64', data: Buffer.from([1, 2, 3]).toString('base64') }), true);
 	assert.equal(isEngineCommand({ type: 'openPairingFileBase64', data: '!!!' }), false);
 });
+
 test('identity, codecs, relays and session settings validate exactly', () => {
 	assert.equal(isEngineCommand({ type: 'endpoint' }), true);
 	assert.equal(isEngineCommand({ type: 'endpoint', extra: true }), false);
@@ -76,6 +78,7 @@ test('identity, codecs, relays and session settings validate exactly', () => {
 	assert.equal(isEngineReply({ type: 'events', events: [{ type: 'hostingChanged', hosting: true }], lagged: '0' }), true);
 	assert.equal(isEngineReply({ type: 'events', events: [{ type: 'bogus' }], lagged: '0' }), false);
 });
+
 test('bridge events keep core names and lossless ids', () => {
 	assert.equal(isEngineEvent({ type: 'hostingChanged', hosting: false }), true);
 	assert.equal(isEngineEvent({ type: 'devicePaired', endpoint_id: 'peer' }), true);
@@ -96,6 +99,7 @@ test('bridge events keep core names and lossless ids', () => {
 	assert.equal(isEngineEvent({ type: 'hostLocked', locked: true, extra: 1 }), false);
 	assert.equal(isEngineEvent({ type: 'nope' }), false);
 });
+
 test('service commands validate kinds, policies, sessions and jobs exactly', () => {
 	assert.equal(isEngineCommand({ type: 'servicePermissions', endpointId: 'peer' }), true);
 	assert.equal(isEngineCommand({ type: 'authorizeService', endpointId: 'peer', kind: 'Terminal', allowed: true }), true);
@@ -128,6 +132,7 @@ test('service commands validate kinds, policies, sessions and jobs exactly', () 
 	assert.equal(isEngineReply({ type: 'job', job: { ...job, state: 'Warping' } }), false);
 	assert.equal(isEngineReply({ type: 'fileJobsSubscription', subscriptionId: '5' }), true);
 });
+
 test('pairing handles cross the bridge as lossless decimal strings', () => {
 	const preview = { id: '18446744073709551615', endpoint_id: 'peer', check: '123', expires_at_ms: '18446744073709551615' };
 	assert.equal(isEngineReply({ type: 'pairingPreview', preview }), true);

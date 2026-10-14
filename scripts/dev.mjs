@@ -7,10 +7,15 @@ import electron from 'electron';
 import { watchApplication } from '../build/watch.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+
 const watchOnly = process.argv.includes('--watch-only');
+
 const children = new Set();
+
 let watcher;
+
 let stopping = false;
+
 async function stop(code = 0) {
 	if (stopping) {
 		return;
@@ -19,13 +24,15 @@ async function stop(code = 0) {
 	const exits = [...children].map(child => new Promise(resolve => {
 		const timer = setTimeout(() => child.kill('SIGKILL'), 3000);
 		child.once('exit', () => {
-			clearTimeout(timer); resolve();
+			clearTimeout(timer);
+			resolve();
 		});
 		child.kill('SIGTERM');
 	}));
 	await Promise.all([watcher?.dispose(), ...exits]);
 	process.exitCode = code;
 }
+
 function run(command, args, options = {}) {
 	const { restartOnExit = false, ...spawnOptions } = options;
 	const child = spawn(command, args, { cwd: root, stdio: 'inherit', ...spawnOptions });
@@ -47,12 +54,15 @@ function run(command, args, options = {}) {
 	});
 	return child;
 }
+
 process.on('SIGINT', () => {
 	void stop();
 });
+
 process.on('SIGTERM', () => {
 	void stop();
 });
+
 try {
 	if (!watchOnly) {
 		try {

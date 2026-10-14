@@ -20,6 +20,7 @@ export function getMacOSWindowControlsPosition(
 	const offset = Math.floor((height - buttonHeight) / 2);
 	return !offset && horizontalInset === undefined ? null : { x: horizontalInset ?? offset + 1, y: offset };
 }
+
 export function getNativeTitlebarHeight(osVersion: string): number {
 	return isMacintosh ? (isTahoeOrNewer(osVersion) ? 32 : 28) : 30;
 }

@@ -2,7 +2,9 @@ import type { DesktopApi } from '../../../../platform/ipc/common/desktopApi.js';
 import type { Device, ServiceKind, EngineReply, SystemPolicy, SystemSupport } from '../../../../platform/engine/common/engine.js';
 import { AccessReadbackError, type AccessPermission, type PeerAccess, type LocalSecurity, type IAccessService } from '../common/accessService.js';
 import type { DeviceSummary } from '../../devices/common/deviceService.js';
+
 const systemCapabilities: Record<keyof SystemPolicy, keyof SystemSupport> = { allow_lock: 'lock', allow_restart: 'restart', allow_shutdown: 'shutdown', allow_privacy: 'privacy' };
+
 const services: Record<Exclude<AccessPermission, 'control' | 'clipboard' | 'recording'>, ServiceKind> = {
 	view: 'Desktop', files: 'Files', terminal: 'Terminal', camera: 'Camera', systemAudio: 'SystemAudio', microphone: 'Microphone', systemActions: 'System',
 };
@@ -11,7 +13,9 @@ const services: Record<Exclude<AccessPermission, 'control' | 'clipboard' | 'reco
 export class AccessService implements IAccessService {
 	declare public readonly _serviceBrand: undefined;
 	private pending: Promise<unknown> = Promise.resolve();
+
 	constructor(private readonly api: Pick<DesktopApi, 'engineCommand'>, public readonly available: boolean) { }
+
 	private async devices(): Promise<readonly Device[]> {
 		if (!this.available) {
 			throw new Error('Access service unavailable');
@@ -22,9 +26,11 @@ export class AccessService implements IAccessService {
 		}
 		return reply.snapshot.devices;
 	}
+
 	public async listDevices(): Promise<readonly DeviceSummary[]> {
 		return (await this.devices()).map(device => ({ id: device.endpoint_id, name: device.pet_name ?? device.hostname ?? device.endpoint_id }));
 	}
+
 	private async device(id: string): Promise<Device> {
 		const device = (await this.devices()).find(device => device.endpoint_id === id);
 		if (!device) {
@@ -32,6 +38,7 @@ export class AccessService implements IAccessService {
 		}
 		return device;
 	}
+
 	public async loadPeer(id: string): Promise<PeerAccess> {
 		const device = await this.device(id);
 		const reply = await this.api.engineCommand({ type: 'servicePermissions', endpointId: id });
@@ -44,6 +51,7 @@ export class AccessService implements IAccessService {
 			permissions: { view: permissions.desktop, control: device.grants.control, clipboard: device.grants.clipboard, files: permissions.files, terminal: permissions.terminal, camera: permissions.camera, systemAudio: permissions.system_audio, microphone: permissions.microphone, recording: permissions.recording, systemActions: permissions.system_actions },
 		};
 	}
+
 	public setPermission(id: string, permission: AccessPermission, allowed: boolean): Promise<PeerAccess> {
 		return this.queue(async () => {
 			const device = await this.device(id);
@@ -65,6 +73,7 @@ export class AccessService implements IAccessService {
 			}
 		});
 	}
+
 	public async loadPolicy(): Promise<LocalSecurity> {
 		if (!this.available) {
 			throw new Error('Access service unavailable');
@@ -75,6 +84,7 @@ export class AccessService implements IAccessService {
 		}
 		return { policy: reply.policy, support: reply.support };
 	}
+
 	public setPolicy(key: keyof SystemPolicy, allowed: boolean): Promise<LocalSecurity> {
 		return this.queue(async () => {
 			const current = await this.loadPolicy();
@@ -92,7 +102,10 @@ export class AccessService implements IAccessService {
 			}
 		});
 	}
+
 	private queue<T>(task: () => Promise<T>): Promise<T> {
-		const result = this.pending.then(task); this.pending = result.catch(() => undefined); return result;
+		const result = this.pending.then(task);
+		this.pending = result.catch(() => undefined);
+		return result;
 	}
 }

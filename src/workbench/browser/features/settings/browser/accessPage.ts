@@ -11,14 +11,19 @@ import './media/access.css';
 export class AccessPage extends Disposable implements WorkbenchPage {
 	public readonly element = document.createElement('main');
 	public readonly actions: readonly TabAction[] = [];
+
 	constructor(@IInstantiationService instantiation: IInstantiationService) {
-		super(); this.element.className = 'access-page';
+		super();
+		this.element.className = 'access-page';
 		this.element.append(createPageHeading(nls.localize('home.access', 'Access & Security'), nls.localize('access.description', 'Control who can access this computer and what they can do.')));
-		const content = document.createElement('div'); content.className = 'access-content';
+		const content = document.createElement('div');
+		content.className = 'access-content';
 		content.append(this._register(instantiation.createInstance(MachinePermissionsSection)).element, this._register(instantiation.createInstance(PeerAccessSection)).element, this._register(instantiation.createInstance(LocalSecuritySection)).element);
 		this.element.append(content);
 	}
+
 	public override dispose(): void {
-		super.dispose(); this.element.remove();
+		super.dispose();
+		this.element.remove();
 	}
 }

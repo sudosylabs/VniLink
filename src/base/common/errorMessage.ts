@@ -46,7 +46,6 @@ function exceptionToErrorMessage(exception: unknown, verbose: boolean): string {
 	if (verbose && stack) {
 		return nls.localize('stackTrace.format', '{0}: {1}', detectSystemErrorMessage(exception), stack);
 	}
-
 	return detectSystemErrorMessage(exception);
 }
 
@@ -54,7 +53,6 @@ function stackToString(stack: string[] | string | undefined): string | undefined
 	if (Array.isArray(stack)) {
 		return stack.join('\n');
 	}
-
 	return stack;
 }
 
@@ -70,7 +68,6 @@ function detectSystemErrorMessage(exception: unknown): string {
 	if (typeof candidate.code === 'string' && typeof candidate.errno === 'number' && typeof candidate.syscall === 'string') {
 		return nls.localize('nodeExceptionMessage', 'A system error occurred ({0})', candidate.message as string | number | boolean | null | undefined);
 	}
-
 	if (candidate.message) {
 		return candidate.message as string;
 	}
@@ -87,46 +84,35 @@ export function toErrorMessage(error: unknown = null, verbose = false): string {
 	if (!error) {
 		return nls.localize('error.defaultMessage', 'An unknown error occurred. Please consult the log for more details.');
 	}
-
 	if (Array.isArray(error)) {
 		const errors = arrays.coalesce(error);
 		const msg = toErrorMessage(errors[0], verbose);
-
 		if (errors.length > 1) {
 			return nls.localize('error.moreErrors', '{0} ({1} errors in total)', msg, errors.length);
 		}
-
 		return msg;
 	}
-
 	if (types.isString(error)) {
 		return error;
 	}
-
 	const candidate = toErrorLike(error);
 	if (candidate.detail) {
 		const detail = toErrorLike(candidate.detail);
-
 		if (detail.error) {
 			return exceptionToErrorMessage(detail.error, verbose);
 		}
-
 		if (detail.exception) {
 			return exceptionToErrorMessage(detail.exception, verbose);
 		}
 	}
-
 	if (candidate.stack) {
 		return exceptionToErrorMessage(error, verbose);
 	}
-
 	if (candidate.message) {
 		return candidate.message as string;
 	}
-
 	return nls.localize('error.defaultMessage', 'An unknown error occurred. Please consult the log for more details.');
 }
-
 
 export interface IErrorWithActions extends Error {
 	actions: IAction[];
@@ -134,7 +120,6 @@ export interface IErrorWithActions extends Error {
 
 export function isErrorWithActions(obj: unknown): obj is IErrorWithActions {
 	const candidate = obj as IErrorWithActions | undefined;
-
 	return candidate instanceof Error && Array.isArray(candidate.actions);
 }
 
@@ -145,8 +130,6 @@ export function createErrorWithActions(messageOrError: string | Error, actions: 
 	} else {
 		error = messageOrError as IErrorWithActions;
 	}
-
 	error.actions = actions;
-
 	return error;
 }

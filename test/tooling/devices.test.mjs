@@ -2,23 +2,30 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
+
 const root = fileURLToPath(new URL('../../', import.meta.url));
+
 const bundle = await build({
 	stdin: { contents: `export { DeviceService } from './src/workbench/services/devices/electron-browser/deviceService.js';`, loader: 'ts', resolveDir: root },
 	bundle: true, write: false, platform: 'node', format: 'esm', target: 'node22', tsconfig: `${root}tsconfig.json`,
 });
+
 const { DeviceService } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
+
 function snapshot(devices) {
 	return { type: 'snapshot', snapshot: { devices } };
 }
+
 function deferred() {
 	let resolve;
 	let reject;
 	const promise = new Promise((done, fail) => {
-		resolve = done; reject = fail;
+		resolve = done;
+		reject = fail;
 	});
 	return { promise, resolve, reject };
 }
+
 function device(id, pet_name = null, hostname = null) {
 	return { endpoint_id: id, pet_name, hostname };
 }
@@ -27,7 +34,8 @@ test('device state maps names, publishes empty results and cannot be mutated by 
 	let reply = snapshot([device('one', 'Personal', 'Host'), device('two', null, 'Host'), device('three')]);
 	const service = new DeviceService({
 		async engineCommand(command) {
-			assert.deepEqual(command, { type: 'snapshot' }); return reply;
+			assert.deepEqual(command, { type: 'snapshot' });
+			return reply;
 		}
 	}, true);
 	const events = [];
@@ -50,7 +58,9 @@ test('device state maps names, publishes empty results and cannot be mutated by 
 });
 
 test('an older snapshot cannot overwrite a newer refresh', async () => {
-	const first = deferred(); const second = deferred(); const requests = [first, second];
+	const first = deferred();
+	const second = deferred();
+	const requests = [first, second];
 	const service = new DeviceService({
 		engineCommand() {
 			return requests.shift().promise;
@@ -61,8 +71,10 @@ test('an older snapshot cannot overwrite a newer refresh', async () => {
 	try {
 		const old = service.refresh(new AbortController().signal);
 		const fresh = service.refresh(new AbortController().signal);
-		second.resolve(snapshot([device('new')])); await fresh;
-		first.resolve(snapshot([device('old')])); await old;
+		second.resolve(snapshot([device('new')]));
+		await fresh;
+		first.resolve(snapshot([device('old')]));
+		await old;
 		assert.deepEqual(service.devices, [{ id: 'new', name: 'new' }]);
 		assert.equal(events, 1);
 	} finally {
@@ -73,7 +85,8 @@ test('an older snapshot cannot overwrite a newer refresh', async () => {
 test('cancellation and disposal fence late replies and errors', async () => {
 	for (const stop of ['abort', 'dispose']) {
 		for (const outcome of ['resolve', 'reject']) {
-			const request = deferred(); const controller = new AbortController();
+			const request = deferred();
+			const controller = new AbortController();
 			const service = new DeviceService({
 				engineCommand() {
 					return request.promise;
@@ -106,7 +119,8 @@ test('failed refresh preserves the previous snapshot and surfaces current failur
 		async engineCommand() {
 			if (reply instanceof Error) {
 				throw reply;
-			} return reply;
+			}
+			return reply;
 		}
 	}, true);
 	try {
@@ -125,11 +139,13 @@ test('unavailable, cancelled and disposed services never send requests', async (
 	let calls = 0;
 	const service = new DeviceService({
 		async engineCommand() {
-			calls++; return snapshot([]);
+			calls++;
+			return snapshot([]);
 		}
 	}, false);
 	await assert.rejects(service.refresh(new AbortController().signal), /unavailable/);
-	const aborted = new AbortController(); aborted.abort();
+	const aborted = new AbortController();
+	aborted.abort();
 	await service.refresh(aborted.signal);
 	service.dispose();
 	await service.refresh(new AbortController().signal);

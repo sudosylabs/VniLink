@@ -16,6 +16,7 @@ export function createSetting(label: string, description: string, control: HTMLE
 	row.append(caption, help);
 	return row;
 }
+
 export function createSelect(options: readonly (readonly [string, string])[]): HTMLSelectElement {
 	const select = document.createElement('select');
 	for (const [value, label] of options) {

@@ -28,5 +28,7 @@ export const Icons = Object.freeze({
 	maximize: 'maximize',
 	restore: 'restore',
 } as const);
+
 export type IconId = typeof Icons[keyof typeof Icons];
+
 export type IconVariant = 'outlined' | 'filled';

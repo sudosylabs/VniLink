@@ -495,18 +495,18 @@
       "path": "src/platform/ipc/common/mainProcessService.ts",
       "upstreamPath": "src/vs/platform/ipc/common/mainProcessService.ts",
       "adapted": true,
-      "sha256": "2e1ab6199be2796a9df329c36bd210f5025c7df17b972620cc30e29e50bc7f3c"
+      "sha256": "9a199d102134767ad0a18136d669c1f720d9b893393f449d28f40cc6f3795390"
     },
     {
       "path": "src/platform/ipc/electron-browser/mainProcessService.ts",
       "upstreamPath": "src/vs/platform/ipc/electron-browser/mainProcessService.ts",
       "adapted": true,
-      "sha256": "09901fcea861345d2a78633e3173200010787cff0d17e5fa9ce14875464ed02c"
+      "sha256": "ebd33d3510375ccdd4201b62b4f67041f23e08e8a8dbe401e84430726aea24a4"
     },
     {
       "path": "src/platform/native/common/native.ts",
       "upstreamPath": "src/vs/platform/native/common/native.ts",
-      "sha256": "b0598c07474176fe6f28b354852968e0ceb2af0f9f1085d5b761e86a0eac9c7d",
+      "sha256": "4a660b837ff659d0bb87ef350c86cda7f49fb90edbb4eeb4cddea765b1d6ad7d",
       "changedImports": 0,
       "adapted": true
     },
@@ -514,32 +514,32 @@
       "path": "src/platform/native/common/nativeHostService.ts",
       "upstreamPath": "src/vs/platform/native/common/nativeHostService.ts",
       "adapted": true,
-      "sha256": "3ab246f2a93a65238c242cec060518266ae7be93026cec31071ff31dd22b5c6f"
+      "sha256": "280440d90cb65737fc55c3938474b69b63d90a0ab00918ca94156e7577786eb5"
     },
     {
       "path": "src/platform/native/electron-main/nativeHostMainService.ts",
       "upstreamPath": "src/vs/platform/native/electron-main/nativeHostMainService.ts",
       "adapted": true,
-      "sha256": "ea1ac9b9340c66b59ddafb17fbfce4fe1f73ed9ba0c71321d0d870c03b190ec5"
+      "sha256": "9c4baf644b444732efb51239b6addba95b283faa8dad826f51456937989663b4"
     },
     {
       "path": "src/platform/theme/browser/themeService.ts",
       "upstreamPath": "src/vs/workbench/services/themes/browser/workbenchThemeService.ts",
       "adapted": true,
-      "sha256": "e0a98cffbf42bb32f3b677b258f9cb112dcc9e741e2fe585210b3caa2a12038a",
+      "sha256": "910bee77a553b18a97994f7b5ac315a7cebcdecdbef2c4315bed45bd30c45f04",
       "adaptation": "New system-theme adapter using the upstream theme-service registration pattern."
     },
     {
       "path": "src/platform/theme/common/themeService.ts",
       "upstreamPath": "src/vs/platform/theme/common/themeService.ts",
-      "sha256": "362c87ea690454b86faaf9225b544ce9fd831b6f2992d8e8e780d243a5bf1006",
+      "sha256": "9415e9b5f6c34d115abb4e387cbbcfa256c45b9a7b08a44ec13256dd7363d461",
       "changedImports": 0,
       "adapted": true
     },
     {
       "path": "src/platform/window/common/window.ts",
       "upstreamPath": "src/vs/platform/window/common/window.ts",
-      "sha256": "bb59de1bf41782bfb3c51afba1772a57882f4582a7b21bc34e0356bd74ac2239",
+      "sha256": "caea024af8c8760dca3e331cf57e68ffd48f2af381fddb469ecc886e507ea9c4",
       "changedImports": 0,
       "adapted": true
     },
@@ -590,7 +590,7 @@
     {
       "path": "src/workbench/browser/parts/titlebar/titlebarPart.ts",
       "upstreamPath": "src/vs/workbench/browser/parts/titlebar/titlebarPart.ts",
-      "sha256": "6475423991bd1ef46b41cf19accfc943b9daccef83d4423f9bf6db20d0525485",
+      "sha256": "15aa91d22a80061103225d1df9f6927ad26a5ffd748e5eb7d127f0abeaf99a8b",
       "changedImports": 0,
       "adapted": true
     },
@@ -598,19 +598,19 @@
       "path": "src/workbench/electron-browser/desktop.main.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/desktop.main.ts",
       "adapted": true,
-      "sha256": "854b1016a3cc03078b905a8bcd6940510d832e2ac1af34c2b7e2055e7ac6ab51"
+      "sha256": "31d6359b6d8b318d7cc4e827fed39dd2fe0732bcd9efee67088fd45edd792ec7"
     },
     {
       "path": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
-      "sha256": "e3cbe182c8f450d072d1c21dd43e5665273847f63efaff0bcd941dc2b58e1bd9",
+      "sha256": "0a5b4cfb46deb829d29f14dedd2fe6385d859eefd874767f7a8f78bae1d09735",
       "changedImports": 0,
       "adapted": true
     },
     {
       "path": "src/workbench/services/host/browser/host.ts",
       "upstreamPath": "src/vs/workbench/services/host/browser/host.ts",
-      "sha256": "b85c3e37ff71e97e8c61f5cf2ae5d8b0ee024a35a21baed06a2f580acce0325f",
+      "sha256": "3e4d743c008479453ad62f0386de6fef6b38d54187ebc7398016408a58286e40",
       "changedImports": 0,
       "adapted": true
     },
@@ -618,7 +618,7 @@
       "path": "src/workbench/services/host/electron-browser/nativeHostService.ts",
       "upstreamPath": "src/vs/workbench/services/host/electron-browser/nativeHostService.ts",
       "adapted": true,
-      "sha256": "6d3207d88987cd1e8903b4e3b83a4f1cfa04b6ac9d6043ab809e548d552ef287"
+      "sha256": "cd7f83509e5e83251b269f625c4592467cb2286031a54d18f80e8dc31190703c"
     },
     {
       "path": "src/base/browser/window.ts",

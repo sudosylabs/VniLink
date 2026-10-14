@@ -16,6 +16,7 @@ export function buildOptions(root) {
 		browser('test/browser/tabs.ts', 'tab-tests.js', { format: 'iife', globalName: 'tabTests' }),
 	];
 }
+
 export function resources(root) {
 	return [
 		['src/workbench/browser/index.html', 'renderer/index.html'],

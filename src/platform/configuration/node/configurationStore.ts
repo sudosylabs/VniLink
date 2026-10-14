@@ -16,9 +16,11 @@ export class ConfigurationStore extends Disposable {
 	constructor(private readonly path: string) {
 		super();
 	}
+
 	public get snapshot(): ConfigurationSnapshot {
 		return this.current;
 	}
+
 	public async initialize(): Promise<void> {
 		if (this.initialized) {
 			return;
@@ -49,6 +51,7 @@ export class ConfigurationStore extends Disposable {
 		}
 		this.initialized = true;
 	}
+
 	public updateValue(change: ConfigurationUpdate): Promise<ConfigurationSnapshot> {
 		if (!isConfigurationUpdate(change)) {
 			return Promise.reject(new Error('Invalid configuration update'));
@@ -68,9 +71,11 @@ export class ConfigurationStore extends Disposable {
 		this.pending = result.catch(() => undefined);
 		return result;
 	}
+
 	public async flush(): Promise<void> {
 		await this.pending;
 	}
+
 	private async write(values: unknown): Promise<void> {
 		await mkdir(dirname(this.path), { recursive: true });
 		const temporary = `${this.path}.${randomUUID()}.tmp`;

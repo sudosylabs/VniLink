@@ -13,6 +13,7 @@ async function until(predicate) {
 		await new Promise(resolve => setTimeout(resolve, 30));
 	}
 }
+
 test('desktop watcher rebuilds TS/CSS, handles atomic resource saves and leaves Rust alone', async () => {
 	const root = await mkdtemp(join(tmpdir(), 'vnilink-watch-'));
 	async function put(path, text) {
@@ -46,7 +47,8 @@ test('desktop watcher rebuilds TS/CSS, handles atomic resource saves and leaves 
 		await rm(join(root, 'src/workbench/browser/index.html'));
 		await until(async () => {
 			try {
-				await access(join(root, 'out/renderer/index.html')); return false;
+				await access(join(root, 'out/renderer/index.html'));
+				return false;
 			} catch {
 				return true;
 			}
@@ -61,7 +63,8 @@ test('desktop watcher rebuilds TS/CSS, handles atomic resource saves and leaves 
 		});
 		await put('crates/example/src/lib.rs', 'this deliberately is not valid Rust');
 		assert.equal(await readFile(join(root, 'out/native/vnilink.node'), 'utf8'), 'native-sentinel');
-		await watcher.dispose(); watcher = undefined;
+		await watcher.dispose();
+		watcher = undefined;
 		await put('src/main.ts', 'console.log("after-disposal");');
 		await new Promise(resolve => setTimeout(resolve, 300));
 		assert.equal((await readFile(join(root, 'out/main.cjs'), 'utf8')).includes('after-disposal'), false);

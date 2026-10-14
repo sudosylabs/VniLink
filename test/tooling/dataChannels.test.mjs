@@ -3,14 +3,20 @@ import test from 'node:test';
 import { build } from 'esbuild';
 import { MessageChannel } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
+
 async function load(path) {
 	const output = await build({ entryPoints: [fileURLToPath(new URL(path, import.meta.url))], bundle: true, write: false, format: 'esm', platform: 'node' });
 	return await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
 }
+
 const { DataChannelHost } = await load('../../src/platform/engine/electron-utility/dataChannelHost.ts');
+
 const { DataChannelClient } = await load('../../src/platform/engine/browser/dataChannelClient.ts');
+
 const { isChannelRequest } = await load('../../src/platform/engine/common/dataChannel.ts');
+
 const request = { kind: 'video', requestId: 'test', sessionId: '1', generation: '2' };
+
 function fixture(kind = 'video') {
 	const messages = [];
 	const listeners = new Map();
@@ -26,6 +32,7 @@ function fixture(kind = 'video') {
 		}
 	};
 }
+
 test('data requests reject loss of identity, invalid terminal sizes and additional authority', () => {
 	assert.equal(isChannelRequest(request), true);
 	assert.equal(isChannelRequest({ ...request, kind: ['video'] }), false);
@@ -35,6 +42,7 @@ test('data requests reject loss of identity, invalid terminal sizes and addition
 	assert.equal(isChannelRequest({ ...request, kind: 'terminal', rows: 24, columns: 80 }), true);
 	assert.equal(isChannelRequest({ ...request, kind: 'terminal', rows: 0, columns: 80 }), false);
 });
+
 test('binary output is ordered and a slow consumer cannot grow the IPC queue', () => {
 	const f = fixture();
 	try {
@@ -52,6 +60,7 @@ test('binary output is ordered and a slow consumer cannot grow the IPC queue', (
 		f.host.close();
 	}
 });
+
 test('terminal exit is consumed before graceful channel closure', () => {
 	const f = fixture('terminal');
 	f.packets.push({ kind: 'exited', metadata: '{"code":7}' });
@@ -61,6 +70,7 @@ test('terminal exit is consumed before graceful channel closure', () => {
 	assert.equal(f.closed, 1);
 	assert.equal(f.messages.at(-1).type, 'closed');
 });
+
 test('input cannot inject a different session or management operation', () => {
 	const f = fixture('input');
 	f.host.start(f.native);
@@ -70,11 +80,15 @@ test('input cannot inject a different session or management operation', () => {
 	assert.equal(f.inputs.length, 1);
 	assert.equal(f.closed, 1);
 });
+
 test('close before native startup disposes the late handle exactly once', () => {
 	const f = fixture();
-	f.host.close(); f.host.start(f.native); f.host.close();
+	f.host.close();
+	f.host.start(f.native);
+	f.host.close();
 	assert.equal(f.closed, 1);
 });
+
 async function until(predicate) {
 	const deadline = performance.now() + 3000;
 	while (!predicate()) {
@@ -82,6 +96,7 @@ async function until(predicate) {
 		await new Promise(resolve => setTimeout(resolve, 1));
 	}
 }
+
 test('renderer acknowledges only after consumption and coalesces positions without losing key transitions', async () => {
 	const { port1, port2 } = new MessageChannel();
 	const messages = [];
@@ -104,16 +119,19 @@ test('renderer acknowledges only after consumption and coalesces positions witho
 		await until(() => messages.some(message => message.type === 'ack'));
 		assert.equal(messages[0].type, 'ack');
 		const pointer = x => ({ type: 'submitPointer', sessionId: '1', generation: '2', x, y: 0, display: '1', revision: '1' });
-		client.input(pointer(1)); client.input(pointer(2));
+		client.input(pointer(1));
+		client.input(pointer(2));
 		client.input({ type: 'submitKey', sessionId: '1', generation: '2', usage: 4, down: true });
 		client.input(pointer(3));
 		await until(() => messages.filter(message => message.type === 'input').length === 3);
 		const inputs = messages.filter(m => m.type === 'input').map(m => m.command);
 		assert.deepEqual(inputs.map(c => c.type), ['submitPointer', 'submitKey', 'submitPointer']);
-		assert.equal(inputs[0].x, 2); assert.equal(inputs[2].x, 3);
+		assert.equal(inputs[0].x, 2);
+		assert.equal(inputs[2].x, 3);
 		assert.deepEqual(errors, []);
 	} finally {
-		client.close(); port2.close();
+		client.close();
+		port2.close();
 	}
 });
 
@@ -130,7 +148,8 @@ test('intentional close with unacknowledged input does not report a failure', as
 		await new Promise(resolve => setImmediate(resolve));
 		assert.deepEqual(errors, []);
 	} finally {
-		client.close(); port2.close();
+		client.close();
+		port2.close();
 	}
 });
 
@@ -168,7 +187,8 @@ test('cancel passes through renderer and utility while progress is pending', asy
 		assert.equal(await poll, '{"state":"Cancelled"}');
 		assert.deepEqual(errors, []);
 	} finally {
-		client.close(); host.close();
+		client.close();
+		host.close();
 		if (poll) {
 			await poll.catch(() => { });
 		}

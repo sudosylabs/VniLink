@@ -34,6 +34,7 @@ import { IConnectionService } from '../services/connection/common/connectionServ
 import { ConnectionService } from '../services/connection/electron-browser/connectionService.js';
 import { IAccessService } from '../services/access/common/accessService.js';
 import { AccessService } from '../services/access/electron-browser/accessService.js';
+
 export function createWorkbenchServices(api: DesktopApi, info: AppInfo): InstantiationService {
 	const services = new ServiceCollection(
 		[IMainProcessService, new SyncDescriptor(MainProcessService, [api, info.windowId])],

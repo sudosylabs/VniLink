@@ -17,19 +17,31 @@ export class PeerAccessSection extends Disposable {
 	private current: PeerAccess | undefined;
 	private busy = false;
 	private revision = 0;
+
 	constructor(@IAccessService private readonly access: IAccessService) {
 		super();
 		this.element.className = 'access-section';
-		const header = document.createElement('div'); header.className = 'access-section-header';
-		const heading = document.createElement('h2'); heading.textContent = nls.localize('access.devices', 'Device access');
-		this.refreshButton.type = 'button'; this.refreshButton.className = 'access-text-button'; this.refreshButton.textContent = nls.localize('access.refresh', 'Refresh');
+		const header = document.createElement('div');
+		header.className = 'access-section-header';
+		const heading = document.createElement('h2');
+		heading.textContent = nls.localize('access.devices', 'Device access');
+		this.refreshButton.type = 'button';
+		this.refreshButton.className = 'access-text-button';
+		this.refreshButton.textContent = nls.localize('access.refresh', 'Refresh');
 		header.append(heading, this.refreshButton);
-		const help = document.createElement('p'); help.className = 'access-description'; help.textContent = nls.localize('access.direction', 'Choose what a paired device can access on this computer.');
-		const selector = document.createElement('label'); selector.className = 'access-device-selector';
-		const title = document.createElement('span'); title.textContent = nls.localize('access.device', 'Device'); selector.append(title, wrapSelect(this.select));
+		const help = document.createElement('p');
+		help.className = 'access-description';
+		help.textContent = nls.localize('access.direction', 'Choose what a paired device can access on this computer.');
+		const selector = document.createElement('label');
+		selector.className = 'access-device-selector';
+		const title = document.createElement('span');
+		title.textContent = nls.localize('access.device', 'Device');
+		selector.append(title, wrapSelect(this.select));
 		this.identity.className = 'access-identity';
-		this.fields.className = 'access-permissions'; this.fields.hidden = true;
-		this.status.className = 'access-status'; this.status.setAttribute('role', 'status');
+		this.fields.className = 'access-permissions';
+		this.fields.hidden = true;
+		this.status.className = 'access-status';
+		this.status.setAttribute('role', 'status');
 		const definitions: readonly (readonly [AccessPermission, string, string])[] = [
 			['view', nls.localize('access.view', 'View screen'), nls.localize('access.viewHelp', 'See the screen of this computer.')],
 			['control', nls.localize('access.control', 'Keyboard & mouse'), nls.localize('access.controlHelp', 'Control this computer’s keyboard and pointer.')],
@@ -46,9 +58,12 @@ export class PeerAccessSection extends Disposable {
 			const row = this._register(new AccessToggle(title, description, allowed => {
 				void this.change(key, allowed);
 			}));
-			row.input.dataset.permission = key; this.rows.set(key, row); this.fields.append(row.element);
+			row.input.dataset.permission = key;
+			this.rows.set(key, row);
+			this.fields.append(row.element);
 		}
-		const note = document.createElement('p'); note.className = 'access-description';
+		const note = document.createElement('p');
+		note.className = 'access-description';
 		note.textContent = nls.localize('access.permissionNote', 'Changes apply immediately. Removing permission can stop active work. Device support and operating-system consent still apply.');
 		this.fields.append(note);
 		appendAccessSection(this.element, header, help, [selector, this.identity, this.fields, this.status]);
@@ -63,62 +78,92 @@ export class PeerAccessSection extends Disposable {
 		if (access.available) {
 			void this.refresh();
 		} else {
-			this.select.disabled = true; this.refreshButton.disabled = true; this.status.textContent = nls.localize('access.unavailable', 'The connection engine is unavailable. Restart VniLink to try again.');
+			this.select.disabled = true;
+			this.refreshButton.disabled = true;
+			this.status.textContent = nls.localize('access.unavailable', 'The connection engine is unavailable. Restart VniLink to try again.');
 		}
 	}
+
 	private disposed(): boolean {
 		return this._store.isDisposed;
 	}
+
 	private setBusy(busy: boolean): void {
-		this.busy = busy; this.element.setAttribute('aria-busy', String(busy)); this.select.disabled = busy; this.refreshButton.disabled = busy;
+		this.busy = busy;
+		this.element.setAttribute('aria-busy', String(busy));
+		this.select.disabled = busy;
+		this.refreshButton.disabled = busy;
 		for (const row of this.rows.values()) {
 			row.setEnabled(!busy && !!this.current);
 		}
 	}
+
 	private render(peer: PeerAccess): void {
-		this.current = peer; this.identity.textContent = peer.device.id; this.fields.hidden = false;
+		this.current = peer;
+		this.identity.textContent = peer.device.id;
+		this.fields.hidden = false;
 		for (const [key, row] of this.rows) {
 			row.setValue(peer.permissions[key]);
 		}
 	}
+
 	private async refresh(): Promise<void> {
 		if (this.busy || this.disposed()) {
 			return;
 		}
-		this.setBusy(true); this.status.textContent = nls.localize('access.loadingDevices', 'Loading paired devices…');
+		this.setBusy(true);
+		this.status.textContent = nls.localize('access.loadingDevices', 'Loading paired devices…');
 		const selected = this.current?.device.id;
 		try {
-			const devices = await this.access.listDevices(); if (this.disposed()) {
+			const devices = await this.access.listDevices();
+			if (this.disposed()) {
 				return;
 			}
 			this.select.replaceChildren();
 			for (const device of devices) {
-				const option = document.createElement('option'); option.value = device.id; option.textContent = `${device.name} · ${device.id.slice(0, 8)}`; this.select.append(option);
+				const option = document.createElement('option');
+				option.value = device.id;
+				option.textContent = `${device.name} · ${device.id.slice(0, 8)}`;
+				this.select.append(option);
 			}
 			this.setBusy(false);
 			if (!devices.length) {
-				this.current = undefined; this.fields.hidden = true; this.identity.textContent = ''; this.select.disabled = true;
-				this.status.textContent = nls.localize('access.noDevices', 'No paired devices. Pair a device to manage its access here.'); return;
+				this.current = undefined;
+				this.fields.hidden = true;
+				this.identity.textContent = '';
+				this.select.disabled = true;
+				this.status.textContent = nls.localize('access.noDevices', 'No paired devices. Pair a device to manage its access here.');
+				return;
 			}
 			this.select.value = devices.some(device => device.id === selected) && selected ? selected : devices[0].id;
 			await this.load(this.select.value);
 		} catch {
 			if (!this.disposed()) {
-				this.current = undefined; this.fields.hidden = true; this.identity.textContent = ''; this.status.textContent = nls.localize('access.deviceLoadFailed', 'Could not load paired devices. Refresh to try again.'); this.setBusy(false);
+				this.current = undefined;
+				this.fields.hidden = true;
+				this.identity.textContent = '';
+				this.status.textContent = nls.localize('access.deviceLoadFailed', 'Could not load paired devices. Refresh to try again.');
+				this.setBusy(false);
 			}
 		}
 	}
+
 	private async load(id: string): Promise<void> {
 		if (this.disposed()) {
 			return;
 		}
-		const revision = ++this.revision; this.current = undefined; this.fields.hidden = true; this.identity.textContent = ''; this.setBusy(true);
+		const revision = ++this.revision;
+		this.current = undefined;
+		this.fields.hidden = true;
+		this.identity.textContent = '';
+		this.setBusy(true);
 		try {
 			const peer = await this.access.loadPeer(id);
 			if (this.disposed() || revision !== this.revision) {
 				return;
 			}
-			this.render(peer); this.status.textContent = '';
+			this.render(peer);
+			this.status.textContent = '';
 		} catch {
 			if (!this.disposed() && revision === this.revision) {
 				this.status.textContent = nls.localize('access.peerLoadFailed', 'Could not load this device’s permissions. Refresh to try again.');
@@ -129,11 +174,14 @@ export class PeerAccessSection extends Disposable {
 			}
 		}
 	}
+
 	private async change(key: AccessPermission, allowed: boolean): Promise<void> {
 		if (this.busy || !this.current || this.disposed()) {
 			return;
 		}
-		const previous = this.current; this.setBusy(true); this.status.textContent = '';
+		const previous = this.current;
+		this.setBusy(true);
+		this.status.textContent = '';
 		try {
 			const peer = await this.access.setPermission(previous.device.id, key, allowed);
 			if (!this.disposed()) {
@@ -142,9 +190,14 @@ export class PeerAccessSection extends Disposable {
 		} catch (error) {
 			if (!this.disposed()) {
 				if (error instanceof AccessReadbackError) {
-					this.current = undefined; this.fields.hidden = true; this.status.textContent = nls.localize('access.readbackFailed', 'Change applied, but permissions could not be reloaded. Refresh before editing again.');
+					this.current = undefined;
+					this.fields.hidden = true;
+					this.status.textContent = nls.localize('access.readbackFailed', 'Change applied, but permissions could not be reloaded. Refresh before editing again.');
 				} else {
-					this.render(previous); this.current = undefined; this.fields.hidden = true; this.status.textContent = nls.localize('access.changeFailed', 'Could not confirm the change. Refresh to check this device’s current permissions.');
+					this.render(previous);
+					this.current = undefined;
+					this.fields.hidden = true;
+					this.status.textContent = nls.localize('access.changeFailed', 'Could not confirm the change. Refresh to check this device’s current permissions.');
 				}
 			}
 		} finally {

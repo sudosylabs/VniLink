@@ -1,10 +1,13 @@
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { ITabService, type WorkbenchTab } from '../../../services/tabs/common/tabService.js';
+
 export interface WorkbenchView extends WorkbenchTab {
 	readonly element: HTMLElement;
 }
+
 export class ViewHost extends Disposable {
 	private readonly views = new Map<string, WorkbenchView>();
+
 	constructor(
 		private readonly container: HTMLElement,
 		@ITabService private readonly tabs: ITabService,
@@ -17,6 +20,7 @@ export class ViewHost extends Disposable {
 			}),
 		);
 	}
+
 	public open(view: WorkbenchView): void {
 		const existing = this.views.get(view.id);
 		if (existing) {
@@ -34,6 +38,7 @@ export class ViewHost extends Disposable {
 			throw error;
 		}
 	}
+
 	private render(): void {
 		const ids = new Set(this.tabs.tabs.map((tab) => tab.id));
 		for (const [id, view] of this.views) {

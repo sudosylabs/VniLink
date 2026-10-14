@@ -4,7 +4,9 @@ import { build } from 'esbuild';
 import { mkdtemp, mkdir, readFile, writeFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
 const output = await build({ stdin: { contents: `export { ConfigurationStore } from './src/platform/configuration/node/configurationStore.js'; export { ConfigurationService } from './src/platform/configuration/electron-browser/configurationService.js'; export { defaultConfiguration, isConfigurationUpdate, isConfigurationSnapshot } from './src/platform/configuration/common/configuration.js'; export { ConnectionService } from './src/workbench/services/connection/electron-browser/connectionService.js'; export { ConnectionReadbackError } from './src/workbench/services/connection/common/connectionService.js'; export { validateRelays } from './src/workbench/services/connection/common/relayValidation.js';`, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json' });
+
 const { ConfigurationStore, ConfigurationService, defaultConfiguration, isConfigurationUpdate, isConfigurationSnapshot, ConnectionService, ConnectionReadbackError, validateRelays } = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
 
 test('local preferences survive reopen and concurrent writes preserve unrelated keys', async () => {
@@ -24,14 +26,16 @@ test('local preferences survive reopen and concurrent writes preserve unrelated 
 		assert.deepEqual(await readdir(dir), ['settings.json']);
 		const reopened = new ConfigurationStore(path);
 		try {
-			await reopened.initialize(); assert.deepEqual(reopened.snapshot.values, contents);
+			await reopened.initialize();
+			assert.deepEqual(reopened.snapshot.values, contents);
 		} finally {
 			reopened.dispose();
 		}
 		await assert.rejects(store.updateValue({ key: 'unknown', value: true }), /Invalid/);
 		assert.equal(notifications, 2);
 	} finally {
-		store.dispose(); await rm(dir, { recursive: true, force: true });
+		store.dispose();
+		await rm(dir, { recursive: true, force: true });
 	}
 });
 
@@ -42,7 +46,8 @@ test('invalid settings are preserved and blocked from being overwritten', async 
 		await writeFile(path, contents);
 		const store = new ConfigurationStore(path);
 		try {
-			await store.initialize(); assert.ok(store.snapshot.error);
+			await store.initialize();
+			assert.ok(store.snapshot.error);
 			assert.deepEqual(store.snapshot.values, defaultConfiguration);
 			await assert.rejects(store.updateValue({ key: 'appearance.theme', value: 'light' }));
 			assert.equal(await readFile(path, 'utf8'), contents);
@@ -58,37 +63,50 @@ test('failed atomic writes keep effective values and later writes recover', asyn
 	const path = join(dir, 'settings.json');
 	const store = new ConfigurationStore(path);
 	try {
-		await store.initialize(); await mkdir(path);
-		let events = 0; store.onDidChangeConfiguration(() => events++);
+		await store.initialize();
+		await mkdir(path);
+		let events = 0;
+		store.onDidChangeConfiguration(() => events++);
 		await assert.rejects(store.updateValue({ key: 'appearance.theme', value: 'dark' }));
-		assert.equal(events, 0); assert.deepEqual(store.snapshot.values, defaultConfiguration);
+		assert.equal(events, 0);
+		assert.deepEqual(store.snapshot.values, defaultConfiguration);
 		assert.deepEqual(await readdir(dir), ['settings.json']);
 		await rm(path, { recursive: true });
 		await store.updateValue({ key: 'appearance.theme', value: 'light' });
-		assert.equal(events, 1); assert.equal(store.snapshot.values['appearance.theme'], 'light');
+		assert.equal(events, 1);
+		assert.equal(store.snapshot.values['appearance.theme'], 'light');
 	} finally {
-		store.dispose(); await rm(dir, { recursive: true, force: true });
+		store.dispose();
+		await rm(dir, { recursive: true, force: true });
 	}
 });
 
 test('renderer configuration rejects stale initialization and releases its subscription', async () => {
-	let finish; let receive; let unsubscribed = 0;
+	let finish;
+	let receive;
+	let unsubscribed = 0;
 	const service = new ConfigurationService({
 		getConfiguration: () => new Promise(resolve => {
 			finish = resolve;
 		}), updateConfiguration: () => Promise.reject(new Error('disk failure')), onConfigurationChanged(listener) {
-			receive = listener; return () => {
+			receive = listener;
+			return () => {
 				unsubscribed++;
 			};
 		}
 	});
 	const loading = service.initialize();
-	const incomingQuality = { ...defaultConfiguration['desktop.quality'] }; receive({ revision: 2, values: { ...defaultConfiguration, 'appearance.theme': 'dark', 'desktop.quality': incomingQuality }, error: null }); incomingQuality.max_frame_rate = 10; assert.equal(service.snapshot.values['desktop.quality'].max_frame_rate, 30);
-	finish({ revision: 0, values: defaultConfiguration, error: null }); await loading;
+	const incomingQuality = { ...defaultConfiguration['desktop.quality'] };
+	receive({ revision: 2, values: { ...defaultConfiguration, 'appearance.theme': 'dark', 'desktop.quality': incomingQuality }, error: null });
+	incomingQuality.max_frame_rate = 10;
+	assert.equal(service.snapshot.values['desktop.quality'].max_frame_rate, 30);
+	finish({ revision: 0, values: defaultConfiguration, error: null });
+	await loading;
 	assert.equal(service.snapshot.values['appearance.theme'], 'dark');
 	await assert.rejects(service.updateValue({ key: 'appearance.theme', value: 'light' }));
 	assert.equal(service.snapshot.values['appearance.theme'], 'dark');
-	service.dispose(); assert.equal(unsubscribed, 1);
+	service.dispose();
+	assert.equal(unsubscribed, 1);
 	receive({ revision: 3, values: defaultConfiguration, error: null });
 	assert.equal(service.snapshot.revision, 2);
 	assert.equal(isConfigurationUpdate({ key: 'appearance.theme', value: 'invalid' }), false);
@@ -99,6 +117,7 @@ test('renderer configuration rejects stale initialization and releases its subsc
 function relay(url, authenticated = false, replacementToken = '') {
 	return { url, authenticated, replacementToken };
 }
+
 test('relay validation follows count, HTTPS, loopback, duplicate and credential rules', () => {
 	const saved = new Set(['https://saved.example/']);
 	for (const value of ['https://relay.example/', 'http://localhost:3340/', 'http://127.0.0.2/', 'http://[::1]/']) {
@@ -142,6 +161,7 @@ function connectionFixture() {
 	};
 	return { api, commands };
 }
+
 test('relay saves read back Rust state and preserve active configuration and saved credentials', async () => {
 	const { api, commands } = connectionFixture();
 	const service = new ConnectionService(api, true);
@@ -160,12 +180,14 @@ test('invalid relay drafts never reach a write and unavailable engines never rec
 	await assert.rejects(service.save({ mode: 'custom', relays: [relay('http://remote.example/')] }));
 	assert.ok(!commands.some(command => command.type === 'saveCustomRelays'));
 	commands.length = 0;
-	await assert.rejects(new ConnectionService(api, false).load()); assert.equal(commands.length, 0);
+	await assert.rejects(new ConnectionService(api, false).load());
+	assert.equal(commands.length, 0);
 });
 
 test('a committed relay save with failed read-back is distinguished from a write failure', async () => {
 	const { api } = connectionFixture();
-	const original = api.engineCommand; let committed = false;
+	const original = api.engineCommand;
+	let committed = false;
 	api.engineCommand = async command => {
 		if (committed) {
 			throw new Error('read-back failed');
@@ -200,34 +222,53 @@ test('queued relay saves capture their drafts and recover after a write failure'
 });
 
 test('desktop defaults persist, validate, and capture mutable drafts before writes', async () => {
-	const dir = await mkdtemp(join(tmpdir(), 'vnilink-desktop-defaults-')); const path = join(dir, 'settings.json'); const store = new ConfigurationStore(path);
+	const dir = await mkdtemp(join(tmpdir(), 'vnilink-desktop-defaults-'));
+	const path = join(dir, 'settings.json');
+	const store = new ConfigurationStore(path);
 	try {
-		await writeFile(path, JSON.stringify({ 'appearance.theme': 'dark', 'appearance.nativeBackground': false })); await store.initialize(); assert.equal(store.snapshot.error, null);
-		const quality = { max_bitrate_kbps: 5000, max_frame_rate: 60, max_width: 1920, max_height: 1080 }; const saving = store.updateValue({ key: 'desktop.quality', value: quality }); quality.max_frame_rate = 10; await saving;
-		const reopened = new ConfigurationStore(path); try {
-			await reopened.initialize(); assert.equal(reopened.snapshot.values['desktop.quality'].max_frame_rate, 60); assert.equal(reopened.snapshot.values['appearance.theme'], 'dark');
+		await writeFile(path, JSON.stringify({ 'appearance.theme': 'dark', 'appearance.nativeBackground': false }));
+		await store.initialize();
+		assert.equal(store.snapshot.error, null);
+		const quality = { max_bitrate_kbps: 5000, max_frame_rate: 60, max_width: 1920, max_height: 1080 };
+		const saving = store.updateValue({ key: 'desktop.quality', value: quality });
+		quality.max_frame_rate = 10;
+		await saving;
+		const reopened = new ConfigurationStore(path);
+		try {
+			await reopened.initialize();
+			assert.equal(reopened.snapshot.values['desktop.quality'].max_frame_rate, 60);
+			assert.equal(reopened.snapshot.values['appearance.theme'], 'dark');
 		} finally {
 			reopened.dispose();
 		}
 		assert(!isConfigurationUpdate({ key: 'desktop.quality', value: { ...quality, max_frame_rate: 61 } }));
 	} finally {
-		store.dispose(); await rm(dir, { recursive: true, force: true });
+		store.dispose();
+		await rm(dir, { recursive: true, force: true });
 	}
 });
 
 test('input defaults and shared folders persist across restarts without retaining mutable caller objects', async () => {
-	const dir = await mkdtemp(join(tmpdir(), 'vnilink-input-defaults-')); const path = join(dir, 'settings.json');
+	const dir = await mkdtemp(join(tmpdir(), 'vnilink-input-defaults-'));
+	const path = join(dir, 'settings.json');
 	try {
-		const store = new ConfigurationStore(path); await store.initialize();
+		const store = new ConfigurationStore(path);
+		await store.initialize();
 		const defaults = { mode: 'Map', swap: true, pointer: { sensitivity_percent: 175, reverse_wheel: true, swap_buttons: true } };
-		const saving = store.updateValue({ key: 'input.defaults', value: defaults }); defaults.pointer.sensitivity_percent = 200; await saving;
+		const saving = store.updateValue({ key: 'input.defaults', value: defaults });
+		defaults.pointer.sensitivity_percent = 200;
+		await saving;
 		await store.updateValue({ key: 'files.roots', value: [dir] });
-		const reopened = new ConfigurationStore(path); await reopened.initialize();
-		assert.equal(reopened.snapshot.values['input.defaults'].pointer.sensitivity_percent, 175); assert.deepEqual(reopened.snapshot.values['files.roots'], [dir]);
-		assert(Object.isFrozen(reopened.snapshot.values['input.defaults'].pointer)); assert(Object.isFrozen(reopened.snapshot.values['files.roots']));
+		const reopened = new ConfigurationStore(path);
+		await reopened.initialize();
+		assert.equal(reopened.snapshot.values['input.defaults'].pointer.sensitivity_percent, 175);
+		assert.deepEqual(reopened.snapshot.values['files.roots'], [dir]);
+		assert(Object.isFrozen(reopened.snapshot.values['input.defaults'].pointer));
+		assert(Object.isFrozen(reopened.snapshot.values['files.roots']));
 		await assert.rejects(store.updateValue({ key: 'input.defaults', value: { ...defaults, pointer: { ...defaults.pointer, sensitivity_percent: 401 } } }));
 		await assert.rejects(store.updateValue({ key: 'files.roots', value: ['relative/path'] }));
-		store.dispose(); reopened.dispose();
+		store.dispose();
+		reopened.dispose();
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
@@ -240,10 +281,16 @@ test('codec choice persists and old settings migrate to Auto', async () => {
 		const oldSettings = Object.fromEntries(Object.entries(defaultConfiguration).filter(([key]) => key !== 'desktop.codec'));
 		await writeFile(path, JSON.stringify(oldSettings));
 		const store = new ConfigurationStore(path);
-		await store.initialize(); assert.equal(store.snapshot.error, null); assert.equal(store.snapshot.values['desktop.codec'], 'auto');
-		await store.updateValue({ key: 'desktop.codec', value: 'vp9' }); store.dispose();
-		const reopened = new ConfigurationStore(path); await reopened.initialize(); assert.equal(reopened.snapshot.values['desktop.codec'], 'vp9');
-		await assert.rejects(reopened.updateValue({ key: 'desktop.codec', value: 'bogus' })); reopened.dispose();
+		await store.initialize();
+		assert.equal(store.snapshot.error, null);
+		assert.equal(store.snapshot.values['desktop.codec'], 'auto');
+		await store.updateValue({ key: 'desktop.codec', value: 'vp9' });
+		store.dispose();
+		const reopened = new ConfigurationStore(path);
+		await reopened.initialize();
+		assert.equal(reopened.snapshot.values['desktop.codec'], 'vp9');
+		await assert.rejects(reopened.updateValue({ key: 'desktop.codec', value: 'bogus' }));
+		reopened.dispose();
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

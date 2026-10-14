@@ -4,6 +4,7 @@ import type { DataChannelRequest } from '../../engine/common/dataChannel.js';
 import type { NativeHostMethod, IWindowState } from '../../native/common/native.js';
 import type { EngineCommand, EngineReply, NativeScreenSource } from '../../engine/common/engine.js';
 import type { ConfigurationSnapshot, ConfigurationUpdate } from '../../configuration/common/configuration.js';
+
 export interface AppInfo {
 	windowId: number;
 	osRelease: string;

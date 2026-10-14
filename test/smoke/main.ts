@@ -15,7 +15,9 @@ import { startApplication } from '../../src/app/electron-main/application.js';
 import { registerDevelopmentWindow } from '../../src/app/electron-main/development.js';
 
 const profile = mkdtempSync(join(tmpdir(), 'vnilink-electron-smoke-'));
+
 app.setPath('userData', profile);
+
 app.on('web-contents-created', (_event, contents) => {
 	contents.on('console-message', details => {
 		if (details.level === 'error') {
@@ -23,14 +25,17 @@ app.on('web-contents-created', (_event, contents) => {
 		}
 	});
 });
+
 const timeout = setTimeout(() => {
 	console.error('Smoke test timed out');
 	app.exit(1);
 }, 60_000);
+
 app.on('quit', () => {
 	clearTimeout(timeout);
 	rmSync(profile, { recursive: true, force: true });
 });
+
 async function verify(window: BrowserWindow): Promise<void> {
 	await window.webContents.executeJavaScript(`new Promise((resolve, reject) => {
     if (document.documentElement.dataset.workbenchReady === 'true') return resolve(true);
@@ -125,6 +130,7 @@ async function verify(window: BrowserWindow): Promise<void> {
 	);
 	app.quit();
 }
+
 async function verifyHomeNavigation(window: BrowserWindow): Promise<void> {
 	const result: unknown = await window.webContents.executeJavaScript(`(() => {
       const sidebar = document.querySelector('.sidebar');
@@ -159,6 +165,7 @@ async function verifyHomeNavigation(window: BrowserWindow): Promise<void> {
 		settings: 'Settings', fullHeight: true, selected: 'devices', refresh: 'Refresh devices',
 	});
 }
+
 async function verifyPreferences(window: BrowserWindow): Promise<void> {
 	await window.webContents.executeJavaScript(`(async () => {
     await window.vnilink.updateConfiguration({ key: 'appearance.theme', value: 'dark' });
@@ -205,6 +212,7 @@ async function verifyPreferences(window: BrowserWindow): Promise<void> {
     await window.vnilink.updateConfiguration({ key: 'appearance.nativeBackground', value: true });
   })()`);
 }
+
 async function verifyDevelopmentReload(window: BrowserWindow, endpointId: string): Promise<void> {
 	const previous = process.env.VNILINK_DEV;
 	process.env.VNILINK_DEV = '1';
@@ -239,6 +247,7 @@ async function verifyDevelopmentReload(window: BrowserWindow, endpointId: string
 	const snapshot: unknown = await window.webContents.executeJavaScript(`window.vnilink.engineCommand({ type: 'snapshot' })`);
 	assert.ok(isEngineReply(snapshot) && snapshot.type === 'snapshot' && snapshot.snapshot.endpoint_id === endpointId, 'Reload replaced the native engine');
 }
+
 async function verifyTitlebar(window: BrowserWindow): Promise<void> {
 	const height = getWorkbenchTitlebarHeight(release());
 	const presentation: unknown = await window.webContents.executeJavaScript(
@@ -362,4 +371,5 @@ async function verifyTitlebar(window: BrowserWindow): Promise<void> {
 		record(state) && state.windowId === window.id && state.fullscreen === false && state.alwaysOnTop === false,
 	);
 }
+
 void startApplication({ showWindow: false, temporaryEngine: true, onReady: verify });

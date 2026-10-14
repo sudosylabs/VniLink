@@ -5,6 +5,7 @@ import { addDisposableListener } from '../../../../../base/browser/domEvent.js';
 import type { ConfigurationValues } from '../../../../../platform/configuration/common/configuration.js';
 
 export type ThemeMode = ConfigurationValues['appearance.theme'];
+
 let nextPickerId = 0;
 
 /** Native radio semantics with decorative previews of VniLink's own workbench. */
@@ -69,16 +70,19 @@ export class ThemeModePicker extends Disposable {
 		}
 		return 'system';
 	}
+
 	public setValue(mode: ThemeMode): void {
 		for (const [key, input] of this.inputs) {
 			input.checked = key === mode;
 		}
 	}
+
 	public setEnabled(enabled: boolean): void {
 		for (const input of this.inputs.values()) {
 			input.disabled = !enabled;
 		}
 	}
+
 	public override dispose(): void {
 		super.dispose();
 		this.inputs.clear();

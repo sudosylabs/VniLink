@@ -1,11 +1,13 @@
 import { Icons } from '../../src/base/common/icons.js';
 import { renderIcon } from '../../src/base/browser/ui/icon/icon.js';
 import { button } from '../../src/base/browser/ui/button/vnilinkButton.js';
+
 function assert(value: boolean, message: string): void {
 	if (!value) {
 		throw new Error(message);
 	}
 }
+
 export function verifyIcons(): boolean {
 	const fixture = document.createElement('div');
 	document.body.append(fixture);

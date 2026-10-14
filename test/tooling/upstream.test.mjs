@@ -4,7 +4,9 @@ import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import { isApplicationFile } from '../../build/sourceScope.mjs';
 import staged from '../../.lintstagedrc.mjs';
+
 const root = fileURLToPath(new URL('../../', import.meta.url));
+
 test('staged fixes preserve imported source while checking application files', () => {
 	const imported = `${root}src/platform/instantiation/common/instantiationService.ts`;
 	const application = `${root}src/workbench/browser/parts/titlebar/titlebarPart.ts`;
@@ -18,6 +20,7 @@ test('staged fixes preserve imported source while checking application files', (
 	}
 	assert.deepEqual(staged['{src,test}/**/*.ts']([imported]), []);
 });
+
 test('copied service container injects, shares and disposes its service instances', async () => {
 	const bundle = await build({
 		stdin: {
@@ -40,6 +43,7 @@ export { SyncDescriptor } from './src/platform/instantiation/common/descriptors.
 		constructor() {
 			created++;
 		}
+
 		dispose() {
 			disposed++;
 		}
@@ -78,11 +82,13 @@ test('native-host proxy uses window context, filters events and releases its tra
 	const state = { windowId: 7, revision: 1, focused: false, maximized: false, fullscreen: false, alwaysOnTop: false, zoomFactor: 1, backgroundMaterial: 'none' };
 	const api = {
 		onWindowStateChanged(listener) {
-			receive = listener; return () => {
+			receive = listener;
+			return () => {
 				unsubscribed++;
 			};
 		}, async nativeHostCommand(method, args) {
-			calls.push([method, args]); return method === 'getWindowState' ? state : undefined;
+			calls.push([method, args]);
+			return method === 'getWindowState' ? state : undefined;
 		}
 	};
 	const container = new InstantiationService(new ServiceCollection([IMainProcessService, new SyncDescriptor(MainProcessService, [api, 7])], [INativeHostService, new SyncDescriptor(NativeHostService, [7])]), true);

@@ -11,10 +11,12 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { IHostService } from '../../../services/host/browser/host.js';
 import { INativeHostService, type IWindowState } from '../../../../platform/native/common/native.js';
 import { getWorkbenchTitlebarHeight } from '../../../../platform/window/common/titlebar.js';
+
 export class NativeTitlebarPart extends BrowserTitlebarPart {
 	private state: IWindowState | undefined;
 	private controls = '';
 	private readonly height: number;
+
 	constructor(
 		osRelease: string,
 		onError: (error: unknown) => void,
@@ -34,9 +36,11 @@ export class NativeTitlebarPart extends BrowserTitlebarPart {
 			void this.initialize().catch(this.onError);
 		}));
 	}
+
 	public async initialize(): Promise<void> {
 		this.acceptState(await this.nativeHostService.getWindowState());
 	}
+
 	private acceptState(state: IWindowState): void {
 		if (this._store.isDisposed || (this.state && state.revision <= this.state.revision)) {
 			return;
@@ -45,6 +49,7 @@ export class NativeTitlebarPart extends BrowserTitlebarPart {
 		this.active = state.focused;
 		this.updateStyles();
 	}
+
 	protected override updateStyles(): void {
 		super.updateStyles();
 		if (!this.container || !this.state) {
