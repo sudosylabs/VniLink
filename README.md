@@ -15,6 +15,10 @@ npm start
 
 `npm run build` type-checks the application, builds the Rust Node addon and compiles the Electron entry points. Native Linux builds require the DBus development libraries for Secret Service. `npm test` launches a hidden Electron window with a disposable profile and temporary Rust identity, checks rendering, the preload boundary, native state/invitations, invalid actions and restricted local assets. It never opens the installation credential store. Normal startup requires the platform credential store; failure does not fall back to a temporary identity. After an initial `npm run build`, `npm run dev` launches the development shell with incremental TypeScript/CSS builds, resource watchers and background type checking. Save changes, wait for the watcher to finish, then press Cmd+R on macOS or Ctrl+R on Windows/Linux to reload the window. `npm run watch` runs the same watchers without launching Electron. Main/preload/utility-process changes require restarting the development app; Rust is not watched, so quit and run `npm run build` after Rust changes. Reloading resets renderer state and retires its data channels; it keeps the Rust utility process running. Generated application code lives in `out/`; `dist/` is reserved for distribution packages.
 
+The build uses named native compilation, output preparation, TypeScript bundling and resource/addon staging tasks. Development and launch reject a missing or stale native addon using its source, target/profile and binary identity. Rust changes require a rebuild; renderer reload preserves the engine.
+
+Run independently selectable desktop scenarios after building with `npm run test:ui -- --list` and `npm run test:ui -- --scenario appearance` (repeat `--scenario` for more areas). Test profiles are removed after Electron exits; logs, environment details and screenshots are retained under `.build/test-runs`. `npm run test:linux` runs the checks, Rust tests and headless Electron scenarios in the maintained Debian Trixie container. It requires Docker and isolates the read-only checkout from Linux dependencies/build caches; this environment supplies PipeWire headers compatible with the pinned binding. On native Windows x64, use `scripts/test-windows.ps1` after installing Node, Rust and MSYS2 MinGW GCC/Clang/NASM/Make plus CMake. These are also the Linux and Windows CI entry points. Headless/container checks do not establish physical capture, input, privacy or peer interoperability.
+
 `npm run format` applies the agreed formatting; `npm run lint:fix` fixes supported lint findings. `npm run check` verifies formatting, code/CSS lint, types and tooling regression tests. See [contributor guidance](CONTRIBUTING.md#typescript-css-and-formatting) for rules and layer boundaries.
 
 Electron main owns windows, lifecycle, the local protocol and validated IPC. Preload exposes named operations rather than Node/IPC APIs. The browser workbench owns the interface. Common contracts contain environment-independent types; base browser controls are reusable across features. Only implemented modules have directories. No UI framework is required; esbuild is a build tool.
@@ -103,12 +107,16 @@ vnilink/
     platform/engine/common/    # Control commands and value validation
     platform/engine/electron-main/ # Engine ownership and request queue
     platform/engine/electron-utility/ # Rust addon host
-    workbench/browser/         # Layout, parts, feature views and CSS
+    workbench/browser/         # Workbench composition, parts and layout
+    workbench/contrib/         # Feature pages and their local controls/styles
+    workbench/services/        # Injected feature/application service contracts
   crates/                      # Shared core and native engines
   assets/                      # Existing branding
   vendor/                      # Patched dependencies
   build/                       # Build and future packaging tools
   scripts/                     # Development commands
+  test/automation/             # Application/window drivers and scenario selection
+  test/browser/                # Independent renderer scenarios
   test/smoke/                  # Actual Electron application checks
   test/native/                 # Two-engine Rust binding integration checks
   out/                         # Generated application code; ignored
@@ -116,7 +124,7 @@ vnilink/
   docs/                        # Local specifications/evidence; ignored
 ```
 
-Engine bridge hosting, richer application state and new feature views will acquire directories when implemented. Library tests remain in their owning Rust crates. The old `apple/` and `linux/` GUI applications are no longer workspace components.
+Engine bridge hosting and application services occupy the platform layers; feature pages occupy workbench contributions. Library tests remain in their owning Rust crates. The old `apple/` and `linux/` GUI applications are no longer workspace components.
 
 ## 4. Component ownership
 
@@ -134,7 +142,7 @@ Give the runtime a defined owner. Specify startup/shutdown, callback threading, 
 
 ### Electron application and native adapters
 
-The TypeScript workbench owns tabs, devices, settings and viewer controls. Electron main owns windows and validated desktop services. A future Rust bridge must preserve owner identity, cancellation and bounded events. Platform crates continue to own capture, codecs, device/session APIs and other native behavior; credentials and privileged OS operations do not move into browser code.
+The TypeScript workbench owns tabs, devices, settings and viewer controls. Electron main owns windows and validated desktop services. The Rust bridge preserves owner identity, cancellation and bounded events. Platform crates continue to own capture, codecs, device/session APIs and other native behavior; credentials and privileged OS operations do not move into browser code.
 
 ### Background hosting
 
@@ -144,7 +152,7 @@ Service installation does not automatically provide access to a user's graphical
 
 ## 5. Rust bindings and media boundary
 
-`crates/vnilink-app` preserves the tested application adapters as plain Rust. `crates/vnilink-node` exposes a bounded Node-API control interface, hosted by an Electron utility process. UniFFI and its generator have been removed. The bridge currently supports snapshots, invitation/file pairing, grants, revocation, unpairing and peer names; the remaining service APIs and UI flows are not connected yet. Native credentials are stored as an opaque installation record under `com.vnilink.installation` / `primary` (Keychain on macOS, Credential Manager on Windows, Secret Service on Linux). Media streaming and presentation remain deferred.
+`crates/vnilink-app` preserves the tested application adapters as plain Rust. `crates/vnilink-node` exposes a bounded Node-API control interface, hosted by an Electron utility process. UniFFI and its generator have been removed. Typed commands cover identity/pairing, connections, grants and remote-service settings; bridge-owned binary channels carry stream and transfer data. Individual product flows and native desktop behavior still require their own validation. Native credentials are stored as an opaque installation record under `com.vnilink.installation` / `primary` (Keychain on macOS, Credential Manager on Windows, Secret Service on Linux). Media streaming and presentation remain deferred.
 
 Document ownership, lifetime, threading, error mapping, and cancellation for each boundary. Do not expose internal async types or networking implementation details as the native API.
 
