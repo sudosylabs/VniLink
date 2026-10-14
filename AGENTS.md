@@ -32,6 +32,7 @@ VS Code is the TypeScript architectural reference. Read the corresponding upstre
 - `design-philosophy`, `ux-css-layout`, `ux-theming`, `accessibility` — product design and interaction requirements.
 - `async-cancellation`, `memory-leak-audit`, `error-doc-voice` — lifecycle, resources and error semantics.
 - `unit-tests` — authoritative validation selection and completion policy; `cross-platform-validation` — environments, prerequisites and limits of evidence.
+- `commit-organization` — coherent commit boundaries, selective staging and verification of each commit; use when committing work or planning a commit series.
 
 Skill names refer to `.agents/skills/<name>/SKILL.md`. Read the applicable guidance, not every skill as a ritual. New instructions belong to one owner; other documents link to that owner.
 
