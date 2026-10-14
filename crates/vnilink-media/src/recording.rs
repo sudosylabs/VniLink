@@ -1,6 +1,6 @@
 //! Narrow Matroska/AVC remuxer. No capture, decode, UI or filesystem selection.
 //! Each complete Cluster is independently recoverable after a truncated tail.
-use crate::parse_annex_b;
+use crate::recording_format::RecordingFormat;
 use std::io::{self, Seek, SeekFrom, Write};
 use vnilink::EncodedFrame;
 
@@ -46,8 +46,7 @@ pub struct MatroskaRecorder<W: Write + Seek> {
     duration_position: u64,
     last_time: Option<u64>,
     duration: u64,
-    sps: Vec<u8>,
-    pps: Vec<u8>,
+    format: RecordingFormat,
     failed: bool,
     frames: u64,
     cues: Vec<(u64, u64)>,
@@ -64,41 +63,10 @@ impl<W: Write + Seek> MatroskaRecorder<W> {
         limits: RecordingLimits,
     ) -> Result<Self, RecordingError> {
         limits.validate()?;
-        if width == 0 || height == 0 || !first.keyframe {
+        if width == 0 || height == 0 {
             return Err(RecordingError::InvalidMedia);
         }
-        let unit = parse_annex_b(&first.payload).map_err(|_| RecordingError::InvalidMedia)?;
-        if !unit.has_idr() {
-            return Err(RecordingError::InvalidMedia);
-        }
-        let sps = unit
-            .units()
-            .iter()
-            .find(|u| u.nal_type == 7)
-            .ok_or(RecordingError::InvalidMedia)?
-            .bytes()
-            .to_vec();
-        let pps = unit
-            .units()
-            .iter()
-            .find(|u| u.nal_type == 8)
-            .ok_or(RecordingError::InvalidMedia)?
-            .bytes()
-            .to_vec();
-        if sps.len() < 4 || sps.len() > 65535 || pps.is_empty() || pps.len() > 65535 {
-            return Err(RecordingError::InvalidMedia);
-        }
-        let actual = crate::h264_picture_size(&sps).map_err(|_| RecordingError::InvalidMedia)?;
-        if actual != (width, height) {
-            return Err(RecordingError::InvalidMedia);
-        }
-        // AVCDecoderConfigurationRecord, four-byte NAL lengths.
-        let mut avcc = vec![1, sps[1], sps[2], sps[3], 0xff, 0xe1];
-        avcc.extend_from_slice(&(sps.len() as u16).to_be_bytes());
-        avcc.extend_from_slice(&sps);
-        avcc.push(1);
-        avcc.extend_from_slice(&(pps.len() as u16).to_be_bytes());
-        avcc.extend_from_slice(&pps);
+        let format = RecordingFormat::open(first, (width, height))?;
         let mut out = Self {
             writer,
             limits,
@@ -106,8 +74,7 @@ impl<W: Write + Seek> MatroskaRecorder<W> {
             duration_position: 0,
             last_time: None,
             duration: 0,
-            sps,
-            pps,
+            format,
             failed: false,
             frames: 0,
             cues: Vec::new(),
@@ -147,8 +114,10 @@ impl<W: Write + Seek> MatroskaRecorder<W> {
         uint(&mut track, 0x73c5, 1);
         uint(&mut track, 0x83, 1);
         uint(&mut track, 0x9c, 0);
-        element(&mut track, 0x86, b"V_MPEG4/ISO/AVC");
-        element(&mut track, 0x63a2, &avcc);
+        element(&mut track, 0x86, out.format.id());
+        if !out.format.private.is_empty() {
+            element(&mut track, 0x63a2, &out.format.private);
+        }
         track.extend(master(0xe0, &video));
         out.emit(&master(0x1654ae6b, &master(0xae, &track)))?;
         out.push_video(first, 0)?;
@@ -181,32 +150,9 @@ impl<W: Write + Seek> MatroskaRecorder<W> {
         {
             return Err(RecordingError::Limit);
         }
-        let unit = parse_annex_b(&frame.payload).map_err(|_| RecordingError::InvalidMedia)?;
-        if unit.has_idr() != frame.keyframe {
-            return Err(RecordingError::InvalidMedia);
-        }
-        for nal in unit.units() {
-            if nal.nal_type == 7 && nal.bytes() != self.sps
-                || nal.nal_type == 8 && nal.bytes() != self.pps
-            {
-                return Err(RecordingError::FormatChanged);
-            }
-        }
+        let picture = self.format.picture(frame)?;
         let mut block = vec![0x81, 0, 0, if frame.keyframe { 0x80 } else { 0 }];
-        let mut picture = false;
-        for nal in unit.units() {
-            if matches!(nal.nal_type, 7 | 8 | 9) {
-                continue;
-            }
-            if matches!(nal.nal_type, 1 | 5) {
-                picture = true;
-            }
-            block.extend_from_slice(&(nal.bytes().len() as u32).to_be_bytes());
-            block.extend_from_slice(nal.bytes());
-        }
-        if !picture {
-            return Err(RecordingError::InvalidMedia);
-        }
+        block.extend(picture);
         let mut cluster = Vec::new();
         uint(&mut cluster, 0xe7, time_ms);
         element(&mut cluster, 0xa3, &block);

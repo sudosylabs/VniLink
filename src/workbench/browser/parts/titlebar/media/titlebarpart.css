@@ -1,0 +1,98 @@
+/* ---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted for VniLink: native window controls, window state and view tabs.
+ *-------------------------------------------------------------------------------------------- */
+
+.part.titlebar {
+	position: relative;
+	flex-shrink: 0;
+	width: 100%;
+	user-select: none;
+}
+
+.part.titlebar[hidden] {
+	display: none;
+}
+
+.titlebar-drag-region {
+	position: absolute;
+	inset: 0;
+	-webkit-app-region: drag;
+}
+
+.titlebar-container {
+	position: relative;
+	width: 100%;
+	height: 100%;
+	display: flex;
+	padding-right: max(
+		calc(138px / var(--window-zoom, 1)),
+		calc(100vw - env(titlebar-area-width, 100vw) - env(titlebar-area-x, 0px))
+	);
+}
+
+:root[data-platform='darwin'] .titlebar-container {
+	padding-left: calc(78px / var(--window-zoom, 1));
+	padding-right: 0;
+}
+
+.tabs-and-actions-container {
+	position: relative;
+	display: flex;
+	flex: 1;
+	min-width: 0;
+	height: 100%;
+}
+
+.tabs-scrollable {
+	position: relative;
+	flex: 1;
+	min-width: 0;
+	overflow: auto hidden;
+	scrollbar-width: none;
+	-webkit-app-region: drag;
+}
+
+.tabs-scrollable::-webkit-scrollbar {
+	display: none;
+}
+
+.tabs-container {
+	display: flex;
+	width: max-content;
+	min-width: 100%;
+	height: 100%;
+	-webkit-app-region: drag;
+}
+
+.view-actions {
+	display: flex;
+	align-items: center;
+	flex: 0 0 auto;
+	padding: 0 8px 0 4px;
+	gap: 4px;
+	-webkit-app-region: no-drag;
+}
+
+.view-actions:empty {
+	padding: 0;
+}
+
+.view-action {
+	min-width: 24px;
+	height: 24px;
+	justify-content: center;
+	padding: 0 4px;
+	background: transparent;
+	border-radius: 3px;
+	-webkit-app-region: no-drag;
+}
+
+.view-action:disabled {
+	opacity: 0.45;
+}
+
+.view-action:hover:not(:disabled) {
+	background: var(--line);
+}

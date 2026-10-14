@@ -1,0 +1,87 @@
+import type { IconId, IconVariant } from '../../../common/icons.js';
+import refreshOutlined from '@phosphor-icons/core/assets/regular/arrow-clockwise.svg';
+import refreshFilled from '@phosphor-icons/core/assets/fill/arrow-clockwise-fill.svg';
+import homeOutlined from '@phosphor-icons/core/assets/regular/house.svg';
+import homeFilled from '@phosphor-icons/core/assets/fill/house-fill.svg';
+import computersOutlined from '@phosphor-icons/core/assets/regular/desktop.svg';
+import computersFilled from '@phosphor-icons/core/assets/fill/desktop-fill.svg';
+import backOutlined from '@phosphor-icons/core/assets/regular/arrow-left.svg';
+import backFilled from '@phosphor-icons/core/assets/fill/arrow-left-fill.svg';
+import forwardOutlined from '@phosphor-icons/core/assets/regular/arrow-right.svg';
+import forwardFilled from '@phosphor-icons/core/assets/fill/arrow-right-fill.svg';
+import chevronLeftOutlined from '@phosphor-icons/core/assets/regular/caret-left.svg';
+import chevronLeftFilled from '@phosphor-icons/core/assets/fill/caret-left-fill.svg';
+import chevronRightOutlined from '@phosphor-icons/core/assets/regular/caret-right.svg';
+import chevronRightFilled from '@phosphor-icons/core/assets/fill/caret-right-fill.svg';
+import chevronUpOutlined from '@phosphor-icons/core/assets/regular/caret-up.svg';
+import chevronUpFilled from '@phosphor-icons/core/assets/fill/caret-up-fill.svg';
+import chevronDownOutlined from '@phosphor-icons/core/assets/regular/caret-down.svg';
+import chevronDownFilled from '@phosphor-icons/core/assets/fill/caret-down-fill.svg';
+import settingsOutlined from '@phosphor-icons/core/assets/regular/gear.svg';
+import settingsFilled from '@phosphor-icons/core/assets/fill/gear-fill.svg';
+import closeOutlined from '@phosphor-icons/core/assets/regular/x.svg';
+import closeFilled from '@phosphor-icons/core/assets/fill/x-fill.svg';
+import minimizeOutlined from '@phosphor-icons/core/assets/regular/minus.svg';
+import minimizeFilled from '@phosphor-icons/core/assets/fill/minus-fill.svg';
+import maximizeOutlined from '@phosphor-icons/core/assets/regular/square.svg';
+import maximizeFilled from '@phosphor-icons/core/assets/fill/square-fill.svg';
+import restoreOutlined from '@phosphor-icons/core/assets/regular/copy.svg';
+import restoreFilled from '@phosphor-icons/core/assets/fill/copy-fill.svg';
+
+import connectionOutlined from '@phosphor-icons/core/assets/regular/plugs.svg';
+import connectionFilled from '@phosphor-icons/core/assets/fill/plugs-fill.svg';
+import securityOutlined from '@phosphor-icons/core/assets/regular/shield-check.svg';
+import securityFilled from '@phosphor-icons/core/assets/fill/shield-check-fill.svg';
+import keyboardOutlined from '@phosphor-icons/core/assets/regular/keyboard.svg';
+import keyboardFilled from '@phosphor-icons/core/assets/fill/keyboard-fill.svg';
+import filesOutlined from '@phosphor-icons/core/assets/regular/folder.svg';
+import filesFilled from '@phosphor-icons/core/assets/fill/folder-fill.svg';
+import terminalOutlined from '@phosphor-icons/core/assets/regular/terminal-window.svg';
+import terminalFilled from '@phosphor-icons/core/assets/fill/terminal-window-fill.svg';
+import audioOutlined from '@phosphor-icons/core/assets/regular/speaker-high.svg';
+import audioFilled from '@phosphor-icons/core/assets/fill/speaker-high-fill.svg';
+import recordingOutlined from '@phosphor-icons/core/assets/regular/record.svg';
+import recordingFilled from '@phosphor-icons/core/assets/fill/record-fill.svg';
+import powerOutlined from '@phosphor-icons/core/assets/regular/power.svg';
+import powerFilled from '@phosphor-icons/core/assets/fill/power-fill.svg';
+
+import devicesOutlined from '@phosphor-icons/core/assets/regular/devices.svg';
+import devicesFilled from '@phosphor-icons/core/assets/fill/devices-fill.svg';
+import remoteDesktopOutlined from '@phosphor-icons/core/assets/regular/computer-tower.svg';
+import remoteDesktopFilled from '@phosphor-icons/core/assets/fill/computer-tower-fill.svg';
+
+import appearanceOutlined from '@phosphor-icons/core/assets/regular/palette.svg';
+import appearanceFilled from '@phosphor-icons/core/assets/fill/palette-fill.svg';
+
+// The only place that knows the icon provider and its filenames.
+const assets: Record<IconId, Record<IconVariant, string>> = {
+	appearance: { outlined: appearanceOutlined, filled: appearanceFilled },
+	connection: { outlined: connectionOutlined, filled: connectionFilled },
+	security: { outlined: securityOutlined, filled: securityFilled },
+	keyboard: { outlined: keyboardOutlined, filled: keyboardFilled },
+	files: { outlined: filesOutlined, filled: filesFilled },
+	terminal: { outlined: terminalOutlined, filled: terminalFilled },
+	audio: { outlined: audioOutlined, filled: audioFilled },
+	recording: { outlined: recordingOutlined, filled: recordingFilled },
+	power: { outlined: powerOutlined, filled: powerFilled },
+	devices: { outlined: devicesOutlined, filled: devicesFilled },
+	remoteDesktop: { outlined: remoteDesktopOutlined, filled: remoteDesktopFilled },
+	refresh: { outlined: refreshOutlined, filled: refreshFilled },
+	restart: { outlined: refreshOutlined, filled: refreshFilled },
+	home: { outlined: homeOutlined, filled: homeFilled },
+	computers: { outlined: computersOutlined, filled: computersFilled },
+	back: { outlined: backOutlined, filled: backFilled },
+	forward: { outlined: forwardOutlined, filled: forwardFilled },
+	chevronLeft: { outlined: chevronLeftOutlined, filled: chevronLeftFilled },
+	chevronRight: { outlined: chevronRightOutlined, filled: chevronRightFilled },
+	chevronUp: { outlined: chevronUpOutlined, filled: chevronUpFilled },
+	chevronDown: { outlined: chevronDownOutlined, filled: chevronDownFilled },
+	settings: { outlined: settingsOutlined, filled: settingsFilled },
+	close: { outlined: closeOutlined, filled: closeFilled },
+	minimize: { outlined: minimizeOutlined, filled: minimizeFilled },
+	maximize: { outlined: maximizeOutlined, filled: maximizeFilled },
+	restore: { outlined: restoreOutlined, filled: restoreFilled },
+};
+export function iconSvg(icon: IconId, variant: IconVariant): string {
+	return assets[icon][variant];
+}

@@ -21,6 +21,7 @@ pub struct EncodeParams {
 
 /// Annex-B bytes an encoder returns. A keyframe must contain SPS, PPS, and an IDR.
 pub struct EncodedSample {
+    codec: vnilink::VideoCodec,
     keyframe: bool,
     annex_b: Vec<u8>,
 }
@@ -40,9 +41,33 @@ impl EncodedSample {
                 "a keyframe needs SPS, PPS, and an IDR",
             ));
         }
-        Ok(Self { keyframe, annex_b })
+        Ok(Self {
+            codec: vnilink::VideoCodec::H264,
+            keyframe,
+            annex_b,
+        })
     }
 
+    pub fn packet(
+        codec: vnilink::VideoCodec,
+        keyframe: bool,
+        bytes: Vec<u8>,
+    ) -> Result<Self, Error> {
+        if codec == vnilink::VideoCodec::H264 {
+            return Self::annex_b(keyframe, bytes);
+        }
+        if bytes.is_empty() || bytes.len() > MAX_VIDEO_FRAME {
+            return Err(Error::InvalidFrame("encoded packet size"));
+        }
+        Ok(Self {
+            codec,
+            keyframe,
+            annex_b: bytes,
+        })
+    }
+    pub fn codec(&self) -> vnilink::VideoCodec {
+        self.codec
+    }
     pub fn keyframe(&self) -> bool {
         self.keyframe
     }
@@ -151,8 +176,9 @@ impl FramePump {
                 "the encoder did not produce a keyframe",
             ));
         }
-        let encoded = EncodedFrame::h264(keyframe, frame.timestamp_us(), sample.annex_b)
-            .map_err(|_| Error::InvalidFrame("encoded frame was rejected"))?;
+        let encoded =
+            EncodedFrame::new(sample.codec, keyframe, frame.timestamp_us(), sample.annex_b)
+                .map_err(|_| Error::InvalidFrame("encoded frame was rejected"))?;
         if keyframe {
             self.force_keyframe = false;
             self.awaiting_keyframe = false;

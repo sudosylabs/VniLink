@@ -30,6 +30,28 @@ impl Core {
         Ok(())
     }
 
+    /// Updates OS consent without clearing a separately observed device or backend failure.
+    pub fn report_os_permission(&self, capability: Capability, denied: bool) -> Result<(), Error> {
+        self.ensure_alive()?;
+        lock(&self.shared.backend_state)
+            .entry(capability)
+            .or_default()
+            .os_denied = denied;
+        Ok(())
+    }
+    pub fn report_backend_failure(
+        &self,
+        capability: Capability,
+        failure: Option<String>,
+    ) -> Result<(), Error> {
+        self.ensure_alive()?;
+        lock(&self.shared.backend_state)
+            .entry(capability)
+            .or_default()
+            .failed = failure.map(crate::availability::truncate);
+        Ok(())
+    }
+
     /// Drops any published backend facts for one capability. The query
     /// returns to unknown (no blocker) for OS, device and failure facts.
     pub fn clear_backend_state(&self, capability: Capability) -> Result<(), Error> {
@@ -82,10 +104,18 @@ impl Core {
         let service_granted = |kind: ServiceKind| -> bool {
             peer.is_none_or(|peer| state.trust.service_granted(&peer, kind))
         };
-        let view_ready =
-            lock(&self.shared.video_caps).can_encode() && monitor_size(&self.shared) != (0, 0);
+        let view_ready = lock(&self.shared.video_caps).can_encode()
+            && monitor_size(&self.shared) != (0, 0)
+            && lock(&self.shared.capture).is_some();
         let implemented = match capability {
-            Capability::DesktopView | Capability::Clipboard => view_ready,
+            Capability::DesktopView => view_ready,
+            Capability::Clipboard => {
+                view_ready
+                    && self
+                        .shared
+                        .clipboard_available
+                        .load(std::sync::atomic::Ordering::Acquire)
+            }
             Capability::DesktopControl => view_ready && lock(&self.shared.desktop_info).is_some(),
             Capability::Files | Capability::Recording => true,
             Capability::Terminal => lock(&self.shared.terminal_factory).is_some(),

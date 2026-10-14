@@ -62,6 +62,10 @@ impl Core {
     ///
     /// On macOS this can prompt for Accessibility permission. It does not capture
     /// the screen. Linux support is the X11 backend; Wayland is not claimed.
+    pub fn enable_os_input_without_prompt(&self) -> Result<(), Error> {
+        self.set_desktop(Box::new(OsInput::open_with_prompt(false)?))
+    }
+
     pub fn enable_os_input(&self) -> Result<(), Error> {
         self.set_desktop(Box::new(OsInput::open()?))
     }
@@ -93,6 +97,58 @@ impl Core {
             held.observe(event);
         }
         *pointer = trial;
+        Ok(())
+    }
+
+    /// Applies application defaults to all controller owners and future connections.
+    /// Validation and held-input checks precede every mutation.
+    pub fn set_input_defaults(
+        &self,
+        mode: KeyboardMode,
+        swap: bool,
+        pointer: crate::PointerSettings,
+    ) -> Result<(), Error> {
+        pointer.validate()?;
+        let state = self.alive_state()?;
+        let controllers: Vec<_> = state
+            .outgoing
+            .values()
+            .filter(|s| !finished(&s.phase))
+            .filter_map(|s| s.controller.clone())
+            .collect();
+        let desktops: Vec<_> = state
+            .services
+            .values()
+            .filter_map(|s| s.desktop.clone())
+            .collect();
+        let plans: Vec<_> = controllers.iter().map(|c| lock(&c.keyboard)).collect();
+        let held: Vec<_> = controllers.iter().map(|c| lock(&c.held)).collect();
+        let mut desktop_plans: Vec<_> = desktops.iter().map(|d| lock(&d.keyboard)).collect();
+        if plans.iter().any(|p| p.is_held())
+            || held.iter().any(|h| !h.release_events().is_empty())
+            || desktop_plans.iter().any(|p| !p.idle())
+        {
+            return Err(Error::InvalidSetting(
+                "release held keys and buttons before changing input defaults",
+            ));
+        }
+        for controller in &controllers {
+            controller.mode.store(mode as u8, Ordering::Relaxed);
+            controller.swap.store(swap, Ordering::Relaxed);
+            *lock(&controller.pointer) = crate::input::PointerPlan::with_settings(pointer);
+        }
+        for keyboard in &mut desktop_plans {
+            keyboard.mode = mode;
+            keyboard.swap = swap;
+            keyboard.pointer = crate::input::PointerPlan::with_settings(pointer);
+        }
+        self.shared
+            .keyboard_mode
+            .store(mode as u8, Ordering::Relaxed);
+        self.shared
+            .swap_control_command
+            .store(swap, Ordering::Relaxed);
+        *lock(&self.shared.pointer_defaults) = pointer;
         Ok(())
     }
 

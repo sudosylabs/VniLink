@@ -23,10 +23,11 @@ impl fmt::Debug for KeyText {
 /// Version 4 adds files-only sessions (`files_only` in Hello): Transfer-grant
 /// admission without video, input or screen sharing. Version 5 adds a neutral
 /// service-only connection; service permissions are checked on Open. Hosts admit
-/// 1 through 5;
+/// 1 through 6;
 /// newer controllers fall back to a version-1 Baseline hello when an older
 /// host rejects it as incompatible (files-only needs v4 on both sides).
-pub const PROTOCOL_VERSION: u16 = 5;
+/// Version 6 carries a probe-validated decoder mask for automatic codec selection.
+pub const PROTOCOL_VERSION: u16 = 6;
 
 /// Version-3 Accept codec bit: independent cursor stream is available.
 pub(crate) const SEPARATE_CURSOR: u8 = 0x80;
@@ -103,7 +104,7 @@ impl Default for Capabilities {
 /// The shared library stores them with the session and does not reshape
 /// frames itself. `vnilink-media` reads them when it paces capture: size,
 /// frame rate, and bitrate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct Quality {
     pub max_bitrate_kbps: u32,
     pub max_frame_rate: u8,

@@ -12,3 +12,16 @@ thiserror = "2"
 vnilink = { path = "../vnilink" }
 
 vnilink-rename = { path = "../vnilink-rename" }
+shiguredo_libvpx = "=2026.1.0"
+shiguredo_aom = "=2026.1.0"
+
+vnilink-hevc = { path = "../vnilink-hevc" }
+
+# Build against the local Linux libc instead of assuming an Ubuntu prebuilt ABI.
+[target.'cfg(target_os = "linux")'.dependencies]
+shiguredo_libvpx = { version = "=2026.1.0", features = ["source-build"] }
+shiguredo_aom = { version = "=2026.1.0", features = ["source-build"] }
+
+# The upstream AV1 Windows prebuilt is MSVC-only; GNU builds need their own ABI.
+[target.'cfg(all(windows, target_env = "gnu"))'.dependencies]
+shiguredo_aom = { version = "=2026.1.0", features = ["source-build"] }

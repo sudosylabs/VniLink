@@ -221,6 +221,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
             .unwrap();
         core
     }
+    #[track_caller]
     fn wait(mut test: impl FnMut() -> bool) {
         let until = Instant::now() + Duration::from_secs(8);
         while !test() {
@@ -294,6 +295,8 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
     host.authorize_recording(&controller.endpoint_id(), true)
         .unwrap();
     wait(|| desktop.recording_allowed().unwrap());
+    // Capture is already encoding when a viewer starts a recording.
+    let mut encoder = MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
     let recorder = DesktopRecorder::start(
         &desktop,
         &path,
@@ -303,7 +306,6 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
         },
     )
     .unwrap();
-    let mut encoder = MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
     for index in 0..30u64 {
         let time = index * 33_333;
         let sample = encoder
@@ -329,7 +331,15 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
                 .timestamp_us,
             time
         );
-        wait(|| recorder.status().frames == index + 1);
+        wait(|| {
+            let status = recorder.status();
+            assert_ne!(
+                status.phase,
+                RecordingPhase::Failed,
+                "recorder failed at frame {index}: {status:?}"
+            );
+            status.frames == index + 1
+        });
     }
     recorder.stop();
     wait(|| {
@@ -508,4 +518,39 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
     controller.shutdown();
     host.shutdown();
     std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[test]
+fn hevc_probe_and_negotiated_encoder_process_real_synthetic_frames() {
+    let support = crate::probe_hevc();
+    assert!(
+        support.encode && support.decode,
+        "VideoToolbox HEVC roundtrip failed"
+    );
+    let mut encoder = crate::MacVideoEncoder::open(64, 64, 30, 500_000, 3).unwrap();
+    let mut decoder = crate::MacDecoder::new();
+    for i in 0..3 {
+        let raw = solid(64, 64, i * 33333, 32, 64, 128);
+        let sample = encoder
+            .encode(
+                &raw,
+                &EncodeParams {
+                    force_keyframe: i == 0,
+                    bitrate_bps: 500_000,
+                    frame_rate: 30,
+                },
+            )
+            .unwrap();
+        assert_eq!(sample.codec(), vnilink::VideoCodec::H265);
+        let frame = EncodedFrame::new(
+            sample.codec(),
+            sample.keyframe(),
+            raw.timestamp_us(),
+            sample.bytes().to_vec(),
+        )
+        .unwrap();
+        let decoded = decoder.decode(&frame).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (64, 64));
+        assert!(decoded.pixels()[2].abs_diff(128) < 20);
+    }
 }

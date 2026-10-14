@@ -295,6 +295,33 @@ fn published_backend_state_flows_into_the_query_and_clears() {
             },
         ]
     );
+    host.report_os_permission(Capability::Camera, false)
+        .unwrap();
+    let consent_updated = host
+        .capability_availability(None, Capability::Camera)
+        .unwrap();
+    assert!(!consent_updated
+        .reasons
+        .contains(&AvailabilityReason::DeniedOsPermission));
+    assert!(consent_updated
+        .reasons
+        .contains(&AvailabilityReason::UnavailableDevice));
+    assert!(consent_updated
+        .reasons
+        .iter()
+        .any(|reason| matches!(reason, AvailabilityReason::BackendFailed { .. })));
+    host.report_backend_failure(Capability::Camera, None)
+        .unwrap();
+    let failure_cleared = host
+        .capability_availability(None, Capability::Camera)
+        .unwrap();
+    assert!(failure_cleared
+        .reasons
+        .contains(&AvailabilityReason::UnavailableDevice));
+    assert!(!failure_cleared
+        .reasons
+        .iter()
+        .any(|reason| matches!(reason, AvailabilityReason::BackendFailed { .. })));
     host.clear_backend_state(Capability::Camera).unwrap();
     let after = host
         .capability_availability(None, Capability::Camera)
@@ -319,4 +346,52 @@ fn published_backend_state_flows_into_the_query_and_clears() {
     };
     assert!(detail.len() <= 256);
     assert!(detail.chars().all(|c| c == 'é'));
+}
+
+#[test]
+fn codec_flags_and_input_geometry_do_not_claim_capture_or_clipboard_implementation() {
+    struct Input;
+    impl crate::HostDesktop for Input {
+        fn monitor(&self) -> (u16, u16) {
+            (64, 64)
+        }
+        fn apply(&mut self, _: crate::InputEvent) -> Result<(), crate::Error> {
+            Ok(())
+        }
+    }
+    struct Clipboard;
+    impl crate::HostClipboard for Clipboard {
+        fn set_text(&mut self, _: &str) -> Result<(), crate::Error> {
+            Ok(())
+        }
+    }
+    let core = start_direct();
+    core.set_video_codecs(crate::VideoCodecCaps::h264_full(64, 64, "test"))
+        .unwrap();
+    core.set_desktop(Box::new(Input)).unwrap();
+    assert!(
+        !core
+            .capability_availability(None, Capability::DesktopView)
+            .unwrap()
+            .available
+    );
+    core.set_capture(Box::new(super::support::ShutdownCapture))
+        .unwrap();
+    assert!(
+        core.capability_availability(None, Capability::DesktopView)
+            .unwrap()
+            .available
+    );
+    assert!(
+        !core
+            .capability_availability(None, Capability::Clipboard)
+            .unwrap()
+            .available
+    );
+    core.set_clipboard(Box::new(Clipboard)).unwrap();
+    assert!(
+        core.capability_availability(None, Capability::Clipboard)
+            .unwrap()
+            .available
+    );
 }

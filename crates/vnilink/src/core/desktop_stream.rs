@@ -103,20 +103,20 @@ pub(super) struct DesktopRuntime {
     pub(super) display_fault: Mutex<Option<&'static str>>,
     /// Topology the host sent to this controller. Empty until the first snapshot.
     topology: Mutex<Vec<crate::DisplayInfo>>,
-    keyboard: Mutex<DesktopKeyboard>,
+    pub(super) keyboard: Mutex<DesktopKeyboard>,
     pub(super) clipboard: super::desktop_clipboard::ClipboardState,
     #[cfg(test)]
     force_stream: std::sync::atomic::AtomicBool,
 }
-struct DesktopKeyboard {
-    pointer: crate::input::PointerPlan,
-    plan: crate::keyboard::KeyPlan,
-    held: HeldInput,
-    mode: crate::KeyboardMode,
-    swap: bool,
+pub(super) struct DesktopKeyboard {
+    pub(super) pointer: crate::input::PointerPlan,
+    pub(super) plan: crate::keyboard::KeyPlan,
+    pub(super) held: HeldInput,
+    pub(super) mode: crate::KeyboardMode,
+    pub(super) swap: bool,
 }
 impl DesktopKeyboard {
-    fn idle(&self) -> bool {
+    pub(super) fn idle(&self) -> bool {
         !self.plan.is_held() && self.held.release_events().is_empty()
     }
 }
@@ -293,7 +293,9 @@ impl DesktopRuntime {
             codec: match self.info.codec {
                 crate::protocol::CODEC_H264 => "h264",
                 crate::protocol::CODEC_H264_HIGH => "h264-high",
-                _ => "unknown",
+                id => crate::VideoCodec::from_wire_id(id)
+                    .map(|c| c.label())
+                    .unwrap_or("unknown"),
             }
             .into(),
             width: self.info.monitor_width,
@@ -442,6 +444,9 @@ async fn route_desktop_datagrams(
             .or_insert_with(crate::video::Reassembler::new);
         if let Some(body) = reassembly.push(fragment) {
             if let Ok(frame) = crate::video::decode_video_body(&body) {
+                if Some(frame.codec) != crate::VideoCodec::from_wire_id(desktop.info.codec) {
+                    continue;
+                }
                 if matches!(desktop.inbox.push(frame), VideoPush::KeyframeNeeded) {
                     desktop.keyframe.request();
                 }
@@ -575,6 +580,11 @@ impl Core {
             let state = self.alive_state()?;
             runtime(&state, id, generation, true)?
         };
+        if Some(frame.codec) != crate::VideoCodec::from_wire_id(desktop.info.codec) {
+            return Err(Error::InvalidSetting(
+                "frame codec does not match Desktop owner",
+            ));
+        }
         // Backstop a zero revision from the live topology. The display id
         // is never invented here: only the producer knows which display an
         // unselected ("follows capture") target actually receives, and a
@@ -903,6 +913,10 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
             record.stop.clone(),
         )
     };
+    let offer = core.desktop_quality_defaults()?;
+    let decoder_caps = core.video_codecs()?;
+    let codec_preference = core.desktop_codec_default()?;
+    let codec_offer = decoder_caps.preferred_offer(codec_preference)?;
     // Reserve once per owner, including while Open awaits a reply.
     let reservation = DesktopRuntime::new(
         DesktopInfo {
@@ -910,7 +924,7 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
             monitor_width: 0,
             monitor_height: 0,
             codec: 1,
-            quality: crate::session::controller_offer(),
+            quality: offer,
             separate_cursor: false,
         },
         SessionStamp::new(0, 0),
@@ -945,8 +959,8 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                     request.extend_from_slice(
                         &ControlMessage::Hello {
                             version: crate::protocol::PROTOCOL_VERSION,
-                            codec: crate::protocol::CODEC_H264_HIGH,
-                            quality: crate::session::controller_offer(),
+                            codec: codec_offer,
+                            quality: offer,
                             decode: true,
                             files_only: false,
                             services_only: false,
@@ -954,6 +968,7 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                         }
                         .encode(),
                     );
+                    let mut legacy = false;
                     loop {
                         let (mut send, mut recv) =
                             link.open_bi().await.map_err(Error::network_debug)?;
@@ -966,6 +981,32 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                             0 => {}
                             4 => {
                                 tokio::time::sleep(Duration::from_millis(20)).await;
+                                continue;
+                            }
+                            5 if !legacy
+                                && (codec_preference.is_none()
+                                    || codec_preference == Some(crate::VideoCodec::H264))
+                                && (decoder_caps.decode_high || decoder_caps.decode_baseline) =>
+                            {
+                                legacy = true;
+                                request.truncate(27);
+                                request.extend_from_slice(
+                                    &ControlMessage::Hello {
+                                        version: 5,
+                                        codec: if decoder_caps.decode_high {
+                                            crate::protocol::CODEC_H264_HIGH
+                                        } else {
+                                            crate::protocol::CODEC_H264
+                                        },
+                                        quality: offer,
+                                        decode: decoder_caps.decode_high
+                                            || decoder_caps.decode_baseline,
+                                        files_only: false,
+                                        services_only: false,
+                                        hostname: None,
+                                    }
+                                    .encode(),
+                                );
                                 continue;
                             }
                             6 => return Err(Error::Unauthorized),
@@ -996,6 +1037,13 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                         {
                             return Err(Error::Malformed);
                         }
+                        if codec_preference.is_some_and(|c| {
+                            crate::VideoCodec::from_wire_id(
+                                codec & !crate::protocol::SEPARATE_CURSOR,
+                            ) != Some(c)
+                        }) {
+                            return Err(Error::IncompatibleVersion);
+                        }
                         let info = DesktopInfo {
                             service: owner_info.clone(),
                             monitor_width,
@@ -1004,9 +1052,9 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                             quality,
                             separate_cursor: codec & crate::protocol::SEPARATE_CURSOR != 0,
                         };
-                        if !matches!(
-                            info.codec,
-                            crate::protocol::CODEC_H264 | crate::protocol::CODEC_H264_HIGH
+                        if !decoder_caps.supports_decode(
+                            crate::VideoCodec::from_wire_id(info.codec)
+                                .ok_or(Error::IncompatibleVersion)?,
                         ) {
                             return Err(Error::IncompatibleVersion);
                         }
@@ -1023,6 +1071,9 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                         )?;
                         {
                             let mut keyboard = lock(&desktop.keyboard);
+                            keyboard.pointer = crate::input::PointerPlan::with_settings(*lock(
+                                &shared.pointer_defaults,
+                            ));
                             keyboard.mode = crate::KeyboardMode::from_u8(
                                 shared
                                     .keyboard_mode
@@ -1277,6 +1328,9 @@ async fn client_receive(
                 }
                 VIDEO => {
                     let frame = crate::video::decode_video_body(&body[1..])?;
+                    if Some(frame.codec) != crate::VideoCodec::from_wire_id(desktop.info.codec) {
+                        return Err(Error::Malformed);
+                    }
                     if matches!(desktop.inbox.push(frame), VideoPush::KeyframeNeeded) {
                         desktop.keyframe.request();
                     }
@@ -1447,7 +1501,7 @@ pub(super) async fn serve(
     else {
         return Err(Error::Malformed);
     };
-    if remote_id == 0 || version != crate::protocol::PROTOCOL_VERSION {
+    if remote_id == 0 || !(5..=crate::protocol::PROTOCOL_VERSION).contains(&version) {
         write(&mut send, &[VERSION, 5]).await?;
         return Ok(());
     }

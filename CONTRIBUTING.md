@@ -36,9 +36,10 @@ Platform work requires the native host and libraries for that platform.
 macOS capture and codec work requires Xcode's developer tools; Windows work
 requires the MSVC toolchain and Windows SDK. Linux capture and media builds
 require the development libraries for PipeWire, VA-API, GBM, and their build
-dependencies. The GNOME application additionally requires GTK 4.10+,
-libadwaita 1.5+, and a session Secret Service. See the
-[Linux application guide](linux/README.md) for the app entry point.
+dependencies. The shared desktop application uses Electron and vanilla TypeScript/CSS.
+Install Node 22.19 or later, run `npm ci` from the repository root, then
+`npm start`. `npm run build` and `npm test` verify the shell; the Rust control bridge
+runs in an Electron utility process; streaming remains deferred.
 
 ## Find the owning component
 
@@ -49,11 +50,14 @@ libadwaita 1.5+, and a session Secret Service. See the
 | `crates/vnilink-macos/` | macOS capture and VideoToolbox adapters |
 | `crates/vnilink-windows/` | Windows capture and Media Foundation adapters |
 | `crates/vnilink-linux/` | X11, Wayland portal, PipeWire, and VA-API adapters |
-| `linux/` | Native GTK/libadwaita application and keyring integration |
-| `assets/`, `apple/` | Artwork and the Apple Icon Composer resource; not evidence of a completed Apple app |
+| `crates/vnilink-app/`, `crates/vnilink-node/` | Shared application adapters and Node-API control bindings |
+| `src/app/`, `src/platform/` | Electron lifecycle, windows, IPC and desktop service boundaries |
+| `src/workbench/`, `src/base/browser/` | Browser interface and reusable DOM controls |
+| `build/`, `scripts/`, `test/` | Application build, development and smoke verification |
+| `assets/` | Branding and icons |
 | `docs/validation/` | Reproducible validation methods, results, and remaining cases |
 
-Native applications host the shared Rust library. Keep platform capture,
+The shared Electron application hosts the Rust library through a Node-API control bridge. Keep platform capture,
 rendering, and credential-store integration in their owning adapters or apps.
 Follow nearby code style and explain non-obvious invariants in comments.
 
@@ -72,6 +76,116 @@ Read the relevant [pairing](crates/vnilink/PAIRING.md),
 [transfer](crates/vnilink/TRANSFER.md) contracts before changing those paths.
 Update contracts and regression coverage in the same pull request when
 behavior changes.
+
+## TypeScript, CSS and formatting
+
+The application follows VS Code's separation of formatting, semantic lint and
+architecture checks, adapted to this smaller codebase. TypeScript/JavaScript use
+the TypeScript language-service formatter with `tsfmt.json`: tabs at width 4,
+spaces around operators and same-line opening braces. ESLint enforces single
+quotes, semicolons, braces, strict equality, explicit type imports and correct
+promise handling. Relative TypeScript imports always use the emitted `.js` suffix,
+including type imports and re-exports; stylesheet imports retain `.css`. NodeNext
+resolution checks these paths. The strict type-aware preset also checks unsafe
+assignments/assertions, unnecessary conditions, exhaustive switches and explicit
+member visibility. Production processes must use asynchronous filesystem APIs. JSON uses two spaces. CSS/HTML/JSON use Prettier, with CSS
+correctness checked by Stylelint. Rust continues to use `rustfmt`; generated,
+vendored and historical evidence files are outside the JavaScript formatter.
+
+```sh
+npm run format          # Format application and tooling files
+npm run lint:fix        # Fix supported lint findings
+npm run check           # Formatting, ESLint, CSS lint, types and tooling tests
+npm test                # Actual Electron shell smoke test
+```
+
+The flat ESLint configuration and `build/lint/layers.mjs` enforce dependency
+boundaries: browser/common code cannot import Node/Electron or privileged
+implementations, base controls cannot depend on features/services, platform
+services cannot depend on the workbench/application, and Electron application
+code cannot import browser implementation. Add a narrow preload operation instead
+of reaching across those boundaries. The rule covers imports, re-exports,
+dynamic imports and literal require calls. Layer tests include deliberately
+invalid dependencies; formatter tests check idempotence and literal preservation.
+
+`npm ci` installs the Husky pre-commit hook automatically. It runs lint-staged
+with its default backup and partial-staging safeguards: supported staged files
+are lint-fixed and formatted without staging unrelated edits. It then runs the
+full `npm run check`, Rust formatting checks and `npm test` (native bridge plus
+Electron smoke). Any failure blocks the commit. Fix errors and retry; the hook
+requires the same native build dependencies as the app. Rust files are checked
+but not automatically rewritten; use `cargo fmt --all` before committing.
+Ignored docs, vendor files and generated output stay outside formatting scope.
+
+Workspace editor settings recommend ESLint, Prettier and Stylelint integrations.
+They use the built-in TypeScript formatter and the project TypeScript SDK.
+Dependencies are pinned. TypeScript 6.0.3 is used because the current
+`typescript-eslint` release supports TypeScript below 6.1; don't move the compiler
+outside its supported range without validating the lint tooling too. VS Code's
+extension-specific, localization and dependency-injection rules are not copied.
+
+## Interface icons
+
+Use `Icons` from `src/base/common/icons.ts` and `renderIcon` from
+`src/base/browser/ui/icon/icon.ts`. Components use product names, never provider
+names or file paths. `renderIcon(Icons.home, { variant: 'filled' })` selects a
+filled icon; the default is outlined. Buttons accept an options object, for
+example `button('Back', 'nav-item', { icon: Icons.back, onClick: goBack })`.
+
+Icons inherit text color and use `--icon-size` (16px by default). Decorative
+icons are hidden from assistive technology. Name icon-only buttons with an
+`aria-label` on the button; use the icon's `label` option only when the icon
+itself conveys information outside a labeled control.
+
+Add icon IDs to the shared registry and map both variants in `iconAssets.ts`.
+Only that provider may import Phosphor. The build bundles the selected SVGs
+from the pinned `@phosphor-icons/core` dependency, requires no network requests
+or icon font, and copies its MIT license to `out/licenses/phosphor-icons.txt`.
+The Electron smoke test verifies every registered variant, sizing, color
+inheritance, accessibility, independent DOM instances and button behavior.
+
+## Imported VS Code source
+
+The titlebar and native-window adapters follow Microsoft's VS Code release
+`1.141.0`, with `src/vs` flattened into `src`. The running shell registers
+services with `ServiceCollection`, `SyncDescriptor`, `registerSingleton` and
+`InstantiationService`, then mounts `NativeTitlebarPart`. Electron owns the
+native window controls; the renderer owns the draggable titlebar, view tabs,
+contextual actions and theme. Rust remains responsible for the application engine.
+
+The titlebar's editor, command-center, menu, toolbar and window-title code has
+been removed. Its dependency closure contains only the remaining adapters,
+service-container implementation and their required libraries and declarations.
+`build/vscode-source.json` records the release, original paths, dependency edges
+and hashes. Files marked `adapted` contain VniLink-specific changes and receive
+normal formatting, linting and staged fixes. Unchanged upstream files retain
+their source formatting. Preserve the Microsoft copyright headers,
+`LICENSE.vscode.txt` and `ThirdPartyNotices.vscode.txt` when redistributing them.
+
+`npm run check:upstream` verifies hashes and the complete dependency closure.
+When intentionally changing an adapted module, update its reviewed hash and
+regenerate dependency edges in the manifest. New application dependencies must
+be explicitly listed rather than silently excluded from the graph.
+
+Both TypeScript projects use legacy parameter decorators and compatible compiler
+settings. `src/tsconfig.json` checks every retained upstream and adapted module;
+the root configuration checks the application entry points and tests. CSS imports
+are declared in `src/assets.d.ts`. `npm run typecheck` checks both projects.
+The Electron smoke test exercises native controls, window-state IPC, theme
+updates, fullscreen layout, tab overflow and request validation on the current platform.
+
+VniLink views implement `WorkbenchView` and open through `ViewHost`. `ITabService`
+owns their lifetimes, selection and order. Switching hides the existing element
+without disposing it; closing calls optional `canClose`, aborts pending actions
+and disposes the view. Each view supplies actions and may emit
+`onDidChangeActions` when their availability changes. Actions receive an
+`AbortSignal` and must avoid applying results after cancellation. The titlebar
+uses a scrolling tab region beside a separate toolbar for the active view.
+Its connected presentation adapts VS Code's `modernUI/browser/media/tabs.css`
+and `connectedEditorTabs.css`: the active tab shares its content surface, with
+curved shoulders and an open bottom edge. A view owns its whole layout,
+including any sidebar; closing Computers removes both its sidebar and page.
+Computers is the first integrated view; stream and terminal views are deferred.
 
 ## Verify the change
 
@@ -99,10 +213,10 @@ cargo test --locked --workspace
 cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
 
-For GNOME changes, also build and run `cargo run --locked -p vnilink-gnome`
-in a Linux graphical session and inspect the affected flow. Capture and input
-checks may access real devices or request operating-system permission; use a
-test environment you control.
+For Electron changes, run `npm run build` and `npm test`, then inspect the
+affected flow in `npm start`. Validate platform-specific window/input/media
+behavior on its real OS. Capture/input checks can access devices or request
+OS permissions; use a test environment you control.
 
 A build on macOS does not exercise Windows or Linux native code. Synthetic
 frames and loopback sessions do not prove an interactive remote desktop across

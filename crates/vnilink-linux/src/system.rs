@@ -1,14 +1,16 @@
 //! Linux OS actions over D-Bus. Workstation lock goes to the session
 //! screensaver; restart and shutdown go to logind, which may demand
-//! interactive polkit authorization. Privacy mode and global input blocking
-//! have no supported facility and stay honestly unsupported.
+//! interactive polkit authorization. Display privacy uses probed X11 scanout
+//! gamma ramps. Wayland display privacy and global input blocking remain unsupported.
 
 use vnilink::system::{HostSessionState, HostSystemActions, SystemSupport};
 use vnilink::Error;
 use zbus::blocking::{Connection, Proxy};
 
 #[derive(Default)]
-pub struct LinuxSystemActions;
+pub struct LinuxSystemActions {
+    privacy: crate::privacy::Privacy,
+}
 
 impl LinuxSystemActions {
     fn lock_via(
@@ -45,7 +47,7 @@ impl HostSystemActions for LinuxSystemActions {
             lock: true,
             restart: true,
             shutdown: true,
-            privacy: false,
+            privacy: crate::privacy::supported(),
             input_block: false,
         }
     }
@@ -77,12 +79,16 @@ impl HostSystemActions for LinuxSystemActions {
         self.login1("PowerOff")
     }
 
-    fn set_display_private(&self, _private: bool) -> Result<(), Error> {
-        Err(Error::Unsupported("privacy mode is not available"))
+    fn set_display_private(&self, private: bool) -> Result<(), Error> {
+        self.privacy.set(private)
     }
 
     fn set_input_blocked(&self, _blocked: bool) -> Result<(), Error> {
         Err(Error::Unsupported("input blocking is not available"))
+    }
+
+    fn observed_privacy(&self) -> Option<(bool, bool)> {
+        Some((self.privacy.observed(), false))
     }
 
     fn session_state(&self) -> HostSessionState {

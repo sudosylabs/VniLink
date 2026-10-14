@@ -728,3 +728,20 @@ fn file_resource_policy_roundtrips_and_save_failure_preserves_durable_state() {
     let reopened = open_loop(&store, RelaySettings::public_n0());
     assert_eq!(reopened.file_resource_policy().unwrap(), policy);
 }
+
+#[test]
+fn relay_restart_required_includes_credentials_and_clears_when_reverted() {
+    let store = MemoryStore::empty();
+    let original = credentialed_relay();
+    let core = open_loop(&store, original.clone());
+    assert!(!core.relay_restart_required().unwrap());
+    let changed = CustomRelay::new("https://relay.example.com./")
+        .unwrap()
+        .with_auth_token("relay-credential-beta")
+        .unwrap();
+    core.set_relay(RelaySettings::custom(vec![changed]).unwrap())
+        .unwrap();
+    assert!(core.relay_restart_required().unwrap());
+    core.set_relay(original).unwrap();
+    assert!(!core.relay_restart_required().unwrap());
+}

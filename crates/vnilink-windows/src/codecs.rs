@@ -25,6 +25,7 @@ pub fn probe_video_codecs() -> vnilink::VideoCodecCaps {
             hardware: encode,
             device: "mediafoundation".into(),
             chroma444: false,
+            additional: Vec::new(),
         }
     }
 }

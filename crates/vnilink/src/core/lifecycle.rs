@@ -236,6 +236,8 @@ impl Core {
                 file_retention_policy,
                 terminal_policy,
                 system_policy,
+                desktop_quality_default: crate::session::controller_offer(),
+                desktop_codec_default: None,
                 system_operations: HashMap::new(),
                 next_operation_id: 1,
                 privacy: None,
@@ -294,6 +296,7 @@ impl Core {
             swap_control_command: AtomicBool::new(false),
             video_caps: Mutex::new(crate::video_caps::VideoCodecCaps::default()),
             keyboard_mode: AtomicU8::new(KeyboardMode::Character as u8),
+            pointer_defaults: Mutex::new(crate::PointerSettings::default()),
             cursor_receiver: AtomicBool::new(false),
             file_roots: Mutex::new(crate::fs::RootSet::default()),
             blob_dir: Mutex::new(None),
@@ -368,6 +371,11 @@ impl Core {
     /// callers can preserve or replace them but cannot read the token string.
     pub fn relay_configuration(&self) -> Result<RelaySettings, Error> {
         Ok(self.alive_state()?.record_relay.clone())
+    }
+
+    /// Compare saved and bound relays inside Rust, including private credentials.
+    pub fn relay_restart_required(&self) -> Result<bool, Error> {
+        Ok(self.alive_state()?.record_relay != self.shared.relay)
     }
 
     /// Saves the relay the next [`Core::open`] binds.

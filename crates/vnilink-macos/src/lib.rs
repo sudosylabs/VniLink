@@ -27,7 +27,9 @@ pub use capture::{display_scale, ScreenPlan, FILEVAULT_PREBOOT_SUPPORTED};
 pub use capture::{list_displays, ScreenCapture};
 #[cfg(target_os = "macos")]
 pub use decode::MacDecoder;
-pub use encode::MacEncoder;
+#[cfg(target_os = "macos")]
+pub use encode::probe_hevc;
+pub use encode::{MacEncoder, MacVideoEncoder};
 pub use host::HostSession;
 #[cfg(target_os = "macos")]
 pub use host::{serve_desktop, serve_shared, serve_stream};
@@ -43,6 +45,8 @@ mod tests;
 mod power;
 #[cfg(target_os = "macos")]
 pub use power::MacPowerFactory;
+#[cfg(target_os = "macos")]
+mod privacy;
 #[cfg(target_os = "macos")]
 mod system;
 #[cfg(target_os = "macos")]

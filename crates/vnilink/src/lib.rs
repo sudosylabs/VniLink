@@ -161,7 +161,10 @@ pub use system::{
     HostSessionState, HostSystemActions, OperationState, PrivacyState, SystemAction,
     SystemOperation, SystemPolicy, SystemSupport,
 };
-pub use video::{EncodedFrame, HostCapture, RecordingVideoTap, VideoSubscription, MAX_VIDEO_FRAME};
+pub use video::{
+    CodecSupport, EncodedFrame, HostCapture, RecordingVideoTap, VideoCodec, VideoSubscription,
+    MAX_VIDEO_FRAME,
+};
 pub use video_caps::{
     clamp_quality, negotiate as negotiate_video_codec, AgreedCodec, VideoCodecCaps,
 };

@@ -49,6 +49,12 @@ pub(crate) struct PointerPlan {
     remainder: (i32, i32),
 }
 impl PointerPlan {
+    pub(crate) fn with_settings(settings: PointerSettings) -> Self {
+        Self {
+            settings,
+            remainder: (0, 0),
+        }
+    }
     pub(crate) fn reset(&mut self) {
         self.remainder = (0, 0);
     }

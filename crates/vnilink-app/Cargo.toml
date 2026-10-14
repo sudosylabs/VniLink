@@ -1,0 +1,36 @@
+[package]
+name = "vnilink-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Application adapters for the VniLink shared library"
+publish = false
+
+[lib]
+name = "vnilink_app"
+crate-type = ["rlib"]
+
+[features]
+# Temporary loopback fixtures, unavailable in normal application builds.
+test-support = []
+
+[dependencies]
+vnilink = { path = "../vnilink" }
+vnilink-audio = { path = "../vnilink-audio", features = ["native"] }
+vnilink-media = { path = "../vnilink-media" }
+arboard = { version = "=3.6.1", default-features = false, features = ["wayland-data-control"] }
+thiserror = "2"
+serde = { version = "=1.0.229", features = ["derive"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+vnilink-macos = { path = "../vnilink-macos" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+vnilink-linux = { path = "../vnilink-linux" }
+
+[target.'cfg(windows)'.dependencies]
+vnilink-windows = { path = "../vnilink-windows" }
+
+[dev-dependencies]
+serde_json = "=1.0.151"

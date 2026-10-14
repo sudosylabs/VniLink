@@ -271,7 +271,7 @@ struct ControllerState {
     auto: Mutex<AutoState>,
 }
 impl ControllerState {
-    fn new(inbox: Arc<VideoInbox>, mode: u8, swap: bool) -> Self {
+    fn new(inbox: Arc<VideoInbox>, mode: u8, swap: bool, pointer: crate::PointerSettings) -> Self {
         Self {
             inbox,
             subscriber: Mutex::new(Weak::new()),
@@ -282,7 +282,7 @@ impl ControllerState {
             published_rev: AtomicU64::new(0),
             keyboard: Mutex::new(keyboard::KeyPlan::new()),
             held: Mutex::new(crate::input::HeldInput::default()),
-            pointer: Mutex::new(crate::input::PointerPlan::default()),
+            pointer: Mutex::new(crate::input::PointerPlan::with_settings(pointer)),
             mode: AtomicU8::new(mode),
             swap: AtomicBool::new(swap),
             auto: Mutex::new(AutoState::default()),
@@ -403,6 +403,8 @@ struct State {
     file_retention_policy: crate::job::FileRetentionPolicy,
     terminal_policy: crate::terminal::TerminalPolicy,
     system_policy: crate::system::SystemPolicy,
+    desktop_quality_default: crate::protocol::Quality,
+    desktop_codec_default: Option<crate::VideoCodec>,
     system_operations: HashMap<u64, crate::system::SystemOperationRecord>,
     next_operation_id: u64,
     privacy: Option<crate::system::PrivacyLease>,
@@ -540,6 +542,7 @@ struct Shared {
     video_caps: Mutex<crate::video_caps::VideoCodecCaps>,
     /// Controller-only. How a local key becomes host input. Not saved.
     keyboard_mode: AtomicU8,
+    pointer_defaults: Mutex<crate::PointerSettings>,
     cursor_receiver: AtomicBool,
     /// Managed blob directory for the transfer manager. Empty until set.
     blob_dir: Mutex<Option<PathBuf>>,
@@ -721,8 +724,9 @@ fn desktop_capabilities(shared: &Shared) -> Capabilities {
         file_transfer: !lock(&shared.file_roots).is_empty(),
         audio: false,
         monitors: u8::from(width > 0 && height > 0),
-        h264_encode: capture.is_some() && lock(&shared.video_caps).can_encode(),
-        h264_decode: lock(&shared.video_caps).can_decode(),
+        h264_encode: capture.is_some()
+            && lock(&shared.video_caps).supports_encode(crate::VideoCodec::H264),
+        h264_decode: lock(&shared.video_caps).supports_decode(crate::VideoCodec::H264),
     }
 }
 

@@ -1,0 +1,17 @@
+.vnilink-icon {
+	display: inline-flex;
+	flex: none;
+	width: 1em;
+	height: 1em;
+	font-size: var(--icon-size, 16px);
+	color: inherit;
+	vertical-align: middle;
+	pointer-events: none;
+}
+
+.vnilink-icon > svg {
+	display: block;
+	width: 100%;
+	height: 100%;
+	fill: currentcolor;
+}

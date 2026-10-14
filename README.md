@@ -1,66 +1,29 @@
 # VniLink
 
-VniLink is a remote desktop application for controlling your own computers across the internet. It will use a shared Rust library and a native desktop application on each supported platform.
+VniLink is a remote desktop application with a shared Electron interface written in vanilla TypeScript, HTML and CSS, and a shared Rust library with native macOS, Windows and Linux engines.
 
-Anyone can install it and use their own devices. Device identity, paired devices, permissions, and relay settings belong to that installation. The owner's three computers are the first validation set.
+The Electron application lives at the repository root. Its sandboxed renderer calls a typed preload API; an Electron utility process hosts the Rust Node addon. Installation state and pairing commands are connected, while the full pairing interface, remaining services and media streaming are pending. The old SwiftUI and GTK application folders and UniFFI generator have been removed; the Rust platform and application adapters remain.
 
-The native [macOS app](apple/README.md) has a computer browser, Keychain-backed pairing, settings, a separate VideoToolbox desktop viewer, and explicit ScreenCaptureKit/input setup. Synthetic video over a paired loopback session is verified; real-machine Mac capture and control still need validation.
+## Development
 
-See [Contributing](CONTRIBUTING.md) to work on VniLink,
-[Security](SECURITY.md) to report a vulnerability privately, and the
-[Code of Conduct](CODE_OF_CONDUCT.md) for community expectations and incident reporting.
+Use Node 22.19 or later, npm and the pinned Rust toolchain:
 
-The [file transfer window specification](docs/architecture/file-transfer.md)
-records the agreed direction: native two-pane browsing, transfers in both
-directions using `iroh-blobs`, and filesystem renaming of files and folders.
-These are planned capabilities; the current single-file transfer contract is
-documented in [TRANSFER.md](crates/vnilink/TRANSFER.md).
-The [implementation handoff](docs/handoffs/file-transfer-implementation.md)
-provides the build sequence, acceptance tests, Linux Docker workflow and
-RustDesk comparison checklist for the agent implementing this feature.
+```sh
+npm ci
+npm start
+```
 
-The [service ownership foundation](docs/architecture/services.md) separates
-local service handles and cancellation from peer connections. It is the first
-layer for independent desktop, files, terminal and camera services; terminal
-and camera contracts are described below. Versioned service negotiation
-and an independently owned remote Files browsing/rename stream are implemented;
-native desktop and file-manager ownership migration remains.
-Files-owned transfer jobs now reuse the referenced-blob engine with scoped
-admission and cancellation on both computers; native migration is still pending.
-Independent Terminal/Camera permissions now persist with default-denied
-migration; granting them does not install a host backend. Paired neutral
-connections now use protocol v5 without desktop/file permissions, and service
-Open checks its own grant. Native flows have not migrated to that connection
-mode. See its [validation results](docs/validation/services.md).
-An explicit Desktop service handle can adopt an existing desktop session;
-closing it releases held input and stops that session's media while Files and
-the connection remain active. Neutral connections now support independently
-opening, closing and reopening Desktop with scoped input, video and cursor
-queues. The shared capture helper publishes against a Desktop instance rather
-than its parent connection. Mac capture resources now open per Desktop instance,
-and a service-owned Mac decoder API and Linux encoder path are available.
-Native controller callers and Linux portal-grant ownership still need migration.
-Each Desktop now owns its keyboard planner, mode, modifier swap and held input;
-focus-loss releases are ordered before new keys. Each Desktop also owns a bounded,
-acknowledged clipboard pipe. The Files handle exposes an owner-scoped transfer
-queue, including conflict controls and cleanup. Native file-manager windows now
-use those owners for browsing and transfers. Desktop Files actions and external
-drops now use that queue; drops select an approved item before explicit Send.
-Native clipboard hooks must migrate before tabs switch to neutral connections.
-Terminal has opt-in Unix PTYs, independent persistent shells, reconnect replay
-and remote discovery/termination. Camera has independent encoded-video transport
-and native AVFoundation/VideoToolbox and V4L2/VA-API adapters exposed through FFI.
-Physical camera testing and app permission/startup integration remain pending. Files
-jobs can be explicitly adopted by a new owner on both peers before Resume. Native
-UI work is deferred. See [Terminal](docs/architecture/terminal-service.md) and
-[Camera](docs/architecture/camera-service.md).
+`npm run build` type-checks the application, builds the Rust Node addon and compiles the Electron entry points. Native Linux builds require the DBus development libraries for Secret Service. `npm test` launches a hidden Electron window with a disposable profile and temporary Rust identity, checks rendering, the preload boundary, native state/invitations, invalid actions and restricted local assets. It never opens the installation credential store. Normal startup requires the platform credential store; failure does not fall back to a temporary identity. After an initial `npm run build`, `npm run dev` launches the development shell with incremental TypeScript/CSS builds, resource watchers and background type checking. Save changes, wait for the watcher to finish, then press Cmd+R on macOS or Ctrl+R on Windows/Linux to reload the window. `npm run watch` runs the same watchers without launching Electron. Main/preload/utility-process changes require restarting the development app; Rust is not watched, so quit and run `npm run build` after Rust changes. Reloading resets renderer state and retires its data channels; it keeps the Rust utility process running. Generated application code lives in `out/`; `dist/` is reserved for distribution packages.
 
-For the next non-UI implementation phase, start with the
-[remote capabilities handoff](docs/handoffs/remote-capabilities-implementation.md).
-It defines the engine/OS scope, checkpoint gates and Mac/Linux/Windows validation
-methods. Native UI work stays deferred; backward compatibility is not required.
+`npm run format` applies the agreed formatting; `npm run lint:fix` fixes supported lint findings. `npm run check` verifies formatting, code/CSS lint, types and tooling regression tests. See [contributor guidance](CONTRIBUTING.md#typescript-css-and-formatting) for rules and layer boundaries.
 
-**Status:** implementation started October 1, 2026. `crates/vnilink` is a shared control library pinned to iroh 1.3.0 (Rust 1.91). It owns installation identity, public or custom relay selection, signed invitations, directional grants, one control session per host, and keyboard and pointer input. `cargo test -p vnilink` passes, including two cores on loopback. An authorized controller can send key, button, wheel, and pointer events. The host applies them when it calls `enable_os_input`. Pointer positions collapse to the latest sample. Held keys and buttons are released when the session ends. With an `InstallationStore`, a restart keeps the endpoint id, paired devices, grants, used invitations, and relay settings. The library does not open Keychain, DPAPI, or Secret Service. `Core::start` without a store still keeps that state only for the process. Custom relay mode does not publish through n0 address lookup. The library carries encoded H.264 frames over QUIC datagrams with a reliable-stream fallback and drops predicted frames until the next keyframe. Protocol version 2 negotiates H.264 High profile (CABAC and decoder support for 8x8 transforms) and falls back to a version-1 Baseline hello for older hosts. `vnilink-media` paces BGRA pictures and requires an Annex-B keyframe to carry SPS, PPS, and an IDR. `vnilink-macos` encodes and decodes a synthetic picture with VideoToolbox. Its tests build a one-monitor ScreenCaptureKit configuration and do not start capture or record the screen. `vnilink-windows` describes one interactive-desktop monitor and excludes the secure desktop; Desktop Duplication and Media Foundation compile only as Windows code. `vnilink-linux` keeps X11 and the Wayland portal separate. On Linux, H.264 encode opens VA-API High profile when the session negotiates it, else Constrained Baseline, on the first DRM render node that offers it and returns Annex-B; a machine where no render node offers that entrypoint still reports that VA-API is unavailable. The portal path reads one monitor from the PipeWire node it is given, as BGRA or BGRx. The live portal negotiates shared-memory buffers and refuses DMA-BUF delivery after an observed Mesa GBM-unmap abort. Tests do not open the portal or an X server. A test run on macOS does not execute the Windows or Linux capture paths. Pairing starts from a `.vnl` file one computer writes and the other opens. The file holds a signed invitation. The opener types the three digits shown on the writer's screen, and the writer types the controller's digits when Connect starts. No pairing server is required. A dropped control session dials the saved device again with a new generation and does not replay the old input. While a session is up, each side stores the other's current home relay and direct addresses. Clipboard text is a separate grant, limited to 256 KiB, and the library does not read the operating-system clipboard. File transfer is a separate grant: at most 8 MiB, a relative path inside a directory chosen for that installation, and no replace unless the sender asks. The default keyboard mode inserts the character the controller's operating system produced, so a typed `@` arrives as `@`. Map mode sends the physical key, and Translate mode asks a Linux host to press the chord in its X11 layout. Windows and macOS hosts refuse Translate. Tests do not open an X server for that lookup. Left and right modifiers stay distinct. The controller can exchange Control and Command, and it can send finished text of at most 128 bytes separately from the clipboard. The GNOME application in `linux/` keeps the installation record in the session keyring. This computer creates a `.vnl` pairing file and shows the three digits; another computer opens that file, types the digits, and connects. The computer that shared the file types the controller's digits to allow control. The Linux application now wires screen selection, VA-API decode, a remote desktop window, settings, and input to the shared core. GTK tests render synthetic pixels and exercise settings persistence; a real two-machine desktop session is still unverified. There is no deployment or measured remote desktop. The gates in section 11 are not complete. FileVault preboot, the Windows secure desktop, and a universal Wayland session are not claimed. Sections below still describe the product to build except where they name this library or these crates.
+Electron main owns windows, lifecycle, the local protocol and validated IPC. Preload exposes named operations rather than Node/IPC APIs. The browser workbench owns the interface. Common contracts contain environment-independent types; base browser controls are reusable across features. Only implemented modules have directories. No UI framework is required; esbuild is a build tool.
+
+Continuous data uses a separate engine channel. `DataChannelClient.open` requests a session-scoped port through preload; main validates the requesting window and transfers the endpoints to the renderer and utility process. Payload messages then travel directly between them. The native `DataChannel` handles operate outside the JSON command bridge's mutex. Video and terminal output carry binary bytes, with one unacknowledged output packet per channel. The utility process currently checks native queues every 4ms while idle; the renderer acknowledges after consuming the packet. Input has independent delivery and acknowledgements; adjacent absolute pointer positions coalesce without discarding key/button transitions. File channels operate on Rust-owned service jobs and return progress snapshots; a Rust background worker advances transfers independently of UI polling. Cancellation has a separate bounded request slot, so an outstanding progress request cannot block it. Blob transfer and disk I/O stay in Rust.
+
+Use the active session ID and generation when opening a channel; `beginConnectServices` establishes a neutral connection under existing peer admission rules. Video and input channels share an authorized Desktop service for that connection generation, including neutral connections. Closing either channel preserves its sibling; closing the last one retires the Desktop owner. Closing a client, navigating, or destroying the window retires its channels. Terminal services still require the existing host backend and explicit Rust permission; the transport does not enable terminals or grant access. File services still require approved roots and blob storage. The channel metrics expose acknowledgements and local consumer latency. GPU texture import, video decoding/presentation, and terminal/file views remain separate work; this change provides their transport, not a measured end-to-end latency result. The old JSON video commands remain available for compatibility, but new consumers should use binary channels.
+
+See [Contributing](CONTRIBUTING.md), [Security](SECURITY.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Pairing, grants, reconnect and Files ownership remain Rust contracts; replacing the UI does not replace those engines. The product requirements below describe the intended complete application, not claims that the Electron shell already implements them.
 
 ## 1. Product requirements and decision status
 
@@ -71,8 +34,8 @@ methods. Native UI work stays deferred; backward compatibility is not required.
 - Every device must be able to control either of the other two: all six directed combinations must work.
 - Access must work across the internet, including different networks, rather than only on a home LAN.
 - The application should be lightweight.
-- The shared Rust part must be a **library**. Native platform applications host it; there is no shared web or cross-platform UI requirement.
-- Follow the structural approach of **VniDrop**, with native platform directories and a shared Rust core.
+- The shared Rust part must be a **library**. A shared Electron desktop application will host it through a defined Rust bridge.
+- Use root-level TypeScript application sources with shared Rust crates, following a smaller version of VS Code's layer boundaries.
 - Build a distinct product rather than shipping Tailscale or RustDesk as the application.
 - Each installation uses its own configuration, so other people can install VniLink and point it at their own devices and relays.
 - The default relay is the public n0 relay set from the pinned Iroh release. In iroh 1.3.0 that is `RelayMode::Default`, also applied by `presets::N0`. Installing, pairing, and connecting works with those public relays alone.
@@ -83,7 +46,7 @@ methods. Native UI work stays deferred; backward compatibility is not required.
 These are recommended starting choices, not additional owner-approved requirements:
 
 - Iroh for authenticated encrypted transport, NAT traversal, and relay fallback.
-- SwiftUI on macOS, WinUI 3 on Windows, GTK/libadwaita on Linux, matching the inspected VniDrop layout.
+- Vanilla TypeScript, HTML and CSS for the shared Electron UI; native Rust adapters for operating-system integration.
 - Explicit device pairing and per-target authorization for unattended control.
 - One active controlling session per target initially; a device may host a session while controlling another device if resource limits permit.
 - One monitor and keyboard/mouse control for the first end-to-end milestone.
@@ -121,37 +84,39 @@ Closing the visible window and disabling hosting are different actions. When una
 
 ## 3. Repository structure
 
-Present today: `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, the crates under `crates/`, and the GNOME application in `linux/`. Library tests live in each crate's `src/tests` and are included from the crate, the same layout VniDrop uses. Pairing steps for the `.vnl` file are in `crates/vnilink/PAIRING.md`. `apple/` and `windows/` are still the proposed layout. Create a directory when it acquires content.
-
 ```text
 vnilink/
-  README.md
-  Cargo.toml                    # Rust workspace
+  package.json                 # Electron entry and npm commands
+  package-lock.json
+  tsconfig.json
+  Cargo.toml                   # Rust workspace
   Cargo.lock
-  rust-toolchain.toml           # Rust 1.91.0
-  crates/
-    vnilink/                    # Shared control library. Input and encoded frames
-    vnilink-media/              # Annex-B, frame pacing, one-monitor plan
-    vnilink-macos/              # VideoToolbox, ScreenCaptureKit configuration
-    vnilink-windows/            # Desktop Duplication and Media Foundation on Windows
-    vnilink-linux/              # X11 capture, Wayland portal, PipeWire frames, VA-API H.264
-    vnilink-protocol/           # Wire types/validation, if a separate crate earns its cost
-    vnilink-ffi/                  # UniFFI control-plane bindings for SwiftUI/WinUI
-    uniffi-bindgen/             # Binding generation tooling, pinned to the same UniFFI
-  apple/                        # SwiftUI macOS app and host lifecycle
-  windows/                      # WinUI app and host/service lifecycle
-  linux/                        # GTK 4 / libadwaita app. Keyring record, pairing file, connect
-  services/
-    relay/                      # Optional custom-relay deployment notes; unused by the public-relay default
-  docs/
-    architecture/              # Decisions, protocol, trust model, media boundaries
-    platforms/                 # Permissions, startup, supported OS/desktop states
-    validation/                # Reproducible test matrix and measured results
-  scripts/                      # Build, bindings, packaging, verification helpers
-  packaging/                    # Platform packaging where not native-project-owned
+  rust-toolchain.toml
+  src/
+    main.ts                    # Electron startup
+    preload.ts                 # Narrow renderer API
+    renderer.ts                # Browser startup
+    app/electron-main/         # Lifecycle and windows
+    base/browser/ui/           # Reusable DOM controls
+    platform/ipc/common/       # Environment-independent API contracts
+    platform/ipc/electron-main/ # Validated privileged handlers
+    platform/engine/common/    # Control commands and value validation
+    platform/engine/electron-main/ # Engine ownership and request queue
+    platform/engine/electron-utility/ # Rust addon host
+    workbench/browser/         # Layout, parts, feature views and CSS
+  crates/                      # Shared core and native engines
+  assets/                      # Existing branding
+  vendor/                      # Patched dependencies
+  build/                       # Build and future packaging tools
+  scripts/                     # Development commands
+  test/smoke/                  # Actual Electron application checks
+  test/native/                 # Two-engine Rust binding integration checks
+  out/                         # Generated application code; ignored
+  dist/                        # Future distribution output; ignored
+  docs/                        # Local specifications/evidence; ignored
 ```
 
-VniDrop is a structural reference, not a template to copy wholesale. The accessible checkout inspected during planning was `/Users/hammed/Projects/vnidrop`; the owner originally named `/home/hammed/Projects/vnidrop`. Locate the actual checkout in the implementation environment before using it. Its README describes SwiftUI, WinUI, and GTK/libadwaita; its Rust crate supports `rlib`, `staticlib`, and `cdylib` and uses UniFFI. Inspect its real platform bridges before choosing VniLink bindings, particularly Windows. Do not copy mobile targets, transfer-consent rules, dependencies, or build machinery without a VniLink need.
+Engine bridge hosting, richer application state and new feature views will acquire directories when implemented. Library tests remain in their owning Rust crates. The old `apple/` and `linux/` GUI applications are no longer workspace components.
 
 ## 4. Component ownership
 
@@ -165,13 +130,11 @@ Input events use USB HID keyboard usages for keys, separate press and release fo
 
 Expose semantic operations such as start hosting, pair, authorize device, connect, disconnect, revoke device, unpair device, update session quality, and query capabilities. Native clients observe state/events rather than reconstructing session rules.
 
-Give the runtime a defined owner. Specify startup/shutdown, callback threading, cancellation, event ordering, and how a native UI marshals updates onto its UI thread. Slow subscribers must not block networking or allocate unbounded event queues.
+Give the runtime a defined owner. Specify startup/shutdown, callback threading, cancellation, event ordering, and how the Electron renderer receives bounded updates. Slow subscribers must not block networking or allocate unbounded event queues.
 
-### Native applications and adapters
+### Electron application and native adapters
 
-Own UI, local permission flows, OS startup integration, capture/input APIs, display enumeration, encoder/decoder integration, rendering, and platform credential-store access.
-
-Define a capability interface so the Rust library can negotiate what the host actually supports. Represent unsupported features explicitly. Platform adapters can themselves contain Rust where practical; native UI does not require all platform logic to be written in the UI language.
+The TypeScript workbench owns tabs, devices, settings and viewer controls. Electron main owns windows and validated desktop services. A future Rust bridge must preserve owner identity, cancellation and bounded events. Platform crates continue to own capture, codecs, device/session APIs and other native behavior; credentials and privileged OS operations do not move into browser code.
 
 ### Background hosting
 
@@ -179,9 +142,9 @@ The shared library remains a library. A platform executable, user agent, or serv
 
 Service installation does not automatically provide access to a user's graphical session. Design and validate the service-to-session relationship separately on each OS. Protect local IPC against unauthorized local clients and validate message sizes and caller identity.
 
-## 5. Native bindings and media boundary
+## 5. Rust bindings and media boundary
 
-Select bindings after checking actual support for Swift, Windows application language, and Rust Linux callers. UniFFI is the control-plane binding: `crates/vnilink-ffi` exposes the session, pairing, grant, input, clipboard, transfer, and video-frame API as records, enums, and byte vectors. The contract is in `docs/architecture/ffi-contract.md`.
+`crates/vnilink-app` preserves the tested application adapters as plain Rust. `crates/vnilink-node` exposes a bounded Node-API control interface, hosted by an Electron utility process. UniFFI and its generator have been removed. The bridge currently supports snapshots, invitation/file pairing, grants, revocation, unpairing and peer names; the remaining service APIs and UI flows are not connected yet. Native credentials are stored as an opaque installation record under `com.vnilink.installation` / `primary` (Keychain on macOS, Credential Manager on Windows, Secret Service on Linux). Media streaming and presentation remain deferred.
 
 Document ownership, lifetime, threading, error mapping, and cancellation for each boundary. Do not expose internal async types or networking implementation details as the native API.
 
@@ -262,7 +225,7 @@ Clipboard and file transfer are privileged session features. Clipboard text requ
 
 ### macOS
 
-`vnilink-macos` encodes and decodes H.264 with VideoToolbox and builds a ScreenCaptureKit configuration for one BGRA monitor, cursor hidden. `ScreenCapture` starts the stream and copies BGRA pictures through an output handler; `HostSession` paces them at the session quality and publishes Annex-B for that hosted session, and `serve_stream` reads a capture that is already open and stops when the session ends. Tests use a synthetic picture. They do not call `SCShareableContent::get` or start a stream, and they have not captured the screen. SwiftUI, permission onboarding, and drawing the decoded picture are still open.
+`vnilink-macos` encodes and decodes H.264 with VideoToolbox and builds a ScreenCaptureKit configuration for one BGRA monitor, cursor hidden. `ScreenCapture` starts the stream and copies BGRA pictures through an output handler; `HostSession` paces them at the session quality and publishes Annex-B for that hosted session, and `serve_stream` reads a capture that is already open and stops when the session ends. Tests use a synthetic picture. They do not call `SCShareableContent::get` or start a stream, and they have not captured the screen. Electron permission onboarding and presentation of decoded pictures remain open.
 
 Test locked sessions, user switching, monitor disconnect, and headless capture on the actual Mac mini. FileVault preboot unlock is outside the initial logged-in-desktop milestone; do not promise that an ordinary app or launch agent can control it.
 
@@ -348,10 +311,4 @@ Consult current primary documentation when implementing version-dependent behavi
 
 Pin selected dependencies and document the actual supported versions. Replace proposed build layout and instructions with verified commands as implementation lands. Put detailed decisions and evidence in the corresponding docs directories, and keep this README as the entry point describing the final product and remaining scope.
 
-The native Linux and macOS apps now provide background window-close behavior,
-tray/menu-bar Open, Settings, Stop remote access and Quit actions, and opt-in
-launch at login. Startup sharing is opt-in: macOS requires existing Screen
-Recording/Accessibility permissions; Linux can resume X11 sharing, while Wayland
-still requires its portal selection. See [Linux background setup](linux/README.md#background-and-login-startup)
-and [macOS implementation](apple/README.md). Actual login cycles and unattended
-real-machine desktop operation remain validation work.
+The removed native apps previously implemented background window-close, login startup and sharing controls. Those behaviors are not yet integrated into Electron. Startup sharing, permission onboarding and background hosting must be restored through the retained Rust engines and reviewed application services before claiming parity. Earlier native cursor/viewer results above are historical evidence for those implementations, not validation of the new Electron viewer.

@@ -3,13 +3,13 @@ members = [
     "crates/vnilink",
     "crates/vnilink-rename",
     "crates/vnilink-media",
+    "crates/vnilink-hevc",
     "crates/vnilink-audio",
     "crates/vnilink-macos",
     "crates/vnilink-windows",
     "crates/vnilink-linux",
-    "crates/vnilink-ffi",
-    "crates/uniffi-bindgen",
-    "linux",
+    "crates/vnilink-app",
+    "crates/vnilink-node",
 ]
 resolver = "2"
 
@@ -24,5 +24,8 @@ debug = "line-tables-only"
 
 # Enigo 0.6.1 with a macOS local-input coexistence fix; see vendor/enigo/VNILINK.md.
 [patch.crates-io]
+iroh = { path = "vendor/iroh" }
 enigo = { path = "vendor/enigo" }
 cpal = { path = "vendor/cpal" }
+
+shiguredo_libvpx = { path = "vendor/shiguredo-libvpx" }

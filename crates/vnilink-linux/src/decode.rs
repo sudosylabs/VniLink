@@ -89,6 +89,7 @@ struct OpenDecoder {
 }
 
 pub struct LinuxDecoder {
+    software: vnilink_media::SoftwareDecoderSlot,
     worker: Option<Worker>,
 }
 
@@ -99,7 +100,10 @@ struct Worker {
 
 impl LinuxDecoder {
     pub fn new() -> Self {
-        Self { worker: None }
+        Self {
+            worker: None,
+            software: Default::default(),
+        }
     }
 
     fn ensure_worker(&mut self) -> Result<&Worker, Error> {
@@ -137,6 +141,9 @@ impl Drop for LinuxDecoder {
 
 impl VideoDecoder for LinuxDecoder {
     fn decode(&mut self, frame: &EncodedFrame) -> Result<RawFrame, Error> {
+        if let Some(result) = self.software.decode(frame) {
+            return result;
+        }
         let worker = self.ensure_worker()?;
         let (reply_tx, reply_rx) = mpsc::channel();
         worker

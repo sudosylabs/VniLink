@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2024", "ESNext.Disposable", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": false,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+    "useUnknownInCatchVariables": false
+  },
+  "include": [
+    "src/main.ts",
+    "src/renderer.ts",
+    "src/preload.ts",
+    "src/platform/engine/electron-utility/engineHost.ts",
+    "src/platform/secrets/common/secrets.ts",
+    "src/assets.d.ts",
+    "src/typings/desktop.d.ts",
+    "test/**/*.ts",
+    "src/typings/base-common.d.ts",
+    "src/typings/thenable.d.ts",
+    "src/typings/vscode-globals-nls.d.ts",
+    "src/typings/vscode-globals-product.d.ts",
+    "src/platform/engine/browser/dataChannelClient.ts",
+    "src/platform/log/common/bufferLog.ts"
+  ]
+}

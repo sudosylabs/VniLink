@@ -10,6 +10,12 @@
 
 #![forbid(unsafe_code)]
 
+mod software;
+pub use software::{
+    probe_software_codecs, CodecEncoder, SoftwareDecoder, SoftwareDecoderSlot, SoftwareEncoder,
+};
+mod hevc;
+pub use hevc::{hevc_annex_b, hevc_sample, hevc_units};
 mod annexb;
 mod channel;
 mod controller;
@@ -23,6 +29,7 @@ mod nv12;
 mod pump;
 mod rate;
 mod recording;
+mod recording_format;
 mod recording_segments;
 pub use recording_segments::{
     RecordingFailure, RecordingRetention, RecordingSnapshot, SegmentWriter,

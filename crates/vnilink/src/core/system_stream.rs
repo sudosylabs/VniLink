@@ -356,14 +356,7 @@ impl Core {
     /// Local privacy/input state and its holding connection, if any.
     pub fn system_privacy(&self) -> Result<PrivacyState, Error> {
         let state = self.alive_state()?;
-        Ok(match state.privacy.as_ref() {
-            Some(lease) => PrivacyState {
-                display_private: lease.display_private,
-                input_blocked: lease.input_blocked,
-                holder_connection: Some(lease.connection_id),
-            },
-            None => PrivacyState::default(),
-        })
+        Ok(current_privacy(&state))
     }
 
     /// Opens a System backend on its own stream and task. The local owner
@@ -744,16 +737,21 @@ fn support(shared: &Shared) -> Vec<u8> {
 
 fn current_privacy(state: &State) -> PrivacyState {
     match state.privacy.as_ref() {
-        Some(lease) => PrivacyState {
-            display_private: lease.display_private,
-            input_blocked: lease.input_blocked,
-            holder_connection: Some(lease.connection_id),
-        },
+        Some(lease) => {
+            let (display_private, input_blocked) = lease
+                .actions
+                .observed_privacy()
+                .unwrap_or((lease.display_private, lease.input_blocked));
+            PrivacyState {
+                display_private,
+                input_blocked,
+                holder_connection: Some(lease.connection_id),
+            }
+        }
         None => PrivacyState::default(),
     }
 }
 
-#[cfg(test)]
 fn set_privacy(
     shared: &Shared,
     admission: &Admission,
@@ -820,10 +818,12 @@ fn set_privacy_inner(
             Some(lease) => lease.actions.clone(),
             None => lock(&shared.system_actions).clone().ok_or(1)?,
         };
-        let previous = state
-            .privacy
-            .as_ref()
-            .map(|lease| (lease.display_private, lease.input_blocked));
+        let previous = state.privacy.as_ref().map(|lease| {
+            lease
+                .actions
+                .observed_privacy()
+                .unwrap_or((lease.display_private, lease.input_blocked))
+        });
         (actions, previous)
     };
     let support = actions.support();

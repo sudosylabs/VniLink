@@ -1,0 +1,388 @@
+:root {
+	color-scheme: light dark;
+
+	--canvas: #fafafa;
+	--sidebar: #f1f1f3;
+	--chrome: #ececef;
+	--text: #242426;
+	--muted: #737378;
+	--line: #dedee2;
+	--selected: #fff;
+	--native-chrome: rgb(248 248 250 / 58%);
+
+	font:
+		13px -apple-system,
+		BlinkMacSystemFont,
+		'Segoe UI',
+		sans-serif;
+	color: var(--text);
+	background: var(--canvas);
+}
+
+* {
+	box-sizing: border-box;
+}
+
+body {
+	margin: 0;
+	height: 100vh;
+	overflow: hidden;
+}
+
+button {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	font: inherit;
+	color: inherit;
+	border: 0;
+	cursor: default;
+}
+
+button:focus-visible {
+	outline: 2px solid #547eea;
+	outline-offset: -2px;
+}
+
+.workspace {
+	height: calc(100vh - var(--titlebar-height, 28px));
+	display: flex;
+	flex-direction: column;
+}
+
+.sidebar {
+	display: flex;
+	flex-direction: column;
+	background: var(--sidebar);
+	border-right: 1px solid var(--line);
+	padding: 16px 12px;
+	overflow-y: auto;
+}
+
+.sidebar-section + .sidebar-section {
+	margin-top: 24px;
+}
+
+.sidebar-heading {
+	margin: 0 10px 8px;
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--muted);
+}
+
+.nav-item {
+	width: 100%;
+	min-height: 34px;
+	text-align: left;
+	padding: 7px 10px;
+	gap: 10px;
+	border-radius: 5px;
+	background: transparent;
+	font-weight: 400;
+	color: var(--muted);
+}
+
+.nav-item + .nav-item {
+	margin-top: 2px;
+}
+
+.nav-item:hover {
+	background: color-mix(in srgb, var(--text) 5%, transparent);
+	color: var(--text);
+}
+
+.nav-item.selected {
+	background: var(--selected);
+	color: var(--text);
+	font-weight: 500;
+}
+
+.nav-item .vnilink-icon {
+	--icon-size: 17px;
+}
+
+main {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.page-heading {
+	padding: 34px 40px 0;
+}
+
+h1 {
+	margin: 0;
+	font-size: 23px;
+	font-weight: 600;
+	letter-spacing: -0.55px;
+}
+
+.page-heading p {
+	color: var(--muted);
+	margin: 10px 0 0;
+}
+
+.empty-state {
+	margin: auto;
+	text-align: center;
+	padding: 48px;
+}
+
+.computer {
+	--icon-size: 56px;
+
+	color: var(--muted);
+}
+
+h2 {
+	margin: 19px 0 8px;
+	font-size: 16px;
+	font-weight: 500;
+}
+
+.empty-state p {
+	color: var(--muted);
+	margin: 0;
+}
+
+.workbench-notice {
+	padding: 10px 18px;
+	color: var(--text);
+	background: var(--canvas);
+	border-bottom: 1px solid var(--line);
+}
+
+.workbench-notice[hidden] {
+	display: none;
+}
+
+.settings-placeholder {
+	margin: 32px 40px;
+	color: var(--muted);
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--canvas: #202124;
+		--sidebar: #26272b;
+		--chrome: #2c2d31;
+		--text: #e6e6e8;
+		--muted: #999ba2;
+		--line: #383a40;
+		--selected: #36383e;
+		--native-chrome: rgb(32 33 36 / 22%);
+	}
+}
+
+.view-stack {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+}
+
+.view-host {
+	display: flex;
+	flex: 1;
+	min-height: 0;
+	overflow: hidden;
+}
+
+.home-view {
+	display: grid;
+	grid-template-columns: 232px minmax(0, 1fr);
+	min-width: 0;
+	min-height: 0;
+}
+
+.view-host > .home-view {
+	flex: 1;
+}
+
+.view-host > [hidden] {
+	display: none;
+}
+
+.view-host.empty::after {
+	content: 'No open views';
+	margin: auto;
+	color: var(--muted);
+}
+
+.home-content {
+	display: flex;
+	align-items: flex-start;
+	min-height: 0;
+	overflow: auto;
+}
+
+.home-content > main {
+	max-width: 800px;
+	margin-inline: auto;
+	flex: 1;
+	min-height: 100%;
+	padding-bottom: 48px;
+	box-sizing: border-box;
+	min-width: 0;
+}
+
+/* Reveal the OS backdrop only through chrome; view content stays opaque. */
+:root[data-window-material='vibrancy'] {
+	--sidebar: var(--native-chrome);
+	--chrome: var(--native-chrome);
+
+	background: transparent;
+}
+
+:root[data-window-material='mica'] {
+	--sidebar: transparent;
+	--chrome: transparent;
+
+	background: transparent;
+}
+
+.home-content,
+.view-host > :not(.home-view) {
+	background: var(--canvas);
+}
+
+.settings-form {
+	margin: 28px 40px 40px;
+	max-width: 680px;
+}
+
+.settings-fields {
+	border: 0;
+	padding: 0;
+	margin: 0;
+	min-width: 0;
+}
+
+.setting {
+	margin-bottom: 24px;
+}
+
+.setting label {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 10px;
+}
+
+.setting-label {
+	font-weight: 500;
+}
+
+.setting-description,
+.settings-status {
+	color: var(--muted);
+	line-height: 1.5;
+}
+
+.setting-description {
+	margin: 8px 0 0;
+}
+
+.settings-select {
+	position: relative;
+	display: inline-flex;
+	min-width: 0;
+	width: 65%;
+}
+
+.settings-select select {
+	appearance: none;
+	width: 100%;
+	min-width: 0;
+	padding-right: 36px;
+}
+
+.settings-select > .vnilink-icon {
+	--icon-size: 14px;
+
+	position: absolute;
+	right: 12px;
+	top: 50%;
+	transform: translateY(-50%);
+	pointer-events: none;
+	color: var(--muted);
+}
+
+.settings-select:has(select:disabled) > .vnilink-icon {
+	opacity: 0.5;
+}
+
+.settings-form input:not([type='checkbox'], [type='radio']),
+.settings-form select {
+	font: inherit;
+	color: var(--text);
+	background: var(--canvas);
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	padding: 7px 10px;
+	max-width: 100%;
+	width: 100%;
+}
+
+.settings-form select {
+	width: 260px;
+}
+
+.settings-form input[type='checkbox'] {
+	accent-color: #547eea;
+}
+
+.settings-form input:focus-visible,
+.settings-form select:focus-visible {
+	outline: 2px solid #547eea;
+	outline-offset: 1px;
+}
+
+.settings-form [disabled] {
+	opacity: 0.6;
+}
+
+.relay-editor {
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	padding: 18px;
+	margin: 20px 0;
+	min-width: 0;
+}
+
+.relay-editor legend {
+	padding: 0 6px;
+	color: var(--muted);
+}
+
+.settings-button {
+	background: var(--sidebar);
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	padding: 7px 14px;
+	margin-right: 8px;
+}
+
+.settings-button.primary {
+	background: #547eea;
+	color: #fff;
+	border-color: transparent;
+	margin-top: 24px;
+}
+
+.setting-error {
+	color: #d44949;
+	line-height: 1.5;
+}
+
+.setting-error[hidden],
+.settings-form [hidden] {
+	display: none;
+}
+
+.home-content > .appearance-page,
+.home-content > .access-page {
+	max-width: 900px;
+}
