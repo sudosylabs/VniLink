@@ -15,8 +15,8 @@ test('staged fixes preserve imported source while checking application files', (
 	const commands = staged['{src,test}/**/*.ts']([imported, application]);
 	assert.equal(commands.length, 2);
 	for (const command of commands) {
-		assert.ok(command.includes(application));
-		assert.ok(!command.includes(imported));
+		assert.ok(command.includes(JSON.stringify(application)));
+		assert.ok(!command.includes(JSON.stringify(imported)));
 	}
 	assert.deepEqual(staged['{src,test}/**/*.ts']([imported]), []);
 });
