@@ -1496,7 +1496,8 @@ mod viewer_tests {
                 0,
                 sample.bytes().to_vec(),
             )
-            .unwrap(),
+            .unwrap()
+            .into(),
         )
         .unwrap();
         let until = std::time::Instant::now() + Duration::from_secs(5);
@@ -1594,7 +1595,8 @@ mod viewer_tests {
                 0,
                 sample.bytes().to_vec(),
             )
-            .unwrap(),
+            .unwrap()
+            .into(),
         )
         .unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);

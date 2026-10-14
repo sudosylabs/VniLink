@@ -3,7 +3,49 @@ use crate::{error::map_error, FfiError, VnilinkCore};
 use std::sync::Arc;
 use vnilink::power::{PowerKind, PowerPhase};
 
-pub use vnilink::power::PowerPolicy as FfiPowerPolicy;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FfiPowerPolicy {
+    pub incoming_display: bool,
+    pub incoming_system: bool,
+    pub outgoing_display: bool,
+    pub outgoing_system: bool,
+    pub incoming_idle_secs: u32,
+    pub outgoing_idle_secs: u32,
+    pub lock_after_control: bool,
+}
+impl From<vnilink::power::PowerPolicy> for FfiPowerPolicy {
+    fn from(value: vnilink::power::PowerPolicy) -> Self {
+        Self {
+            incoming_display: value.incoming_display,
+            incoming_system: value.incoming_system,
+            outgoing_display: value.outgoing_display,
+            outgoing_system: value.outgoing_system,
+            incoming_idle_secs: value.incoming_idle_secs,
+            outgoing_idle_secs: value.outgoing_idle_secs,
+            lock_after_control: value.lock_after_control,
+        }
+    }
+}
+impl From<FfiPowerPolicy> for vnilink::power::PowerPolicy {
+    fn from(value: FfiPowerPolicy) -> Self {
+        Self {
+            incoming_display: value.incoming_display,
+            incoming_system: value.incoming_system,
+            outgoing_display: value.outgoing_display,
+            outgoing_system: value.outgoing_system,
+            incoming_idle_secs: value.incoming_idle_secs,
+            outgoing_idle_secs: value.outgoing_idle_secs,
+            lock_after_control: value.lock_after_control,
+        }
+    }
+}
+impl Default for FfiPowerPolicy {
+    fn default() -> Self {
+        vnilink::power::PowerPolicy::default().into()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiPowerKind {
     Display,

@@ -26,12 +26,102 @@ pub struct FfiCapabilities {
     pub h264_decode: bool,
 }
 
-/// Probe-validated H.264 abilities. Every set bit means a backend
+/// Probe-validated video abilities. Every set bit means a backend
 /// initialized and processed a sample.
-pub use vnilink::VideoCodecCaps as FfiVideoCodecCaps;
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FfiCodecSupport {
+    pub codec: FfiVideoCodec,
+    pub encode: bool,
+    pub decode: bool,
+    pub hardware: bool,
+}
+impl From<vnilink::CodecSupport> for FfiCodecSupport {
+    fn from(value: vnilink::CodecSupport) -> Self {
+        Self {
+            codec: value.codec.into(),
+            encode: value.encode,
+            decode: value.decode,
+            hardware: value.hardware,
+        }
+    }
+}
+impl From<FfiCodecSupport> for vnilink::CodecSupport {
+    fn from(value: FfiCodecSupport) -> Self {
+        Self {
+            codec: value.codec.into(),
+            encode: value.encode,
+            decode: value.decode,
+            hardware: value.hardware,
+        }
+    }
+}
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FfiVideoCodecCaps {
+    #[serde(default)]
+    pub additional: Vec<FfiCodecSupport>,
+    pub encode_baseline: bool,
+    pub encode_high: bool,
+    pub decode_baseline: bool,
+    pub decode_high: bool,
+    pub max_width: u16,
+    pub max_height: u16,
+    pub hardware: bool,
+    pub device: String,
+    pub chroma444: bool,
+}
+impl From<vnilink::VideoCodecCaps> for FfiVideoCodecCaps {
+    fn from(value: vnilink::VideoCodecCaps) -> Self {
+        Self {
+            additional: value.additional.into_iter().map(Into::into).collect(),
+            encode_baseline: value.encode_baseline,
+            encode_high: value.encode_high,
+            decode_baseline: value.decode_baseline,
+            decode_high: value.decode_high,
+            max_width: value.max_width,
+            max_height: value.max_height,
+            hardware: value.hardware,
+            device: value.device,
+            chroma444: value.chroma444,
+        }
+    }
+}
+impl From<FfiVideoCodecCaps> for vnilink::VideoCodecCaps {
+    fn from(value: FfiVideoCodecCaps) -> Self {
+        Self {
+            additional: value.additional.into_iter().map(Into::into).collect(),
+            encode_baseline: value.encode_baseline,
+            encode_high: value.encode_high,
+            decode_baseline: value.decode_baseline,
+            decode_high: value.decode_high,
+            max_width: value.max_width,
+            max_height: value.max_height,
+            hardware: value.hardware,
+            device: value.device,
+            chroma444: value.chroma444,
+        }
+    }
+}
 
 /// Preferred limits for the platform encoder.
-pub use vnilink::Quality as FfiQuality;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct FfiQuality {
+    pub max_bitrate_kbps: u32,
+    pub max_frame_rate: u8,
+    pub max_width: u16,
+    pub max_height: u16,
+}
+impl From<vnilink::Quality> for FfiQuality {
+    fn from(value: vnilink::Quality) -> Self {
+        Self {
+            max_bitrate_kbps: value.max_bitrate_kbps,
+            max_frame_rate: value.max_frame_rate,
+            max_width: value.max_width,
+            max_height: value.max_height,
+        }
+    }
+}
 
 pub fn new_quality(
     max_bitrate_kbps: u32,
@@ -140,13 +230,111 @@ pub struct FfiSessionPath {
     pub rx_bytes: u64,
 }
 
-/// One encoded H.264 frame. Screen content: never logged.
+/// One encoded video frame. Screen content: never logged.
 ///
 /// `display_id`/`revision` attest the captured source (topology display id
 /// and revision); zero means unstamped. Viewers map pointer input by this
 /// id instead of guessing from picture dimensions.
-pub use vnilink::EncodedFrame as FfiEncodedFrame;
-pub use vnilink::VideoCodec as FfiVideoCodec;
+#[derive(Clone, PartialEq, Eq)]
+pub struct FfiEncodedFrame {
+    pub codec: FfiVideoCodec,
+    pub keyframe: bool,
+    pub timestamp_us: u64,
+    pub payload: Vec<u8>,
+    pub display_id: u64,
+    pub revision: u64,
+}
+impl FfiEncodedFrame {
+    pub fn new(
+        codec: FfiVideoCodec,
+        keyframe: bool,
+        timestamp_us: u64,
+        payload: Vec<u8>,
+    ) -> Result<Self, FfiError> {
+        vnilink::EncodedFrame::new(codec.into(), keyframe, timestamp_us, payload)
+            .map(Into::into)
+            .map_err(map_error)
+    }
+    pub fn h264(keyframe: bool, timestamp_us: u64, payload: Vec<u8>) -> Result<Self, FfiError> {
+        Self::new(FfiVideoCodec::H264, keyframe, timestamp_us, payload)
+    }
+    pub fn with_source(mut self, display_id: u64, revision: u64) -> Self {
+        self.display_id = display_id;
+        self.revision = revision;
+        self
+    }
+    pub(crate) fn into_core(self) -> Result<vnilink::EncodedFrame, FfiError> {
+        vnilink::EncodedFrame::new(
+            self.codec.into(),
+            self.keyframe,
+            self.timestamp_us,
+            self.payload,
+        )
+        .map(|frame| frame.with_source(self.display_id, self.revision))
+        .map_err(map_error)
+    }
+}
+impl From<vnilink::EncodedFrame> for FfiEncodedFrame {
+    fn from(value: vnilink::EncodedFrame) -> Self {
+        Self {
+            codec: value.codec.into(),
+            keyframe: value.keyframe,
+            timestamp_us: value.timestamp_us,
+            payload: value.payload,
+            display_id: value.display_id,
+            revision: value.revision,
+        }
+    }
+}
+impl std::fmt::Debug for FfiEncodedFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FfiEncodedFrame")
+            .field("codec", &self.codec)
+            .field("keyframe", &self.keyframe)
+            .field("timestamp_us", &self.timestamp_us)
+            .field("display_id", &self.display_id)
+            .field("revision", &self.revision)
+            .field("payload_len", &self.payload.len())
+            .finish()
+    }
+}
+
+/// Stable application codec identity; domain negotiation owns preference order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum FfiVideoCodec {
+    H264,
+    H265,
+    Vp8,
+    Vp9,
+    Av1,
+}
+impl From<vnilink::VideoCodec> for FfiVideoCodec {
+    fn from(value: vnilink::VideoCodec) -> Self {
+        match value {
+            vnilink::VideoCodec::H264 => Self::H264,
+            vnilink::VideoCodec::H265 => Self::H265,
+            vnilink::VideoCodec::Vp8 => Self::Vp8,
+            vnilink::VideoCodec::Vp9 => Self::Vp9,
+            vnilink::VideoCodec::Av1 => Self::Av1,
+        }
+    }
+}
+impl From<FfiVideoCodec> for vnilink::VideoCodec {
+    fn from(value: FfiVideoCodec) -> Self {
+        match value {
+            FfiVideoCodec::H264 => Self::H264,
+            FfiVideoCodec::H265 => Self::H265,
+            FfiVideoCodec::Vp8 => Self::Vp8,
+            FfiVideoCodec::Vp9 => Self::Vp9,
+            FfiVideoCodec::Av1 => Self::Av1,
+        }
+    }
+}
+impl FfiVideoCodec {
+    pub fn label(self) -> &'static str {
+        vnilink::VideoCodec::from(self).label()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiKeyboardMode {
@@ -270,7 +458,7 @@ pub(crate) fn capabilities(capabilities: &vnilink::Capabilities) -> FfiCapabilit
 }
 
 pub(crate) fn quality_record(quality: &vnilink::Quality) -> FfiQuality {
-    *quality
+    (*quality).into()
 }
 
 pub(crate) fn to_quality(quality: FfiQuality) -> Result<vnilink::Quality, FfiError> {
@@ -527,6 +715,83 @@ fn serialize_u64<S: serde::Serializer>(value: &u64, serializer: S) -> Result<S::
 #[cfg(test)]
 mod bridge_serialization_tests {
     use super::*;
+    #[test]
+    fn facade_codec_values_preserve_wire_shapes_and_all_probe_fields() {
+        let mut caps = vnilink::VideoCodecCaps::h264_full(4096, 2160, "probe");
+        caps.chroma444 = true;
+        caps.hardware = true;
+        caps.additional = vnilink::VideoCodec::ALL
+            .into_iter()
+            .map(|codec| vnilink::CodecSupport {
+                codec,
+                encode: true,
+                decode: false,
+                hardware: false,
+            })
+            .collect();
+        let facade: FfiVideoCodecCaps = caps.clone().into();
+        assert_eq!(
+            serde_json::to_value(&facade).unwrap(),
+            serde_json::to_value(&caps).unwrap()
+        );
+        assert_eq!(vnilink::VideoCodecCaps::from(facade), caps);
+    }
+
+    #[test]
+    fn facade_frames_preserve_source_and_revalidate_mutable_payload_without_logging_it() {
+        for codec in vnilink::VideoCodec::ALL {
+            let original =
+                vnilink::EncodedFrame::new(codec, true, u64::MAX, b"private pixels".to_vec())
+                    .unwrap()
+                    .with_source(u64::MAX, u64::MAX);
+            let mut facade: FfiEncodedFrame = original.clone().into();
+            let debug = format!("{facade:?}");
+            assert!(debug.contains("payload_len"));
+            assert!(!debug.contains("payload:"));
+            assert_eq!(facade.clone().into_core().unwrap(), original);
+            facade.payload.clear();
+            assert!(matches!(
+                facade.into_core(),
+                Err(FfiError::InvalidSetting { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn facade_policy_defaults_and_round_trips_preserve_core_meanings() {
+        let system = vnilink::SystemPolicy::default();
+        let facade = crate::FfiSystemPolicy::default();
+        assert_eq!(vnilink::SystemPolicy::from(facade), system);
+        assert!(facade.allow_lock);
+        let power = vnilink::power::PowerPolicy {
+            incoming_display: true,
+            outgoing_system: true,
+            incoming_idle_secs: 86400,
+            outgoing_idle_secs: 1,
+            lock_after_control: true,
+            ..Default::default()
+        };
+        let facade: crate::FfiPowerPolicy = power.into();
+        assert_eq!(
+            serde_json::to_value(facade).unwrap(),
+            serde_json::to_value(power).unwrap()
+        );
+        assert_eq!(vnilink::power::PowerPolicy::from(facade), power);
+        assert_eq!(
+            vnilink::power::PowerPolicy::from(crate::FfiPowerPolicy::default()),
+            vnilink::power::PowerPolicy::default()
+        );
+        assert!(matches!(
+            to_quality(FfiQuality {
+                max_bitrate_kbps: 0,
+                max_frame_rate: 30,
+                max_width: 1920,
+                max_height: 1080
+            }),
+            Err(FfiError::InvalidSetting { .. })
+        ));
+    }
+
     #[test]
     fn pairing_handles_and_expiry_are_lossless_strings() {
         let preview = FfiPairingPreview {

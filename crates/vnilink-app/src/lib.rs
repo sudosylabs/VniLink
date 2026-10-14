@@ -80,10 +80,11 @@ pub use files::{
     FfiFileRetentionPolicy, FfiFileRoot, FfiFsEntry, FfiJobDirection, FfiJobSnapshot, FfiJobState,
 };
 pub use types::{
-    new_quality, FfiCapabilities, FfiCodecPreference, FfiControlRequest, FfiDeviceInfo, FfiDisplay,
-    FfiEncodedFrame, FfiEvent, FfiGrants, FfiKeyboardMode, FfiPairingFile, FfiPairingPreview,
-    FfiPointerButton, FfiPointerSettings, FfiQuality, FfiSessionInfo, FfiSessionPath,
-    FfiSessionPhase, FfiSessionRole, FfiSnapshot, FfiVideoCodec, FfiVideoCodecCaps,
+    new_quality, FfiCapabilities, FfiCodecPreference, FfiCodecSupport, FfiControlRequest,
+    FfiDeviceInfo, FfiDisplay, FfiEncodedFrame, FfiEvent, FfiGrants, FfiKeyboardMode,
+    FfiPairingFile, FfiPairingPreview, FfiPointerButton, FfiPointerSettings, FfiQuality,
+    FfiSessionInfo, FfiSessionPath, FfiSessionPhase, FfiSessionRole, FfiSnapshot, FfiVideoCodec,
+    FfiVideoCodecCaps,
 };
 
 use std::collections::HashMap;
@@ -910,7 +911,7 @@ impl VnilinkCore {
         frame: FfiEncodedFrame,
     ) -> Result<(), FfiError> {
         self.inner
-            .publish_video(session_id, frame)
+            .publish_video(session_id, frame.into_core()?)
             .map_err(map_error)
     }
 

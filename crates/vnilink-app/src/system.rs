@@ -116,7 +116,39 @@ pub struct FfiHostSystemReport {
     pub session: FfiSessionState,
 }
 
-pub use vnilink::SystemPolicy as FfiSystemPolicy;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FfiSystemPolicy {
+    pub allow_lock: bool,
+    pub allow_restart: bool,
+    pub allow_shutdown: bool,
+    pub allow_privacy: bool,
+}
+impl From<vnilink::SystemPolicy> for FfiSystemPolicy {
+    fn from(value: vnilink::SystemPolicy) -> Self {
+        Self {
+            allow_lock: value.allow_lock,
+            allow_restart: value.allow_restart,
+            allow_shutdown: value.allow_shutdown,
+            allow_privacy: value.allow_privacy,
+        }
+    }
+}
+impl From<FfiSystemPolicy> for vnilink::SystemPolicy {
+    fn from(value: FfiSystemPolicy) -> Self {
+        Self {
+            allow_lock: value.allow_lock,
+            allow_restart: value.allow_restart,
+            allow_shutdown: value.allow_shutdown,
+            allow_privacy: value.allow_privacy,
+        }
+    }
+}
+impl Default for FfiSystemPolicy {
+    fn default() -> Self {
+        vnilink::SystemPolicy::default().into()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiPrivacyState {
