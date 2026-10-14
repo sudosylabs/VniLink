@@ -479,7 +479,58 @@ impl Core {
                 Ok((hash, old_size))
             })
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            let (parent_rel, name) = root_rel.rsplit_once('/').unwrap_or(("", root_rel));
+            crate::fs::check_name(name)
+                .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
+            let absolute = {
+                let roots = lock(&self.shared.file_roots);
+                roots.verify_pin(pin)?;
+                roots.resolve_parent(root, parent_rel, name)?.1
+            };
+            let meta = std::fs::symlink_metadata(&absolute)
+                .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|age| age.as_millis().try_into().unwrap_or(u64::MAX))
+                .unwrap_or(0);
+            if !meta.is_file()
+                || meta.file_type().is_symlink()
+                || meta.len() != old_size
+                || mtime != old_mtime_ms
+            {
+                return Err(Error::InvalidSetting(
+                    "the source changed since preparation",
+                ));
+            }
+            self.runtime.block_on(async {
+                let store = open_store(&self.shared).await?;
+                // Keep Windows' owned-copy fallback. External references need
+                // verified serve-time handles before they can safely replace it.
+                let tag = store
+                    .add_path(absolute)
+                    .temp_tag()
+                    .await
+                    .map_err(|error| Error::network(error.to_string()))?;
+                if tag.hash().as_bytes() != &old_hash {
+                    return Err(Error::InvalidSetting(
+                        "the source changed since preparation",
+                    ));
+                }
+                let state = self.alive_state()?;
+                state.trust.get(&peer).cloned().ok_or(Error::NotPaired)?;
+                lock(&self.shared.file_roots).verify_pin(pin)?;
+                let hash = tag.hash();
+                lock(&self.shared.blob_job_offers).insert((peer, *hash.as_bytes()));
+                lock(&self.shared.blob_import_pins)
+                    .insert(*hash.as_bytes(), (std::time::Instant::now(), tag));
+                Ok((hash, old_size))
+            })
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = (
                 root,
@@ -492,6 +543,17 @@ impl Core {
             );
             Err(Error::InvalidSetting("the source file cannot be read"))
         }
+    }
+
+    /// Whether a job re-offer authorized `hash` for `peer_endpoint_id`.
+    /// Tests use this to prove a rejected re-offer did not publish the
+    /// replacement bytes.
+    #[cfg(test)]
+    pub(crate) fn blob_job_offer_contains(&self, peer_endpoint_id: &str, hash: &[u8; 32]) -> bool {
+        let Ok(peer) = parse_endpoint_id(peer_endpoint_id) else {
+            return false;
+        };
+        lock(&self.shared.blob_job_offers).contains(&(peer, *hash))
     }
 
     /// Fetches `hash` from one paired peer into the local store and

@@ -610,6 +610,21 @@ impl FilesService {
             .rename(root, &path, &name, expected, &new_name)
             .map_err(map_error)
     }
+    pub fn delete(
+        &self,
+        root: u64,
+        path: String,
+        name: String,
+        expected: Option<crate::FfiEntryToken>,
+    ) -> Result<(), FfiError> {
+        let expected = expected.map(|token| vnilink::EntryToken {
+            dev: token.dev,
+            ino: token.ino,
+        });
+        self.inner
+            .delete(root, &path, &name, expected)
+            .map_err(map_error)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -707,7 +722,7 @@ impl VnilinkCore {
         frame: crate::FfiEncodedFrame,
     ) -> Result<(), FfiError> {
         self.inner
-            .publish_desktop_video(id, generation, frame)
+            .publish_desktop_video(id, generation, frame.into_core()?)
             .map_err(map_error)
     }
 

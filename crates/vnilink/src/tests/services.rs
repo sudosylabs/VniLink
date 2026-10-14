@@ -1,3 +1,4 @@
+use super::filesystem_location::FilesystemLocation;
 use super::support::{pair_for_control, start_direct, RecordingDesktop};
 use crate::camera::{CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory};
 use crate::terminal::TerminalSize;
@@ -349,7 +350,8 @@ fn remote_files_pipe_routes_real_operations_and_closes_independently() {
     std::fs::create_dir(&scratch.0).unwrap();
     let controller = start_direct();
     let host = start_direct();
-    host.set_file_roots(vec![scratch.0.clone()]).unwrap();
+    host.enable_filesystem_access().unwrap();
+    let location = FilesystemLocation::new(host.file_roots().unwrap(), &scratch.0);
     pair_for_control(&host, &controller);
     let session = active(
         &controller,
@@ -388,9 +390,12 @@ fn remote_files_pipe_routes_real_operations_and_closes_independently() {
         controller.open_files_service(owner.id, owner.generation),
         Err(Error::Busy)
     ));
-    let root = host.file_roots().unwrap()[0].0;
-    files.mkdir(root, "", "original").unwrap();
-    let listing = files.list(root, "", 0, 20).unwrap();
+    files
+        .mkdir(location.root, &location.path(""), "original")
+        .unwrap();
+    let listing = files
+        .list(location.root, &location.path(""), 0, 20)
+        .unwrap();
     assert_eq!(
         listing
             .entries
@@ -401,8 +406,8 @@ fn remote_files_pipe_routes_real_operations_and_closes_independently() {
     );
     files
         .rename(
-            root,
-            "",
+            location.root,
+            &location.path(""),
             "original",
             Some(listing.entries[0].token),
             "renamed",
@@ -412,7 +417,14 @@ fn remote_files_pipe_routes_real_operations_and_closes_independently() {
     assert!(!scratch.0.join("original").exists());
     // A retained service pipe must not consume/block legacy filesystem streams.
     let legacy = controller
-        .fs_list(session.id, session.generation, root, "", 0, 20)
+        .fs_list(
+            session.id,
+            session.generation,
+            location.root,
+            &location.path(""),
+            0,
+            20,
+        )
         .unwrap();
     assert_eq!(
         legacy
@@ -434,7 +446,10 @@ fn remote_files_pipe_routes_real_operations_and_closes_independently() {
     wait(|| host.hosted_services().unwrap().is_empty());
     assert!(!screen_work.is_cancelled());
     assert_eq!(controller.controller_session(session.id).unwrap(), session);
-    assert!(matches!(files.list(root, "", 0, 20), Err(Error::NoSession)));
+    assert!(matches!(
+        files.list(location.root, &location.path(""), 0, 20),
+        Err(Error::NoSession)
+    ));
     let next = controller
         .attach_controller_service(session.id, session.generation, ServiceKind::Files)
         .unwrap();
@@ -457,7 +472,14 @@ fn remote_files_pipe_routes_real_operations_and_closes_independently() {
     host.authorize_service(&controller.endpoint_id(), ServiceKind::Camera, false)
         .unwrap();
     assert!(!revoked.is_cancelled());
-    assert_eq!(revoked.list(root, "", 0, 20).unwrap().entries.len(), 1);
+    assert_eq!(
+        revoked
+            .list(location.root, &location.path(""), 0, 20)
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
     host.authorize_service(&controller.endpoint_id(), ServiceKind::Files, false)
         .unwrap();
     let permissions = host.service_permissions(&controller.endpoint_id()).unwrap();
@@ -632,7 +654,8 @@ fn neutral_connection_admits_without_feature_grants_and_gates_real_files() {
     std::fs::create_dir(&scratch.0).unwrap();
     let host = start_direct();
     let controller = start_direct();
-    host.set_file_roots(vec![scratch.0.clone()]).unwrap();
+    host.enable_filesystem_access().unwrap();
+    let location = FilesystemLocation::new(host.file_roots().unwrap(), &scratch.0);
     pair_for_control(&host, &controller);
     host.authorize(&controller.endpoint_id(), Grants::default())
         .unwrap();
@@ -690,11 +713,24 @@ fn neutral_connection_admits_without_feature_grants_and_gates_real_files() {
     let pipe = controller
         .open_files_service(owner.id, owner.generation)
         .unwrap();
-    pipe.mkdir(0, "", "owned").unwrap();
-    assert_eq!(pipe.list(0, "", 0, 20).unwrap().entries[0].name, "owned");
+    pipe.mkdir(location.root, &location.path(""), "owned")
+        .unwrap();
+    assert_eq!(
+        pipe.list(location.root, &location.path(""), 0, 20)
+            .unwrap()
+            .entries[0]
+            .name,
+        "owned"
+    );
     // Even with Transfer, legacy mutations cannot bypass service admission.
     assert!(controller
-        .fs_mkdir(session.id, session.generation, 0, "", "legacy")
+        .fs_mkdir(
+            session.id,
+            session.generation,
+            location.root,
+            &location.path(""),
+            "legacy"
+        )
         .is_err());
     assert!(!scratch.0.join("legacy").exists());
     let old_lease = controller
@@ -715,7 +751,13 @@ fn neutral_connection_admits_without_feature_grants_and_gates_real_files() {
         .open_files_service(fresh.id, fresh.generation)
         .unwrap();
     pipe.close();
-    assert_eq!(next.list(0, "", 0, 20).unwrap().entries[0].name, "owned");
+    assert_eq!(
+        next.list(location.root, &location.path(""), 0, 20)
+            .unwrap()
+            .entries[0]
+            .name,
+        "owned"
+    );
     assert!(controller
         .controller_session(session.id)
         .unwrap()
@@ -774,7 +816,8 @@ fn adopted_desktop_close_releases_input_and_preserves_files_for_every_close_path
             close
         )));
         std::fs::create_dir_all(&root.0).unwrap();
-        host.set_file_roots(vec![root.0.clone()]).unwrap();
+        host.enable_filesystem_access().unwrap();
+        let location = FilesystemLocation::new(host.file_roots().unwrap(), &root.0);
         let applied = Arc::new(std::sync::Mutex::new(Vec::new()));
         host.set_desktop(Box::new(super::support::RecordingDesktop {
             events: applied.clone(),
@@ -889,9 +932,13 @@ fn adopted_desktop_close_releases_input_and_preserves_files_for_every_close_path
             host.snapshot().unwrap().incoming.unwrap().phase,
             SessionPhase::Active
         );
-        pipe.mkdir(0, "", "after-desktop-close").unwrap();
+        pipe.mkdir(location.root, &location.path(""), "after-desktop-close")
+            .unwrap();
         assert_eq!(
-            pipe.list(0, "", 0, 20).unwrap().entries[0].name,
+            pipe.list(location.root, &location.path(""), 0, 20)
+                .unwrap()
+                .entries[0]
+                .name,
             "after-desktop-close"
         );
         assert!(!pipe.is_cancelled());
@@ -929,7 +976,9 @@ fn adopted_desktop_close_releases_input_and_preserves_files_for_every_close_path
             .unwrap();
         pipe.close();
         assert!(!fresh_pipe.is_cancelled());
-        fresh_pipe.mkdir(0, "", "after-reconnect").unwrap();
+        fresh_pipe
+            .mkdir(location.root, &location.path(""), "after-reconnect")
+            .unwrap();
     }
 }
 
@@ -1076,8 +1125,8 @@ fn connect_services(controller: &Core, host: &Core) -> SessionInfo {
 fn all_services_share_one_parent_and_close_independently() {
     let controller = start_direct();
     let host = start_direct();
-    let root = scratch_dir("all");
-    host.set_file_roots(vec![root.0.clone()]).unwrap();
+    let _root = scratch_dir("all");
+    host.enable_filesystem_access().unwrap();
     host.set_desktop(Box::new(RecordingDesktop {
         events: Arc::new(Mutex::new(Vec::new())),
     }))
@@ -1237,7 +1286,8 @@ fn files_and_terminal_start_without_capture_or_desktop_decoder() {
     let controller = start_direct();
     let host = start_direct();
     let root = scratch_dir("nocapture");
-    host.set_file_roots(vec![root.0.clone()]).unwrap();
+    host.enable_filesystem_access().unwrap();
+    let location = FilesystemLocation::new(host.file_roots().unwrap(), &root.0);
     host.set_terminal_factory(Some(test_terminal_factory()))
         .unwrap();
     // No capture, no desktop adapter, no H.264 encoder on the host.
@@ -1264,7 +1314,9 @@ fn files_and_terminal_start_without_capture_or_desktop_decoder() {
     let files = controller
         .open_files_service(files_owner.id, files_owner.generation)
         .unwrap();
-    files.mkdir(0, "", "no-capture").unwrap();
+    files
+        .mkdir(location.root, &location.path(""), "no-capture")
+        .unwrap();
     assert!(root.0.join("no-capture").is_dir());
 
     let terminal_owner = controller
@@ -1418,7 +1470,7 @@ fn revoke_and_idle_expiry_name_their_causes() {
     let host = start_direct();
     let root = scratch_dir("cause-files");
     std::fs::create_dir_all(&root.0).unwrap();
-    host.set_file_roots(vec![root.0.clone()]).unwrap();
+    host.enable_filesystem_access().unwrap();
     host.set_desktop(Box::new(RecordingDesktop {
         events: Arc::new(Mutex::new(Vec::new())),
     }))

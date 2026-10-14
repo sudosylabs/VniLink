@@ -1,7 +1,7 @@
 //! Owner-approved file roots and filesystem operations.
 //!
 //! The `Core` methods here execute against this installation's own disks
-//! (the local pane). The `fs_list`/`fs_mkdir`/`fs_rename` methods reach the
+//! (the local pane). The `fs_list`/`fs_mkdir`/`fs_rename`/`fs_delete` methods reach the
 //! controlled computer instead: each request opens its own short side
 //! stream on the live control connection, carrying the versioned wire codec
 //! with the session generation, and the host re-checks generation and the
@@ -129,6 +129,32 @@ impl Core {
         fs::rename_entry(&roots, root, path, name, expected, new_name)
     }
 
+    /// Deletes one entry inside its existing parent folder under an
+    /// approved root. `expected` carries the listing token; a strong token
+    /// that no longer names the same object refuses the mutation. A file is
+    /// unlinked in place. A folder is renamed aside and then removed without
+    /// following links, after this method drops the roots lock. Deleting an
+    /// entry used by an active transfer is refused.
+    pub fn delete_entry(
+        &self,
+        root: u64,
+        path: &str,
+        name: &str,
+        expected: Option<crate::fs::EntryToken>,
+    ) -> Result<(), Error> {
+        self.ensure_alive()?;
+        if super::jobs::rename_blocked(&self.shared, root, path, name) {
+            return Err(Error::InvalidSetting(
+                "the entry is used by an active transfer",
+            ));
+        }
+        let work = {
+            let roots = lock(&self.shared.file_roots);
+            fs::stage_delete(&roots, root, path, name, expected)?
+        };
+        fs::finish_delete(work)
+    }
+
     /// Stats one entry for test identity proofs without listing.
     #[cfg(test)]
     pub(crate) fn stat_entry(
@@ -229,6 +255,35 @@ impl Core {
         }
     }
 
+    /// Deletes one entry on the controlled computer. `expected` carries the
+    /// listing token from a remote listing; the host refuses a replaced
+    /// source instead of deleting a different object.
+    pub fn fs_delete(
+        &self,
+        session_id: u64,
+        generation: u64,
+        root: u64,
+        path: &str,
+        name: &str,
+        expected: Option<crate::fs::EntryToken>,
+    ) -> Result<(), Error> {
+        match self.fs_round_trip(
+            session_id,
+            generation,
+            fs::Request::Delete {
+                id: 1,
+                generation,
+                root,
+                path: path.to_owned(),
+                name: name.to_owned(),
+                expected,
+            },
+        )? {
+            FsOutcome::Done => Ok(()),
+            FsOutcome::Page(_) => Err(Error::Malformed),
+        }
+    }
+
     fn fs_round_trip(
         &self,
         session_id: u64,
@@ -247,7 +302,8 @@ impl Core {
             match &mut request {
                 fs::Request::List { generation, .. }
                 | fs::Request::Mkdir { generation, .. }
-                | fs::Request::Rename { generation, .. } => {
+                | fs::Request::Rename { generation, .. }
+                | fs::Request::Delete { generation, .. } => {
                     *generation = session.wire_stamp.generation
                 }
             }
@@ -283,17 +339,7 @@ impl Core {
             if response.id != 1 {
                 return Err(Error::Malformed);
             }
-            match response.status {
-                0 => {}
-                status if status == fs::STATUS_EXISTS => return Err(Error::FileExists),
-                status if status == fs::STATUS_DENIED => return Err(Error::TransferDenied),
-                status if status == fs::STATUS_STALE => return Err(Error::StaleSession),
-                _ => {
-                    return Err(Error::InvalidSetting(
-                        "the remote filesystem refused the request",
-                    ))
-                }
-            }
+            status_error(response.status, &response.message)?;
             match request {
                 fs::Request::List { .. } => {
                     let body: Vec<u8> = crate::sidestream::read_frame(
@@ -511,7 +557,8 @@ pub(super) async fn handle_fs_request(
     let (id, generation) = match &request {
         fs::Request::List { id, generation, .. }
         | fs::Request::Mkdir { id, generation, .. }
-        | fs::Request::Rename { id, generation, .. } => (*id, *generation),
+        | fs::Request::Rename { id, generation, .. }
+        | fs::Request::Delete { id, generation, .. } => (*id, *generation),
     };
     // Fence generation + authorization with the mutation under one state
     // hold (jobs->state order for renames, consistent with publication):
@@ -521,6 +568,47 @@ pub(super) async fn handle_fs_request(
     // worker await, so slow storage never parks the handler's locks.
     // Reply awaits happen after all locks drop, so futures stay Send.
     let (response, body): (fs::Response, Option<Vec<u8>>) = match request {
+        fs::Request::Delete {
+            root,
+            path,
+            name,
+            expected,
+            ..
+        } => {
+            // Same admission as rename, but the tree walk happens after the
+            // guards drop. A folder is only renamed aside while jobs, state
+            // and roots are held; unlinking its children must not park them.
+            let staged = {
+                let jobs_guard = lock(&shared.jobs);
+                let state_guard = lock(&shared.state);
+                let live = matches!(state_guard.incoming.get(&session_id), Some(session)
+                    if session.generation == generation
+                        && session.phase == crate::session::SessionPhase::Active
+                        && session.peer_key == *peer);
+                if !live {
+                    Err(fs::Response::coded(id, fs::STATUS_STALE))
+                } else if !state_guard.trust.granted(peer, Grant::Transfer) {
+                    Err(fs::Response::coded(id, fs::STATUS_DENIED))
+                } else if super::jobs::rename_blocked_with(&jobs_guard, root, &path, &name) {
+                    Err(fs::Response::coded(id, fs::STATUS_ERROR))
+                } else {
+                    let roots = lock(&shared.file_roots);
+                    let outcome = fs::stage_delete(&roots, root, &path, &name, expected);
+                    drop(roots);
+                    outcome.map_err(|error| map_fs_error(id, &error))
+                }
+            };
+            match staged {
+                Err(response) => (response, None),
+                Ok(work) => {
+                    match tokio::task::spawn_blocking(move || fs::finish_delete(work)).await {
+                        Ok(Ok(())) => (fs::Response::ok(id), None),
+                        Ok(Err(error)) => (map_fs_error(id, &error), None),
+                        Err(_) => (fs::Response::coded(id, fs::STATUS_ERROR), None),
+                    }
+                }
+            }
+        }
         fs::Request::Rename {
             root,
             path,
@@ -667,11 +755,30 @@ async fn serve_list_page(
     }
 }
 
+pub(super) fn status_error(status: u8, message: &str) -> Result<(), Error> {
+    match status {
+        0 => Ok(()),
+        status if status == fs::STATUS_EXISTS => Err(Error::FileExists),
+        status if status == fs::STATUS_DENIED => Err(Error::TransferDenied),
+        status if status == fs::STATUS_STALE => Err(Error::StaleSession),
+        _ => Err(Error::InvalidSetting(fs::failure_message(message))),
+    }
+}
+
 fn map_fs_error(id: u32, error: &Error) -> fs::Response {
     match error {
         Error::FileExists => fs::Response::coded(id, fs::STATUS_EXISTS),
         Error::TransferDenied => fs::Response::coded(id, fs::STATUS_DENIED),
         Error::StaleSession => fs::Response::coded(id, fs::STATUS_STALE),
+        Error::InvalidSetting(message)
+            if *message == fs::DELETE_FAILED || *message == fs::DELETE_INCOMPLETE =>
+        {
+            fs::Response {
+                id,
+                status: fs::STATUS_ERROR,
+                message: (*message).to_owned(),
+            }
+        }
         _ => fs::Response::coded(id, fs::STATUS_ERROR),
     }
 }
@@ -780,7 +887,11 @@ mod listing_tests {
             iroh::RelayMode::Disabled,
         )
         .expect("loopback core");
-        host.set_file_roots(vec![root]).unwrap();
+        host.enable_filesystem_access().unwrap();
+        let files = crate::tests::filesystem_location::FilesystemLocation::new(
+            host.file_roots().unwrap(),
+            &root,
+        );
         forge_transfer_session(&host, 41, 7);
 
         let parked_rt = tokio::runtime::Builder::new_current_thread()
@@ -799,9 +910,19 @@ mod listing_tests {
         std::thread::scope(|scope| {
             scope.spawn(|| {
                 parked_rt.block_on(async {
-                    let served =
-                        serve_list_page(&host.shared, 41, &STALE_PEER, 7, 9, 0, "", 0, 50, hooks)
-                            .await;
+                    let served = serve_list_page(
+                        &host.shared,
+                        41,
+                        &STALE_PEER,
+                        7,
+                        9,
+                        files.root,
+                        &files.path(""),
+                        0,
+                        50,
+                        hooks,
+                    )
+                    .await;
                     let _ = result_tx.send(served);
                 });
             });
@@ -822,8 +943,8 @@ mod listing_tests {
                 &STALE_PEER,
                 7,
                 10,
-                0,
-                "",
+                files.root,
+                &files.path(""),
                 0,
                 50,
                 fs::ListHooks::none(),

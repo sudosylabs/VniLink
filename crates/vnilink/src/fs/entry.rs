@@ -102,7 +102,7 @@ pub(crate) fn stat(path: &std::path::Path, name: String) -> FsEntry {
                     0
                 },
                 mtime_ms: mtime_ms(&meta),
-                token: identity(&meta),
+                token: identity(path, &meta),
             }
         }
         Err(_) => FsEntry {
@@ -124,7 +124,7 @@ fn mtime_ms(meta: &std::fs::Metadata) -> u64 {
 }
 
 #[cfg(unix)]
-fn identity(meta: &std::fs::Metadata) -> EntryToken {
+fn identity(_path: &std::path::Path, meta: &std::fs::Metadata) -> EntryToken {
     use std::os::unix::fs::MetadataExt;
     EntryToken {
         dev: Some(meta.dev()),
@@ -132,7 +132,18 @@ fn identity(meta: &std::fs::Metadata) -> EntryToken {
     }
 }
 
-#[cfg(not(unix))]
-fn identity(_meta: &std::fs::Metadata) -> EntryToken {
+#[cfg(windows)]
+fn identity(path: &std::path::Path, _meta: &std::fs::Metadata) -> EntryToken {
+    match vnilink_rename::windows::entry_identity(path) {
+        Ok((dev, ino)) => EntryToken {
+            dev: Some(dev),
+            ino: Some(ino),
+        },
+        Err(_) => EntryToken::NONE,
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn identity(_path: &std::path::Path, _meta: &std::fs::Metadata) -> EntryToken {
     EntryToken::NONE
 }

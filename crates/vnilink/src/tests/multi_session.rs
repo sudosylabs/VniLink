@@ -1,3 +1,4 @@
+use super::filesystem_location::FilesystemLocation;
 use super::support::{pair_for_control, start_direct, RecordingDesktop};
 use crate::{
     Core, CursorState, EncodedFrame, Error, Grants, HostClipboard, InputEvent, KeyboardMode,
@@ -366,11 +367,16 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() {
     let _ = std::fs::remove_dir_all(&dir);
     for (core, name) in [(&controller, "controller"), (&a, "a"), (&b, "b")] {
         std::fs::create_dir_all(dir.join(name).join("root")).unwrap();
-        core.set_file_roots(vec![dir.join(name).join("root")])
-            .unwrap();
+        core.enable_filesystem_access().unwrap();
         core.set_blob_directory(dir.join(name).join("blobs"))
             .unwrap();
     }
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &dir.join("controller").join("root"),
+    );
+    let a_files = FilesystemLocation::new(a.file_roots().unwrap(), &dir.join("a").join("root"));
+    let b_files = FilesystemLocation::new(b.file_roots().unwrap(), &dir.join("b").join("root"));
     std::fs::write(dir.join("a/root/a.txt"), b"A's bytes").unwrap();
     std::fs::write(dir.join("b/root/b.txt"), b"B's bytes").unwrap();
     for host in [&a, &b] {
@@ -401,10 +407,22 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() {
         );
     }
     let ja = controller
-        .job_submit_download(&a.endpoint_id(), 0, "a.txt", 0, "")
+        .job_submit_download(
+            &a.endpoint_id(),
+            a_files.root,
+            &a_files.path("a.txt"),
+            controller_files.root,
+            &controller_files.path(""),
+        )
         .unwrap();
     let jb = controller
-        .job_submit_download(&b.endpoint_id(), 0, "b.txt", 0, "")
+        .job_submit_download(
+            &b.endpoint_id(),
+            b_files.root,
+            &b_files.path("b.txt"),
+            controller_files.root,
+            &controller_files.path(""),
+        )
         .unwrap();
     assert_ne!(ja, jb);
     assert_eq!(a.job_list().unwrap()[0].id, b.job_list().unwrap()[0].id);
@@ -439,10 +457,22 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() {
     std::fs::write(dir.join("a/root/closed.txt"), b"must stay paused").unwrap();
     std::fs::write(dir.join("b/root/still-open.txt"), b"still transfers").unwrap();
     let closed_job = controller
-        .job_submit_download(&a.endpoint_id(), 0, "closed.txt", 0, "")
+        .job_submit_download(
+            &a.endpoint_id(),
+            a_files.root,
+            &a_files.path("closed.txt"),
+            controller_files.root,
+            &controller_files.path(""),
+        )
         .unwrap();
     let open_job = controller
-        .job_submit_download(&b.endpoint_id(), 0, "still-open.txt", 0, "")
+        .job_submit_download(
+            &b.endpoint_id(),
+            b_files.root,
+            &b_files.path("still-open.txt"),
+            controller_files.root,
+            &controller_files.path(""),
+        )
         .unwrap();
     let a_session = controller
         .controller_sessions()

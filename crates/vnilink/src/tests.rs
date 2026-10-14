@@ -20,6 +20,8 @@ mod diagnostics_tests;
 mod error_tests;
 #[path = "tests/events.rs"]
 mod events_tests;
+#[path = "tests/filesystem_location.rs"]
+pub(crate) mod filesystem_location;
 #[path = "tests/fs.rs"]
 mod fs_tests;
 #[path = "tests/hosting.rs"]

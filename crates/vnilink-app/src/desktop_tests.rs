@@ -1,3 +1,4 @@
+use crate::tests::filesystem_location::FilesystemLocation;
 use crate::*;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -92,7 +93,8 @@ fn service_handles_and_cancellation_cross_the_ffi_boundary() {
                 .as_nanos()
         )));
     std::fs::create_dir(&scratch.0).unwrap();
-    host.inner.set_file_roots(vec![scratch.0.clone()]).unwrap();
+    host.inner.enable_filesystem_access().unwrap();
+    let host_files = FilesystemLocation::new(host.inner.file_roots().unwrap(), &scratch.0);
     let session = controller.connect(host.endpoint_id()).unwrap();
     let events = controller.subscribe_events().unwrap();
     let desktop = controller
@@ -116,13 +118,15 @@ fn service_handles_and_cancellation_cross_the_ffi_boundary() {
     let pipe = controller
         .open_files_service(files.id, files.generation)
         .unwrap();
-    let root = host.inner.file_roots().unwrap()[0].0;
-    pipe.mkdir(root, "".into(), "folder".into()).unwrap();
-    let page = pipe.list(root, "".into(), 0, 20).unwrap();
+    pipe.mkdir(host_files.root, host_files.path(""), "folder".into())
+        .unwrap();
+    let page = pipe
+        .list(host_files.root, host_files.path(""), 0, 20)
+        .unwrap();
     assert_eq!(page.entries.len(), 1);
     pipe.rename(
-        root,
-        "".into(),
+        host_files.root,
+        host_files.path(""),
         "folder".into(),
         Some(page.entries[0].token),
         "renamed".into(),
@@ -223,11 +227,11 @@ fn native_desktop_contract_covers_shortcuts_clipboard_and_bidirectional_files() 
         .inner
         .set_blob_directory(root.join("controller-blobs"))
         .unwrap();
-    host.inner.set_file_roots(vec![host_dir.clone()]).unwrap();
-    controller
-        .inner
-        .set_file_roots(vec![controller_dir.clone()])
-        .unwrap();
+    host.inner.enable_filesystem_access().unwrap();
+    let host_files = FilesystemLocation::new(host.inner.file_roots().unwrap(), &host_dir);
+    controller.inner.enable_filesystem_access().unwrap();
+    let controller_files =
+        FilesystemLocation::new(controller.inner.file_roots().unwrap(), &controller_dir);
     pair(&host, &controller, true, true);
     controller
         .authorize(host.endpoint_id(), false, false, false, true)
@@ -290,10 +294,22 @@ fn native_desktop_contract_covers_shortcuts_clipboard_and_bidirectional_files() 
     std::fs::write(controller_dir.join("sent.bin"), [0, 255, 10]).unwrap();
     std::fs::write(host_dir.join("returned.bin"), [4, 2]).unwrap();
     let up = controller
-        .job_submit_upload(host.endpoint_id(), 0, "sent.bin".into(), 0, "".into())
+        .job_submit_upload(
+            host.endpoint_id(),
+            controller_files.root,
+            controller_files.path("sent.bin"),
+            host_files.root,
+            host_files.path(""),
+        )
         .unwrap();
     let down = controller
-        .job_submit_download(host.endpoint_id(), 0, "returned.bin".into(), 0, "".into())
+        .job_submit_download(
+            host.endpoint_id(),
+            host_files.root,
+            host_files.path("returned.bin"),
+            controller_files.root,
+            controller_files.path(""),
+        )
         .unwrap();
     let host_jobs: Vec<u64> = host
         .inner
@@ -384,11 +400,11 @@ fn service_jobs_cross_the_ffi_boundary() {
         .inner
         .set_blob_directory(scratch.0.join("controller-blobs"))
         .unwrap();
-    host.inner.set_file_roots(vec![host_root.clone()]).unwrap();
-    controller
-        .inner
-        .set_file_roots(vec![controller_root.clone()])
-        .unwrap();
+    host.inner.enable_filesystem_access().unwrap();
+    let host_files = FilesystemLocation::new(host.inner.file_roots().unwrap(), &host_root);
+    controller.inner.enable_filesystem_access().unwrap();
+    let controller_files =
+        FilesystemLocation::new(controller.inner.file_roots().unwrap(), &controller_root);
     pair(&host, &controller, false, true);
     controller
         .authorize(host.endpoint_id(), false, false, false, true)
@@ -406,10 +422,10 @@ fn service_jobs_cross_the_ffi_boundary() {
         .files_service_upload(
             owner.id,
             owner.generation,
-            0,
-            "up.txt".into(),
-            0,
-            "uploaded".into(),
+            controller_files.root,
+            controller_files.path("up.txt"),
+            host_files.root,
+            host_files.path("uploaded"),
         )
         .unwrap();
     let up_rx = host.inner.job_list().unwrap()[0].id;
@@ -429,10 +445,10 @@ fn service_jobs_cross_the_ffi_boundary() {
         .files_service_download(
             owner.id,
             owner.generation,
-            0,
-            "down.txt".into(),
-            0,
-            "cancelled".into(),
+            host_files.root,
+            host_files.path("down.txt"),
+            controller_files.root,
+            controller_files.path("cancelled"),
         )
         .unwrap();
     assert_eq!(
@@ -453,10 +469,10 @@ fn service_jobs_cross_the_ffi_boundary() {
         .files_service_download(
             owner.id,
             owner.generation,
-            0,
-            "down.txt".into(),
-            0,
-            "later".into()
+            host_files.root,
+            host_files.path("down.txt"),
+            controller_files.root,
+            controller_files.path("later")
         )
         .is_err());
     assert_eq!(
@@ -800,6 +816,21 @@ fn neutral_desktop_input_video_and_reopen_cross_ffi() {
     first.close();
     assert!(!second.is_cancelled());
     assert!(first.submit_pointer(20, 30, 1, 1).is_err());
+    // Local close is immediate; the host observes its stream retirement
+    // asynchronously. Reopening another stream does not order that delivery.
+    let until = Instant::now() + Duration::from_secs(5);
+    while host
+        .hosted_services()
+        .unwrap()
+        .iter()
+        .any(|service| service.id == remote.id && service.phase == FfiServicePhase::Active)
+    {
+        assert!(
+            Instant::now() < until,
+            "closed Desktop owner remained active on the host"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert!(host
         .publish_desktop_video(remote.id, remote.generation, true, 11, vec![9])
         .is_err());
@@ -965,13 +996,19 @@ fn files_handle_owns_submission_queue_and_cleanup() {
     let _cleanup = Cleanup(directory.clone());
     for (core, name) in [(&host, "host"), (&controller, "controller")] {
         std::fs::create_dir_all(directory.join(name).join("root")).unwrap();
-        core.inner
-            .set_file_roots(vec![directory.join(name).join("root")])
-            .unwrap();
+        core.inner.enable_filesystem_access().unwrap();
         core.inner
             .set_blob_directory(directory.join(name).join("blobs"))
             .unwrap();
     }
+    let host_files = FilesystemLocation::new(
+        host.inner.file_roots().unwrap(),
+        &directory.join("host").join("root"),
+    );
+    let controller_files = FilesystemLocation::new(
+        controller.inner.file_roots().unwrap(),
+        &directory.join("controller").join("root"),
+    );
     std::fs::write(
         directory.join("controller/root/source.txt"),
         b"scoped contents",
@@ -993,7 +1030,12 @@ fn files_handle_owns_submission_queue_and_cleanup() {
         .open_files_service(info.id, info.generation)
         .unwrap();
     let job = files
-        .upload(0, "source.txt".into(), 0, "upload".into())
+        .upload(
+            controller_files.root,
+            controller_files.path("source.txt"),
+            host_files.root,
+            host_files.path("upload"),
+        )
         .unwrap();
     assert_eq!(
         files
@@ -1013,7 +1055,12 @@ fn files_handle_owns_submission_queue_and_cleanup() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(files
-        .upload(0, "source.txt".into(), 0, "refused".into())
+        .upload(
+            controller_files.root,
+            controller_files.path("source.txt"),
+            host_files.root,
+            host_files.path("refused")
+        )
         .is_err());
     assert!(files.job_resume(job).is_err());
     assert_eq!(files.job_cancel(job).unwrap().state, FfiJobState::Cancelled);
@@ -1031,7 +1078,12 @@ fn files_handle_owns_submission_queue_and_cleanup() {
     assert!(files.jobs().unwrap().is_empty());
     std::fs::write(directory.join("host/root/return.txt"), b"return contents").unwrap();
     let download = replacement
-        .download(0, "return.txt".into(), 0, "download".into())
+        .download(
+            host_files.root,
+            host_files.path("return.txt"),
+            controller_files.root,
+            controller_files.path("download"),
+        )
         .unwrap();
     let until = Instant::now() + Duration::from_secs(8);
     while replacement.job_snapshot(download).unwrap().state != FfiJobState::Complete {
@@ -1190,7 +1242,7 @@ fn native_camera_callback_and_frame_queue_cross_ffi() {
     let source = produced.lock().unwrap().clone().unwrap();
     assert!(source.take_keyframe_request());
     let expected = FfiEncodedFrame {
-        codec: vnilink::VideoCodec::H264,
+        codec: crate::FfiVideoCodec::H264,
         keyframe: true,
         timestamp_us: 42,
         payload: vec![9; 300_000],

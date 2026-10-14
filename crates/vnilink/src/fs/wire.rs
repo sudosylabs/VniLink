@@ -24,6 +24,7 @@ const MAX_WIRE_BYTES: usize = 4 * 1024;
 const TAG_LIST: u8 = 1;
 const TAG_MKDIR: u8 = 2;
 const TAG_RENAME: u8 = 3;
+const TAG_DELETE: u8 = 4;
 
 const STATUS_OK: u8 = 0;
 /// Machine-readable response codes. The message line stays human-only.
@@ -59,6 +60,14 @@ pub enum Request {
         name: String,
         expected: Option<EntryToken>,
         new_name: String,
+    },
+    Delete {
+        id: u32,
+        generation: u64,
+        root: u64,
+        path: String,
+        name: String,
+        expected: Option<EntryToken>,
     },
 }
 
@@ -149,16 +158,24 @@ pub(crate) fn encode_request(request: &Request) -> Result<Vec<u8>, Error> {
             push_u64(&mut bytes, *root);
             push_text(&mut bytes, path, MAX_REL_BYTES)?;
             push_text(&mut bytes, name, MAX_COMPONENT_BYTES)?;
-            match expected {
-                Some(token) => {
-                    bytes.push(1);
-                    push_u64(&mut bytes, token.dev.unwrap_or(0));
-                    push_u64(&mut bytes, token.ino.unwrap_or(0));
-                    bytes.push(u8::from(token.is_strong()));
-                }
-                None => bytes.push(0),
-            }
+            push_expected(&mut bytes, *expected);
             push_text(&mut bytes, new_name, MAX_COMPONENT_BYTES)?;
+        }
+        Request::Delete {
+            id,
+            generation,
+            root,
+            path,
+            name,
+            expected,
+        } => {
+            push_u32(&mut bytes, *id);
+            push_u64(&mut bytes, *generation);
+            bytes.push(TAG_DELETE);
+            push_u64(&mut bytes, *root);
+            push_text(&mut bytes, path, MAX_REL_BYTES)?;
+            push_text(&mut bytes, name, MAX_COMPONENT_BYTES)?;
+            push_expected(&mut bytes, *expected);
         }
     }
     if bytes.len() > MAX_WIRE_BYTES {
@@ -223,26 +240,7 @@ pub(crate) fn decode_request(bytes: &[u8]) -> Result<Request, WireError> {
         TAG_RENAME => {
             let name = take_text(&mut cursor, MAX_COMPONENT_BYTES)
                 .ok_or(error("the filesystem frame is malformed"))?;
-            let flag = take_byte(&mut cursor).ok_or(error("the filesystem frame is malformed"))?;
-            let expected = match flag {
-                0 => None,
-                1 => {
-                    let dev =
-                        take_u64(&mut cursor).ok_or(error("the filesystem frame is malformed"))?;
-                    let ino =
-                        take_u64(&mut cursor).ok_or(error("the filesystem frame is malformed"))?;
-                    let strong =
-                        take_byte(&mut cursor).ok_or(error("the filesystem frame is malformed"))?;
-                    if strong != 0 && strong != 1 {
-                        return Err(error("the filesystem frame is malformed"));
-                    }
-                    Some(EntryToken {
-                        dev: (dev != 0).then_some(dev),
-                        ino: (ino != 0).then_some(ino),
-                    })
-                }
-                _ => return Err(error("the filesystem frame is malformed")),
-            };
+            let expected = take_expected(&mut cursor)?;
             let new_name = take_text(&mut cursor, MAX_COMPONENT_BYTES)
                 .ok_or(error("the filesystem frame is malformed"))?;
             if !cursor.is_empty() {
@@ -256,6 +254,22 @@ pub(crate) fn decode_request(bytes: &[u8]) -> Result<Request, WireError> {
                 name,
                 expected,
                 new_name,
+            })
+        }
+        TAG_DELETE => {
+            let name = take_text(&mut cursor, MAX_COMPONENT_BYTES)
+                .ok_or(error("the filesystem frame is malformed"))?;
+            let expected = take_expected(&mut cursor)?;
+            if !cursor.is_empty() {
+                return Err(error("the filesystem frame is malformed"));
+            }
+            Ok(Request::Delete {
+                id,
+                generation,
+                root,
+                path,
+                name,
+                expected,
             })
         }
         _ => Err(error("the filesystem frame is malformed")),
@@ -421,6 +435,38 @@ impl RevisionGate {
 impl Default for RevisionGate {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn push_expected(bytes: &mut Vec<u8>, expected: Option<EntryToken>) {
+    match expected {
+        Some(token) => {
+            bytes.push(1);
+            push_u64(bytes, token.dev.unwrap_or(0));
+            push_u64(bytes, token.ino.unwrap_or(0));
+            bytes.push(u8::from(token.is_strong()));
+        }
+        None => bytes.push(0),
+    }
+}
+
+fn take_expected(cursor: &mut &[u8]) -> Result<Option<EntryToken>, WireError> {
+    let error = || WireError("the filesystem frame is malformed");
+    match take_byte(cursor).ok_or_else(error)? {
+        0 => Ok(None),
+        1 => {
+            let dev = take_u64(cursor).ok_or_else(error)?;
+            let ino = take_u64(cursor).ok_or_else(error)?;
+            let strong = take_byte(cursor).ok_or_else(error)?;
+            if strong != 0 && strong != 1 {
+                return Err(error());
+            }
+            Ok(Some(EntryToken {
+                dev: (dev != 0).then_some(dev),
+                ino: (ino != 0).then_some(ino),
+            }))
+        }
+        _ => Err(error()),
     }
 }
 

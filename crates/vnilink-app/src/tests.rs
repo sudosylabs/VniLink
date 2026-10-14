@@ -1,5 +1,8 @@
+#[path = "../../vnilink/src/tests/filesystem_location.rs"]
+pub(crate) mod filesystem_location;
 use crate::{new_quality, FfiKeyboardMode, FfiPointerButton, FfiSessionRole, VnilinkCore};
 use crate::{FfiError, FfiEvent, FfiVideoCodecCaps};
+use filesystem_location::FilesystemLocation;
 
 fn full_codecs() -> FfiVideoCodecCaps {
     vnilink::VideoCodecCaps::h264_full(4096, 4096, "test").into()
@@ -273,12 +276,9 @@ fn keyboard_mode_and_swap_round_trip() {
 }
 
 #[test]
-fn file_roots_advertise_transfer_and_events_flow() {
+fn whole_filesystem_advertises_transfer_and_events_flow() {
     let core = open_core();
-    let root = std::env::temp_dir().join(format!("vnl-ffi-{}", std::process::id()));
-    std::fs::create_dir_all(&root).unwrap();
-    core.set_file_roots(vec![root.to_string_lossy().into_owned()])
-        .unwrap();
+    core.enable_filesystem_access().unwrap();
     assert!(core.snapshot().unwrap().capabilities.file_transfer);
     let events = core.subscribe_events().unwrap();
     core.start_hosting().unwrap();
@@ -377,7 +377,7 @@ fn native_store_keeps_identity_names_and_opaque_relay_credentials() {
 }
 
 #[test]
-fn file_roots_and_local_operations_cross_the_ffi() {
+fn whole_filesystem_and_local_operations_cross_the_ffi() {
     use crate::{FfiConflictChoice, FfiEntryKind, FfiJobState};
 
     let dir = std::env::temp_dir().join(format!("vnilink-app-files-{}", std::process::id()));
@@ -388,24 +388,25 @@ fn file_roots_and_local_operations_cross_the_ffi() {
         .unwrap();
     assert!(core.file_roots().unwrap().is_empty());
     assert!(core.list_dir(0, "".into(), 0, 50).is_err());
-    core.set_file_roots(vec![dir.join("root").to_string_lossy().into_owned()])
-        .unwrap();
+    core.enable_filesystem_access().unwrap();
+    let files = FilesystemLocation::new(core.inner.file_roots().unwrap(), &dir.join("root"));
     let roots = core.file_roots().unwrap();
-    assert_eq!(roots.len(), 1);
-    assert_eq!(roots[0].id, 0);
+    assert!(!roots.is_empty());
+    assert!(roots.iter().any(|root| root.id == files.root));
 
-    let page = core.list_dir(0, "".into(), 0, 50).unwrap();
+    let page = core.list_dir(files.root, files.path(""), 0, 50).unwrap();
     assert_eq!(page.total, 1);
     assert_eq!(page.entries[0].name, "notes.txt");
     assert_eq!(page.entries[0].kind, FfiEntryKind::File);
     assert_eq!(page.entries[0].size, 9);
     assert!(!format!("{:?}", page).contains("notes"));
 
-    core.create_dir(0, "".into(), "docs".into()).unwrap();
+    core.create_dir(files.root, files.path(""), "docs".into())
+        .unwrap();
     let token = page.entries[0].token;
     core.rename_entry(
-        0,
-        "".into(),
+        files.root,
+        files.path(""),
         "notes.txt".into(),
         Some(token),
         "renamed.txt".into(),
@@ -421,14 +422,29 @@ fn file_roots_and_local_operations_cross_the_ffi() {
     std::fs::rename(dir.join("root/renamed.txt"), dir.join("root/previous.txt")).unwrap();
     std::fs::write(dir.join("root/renamed.txt"), b"changed").unwrap();
     let stale = core.rename_entry(
-        0,
-        "".into(),
+        files.root,
+        files.path(""),
         "renamed.txt".into(),
         Some(token),
         "x.txt".into(),
     );
     assert!(matches!(stale, Err(FfiError::InvalidSetting { .. })));
     assert!(!dir.join("root/x.txt").exists());
+    let previous = core
+        .list_dir(files.root, files.path(""), 0, 50)
+        .unwrap()
+        .entries
+        .into_iter()
+        .find(|entry| entry.name == "previous.txt")
+        .unwrap();
+    core.delete_entry(
+        files.root,
+        files.path(""),
+        "previous.txt".into(),
+        Some(previous.token),
+    )
+    .unwrap();
+    assert!(!dir.join("root/previous.txt").exists());
 
     // A no-session job submit maps cleanly; FFI stays usable afterwards.
     // Pair first so the failure is the missing session, not pairing.

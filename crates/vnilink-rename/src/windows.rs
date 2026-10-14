@@ -63,6 +63,28 @@ pub fn directory_identity(file: &std::fs::File) -> io::Result<(u64, u64)> {
     ))
 }
 
+/// Queries a listed object's identity without following a final reparse
+/// point. Unlike recording admission, listings also identify directories
+/// and files with multiple hard links, and need no content-read permission.
+pub fn entry_identity(path: &Path) -> io::Result<(u64, u64)> {
+    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+    let file = std::fs::OpenOptions::new()
+        .access_mode(0)
+        .share_mode(1 | 2 | 4)
+        .custom_flags(0x0200_0000 | 0x0020_0000)
+        .open(path)?;
+    let mut info = HandleInformation::default();
+    // SAFETY: the owned File keeps the handle live, and the correctly laid
+    // out information structure remains writable throughout the syscall.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((
+        u64::from(info.volume),
+        (u64::from(info.index_high) << 32) | u64::from(info.index_low),
+    ))
+}
+
 pub fn open_single_link_file_rw(path: &Path) -> io::Result<std::fs::File> {
     use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
     let file = std::fs::OpenOptions::new()
@@ -163,11 +185,21 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("existing")).unwrap(), b"destination");
         std::fs::create_dir(dir.join("folder")).unwrap();
         std::fs::write(dir.join("folder/child"), b"child").unwrap();
-        let open = std::fs::File::open(dir.join("folder/child")).unwrap();
+        let open = open_directory(&dir.join("folder")).unwrap();
+        let identity = directory_identity(&open).unwrap();
         rename_noreplace(&dir.join("folder"), &dir.join("renamed")).unwrap();
         assert!(!dir.join("folder").exists());
         assert_eq!(std::fs::read(dir.join("renamed/child")).unwrap(), b"child");
-        assert_eq!(open.metadata().unwrap().len(), 5);
+        assert_eq!(directory_identity(&open).unwrap(), identity);
+        assert_eq!(
+            directory_identity(&open_directory(&dir.join("renamed")).unwrap()).unwrap(),
+            identity
+        );
+        assert_eq!(entry_identity(&dir.join("renamed")).unwrap(), identity);
+        let source_identity = entry_identity(&dir.join("source")).unwrap();
+        let destination_identity = entry_identity(&dir.join("existing")).unwrap();
+        assert_ne!(source_identity, destination_identity);
+        assert_ne!(source_identity, identity);
         assert!(available_storage(&dir).unwrap() > 0);
     }
 }

@@ -1,3 +1,4 @@
+use super::filesystem_location::FilesystemLocation;
 use super::support::{pair_for_control, start_direct, RecordingDesktop};
 use crate::{Core, EncodedFrame, InputEvent, PointerButton, ServiceKind, SessionPhase};
 use std::sync::{Arc, Mutex};
@@ -47,7 +48,8 @@ fn neutral_desktop_stream_fallback_cursor_and_files_are_independent() {
     let controller = start_direct();
     controller.set_cursor_receiver(true).unwrap();
     host.set_capture(Box::new(Capture)).unwrap();
-    host.set_file_roots(vec![scratch.0.clone()]).unwrap();
+    host.enable_filesystem_access().unwrap();
+    let location = FilesystemLocation::new(host.file_roots().unwrap(), &scratch.0);
     pair_for_control(&host, &controller);
     host.authorize_service(&controller.endpoint_id(), ServiceKind::Files, true)
         .unwrap();
@@ -111,7 +113,9 @@ fn neutral_desktop_stream_fallback_cursor_and_files_are_independent() {
             .iter()
             .all(|s| s.kind != ServiceKind::Desktop)
     });
-    files.mkdir(0, "", "still-connected").unwrap();
+    files
+        .mkdir(location.root, &location.path(""), "still-connected")
+        .unwrap();
     assert!(scratch.0.join("still-connected").is_dir());
     assert!(!files.is_cancelled());
     assert_eq!(controller.controller_session(parent.id).unwrap(), parent);

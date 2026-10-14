@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use iroh::RelayMode;
 
+use super::filesystem_location::FilesystemLocation;
 use crate::core::{Core, CoreConfig, Listen};
 use crate::error::Error;
 use crate::job::{ConflictChoice, JobState};
@@ -131,6 +132,20 @@ fn pair_with_transfer(host: &Core, controller: &Core) {
 }
 
 fn setup(tag: &str) -> (Core, Core, Scratch, Scratch) {
+    setup_with_access(tag, |core, _| core.enable_filesystem_access().unwrap())
+}
+
+#[cfg(unix)]
+fn setup_confined(tag: &str) -> (Core, Core, Scratch, Scratch) {
+    setup_with_access(tag, |core, root| {
+        core.set_file_roots(vec![root.to_path_buf()]).unwrap()
+    })
+}
+
+fn setup_with_access(
+    tag: &str,
+    configure: impl Fn(&Core, &Path),
+) -> (Core, Core, Scratch, Scratch) {
     let host = start_direct();
     let controller = start_direct();
     let host_scratch = Scratch::tagged(&format!("{tag}-host"));
@@ -138,7 +153,7 @@ fn setup(tag: &str) -> (Core, Core, Scratch, Scratch) {
     for (core, scratch) in [(&host, &host_scratch), (&controller, &controller_scratch)] {
         std::fs::create_dir_all(scratch.join("root")).unwrap();
         core.set_blob_directory(scratch.join("blobs")).unwrap();
-        core.set_file_roots(vec![scratch.join("root")]).unwrap();
+        configure(core, &scratch.join("root"));
     }
     pair_with_transfer(&host, &controller);
     controller
@@ -250,12 +265,24 @@ fn upload_tree_matches_exactly() {
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
     let (host, controller, host_scratch, controller_scratch) = setup("upload");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     write_tree(&controller_scratch.join("root"));
 
     let session = controller.connect(&host.endpoint_id()).unwrap();
     let _ = session;
     let job = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "", 0, "arrived")
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path(""),
+            host_files.root,
+            &host_files.path("arrived"),
+        )
         .unwrap();
     let rx = receiver_id(&host, job);
     let (sender, receiver) = drive_to_end(&controller, job, &host, rx);
@@ -265,14 +292,15 @@ fn upload_tree_matches_exactly() {
     assert!(receiver.total_bytes > 9 * 1024 * 1024);
     // Queue rows show the first path plus a count, never raw internals.
     assert!(
-        receiver.label.starts_with("docs/2026/big.bin") || receiver.label.starts_with("docs/read")
+        receiver.label.starts_with("root/docs/2026/big.bin")
+            || receiver.label.starts_with("root/docs/read")
     );
     assert!(receiver.label.contains("more"));
     assert!(!format!("{:?}", receiver).contains("arrived"));
 
     manifest::assert_trees_equal(
         &controller_scratch.join("root"),
-        &host_scratch.join("root/arrived"),
+        &host_scratch.join("root/arrived/root"),
     );
     // The source is a copy: sending leaves every source file in place.
     assert!(controller_scratch.join("root/docs/2026/big.bin").exists());
@@ -284,12 +312,26 @@ fn download_tree_matches_exactly() {
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
     let (host, controller, host_scratch, controller_scratch) = setup("download");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     write_tree(&host_scratch.join("root"));
 
     controller.connect(&host.endpoint_id()).unwrap();
-    controller.create_dir(0, "", "got").unwrap();
+    controller
+        .create_dir(controller_files.root, &controller_files.path(""), "got")
+        .unwrap();
     let job = controller
-        .job_submit_download(&host.endpoint_id(), 0, "", 0, "got")
+        .job_submit_download(
+            &host.endpoint_id(),
+            host_files.root,
+            &host_files.path(""),
+            controller_files.root,
+            &controller_files.path("got"),
+        )
         .unwrap();
     // The host's sender record mirrors completion through status polls.
     let host_jobs = host.job_list().unwrap();
@@ -301,19 +343,25 @@ fn download_tree_matches_exactly() {
 
     manifest::assert_trees_equal(
         &host_scratch.join("root"),
-        &controller_scratch.join("root/got"),
+        &controller_scratch.join("root/got/root"),
     );
 }
 
 #[test]
 fn conflicts_follow_explicit_choices() {
     let (host, controller, host_scratch, controller_scratch) = setup("conflict");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     std::fs::create_dir_all(controller_scratch.join("root")).unwrap();
     std::fs::write(controller_scratch.join("root/a.txt"), payload(100, 1)).unwrap();
     std::fs::write(controller_scratch.join("root/b.txt"), payload(100, 2)).unwrap();
     std::fs::write(controller_scratch.join("root/c.txt"), payload(100, 3)).unwrap();
 
-    let dest = host_scratch.join("root/dest");
+    let dest = host_scratch.join("root/dest/root");
     std::fs::create_dir_all(&dest).unwrap();
     std::fs::write(dest.join("a.txt"), b"old-a").unwrap();
     std::fs::write(dest.join("b.txt"), b"old-b").unwrap();
@@ -322,7 +370,13 @@ fn conflicts_follow_explicit_choices() {
 
     controller.connect(&host.endpoint_id()).unwrap();
     let job = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "", 0, "dest")
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path(""),
+            host_files.root,
+            &host_files.path("dest"),
+        )
         .unwrap();
     let rx = receiver_id(&host, job);
 
@@ -330,7 +384,7 @@ fn conflicts_follow_explicit_choices() {
     // per-file paths, so answer the first file only.
     let waiting = host.job_poll(rx).unwrap();
     assert_eq!(waiting.state, JobState::WaitingDecision);
-    assert_eq!(waiting.waiting_file.as_deref(), Some("a.txt"));
+    assert_eq!(waiting.waiting_file.as_deref(), Some("root/a.txt"));
     host.job_resolve(rx, ConflictChoice::Replace, false)
         .unwrap();
     // Second conflict: skip it without touching the original.
@@ -338,14 +392,14 @@ fn conflicts_follow_explicit_choices() {
         .map(|_| host.job_poll(rx).unwrap())
         .find(|snap| snap.state == JobState::WaitingDecision)
         .expect("second conflict waits");
-    assert_eq!(waiting.waiting_file.as_deref(), Some("b.txt"));
+    assert_eq!(waiting.waiting_file.as_deref(), Some("root/b.txt"));
     host.job_resolve(rx, ConflictChoice::Skip, false).unwrap();
     // Third conflict: keep both, preserving the original name.
     let waiting = (0..10)
         .map(|_| host.job_poll(rx).unwrap())
         .find(|snap| snap.state == JobState::WaitingDecision)
         .expect("third conflict waits");
-    assert_eq!(waiting.waiting_file.as_deref(), Some("c.txt"));
+    assert_eq!(waiting.waiting_file.as_deref(), Some("root/c.txt"));
     host.job_resolve(rx, ConflictChoice::KeepBoth, false)
         .unwrap();
     let (sender, receiver) = drive_to_end(&controller, job, &host, rx);
@@ -484,15 +538,29 @@ fn job_restart_resumes_unfinished_files() {
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
     let (host, controller, _host_scratch, controller_scratch) = setup("restart");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &_host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     let host_root = _host_scratch.join("root");
     std::fs::write(host_root.join("one.txt"), payload(1024, 5)).unwrap();
     std::fs::write(host_root.join("two.txt"), payload(1024, 6)).unwrap();
     std::fs::write(host_root.join("three.txt"), payload(1024, 7)).unwrap();
 
     controller.connect(&host.endpoint_id()).unwrap();
-    controller.create_dir(0, "", "got").unwrap();
+    controller
+        .create_dir(controller_files.root, &controller_files.path(""), "got")
+        .unwrap();
     let job = controller
-        .job_submit_download(&host.endpoint_id(), 0, "", 0, "got")
+        .job_submit_download(
+            &host.endpoint_id(),
+            host_files.root,
+            &host_files.path(""),
+            controller_files.root,
+            &controller_files.path("got"),
+        )
         .unwrap();
 
     // Two files land, the third is pending: kill the receiver process here.
@@ -502,7 +570,6 @@ fn job_restart_resumes_unfinished_files() {
     assert_eq!(mid.files_done, 2);
     let secret = controller.export_identity();
     let blob_dir = controller_scratch.join("blobs");
-    let root_dir = controller_scratch.join("root");
     controller.shutdown();
     drop(controller);
 
@@ -521,7 +588,7 @@ fn job_restart_resumes_unfinished_files() {
         .set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
         .unwrap();
     controller.set_blob_directory(&blob_dir).unwrap();
-    controller.set_file_roots(vec![root_dir]).unwrap();
+    controller.enable_filesystem_access().unwrap();
     let jobs = controller.job_list().unwrap();
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].state, JobState::Interrupted);
@@ -552,7 +619,7 @@ fn job_restart_resumes_unfinished_files() {
     assert_eq!(receiver.state, JobState::Complete);
     assert_eq!(sender.state, JobState::Complete);
     assert_eq!(receiver.files_done, 3);
-    manifest::assert_trees_equal(&host_root, &controller_scratch.join("root/got"));
+    manifest::assert_trees_equal(&host_root, &controller_scratch.join("root/got/root"));
 }
 
 #[test]
@@ -561,6 +628,12 @@ fn cancel_preserves_the_destination() {
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
     let (host, controller, host_scratch, controller_scratch) = setup("cancel");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     std::fs::write(host_scratch.join("root/one.txt"), payload(2048, 8)).unwrap();
     std::fs::write(
         host_scratch.join("root/two.txt"),
@@ -569,9 +642,17 @@ fn cancel_preserves_the_destination() {
     .unwrap();
 
     controller.connect(&host.endpoint_id()).unwrap();
-    controller.create_dir(0, "", "got").unwrap();
+    controller
+        .create_dir(controller_files.root, &controller_files.path(""), "got")
+        .unwrap();
     let job = controller
-        .job_submit_download(&host.endpoint_id(), 0, "", 0, "got")
+        .job_submit_download(
+            &host.endpoint_id(),
+            host_files.root,
+            &host_files.path(""),
+            controller_files.root,
+            &controller_files.path("got"),
+        )
         .unwrap();
     controller.job_poll(job).unwrap();
     // Cancel while the large file is in flight: the 20 MiB fetch takes
@@ -588,11 +669,11 @@ fn cancel_preserves_the_destination() {
     // The finished file stays; the in-flight destination never appears,
     // not even partially.
     assert_eq!(
-        std::fs::read(controller_scratch.join("root/got/one.txt")).unwrap(),
+        std::fs::read(controller_scratch.join("root/got/root/one.txt")).unwrap(),
         payload(2048, 8)
     );
-    assert!(!controller_scratch.join("root/got/two.txt").exists());
-    for entry in std::fs::read_dir(controller_scratch.join("root/got")).unwrap() {
+    assert!(!controller_scratch.join("root/got/root/two.txt").exists());
+    for entry in std::fs::read_dir(controller_scratch.join("root/got/root")).unwrap() {
         let name = entry.unwrap().file_name().into_string().unwrap();
         assert!(
             !name.ends_with(".part"),
@@ -606,17 +687,41 @@ fn cancel_preserves_the_destination() {
     assert_eq!(receiver.state, JobState::Complete);
     manifest::assert_trees_equal(
         &host_scratch.join("root"),
-        &controller_scratch.join("root/got"),
+        &controller_scratch.join("root/got/root"),
     );
 }
 
 #[test]
 fn export_failure_keeps_the_original() {
     let (host, controller, host_scratch, controller_scratch) = setup("readonly");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     std::fs::write(host_scratch.join("root/new.txt"), payload(512, 10)).unwrap();
-    let dest = controller_scratch.join("root/got");
+    let dest = controller_scratch.join("root/got/root");
     std::fs::create_dir_all(&dest).unwrap();
     std::fs::write(dest.join("new.txt"), b"original").unwrap();
+
+    // Windows enforces read-only on the target file, rather than Unix
+    // directory permission bits. Restore it even if an assertion panics.
+    #[cfg(windows)]
+    let writable = {
+        struct RestorePermissions(PathBuf, std::fs::Permissions);
+        impl Drop for RestorePermissions {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.0, self.1.clone());
+            }
+        }
+        let path = dest.join("new.txt");
+        let original = std::fs::metadata(&path).unwrap().permissions();
+        let mut readonly = original.clone();
+        readonly.set_readonly(true);
+        std::fs::set_permissions(&path, readonly).unwrap();
+        RestorePermissions(path, original)
+    };
 
     // Read-only destination: publication must fail without touching it.
     #[cfg(unix)]
@@ -633,7 +738,13 @@ fn export_failure_keeps_the_original() {
 
     controller.connect(&host.endpoint_id()).unwrap();
     let job = controller
-        .job_submit_download(&host.endpoint_id(), 0, "", 0, "got")
+        .job_submit_download(
+            &host.endpoint_id(),
+            host_files.root,
+            &host_files.path(""),
+            controller_files.root,
+            &controller_files.path("got"),
+        )
         .unwrap();
     let host_job = host.job_list().unwrap()[0].id;
     // Resolve the conflict with Replace so publication is attempted.
@@ -654,6 +765,9 @@ fn export_failure_keeps_the_original() {
     assert_eq!(receiver.state, JobState::Failed);
     assert_eq!(std::fs::read(dest.join("new.txt")).unwrap(), b"original");
 
+    #[cfg(windows)]
+    drop(writable);
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -671,14 +785,28 @@ fn export_failure_keeps_the_original() {
 #[test]
 fn revoke_pauses_and_reauthorize_resumes() {
     let (host, controller, _host_scratch, controller_scratch) = setup("revoke");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &_host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     let _ = &controller_scratch;
     std::fs::write(_host_scratch.join("root/one.txt"), payload(512, 12)).unwrap();
     std::fs::write(_host_scratch.join("root/two.txt"), payload(512, 13)).unwrap();
 
     controller.connect(&host.endpoint_id()).unwrap();
-    controller.create_dir(0, "", "got").unwrap();
+    controller
+        .create_dir(controller_files.root, &controller_files.path(""), "got")
+        .unwrap();
     let job = controller
-        .job_submit_download(&host.endpoint_id(), 0, "", 0, "got")
+        .job_submit_download(
+            &host.endpoint_id(),
+            host_files.root,
+            &host_files.path(""),
+            controller_files.root,
+            &controller_files.path("got"),
+        )
         .unwrap();
     controller.job_poll(job).unwrap();
     // Revoke mid-job: the next poll stops instead of fetching. The
@@ -688,7 +816,7 @@ fn revoke_pauses_and_reauthorize_resumes() {
     let next = controller.job_poll(job).unwrap();
     assert_eq!(next.state, JobState::Interrupted);
     assert_eq!(next.files_done, 1);
-    assert!(!controller_scratch.join("root/got/two.txt").exists());
+    assert!(!controller_scratch.join("root/got/root/two.txt").exists());
 
     // Re-authorize and resume to an exact tree. Revocation dropped the
     // host's offers, so the host sender re-offers before the receiver
@@ -711,25 +839,49 @@ fn revoke_pauses_and_reauthorize_resumes() {
     assert_eq!(receiver.state, JobState::Complete);
     manifest::assert_trees_equal(
         &_host_scratch.join("root"),
-        &controller_scratch.join("root/got"),
+        &controller_scratch.join("root/got/root"),
     );
 }
 
 #[test]
 fn submit_needs_a_session_dirs_and_known_roots() {
     let (host, controller, _host_scratch, _controller_scratch) = setup("gates");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &_host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &_controller_scratch.join("root"),
+    );
     // No control session yet: submission is refused before any hashing.
     assert!(matches!(
-        controller.job_submit_upload(&host.endpoint_id(), 0, "", 0, "x"),
+        controller.job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path(""),
+            host_files.root,
+            &host_files.path("x")
+        ),
         Err(Error::NoSession)
     ));
     controller.connect(&host.endpoint_id()).unwrap();
     assert!(matches!(
-        controller.job_submit_upload(&host.endpoint_id(), 0, "missing", 0, "x"),
+        controller.job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("missing"),
+            host_files.root,
+            &host_files.path("x")
+        ),
         Err(Error::InvalidSetting(_))
     ));
     assert!(matches!(
-        controller.job_submit_download(&host.endpoint_id(), 0, "", 9, "x"),
+        controller.job_submit_download(
+            &host.endpoint_id(),
+            host_files.root,
+            &host_files.path(""),
+            u64::MAX,
+            &controller_files.path("x")
+        ),
         Err(Error::InvalidSetting(_))
     ));
 }
@@ -737,6 +889,12 @@ fn submit_needs_a_session_dirs_and_known_roots() {
 #[test]
 fn empty_folder_transfer_preserves_hierarchy() {
     let (host, controller, host_scratch, controller_scratch) = setup("empty-dir");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     // Nested empty folders plus one file elsewhere so the manifest is not
     // empty-only edge but the empty branch must still land.
     std::fs::create_dir_all(controller_scratch.join("root/empty/nested")).unwrap();
@@ -745,7 +903,13 @@ fn empty_folder_transfer_preserves_hierarchy() {
 
     controller.connect(&host.endpoint_id()).unwrap();
     let job = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "empty", 0, "arrived")
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("empty"),
+            host_files.root,
+            &host_files.path("arrived"),
+        )
         .unwrap();
     let rx = receiver_id(&host, job);
     let (sender, receiver) = drive_to_end(&controller, job, &host, rx);
@@ -759,11 +923,23 @@ fn empty_folder_transfer_preserves_hierarchy() {
 #[test]
 fn sender_cancel_prevents_delivery() {
     let (host, controller, host_scratch, controller_scratch) = setup("sender-cancel");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     std::fs::write(controller_scratch.join("root/a.txt"), payload(1024, 21)).unwrap();
 
     controller.connect(&host.endpoint_id()).unwrap();
     let job = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "a.txt", 0, "got")
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("a.txt"),
+            host_files.root,
+            &host_files.path("got"),
+        )
         .unwrap();
     let rx = receiver_id(&host, job);
     // Sender cancels before the receiver polls: the destination must never
@@ -782,13 +958,27 @@ fn sender_cancel_prevents_delivery() {
 #[test]
 fn revoke_before_publish_prevents_file_creation() {
     let (host, controller, host_scratch, _controller_scratch) = setup("revoke-publish");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &_controller_scratch.join("root"),
+    );
     std::fs::write(host_scratch.join("root/one.txt"), payload(512, 31)).unwrap();
     std::fs::write(host_scratch.join("root/two.txt"), payload(512, 32)).unwrap();
 
     controller.connect(&host.endpoint_id()).unwrap();
-    controller.create_dir(0, "", "got").unwrap();
+    controller
+        .create_dir(controller_files.root, &controller_files.path(""), "got")
+        .unwrap();
     let job = controller
-        .job_submit_download(&host.endpoint_id(), 0, "", 0, "got")
+        .job_submit_download(
+            &host.endpoint_id(),
+            host_files.root,
+            &host_files.path(""),
+            controller_files.root,
+            &controller_files.path("got"),
+        )
         .unwrap();
     // First file lands.
     controller.job_poll(job).unwrap();
@@ -803,21 +993,45 @@ fn revoke_before_publish_prevents_file_creation() {
 #[test]
 fn rename_during_active_transfer_is_refused() {
     let (host, controller, host_scratch, controller_scratch) = setup("rename-block");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     std::fs::write(controller_scratch.join("root/a.txt"), payload(512, 41)).unwrap();
     controller.connect(&host.endpoint_id()).unwrap();
     let job = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "a.txt", 0, "dest")
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("a.txt"),
+            host_files.root,
+            &host_files.path("dest"),
+        )
         .unwrap();
     let _rx = receiver_id(&host, job);
     // The sender source is pinned while the job is active.
     assert!(controller
-        .rename_entry(0, "", "a.txt", None, "b.txt")
+        .rename_entry(
+            controller_files.root,
+            &controller_files.path(""),
+            "a.txt",
+            None,
+            "b.txt"
+        )
         .is_err());
     // The receiver destination base is pinned while the job is active.
     controller.job_cancel(job).unwrap();
     // After cancellation the rename is allowed again.
     controller
-        .rename_entry(0, "", "a.txt", None, "b.txt")
+        .rename_entry(
+            controller_files.root,
+            &controller_files.path(""),
+            "a.txt",
+            None,
+            "b.txt",
+        )
         .unwrap();
     assert!(controller_scratch.join("root/b.txt").exists());
     let _ = &host_scratch;
@@ -826,10 +1040,22 @@ fn rename_during_active_transfer_is_refused() {
 #[test]
 fn drive_jobs_advances_without_window_polls() {
     let (host, controller, host_scratch, controller_scratch) = setup("drive-all");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     std::fs::write(controller_scratch.join("root/a.txt"), payload(1024, 51)).unwrap();
     controller.connect(&host.endpoint_id()).unwrap();
     let job = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "a.txt", 0, "got")
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("a.txt"),
+            host_files.root,
+            &host_files.path("got"),
+        )
         .unwrap();
     // Background-style driving: no direct `job_poll` on the receiver window,
     // only `drive_jobs` on each installation (the background driver path).
@@ -859,15 +1085,16 @@ fn scan_accepts_single_files_as_well_as_trees() {
     std::fs::create_dir_all(root.join("sub")).unwrap();
     std::fs::write(root.join("sub/only.txt"), b"solo-bytes").unwrap();
     let mut roots = crate::fs::RootSet::default();
-    roots.set(std::slice::from_ref(&root)).unwrap();
+    roots.set_filesystem().unwrap();
+    let files = FilesystemLocation::new(roots.snapshot(), &root);
 
     // A whole tree still scans.
-    let tree = crate::manifest::scan(&roots, 0, "").unwrap();
+    let tree = crate::manifest::scan(&roots, files.root, &files.path("")).unwrap();
     assert!(tree.files.iter().any(|f| f.rel == "sub/only.txt"));
 
     // A single file scans to a one-file manifest addressed by basename,
     // so selections of individual files transfer too.
-    let single = crate::manifest::scan(&roots, 0, "sub/only.txt").unwrap();
+    let single = crate::manifest::scan(&roots, files.root, &files.path("sub/only.txt")).unwrap();
     assert_eq!(single.files.len(), 1);
     assert_eq!(single.files[0].rel, "only.txt");
     assert_eq!(single.files[0].size, 10);
@@ -877,7 +1104,7 @@ fn scan_accepts_single_files_as_well_as_trees() {
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(root.join("sub/only.txt"), root.join("sub/link.txt")).unwrap();
-        assert!(crate::manifest::scan(&roots, 0, "sub/link.txt").is_err());
+        assert!(crate::manifest::scan(&roots, files.root, &files.path("sub/link.txt")).is_err());
     }
 }
 
@@ -899,9 +1126,10 @@ fn scan_refuses_directories_past_the_manifest_budget() {
         std::fs::write(exact.join(format!("entry-{i:06}")), []).unwrap();
     }
     let mut roots = crate::fs::RootSet::default();
-    roots.set(std::slice::from_ref(&root)).unwrap();
-    assert!(crate::manifest::scan(&roots, 0, "big").is_err());
-    let fit = crate::manifest::scan(&roots, 0, "exact").unwrap();
+    roots.set_filesystem().unwrap();
+    let files = FilesystemLocation::new(roots.snapshot(), &root);
+    assert!(crate::manifest::scan(&roots, files.root, &files.path("big")).is_err());
+    let fit = crate::manifest::scan(&roots, files.root, &files.path("exact")).unwrap();
     assert_eq!(fit.files.len(), 5000);
     assert!(fit.dirs.is_empty());
 }
@@ -939,7 +1167,8 @@ fn parked_scan_yields_sibling_and_cancels_before_traversal() {
     std::fs::create_dir_all(root.join("sub")).unwrap();
     std::fs::write(root.join("sub/a.txt"), b"parked-bytes").unwrap();
     let mut roots = crate::fs::RootSet::default();
-    roots.set(std::slice::from_ref(&root)).unwrap();
+    roots.set_filesystem().unwrap();
+    let files = FilesystemLocation::new(roots.snapshot(), &root);
     // Stand-in for the shared file-roots lock: the parked scan must hold
     // no lock across its worker await, so the sibling locks, snapshots
     // and completes while the first scan stays parked.
@@ -961,10 +1190,11 @@ fn parked_scan_yields_sibling_and_cancels_before_traversal() {
     // driver thread owns it while the test observes from outside.
     let driver = std::thread::spawn(move || {
         runtime.block_on(async move {
+            let sibling_files = files.clone();
             let scan = tokio::spawn(crate::manifest::scan_roots_async(
                 first,
-                0,
-                String::new(),
+                files.root,
+                files.path(""),
                 hooks,
             ));
             handle_tx.send(scan).unwrap();
@@ -981,8 +1211,8 @@ fn parked_scan_yields_sibling_and_cancels_before_traversal() {
                 let snapshot = sibling_shared.lock().unwrap().clone();
                 let page = crate::manifest::scan_roots_async(
                     snapshot,
-                    0,
-                    String::new(),
+                    sibling_files.root,
+                    sibling_files.path(""),
                     crate::manifest::ScanHooks::none(),
                 )
                 .await;
@@ -1045,6 +1275,12 @@ fn parked_scan_yields_sibling_and_cancels_before_traversal() {
 #[test]
 fn upload_conflict_forwards_to_sender_and_resolves() {
     let (host, controller, host_scratch, controller_scratch) = setup("conflict-fwd");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     std::fs::write(controller_scratch.join("root/a.txt"), payload(100, 61)).unwrap();
     let dest = host_scratch.join("root/dest");
     std::fs::create_dir_all(&dest).unwrap();
@@ -1052,7 +1288,13 @@ fn upload_conflict_forwards_to_sender_and_resolves() {
 
     controller.connect(&host.endpoint_id()).unwrap();
     let job = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "a.txt", 0, "dest")
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("a.txt"),
+            host_files.root,
+            &host_files.path("dest"),
+        )
         .unwrap();
     let rx = receiver_id(&host, job);
     // Receiver hits the conflict first.
@@ -1076,11 +1318,23 @@ fn upload_conflict_forwards_to_sender_and_resolves() {
 #[test]
 fn coordinated_resume_after_symmetric_cancel() {
     let (host, controller, host_scratch, controller_scratch) = setup("resume-coord");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     std::fs::write(controller_scratch.join("root/a.txt"), payload(512, 71)).unwrap();
     std::fs::write(controller_scratch.join("root/b.txt"), payload(512, 72)).unwrap();
     controller.connect(&host.endpoint_id()).unwrap();
     let job = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "", 0, "got")
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path(""),
+            host_files.root,
+            &host_files.path("got"),
+        )
         .unwrap();
     let rx = receiver_id(&host, job);
     // Symmetric cancel from the sender: both sides Cancelled.
@@ -1104,8 +1358,8 @@ fn coordinated_resume_after_symmetric_cancel() {
     let (sender, receiver) = drive_to_end(&controller, job, &host, rx);
     assert_eq!(receiver.state, JobState::Complete);
     assert_eq!(sender.state, JobState::Complete);
-    assert!(host_scratch.join("root/got/a.txt").exists());
-    assert!(host_scratch.join("root/got/b.txt").exists());
+    assert!(host_scratch.join("root/got/root/a.txt").exists());
+    assert!(host_scratch.join("root/got/root/b.txt").exists());
     let _ = &controller_scratch;
 }
 
@@ -1115,6 +1369,12 @@ fn nested_sender_resume_resolves_correct_file() {
     // files (root/docs/pack/..., not root/pack/...). Exercises `resume_sender`
     // path reconstruction via durable restart, like the flat restart proof.
     let (host, controller, _host_scratch, controller_scratch) = setup("nested-resume");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &_host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     let host_root = _host_scratch.join("root");
     std::fs::create_dir_all(controller_scratch.join("root/docs/pack/sub")).unwrap();
     std::fs::write(
@@ -1130,7 +1390,13 @@ fn nested_sender_resume_resolves_correct_file() {
 
     controller.connect(&host.endpoint_id()).unwrap();
     let job = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "docs/pack", 0, "got")
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("docs/pack"),
+            host_files.root,
+            &host_files.path("got"),
+        )
         .unwrap();
     let rx = receiver_id(&host, job);
     // One file lands, then kill the sender process here (receiver keeps its
@@ -1138,7 +1404,6 @@ fn nested_sender_resume_resolves_correct_file() {
     host.job_poll(rx).unwrap();
     let secret = controller.export_identity();
     let blob_dir = controller_scratch.join("blobs");
-    let root_dir = controller_scratch.join("root");
     controller.shutdown();
     drop(controller);
 
@@ -1155,7 +1420,7 @@ fn nested_sender_resume_resolves_correct_file() {
         .set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
         .unwrap();
     controller.set_blob_directory(&blob_dir).unwrap();
-    controller.set_file_roots(vec![root_dir]).unwrap();
+    controller.enable_filesystem_access().unwrap();
     controller
         .accept_invitation(&host.create_invitation(Duration::from_secs(60)).unwrap())
         .unwrap();
@@ -1191,7 +1456,7 @@ fn nested_sender_resume_resolves_correct_file() {
 #[test]
 #[cfg(unix)]
 fn anchored_import_refuses_swapped_parent() {
-    let (host, controller, host_scratch, controller_scratch) = setup("import-swap");
+    let (host, controller, host_scratch, controller_scratch) = setup_confined("import-swap");
     std::fs::create_dir_all(controller_scratch.join("root/docs")).unwrap();
     std::fs::write(controller_scratch.join("root/docs/public.txt"), b"public").unwrap();
     let outside = controller_scratch.join("outside");
@@ -1232,11 +1497,17 @@ fn anchored_import_refuses_swapped_parent() {
 }
 
 #[test]
-fn sender_store_does_not_retain_full_copy() {
+fn sender_store_retention_matches_platform_import_mode() {
     // Test sender references separately from legitimate receiver cache data
     // and database allocation. The pinned FsStore keeps external data out of
     // its hash.data payload files when TryReference and no inlining are used.
     let (host, controller, host_scratch, controller_scratch) = setup("no-copy");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     // Distinct 2 MiB files (incompressible xorshift, different seeds).
     std::fs::write(
         controller_scratch.join("root/up.bin"),
@@ -1260,16 +1531,34 @@ fn sender_store_does_not_retain_full_copy() {
     controller.connect(&host.endpoint_id()).unwrap();
     // Controller-upload (controller sender, host receiver).
     let up = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "up.bin", 0, "got-up")
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("up.bin"),
+            host_files.root,
+            &host_files.path("got-up"),
+        )
         .unwrap();
     let up_rx = receiver_id(&host, up);
     let (up_sender, up_receiver) = drive_to_end(&controller, up, &host, up_rx);
     assert_eq!(up_sender.state, JobState::Complete);
     assert_eq!(up_receiver.state, JobState::Complete);
     // Host-download (host sender, controller receiver) with distinct file.
-    controller.create_dir(0, "", "got-down").unwrap();
+    controller
+        .create_dir(
+            controller_files.root,
+            &controller_files.path(""),
+            "got-down",
+        )
+        .unwrap();
     let down = controller
-        .job_submit_download(&host.endpoint_id(), 0, "down.bin", 0, "got-down")
+        .job_submit_download(
+            &host.endpoint_id(),
+            host_files.root,
+            &host_files.path("down.bin"),
+            controller_files.root,
+            &controller_files.path("got-down"),
+        )
         .unwrap();
     // Host has upload-receiver (up_rx) + download-sender (new); find sender.
     let host_down = host
@@ -1283,14 +1572,30 @@ fn sender_store_does_not_retain_full_copy() {
     assert_eq!(down_receiver.state, JobState::Complete);
     assert_eq!(down_sender.state, JobState::Complete);
 
+    #[cfg(unix)]
     assert!(
         !payload_path(&controller_blobs, up_hash).exists(),
         "upload sender must reference its source, not retain a payload copy"
     );
+    #[cfg(unix)]
     assert!(
         !payload_path(&host_blobs, down_hash).exists(),
         "download sender must reference its source, not retain a payload copy"
     );
+    // Windows currently serves owned copies, because the Unix verified-FD
+    // provider path has no Windows equivalent. Assert that real fallback
+    // explicitly rather than requiring unsupported external references.
+    #[cfg(windows)]
+    {
+        assert_eq!(
+            std::fs::read(payload_path(&controller_blobs, up_hash)).unwrap(),
+            payload(2 * 1024 * 1024, 101)
+        );
+        assert_eq!(
+            std::fs::read(payload_path(&host_blobs, down_hash)).unwrap(),
+            payload(2 * 1024 * 1024, 202)
+        );
+    }
     // Each peer received the other, distinct hash. Verified receiver payloads
     // are allowed for publication/resume; they must not be mistaken for copies
     // of that peer's own outgoing source.
@@ -1299,18 +1604,92 @@ fn sender_store_does_not_retain_full_copy() {
 }
 
 #[test]
+fn source_reoffer_rejects_changed_bytes_before_authorizing_the_hash() {
+    let (host, controller, _host_scratch, controller_scratch) = setup("reoffer-changed");
+    let files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
+    let original = b"original";
+    let replacement = b"replaced";
+    assert_eq!(original.len(), replacement.len());
+    let path = controller_scratch.join("root/source.bin");
+    let mtime_ms = |path: &std::path::Path| {
+        std::fs::symlink_metadata(path)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    };
+    std::fs::write(&path, replacement).unwrap();
+    let pin = controller.pin_file_root(files.root).unwrap();
+    let expected = *blake3::hash(original).as_bytes();
+    // Same size and the replacement's own mtime: only the recorded hash can
+    // refuse the swapped bytes.
+    assert!(controller
+        .blob_reoffer_file_at(
+            &host.endpoint_id(),
+            files.root,
+            &files.path("source.bin"),
+            expected,
+            original.len() as u64,
+            mtime_ms(&path),
+            original.len() as u64,
+            &pin,
+        )
+        .is_err());
+    assert!(!controller
+        .blob_job_offer_contains(&host.endpoint_id(), blake3::hash(replacement).as_bytes(),));
+    std::fs::write(&path, original).unwrap();
+    let (hash, size) = controller
+        .blob_reoffer_file_at(
+            &host.endpoint_id(),
+            files.root,
+            &files.path("source.bin"),
+            expected,
+            original.len() as u64,
+            mtime_ms(&path),
+            original.len() as u64,
+            &pin,
+        )
+        .unwrap();
+    assert_eq!(hash.as_bytes(), &expected);
+    assert_eq!(size, original.len() as u64);
+}
+
+#[test]
 fn concurrent_jobs_sharing_content_preserve_access() {
     let (host, controller, host_scratch, controller_scratch) = setup("share-hash");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     // Same bytes in two distinct source files (same hash, different paths).
     let bytes = payload(1024, 303);
     std::fs::write(controller_scratch.join("root/a.txt"), &bytes).unwrap();
     std::fs::write(controller_scratch.join("root/b.txt"), &bytes).unwrap();
     controller.connect(&host.endpoint_id()).unwrap();
     let job_a = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "a.txt", 0, "got-a")
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("a.txt"),
+            host_files.root,
+            &host_files.path("got-a"),
+        )
         .unwrap();
     let job_b = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "b.txt", 0, "got-b")
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("b.txt"),
+            host_files.root,
+            &host_files.path("got-b"),
+        )
         .unwrap();
     // Host adopts sender ids, so receiver ids equal sender ids.
     let rx_a = job_a;
@@ -1356,8 +1735,14 @@ fn cross_filesystem_publication_succeeds() {
     for (core, scratch) in [(&host, &host_scratch), (&controller, &controller_scratch)] {
         std::fs::create_dir_all(scratch.join("root")).unwrap();
         core.set_blob_directory(scratch.join("blobs")).unwrap();
-        core.set_file_roots(vec![scratch.join("root")]).unwrap();
+        core.enable_filesystem_access().unwrap();
     }
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     // If shm usable, move controller blobs to shm (cross-mount for upload:
     // staging in controller blobs (shm)?? Actually staging is on receiver (host blobs).
     // For upload (controller sender, host receiver), staging on host blobs.
@@ -1390,7 +1775,13 @@ fn cross_filesystem_publication_succeeds() {
             .unwrap();
         controller.connect(&host.endpoint_id()).unwrap();
         let job = controller
-            .job_submit_upload(&host.endpoint_id(), 0, "a.txt", 0, "got")
+            .job_submit_upload(
+                &host.endpoint_id(),
+                controller_files.root,
+                &controller_files.path("a.txt"),
+                host_files.root,
+                &host_files.path("got"),
+            )
             .unwrap();
         let rx = receiver_id(&host, job);
         let (sender, receiver) = drive_to_end(&controller, job, &host, rx);
@@ -1417,7 +1808,13 @@ fn cross_filesystem_publication_succeeds() {
             .unwrap();
         controller.connect(&host.endpoint_id()).unwrap();
         let job = controller
-            .job_submit_upload(&host.endpoint_id(), 0, "a.txt", 0, "got")
+            .job_submit_upload(
+                &host.endpoint_id(),
+                controller_files.root,
+                &controller_files.path("a.txt"),
+                host_files.root,
+                &host_files.path("got"),
+            )
             .unwrap();
         let rx = receiver_id(&host, job);
         let (sender, receiver) = drive_to_end(&controller, job, &host, rx);
@@ -1428,13 +1825,26 @@ fn cross_filesystem_publication_succeeds() {
 
 #[test]
 fn completed_and_forgotten_receivers_reclaim_payloads_without_deleting_destinations() {
-    let _heavy = HEAVY_JOB.lock().unwrap();
+    let _heavy = HEAVY_JOB
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let (host, controller, host_disk, controller_disk) = setup("reclaim");
+    let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &host_disk.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_disk.join("root"),
+    );
     let bytes = payload(64 * 1024, 707);
     std::fs::write(controller_disk.join("root/payload.bin"), &bytes).unwrap();
     controller.connect(&host.endpoint_id()).unwrap();
     let id = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "payload.bin", 0, "")
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("payload.bin"),
+            host_files.root,
+            &host_files.path(""),
+        )
         .unwrap();
     let hash = iroh_blobs::Hash::new(&bytes);
     let (_, received) = drive_to_end(&controller, id, &host, id);
@@ -1456,7 +1866,13 @@ fn completed_and_forgotten_receivers_reclaim_payloads_without_deleting_destinati
     let second = payload(64 * 1024, 708);
     std::fs::write(controller_disk.join("root/partial.bin"), &second).unwrap();
     let id = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "partial.bin", 0, "")
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("partial.bin"),
+            host_files.root,
+            &host_files.path(""),
+        )
         .unwrap();
     let hash = iroh_blobs::Hash::new(&second);
     host.blob_fetch_streamed(&controller.endpoint_id(), hash, None, None)
@@ -1490,11 +1906,22 @@ fn completed_and_forgotten_receivers_reclaim_payloads_without_deleting_destinati
 #[test]
 fn receiver_side_keep_both_unblocks_a_sender_already_mirroring_the_conflict() {
     let (host, controller, host_disk, controller_disk) = setup("receiver-choice");
+    let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &host_disk.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_disk.join("root"),
+    );
     std::fs::write(controller_disk.join("root/file.txt"), b"incoming").unwrap();
     std::fs::write(host_disk.join("root/file.txt"), b"original").unwrap();
     controller.connect(&host.endpoint_id()).unwrap();
     let id = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "file.txt", 0, "")
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("file.txt"),
+            host_files.root,
+            &host_files.path(""),
+        )
         .unwrap();
     assert_eq!(host.job_poll(id).unwrap().state, JobState::WaitingDecision);
     assert_eq!(
@@ -1554,6 +1981,9 @@ fn neutral_service_jobs_complete_both_directions_without_desktop() {
 
 fn service_jobs_complete_both_directions(neutral: bool) {
     let (host, controller, hs, cs) = setup("owned-both");
+    let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &hs.join("root"));
+    let controller_files =
+        FilesystemLocation::new(controller.file_roots().unwrap(), &cs.join("root"));
     let upload_bytes = payload(8192, 113);
     let download_bytes = payload(16384, 117);
     std::fs::write(cs.join("root/up.bin"), &upload_bytes).unwrap();
@@ -1589,7 +2019,14 @@ fn service_jobs_complete_both_directions(neutral: bool) {
         owned_files(&controller, &host)
     };
     let up = controller
-        .files_service_upload(owner.id, owner.generation, 0, "up.bin", 0, "uploads")
+        .files_service_upload(
+            owner.id,
+            owner.generation,
+            controller_files.root,
+            &controller_files.path("up.bin"),
+            host_files.root,
+            &host_files.path("uploads"),
+        )
         .unwrap();
     if !neutral {
         let desktop = controller
@@ -1611,7 +2048,14 @@ fn service_jobs_complete_both_directions(neutral: bool) {
         (JobState::Complete, JobState::Complete)
     );
     let down = controller
-        .files_service_download(owner.id, owner.generation, 0, "down.bin", 0, "downloads")
+        .files_service_download(
+            owner.id,
+            owner.generation,
+            host_files.root,
+            &host_files.path("down.bin"),
+            controller_files.root,
+            &controller_files.path("downloads"),
+        )
         .unwrap();
     let tx = host
         .job_list()
@@ -1650,6 +2094,9 @@ fn service_jobs_complete_both_directions(neutral: bool) {
 #[test]
 fn service_jobs_close_preserves_legacy_job_sharing_the_same_hash() {
     let (host, controller, hs, cs) = setup("owned-shared");
+    let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &hs.join("root"));
+    let controller_files =
+        FilesystemLocation::new(controller.file_roots().unwrap(), &cs.join("root"));
     let bytes = payload(32768, 123);
     std::fs::write(cs.join("root/same.bin"), &bytes).unwrap();
     let (owner, pipe) = owned_files(&controller, &host);
@@ -1661,11 +2108,24 @@ fn service_jobs_close_preserves_legacy_job_sharing_the_same_hash() {
         )
         .unwrap();
     let scoped = controller
-        .files_service_upload(owner.id, owner.generation, 0, "same.bin", 0, "cancelled")
+        .files_service_upload(
+            owner.id,
+            owner.generation,
+            controller_files.root,
+            &controller_files.path("same.bin"),
+            host_files.root,
+            &host_files.path("cancelled"),
+        )
         .unwrap();
     let scoped_rx = host.job_list().unwrap()[0].id;
     let legacy = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "same.bin", 0, "kept")
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("same.bin"),
+            host_files.root,
+            &host_files.path("kept"),
+        )
         .unwrap();
     let legacy_rx = host
         .job_list()
@@ -1711,10 +2171,20 @@ fn service_jobs_close_preserves_legacy_job_sharing_the_same_hash() {
 #[test]
 fn service_jobs_host_close_stops_download_and_rejects_new_work() {
     let (host, controller, hs, cs) = setup("owned-host-close");
+    let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &hs.join("root"));
+    let controller_files =
+        FilesystemLocation::new(controller.file_roots().unwrap(), &cs.join("root"));
     std::fs::write(hs.join("root/a.bin"), payload(8192, 137)).unwrap();
     let (owner, pipe) = owned_files(&controller, &host);
     let job = controller
-        .files_service_download(owner.id, owner.generation, 0, "a.bin", 0, "cancelled")
+        .files_service_download(
+            owner.id,
+            owner.generation,
+            host_files.root,
+            &host_files.path("a.bin"),
+            controller_files.root,
+            &controller_files.path("cancelled"),
+        )
         .unwrap();
     let tx = host.job_list().unwrap()[0].id;
     let hosted = host.hosted_services().unwrap()[0].clone();
@@ -1724,7 +2194,14 @@ fn service_jobs_host_close_stops_download_and_rejects_new_work() {
     await_jobs(|| pipe.is_cancelled());
     await_jobs(|| controller.job_snapshot(job).unwrap().state == JobState::Cancelled);
     assert!(matches!(
-        controller.files_service_download(owner.id, owner.generation, 0, "a.bin", 0, "later"),
+        controller.files_service_download(
+            owner.id,
+            owner.generation,
+            host_files.root,
+            &host_files.path("a.bin"),
+            controller_files.root,
+            &controller_files.path("later")
+        ),
         Err(Error::NoSession)
     ));
     assert!(!cs.join("root/cancelled").exists());
@@ -1740,13 +2217,23 @@ fn service_jobs_host_close_stops_download_and_rejects_new_work() {
 #[test]
 fn service_jobs_require_peer_admission_and_explicit_adoption_after_restart() {
     let (host, controller, _hs, cs) = setup("owned-admit-restart");
+    let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &_hs.join("root"));
+    let controller_files =
+        FilesystemLocation::new(controller.file_roots().unwrap(), &cs.join("root"));
     std::fs::write(cs.join("root/a.bin"), payload(4096, 139)).unwrap();
     let session = controller.connect(&host.endpoint_id()).unwrap();
     let owner = controller
         .attach_controller_service(session.id, session.generation, crate::ServiceKind::Files)
         .unwrap();
     assert!(controller
-        .files_service_upload(owner.id, owner.generation, 0, "a.bin", 0, "refused")
+        .files_service_upload(
+            owner.id,
+            owner.generation,
+            controller_files.root,
+            &controller_files.path("a.bin"),
+            host_files.root,
+            &host_files.path("refused")
+        )
         .is_err());
     assert!(host.job_list().unwrap().is_empty());
     assert!(controller.job_list().unwrap().is_empty());
@@ -1769,7 +2256,14 @@ fn service_jobs_require_peer_admission_and_explicit_adoption_after_restart() {
         .open_files_service(owner.id, owner.generation)
         .unwrap();
     let job = controller
-        .files_service_upload(owner.id, owner.generation, 0, "a.bin", 0, "cancelled")
+        .files_service_upload(
+            owner.id,
+            owner.generation,
+            controller_files.root,
+            &controller_files.path("a.bin"),
+            host_files.root,
+            &host_files.path("cancelled"),
+        )
         .unwrap();
     pipe.close();
     await_jobs(|| controller.job_snapshot(job).unwrap().state == JobState::Cancelled);
@@ -1788,15 +2282,18 @@ fn service_jobs_require_peer_admission_and_explicit_adoption_after_restart() {
 #[test]
 fn service_jobs_closing_one_computer_keeps_another_transfer_active() {
     let (first, controller, first_disk, cs) = setup("owned-multiple");
+    let host_files = FilesystemLocation::new(first.file_roots().unwrap(), &first_disk.join("root"));
+    let controller_files =
+        FilesystemLocation::new(controller.file_roots().unwrap(), &cs.join("root"));
     let second = start_direct();
     let second_disk = Scratch::tagged("owned-second-host");
     std::fs::create_dir(second_disk.join("root")).unwrap();
     second
         .set_blob_directory(second_disk.join("blobs"))
         .unwrap();
-    second
-        .set_file_roots(vec![second_disk.join("root")])
-        .unwrap();
+    second.enable_filesystem_access().unwrap();
+    let second_files =
+        FilesystemLocation::new(second.file_roots().unwrap(), &second_disk.join("root"));
     pair_with_transfer(&second, &controller);
     controller
         .authorize(
@@ -1814,10 +2311,24 @@ fn service_jobs_closing_one_computer_keeps_another_transfer_active() {
     let (one, _one_pipe) = owned_files(&controller, &first);
     let (two, _two_pipe) = owned_files(&controller, &second);
     let cancelled = controller
-        .files_service_upload(one.id, one.generation, 0, "shared.bin", 0, "cancelled")
+        .files_service_upload(
+            one.id,
+            one.generation,
+            controller_files.root,
+            &controller_files.path("shared.bin"),
+            host_files.root,
+            &host_files.path("cancelled"),
+        )
         .unwrap();
     let kept = controller
-        .files_service_upload(two.id, two.generation, 0, "shared.bin", 0, "kept")
+        .files_service_upload(
+            two.id,
+            two.generation,
+            controller_files.root,
+            &controller_files.path("shared.bin"),
+            second_files.root,
+            &second_files.path("kept"),
+        )
         .unwrap();
     // A tab cannot use another tab's job ID, even though both jobs live
     // in the same engine and share the same source hash.
@@ -1913,6 +2424,12 @@ fn service_jobs_closing_one_computer_keeps_another_transfer_active() {
 #[test]
 fn files_job_explicit_adoption_rebinds_both_sides_and_fences_old_handle() {
     let (host, controller, host_scratch, controller_scratch) = setup("adopt-job");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
     let bytes = payload(1024 * 1024, 903);
     std::fs::write(controller_scratch.join("root/adopt.bin"), &bytes).unwrap();
     let session = controller.connect(&host.endpoint_id()).unwrap();
@@ -1925,7 +2442,14 @@ fn files_job_explicit_adoption_rebinds_both_sides_and_fences_old_handle() {
     };
     let (old, pipe) = scoped_files(&controller, &session);
     let job = controller
-        .files_service_upload(old.id, old.generation, 0, "adopt.bin", 0, "adopted")
+        .files_service_upload(
+            old.id,
+            old.generation,
+            controller_files.root,
+            &controller_files.path("adopt.bin"),
+            host_files.root,
+            &host_files.path("adopted"),
+        )
         .unwrap();
     let receiver = host.job_list().unwrap()[0].id;
     controller
@@ -1977,6 +2501,9 @@ fn files_job_explicit_adoption_rebinds_both_sides_and_fences_old_handle() {
 #[test]
 fn files_download_adoption_after_parent_replacement_preserves_verified_progress() {
     let (host, controller, hs, cs) = setup("adopt-download-reconnect");
+    let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &hs.join("root"));
+    let controller_files =
+        FilesystemLocation::new(controller.file_roots().unwrap(), &cs.join("root"));
     std::fs::create_dir_all(hs.join("root/source")).unwrap();
     let first = payload(65536, 912);
     let second = payload(131072, 913);
@@ -2004,7 +2531,14 @@ fn files_download_adoption_after_parent_replacement_preserves_verified_progress(
         .open_files_service(old.id, old.generation)
         .unwrap();
     let job = controller
-        .files_service_download(old.id, old.generation, 0, "source", 0, "received")
+        .files_service_download(
+            old.id,
+            old.generation,
+            host_files.root,
+            &host_files.path("source"),
+            controller_files.root,
+            &controller_files.path("received"),
+        )
         .unwrap();
     let sender = host
         .job_list()
@@ -2027,6 +2561,28 @@ fn files_download_adoption_after_parent_replacement_preserves_verified_progress(
     let end = std::time::Instant::now() + Duration::from_secs(5);
     while !host.hosted_services().unwrap().is_empty() {
         assert!(std::time::Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // Stream retirement on the host and parent retirement on the controller
+    // are independent observations. A Stopping parent still reserves its peer.
+    loop {
+        match controller.controller_session(session.id) {
+            Ok(info)
+                if matches!(
+                    info.phase,
+                    crate::SessionPhase::Closed | crate::SessionPhase::Failed(_)
+                ) =>
+            {
+                break
+            }
+            Err(Error::NoSession) => break,
+            Ok(_) => {}
+            Err(error) => panic!("parent retirement failed: {error}"),
+        }
+        assert!(
+            std::time::Instant::now() < end,
+            "old controller parent remained live"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
     let fresh_session = connect();
@@ -2067,6 +2623,9 @@ fn files_download_adoption_after_parent_replacement_preserves_verified_progress(
 #[test]
 fn files_adoption_survives_both_core_restarts_with_verified_download() {
     let (host, controller, hs, cs) = setup("adopt-both-restart");
+    let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &hs.join("root"));
+    let controller_files =
+        FilesystemLocation::new(controller.file_roots().unwrap(), &cs.join("root"));
     std::fs::create_dir(hs.join("root/pack")).unwrap();
     let first = payload(32768, 940);
     let second = payload(65536, 941);
@@ -2090,7 +2649,14 @@ fn files_adoption_survives_both_core_restarts_with_verified_download() {
     };
     let (old, pipe) = connect_files(&controller, &host);
     let job = controller
-        .files_service_download(old.id, old.generation, 0, "pack", 0, "received")
+        .files_service_download(
+            old.id,
+            old.generation,
+            host_files.root,
+            &host_files.path("pack"),
+            controller_files.root,
+            &controller_files.path("received"),
+        )
         .unwrap();
     let peer_job = host
         .job_list()
@@ -2126,7 +2692,7 @@ fn files_adoption_survives_both_core_restarts_with_verified_download() {
         core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
             .unwrap();
         core.set_blob_directory(scratch.join("blobs")).unwrap();
-        core.set_file_roots(vec![scratch.join("root")]).unwrap();
+        core.enable_filesystem_access().unwrap();
         core
     };
     let host = reopen(host_key, &hs);
@@ -2174,6 +2740,9 @@ fn files_adoption_survives_both_core_restarts_with_verified_download() {
 #[test]
 fn files_adoption_local_save_failure_can_retry_remote_acknowledged_binding() {
     let (host, controller, hs, cs) = setup("adopt-save-retry");
+    let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &hs.join("root"));
+    let controller_files =
+        FilesystemLocation::new(controller.file_roots().unwrap(), &cs.join("root"));
     let expected = payload(65536, 942);
     std::fs::write(cs.join("root/source.bin"), &expected).unwrap();
     let pending = controller
@@ -2194,7 +2763,14 @@ fn files_adoption_local_save_failure_can_retry_remote_acknowledged_binding() {
     };
     let (old, pipe) = open();
     let job = controller
-        .files_service_upload(old.id, old.generation, 0, "source.bin", 0, "received")
+        .files_service_upload(
+            old.id,
+            old.generation,
+            controller_files.root,
+            &controller_files.path("source.bin"),
+            host_files.root,
+            &host_files.path("received"),
+        )
         .unwrap();
     let peer_job = host.job_list().unwrap()[0].id;
     controller
@@ -2242,7 +2818,7 @@ fn files_adoption_local_save_failure_can_retry_remote_acknowledged_binding() {
 #[test]
 #[cfg(unix)]
 fn resume_reoffer_enforces_size_limit_before_import_and_accepts_exact_boundary() {
-    let (host, controller, _host_scratch, controller_scratch) = setup("resume-limit");
+    let (host, controller, _host_scratch, controller_scratch) = setup_confined("resume-limit");
     let bytes = payload(64 * 1024, 99);
     let path = controller_scratch.join("root/resume.bin");
     std::fs::write(&path, &bytes).unwrap();
@@ -2290,6 +2866,9 @@ fn resume_reoffer_enforces_size_limit_before_import_and_accepts_exact_boundary()
 #[test]
 fn receiver_resource_budget_refuses_before_fetch_and_preserves_source_and_destination() {
     let (host, controller, hs, cs) = setup("resource-admission");
+    let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &hs.join("root"));
+    let controller_files =
+        FilesystemLocation::new(controller.file_roots().unwrap(), &cs.join("root"));
     let bytes = payload(64 * 1024, 314);
     std::fs::write(cs.join("root/send.bin"), &bytes).unwrap();
     let hash = iroh_blobs::Hash::new(&bytes);
@@ -2301,7 +2880,13 @@ fn receiver_resource_budget_refuses_before_fetch_and_preserves_source_and_destin
     .unwrap();
     controller.connect(&host.endpoint_id()).unwrap();
     let sent = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "", 0, "arrived")
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path(""),
+            host_files.root,
+            &host_files.path("arrived"),
+        )
         .unwrap();
     let rx = receiver_id(&host, sent);
     let failed = host.job_poll(rx).unwrap();
@@ -2312,7 +2897,7 @@ fn receiver_resource_budget_refuses_before_fetch_and_preserves_source_and_destin
     );
     assert_eq!(failed.done_bytes, 0);
     assert!(!host.blob_has(hash).unwrap());
-    assert!(!hs.join("root/arrived/send.bin").exists());
+    assert!(!hs.join("root/arrived/root/send.bin").exists());
     assert_eq!(std::fs::read(cs.join("root/send.bin")).unwrap(), bytes);
     let sender = controller.job_poll(sent).unwrap();
     assert_eq!(sender.state, JobState::Failed);
@@ -2324,7 +2909,7 @@ fn receiver_resource_budget_refuses_before_fetch_and_preserves_source_and_destin
 #[test]
 #[cfg(unix)]
 fn restart_reconciles_managed_orphans_but_keeps_interrupted_staging() {
-    let (host, controller, hs, cs) = setup("stage-crash");
+    let (host, controller, hs, cs) = setup_confined("stage-crash");
     std::fs::write(cs.join("root/source.bin"), b"source survives crash").unwrap();
     controller.connect(&host.endpoint_id()).unwrap();
     let sent = controller
@@ -2437,7 +3022,7 @@ fn revoked_cross_volume_publish_never_lands_and_locks_stay_free() {
     let _heavy = HEAVY_JOB
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
-    let (host, controller, host_scratch, controller_scratch) = setup("prestage");
+    let (host, controller, host_scratch, controller_scratch) = setup_confined("prestage");
     std::fs::write(
         controller_scratch.join("root/big.bin"),
         payload(200 * 1024, 7),
@@ -2634,7 +3219,7 @@ fn parked_mkdir_and_stage_sync_leave_locks_free() {
     let _heavy = HEAVY_JOB
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
-    let (host, controller, host_scratch, controller_scratch) = setup("pubgate");
+    let (host, controller, host_scratch, controller_scratch) = setup_confined("pubgate");
     std::fs::write(
         controller_scratch.join("root/big.bin"),
         payload(200 * 1024, 7),
@@ -2786,10 +3371,11 @@ fn poll_until_interrupted(receiver: &Core, job: u64) {
 }
 
 #[test]
+#[cfg(unix)]
 fn rebound_source_interrupts_and_restores() {
     // The controller uploads: the dialed side cannot rebind mid-session
     // (Busy), so the sender leg under test is the dialer's own.
-    let (host, controller, host_scratch, controller_scratch) = setup("rebind-src");
+    let (host, controller, host_scratch, controller_scratch) = setup_confined("rebind-src");
     let controller_root = controller_scratch.join("root");
     let one = payload(512, 1603);
     let two = payload(512, 1604);
@@ -2836,8 +3422,9 @@ fn rebound_source_interrupts_and_restores() {
 }
 
 #[test]
+#[cfg(unix)]
 fn rebound_destination_interrupts_without_writing() {
-    let (host, controller, _host_scratch, controller_scratch) = setup("rebind-dst");
+    let (host, controller, _host_scratch, controller_scratch) = setup_confined("rebind-dst");
     let host_root = _host_scratch.join("root");
     let one = payload(512, 1605);
     let two = payload(512, 1606);
@@ -2880,8 +3467,9 @@ fn rebound_destination_interrupts_without_writing() {
 }
 
 #[test]
+#[cfg(unix)]
 fn replace_approval_stays_bound_to_original_across_rebind() {
-    let (host, controller, host_scratch, controller_scratch) = setup("rebind-choice");
+    let (host, controller, host_scratch, controller_scratch) = setup_confined("rebind-choice");
     let remote = payload(512, 1610);
     std::fs::write(host_scratch.join("root/one.txt"), &remote).unwrap();
     let got = controller_scratch.join("root/got");
@@ -2935,8 +3523,9 @@ fn replace_approval_stays_bound_to_original_across_rebind() {
 }
 
 #[test]
+#[cfg(unix)]
 fn persisted_replace_refuses_replaced_root_at_same_path() {
-    let (host, controller, host_scratch, controller_scratch) = setup("same-path-replace");
+    let (host, controller, host_scratch, controller_scratch) = setup_confined("same-path-replace");
     std::fs::write(host_scratch.join("root/one.txt"), payload(512, 1701)).unwrap();
     let root = controller_scratch.join("root");
     std::fs::create_dir_all(root.join("got")).unwrap();
@@ -2998,8 +3587,9 @@ fn persisted_replace_refuses_replaced_root_at_same_path() {
 }
 
 #[test]
+#[cfg(unix)]
 fn resume_after_source_rebind_fails_with_rebound_cause() {
-    let (host, controller, host_scratch, controller_scratch) = setup("rebind-resume");
+    let (host, controller, host_scratch, controller_scratch) = setup_confined("rebind-resume");
     let host_root = host_scratch.join("root");
     let one = payload(512, 1607);
     let two = payload(512, 1608);
@@ -3096,7 +3686,7 @@ impl Drop for RebindProbeGuard {
 fn open_handle_completes_across_source_rebind() {
     // The controller uploads: the dialed side cannot rebind mid-session
     // (Busy), so the sender leg under test is the dialer's own.
-    let (host, controller, host_scratch, controller_scratch) = setup("rebind-flight");
+    let (host, controller, host_scratch, controller_scratch) = setup_confined("rebind-flight");
     let controller_root = controller_scratch.join("root");
     let one = payload(512, 1601);
     let two = payload(512, 1602);

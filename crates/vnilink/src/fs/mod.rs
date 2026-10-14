@@ -3,14 +3,16 @@
 //! Owner-approved roots bound every operation: a relative path under one
 //! root can never escape it, and a parent directory replaced by a symlink
 //! between listing and mutation is refused. Directory listings are paged and
-//! sorted; rename is a true same-directory filesystem rename with
-//! no-replace semantics, never copy/delete.
+//! sorted. Rename is a true same-directory filesystem rename with
+//! no-replace semantics and never copies. Delete unlinks a file in place,
+//! or renames a folder aside and removes that tree without following links.
 //!
 //! The legacy single-file transfer directory is a separate setting with its
 //! own grant history. These roots start empty: nothing is browsable until
 //! the owner sets them, so no pairing or transfer grant silently widens
 //! into whole-filesystem access.
 
+mod delete;
 mod entry;
 mod list;
 mod mkdir;
@@ -19,6 +21,9 @@ mod rename;
 mod roots;
 mod wire;
 
+pub(crate) use delete::{
+    failure_message, finish_delete, stage_delete, DELETE_FAILED, DELETE_INCOMPLETE,
+};
 pub(crate) use list::{list_page, list_page_async, ListHooks};
 pub(crate) use mkdir::create_dir;
 pub(crate) use path::{check_name, check_rel};

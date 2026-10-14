@@ -1,3 +1,4 @@
+use super::filesystem_location::FilesystemLocation;
 use std::sync::{Arc, Mutex};
 
 use crate::error::Error;
@@ -460,7 +461,8 @@ fn concurrent_peers_operate_independently_within_capacity() {
     .unwrap();
     let root = std::env::temp_dir().join(format!("vnilink-multi-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
-    host.set_file_roots(vec![root.clone()]).unwrap();
+    host.enable_filesystem_access().unwrap();
+    let location = FilesystemLocation::new(host.file_roots().unwrap(), &root);
     host.authorize_service(&worker.endpoint_id(), crate::ServiceKind::Files, true)
         .unwrap();
     host.authorize(
@@ -557,8 +559,8 @@ fn concurrent_peers_operate_independently_within_capacity() {
         .fs_mkdir(
             files_session.id,
             files_session.generation,
-            0,
-            "",
+            location.root,
+            &location.path(""),
             "from-worker",
         )
         .unwrap();
