@@ -35,7 +35,11 @@ export class TabService extends Disposable implements ITabService {
 			tab.dispose();
 			throw new Error('Invalid tab identity or action IDs');
 		}
-		this.inputs.push(tab);
+		if (tab.permanent) {
+			this.inputs.splice(this.inputs.filter(input => input.permanent).length, 0, tab);
+		} else {
+			this.inputs.push(tab);
+		}
 		const store = new DisposableStore();
 		this.listeners.set(tab, store);
 		if (tab.onDidChangeActions) {
@@ -57,11 +61,12 @@ export class TabService extends Disposable implements ITabService {
 	}
 	public move(id: string, index: number): void {
 		const previous = this.inputs.findIndex((input) => input.id === id);
-		if (previous < 0 || !Number.isInteger(index)) {
+		if (previous < 0 || !Number.isInteger(index) || this.inputs[previous].permanent) {
 			return;
 		}
 		const tab = this.inputs.splice(previous, 1)[0];
-		this.inputs.splice(Math.max(0, Math.min(index, this.inputs.length)), 0, tab);
+		const firstMovable = this.inputs.filter(input => input.permanent).length;
+		this.inputs.splice(Math.max(firstMovable, Math.min(index, this.inputs.length)), 0, tab);
 		this.changed.fire();
 	}
 	public close(id: string): Promise<boolean> {
@@ -70,7 +75,7 @@ export class TabService extends Disposable implements ITabService {
 			return pending;
 		}
 		const tab = this.inputs.find((input) => input.id === id);
-		if (!tab) {
+		if (!tab || tab.permanent) {
 			return Promise.resolve(false);
 		}
 		const operation = Promise.resolve()

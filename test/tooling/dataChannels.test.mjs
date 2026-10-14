@@ -174,3 +174,32 @@ test('cancel passes through renderer and utility while progress is pending', asy
 		}
 	}
 });
+
+test('media channels require matching bounded source configuration and reject extra authority', () => {
+	const request = { requestId: 'media', kind: 'camera', sessionId: '1', generation: '1', media: { type: 'camera', deviceId: 'camera-1', width: 1280, height: 720, fps: 30 } };
+	assert(isChannelRequest(request));
+	assert(!isChannelRequest({ ...request, media: undefined }));
+	assert(!isChannelRequest({ ...request, kind: 'audio' }));
+	assert(!isChannelRequest({ ...request, kind: 'video' }));
+	assert(!isChannelRequest({ ...request, media: { ...request.media, width: 8192 } }));
+	assert(!isChannelRequest({ ...request, media: { ...request.media, width: 1279 } }));
+	assert(!isChannelRequest({ ...request, media: { ...request.media, fps: 61 } }));
+	assert(!isChannelRequest({ ...request, media: { ...request.media, endpointId: 'other' } }));
+	const audio = { ...request, kind: 'audio', media: { type: 'audio', deviceId: 'mic-1', sourceKind: 'Microphone', channels: 1, voice: true } };
+	assert(isChannelRequest(audio));
+	assert(!isChannelRequest({ ...audio, media: { ...audio.media, channels: 3 } }));
+	assert(!isChannelRequest({ ...audio, media: { ...audio.media, sourceKind: 'output' } }));
+});
+
+test('video publication identifies its codec and refuses ambiguous packets', async () => {
+	const { isEngineCommand, isEngineReply } = await load('../../src/platform/engine/common/engine.ts');
+	for (const codec of ['h264', 'h265', 'vp8', 'vp9', 'av1']) {
+		const command = { type: 'publishVideo', codec, sessionId: '1', keyframe: true, timestampUs: '0', data: 'AQ==' };
+		assert(isEngineCommand(command));
+		const { codec: ignored, ...ambiguous } = command;
+		void ignored;
+		assert(!isEngineCommand(ambiguous));
+		assert(!isEngineCommand({ ...command, codec: 'other' }));
+		assert(isEngineReply({ type: 'videoFrame', frame: { codec, keyframe: true, timestamp_us: '0', data: 'AQ==', display_id: '1', revision: '1' } }));
+	}
+});

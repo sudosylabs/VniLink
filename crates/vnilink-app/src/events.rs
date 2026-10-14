@@ -66,24 +66,11 @@ impl VideoPoller {
         }
         Ok(self
             .inner
-            .recv_timeout(std::time::Duration::from_millis(timeout_ms))
-            .map(|frame| FfiEncodedFrame {
-                keyframe: frame.keyframe,
-                timestamp_us: frame.timestamp_us,
-                payload: frame.payload,
-                display_id: frame.display_id,
-                revision: frame.revision,
-            }))
+            .recv_timeout(std::time::Duration::from_millis(timeout_ms)))
     }
 
     pub fn try_recv(&self) -> Option<FfiEncodedFrame> {
-        self.inner.try_recv().map(|frame| FfiEncodedFrame {
-            keyframe: frame.keyframe,
-            timestamp_us: frame.timestamp_us,
-            payload: frame.payload,
-            display_id: frame.display_id,
-            revision: frame.revision,
-        })
+        self.inner.try_recv()
     }
 
     pub fn lagged(&self) -> u64 {

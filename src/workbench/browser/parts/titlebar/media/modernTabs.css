@@ -8,8 +8,8 @@
 .part.titlebar {
 	box-shadow: inset 0 -1px var(--line);
 
-	--tab-height: 24px;
-	--tab-radius: 6px;
+	--tab-height: 35px;
+	--tab-radius: 12px;
 	--tab-active-background: var(--canvas);
 	--tab-hover-background: color-mix(in srgb, var(--text) 8%, var(--chrome));
 }
@@ -17,6 +17,7 @@
 .tabs-and-actions-container {
 	align-items: stretch;
 	padding-left: 0;
+	-webkit-app-region: drag;
 }
 
 .tabs-container {
@@ -43,6 +44,7 @@
 	color: var(--muted);
 	cursor: pointer;
 	white-space: nowrap;
+	-webkit-app-region: no-drag;
 }
 
 .tab-fill {
@@ -78,7 +80,12 @@
 	z-index: 1;
 }
 
+.tab.permanent {
+	padding-right: 12px;
+}
+
 .tab-close {
+	-webkit-app-region: no-drag;
 	position: absolute;
 	z-index: 7;
 	top: calc((100% - 20px) / 2);
@@ -86,7 +93,7 @@
 	width: 20px;
 	height: 20px;
 	justify-content: center;
-	border-radius: var(--tab-radius);
+	border-radius: 3px;
 	background: transparent;
 	opacity: 0;
 	padding: 2px;
@@ -129,7 +136,8 @@
  * rounded shoulders replace the strip separator with the content surface. */
 
 .tabs-scrollable {
-	height: 100%;
+	align-self: flex-end;
+	height: calc(var(--tab-height) / var(--window-zoom, 1));
 }
 
 .tab[aria-selected='true'] > .tab-fill::before,

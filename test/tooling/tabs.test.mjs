@@ -66,3 +66,31 @@ test('concurrent close requests share approval and service disposal fences late 
 	await Promise.resolve(); assert.equal(approvals, 1); tabs.dispose(); approve(true);
 	assert.equal(await first, false); assert.equal(disposed, 1); assert.equal(tabs.tabs.length, 0);
 });
+
+test('permanent Home remains first and cannot be closed or reordered', async () => {
+	const tabs = new TabService();
+	let disposed = 0;
+	const home = tab('home', {
+		permanent: true, dispose() {
+			disposed++;
+		}
+	});
+	try {
+		tabs.open(tab('remote'));
+		tabs.open(home);
+		tabs.open(tab('terminal'));
+		assert.deepEqual(tabs.tabs.map(tab => tab.id), ['home', 'remote', 'terminal']);
+		tabs.move('home', 2);
+		tabs.move('terminal', 0);
+		assert.deepEqual(tabs.tabs.map(tab => tab.id), ['home', 'terminal', 'remote']);
+		assert.equal(await tabs.close('home'), false);
+		assert.equal(disposed, 0);
+		await tabs.close('remote');
+		await tabs.close('terminal');
+		assert.equal(tabs.activeTab, home);
+		assert.deepEqual(tabs.tabs, [home]);
+	} finally {
+		tabs.dispose();
+	}
+	assert.equal(disposed, 1);
+});

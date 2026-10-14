@@ -276,6 +276,7 @@ impl Core {
                 self.shared
                     .swap_control_command
                     .load(std::sync::atomic::Ordering::Relaxed),
+                *lock(&self.shared.pointer_defaults),
             ));
             if legacy {
                 *lock(&controller.subscriber) = lock(&self.shared.video_subscriber).clone();
@@ -292,7 +293,7 @@ impl Core {
                 quality: if services_only {
                     None
                 } else {
-                    Some(crate::session::controller_offer())
+                    Some(state.desktop_quality_default)
                 },
                 codec: crate::protocol::CODEC_H264,
                 separate_cursor: false,
@@ -555,7 +556,8 @@ pub(super) async fn establish(
     let files_only = files_only || retired;
     let services_only = services_only || retired;
     let addr = device_addr(&device)?;
-    let offer = crate::session::controller_offer();
+    let offer = lock(&shared.state).desktop_quality_default;
+    let codec_preference = lock(&shared.state).desktop_codec_default;
     // Neither non-desktop mode needs a decoder. Legacy Files uses v4;
     // neutral service admission requires v5, with no legacy fallback.
     let (decode, files_only_flag, hellos_vec) = if files_only {
@@ -597,8 +599,34 @@ pub(super) async fn establish(
                 ),
             );
         }
+        if !lock(&shared.video_caps).additional.is_empty() {
+            hellos.insert(
+                0,
+                (
+                    crate::protocol::PROTOCOL_VERSION,
+                    lock(&shared.video_caps).decoder_offer(),
+                ),
+            );
+        }
+        if let Some(codec) = codec_preference {
+            let caps = lock(&shared.video_caps).clone();
+            let preferred = caps.preferred_offer(Some(codec))?;
+            if codec == crate::VideoCodec::H264 {
+                hellos.retain(|(_, id)| {
+                    *id == crate::protocol::CODEC_H264 && caps.decode_baseline
+                        || *id == crate::protocol::CODEC_H264_HIGH && caps.decode_high
+                });
+                hellos.insert(0, (crate::protocol::PROTOCOL_VERSION, preferred));
+            } else {
+                hellos = vec![(crate::protocol::PROTOCOL_VERSION, preferred)];
+            }
+        }
         (decode, false, hellos)
     };
+    let mut hellos_vec = hellos_vec;
+    if services_only {
+        hellos_vec.push((5, crate::protocol::CODEC_H264));
+    }
     let mut hellos = hellos_vec.iter();
     let (connection, mut send, recv, info) = loop {
         let &(version, codec) = hellos.next().ok_or(Error::IncompatibleVersion)?;
@@ -646,8 +674,17 @@ pub(super) async fn establish(
                 } else {
                     agreed
                 };
-                if agreed != crate::protocol::CODEC_H264
-                    && agreed != crate::protocol::CODEC_H264_HIGH
+                if !files_only_flag
+                    && codec_preference
+                        .is_some_and(|c| crate::VideoCodec::from_wire_id(agreed) != Some(c))
+                {
+                    return Err(Error::IncompatibleVersion);
+                }
+                if !files_only_flag
+                    && !lock(&shared.video_caps).supports_decode(
+                        crate::VideoCodec::from_wire_id(agreed)
+                            .ok_or(Error::IncompatibleVersion)?,
+                    )
                 {
                     return Err(Error::IncompatibleVersion);
                 }
@@ -675,10 +712,12 @@ pub(super) async fn establish(
                         }
                         if session.generation > 0 {
                             let previous = session.controller.as_ref().ok_or(Error::NoSession)?;
+                            let pointer = lock(&previous.pointer).settings;
                             session.controller = Some(Arc::new(ControllerState::new(
                                 Arc::new(crate::video::VideoInbox::new()),
                                 previous.mode.load(std::sync::atomic::Ordering::Relaxed),
                                 previous.swap.load(std::sync::atomic::Ordering::Relaxed),
+                                pointer,
                             )));
                         }
                         session.wire_stamp = stamp;
@@ -803,6 +842,11 @@ pub(super) async fn establish(
             .filter(|s| s.separate_cursor)
             .map(|s| (s.wire_stamp, Arc::clone(&controller.cursor)))
     };
+    let expected_codec = lock(&shared.state)
+        .outgoing
+        .get(&local_id)
+        .ok_or(Error::NoSession)?
+        .codec;
     let reader = tokio::spawn(async move {
         if files_only {
             return;
@@ -819,6 +863,7 @@ pub(super) async fn establish(
             video_keyframe,
             &mut video_stop,
             cursor,
+            expected_codec,
         ) => {},
         }
     });

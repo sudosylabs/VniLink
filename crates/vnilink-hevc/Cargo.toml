@@ -1,0 +1,11 @@
+[package]
+name = "vnilink-hevc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Owned portable HEVC codec bindings for VniLink"
+[build-dependencies]
+shiguredo_cmake = "=4.4.0"
+cc = "1"

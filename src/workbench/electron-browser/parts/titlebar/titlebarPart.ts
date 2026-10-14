@@ -10,7 +10,7 @@ import { BrowserTitlebarPart } from '../../../browser/parts/titlebar/titlebarPar
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { INativeHostService, type IWindowState } from '../../../../platform/native/common/native.js';
-import { getNativeTitlebarHeight } from '../../../../platform/window/common/window.js';
+import { getWorkbenchTitlebarHeight } from '../../../../platform/window/common/titlebar.js';
 export class NativeTitlebarPart extends BrowserTitlebarPart {
 	private state: IWindowState | undefined;
 	private controls = '';
@@ -24,7 +24,7 @@ export class NativeTitlebarPart extends BrowserTitlebarPart {
 		@IInstantiationService instantiationService: IInstantiationService,
 	) {
 		super(onError, themeService, hostService, instantiationService);
-		this.height = Math.max(35, getNativeTitlebarHeight(osRelease));
+		this.height = getWorkbenchTitlebarHeight(osRelease);
 		this._register(
 			nativeHostService.onDidChangeWindowState((state) => {
 				this.acceptState(state);
@@ -50,14 +50,17 @@ export class NativeTitlebarPart extends BrowserTitlebarPart {
 		if (!this.container || !this.state) {
 			return;
 		}
+		document.documentElement.dataset.windowMaterial = this.state.backgroundMaterial;
 		const height = this.height / this.state.zoomFactor;
 		document.documentElement.style.setProperty('--window-zoom', String(this.state.zoomFactor));
 		this.container.hidden = this.state.fullscreen;
 		document.documentElement.style.setProperty('--titlebar-height', this.state.fullscreen ? '0px' : `${String(height)}px`);
 		this.container.style.height = String(height) + 'px';
 		const theme = this.themeService.getColorTheme();
+		this.container.style.backgroundColor = this.state.backgroundMaterial === 'none' ? theme.background
+			: this.state.backgroundMaterial === 'vibrancy' ? 'var(--native-chrome)' : 'transparent';
 		const foreground = this.active ? theme.foreground : theme.inactiveForeground;
-		const key = `${String(this.height)}:${theme.background}:${foreground}`;
+		const key = `${String(this.height)}:${theme.background}:${foreground}:${this.state.backgroundMaterial}`;
 		if (this.controls !== key) {
 			this.controls = key;
 			void this.nativeHostService

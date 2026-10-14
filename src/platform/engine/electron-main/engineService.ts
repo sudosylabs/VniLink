@@ -9,6 +9,9 @@ interface PendingReply { resolve(value: EngineReply): void; reject(error: Error)
 
 function timeoutFor(command: EngineCommand | { type: 'shutdown' }): number {
 	// Core dials block up to 75 seconds; every other call answers quickly.
+	if (command.type === 'shutdown' || command.type === 'startNativeScreenSharing') {
+		return 30000;
+	}
 	return command.type === 'connect' || command.type === 'connectFiles' ? 90000 : 10000;
 }
 
@@ -37,7 +40,7 @@ export class EngineService {
 		await new Promise<void>((resolve, reject) => {
 			const timeout = setTimeout(() => {
 				this.fail(new Error('Engine startup timed out')); reject(new Error('Engine startup timed out'));
-			}, 15000);
+			}, 60_000);
 			child.on('message', (message: unknown) => {
 				if (this.child !== child) {
 					return;

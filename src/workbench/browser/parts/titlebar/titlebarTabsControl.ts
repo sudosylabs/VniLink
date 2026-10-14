@@ -199,7 +199,7 @@ export class TitlebarTabsControl extends Disposable {
 		this.tablist.replaceChildren();
 		for (const tab of this.service.tabs) {
 			const element = document.createElement('div');
-			element.className = 'tab sizing-fit';
+			element.className = tab.permanent ? 'tab sizing-fit permanent' : 'tab sizing-fit';
 			element.dataset.tabId = tab.id;
 			element.id = `tab-${encodeURIComponent(tab.id)}`;
 			element.setAttribute('role', 'tab');
@@ -207,7 +207,7 @@ export class TitlebarTabsControl extends Disposable {
 			const active = this.service.activeTab === tab;
 			element.setAttribute('aria-selected', String(active));
 			element.tabIndex = active ? 0 : -1;
-			element.draggable = true;
+			element.draggable = !tab.permanent;
 			const fill = document.createElement('span');
 			fill.className = 'tab-fill';
 			element.append(fill);
@@ -218,13 +218,16 @@ export class TitlebarTabsControl extends Disposable {
 			label.className = 'tab-label';
 			label.textContent = tab.label;
 			element.title = tab.label;
-			const close = document.createElement('button');
-			close.type = 'button';
-			close.className = 'tab-close';
-			close.tabIndex = -1;
-			close.setAttribute('aria-label', nls.localize('tabs.close', 'Close {0}', tab.label));
-			close.append(renderIcon(Icons.close));
-			element.append(label, close);
+			element.append(label);
+			if (!tab.permanent) {
+				const close = document.createElement('button');
+				close.type = 'button';
+				close.className = 'tab-close';
+				close.tabIndex = -1;
+				close.setAttribute('aria-label', nls.localize('tabs.close', 'Close {0}', tab.label));
+				close.append(renderIcon(Icons.close));
+				element.append(close);
+			}
 			this.tablist.append(element);
 		}
 		this.actions.replaceChildren();

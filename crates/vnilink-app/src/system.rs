@@ -116,35 +116,7 @@ pub struct FfiHostSystemReport {
     pub session: FfiSessionState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FfiSystemPolicy {
-    pub allow_lock: bool,
-    pub allow_restart: bool,
-    pub allow_shutdown: bool,
-    pub allow_privacy: bool,
-}
-
-impl From<FfiSystemPolicy> for vnilink::SystemPolicy {
-    fn from(value: FfiSystemPolicy) -> Self {
-        Self {
-            allow_lock: value.allow_lock,
-            allow_restart: value.allow_restart,
-            allow_shutdown: value.allow_shutdown,
-            allow_privacy: value.allow_privacy,
-        }
-    }
-}
-
-impl From<vnilink::SystemPolicy> for FfiSystemPolicy {
-    fn from(value: vnilink::SystemPolicy) -> Self {
-        Self {
-            allow_lock: value.allow_lock,
-            allow_restart: value.allow_restart,
-            allow_shutdown: value.allow_shutdown,
-            allow_privacy: value.allow_privacy,
-        }
-    }
-}
+pub use vnilink::SystemPolicy as FfiSystemPolicy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiPrivacyState {
@@ -265,7 +237,7 @@ impl VnilinkCore {
         #[cfg(target_os = "macos")]
         {
             self.inner
-                .set_system_actions(Some(Arc::new(vnilink_macos::MacSystemActions)))
+                .set_system_actions(Some(Arc::new(vnilink_macos::MacSystemActions::default())))
                 .map_err(map_error)
         }
         #[cfg(target_os = "linux")]
@@ -277,7 +249,9 @@ impl VnilinkCore {
         #[cfg(windows)]
         {
             self.inner
-                .set_system_actions(Some(Arc::new(vnilink_windows::WindowsSystemActions)))
+                .set_system_actions(Some(Arc::new(
+                    vnilink_windows::WindowsSystemActions::default(),
+                )))
                 .map_err(map_error)
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]

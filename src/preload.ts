@@ -1,10 +1,13 @@
+import { isRestartState } from './platform/application/common/application.js';
+import { isPermissionCommand, isPermissionSnapshot } from './platform/permissions/common/permissions.js';
 import { isChannelRequest } from './platform/engine/common/dataChannel.js';
 import { isNativeHostRequest, isWindowState } from './platform/native/common/native.js';
-import { isEngineCommand, isEngineReply } from './platform/engine/common/engine.js';
+import { isEngineCommand, isEngineReply, isNativeScreenSources } from './platform/engine/common/engine.js';
 import { isEncryptionText } from './platform/encryption/common/encryption.js';
 import { contextBridge, ipcRenderer } from 'electron';
 import { isAppInfo } from './platform/ipc/common/desktopApi.js';
 import type { DesktopApi } from './platform/ipc/common/desktopApi.js';
+import { isConfigurationSnapshot, isConfigurationUpdate } from './platform/configuration/common/configuration.js';
 if (!process.sandboxed || !process.contextIsolated) {
 	throw new Error('Renderer isolation required');
 }
@@ -18,6 +21,74 @@ ipcRenderer.on('engine:data-port', (event, requestId: unknown) => {
 	window.postMessage({ type: 'vnilink:data-port', requestId }, location.origin, event.ports);
 });
 const api: DesktopApi = {
+	getCaptureDisplays: async () => {
+		const sources: unknown = await ipcRenderer.invoke('app:capture-displays');
+		if (!isNativeScreenSources(sources)) {
+			throw new Error('Invalid capture display reply');
+		}
+		return sources;
+	},
+	getRestartState: async () => {
+		const state: unknown = await ipcRenderer.invoke('app:restart-state');
+		if (!isRestartState(state)) {
+			throw new Error('Invalid restart state');
+		}
+		return state;
+	},
+	onRestartStateChanged: listener => {
+		const handler = (_event: Electron.IpcRendererEvent, state: unknown): void => {
+			if (isRestartState(state)) {
+				listener(state);
+			}
+		};
+		ipcRenderer.on('app:restart-state', handler); return () => {
+			ipcRenderer.removeListener('app:restart-state', handler);
+		};
+	},
+	restartApplication: async () => {
+		await ipcRenderer.invoke('app:restart');
+	},
+	openRelayDocumentation: async () => {
+		await ipcRenderer.invoke('app:relay-documentation');
+	},
+	permissionCommand: async command => {
+		if (!isPermissionCommand(command)) {
+			throw new Error('Invalid permission command');
+		}
+		const snapshot: unknown = await ipcRenderer.invoke('permissions:command', command);
+		if (!isPermissionSnapshot(snapshot)) {
+			throw new Error('Invalid permission snapshot');
+		}
+		return snapshot;
+	},
+	getConfiguration: async () => {
+		const snapshot: unknown = await ipcRenderer.invoke('configuration:get');
+		if (!isConfigurationSnapshot(snapshot)) {
+			throw new Error('Invalid configuration');
+		}
+		return snapshot;
+	},
+	updateConfiguration: async change => {
+		if (!isConfigurationUpdate(change)) {
+			throw new Error('Invalid configuration update');
+		}
+		const snapshot: unknown = await ipcRenderer.invoke('configuration:update', change);
+		if (!isConfigurationSnapshot(snapshot)) {
+			throw new Error('Invalid configuration');
+		}
+		return snapshot;
+	},
+	onConfigurationChanged: listener => {
+		const handler = (_event: Electron.IpcRendererEvent, snapshot: unknown): void => {
+			if (isConfigurationSnapshot(snapshot)) {
+				listener(snapshot);
+			}
+		};
+		ipcRenderer.on('configuration:changed', handler);
+		return () => {
+			ipcRenderer.removeListener('configuration:changed', handler);
+		};
+	},
 	openDataChannel: async request => {
 		if (!isChannelRequest(request) || channelRequests.size >= 8 || channelRequests.has(request.requestId)) {
 			throw new Error('Invalid data channel request');

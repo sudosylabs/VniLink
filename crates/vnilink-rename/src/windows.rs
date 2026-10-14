@@ -2,6 +2,7 @@
 use std::{io, os::windows::ffi::OsStrExt, path::Path};
 #[link(name = "kernel32")]
 unsafe extern "system" {
+    fn GetLogicalDrives() -> u32;
     fn GetDiskFreeSpaceExW(
         path: *const u16,
         available: *mut u64,
@@ -244,4 +245,16 @@ pub fn delete_file_object(file: &std::fs::File) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+
+/// Mounted drive roots, without requesting additional filesystem privileges.
+pub fn drive_roots() -> io::Result<Vec<std::path::PathBuf>> {
+    let drives = unsafe { GetLogicalDrives() };
+    if drives == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((0..26)
+        .filter(|i| drives & (1 << i) != 0)
+        .map(|i| std::path::PathBuf::from(format!("{}:\\", char::from(b'A' + i))))
+        .collect())
 }

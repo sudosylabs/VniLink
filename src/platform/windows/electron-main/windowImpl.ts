@@ -5,13 +5,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { BrowserWindow } from 'electron';
+import type { WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
 import { release } from 'node:os';
 import { isMacintosh } from '../../../base/common/platform.js';
 import { getMacOSWindowControlsPosition } from '../../window/common/window.js';
 import type { IWindowControlsOptions } from '../../native/common/native.js';
 
 export class CodeWindow {
-	constructor(public readonly win: BrowserWindow) { }
+	constructor(public readonly win: BrowserWindow, private readonly material: WindowBackgroundMaterial = 'none') { }
 
 	public updateWindowControls(options: IWindowControlsOptions): void {
 		if (this.win.isDestroyed()) {
@@ -25,7 +26,7 @@ export class CodeWindow {
 			}
 		} else {
 			this.win.setTitleBarOverlay({
-				color: options.backgroundColor,
+				color: this.material === 'mica' ? '#00000000' : options.backgroundColor,
 				symbolColor: options.foregroundColor,
 				height: options.height ? options.height - 1 : undefined,
 			});

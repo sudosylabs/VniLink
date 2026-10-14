@@ -1,8 +1,10 @@
 import { isEngineCommand, record } from './engine.js';
 import type { EngineCommand } from './engine.js';
 
-export type DataChannelKind = 'video' | 'terminal' | 'input' | 'files';
+export type DataChannelKind = 'video' | 'terminal' | 'input' | 'files' | 'camera' | 'audio';
+export type MediaChannelConfig = { readonly type: 'camera'; readonly deviceId: string; readonly width: number; readonly height: number; readonly fps: number } | { readonly type: 'audio'; readonly deviceId: string; readonly sourceKind: 'Microphone' | 'System'; readonly channels: 1 | 2; readonly voice: boolean };
 export interface DataChannelRequest {
+	media?: MediaChannelConfig;
 	requestId: string;
 	kind: DataChannelKind;
 	sessionId: string;
@@ -28,12 +30,13 @@ export function isChannelRequest(value: unknown): value is DataChannelRequest {
 		record(value) &&
 		typeof value.requestId === 'string' &&
 		/^[a-zA-Z0-9-]{1,64}$/.test(value.requestId) &&
-		typeof value.kind === 'string' && ['video', 'terminal', 'input', 'files'].includes(value.kind) &&
+		typeof value.kind === 'string' && ['video', 'terminal', 'input', 'files', 'camera', 'audio'].includes(value.kind) &&
 		id(value.sessionId) &&
 		id(value.generation) &&
 		(value.kind !== 'terminal' || (dimension(value.rows) && dimension(value.columns))) &&
+		((value.kind === 'camera' || value.kind === 'audio') ? isMediaChannelConfig(value.media) && value.media.type === value.kind : value.media === undefined) &&
 		Object.keys(value).every((key) =>
-			['requestId', 'kind', 'sessionId', 'generation', 'rows', 'columns'].includes(key),
+			['requestId', 'kind', 'sessionId', 'generation', 'rows', 'columns', 'media'].includes(key),
 		)
 	);
 }
@@ -82,3 +85,13 @@ export type FileOperation =
 		dstPath: string;
 	}
 	| { type: 'poll' | 'cancel'; jobId: string };
+
+export function isMediaChannelConfig(value: unknown): value is MediaChannelConfig {
+	if (!record(value) || typeof value.deviceId !== 'string' || value.deviceId.length === 0 || value.deviceId.length > 256 || value.deviceId.includes('\0') || Object.keys(value).length !== 5) {
+		return false;
+	}
+	if (value.type === 'camera') {
+		return dimension(value.width) && value.width <= 4096 && value.width % 2 === 0 && dimension(value.height) && value.height <= 4096 && value.height % 2 === 0 && dimension(value.fps) && value.fps <= 60;
+	}
+	return value.type === 'audio' && (value.sourceKind === 'Microphone' || value.sourceKind === 'System') && (value.channels === 1 || value.channels === 2) && typeof value.voice === 'boolean';
+}

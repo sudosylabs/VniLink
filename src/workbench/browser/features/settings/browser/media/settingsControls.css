@@ -1,0 +1,86 @@
+.settings-section-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+}
+
+.settings-help {
+	display: block;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.5;
+	margin: 5px 0 0;
+}
+
+.settings-help:empty {
+	display: none;
+}
+
+.settings-control-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 24px;
+	padding: 14px 0;
+	font-size: 12px;
+	border-bottom: 1px solid var(--line);
+}
+
+.settings-control-row select,
+.settings-control-row input {
+	background: var(--canvas);
+	color: var(--text);
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	padding: 8px 36px 8px 10px;
+	font: inherit;
+}
+
+.settings-control-row select {
+	width: 100%;
+	min-width: 0;
+}
+
+.settings-control-row input {
+	padding: 6px 8px;
+	width: 80px;
+}
+
+.settings-text-button {
+	background: transparent;
+	color: var(--muted);
+	font-size: 12px;
+	padding: 5px 8px;
+	border-radius: 3px;
+}
+
+.settings-text-button:hover {
+	background: color-mix(in srgb, var(--text) 6%, transparent);
+	color: var(--text);
+}
+
+.settings-apply-row {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	margin-top: 20px;
+}
+
+.settings-apply-row button:disabled {
+	background: color-mix(in srgb, var(--text) 6%, transparent);
+	color: var(--muted);
+	cursor: default;
+}
+
+@media (width <= 800px) {
+	.settings-control-row {
+		flex-wrap: wrap;
+		gap: 12px;
+	}
+
+	.settings-apply-row {
+		align-items: flex-start;
+		flex-direction: column;
+		gap: 8px;
+	}
+}

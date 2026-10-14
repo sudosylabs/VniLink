@@ -21,6 +21,7 @@ use vnilink_media::{
 const BGRA: u32 = 0x4247_5241;
 
 pub struct MacEncoder {
+    codec: vnilink::VideoCodec,
     #[cfg(target_os = "macos")]
     session: CompressionSession,
     #[cfg(target_os = "macos")]
@@ -34,6 +35,21 @@ pub struct MacEncoder {
 }
 
 impl MacEncoder {
+    /// Inspect the actual session rather than assuming native means hardware.
+    pub fn hardware(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        unsafe {
+            self.session.copy_property(videotoolbox::ffi::kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder)
+                .ok().flatten().is_some_and(|value| {
+                    value.type_id() as u64 == apple_cf::raw::CFBooleanGetTypeID()
+                        && apple_cf::raw::CFBooleanGetValue(value.as_ptr().cast()) != 0
+                })
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
     pub fn open(
         width: u16,
         height: u16,
@@ -41,6 +57,26 @@ impl MacEncoder {
         bitrate_bps: u32,
         high: bool,
     ) -> Result<Self, Error> {
+        Self::open_codec(
+            width,
+            height,
+            frame_rate,
+            bitrate_bps,
+            vnilink::VideoCodec::H264,
+            high,
+        )
+    }
+    pub fn open_codec(
+        width: u16,
+        height: u16,
+        frame_rate: u8,
+        bitrate_bps: u32,
+        codec: vnilink::VideoCodec,
+        high: bool,
+    ) -> Result<Self, Error> {
+        if !matches!(codec, vnilink::VideoCodec::H264 | vnilink::VideoCodec::H265) {
+            return Err(Error::Unsupported("VideoToolbox encoder codec"));
+        }
         if width == 0 || height == 0 {
             return Err(Error::InvalidFrame(
                 "frame width and height must be non-zero",
@@ -63,24 +99,34 @@ impl MacEncoder {
             // High when the session negotiates it; the Linux parser decodes
             // High, and VideoToolbox decodes both. Baseline stays the
             // fallback for older peers.
-            let profile = if high {
+            let profile = if codec == vnilink::VideoCodec::H265 {
+                ProfileLevel::HEVCMainAutoLevel
+            } else if high {
                 ProfileLevel::H264HighAutoLevel
             } else {
                 ProfileLevel::H264ConstrainedBaselineAutoLevel
             };
-            let session =
-                CompressionSession::builder(i32::from(width), i32::from(height), Codec::H264)
-                    .with_profile_level(profile)
-                    .with_real_time(true)
-                    .with_allow_frame_reordering(false)
-                    .with_average_bit_rate(bitrate)
-                    .with_expected_frame_rate(f64::from(frame_rate))
-                    .with_max_keyframe_interval(120)
-                    .build()
-                    .map_err(|_| Error::Unsupported("VideoToolbox H.264"))?;
+            let session = CompressionSession::builder(
+                i32::from(width),
+                i32::from(height),
+                if codec == vnilink::VideoCodec::H265 {
+                    Codec::HEVC
+                } else {
+                    Codec::H264
+                },
+            )
+            .with_profile_level(profile)
+            .with_real_time(true)
+            .with_allow_frame_reordering(false)
+            .with_average_bit_rate(bitrate)
+            .with_expected_frame_rate(f64::from(frame_rate))
+            .with_max_keyframe_interval(120)
+            .build()
+            .map_err(|_| Error::Unsupported("VideoToolbox H.264"))?;
             let surface = IOSurface::create(usize::from(width), usize::from(height), BGRA, 4)
                 .ok_or(Error::Unsupported("VideoToolbox H.264"))?;
             Ok(Self {
+                codec,
                 session,
                 surface,
                 width,
@@ -131,6 +177,14 @@ impl VideoEncoder for MacEncoder {
                 .ok_or(Error::InvalidFrame(
                     "H.264 length prefix must be 1, 2, or 4 bytes",
                 ))?;
+            if self.codec == vnilink::VideoCodec::H265 {
+                self.frame_index = self.frame_index.saturating_add(1);
+                return vnilink_media::hevc_annex_b(
+                    &encoded.data,
+                    nal_length_size,
+                    &sets.parameter_sets,
+                );
+            }
             let keyframe = contains_idr(&encoded.data, usize::from(nal_length_size));
             let annex_b = to_annex_b(&AvccAccessUnit {
                 nal_length_size,
@@ -197,5 +251,81 @@ fn read_len(data: &[u8], size: usize) -> usize {
         1 => usize::from(data[0]),
         2 => usize::from(u16::from_be_bytes([data[0], data[1]])),
         _ => u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize,
+    }
+}
+
+/// One negotiated encoder per Desktop owner; software is never shared across peers.
+pub enum MacVideoEncoder {
+    Native(MacEncoder),
+    Software(vnilink_media::SoftwareEncoder),
+}
+impl MacVideoEncoder {
+    pub fn open(width: u16, height: u16, fps: u8, bitrate: u32, codec: u8) -> Result<Self, Error> {
+        let kind = vnilink::VideoCodec::from_wire_id(codec)
+            .ok_or(Error::Unsupported("negotiated codec"))?;
+        if matches!(kind, vnilink::VideoCodec::H264 | vnilink::VideoCodec::H265) {
+            match MacEncoder::open_codec(
+                width,
+                height,
+                fps,
+                bitrate,
+                kind,
+                codec == vnilink::CODEC_H264_HIGH,
+            ) {
+                Ok(encoder) => Ok(Self::Native(encoder)),
+                Err(_) if kind == vnilink::VideoCodec::H265 => Ok(Self::Software(
+                    vnilink_media::SoftwareEncoder::open(kind, width, height, fps, bitrate)?,
+                )),
+                Err(error) => Err(error),
+            }
+        } else {
+            Ok(Self::Software(vnilink_media::SoftwareEncoder::open(
+                kind, width, height, fps, bitrate,
+            )?))
+        }
+    }
+}
+impl VideoEncoder for MacVideoEncoder {
+    fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
+        match self {
+            Self::Native(encoder) => encoder.encode(frame, params),
+            Self::Software(encoder) => encoder.encode(frame, params),
+        }
+    }
+}
+/// Real synthetic roundtrip without screen/camera capture or OS permission changes.
+#[cfg(target_os = "macos")]
+pub fn probe_hevc() -> vnilink::CodecSupport {
+    let result = (|| -> Result<bool, Error> {
+        use vnilink_media::VideoDecoder;
+        let raw = RawFrame::bgra(64, 64, 0, [32u8, 64, 128, 255].repeat(4096))?;
+        let mut encoder =
+            MacEncoder::open_codec(64, 64, 30, 500_000, vnilink::VideoCodec::H265, false)?;
+        let sample = encoder.encode(
+            &raw,
+            &EncodeParams {
+                force_keyframe: true,
+                bitrate_bps: 500_000,
+                frame_rate: 30,
+            },
+        )?;
+        let frame = vnilink::EncodedFrame::new(
+            vnilink::VideoCodec::H265,
+            sample.keyframe(),
+            0,
+            sample.bytes().to_vec(),
+        )
+        .map_err(|_| Error::InvalidFrame("HEVC probe packet"))?;
+        let decoded = crate::MacDecoder::new().decode(&frame)?;
+        if decoded.width() != 64 || decoded.height() != 64 {
+            return Err(Error::DecodeRejected("HEVC probe geometry"));
+        }
+        Ok(encoder.hardware())
+    })();
+    vnilink::CodecSupport {
+        codec: vnilink::VideoCodec::H265,
+        encode: result.is_ok(),
+        decode: result.is_ok(),
+        hardware: result.unwrap_or(false),
     }
 }

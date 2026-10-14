@@ -645,6 +645,7 @@ pub fn video_codec_caps() -> vnilink::VideoCodecCaps {
         hardware: encode || decode,
         device: "vaapi".into(),
         chroma444: false,
+        additional: Vec::new(),
     }
 }
 

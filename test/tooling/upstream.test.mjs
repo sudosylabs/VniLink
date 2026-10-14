@@ -75,7 +75,7 @@ test('native-host proxy uses window context, filters events and releases its tra
 	let receive;
 	let unsubscribed = 0;
 	const calls = [];
-	const state = { windowId: 7, revision: 1, focused: false, maximized: false, fullscreen: false, alwaysOnTop: false, zoomFactor: 1 };
+	const state = { windowId: 7, revision: 1, focused: false, maximized: false, fullscreen: false, alwaysOnTop: false, zoomFactor: 1, backgroundMaterial: 'none' };
 	const api = {
 		onWindowStateChanged(listener) {
 			receive = listener; return () => {

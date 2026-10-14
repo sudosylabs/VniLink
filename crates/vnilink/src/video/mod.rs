@@ -4,6 +4,8 @@
 //! drops predicted frames until the next keyframe, and does not look inside the
 //! payload. Those bytes are screen content: do not log them.
 
+mod codec;
+pub use codec::{CodecSupport, VideoCodec};
 mod datagram;
 mod frame;
 mod queue;

@@ -16,6 +16,8 @@ export interface WorkbenchTab extends IDisposable {
 	readonly label: string;
 	readonly icon?: IconId;
 	readonly actions: readonly TabAction[];
+	/** Permanent navigation tabs stay first and cannot be closed or reordered. */
+	readonly permanent?: boolean;
 	readonly onDidChangeActions?: Event<void>;
 	canClose?(): boolean | Promise<boolean>;
 }

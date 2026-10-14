@@ -342,3 +342,17 @@ pub(crate) unsafe fn video_type(
 fn pack_hi_lo(high: u32, low: u32) -> u64 {
     u64::from(low) | (u64::from(high) << 32)
 }
+
+impl WindowsEncoder {
+    pub fn open_codec(
+        w: u16,
+        h: u16,
+        fps: u8,
+        bps: u32,
+        codec: u8,
+    ) -> Result<vnilink_media::CodecEncoder<Self>, Error> {
+        vnilink_media::CodecEncoder::open(codec, w, h, fps, bps, |w, h, fps, bps| {
+            Self::open(w, h, fps, bps)
+        })
+    }
+}

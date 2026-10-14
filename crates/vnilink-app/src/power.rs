@@ -1,44 +1,9 @@
 //! Host-local policy and observed native inhibition; no peer authority is implied.
 use crate::{error::map_error, FfiError, VnilinkCore};
 use std::sync::Arc;
-use vnilink::power::{PowerKind, PowerPhase, PowerPolicy};
+use vnilink::power::{PowerKind, PowerPhase};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FfiPowerPolicy {
-    pub incoming_display: bool,
-    pub incoming_system: bool,
-    pub outgoing_display: bool,
-    pub outgoing_system: bool,
-    pub incoming_idle_secs: u32,
-    pub outgoing_idle_secs: u32,
-    pub lock_after_control: bool,
-}
-impl From<PowerPolicy> for FfiPowerPolicy {
-    fn from(p: PowerPolicy) -> Self {
-        Self {
-            incoming_display: p.incoming_display,
-            incoming_system: p.incoming_system,
-            outgoing_display: p.outgoing_display,
-            outgoing_system: p.outgoing_system,
-            incoming_idle_secs: p.incoming_idle_secs,
-            outgoing_idle_secs: p.outgoing_idle_secs,
-            lock_after_control: p.lock_after_control,
-        }
-    }
-}
-impl From<FfiPowerPolicy> for PowerPolicy {
-    fn from(p: FfiPowerPolicy) -> Self {
-        Self {
-            incoming_display: p.incoming_display,
-            incoming_system: p.incoming_system,
-            outgoing_display: p.outgoing_display,
-            outgoing_system: p.outgoing_system,
-            incoming_idle_secs: p.incoming_idle_secs,
-            outgoing_idle_secs: p.outgoing_idle_secs,
-            lock_after_control: p.lock_after_control,
-        }
-    }
-}
+pub use vnilink::power::PowerPolicy as FfiPowerPolicy;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiPowerKind {
     Display,

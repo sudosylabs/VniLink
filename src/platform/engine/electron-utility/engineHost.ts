@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { record } from '../common/engine.js';
 
-interface NativeEngine { execute(command: string): Promise<string>; openDataChannel(kind: string, sessionId: string, generation: string, rows: number, columns: number): Promise<NativeDataChannel>; }
+interface NativeEngine { execute(command: string): Promise<string>; openDataChannel(kind: string, sessionId: string, generation: string, rows: number, columns: number, media?: string): Promise<NativeDataChannel>; }
 interface Addon { openEngine(): Promise<NativeEngine>; openTemporaryEngine(): Promise<NativeEngine>; }
 
 function isAddon(value: unknown): value is Addon {
@@ -14,6 +14,7 @@ function isAddon(value: unknown): value is Addon {
 
 export class EngineHost {
 	private engine: NativeEngine | undefined;
+	private shuttingDown = false;
 	private readonly inputSessions = new Set<string>();
 	private readonly channels = new Map<string, Set<DataChannelHost>>();
 	constructor(private readonly port: Electron.ParentPort) { }
@@ -26,7 +27,7 @@ export class EngineHost {
 			}
 			if (record(event.data) && event.data.type === 'attachDataChannel') {
 				const request = event.data.request; const owner = event.data.owner; const port = event.ports[0];
-				if (!this.engine || typeof owner !== 'string' || !isChannelRequest(request)) {
+				if (!this.engine || this.shuttingDown || typeof owner !== 'string' || !isChannelRequest(request)) {
 					for (const port of event.ports) {
 						port.close();
 					} return;
@@ -51,7 +52,7 @@ export class EngineHost {
 						this.channels.delete(owner);
 					}
 				}); channels.add(channel);
-				void this.engine.openDataChannel(request.kind, request.sessionId, request.generation, request.rows ?? 24, request.columns ?? 80).then(native => {
+				void this.engine.openDataChannel(request.kind, request.sessionId, request.generation, request.rows ?? 24, request.columns ?? 80, request.media ? JSON.stringify(request.media) : undefined).then(native => {
 					channel.start(native);
 				}, () => {
 					channel.fail();
@@ -91,6 +92,19 @@ export class EngineHost {
 		try {
 			if (!this.engine) {
 				throw new Error('Engine unavailable');
+			}
+			if (this.shuttingDown) {
+				throw new Error('Engine is shutting down');
+			}
+			if (shutdown) {
+				this.shuttingDown = true;
+				for (const channels of this.channels.values()) {
+					for (const channel of channels) {
+						channel.close();
+					}
+				}
+				this.channels.clear();
+				this.inputSessions.clear();
 			}
 			// The reply is validated by the main-process queue; forward it
 			// untouched so only one boundary parses its shape.

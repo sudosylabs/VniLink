@@ -1,3 +1,6 @@
+import { platform as safePlatform } from '../../base/common/process.js';
+import { synchronizeNativePermissions } from '../../platform/engine/electron-main/nativeRuntime.js';
+import { MachinePermissionService } from '../../platform/permissions/electron-main/permissionService.js';
 import { mark } from '../../base/common/performance.js';
 import { isMacintosh } from '../../base/common/platform.js';
 import { InstantiationService } from '../../platform/instantiation/common/instantiationService.js';
@@ -8,7 +11,8 @@ import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.
 import { INativeHostMainService, NativeHostMainService } from '../../platform/native/electron-main/nativeHostMainService.js';
 import { EngineService } from '../../platform/engine/electron-main/engineService.js';
 import { EncryptionMainService } from '../../platform/encryption/electron-main/encryptionMainService.js';
-import { app, BrowserWindow, net, protocol, session } from 'electron';
+import { app, BrowserWindow, nativeTheme, net, protocol, session, systemPreferences } from 'electron';
+import { ConfigurationStore } from '../../platform/configuration/node/configurationStore.js';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createMainWindow } from './windows.js';
@@ -34,6 +38,7 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 	let window: BrowserWindow | null = null;
 	const engine = new EngineService();
 	const encryption = new EncryptionMainService(logService);
+	const configuration = new ConfigurationStore(join(app.getPath('userData'), 'settings.json'));
 	const services = new InstantiationService(new ServiceCollection([INativeHostMainService, new SyncDescriptor(NativeHostMainService, [() => window])]), true);
 	const nativeHost = services.invokeFunction(accessor => accessor.get(INativeHostMainService));
 	nativeHost.onDidChangeWindowState(state => {
@@ -43,6 +48,7 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 	});
 	app.on('will-quit', () => {
 		services.dispose();
+		configuration.dispose();
 		logService.dispose();
 	});
 	app.on('second-instance', () => {
@@ -52,16 +58,21 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 		window?.show(); window?.focus();
 	});
 	let quitting = false;
+	let restarting = false;
 	app.on('before-quit', event => {
 		if (quitting) {
 			return;
 		}
 		event.preventDefault();
 		quitting = true;
-		void engine.stop().catch(() => {
+		void Promise.all([engine.stop(), configuration.flush()]).catch(() => {
 			logService.error('Engine shutdown failed');
 		}).finally(() => {
-			app.quit();
+			if (restarting && process.env.VNILINK_DEV === '1' && !app.isPackaged) {
+				app.exit(42);
+			} else {
+				app.quit();
+			}
 		});
 	});
 	async function openWindow(): Promise<BrowserWindow> {
@@ -94,6 +105,16 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 	});
 	try {
 		await app.whenReady();
+		await configuration.initialize();
+		const applyConfiguration = (): void => {
+			nativeTheme.themeSource = configuration.snapshot.values['appearance.theme'];
+			nativeHost.setNativeBackgroundEnabled(configuration.snapshot.values['appearance.nativeBackground']);
+			if (window && !window.isDestroyed() && window.webContents.mainFrame.url === applicationUrl) {
+				window.webContents.send('configuration:changed', configuration.snapshot);
+			}
+		};
+		applyConfiguration();
+		configuration.onDidChangeConfiguration(applyConfiguration);
 		mark('vnilink/appReady');
 		protocol.handle('vnilink', (request) => {
 			const url = new URL(request.url);
@@ -107,9 +128,38 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 			callback(false);
 		});
 		session.defaultSession.setPermissionCheckHandler(() => false);
-		registerDesktopHandlers(() => window, applicationUrl, engine, nativeHost, encryption);
+		registerDesktopHandlers(() => window, applicationUrl, engine, nativeHost, encryption, configuration, () => {
+			restarting = true;
+			if (app.isPackaged || process.env.VNILINK_DEV !== '1') {
+				app.relaunch();
+			}
+			app.quit();
+		});
 		try {
 			await engine.start(options.temporaryEngine ?? false);
+			await engine.execute({ type: 'setDesktopCodecDefault', codec: configuration.snapshot.values['desktop.codec'] });
+			await engine.execute({ type: 'setDesktopQualityDefaults', quality: configuration.snapshot.values['desktop.quality'] });
+			await engine.execute({ type: 'setInputDefaults', ...configuration.snapshot.values['input.defaults'] });
+			try {
+				const roots = configuration.snapshot.values['files.roots'];
+				await engine.execute(roots.length || options.temporaryEngine ? { type: 'setFileRoots', paths: [...roots] } : { type: 'enableFilesystemAccess' });
+			} catch {
+				logService.error('Shared folders could not be opened; file access remains disabled.');
+			}
+			const consent = new MachinePermissionService(safePlatform, !app.isPackaged, systemPreferences, () => Promise.reject(new Error('Startup cannot open permission settings')));
+			if (!options.temporaryEngine) {
+				await synchronizeNativePermissions(engine, safePlatform, consent.snapshot()).catch(() => {
+					logService.error('Native input backend could not be initialized.');
+				});
+			}
+			const runtime = await engine.execute({ type: 'nativeRuntime' });
+			if (runtime.type === 'nativeRuntime') {
+				for (const backend of runtime.backends) {
+					if (!backend.ready) {
+						logService.error(backend.error ?? 'Native backend unavailable.');
+					}
+				}
+			}
 			mark('vnilink/engineReady');
 		} catch {
 			logService.error('VniLink engine unavailable; secure installation could not be opened.');

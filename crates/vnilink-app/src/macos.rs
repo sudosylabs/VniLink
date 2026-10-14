@@ -221,7 +221,8 @@ fn current(core: &Core, id: u64, generation: u64) -> bool {
 /// Both Baseline and High round-trip, so every registered bit means a
 /// backend processed a sample.
 fn probe_caps() -> Result<vnilink::VideoCodecCaps, FfiError> {
-    let result = (|| -> Result<(), vnilink_media::Error> {
+    let result = (|| -> Result<bool, vnilink_media::Error> {
+        let mut hardware = true;
         for high in [false, true] {
             let mut encoder = vnilink_macos::MacEncoder::open(64, 64, 30, 500_000, high)?;
             let raw = RawFrame::bgra(64, 64, 0, vec![255; 64 * 64 * 4])?;
@@ -233,6 +234,7 @@ fn probe_caps() -> Result<vnilink::VideoCodecCaps, FfiError> {
                     frame_rate: 30,
                 },
             )?;
+            hardware &= encoder.hardware();
             let frame = EncodedFrame::h264(sample.keyframe(), 0, sample.bytes().to_vec()).map_err(
                 |_| vnilink_media::Error::Unsupported("VideoToolbox emitted invalid H.264"),
             )?;
@@ -243,22 +245,52 @@ fn probe_caps() -> Result<vnilink::VideoCodecCaps, FfiError> {
                 ));
             }
         }
-        Ok(())
+        Ok(hardware)
     })();
     result
-        .map(|()| {
+        .map(|hardware| {
             // 4096x4096 is the conservative documented ceiling for
             // VideoToolbox H.264; offers above it clamp instead of failing.
-            vnilink::VideoCodecCaps::h264_full(4096, 4096, "videotoolbox")
+            let mut caps = vnilink::VideoCodecCaps::h264_full(4096, 4096, "videotoolbox");
+            caps.hardware = hardware;
+            caps
         })
         .map_err(|_| FfiError::Unsupported {
             message: "VideoToolbox H.264 is unavailable on this Mac".into(),
         })
 }
 
+/// Refresh all installed backends together. Starting capture must preserve the
+/// software capabilities that service admission negotiated at engine startup.
+pub(crate) fn probe_all_codecs() -> Result<vnilink::VideoCodecCaps, FfiError> {
+    let mut caps = probe_caps().unwrap_or_default();
+    caps.additional = vnilink_media::probe_software_codecs();
+    let native = vnilink_macos::probe_hevc();
+    if native.encode && native.decode {
+        if let Some(hevc) = caps
+            .additional
+            .iter_mut()
+            .find(|c| c.codec == vnilink::VideoCodec::H265)
+        {
+            *hevc = native;
+        }
+    }
+    if caps.can_encode() && (caps.max_width == 0 || caps.max_height == 0) {
+        caps.max_width = 4096;
+        caps.max_height = 4096;
+    }
+    if caps.can_encode() || caps.can_decode() {
+        Ok(caps)
+    } else {
+        Err(FfiError::Unsupported {
+            message: "No video backend is available".into(),
+        })
+    }
+}
+
 impl VnilinkCore {
     pub fn prepare_mac_video(&self) -> Result<(), FfiError> {
-        let caps = probe_caps()?;
+        let caps = probe_all_codecs()?;
         self.inner
             .set_cursor_receiver(true)
             .map_err(crate::error::map_error)?;
@@ -445,6 +477,7 @@ mod tests {
 /// Sharing configuration with a capture resource opened for each Desktop instance.
 /// Dropping it retires capture; peer and service teardown is owned by the caller.
 pub struct MacHost {
+    started: Arc<AtomicBool>,
     core: Arc<Core>,
     display_id: u64,
     capture_size: (u16, u16),
@@ -527,6 +560,9 @@ impl vnilink::HostCapture for MacCaptureDescriptor {
 }
 
 impl MacHost {
+    pub fn is_started(&self) -> bool {
+        self.started.load(Ordering::Acquire) && !self.stop.load(Ordering::Acquire)
+    }
     /// Cursor updates never inject input. Retain a shape across position-only
     /// samples and resend it when a new hosted generation negotiates metadata.
     pub fn update_cursor(&self, update: MacCursorUpdate) -> Result<(), FfiError> {
@@ -638,6 +674,8 @@ impl VnilinkCore {
         }
         let core = Arc::clone(&self.inner);
         let stop = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(AtomicBool::new(false));
+        let worker_started = started.clone();
         let error = Arc::new(Mutex::new(None));
         let worker_core = Arc::clone(&core);
         let worker_stop = Arc::clone(&stop);
@@ -673,7 +711,7 @@ impl VnilinkCore {
                         }
                     }
                     worker_core
-                        .set_video_codecs(probe_caps()?)
+                        .set_video_codecs(probe_all_codecs()?)
                         .map_err(crate::error::map_error)?;
                     publish_mac_topology(
                         &worker_core,
@@ -753,6 +791,7 @@ impl VnilinkCore {
                         Some(display_id),
                         &startup,
                     )?;
+                    worker_started.store(true, Ordering::Release);
                     vnilink_macos::serve_shared(
                         &capture,
                         &worker_core,
@@ -761,6 +800,7 @@ impl VnilinkCore {
                         u64::from(display_id),
                     )
                 })();
+                worker_started.store(false, Ordering::Release);
                 if let Err(error) = result {
                     if !worker_stop.load(Ordering::Acquire) && !startup.is_cancelled() {
                         *worker_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
@@ -776,6 +816,7 @@ impl VnilinkCore {
         });
         match ready_rx.recv_timeout(Duration::from_secs(15)) {
             Ok(Ok(())) => Ok(MacHost {
+                started,
                 core,
                 display_id: u64::from(display_id),
                 capture_size: (pixel_width, pixel_height),
@@ -903,6 +944,7 @@ mod viewer_tests {
         let replacement = || {
             assert!(register_host(host_key(&host.inner)));
             MacHost {
+                started: Arc::new(AtomicBool::new(true)),
                 core: host.inner.clone(),
                 display_id: 1,
                 capture_size: (1920, 1080),
@@ -1423,7 +1465,17 @@ mod viewer_tests {
         assert!(target.service);
         let viewer = controller.mac_desktop_viewer(handle.clone()).unwrap();
         assert!(controller.mac_desktop_viewer(handle.clone()).is_err());
-        let mut encoder = vnilink_macos::MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
+        let mut encoder = vnilink_macos::MacVideoEncoder::open(
+            64,
+            64,
+            30,
+            500_000,
+            host.inner
+                .hosted_desktop_info(target.id, target.generation)
+                .unwrap()
+                .codec,
+        )
+        .unwrap();
         let raw = RawFrame::bgra(64, 64, 0, vec![255; 64 * 64 * 4]).unwrap();
         let sample = encoder
             .encode(
@@ -1435,12 +1487,16 @@ mod viewer_tests {
                 },
             )
             .unwrap();
-        host.publish_desktop_video(
+        host.publish_desktop_frame(
             target.id,
             target.generation,
-            true,
-            0,
-            sample.bytes().to_vec(),
+            EncodedFrame::new(
+                sample.codec(),
+                sample.keyframe(),
+                0,
+                sample.bytes().to_vec(),
+            )
+            .unwrap(),
         )
         .unwrap();
         let until = std::time::Instant::now() + Duration::from_secs(5);
@@ -1517,7 +1573,8 @@ mod viewer_tests {
             pixel[3] = 255;
         }
         let raw = RawFrame::bgra(64, 64, 0, pixels).unwrap();
-        let mut encoder = vnilink_macos::MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
+        let codec = host.inner.video_targets().unwrap()[0].codec;
+        let mut encoder = vnilink_macos::MacVideoEncoder::open(64, 64, 30, 500_000, codec).unwrap();
         let sample = encoder
             .encode(
                 &raw,
@@ -1529,8 +1586,17 @@ mod viewer_tests {
             )
             .unwrap();
         let incoming = host.snapshot().unwrap().incoming.unwrap();
-        host.publish_video(incoming.id, true, 0, sample.bytes().to_vec())
-            .unwrap();
+        host.publish_video_frame(
+            incoming.id,
+            EncodedFrame::new(
+                sample.codec(),
+                sample.keyframe(),
+                0,
+                sample.bytes().to_vec(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let frame = loop {
             if let Some(frame) = viewer.poll() {

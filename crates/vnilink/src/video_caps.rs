@@ -13,8 +13,11 @@ use crate::protocol::{Quality, CODEC_H264, CODEC_H264_HIGH};
 /// H.264 encode/decode abilities of this installation. All `false` and zero
 /// sizes means no usable video path; admission then reports unsupported
 /// instead of a session that can never carry video.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VideoCodecCaps {
+    #[serde(default)]
+    pub additional: Vec<crate::video::CodecSupport>,
     pub encode_baseline: bool,
     pub encode_high: bool,
     pub decode_baseline: bool,
@@ -46,6 +49,7 @@ impl VideoCodecCaps {
             hardware: true,
             device: capped_label(device),
             chroma444: false,
+            additional: Vec::new(),
         }
     }
 
@@ -61,6 +65,7 @@ impl VideoCodecCaps {
             hardware: true,
             device: capped_label(device),
             chroma444: false,
+            additional: Vec::new(),
         }
     }
 
@@ -86,18 +91,64 @@ impl VideoCodecCaps {
             hardware: true,
             device: capped_label(device),
             chroma444: false,
+            additional: Vec::new(),
         }
     }
 
+    /// Offers only the selected codec; unavailable explicit choices never fall back.
+    pub fn preferred_offer(&self, preference: Option<crate::VideoCodec>) -> Result<u8, Error> {
+        match preference {
+            None if self.can_decode() => Ok(self.decoder_offer()),
+            Some(crate::VideoCodec::H264) if self.supports_decode(crate::VideoCodec::H264) => {
+                Ok(0x40 | u8::from(self.decode_baseline) | if self.decode_high { 2 } else { 0 })
+            }
+            Some(codec) if self.supports_decode(codec) => Ok(codec.wire_id()),
+            _ => Err(Error::Unsupported("selected video decoder")),
+        }
+    }
+
+    pub fn decoder_offer(&self) -> u8 {
+        0x40 | u8::from(self.decode_baseline)
+            | if self.decode_high { 2 } else { 0 }
+            | self
+                .additional
+                .iter()
+                .filter(|c| c.decode)
+                .fold(0, |bits, c| bits | c.codec.offer_bit())
+    }
+    pub fn supports_encode(&self, codec: crate::video::VideoCodec) -> bool {
+        if codec == crate::video::VideoCodec::H264 {
+            self.encode_baseline || self.encode_high
+        } else {
+            self.additional.iter().any(|c| c.codec == codec && c.encode)
+        }
+    }
+    pub fn supports_decode(&self, codec: crate::video::VideoCodec) -> bool {
+        if codec == crate::video::VideoCodec::H264 {
+            self.decode_baseline || self.decode_high
+        } else {
+            self.additional.iter().any(|c| c.codec == codec && c.decode)
+        }
+    }
     pub fn can_encode(&self) -> bool {
-        self.encode_baseline || self.encode_high
+        self.encode_baseline || self.encode_high || self.additional.iter().any(|c| c.encode)
     }
 
     pub fn can_decode(&self) -> bool {
-        self.decode_baseline || self.decode_high
+        self.decode_baseline || self.decode_high || self.additional.iter().any(|c| c.decode)
     }
 
     pub fn validate(&self) -> Result<(), Error> {
+        if self.additional.len() > 4
+            || self.additional.iter().enumerate().any(|(i, c)| {
+                c.codec == crate::video::VideoCodec::H264
+                    || self.additional[..i].iter().any(|p| p.codec == c.codec)
+            })
+        {
+            return Err(Error::InvalidSetting(
+                "duplicate or invalid additional codec",
+            ));
+        }
         if self.device.len() > 64 {
             return Err(Error::InvalidSetting("codec device label is too long"));
         }
@@ -126,12 +177,58 @@ pub fn negotiate(
     host: &VideoCodecCaps,
     controller_decodes_high: bool,
 ) -> Option<AgreedCodec> {
-    let codec = match offered {
-        CODEC_H264 if host.encode_baseline => Some(CODEC_H264),
-        CODEC_H264_HIGH if host.encode_high && controller_decodes_high => Some(CODEC_H264_HIGH),
-        CODEC_H264_HIGH if host.encode_baseline => Some(CODEC_H264),
-        _ => None,
-    }?;
+    if offered & 0x80 != 0 {
+        return None;
+    }
+    let codec = if offered & 0x40 != 0 {
+        let mut candidates = crate::video::VideoCodec::ALL.to_vec();
+        // Prefer validated native hardware; avoid expensive software AV1 when
+        // a realtime VP9 fallback is available. Choice is per Desktop owner.
+        candidates.sort_by_key(|codec| {
+            let hardware = if *codec == crate::video::VideoCodec::H264 {
+                host.hardware
+            } else {
+                host.additional
+                    .iter()
+                    .any(|c| c.codec == *codec && c.hardware)
+            };
+            (
+                !hardware,
+                match codec {
+                    crate::video::VideoCodec::H265 => 0,
+                    crate::video::VideoCodec::H264 => 1,
+                    crate::video::VideoCodec::Vp9 => 2,
+                    crate::video::VideoCodec::Vp8 => 3,
+                    crate::video::VideoCodec::Av1 => 4,
+                },
+            )
+        });
+        let selected = candidates.into_iter().find(|codec| {
+            if *codec == crate::VideoCodec::H264 {
+                (host.encode_baseline && offered & 1 != 0) || (host.encode_high && offered & 2 != 0)
+            } else {
+                host.supports_encode(*codec) && offered & codec.offer_bit() != 0
+            }
+        })?;
+        if selected == crate::video::VideoCodec::H264 && offered & 2 != 0 && host.encode_high {
+            CODEC_H264_HIGH
+        } else {
+            selected.wire_id()
+        }
+    } else {
+        match offered {
+            CODEC_H264 if host.encode_baseline => Some(CODEC_H264),
+            CODEC_H264_HIGH if host.encode_high && controller_decodes_high => Some(CODEC_H264_HIGH),
+            CODEC_H264_HIGH if host.encode_baseline => Some(CODEC_H264),
+            id if id >= 3
+                && crate::video::VideoCodec::from_wire_id(id)
+                    .is_some_and(|c| host.supports_encode(c)) =>
+            {
+                Some(id)
+            }
+            _ => None,
+        }?
+    };
     Some(AgreedCodec {
         codec,
         max_width: host.max_width.max(1),

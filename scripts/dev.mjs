@@ -27,7 +27,8 @@ async function stop(code = 0) {
 	process.exitCode = code;
 }
 function run(command, args, options = {}) {
-	const child = spawn(command, args, { cwd: root, stdio: 'inherit', ...options });
+	const { restartOnExit = false, ...spawnOptions } = options;
+	const child = spawn(command, args, { cwd: root, stdio: 'inherit', ...spawnOptions });
 	children.add(child);
 	child.once('error', error => {
 		children.delete(child);
@@ -37,7 +38,11 @@ function run(command, args, options = {}) {
 	child.once('exit', code => {
 		children.delete(child);
 		if (!stopping) {
-			void stop(code ?? 1);
+			if (restartOnExit && code === 42) {
+				run(command, args, options);
+			} else {
+				void stop(code ?? 1);
+			}
 		}
 	});
 	return child;
@@ -64,7 +69,7 @@ try {
 		run(process.execPath, [tsc, '--noEmit', '--watch', '--preserveWatchOutput']);
 		run(process.execPath, [tsc, '-p', 'src/tsconfig.json', '--noEmit', '--watch', '--preserveWatchOutput']);
 		if (!watchOnly) {
-			run(electron, [root, ...process.argv.slice(2)], { env: { ...process.env, VNILINK_DEV: '1' } });
+			run(electron, [root, ...process.argv.slice(2)], { env: { ...process.env, VNILINK_DEV: '1' }, restartOnExit: true });
 		}
 	}
 } catch (error) {

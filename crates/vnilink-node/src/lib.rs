@@ -3,6 +3,12 @@
 //! subscriptions instead of holding pollers in JavaScript.
 //! Management calls run on libuv workers. The separate data module uses
 //! bounded, nonblocking native drains and input queues outside this mutex.
+mod native;
+use native::{
+    TransferCapability, TransferNativeBackend, TransferNativeDevice, TransferPowerPolicy,
+    TransferPowerStatus, TransferRecordingRetention, TransferRecordingStatus,
+    TransferSharingStatus,
+};
 mod data;
 
 use napi::{bindgen_prelude::AsyncTask, Env, Error, Result, Status, Task};
@@ -21,6 +27,7 @@ const COMMAND_BYTES_MAX: usize = 2 * 1024 * 1024;
 /// Bridge-local transfer shapes. The application `Ffi*` records behind these
 /// are not serde types, so the bridge owns the exact JSON field names.
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct TransferPointerSettings {
     sensitivity_percent: u16,
     reverse_wheel: bool,
@@ -58,6 +65,7 @@ struct TransferPath {
 
 #[derive(Serialize)]
 struct TransferFrame {
+    codec: String,
     keyframe: bool,
     timestamp_us: String,
     data: String,
@@ -71,18 +79,7 @@ struct TransferRelay {
     authenticated: bool,
 }
 
-#[derive(Deserialize, Serialize, Clone)]
-struct TransferVideoCodecCaps {
-    encode_baseline: bool,
-    encode_high: bool,
-    decode_baseline: bool,
-    decode_high: bool,
-    max_width: u16,
-    max_height: u16,
-    hardware: bool,
-    device: String,
-    chroma444: bool,
-}
+use vnilink_app::FfiVideoCodecCaps as TransferVideoCodecCaps;
 
 #[derive(Serialize)]
 struct TransferServicePermissions {
@@ -94,6 +91,16 @@ struct TransferServicePermissions {
     microphone: bool,
     recording: bool,
     system_actions: bool,
+}
+
+use vnilink_app::FfiSystemPolicy as TransferSystemPolicy;
+
+#[derive(Serialize)]
+struct TransferSystemSupport {
+    lock: bool,
+    restart: bool,
+    shutdown: bool,
+    privacy: bool,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -193,38 +200,6 @@ struct TransferRelayInput {
     authenticated: bool,
     #[serde(rename = "replacementToken")]
     replacement_token: String,
-}
-
-impl From<vnilink_app::FfiVideoCodecCaps> for TransferVideoCodecCaps {
-    fn from(caps: vnilink_app::FfiVideoCodecCaps) -> Self {
-        Self {
-            encode_baseline: caps.encode_baseline,
-            encode_high: caps.encode_high,
-            decode_baseline: caps.decode_baseline,
-            decode_high: caps.decode_high,
-            max_width: caps.max_width,
-            max_height: caps.max_height,
-            hardware: caps.hardware,
-            device: caps.device,
-            chroma444: caps.chroma444,
-        }
-    }
-}
-
-impl From<TransferVideoCodecCaps> for vnilink_app::FfiVideoCodecCaps {
-    fn from(caps: TransferVideoCodecCaps) -> Self {
-        Self {
-            encode_baseline: caps.encode_baseline,
-            encode_high: caps.encode_high,
-            decode_baseline: caps.decode_baseline,
-            decode_high: caps.decode_high,
-            max_width: caps.max_width,
-            max_height: caps.max_height,
-            hardware: caps.hardware,
-            device: caps.device,
-            chroma444: caps.chroma444,
-        }
-    }
 }
 
 impl From<vnilink_app::FfiTerminalPolicy> for TransferTerminalPolicy {
@@ -589,6 +564,10 @@ enum Command {
         endpoint_id: String,
         allowed: bool,
     },
+    SystemPolicy,
+    SetSystemPolicy {
+        policy: TransferSystemPolicy,
+    },
     TerminalPolicy,
     SetTerminalPolicy {
         policy: TransferTerminalPolicy,
@@ -775,6 +754,81 @@ enum Command {
         session_id: String,
         generation: String,
     },
+    StartNativeScreenSharing {
+        #[serde(rename = "displayId")]
+        display_id: u32,
+        width: u16,
+        height: u16,
+        #[serde(rename = "pixelWidth")]
+        pixel_width: u16,
+        #[serde(rename = "pixelHeight")]
+        pixel_height: u16,
+    },
+    StopNativeScreenSharing,
+    NativeSharingStatus,
+    StartRecording {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        generation: String,
+        destination: String,
+        #[serde(rename = "maxBytes")]
+        max_bytes: String,
+        #[serde(rename = "maxDurationMs")]
+        max_duration_ms: String,
+        retention: Option<TransferRecordingRetention>,
+    },
+    RecordingStatus {
+        id: String,
+    },
+    StopRecording {
+        id: String,
+    },
+    ReleaseRecording {
+        id: String,
+    },
+    RemoteCameraDevices {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        generation: String,
+    },
+    RemoteAudioDevices {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        generation: String,
+        kind: String,
+    },
+    NativeCameraDevices,
+    NativeAudioDevices,
+    NativeAudioOutputs,
+    SetNativeCameraSources {
+        ids: Vec<String>,
+    },
+    SetNativeAudioSources {
+        microphones: Vec<String>,
+        system: Vec<String>,
+    },
+    PowerPolicy,
+    SetPowerPolicy {
+        policy: TransferPowerPolicy,
+    },
+    PowerStatus,
+    NativeRuntime,
+    EnableNativeInput,
+    ReportNativePermissions {
+        screen: bool,
+        input: bool,
+        camera: bool,
+        microphone: bool,
+    },
+    SetInputDefaults {
+        mode: String,
+        swap: bool,
+        pointer: TransferPointerSettings,
+    },
+    EnableFilesystemAccess,
+    SetFileRoots {
+        paths: Vec<String>,
+    },
     KeyboardMode,
     SetKeyboardMode {
         mode: String,
@@ -809,6 +863,7 @@ enum Command {
         urls: Vec<String>,
     },
     SavedRelays,
+    RelayRestartRequired,
     ControlCheck,
     ControlRequest,
     ConfirmControlRequest {
@@ -846,9 +901,16 @@ enum Command {
         revision: String,
         displays: Vec<TransferDisplay>,
     },
+    SetDesktopCodecDefault {
+        codec: String,
+    },
+    SetDesktopQualityDefaults {
+        quality: TransferQuality,
+    },
     UpdateSessionQuality {
         #[serde(rename = "sessionId")]
         session_id: String,
+        generation: String,
         role: String,
         quality: TransferQuality,
     },
@@ -866,6 +928,8 @@ enum Command {
         subscription_id: String,
     },
     PublishVideo {
+        #[serde(deserialize_with = "frame_codec")]
+        codec: vnilink_app::FfiVideoCodec,
         #[serde(rename = "sessionId")]
         session_id: String,
         keyframe: bool,
@@ -876,9 +940,27 @@ enum Command {
     Shutdown,
 }
 
+fn frame_codec<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<vnilink_app::FfiVideoCodec, D::Error> {
+    use serde::de::Error;
+    let value = String::deserialize(deserializer)?;
+    match value.as_str() {
+        "h264" => Ok(vnilink_app::FfiVideoCodec::H264),
+        "h265" => Ok(vnilink_app::FfiVideoCodec::H265),
+        "vp8" => Ok(vnilink_app::FfiVideoCodec::Vp8),
+        "vp9" => Ok(vnilink_app::FfiVideoCodec::Vp9),
+        "av1" => Ok(vnilink_app::FfiVideoCodec::Av1),
+        _ => Err(D::Error::custom("unsupported video codec")),
+    }
+}
+
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum Reply {
+    RestartRequired {
+        required: bool,
+    },
     Snapshot {
         snapshot: vnilink_app::FfiSnapshot,
     },
@@ -964,6 +1046,10 @@ enum Reply {
     ServicePermissions {
         permissions: TransferServicePermissions,
     },
+    SystemPolicy {
+        policy: TransferSystemPolicy,
+        support: TransferSystemSupport,
+    },
     TerminalPolicy {
         policy: TransferTerminalPolicy,
     },
@@ -980,6 +1066,25 @@ enum Reply {
         #[serde(rename = "subscriptionId")]
         subscription_id: String,
     },
+    NativeSharingStatus {
+        displays: Vec<TransferSharingStatus>,
+    },
+    RecordingStatus {
+        status: TransferRecordingStatus,
+    },
+    NativeDevices {
+        devices: Vec<TransferNativeDevice>,
+    },
+    PowerPolicy {
+        policy: TransferPowerPolicy,
+    },
+    PowerStatus {
+        statuses: Vec<TransferPowerStatus>,
+    },
+    NativeRuntime {
+        backends: Vec<TransferNativeBackend>,
+        capabilities: Vec<TransferCapability>,
+    },
     Done,
 }
 
@@ -990,6 +1095,7 @@ enum Reply {
 struct State {
     core: Arc<VnilinkCore>,
     closed: bool,
+    native: native::NativeRuntimeState,
     video: HashMap<u64, VideoPoller>,
     events: HashMap<u64, EventPoller>,
     files: HashMap<u64, Arc<FilesService>>,
@@ -1002,11 +1108,15 @@ pub struct Engine {
     state: Arc<Mutex<State>>,
 }
 
+pub struct OpenedEngine {
+    core: VnilinkCore,
+    backends: Vec<TransferNativeBackend>,
+}
 pub struct OpenTask {
     temporary: bool,
 }
 impl Task for OpenTask {
-    type Output = VnilinkCore;
+    type Output = OpenedEngine;
     type JsValue = Engine;
     fn compute(&mut self) -> Result<Self::Output> {
         let result = if self.temporary {
@@ -1015,17 +1125,27 @@ impl Task for OpenTask {
             VnilinkCore::open_persistent(Box::new(NativeStore))
         };
         let core = result.map_err(core_error)?;
+        let backends = if self.temporary {
+            vec![]
+        } else {
+            core.initialize_native_backends()
+                .into_iter()
+                .map(Into::into)
+                .collect()
+        };
         core.start_file_job_driver();
-        Ok(core)
+        Ok(OpenedEngine { core, backends })
     }
-    fn resolve(&mut self, _: Env, core: Self::Output) -> Result<Engine> {
-        let core = Arc::new(core);
+    fn resolve(&mut self, _: Env, opened: Self::Output) -> Result<Engine> {
+        let core = Arc::new(opened.core);
+        let desktops = Arc::new(data::DesktopChannels::default());
         Ok(Engine {
             core: core.clone(),
-            desktops: Arc::new(data::DesktopChannels::default()),
+            desktops: desktops.clone(),
             state: Arc::new(Mutex::new(State {
                 core,
                 closed: false,
+                native: native::NativeRuntimeState::new(opened.backends, desktops),
                 video: HashMap::new(),
                 events: HashMap::new(),
                 files: HashMap::new(),
@@ -1120,12 +1240,28 @@ impl EngineBridge {
                     .map_err(core_error)?;
                 Reply::Done
             }
-            Command::UpdateSessionQuality {
-                session_id,
-                role,
-                quality,
-            } => {
-                let id = parse_id(session_id, "Invalid session ID")?;
+            Command::SetDesktopCodecDefault { codec } => {
+                use vnilink_app::FfiCodecPreference as C;
+                let preference = match codec.as_str() {
+                    "auto" => C::Auto,
+                    "h264" => C::H264,
+                    "h265" => C::H265,
+                    "vp8" => C::Vp8,
+                    "vp9" => C::Vp9,
+                    "av1" => C::Av1,
+                    _ => {
+                        return Err(core_error(FfiError::InvalidSetting {
+                            message: "invalid codec preference".into(),
+                        }))
+                    }
+                };
+                state
+                    .core
+                    .set_desktop_codec_default(preference)
+                    .map_err(core_error)?;
+                Reply::Done
+            }
+            Command::SetDesktopQualityDefaults { quality } => {
                 let quality = vnilink_app::new_quality(
                     quality.max_bitrate_kbps,
                     quality.max_frame_rate,
@@ -1135,7 +1271,27 @@ impl EngineBridge {
                 .map_err(core_error)?;
                 state
                     .core
-                    .update_session_quality(id, session_role(role)?, quality)
+                    .set_desktop_quality_defaults(quality)
+                    .map_err(core_error)?;
+                Reply::Done
+            }
+            Command::UpdateSessionQuality {
+                session_id,
+                generation,
+                role,
+                quality,
+            } => {
+                let (id, gen) = session_target(session_id, generation)?;
+                let quality = vnilink_app::new_quality(
+                    quality.max_bitrate_kbps,
+                    quality.max_frame_rate,
+                    quality.max_width,
+                    quality.max_height,
+                )
+                .map_err(core_error)?;
+                state
+                    .core
+                    .update_session_quality_for_generation(id, gen, session_role(role)?, quality)
                     .map_err(core_error)?;
                 Reply::Done
             }
@@ -1174,6 +1330,7 @@ impl EngineBridge {
                     frame: poller.try_recv().map(|frame| {
                         use base64::Engine as _;
                         TransferFrame {
+                            codec: frame.codec.label().into(),
                             keyframe: frame.keyframe,
                             timestamp_us: frame.timestamp_us.to_string(),
                             data: base64::engine::general_purpose::STANDARD.encode(&frame.payload),
@@ -1189,6 +1346,7 @@ impl EngineBridge {
                 Reply::Done
             }
             Command::PublishVideo {
+                codec,
                 session_id,
                 keyframe,
                 timestamp_us,
@@ -1202,7 +1360,11 @@ impl EngineBridge {
                     .map_err(|_| Error::new(Status::InvalidArg, "Invalid video data"))?;
                 state
                     .core
-                    .publish_video(id, *keyframe, timestamp, payload)
+                    .publish_video_frame(
+                        id,
+                        vnilink_app::FfiEncodedFrame::new(*codec, *keyframe, timestamp, payload)
+                            .map_err(|_| Error::new(Status::InvalidArg, "Invalid video frame"))?,
+                    )
                     .map_err(core_error)?;
                 Reply::Done
             }
@@ -1252,6 +1414,9 @@ impl EngineBridge {
                 core.save_custom_relays(inputs).map_err(core_error)?;
                 Reply::Done
             }
+            Command::RelayRestartRequired => Reply::RestartRequired {
+                required: core.relay_restart_required().map_err(core_error)?,
+            },
             Command::SavedRelays => Reply::Relays {
                 relays: core
                     .saved_relays()
@@ -1427,6 +1592,31 @@ impl EngineBridge {
             } => {
                 let (id, gen) = session_target(session_id, generation)?;
                 core.release_session_input(id, gen).map_err(core_error)?;
+                Reply::Done
+            }
+            Command::SetInputDefaults {
+                mode,
+                swap,
+                pointer,
+            } => {
+                core.set_input_defaults(
+                    keyboard_mode(mode)?,
+                    *swap,
+                    vnilink_app::FfiPointerSettings {
+                        sensitivity_percent: pointer.sensitivity_percent,
+                        reverse_wheel: pointer.reverse_wheel,
+                        swap_buttons: pointer.swap_buttons,
+                    },
+                )
+                .map_err(core_error)?;
+                Reply::Done
+            }
+            Command::EnableFilesystemAccess => {
+                core.enable_filesystem_access().map_err(core_error)?;
+                Reply::Done
+            }
+            Command::SetFileRoots { paths } => {
+                core.set_file_roots(paths.clone()).map_err(core_error)?;
                 Reply::Done
             }
             Command::KeyboardMode => Reply::KeyboardMode {
@@ -1758,6 +1948,23 @@ impl EngineBridge {
                         .map_err(core_error)?;
                     Reply::Done
                 }
+                Command::SystemPolicy => {
+                    let policy = state.core.system_policy().map_err(core_error)?;
+                    let support = state.core.system_support().map_err(core_error)?.support;
+                    Reply::SystemPolicy {
+                        policy,
+                        support: TransferSystemSupport {
+                            lock: support.lock,
+                            restart: support.restart,
+                            shutdown: support.shutdown,
+                            privacy: support.privacy,
+                        },
+                    }
+                }
+                Command::SetSystemPolicy { policy } => {
+                    state.core.set_system_policy(*policy).map_err(core_error)?;
+                    Reply::Done
+                }
                 Command::TerminalPolicy => Reply::TerminalPolicy {
                     policy: TransferTerminalPolicy::from(
                         state.core.terminal_policy().map_err(core_error)?,
@@ -2046,6 +2253,9 @@ impl EngineBridge {
             | Command::SubmitClipboard { .. }
             | Command::SubmitLocalKey { .. }
             | Command::ReleaseSessionInput { .. }
+            | Command::SetInputDefaults { .. }
+            | Command::EnableFilesystemAccess
+            | Command::SetFileRoots { .. }
             | Command::KeyboardMode
             | Command::SetKeyboardMode { .. }
             | Command::SwapControlAndCommand
@@ -2064,15 +2274,38 @@ impl EngineBridge {
             | Command::ResetIdentity
             | Command::SetRelayPublic
             | Command::SetRelayCustom { .. }
-            | Command::SavedRelays => {
+            | Command::SavedRelays
+            | Command::RelayRestartRequired => {
                 let core = &state.core;
                 Self::hosting(core, command)
             }
+            Command::StartNativeScreenSharing { .. }
+            | Command::StopNativeScreenSharing
+            | Command::NativeSharingStatus
+            | Command::StartRecording { .. }
+            | Command::RecordingStatus { .. }
+            | Command::StopRecording { .. }
+            | Command::ReleaseRecording { .. }
+            | Command::RemoteCameraDevices { .. }
+            | Command::RemoteAudioDevices { .. }
+            | Command::NativeCameraDevices
+            | Command::NativeAudioDevices
+            | Command::NativeAudioOutputs
+            | Command::SetNativeCameraSources { .. }
+            | Command::SetNativeAudioSources { .. }
+            | Command::PowerPolicy
+            | Command::SetPowerPolicy { .. }
+            | Command::PowerStatus
+            | Command::NativeRuntime
+            | Command::ReportNativePermissions { .. }
+            | Command::EnableNativeInput => native::dispatch(state, command),
             Command::Topology
             | Command::SessionTopology { .. }
             | Command::SelectDisplays { .. }
             | Command::CaptureDisplays
             | Command::SetTopology { .. }
+            | Command::SetDesktopCodecDefault { .. }
+            | Command::SetDesktopQualityDefaults { .. }
             | Command::UpdateSessionQuality { .. }
             | Command::PublishVideo { .. }
             | Command::SubscribeSessionVideo { .. }
@@ -2085,6 +2318,8 @@ impl EngineBridge {
             Command::ServicePermissions { .. }
             | Command::AuthorizeService { .. }
             | Command::AuthorizeRecording { .. }
+            | Command::SystemPolicy
+            | Command::SetSystemPolicy { .. }
             | Command::TerminalPolicy
             | Command::SetTerminalPolicy { .. }
             | Command::EnableNativeTerminal { .. }
@@ -2101,7 +2336,7 @@ impl EngineBridge {
             | Command::FilesJobResume { .. } => Self::services(state, command),
             Command::Shutdown => {
                 state.closed = true;
-                state.core.shutdown();
+                native::shutdown(state)?;
                 Ok(Reply::Done)
             }
         }
@@ -2216,7 +2451,57 @@ impl CommandShape {
             | "sessionSwapControlAndCommand" => &["type", "sessionId", "generation"],
             "setSessionKeyboardMode" => &["type", "sessionId", "generation", "mode"],
             "setSessionSwapControlAndCommand" => &["type", "sessionId", "generation", "enabled"],
-            "keyboardMode"
+            "reportNativePermissions" => &["type", "screen", "input", "camera", "microphone"],
+            "startNativeScreenSharing" => &[
+                "type",
+                "displayId",
+                "width",
+                "height",
+                "pixelWidth",
+                "pixelHeight",
+            ],
+            "startRecording" => {
+                return raw.as_object().is_some_and(|v| {
+                    [
+                        "type",
+                        "sessionId",
+                        "generation",
+                        "destination",
+                        "maxBytes",
+                        "maxDurationMs",
+                    ]
+                    .iter()
+                    .all(|k| v.contains_key(*k))
+                        && v.keys().all(|k| {
+                            [
+                                "type",
+                                "sessionId",
+                                "generation",
+                                "destination",
+                                "maxBytes",
+                                "maxDurationMs",
+                                "retention",
+                            ]
+                            .contains(&k.as_str())
+                        })
+                });
+            }
+            "recordingStatus" | "stopRecording" | "releaseRecording" => &["type", "id"],
+            "remoteCameraDevices" => &["type", "sessionId", "generation"],
+            "remoteAudioDevices" => &["type", "sessionId", "generation", "kind"],
+            "setNativeCameraSources" => &["type", "ids"],
+            "setNativeAudioSources" => &["type", "microphones", "system"],
+            "setPowerPolicy" => &["type", "policy"],
+            "nativeSharingStatus"
+            | "stopNativeScreenSharing"
+            | "nativeCameraDevices"
+            | "nativeAudioDevices"
+            | "nativeAudioOutputs"
+            | "powerPolicy"
+            | "powerStatus"
+            | "nativeRuntime"
+            | "enableNativeInput"
+            | "keyboardMode"
             | "swapControlAndCommand"
             | "clipboardText"
             | "startHosting"
@@ -2224,6 +2509,7 @@ impl CommandShape {
             | "stopHostedSession"
             | "resetIdentity"
             | "setRelayPublic"
+            | "relayRestartRequired"
             | "savedRelays"
             | "controlCheck"
             | "controlRequest"
@@ -2232,6 +2518,9 @@ impl CommandShape {
             | "hostedSessions"
             | "topology"
             | "captureDisplays" => &["type"],
+            "setInputDefaults" => &["type", "mode", "swap", "pointer"],
+            "enableFilesystemAccess" => &["type"],
+            "setFileRoots" => &["type", "paths"],
             "setKeyboardMode" => &["type", "mode"],
             "setSwapControlAndCommand" => &["type", "enabled"],
             "setSessionPointerSettings" => &["type", "sessionId", "generation", "settings"],
@@ -2246,6 +2535,8 @@ impl CommandShape {
             "servicePermissions" => &["type", "endpointId"],
             "authorizeService" => &["type", "endpointId", "kind", "allowed"],
             "authorizeRecording" => &["type", "endpointId", "allowed"],
+            "systemPolicy" => &["type"],
+            "setSystemPolicy" => &["type", "policy"],
             "terminalPolicy" => &["type"],
             "setTerminalPolicy" => &["type", "policy"],
             "enableNativeTerminal" => &["type", "program", "directory"],
@@ -2261,7 +2552,9 @@ impl CommandShape {
             "sessionTopology" => &["type", "sessionId", "generation"],
             "selectDisplays" => &["type", "sessionId", "generation", "ids"],
             "setTopology" => &["type", "revision", "displays"],
-            "updateSessionQuality" => &["type", "sessionId", "role", "quality"],
+            "setDesktopCodecDefault" => &["type", "codec"],
+            "setDesktopQualityDefaults" => &["type", "quality"],
+            "updateSessionQuality" => &["type", "sessionId", "generation", "role", "quality"],
             "pollVideo" | "releaseVideo" => &["type", "subscriptionId"],
             "publishVideo" => &["type", "sessionId", "keyframe", "timestampUs", "data"],
             _ => return false,

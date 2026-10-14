@@ -1,15 +1,29 @@
+import { verifyFileTerminalSettings } from './fileTerminalSettings.js';
+import { verifyInputPage } from './input.js';
+import { verifyRemoteDesktop } from './remoteDesktop.js';
+import { verifyMachinePermissions } from './permissions.js';
 import { TabService } from '../../src/workbench/services/tabs/common/tabServiceImpl.js';
 import type { TabAction } from '../../src/workbench/services/tabs/common/tabService.js';
 import { TitlebarTabsControl } from '../../src/workbench/browser/parts/titlebar/titlebarTabsControl.js';
 import { ViewHost, type WorkbenchView } from '../../src/workbench/browser/parts/views/viewHost.js';
 import { Emitter } from '../../src/base/common/event.js';
 import { Icons } from '../../src/base/common/icons.js';
+import { verifyAccess } from './access.js';
+import { verifySettingsPages } from './settings.js';
+import { verifyHomeLifecycle } from './home.js';
 function assert(condition: boolean, message: string): void {
 	if (!condition) {
 		throw new Error(message);
 	}
 }
 export async function verifyTabs(): Promise<boolean> {
+	await verifyFileTerminalSettings();
+	await verifyInputPage();
+	await verifyHomeLifecycle();
+	await verifySettingsPages();
+	await verifyAccess();
+	await verifyMachinePermissions();
+	await verifyRemoteDesktop();
 	const service = new TabService();
 	const fixture = document.createElement('div');
 	fixture.className = 'part titlebar';
@@ -20,6 +34,7 @@ export async function verifyTabs(): Promise<boolean> {
 	fixture.append(root);
 	document.body.append(fixture);
 	const content = document.createElement('div');
+	content.style.backgroundColor = 'var(--canvas)';
 	fixture.append(content);
 	const errors: unknown[] = [];
 	const tabs = new TitlebarTabsControl(
@@ -59,6 +74,14 @@ export async function verifyTabs(): Promise<boolean> {
 		};
 	}
 	try {
+		const home = { ...view('home'), permanent: true };
+		host.open(home);
+		assert(root.querySelector('[data-tab-id="home"] .tab-close') === null, 'Home has a close button');
+		const homeTab = root.querySelector<HTMLElement>('[data-tab-id="home"]');
+		homeTab?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+		homeTab?.dispatchEvent(new MouseEvent('auxclick', { button: 1, bubbles: true }));
+		await Promise.resolve();
+		assert(service.tabs[0] === home && homeTab?.draggable === false, 'Home can be closed or dragged');
 		const first = view('first');
 		const second = view('second');
 		host.open(first);
@@ -71,9 +94,11 @@ export async function verifyTabs(): Promise<boolean> {
 		);
 		assert(disposed === 0, 'Switching disposed a view');
 		const fill = root.querySelector<HTMLElement>('[aria-selected="true"] .tab-fill');
-		assert(fill !== null && getComputedStyle(fill).borderTopLeftRadius === '6px', 'Modern tab fill is not rounded');
+		assert(fill !== null && getComputedStyle(fill).borderTopLeftRadius === '12px', 'Modern tab fill is not rounded');
 		assert(fill !== null && getComputedStyle(fill).borderBottomWidth === '0px', 'Connected active tab has a bottom divider');
-		assert(fill !== null && getComputedStyle(fill).backgroundColor === getComputedStyle(document.body).backgroundColor || fill !== null && getComputedStyle(fill).backgroundColor === getComputedStyle(document.documentElement).backgroundColor, 'Active tab does not share the content surface');
+		const close = root.querySelector<HTMLElement>('[aria-selected="true"] .tab-close');
+		assert(close !== null && getComputedStyle(close).borderRadius === '3px', 'Close hover target is not square');
+		assert(fill !== null && getComputedStyle(fill).backgroundColor === getComputedStyle(content).backgroundColor, 'Active tab does not share the content surface');
 		const action = root.querySelector<HTMLButtonElement>('.view-action');
 		assert(action?.getAttribute('aria-label') === 'Action first', 'Toolbar does not follow active tab');
 		action?.click();
@@ -161,7 +186,7 @@ export async function verifyTabs(): Promise<boolean> {
 		);
 		assert(service.activeTab?.id === '1', 'Arrow navigation failed');
 		service.move('1', 0);
-		assert(service.tabs[0]?.id === '1', 'Reorder failed');
+		assert(service.tabs[0] === home && service.tabs[1]?.id === '1', 'Reorder displaced Home');
 		await service.close('1');
 		assert(service.activeTab?.id !== '1', 'Closed tab is still active');
 		assert(errors.length === 0, 'Unexpected tab errors');

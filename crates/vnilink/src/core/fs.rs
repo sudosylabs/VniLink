@@ -38,6 +38,21 @@ pub enum FsOutcome {
 }
 
 impl Core {
+    /// Enables filesystem browsing within this process's OS permissions.
+    /// Files service authorization remains independent and is checked on each
+    /// operation. Existing folder-only access can still be explicitly selected.
+    pub fn enable_filesystem_access(&self) -> Result<(), Error> {
+        let state = self.alive_state()?;
+        if state
+            .incoming
+            .values()
+            .any(|session| !finished(&session.phase))
+        {
+            return Err(Error::Busy);
+        }
+        drop(state);
+        lock(&self.shared.file_roots).set_filesystem()
+    }
     /// Replaces the owner-approved file roots. Nothing is browsable until
     /// this runs: pairing and transfer grants never widen into filesystem
     /// access on their own. Refused while a controlling session is active,

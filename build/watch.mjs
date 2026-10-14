@@ -17,11 +17,11 @@ export async function watchApplication(root = fileURLToPath(new URL('../', impor
 		const next = previous.then(async () => {
 			await mkdir(dirname(resource.output), { recursive: true });
 			try {
-				await cp(resource.source, resource.output);
+				await cp(resource.source, resource.output, { recursive: true });
 				console.log(`[watch] Copied ${basename(resource.source)}`);
 			} catch (error) {
 				if (error.code === 'ENOENT') {
-					await rm(resource.output, { force: true });
+					await rm(resource.output, { recursive: true, force: true });
 				} else {
 					throw error;
 				}

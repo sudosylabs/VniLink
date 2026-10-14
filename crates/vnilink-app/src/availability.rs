@@ -184,6 +184,24 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
+    pub fn report_os_permission(
+        &self,
+        capability: FfiCapability,
+        denied: bool,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .report_os_permission(capability.into(), denied)
+            .map_err(map_error)
+    }
+    pub fn report_backend_failure(
+        &self,
+        capability: FfiCapability,
+        failure: Option<String>,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .report_backend_failure(capability.into(), failure)
+            .map_err(map_error)
+    }
     /// Drops any published backend facts for one capability.
     pub fn clear_backend_state(&self, capability: FfiCapability) -> Result<(), FfiError> {
         self.inner

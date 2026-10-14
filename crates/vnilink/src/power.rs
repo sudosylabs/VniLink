@@ -18,6 +18,7 @@ impl PowerKind {
 /// Opt-in installation policy. Files-only connections, detached shells,
 /// keepalives and ordinary frame traffic do not acquire these assertions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PowerPolicy {
     pub incoming_display: bool,
     pub incoming_system: bool,

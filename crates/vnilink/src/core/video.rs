@@ -259,6 +259,11 @@ impl Core {
             if session.phase != SessionPhase::Active || *session.desktop_stop.borrow() {
                 return Err(Error::NoSession);
             }
+            if Some(frame.codec) != crate::VideoCodec::from_wire_id(session.codec) {
+                return Err(Error::InvalidSetting(
+                    "frame codec differs from negotiated codec",
+                ));
+            }
             session.video.clone().ok_or(Error::NoSession)?
         };
         // Same backstop as the service path: a zero revision reads the live
@@ -289,6 +294,34 @@ impl Core {
         Ok((outbox.queued(), outbox.dropped()))
     }
 
+    /// Starting limits for outgoing sessions and newly opened Desktop owners.
+    /// The application persists this preference and restores it before dialing.
+    pub fn desktop_quality_defaults(&self) -> Result<Quality, Error> {
+        Ok(self.alive_state()?.desktop_quality_default)
+    }
+
+    /// Codec for new outgoing Desktop owners; None negotiates automatically.
+    pub fn desktop_codec_default(&self) -> Result<Option<crate::VideoCodec>, Error> {
+        Ok(self.alive_state()?.desktop_codec_default)
+    }
+
+    /// Saves a preference without changing existing owners or requiring a decoder now.
+    pub fn set_desktop_codec_default(&self, codec: Option<crate::VideoCodec>) -> Result<(), Error> {
+        self.alive_state()?.desktop_codec_default = codec;
+        Ok(())
+    }
+
+    pub fn set_desktop_quality_defaults(&self, quality: Quality) -> Result<(), Error> {
+        let quality = Quality::new(
+            quality.max_bitrate_kbps,
+            quality.max_frame_rate,
+            quality.max_width,
+            quality.max_height,
+        )?;
+        self.alive_state()?.desktop_quality_default = quality;
+        Ok(())
+    }
+
     /// Changes the encoder limits for one live session.
     ///
     /// The role selects which side changes: a host call applies to the
@@ -303,7 +336,19 @@ impl Core {
         role: SessionRole,
         quality: Quality,
     ) -> Result<(), Error> {
-        self.apply_session_quality(session_id, role, quality)
+        self.apply_session_quality(session_id, role, None, quality)
+            .map(|_| ())
+    }
+
+    /// Applies UI edits only while the selected session generation is still live.
+    pub fn update_session_quality_for_generation(
+        &self,
+        session_id: u64,
+        generation: u64,
+        role: SessionRole,
+        quality: Quality,
+    ) -> Result<(), Error> {
+        self.apply_session_quality(session_id, role, Some(generation), quality)
             .map(|_| ())
     }
 
@@ -311,9 +356,26 @@ impl Core {
         &self,
         session_id: u64,
         role: SessionRole,
+        generation: Option<u64>,
         quality: Quality,
     ) -> Result<bool, Error> {
         let mut state = self.alive_state()?;
+        if let Some(expected) = generation {
+            let actual = match role {
+                SessionRole::Host => state
+                    .incoming
+                    .get(&session_id)
+                    .map(|session| session.generation),
+                SessionRole::Controller => state
+                    .outgoing
+                    .get(&session_id)
+                    .map(|session| session.generation),
+            }
+            .ok_or(Error::NoSession)?;
+            if actual != expected {
+                return Err(Error::StaleSession);
+            }
+        }
         match role {
             SessionRole::Host => {
                 let session = state
@@ -449,6 +511,7 @@ pub(super) async fn video_recv_loop(
     keyframe: Arc<KeyframeFlag>,
     stop_rx: &mut tokio::sync::watch::Receiver<bool>,
     cursor: Option<(crate::protocol::SessionStamp, super::cursor::CursorInbox)>,
+    codec: u8,
 ) {
     // Both transports stay live for the session: the host picks datagrams
     // when its path allows them and the stream otherwise, switching per
@@ -471,6 +534,7 @@ pub(super) async fn video_recv_loop(
                 };
                 match decode_video_body(&body) {
                     Ok(frame) => {
+                        if Some(frame.codec)!=crate::VideoCodec::from_wire_id(codec) {continue;}
                         if matches!(inbox.push(frame), VideoPush::KeyframeNeeded) {
                             keyframe.request();
                         }
@@ -504,6 +568,7 @@ pub(super) async fn video_recv_loop(
                         let mut body = vec![0;len];
                         if stream.read_exact(&mut body).await.is_err() { return; }
                         if let Ok(frame) = decode_video_body(&body) {
+                            if Some(frame.codec)!=crate::VideoCodec::from_wire_id(codec) {return;}
                             if matches!(inbox.push(frame), VideoPush::KeyframeNeeded) { keyframe.request(); }
                         }
                         if stream.read_exact(&mut prefix).await.is_err() { return; }

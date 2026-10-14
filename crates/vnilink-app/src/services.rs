@@ -700,6 +700,17 @@ impl VnilinkCore {
             .publish_desktop_video(id, generation, frame)
             .map_err(map_error)
     }
+    pub fn publish_desktop_frame(
+        &self,
+        id: u64,
+        generation: u64,
+        frame: crate::FfiEncodedFrame,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .publish_desktop_video(id, generation, frame)
+            .map_err(map_error)
+    }
+
     pub fn publish_desktop_cursor(
         &self,
         id: u64,

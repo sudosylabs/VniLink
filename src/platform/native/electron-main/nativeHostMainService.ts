@@ -10,12 +10,15 @@ import { Emitter, Event } from '../../../base/common/event.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 import type { IWindowState, IWindowControlsOptions } from '../common/native.js';
 import { CodeWindow } from '../../windows/electron-main/windowImpl.js';
+import { WindowMaterial } from '../../windows/electron-main/windowMaterial.js';
 export const INativeHostMainService = createDecorator<NativeHostMainService>('nativeHostMainService');
 export class NativeHostMainService extends Disposable {
 	declare public readonly _serviceBrand: undefined;
 	private readonly stateChanged = this._register(new Emitter<IWindowState>());
 	public readonly onDidChangeWindowState = this.stateChanged.event;
 	private readonly revisions = new Map<number, number>();
+	private readonly materials = new Map<number, WindowMaterial>();
+	private nativeBackgroundEnabled = true;
 	constructor(private readonly getWindow: () => BrowserWindow | null) {
 		super();
 	}
@@ -26,6 +29,10 @@ export class NativeHostMainService extends Disposable {
 				this.stateChanged.fire(this.state(window));
 			}
 		};
+		const material = store.add(new WindowMaterial(window));
+		material.setEnabled(this.nativeBackgroundEnabled);
+		this.materials.set(window.id, material);
+		store.add(material.onDidChange(publish));
 		const events = [
 			'focus',
 			'blur',
@@ -43,7 +50,14 @@ export class NativeHostMainService extends Disposable {
 		store.add(Event.once(Event.fromNodeEventEmitter<unknown>(window, 'closed'))(() => {
 			this._store.delete(store);
 			this.revisions.delete(window.id);
+			this.materials.delete(window.id);
 		}));
+	}
+	public setNativeBackgroundEnabled(enabled: boolean): void {
+		this.nativeBackgroundEnabled = enabled;
+		for (const material of this.materials.values()) {
+			material.setEnabled(enabled);
+		}
 	}
 	private window(windowId: number): BrowserWindow {
 		const window = this.getWindow();
@@ -63,6 +77,7 @@ export class NativeHostMainService extends Disposable {
 			fullscreen: window.isFullScreen(),
 			alwaysOnTop: window.isAlwaysOnTop(),
 			zoomFactor: window.webContents.getZoomFactor(),
+			backgroundMaterial: this.materials.get(window.id)?.material ?? 'none',
 		};
 	}
 	public getWindowState(windowId: number): Promise<IWindowState> {
@@ -98,7 +113,7 @@ export class NativeHostMainService extends Disposable {
 		return Promise.resolve();
 	}
 	public updateWindowControls(windowId: number, options: IWindowControlsOptions): Promise<void> {
-		new CodeWindow(this.window(windowId)).updateWindowControls(options);
+		new CodeWindow(this.window(windowId), this.materials.get(windowId)?.material ?? 'none').updateWindowControls(options);
 		return Promise.resolve();
 	}
 }

@@ -2,7 +2,7 @@
 //! restart and shutdown enable the shutdown privilege on this process token
 //! first. `BlockInput` needs elevation and never blocks Ctrl+Alt+Delete, so
 //! it is reported as available but can still fail per call. There is no
-//! supported display-privacy facility; it stays honestly unsupported.
+//! display privacy uses an owned window excluded from capture on supported Windows.
 //!
 //! Blocking binds to its thread: only the blocking thread may unblock or
 //! inject while blocked. Every `set_input_blocked` call runs on the shared
@@ -24,7 +24,10 @@ use windows::Win32::System::Shutdown::{
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::Win32::UI::Input::KeyboardAndMouse::BlockInput;
 
-pub struct WindowsSystemActions;
+#[derive(Default)]
+pub struct WindowsSystemActions {
+    privacy: crate::privacy::Privacy,
+}
 
 /// Native blocking backend. Every call runs on the shared input owner.
 struct BlockInputBackend;
@@ -81,7 +84,7 @@ impl HostSystemActions for WindowsSystemActions {
             lock: true,
             restart: true,
             shutdown: true,
-            privacy: false,
+            privacy: crate::privacy::supported(),
             input_block: true,
         }
     }
@@ -100,14 +103,21 @@ impl HostSystemActions for WindowsSystemActions {
         self.exit(EWX_SHUTDOWN)
     }
 
-    fn set_display_private(&self, _private: bool) -> Result<(), Error> {
-        Err(Error::Unsupported("privacy mode is not available"))
+    fn set_display_private(&self, private: bool) -> Result<(), Error> {
+        self.privacy.set(private)
     }
 
     fn set_input_blocked(&self, blocked: bool) -> Result<(), Error> {
         // Runs on the shared owner thread with an acknowledged answer; a
         // failed restore retains ownership for the same thread to retry.
         set_blocked(make_block_backend, make_os_inject_backend, blocked)
+    }
+
+    fn observed_privacy(&self) -> Option<(bool, bool)> {
+        Some((
+            self.privacy.observed(),
+            vnilink::system::owner::is_blocked(),
+        ))
     }
 
     fn session_state(&self) -> HostSessionState {

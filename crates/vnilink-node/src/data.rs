@@ -7,14 +7,17 @@ use napi::{
 use napi_derive::napi;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
-use vnilink_app::{FfiTerminalEvent, FfiTerminalSize, TerminalService, VideoPoller, VnilinkCore};
+use vnilink_app::{
+    AudioService, CameraService, FfiTerminalEvent, FfiTerminalSize, TerminalService, VideoPoller,
+    VnilinkCore,
+};
 
 /// Video and input share one Desktop owner, without holding the command mutex.
 #[derive(Default)]
 pub(crate) struct DesktopChannels(Mutex<HashMap<(u64, u64), Weak<DesktopOwner>>>);
-struct DesktopOwner {
+pub(super) struct DesktopOwner {
     core: Arc<VnilinkCore>,
-    service: Arc<vnilink_app::DesktopService>,
+    pub(super) service: Arc<vnilink_app::DesktopService>,
 }
 impl Drop for DesktopOwner {
     fn drop(&mut self) {
@@ -24,7 +27,12 @@ impl Drop for DesktopOwner {
     }
 }
 impl DesktopChannels {
-    fn open(&self, core: &Arc<VnilinkCore>, id: u64, generation: u64) -> Result<Arc<DesktopOwner>> {
+    pub(super) fn open(
+        &self,
+        core: &Arc<VnilinkCore>,
+        id: u64,
+        generation: u64,
+    ) -> Result<Arc<DesktopOwner>> {
         let mut channels = self
             .0
             .lock()
@@ -74,6 +82,8 @@ pub struct DataChannel {
     video: Mutex<Option<VideoPoller>>,
     desktop: Mutex<Option<Arc<DesktopOwner>>>,
     terminal: Mutex<Option<Arc<TerminalService>>>,
+    camera: Mutex<Option<Arc<CameraService>>>,
+    audio: Mutex<Option<Arc<AudioService>>>,
     closed: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -139,8 +149,35 @@ impl DataChannel {
             return Ok(video.as_ref().and_then(VideoPoller::try_recv).map(|frame| DataEvent {
                 kind: "video".into(),
                 data: Some(frame.payload.into()),
-                metadata: serde_json::json!({"keyframe":frame.keyframe,"timestampUs":frame.timestamp_us.to_string(),"displayId":frame.display_id.to_string(),"revision":frame.revision.to_string()}).to_string(),
+                metadata: serde_json::json!({"codec":frame.codec.label(),"keyframe":frame.keyframe,"timestampUs":frame.timestamp_us.to_string(),"displayId":frame.display_id.to_string(),"revision":frame.revision.to_string()}).to_string(),
             }));
+        }
+        if self.kind == "camera" {
+            let camera = self
+                .camera
+                .lock()
+                .map_err(|_| Error::from_reason("Channel unavailable"))?;
+            return Ok(camera.as_ref().and_then(|camera| camera.poll().map(|frame| {
+                let config = camera.config();
+                DataEvent { kind: "camera".into(), data: Some(frame.payload.into()), metadata: serde_json::json!({"codec":frame.codec.label(),"keyframe":frame.keyframe,"timestampUs":frame.timestamp_us.to_string(),"width":config.width,"height":config.height}).to_string() }
+            })));
+        }
+        if self.kind == "audio" {
+            let audio = self
+                .audio
+                .lock()
+                .map_err(|_| Error::from_reason("Channel unavailable"))?;
+            if let Some(audio) = audio.as_ref() {
+                if let Some(block) = audio.poll_playback().map_err(core_error)? {
+                    let bytes: Vec<u8> = block
+                        .samples
+                        .into_iter()
+                        .flat_map(f32::to_le_bytes)
+                        .collect();
+                    return Ok(Some(DataEvent { kind: "audio".into(), data: Some(bytes.into()), metadata: serde_json::json!({"timestamp":block.timestamp.to_string(),"channels":audio.config().channels,"sampleRate":48000,"concealed":block.concealed}).to_string() }));
+                }
+            }
+            return Ok(None);
         }
         if self.kind == "terminal" {
             let terminal = self
@@ -337,6 +374,16 @@ impl DataChannel {
                     terminal.close();
                 }
             }
+            if let Ok(mut camera) = self.camera.lock() {
+                if let Some(camera) = camera.take() {
+                    camera.close();
+                }
+            }
+            if let Ok(mut audio) = self.audio.lock() {
+                if let Some(audio) = audio.take() {
+                    audio.close();
+                }
+            }
             if let Ok(mut video) = self.video.lock() {
                 video.take();
             }
@@ -405,6 +452,25 @@ impl Task for CloseTask {
     }
 }
 
+#[derive(serde::Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum MediaConfig {
+    Camera {
+        #[serde(rename = "deviceId")]
+        device_id: String,
+        width: u16,
+        height: u16,
+        fps: u16,
+    },
+    Audio {
+        #[serde(rename = "deviceId")]
+        device_id: String,
+        #[serde(rename = "sourceKind")]
+        source_kind: String,
+        channels: u8,
+        voice: bool,
+    },
+}
 pub struct OpenChannelTask {
     core: Arc<VnilinkCore>,
     desktops: Arc<DesktopChannels>,
@@ -413,6 +479,7 @@ pub struct OpenChannelTask {
     kind: String,
     rows: u16,
     columns: u16,
+    media: Option<MediaConfig>,
 }
 impl Task for OpenChannelTask {
     type Output = DataChannel;
@@ -444,6 +511,16 @@ impl Task for OpenChannelTask {
         let kind = match self.kind.as_str() {
             "terminal" => Some(vnilink_app::FfiServiceKind::Terminal),
             "files" => Some(vnilink_app::FfiServiceKind::Files),
+            "camera" => Some(vnilink_app::FfiServiceKind::Camera),
+            "audio" => Some(match &self.media {
+                Some(MediaConfig::Audio { source_kind, .. }) if source_kind == "Microphone" => {
+                    vnilink_app::FfiServiceKind::Microphone
+                }
+                Some(MediaConfig::Audio { source_kind, .. }) if source_kind == "System" => {
+                    vnilink_app::FfiServiceKind::SystemAudio
+                }
+                _ => return Err(Error::from_reason("Invalid audio source kind")),
+            }),
             _ => None,
         };
         let owner = kind
@@ -486,6 +563,79 @@ impl Task for OpenChannelTask {
         } else {
             None
         };
+        let camera = if let Some(owner) = owner.as_ref().filter(|_| self.kind == "camera") {
+            let Some(MediaConfig::Camera {
+                device_id,
+                width,
+                height,
+                fps,
+            }) = &self.media
+            else {
+                let _ = self
+                    .core
+                    .close_controller_service(owner.id, owner.generation);
+                return Err(Error::from_reason("Invalid camera configuration"));
+            };
+            match self.core.open_camera_service(
+                owner.id,
+                owner.generation,
+                vnilink_app::FfiCameraConfig {
+                    device_id: device_id.clone(),
+                    width: *width,
+                    height: *height,
+                    fps: *fps,
+                },
+            ) {
+                Ok(service) => Some(service),
+                Err(error) => {
+                    let _ = self
+                        .core
+                        .close_controller_service(owner.id, owner.generation);
+                    return Err(core_error(error));
+                }
+            }
+        } else {
+            None
+        };
+        let audio = if let Some(owner) = owner.as_ref().filter(|_| self.kind == "audio") {
+            let Some(MediaConfig::Audio {
+                device_id,
+                source_kind,
+                channels,
+                voice,
+            }) = &self.media
+            else {
+                let _ = self
+                    .core
+                    .close_controller_service(owner.id, owner.generation);
+                return Err(Error::from_reason("Invalid audio configuration"));
+            };
+            let kind = if source_kind == "Microphone" {
+                vnilink_app::FfiAudioKind::Microphone
+            } else {
+                vnilink_app::FfiAudioKind::System
+            };
+            match self.core.open_audio_service(
+                owner.id,
+                owner.generation,
+                vnilink_app::FfiAudioConfig {
+                    device_id: device_id.clone(),
+                    kind,
+                    channels: *channels,
+                    voice: *voice,
+                },
+            ) {
+                Ok(service) => Some(service),
+                Err(error) => {
+                    let _ = self
+                        .core
+                        .close_controller_service(owner.id, owner.generation);
+                    return Err(core_error(error));
+                }
+            }
+        } else {
+            None
+        };
         Ok(DataChannel {
             core: self.core.clone(),
             session_id: self.id,
@@ -498,6 +648,8 @@ impl Task for OpenChannelTask {
             video: Mutex::new(video),
             desktop: Mutex::new(desktop),
             terminal: Mutex::new(terminal),
+            camera: Mutex::new(camera),
+            audio: Mutex::new(audio),
             closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
@@ -515,9 +667,31 @@ impl Engine {
         generation: String,
         rows: u16,
         columns: u16,
+        media: Option<String>,
     ) -> Result<AsyncTask<OpenChannelTask>> {
-        if !matches!(kind.as_str(), "video" | "terminal" | "input" | "files") {
+        if !matches!(
+            kind.as_str(),
+            "video" | "terminal" | "input" | "files" | "camera" | "audio"
+        ) {
             return Err(Error::from_reason("Invalid channel kind"));
+        }
+        let config = media
+            .map(|raw| {
+                if raw.len() > 4096 {
+                    return Err(Error::from_reason("Media configuration too large"));
+                }
+                serde_json::from_str::<MediaConfig>(&raw)
+                    .map_err(|_| Error::from_reason("Invalid media configuration"))
+            })
+            .transpose()?;
+        match (&*kind, &config) {
+            ("camera", Some(MediaConfig::Camera { .. }))
+            | ("audio", Some(MediaConfig::Audio { .. })) => {}
+            ("camera" | "audio", _) => {
+                return Err(Error::from_reason("Media configuration required"))
+            }
+            (_, Some(_)) => return Err(Error::from_reason("Unexpected media configuration")),
+            _ => {}
         }
         Ok(AsyncTask::new(OpenChannelTask {
             core: self.core.clone(),
@@ -527,6 +701,7 @@ impl Engine {
             kind,
             rows,
             columns,
+            media: config,
         }))
     }
 }
@@ -686,6 +861,7 @@ mod tests {
             hardware: false,
             device: "test".into(),
             chroma444: false,
+            additional: Vec::new(),
         };
         controller.set_video_codecs(caps.clone()).unwrap();
         host.set_video_codecs(caps).unwrap();
@@ -714,6 +890,7 @@ mod tests {
             kind: "video".into(),
             rows: 24,
             columns: 80,
+            media: None,
         };
         host.authorize_service(
             controller.endpoint_id(),
@@ -919,6 +1096,7 @@ mod tests {
             kind: "terminal".into(),
             rows: 24,
             columns: 80,
+            media: None,
         };
         let channel = task.compute().unwrap();
         channel
@@ -965,6 +1143,7 @@ mod tests {
             kind: "files".into(),
             rows: 24,
             columns: 80,
+            media: None,
         };
         let files = file_open.compute().unwrap();
         let mut file_task = FileTask {

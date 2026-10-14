@@ -199,3 +199,98 @@ fn the_keyboard_mode_is_process_local_and_character_by_default() {
         Err(Error::ShutDown)
     ));
 }
+
+#[test]
+fn input_defaults_cover_live_and_future_connections_and_refuse_held_input_atomically() {
+    let hosts = [start_direct(), start_direct(), start_direct()];
+    let controller = start_direct();
+    for host in &hosts {
+        host.set_desktop(Box::new(recording(Arc::new(Mutex::new(Vec::new())), false)))
+            .unwrap();
+        pair(host, &controller);
+    }
+    let first = controller.connect(&hosts[0].endpoint_id()).unwrap();
+    let pending = controller.begin_connect(&hosts[1].endpoint_id()).unwrap();
+    wait_until(|| controller.controller_session(pending.id).unwrap().phase == SessionPhase::Active);
+    let second = controller.controller_session(pending.id).unwrap();
+    let pointer = crate::PointerSettings {
+        sensitivity_percent: 175,
+        reverse_wheel: true,
+        swap_buttons: true,
+    };
+    controller
+        .set_input_defaults(KeyboardMode::Map, true, pointer)
+        .unwrap();
+    for session in [&first, &second] {
+        assert_eq!(
+            controller
+                .session_keyboard_mode(session.id, session.generation)
+                .unwrap(),
+            KeyboardMode::Map
+        );
+        assert!(controller
+            .session_swap_control_and_command(session.id, session.generation)
+            .unwrap());
+        assert_eq!(
+            controller
+                .session_pointer_settings(session.id, session.generation)
+                .unwrap(),
+            pointer
+        );
+    }
+    controller
+        .submit_local_key(
+            first.id,
+            first.generation,
+            local(usage::LEFT_CONTROL, true, ""),
+        )
+        .unwrap();
+    assert!(controller
+        .set_input_defaults(
+            KeyboardMode::Character,
+            false,
+            crate::PointerSettings::default()
+        )
+        .is_err());
+    assert_eq!(controller.keyboard_mode().unwrap(), KeyboardMode::Map);
+    assert_eq!(
+        controller
+            .session_pointer_settings(second.id, second.generation)
+            .unwrap(),
+        pointer
+    );
+    controller
+        .release_session_input(first.id, first.generation)
+        .unwrap();
+    let pending = controller.begin_connect(&hosts[2].endpoint_id()).unwrap();
+    wait_until(|| controller.controller_session(pending.id).unwrap().phase == SessionPhase::Active);
+    let third = controller.controller_session(pending.id).unwrap();
+    assert_eq!(
+        controller
+            .session_pointer_settings(third.id, third.generation)
+            .unwrap(),
+        pointer
+    );
+    assert_eq!(
+        controller
+            .session_keyboard_mode(third.id, third.generation)
+            .unwrap(),
+        KeyboardMode::Map
+    );
+    assert!(controller
+        .set_input_defaults(
+            KeyboardMode::Character,
+            false,
+            crate::PointerSettings {
+                sensitivity_percent: 0,
+                ..pointer
+            }
+        )
+        .is_err());
+    assert_eq!(
+        controller
+            .session_pointer_settings(third.id, third.generation)
+            .unwrap(),
+        pointer
+    );
+}

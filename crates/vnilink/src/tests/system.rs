@@ -97,6 +97,10 @@ impl HostSystemActions for FakeActions {
         calls.input_calls += 1;
         Ok(())
     }
+    fn observed_privacy(&self) -> Option<(bool, bool)> {
+        let calls = self.calls.lock().unwrap();
+        Some((calls.display_private, calls.input_blocked))
+    }
     fn session_state(&self) -> HostSessionState {
         HostSessionState {
             locked: Some(false),
@@ -994,4 +998,29 @@ fn partial_restore_keeps_remainder_and_repeated_narrowing_retries() {
         crate::PrivacyState::default()
     );
     assert!(!*actions.display_private.lock().unwrap());
+}
+
+#[test]
+fn local_privacy_release_is_observed_and_reenable_reapplies_native_restrictions() {
+    let (host, controller, actions) = paired_system();
+    host.set_system_policy(SystemPolicy {
+        allow_privacy: true,
+        ..Default::default()
+    })
+    .unwrap();
+    let parent = active_parent(&controller, &host);
+    let system = open_system(&controller, &parent);
+    system.set_privacy(true, true).unwrap();
+    {
+        let mut calls = actions.calls.lock().unwrap();
+        calls.display_private = false;
+        calls.input_blocked = false;
+    }
+    let observed = host.system_privacy().unwrap();
+    assert!(!observed.display_private && !observed.input_blocked);
+    assert!(!system.privacy().unwrap().display_private);
+    system.set_privacy(true, true).unwrap();
+    assert!(actions.calls.lock().unwrap().display_private);
+    assert!(host.system_privacy().unwrap().input_blocked);
+    system.close();
 }

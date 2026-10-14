@@ -97,28 +97,20 @@ mod native {
     pub struct NativeTerminalFactory {
         program: std::path::PathBuf,
         directory: std::path::PathBuf,
+        login: bool,
     }
     impl NativeTerminalFactory {
-        /// Locally selected login shell, with predictable fallbacks. Nothing in
+        /// Account login shell and home directory. Nothing in
         /// a remote request can override this executable or home directory.
         pub fn for_current_user() -> Result<Self, Error> {
-            let directory = std::env::var_os("HOME")
-                .map(std::path::PathBuf::from)
-                .filter(|p| p.is_absolute() && p.is_dir())
-                .ok_or(Error::InvalidSetting(
-                    "the host home directory is unavailable",
-                ))?;
-            let selected = std::env::var_os("SHELL").map(std::path::PathBuf::from);
-            let program = selected
-                .into_iter()
-                .chain(
-                    ["/bin/zsh", "/bin/bash", "/bin/sh"]
-                        .into_iter()
-                        .map(std::path::PathBuf::from),
-                )
-                .find(|p| p.is_absolute() && p.is_file())
-                .ok_or(Error::Unsupported("host shell"))?;
-            Self::new(program, directory)
+            let account = nix::unistd::User::from_uid(nix::unistd::Uid::effective())
+                .map_err(|_| Error::Unsupported("host account lookup"))?
+                .ok_or(Error::Unsupported("host account"))?;
+            let directory = account.dir;
+            let program = account.shell;
+            let mut factory = Self::new(program, directory)?;
+            factory.login = true;
+            Ok(factory)
         }
         pub fn new(
             program: std::path::PathBuf,
@@ -133,7 +125,11 @@ mod native {
                     "choose an absolute shell path and an existing working directory",
                 ));
             }
-            Ok(Self { program, directory })
+            Ok(Self {
+                program,
+                directory,
+                login: false,
+            })
         }
     }
     fn size(value: TerminalSize) -> PtySize {
@@ -180,8 +176,13 @@ mod native {
                 .map_err(|_| Error::Unsupported("terminal writer"))?;
             startup.check()?;
             let mut command = CommandBuilder::new(&self.program);
+            if self.login {
+                command.arg("-l");
+            }
             command.cwd(&self.directory);
             command.env("TERM", "xterm-256color");
+            command.env("SHELL", &self.program);
+            command.env("HOME", &self.directory);
             let child = pair
                 .slave
                 .spawn_command(command)
@@ -341,6 +342,25 @@ mod native {
                 output: events,
                 stop,
             })
+        }
+    }
+    #[cfg(test)]
+    mod account_tests {
+        use super::*;
+        #[test]
+        fn default_terminal_uses_account_shell_and_home() {
+            let account = nix::unistd::User::from_uid(nix::unistd::Uid::effective())
+                .unwrap()
+                .unwrap();
+            let factory = NativeTerminalFactory::for_current_user().unwrap();
+            assert_eq!(factory.program, account.shell);
+            assert_eq!(factory.directory, account.dir);
+            assert!(factory.login);
+            assert!(
+                !NativeTerminalFactory::new(factory.program, factory.directory)
+                    .unwrap()
+                    .login
+            );
         }
     }
 }

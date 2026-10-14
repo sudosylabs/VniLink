@@ -162,7 +162,8 @@ impl HostSessionState {
 /// Host-local policy for remote OS actions. Restart and shutdown stay denied
 /// until the local owner explicitly allows them; the per-peer System grant is
 /// still required for every action.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SystemPolicy {
     pub allow_lock: bool,
     pub allow_restart: bool,
@@ -224,6 +225,10 @@ pub trait HostSystemActions: Send + Sync {
     fn shutdown(&self) -> Result<(), Error>;
     fn set_display_private(&self, private: bool) -> Result<(), Error>;
     fn set_input_blocked(&self, blocked: bool) -> Result<(), Error>;
+    /// Native observation when restrictions can expire or be locally released.
+    fn observed_privacy(&self) -> Option<(bool, bool)> {
+        None
+    }
     fn session_state(&self) -> HostSessionState;
 }
 

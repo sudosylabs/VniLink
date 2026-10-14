@@ -1190,6 +1190,7 @@ fn native_camera_callback_and_frame_queue_cross_ffi() {
     let source = produced.lock().unwrap().clone().unwrap();
     assert!(source.take_keyframe_request());
     let expected = FfiEncodedFrame {
+        codec: vnilink::VideoCodec::H264,
         keyframe: true,
         timestamp_us: 42,
         payload: vec![9; 300_000],

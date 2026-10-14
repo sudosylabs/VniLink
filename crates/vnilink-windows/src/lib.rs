@@ -57,3 +57,6 @@ mod camera;
 mod camera_format;
 #[cfg(windows)]
 pub use camera::{camera_devices, WindowsCameraFactory};
+
+#[cfg(windows)]
+mod privacy;

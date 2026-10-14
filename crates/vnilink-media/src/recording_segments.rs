@@ -4,7 +4,7 @@
 //! filename the recording did not create (a prior recording, a user file)
 //! is never swept, and a mid-recording index collision fails as Storage
 //! instead of overwriting.
-use crate::{h264_picture_size, parse_annex_b, MatroskaRecorder, RecordingError, RecordingLimits};
+use crate::{MatroskaRecorder, RecordingError, RecordingLimits};
 use std::{
     ffi::OsString,
     fs::File,
@@ -210,20 +210,14 @@ impl SegmentWriter {
         frame: &vnilink::EncodedFrame,
         strict: bool,
     ) -> Result<(), RecordingFailure> {
-        let parsed = parse_annex_b(&frame.payload).map_err(|_| RecordingFailure::Media)?;
-        if !(frame.keyframe && parsed.has_idr() && parsed.has_sps() && parsed.has_pps()) {
+        if !frame.keyframe {
             if strict {
                 return Err(RecordingFailure::Media);
             }
             return Ok(());
         }
-        let sps = parsed
-            .units()
-            .iter()
-            .find(|n| n.nal_type == 7)
-            .ok_or(RecordingFailure::Media)?;
         let (width, height) =
-            h264_picture_size(sps.bytes()).map_err(|_| RecordingFailure::Media)?;
+            crate::recording_format::picture_size(frame).map_err(|_| RecordingFailure::Media)?;
         let partial = Self::segment_paths(&self.dir, &self.stem, self.index).1;
         let file = vnilink_rename::create_recording_file(&partial)
             .map_err(|_| RecordingFailure::Storage)?;

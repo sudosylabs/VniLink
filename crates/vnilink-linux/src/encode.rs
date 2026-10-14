@@ -82,3 +82,17 @@ impl VideoEncoder for LinuxEncoder {
         }
     }
 }
+
+impl LinuxEncoder {
+    pub fn open_codec(
+        w: u16,
+        h: u16,
+        fps: u8,
+        bps: u32,
+        codec: u8,
+    ) -> Result<vnilink_media::CodecEncoder<Self>, Error> {
+        vnilink_media::CodecEncoder::open(codec, w, h, fps, bps, |w, h, fps, bps| {
+            Self::open(w, h, fps, bps, codec == vnilink::CODEC_H264_HIGH)
+        })
+    }
+}

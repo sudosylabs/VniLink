@@ -18,6 +18,9 @@ mod audio;
 mod audio_native;
 #[cfg(test)]
 mod audio_tests;
+mod native;
+mod native_clipboard;
+pub use native::FfiNativeBackend;
 mod availability;
 pub use audio_native::NativeAudioPlayback;
 mod camera;
@@ -77,10 +80,10 @@ pub use files::{
     FfiFileRetentionPolicy, FfiFileRoot, FfiFsEntry, FfiJobDirection, FfiJobSnapshot, FfiJobState,
 };
 pub use types::{
-    new_quality, FfiCapabilities, FfiControlRequest, FfiDeviceInfo, FfiDisplay, FfiEncodedFrame,
-    FfiEvent, FfiGrants, FfiKeyboardMode, FfiPairingFile, FfiPairingPreview, FfiPointerButton,
-    FfiPointerSettings, FfiQuality, FfiSessionInfo, FfiSessionPath, FfiSessionPhase,
-    FfiSessionRole, FfiSnapshot, FfiVideoCodecCaps,
+    new_quality, FfiCapabilities, FfiCodecPreference, FfiControlRequest, FfiDeviceInfo, FfiDisplay,
+    FfiEncodedFrame, FfiEvent, FfiGrants, FfiKeyboardMode, FfiPairingFile, FfiPairingPreview,
+    FfiPointerButton, FfiPointerSettings, FfiQuality, FfiSessionInfo, FfiSessionPath,
+    FfiSessionPhase, FfiSessionRole, FfiSnapshot, FfiVideoCodec, FfiVideoCodecCaps,
 };
 
 use std::collections::HashMap;
@@ -188,6 +191,10 @@ impl VnilinkCore {
     }
 
     /// Saved relays for the next launch. An empty list means public relays.
+    pub fn relay_restart_required(&self) -> Result<bool, FfiError> {
+        self.inner.relay_restart_required().map_err(map_error)
+    }
+
     pub fn saved_relays(&self) -> Result<Vec<FfiRelay>, FfiError> {
         Ok(match self.inner.relay_configuration().map_err(map_error)? {
             RelaySettings::Public => Vec::new(),
@@ -811,6 +818,47 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
+    pub fn set_input_defaults(
+        &self,
+        mode: FfiKeyboardMode,
+        swap: bool,
+        pointer: FfiPointerSettings,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .set_input_defaults(types::to_keyboard_mode(mode), swap, pointer.into())
+            .map_err(map_error)
+    }
+
+    /// Selects the codec for future outgoing Desktop owners.
+    pub fn set_desktop_codec_default(&self, codec: FfiCodecPreference) -> Result<(), FfiError> {
+        self.inner
+            .set_desktop_codec_default(codec.into())
+            .map_err(map_error)
+    }
+
+    pub fn set_desktop_quality_defaults(&self, quality: FfiQuality) -> Result<(), FfiError> {
+        self.inner
+            .set_desktop_quality_defaults(types::to_quality(quality)?)
+            .map_err(map_error)
+    }
+
+    pub fn update_session_quality_for_generation(
+        &self,
+        session_id: u64,
+        generation: u64,
+        role: FfiSessionRole,
+        quality: FfiQuality,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .update_session_quality_for_generation(
+                session_id,
+                generation,
+                types::to_session_role(role),
+                types::to_quality(quality)?,
+            )
+            .map_err(map_error)
+    }
+
     pub fn update_session_quality(
         &self,
         session_id: u64,
@@ -850,6 +898,17 @@ impl VnilinkCore {
     ) -> Result<(), FfiError> {
         let frame =
             vnilink::EncodedFrame::h264(keyframe, timestamp_us, payload).map_err(map_error)?;
+        self.inner
+            .publish_video(session_id, frame)
+            .map_err(map_error)
+    }
+
+    /// Publish a typed packet without assuming the negotiated codec is H.264.
+    pub fn publish_video_frame(
+        &self,
+        session_id: u64,
+        frame: FfiEncodedFrame,
+    ) -> Result<(), FfiError> {
         self.inner
             .publish_video(session_id, frame)
             .map_err(map_error)

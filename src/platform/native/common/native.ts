@@ -4,6 +4,7 @@
  *  Adapted for VniLink: native window controls and window state only.
  *--------------------------------------------------------------------------------------------*/
 
+import type { WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
 import type { Event } from '../../../base/common/event.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 export interface IWindowState {
@@ -14,6 +15,7 @@ export interface IWindowState {
 	readonly fullscreen: boolean;
 	readonly alwaysOnTop: boolean;
 	readonly zoomFactor: number;
+	readonly backgroundMaterial: WindowBackgroundMaterial;
 }
 export interface IWindowControlsOptions {
 	readonly targetWindowId?: number;
@@ -71,7 +73,9 @@ export function isWindowState(value: unknown): value is IWindowState {
 		typeof value.zoomFactor === 'number' &&
 		Number.isFinite(value.zoomFactor) &&
 		value.zoomFactor >= 0.25 &&
-		value.zoomFactor <= 5
+		value.zoomFactor <= 5 &&
+		'backgroundMaterial' in value &&
+		(value.backgroundMaterial === 'none' || value.backgroundMaterial === 'vibrancy' || value.backgroundMaterial === 'mica')
 	);
 }
 export function isNativeHostRequest(method: unknown, args: unknown): method is NativeHostMethod {

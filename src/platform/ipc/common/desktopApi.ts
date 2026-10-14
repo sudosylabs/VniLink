@@ -1,6 +1,9 @@
+import type { RestartState } from '../../application/common/application.js';
+import type { PermissionCommand, PermissionSnapshot } from '../../permissions/common/permissions.js';
 import type { DataChannelRequest } from '../../engine/common/dataChannel.js';
 import type { NativeHostMethod, IWindowState } from '../../native/common/native.js';
-import type { EngineCommand, EngineReply } from '../../engine/common/engine.js';
+import type { EngineCommand, EngineReply, NativeScreenSource } from '../../engine/common/engine.js';
+import type { ConfigurationSnapshot, ConfigurationUpdate } from '../../configuration/common/configuration.js';
 export interface AppInfo {
 	windowId: number;
 	osRelease: string;
@@ -10,6 +13,15 @@ export interface AppInfo {
 }
 
 export interface DesktopApi {
+	getCaptureDisplays(): Promise<readonly NativeScreenSource[]>;
+	getRestartState(): Promise<RestartState>;
+	onRestartStateChanged(listener: (state: RestartState) => void): () => void;
+	restartApplication(): Promise<void>;
+	openRelayDocumentation(): Promise<void>;
+	permissionCommand(command: PermissionCommand): Promise<PermissionSnapshot>;
+	getConfiguration(): Promise<ConfigurationSnapshot>;
+	updateConfiguration(change: ConfigurationUpdate): Promise<ConfigurationSnapshot>;
+	onConfigurationChanged(listener: (snapshot: ConfigurationSnapshot) => void): () => void;
 	openDataChannel(request: DataChannelRequest): Promise<void>;
 	getAppInfo(): Promise<AppInfo>;
 	nativeHostCommand(method: NativeHostMethod, args: unknown[]): Promise<unknown>;

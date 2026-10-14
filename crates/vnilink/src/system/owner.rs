@@ -174,7 +174,7 @@ where
 
 /// True once an acknowledged block is in force. False before the first
 /// install, so platforms without an owner always inject direct.
-pub(crate) fn is_blocked() -> bool {
+pub fn is_blocked() -> bool {
     GLOBAL.get().is_some_and(Owner::is_blocked)
 }
 

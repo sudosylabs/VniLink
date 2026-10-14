@@ -23,5 +23,13 @@ export function resources(root) {
 		['node_modules/@phosphor-icons/core/LICENSE', 'licenses/phosphor-icons.txt'],
 		['LICENSE.vscode.txt', 'licenses/vscode.txt'],
 		['ThirdPartyNotices.vscode.txt', 'licenses/vscode-third-party.txt'],
+		['assets/licenses', 'licenses/native-codecs'],
+		['Cargo.toml', 'relink/source/Cargo.toml'],
+		['Cargo.lock', 'relink/source/Cargo.lock'],
+		['.cargo/config.toml', 'relink/source/.cargo/config.toml'],
+		['rust-toolchain.toml', 'relink/source/rust-toolchain.toml'],
+		['crates', 'relink/source/crates'],
+		['vendor', 'relink/source/vendor'],
+		['.github/workflows/ci.yml', 'relink/source/.github/workflows/ci.yml'],
 	].map(([source, output]) => ({ source: join(root, source), output: join(root, 'out', output) }));
 }

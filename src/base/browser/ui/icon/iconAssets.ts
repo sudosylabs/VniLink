@@ -28,9 +28,46 @@ import maximizeFilled from '@phosphor-icons/core/assets/fill/square-fill.svg';
 import restoreOutlined from '@phosphor-icons/core/assets/regular/copy.svg';
 import restoreFilled from '@phosphor-icons/core/assets/fill/copy-fill.svg';
 
+import connectionOutlined from '@phosphor-icons/core/assets/regular/plugs.svg';
+import connectionFilled from '@phosphor-icons/core/assets/fill/plugs-fill.svg';
+import securityOutlined from '@phosphor-icons/core/assets/regular/shield-check.svg';
+import securityFilled from '@phosphor-icons/core/assets/fill/shield-check-fill.svg';
+import keyboardOutlined from '@phosphor-icons/core/assets/regular/keyboard.svg';
+import keyboardFilled from '@phosphor-icons/core/assets/fill/keyboard-fill.svg';
+import filesOutlined from '@phosphor-icons/core/assets/regular/folder.svg';
+import filesFilled from '@phosphor-icons/core/assets/fill/folder-fill.svg';
+import terminalOutlined from '@phosphor-icons/core/assets/regular/terminal-window.svg';
+import terminalFilled from '@phosphor-icons/core/assets/fill/terminal-window-fill.svg';
+import audioOutlined from '@phosphor-icons/core/assets/regular/speaker-high.svg';
+import audioFilled from '@phosphor-icons/core/assets/fill/speaker-high-fill.svg';
+import recordingOutlined from '@phosphor-icons/core/assets/regular/record.svg';
+import recordingFilled from '@phosphor-icons/core/assets/fill/record-fill.svg';
+import powerOutlined from '@phosphor-icons/core/assets/regular/power.svg';
+import powerFilled from '@phosphor-icons/core/assets/fill/power-fill.svg';
+
+import devicesOutlined from '@phosphor-icons/core/assets/regular/devices.svg';
+import devicesFilled from '@phosphor-icons/core/assets/fill/devices-fill.svg';
+import remoteDesktopOutlined from '@phosphor-icons/core/assets/regular/computer-tower.svg';
+import remoteDesktopFilled from '@phosphor-icons/core/assets/fill/computer-tower-fill.svg';
+
+import appearanceOutlined from '@phosphor-icons/core/assets/regular/palette.svg';
+import appearanceFilled from '@phosphor-icons/core/assets/fill/palette-fill.svg';
+
 // The only place that knows the icon provider and its filenames.
 const assets: Record<IconId, Record<IconVariant, string>> = {
+	appearance: { outlined: appearanceOutlined, filled: appearanceFilled },
+	connection: { outlined: connectionOutlined, filled: connectionFilled },
+	security: { outlined: securityOutlined, filled: securityFilled },
+	keyboard: { outlined: keyboardOutlined, filled: keyboardFilled },
+	files: { outlined: filesOutlined, filled: filesFilled },
+	terminal: { outlined: terminalOutlined, filled: terminalFilled },
+	audio: { outlined: audioOutlined, filled: audioFilled },
+	recording: { outlined: recordingOutlined, filled: recordingFilled },
+	power: { outlined: powerOutlined, filled: powerFilled },
+	devices: { outlined: devicesOutlined, filled: devicesFilled },
+	remoteDesktop: { outlined: remoteDesktopOutlined, filled: remoteDesktopFilled },
 	refresh: { outlined: refreshOutlined, filled: refreshFilled },
+	restart: { outlined: refreshOutlined, filled: refreshFilled },
 	home: { outlined: homeOutlined, filled: homeFilled },
 	computers: { outlined: computersOutlined, filled: computersFilled },
 	back: { outlined: backOutlined, filled: backFilled },

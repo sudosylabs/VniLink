@@ -28,59 +28,10 @@ pub struct FfiCapabilities {
 
 /// Probe-validated H.264 abilities. Every set bit means a backend
 /// initialized and processed a sample.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FfiVideoCodecCaps {
-    pub encode_baseline: bool,
-    pub encode_high: bool,
-    pub decode_baseline: bool,
-    pub decode_high: bool,
-    pub max_width: u16,
-    pub max_height: u16,
-    pub hardware: bool,
-    pub device: String,
-    pub chroma444: bool,
-}
-
-impl From<vnilink::VideoCodecCaps> for FfiVideoCodecCaps {
-    fn from(value: vnilink::VideoCodecCaps) -> Self {
-        Self {
-            encode_baseline: value.encode_baseline,
-            encode_high: value.encode_high,
-            decode_baseline: value.decode_baseline,
-            decode_high: value.decode_high,
-            max_width: value.max_width,
-            max_height: value.max_height,
-            hardware: value.hardware,
-            device: value.device,
-            chroma444: value.chroma444,
-        }
-    }
-}
-
-impl From<FfiVideoCodecCaps> for vnilink::VideoCodecCaps {
-    fn from(value: FfiVideoCodecCaps) -> Self {
-        Self {
-            encode_baseline: value.encode_baseline,
-            encode_high: value.encode_high,
-            decode_baseline: value.decode_baseline,
-            decode_high: value.decode_high,
-            max_width: value.max_width,
-            max_height: value.max_height,
-            hardware: value.hardware,
-            device: value.device,
-            chroma444: value.chroma444,
-        }
-    }
-}
+pub use vnilink::VideoCodecCaps as FfiVideoCodecCaps;
 
 /// Preferred limits for the platform encoder.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-pub struct FfiQuality {
-    pub max_bitrate_kbps: u32,
-    pub max_frame_rate: u8,
-    pub max_width: u16,
-    pub max_height: u16,
-}
+pub use vnilink::Quality as FfiQuality;
 
 pub fn new_quality(
     max_bitrate_kbps: u32,
@@ -194,14 +145,8 @@ pub struct FfiSessionPath {
 /// `display_id`/`revision` attest the captured source (topology display id
 /// and revision); zero means unstamped. Viewers map pointer input by this
 /// id instead of guessing from picture dimensions.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FfiEncodedFrame {
-    pub keyframe: bool,
-    pub timestamp_us: u64,
-    pub payload: Vec<u8>,
-    pub display_id: u64,
-    pub revision: u64,
-}
+pub use vnilink::EncodedFrame as FfiEncodedFrame;
+pub use vnilink::VideoCodec as FfiVideoCodec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiKeyboardMode {
@@ -325,12 +270,7 @@ pub(crate) fn capabilities(capabilities: &vnilink::Capabilities) -> FfiCapabilit
 }
 
 pub(crate) fn quality_record(quality: &vnilink::Quality) -> FfiQuality {
-    FfiQuality {
-        max_bitrate_kbps: quality.max_bitrate_kbps,
-        max_frame_rate: quality.max_frame_rate,
-        max_width: quality.max_width,
-        max_height: quality.max_height,
-    }
+    *quality
 }
 
 pub(crate) fn to_quality(quality: FfiQuality) -> Result<vnilink::Quality, FfiError> {
@@ -614,5 +554,34 @@ mod bridge_serialization_tests {
         let value = serde_json::to_value(session).unwrap();
         assert_eq!(value["id"], u64::MAX.to_string());
         assert_eq!(value["generation"], u64::MAX.to_string());
+    }
+}
+
+/// Saved codec preference for new outgoing Desktop owners.
+#[derive(Debug, Clone, Copy)]
+pub enum FfiCodecPreference {
+    /// Choose a common codec automatically.
+    Auto,
+    /// Require H.264.
+    H264,
+    /// Require H.265.
+    H265,
+    /// Require VP8.
+    Vp8,
+    /// Require VP9.
+    Vp9,
+    /// Require AV1.
+    Av1,
+}
+impl From<FfiCodecPreference> for Option<vnilink::VideoCodec> {
+    fn from(value: FfiCodecPreference) -> Self {
+        match value {
+            FfiCodecPreference::Auto => None,
+            FfiCodecPreference::H264 => Some(vnilink::VideoCodec::H264),
+            FfiCodecPreference::H265 => Some(vnilink::VideoCodec::H265),
+            FfiCodecPreference::Vp8 => Some(vnilink::VideoCodec::Vp8),
+            FfiCodecPreference::Vp9 => Some(vnilink::VideoCodec::Vp9),
+            FfiCodecPreference::Av1 => Some(vnilink::VideoCodec::Av1),
+        }
     }
 }

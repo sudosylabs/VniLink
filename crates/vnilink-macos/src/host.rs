@@ -14,7 +14,7 @@ pub use vnilink_media::HostSession;
 use vnilink_media::{Error, FrameSource, PublishError, Quality, RawFrame};
 
 #[cfg(target_os = "macos")]
-use crate::encode::MacEncoder;
+use crate::encode::MacVideoEncoder;
 
 #[cfg(target_os = "macos")]
 impl FrameSource for crate::capture::ScreenCapture {
@@ -42,16 +42,14 @@ pub fn serve_stream(
     quality: Quality,
     stop: &AtomicBool,
 ) -> Result<(), PublishError> {
-    let high = core
-        .host_codec(session_id)
-        .is_ok_and(|codec| codec == vnilink::CODEC_H264_HIGH);
+    let codec = core.host_codec(session_id).unwrap_or(vnilink::CODEC_H264);
     vnilink_media::serve_capture(
         capture,
         core,
         session_id,
         quality,
         stop,
-        move |w, h, fps, bps| MacEncoder::open(w, h, fps, bps, high),
+        move |w, h, fps, bps| MacVideoEncoder::open(w, h, fps, bps, codec),
     )
 }
 
@@ -89,8 +87,8 @@ pub fn serve_shared(
             );
         },
         |target, width, height, fps, bps| {
-            let high = target.codec == vnilink::CODEC_H264_HIGH;
-            MacEncoder::open(width, height, fps, bps, high)
+            let codec = target.codec;
+            MacVideoEncoder::open(width, height, fps, bps, codec)
         },
     )
 }
@@ -131,13 +129,13 @@ pub fn serve_desktop(
     stop: &AtomicBool,
 ) -> Result<(), PublishError> {
     let info = core.hosted_desktop_info(service_id, generation)?;
-    let high = info.codec == vnilink::CODEC_H264_HIGH;
+    let codec = info.codec;
     vnilink_media::serve_desktop_capture(
         capture,
         core,
         service_id,
         generation,
         stop,
-        move |w, h, fps, bps| MacEncoder::open(w, h, fps, bps, high),
+        move |w, h, fps, bps| MacVideoEncoder::open(w, h, fps, bps, codec),
     )
 }

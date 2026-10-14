@@ -146,13 +146,7 @@ impl CameraService {
         self.inner.is_cancelled()
     }
     pub fn poll(&self) -> Option<FfiEncodedFrame> {
-        self.inner.try_recv().map(|f| FfiEncodedFrame {
-            keyframe: f.keyframe,
-            timestamp_us: f.timestamp_us,
-            payload: f.payload,
-            display_id: f.display_id,
-            revision: f.revision,
-        })
+        self.inner.try_recv()
     }
     pub fn lagged(&self) -> u64 {
         self.inner.lagged()

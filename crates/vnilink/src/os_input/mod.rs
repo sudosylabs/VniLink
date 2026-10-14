@@ -31,8 +31,11 @@ pub struct OsInput {
 
 impl OsInput {
     pub fn open() -> Result<Self, Error> {
+        Self::open_with_prompt(true)
+    }
+    pub(crate) fn open_with_prompt(prompt: bool) -> Result<Self, Error> {
         let settings = Settings {
-            open_prompt_to_get_permissions: true,
+            open_prompt_to_get_permissions: prompt,
             release_keys_when_dropped: true,
             independent_of_keyboard_state: true,
             ..Settings::default()

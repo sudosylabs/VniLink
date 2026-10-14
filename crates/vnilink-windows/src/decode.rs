@@ -39,6 +39,7 @@ struct OpenDecoder {
 }
 
 pub struct WindowsDecoder {
+    software: vnilink_media::SoftwareDecoderSlot,
     open: Option<OpenDecoder>,
 }
 
@@ -49,7 +50,10 @@ unsafe impl Send for WindowsDecoder {}
 
 impl WindowsDecoder {
     pub fn new() -> Self {
-        Self { open: None }
+        Self {
+            open: None,
+            software: Default::default(),
+        }
     }
 }
 
@@ -61,6 +65,9 @@ impl Default for WindowsDecoder {
 
 impl VideoDecoder for WindowsDecoder {
     fn decode(&mut self, frame: &EncodedFrame) -> Result<RawFrame, Error> {
+        if let Some(result) = self.software.decode(frame) {
+            return result;
+        }
         let parsed = parse_annex_b(&frame.payload)?;
         let mut parameter_sets = Vec::new();
         for unit in parsed.units() {

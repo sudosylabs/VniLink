@@ -17,7 +17,7 @@ use crate::error::Error;
 use super::path::{check_rel, UNSAFE_PATH};
 
 /// Largest number of approved roots.
-pub const MAX_ROOTS: usize = 16;
+pub const MAX_ROOTS: usize = 32;
 
 pub(crate) const NO_ROOTS: &str = "no file roots are set";
 pub(crate) const UNKNOWN_ROOT: &str = "the file root is unknown";
@@ -50,6 +50,7 @@ pub(crate) struct PinnedRoot {
 pub(crate) struct RootSet {
     roots: Vec<Root>,
     epoch: u64,
+    whole_filesystem: bool,
 }
 
 impl Default for RootSet {
@@ -62,6 +63,7 @@ impl Default for RootSet {
         Self {
             roots: Vec::new(),
             epoch: rand::random(),
+            whole_filesystem: false,
         }
     }
 }
@@ -107,13 +109,17 @@ impl RootSet {
     }
 
     pub(crate) fn set(&mut self, paths: &[PathBuf]) -> Result<(), Error> {
+        self.set_mode(paths, false)
+    }
+
+    fn set_mode(&mut self, paths: &[PathBuf], whole_filesystem: bool) -> Result<(), Error> {
         if paths.len() > MAX_ROOTS {
             return Err(Error::InvalidSetting("too many file roots"));
         }
         // Path-based child operations cannot enforce confinement on Windows.
         // Refuse admission rather than expose roots with a check/use race.
         #[cfg(windows)]
-        if !paths.is_empty() {
+        if !paths.is_empty() && !whole_filesystem {
             return Err(Error::Unsupported(
                 "rooted Files operations require handle-relative Windows support",
             ));
@@ -173,8 +179,51 @@ impl RootSet {
             }
         }
         self.roots = roots;
+        self.whole_filesystem = whole_filesystem;
         self.epoch += 1;
         Ok(())
+    }
+
+    /// Whole-filesystem browsing is a distinct owner choice. It never grants
+    /// a peer Files permission or elevates the process's OS access.
+    pub(crate) fn set_filesystem(&mut self) -> Result<(), Error> {
+        #[cfg(unix)]
+        {
+            self.set(&[PathBuf::from("/")])?;
+            self.whole_filesystem = true;
+            Ok(())
+        }
+        #[cfg(windows)]
+        {
+            let paths = vnilink_rename::windows::drive_roots()
+                .map_err(|_| Error::Unsupported("Windows mounted drives"))?;
+            let available: Vec<_> = paths
+                .into_iter()
+                .filter(|p| vnilink_rename::windows::open_directory(p).is_ok())
+                .collect();
+            if available.is_empty() {
+                return Err(Error::Unsupported("no accessible drives"));
+            }
+            self.set_mode(&available, true)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            Err(Error::Unsupported("whole-filesystem native operations"))
+        }
+    }
+
+    #[cfg(unix)]
+    fn directory_path(&self, id: u64, rel: &str) -> Result<PathBuf, Error> {
+        check_rel(rel)?;
+        let path = self.root(id)?.path.join(rel);
+        if self.whole_filesystem {
+            // Following a user-visible directory link is allowed in this mode.
+            // The resulting components are still opened NOFOLLOW; a concurrent
+            // replacement fails instead of redirecting the actual operation.
+            std::fs::canonicalize(path).map_err(|_| Error::InvalidSetting(NOT_A_DIRECTORY))
+        } else {
+            Ok(path)
+        }
     }
 
     pub(crate) fn snapshot(&self) -> Vec<(u64, PathBuf)> {
@@ -224,12 +273,18 @@ impl RootSet {
         use std::os::unix::io::AsFd;
         check_rel(rel)?;
         let mut current = self.open_root_fd(id)?;
-        if !rel.is_empty() {
-            for component in rel.split('/') {
-                let child = vnilink_rename::anchored::open_child(current.as_fd(), component)
-                    .map_err(|_| Error::InvalidSetting(UNSAFE_PATH))?;
-                current = child;
-            }
+        let path = self.directory_path(id, rel)?;
+        let relative = path
+            .strip_prefix(&self.root(id)?.path)
+            .map_err(|_| Error::InvalidSetting(UNSAFE_PATH))?;
+        for component in relative.components() {
+            let component = component
+                .as_os_str()
+                .to_str()
+                .ok_or(Error::InvalidSetting(UNSAFE_PATH))?;
+            let child = vnilink_rename::anchored::open_child(current.as_fd(), component)
+                .map_err(|_| Error::InvalidSetting(UNSAFE_PATH))?;
+            current = child;
         }
         Ok(current)
     }
@@ -247,19 +302,32 @@ impl RootSet {
             // NOFOLLOW opens. The returned path is for compatible readers;
             // mutating callers use `open_dir_fd`/`open_root_fd` directly.
             let _verified = self.open_dir_fd(id, rel)?;
-            let root = self.root(id)?;
-            let mut current = root.path.clone();
-            if !rel.is_empty() {
-                for component in rel.split('/') {
-                    current.push(component);
-                }
-            }
-            Ok(current)
+            self.directory_path(id, rel)
         }
         #[cfg(not(unix))]
         {
             let root = self.root(id)?;
             let mut current = root.path.clone();
+            #[cfg(windows)]
+            if self.whole_filesystem {
+                let file = vnilink_rename::windows::open_directory(&root.path)
+                    .map_err(|_| Error::InvalidSetting(UNSAFE_PATH))?;
+                if vnilink_rename::windows::directory_identity(&file)
+                    .map_err(|_| Error::InvalidSetting(UNSAFE_PATH))?
+                    != (root.dev, root.ino)
+                {
+                    return Err(Error::InvalidSetting(UNSAFE_PATH));
+                }
+                for component in rel.split('/').filter(|p| !p.is_empty()) {
+                    current.push(component);
+                }
+                let resolved = std::fs::canonicalize(current)
+                    .map_err(|_| Error::InvalidSetting(NOT_A_DIRECTORY))?;
+                if !resolved.is_dir() {
+                    return Err(Error::InvalidSetting(NOT_A_DIRECTORY));
+                }
+                return Ok(resolved);
+            }
             if !rel.is_empty() {
                 for component in rel.split('/') {
                     current.push(component);
@@ -297,7 +365,7 @@ impl RootSet {
         let parent = self.resolve_dir(id, rel)?;
         let dest = parent.join(name);
         let root = self.root(id)?;
-        if !under_root(&root.path, &dest) {
+        if !self.whole_filesystem && !under_root(&root.path, &dest) {
             return Err(Error::InvalidSetting(UNSAFE_PATH));
         }
         Ok((parent, dest))
@@ -340,5 +408,42 @@ mod windows_admission_tests {
         assert!(roots.snapshot().is_empty());
         assert_eq!(roots.epoch(), epoch);
         roots.set(&[]).unwrap();
+    }
+}
+
+#[cfg(all(test, unix))]
+mod filesystem_mode_tests {
+    use super::*;
+    #[test]
+    fn whole_filesystem_follows_directory_links_but_folder_mode_stays_confined() {
+        let fixture = std::env::temp_dir().join(format!(
+            "vnilink-fs-mode-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let approved = fixture.join("approved");
+        let other = fixture.join("other");
+        std::fs::create_dir_all(&approved).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::os::unix::fs::symlink(&other, approved.join("link")).unwrap();
+        let mut roots = RootSet::default();
+        roots.set(&[approved.clone()]).unwrap();
+        assert!(roots.open_dir_fd(0, "link").is_err());
+        roots.set_filesystem().unwrap();
+        let relative = approved
+            .join("link")
+            .strip_prefix("/")
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(roots.open_dir_fd(0, &relative).is_ok());
+        assert_eq!(
+            roots.resolve_dir(0, &relative).unwrap(),
+            std::fs::canonicalize(&other).unwrap()
+        );
+        assert!(roots.open_dir_fd(0, "../etc").is_err());
+        roots.set(&[approved]).unwrap();
+        assert!(roots.open_dir_fd(0, "link").is_err());
+        std::fs::remove_dir_all(fixture).unwrap();
     }
 }

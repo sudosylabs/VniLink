@@ -506,7 +506,7 @@
     {
       "path": "src/platform/native/common/native.ts",
       "upstreamPath": "src/vs/platform/native/common/native.ts",
-      "sha256": "3916682b03113e174dc147720a6f915ac5cbc8da38b10abad87d7441c2fd23da",
+      "sha256": "b0598c07474176fe6f28b354852968e0ceb2af0f9f1085d5b761e86a0eac9c7d",
       "changedImports": 0,
       "adapted": true
     },
@@ -520,7 +520,7 @@
       "path": "src/platform/native/electron-main/nativeHostMainService.ts",
       "upstreamPath": "src/vs/platform/native/electron-main/nativeHostMainService.ts",
       "adapted": true,
-      "sha256": "fa365d8de7b149712ec732cc22e55ee2a06f4d539fc424f17eb0be6383c34f61"
+      "sha256": "ea1ac9b9340c66b59ddafb17fbfce4fe1f73ed9ba0c71321d0d870c03b190ec5"
     },
     {
       "path": "src/platform/theme/browser/themeService.ts",
@@ -547,13 +547,13 @@
       "path": "src/platform/windows/electron-main/windowImpl.ts",
       "upstreamPath": "src/vs/platform/windows/electron-main/windowImpl.ts",
       "adapted": true,
-      "sha256": "e9220d515bcbdcc211c812726887b3584320e84f92c17bf94108c828be36cd58"
+      "sha256": "53cdf5373c2b6126f7978bcbedb4c55e149a13154d069bbb8a492a390fd718a7"
     },
     {
       "path": "src/platform/windows/electron-main/windows.ts",
       "upstreamPath": "src/vs/platform/windows/electron-main/windows.ts",
       "adapted": true,
-      "sha256": "b43b9cf526991323f60543a4c772669be53dfd0c11849c7a9d11bda309060376"
+      "sha256": "6309e76e7f70d0b3398ca24802e335d50df9c6cd5ddb2b960f8753457fabb854"
     },
     {
       "path": "src/typings/base-common.d.ts",
@@ -583,7 +583,7 @@
     {
       "path": "src/workbench/browser/parts/titlebar/media/titlebarpart.css",
       "upstreamPath": "src/vs/workbench/browser/parts/titlebar/media/titlebarpart.css",
-      "sha256": "d049afcdd6436cde574e9bad01a1c75416f7b6e756dc47ac1246287023f8bb2e",
+      "sha256": "3f8bc0200b37b3bd148fa951e2fd760913d8dc2483c14f6692b842e5ad18ed77",
       "changedImports": 0,
       "adapted": true
     },
@@ -598,12 +598,12 @@
       "path": "src/workbench/electron-browser/desktop.main.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/desktop.main.ts",
       "adapted": true,
-      "sha256": "ec39ed629401941f2db7359d527fcf6de9449971db528b0d03c34dd4cef54204"
+      "sha256": "854b1016a3cc03078b905a8bcd6940510d832e2ac1af34c2b7e2055e7ac6ab51"
     },
     {
       "path": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
-      "sha256": "99566477c196d60868b88e8c9f6457b71cc255b5a464dae02c76dc94ebffd179",
+      "sha256": "e3cbe182c8f450d072d1c21dd43e5665273847f63efaff0bcd941dc2b58e1bd9",
       "changedImports": 0,
       "adapted": true
     },
@@ -630,7 +630,7 @@
       "path": "src/workbench/browser/parts/titlebar/media/modernTabs.css",
       "upstreamPath": "src/vs/workbench/contrib/modernUI/browser/media/tabs.css",
       "adapted": true,
-      "sha256": "85ec6f73af4138c1449280502f186b52a1260cdb275219fdf849b482602b9d76"
+      "sha256": "e336803fc58083354b0c9741c6e6c3d052fb2d92ff18f7fed96b4215d55e8b0a"
     }
   ],
   "scope": "Native window controls, titlebar presentation, DI registration and their recursive dependencies",
@@ -658,6 +658,16 @@
     {
       "from": "src/platform/windows/electron-main/windows.ts",
       "to": "src/platform/window/common/window.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/windows/electron-main/windows.ts",
+      "to": "src/platform/window/common/titlebar.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/windows/electron-main/windows.ts",
+      "to": "src/platform/window/common/windowMaterial.ts",
       "kind": "import"
     },
     {
@@ -696,6 +706,16 @@
       "kind": "import"
     },
     {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/platform/windows/electron-main/windowMaterial.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/windows/electron-main/windowImpl.ts",
+      "to": "src/platform/window/common/windowMaterial.ts",
+      "kind": "import"
+    },
+    {
       "from": "src/platform/windows/electron-main/windowImpl.ts",
       "to": "src/base/common/platform.ts",
       "kind": "import"
@@ -708,6 +728,11 @@
     {
       "from": "src/platform/windows/electron-main/windowImpl.ts",
       "to": "src/platform/native/common/native.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/common/native.ts",
+      "to": "src/platform/window/common/windowMaterial.ts",
       "kind": "import"
     },
     {
@@ -2102,7 +2127,7 @@
     },
     {
       "from": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
-      "to": "src/platform/window/common/window.ts",
+      "to": "src/platform/window/common/titlebar.ts",
       "kind": "import"
     },
     {
@@ -2158,6 +2183,56 @@
     {
       "from": "src/workbench/browser/parts/titlebar/titlebarPart.ts",
       "to": "src/workbench/services/host/browser/host.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/nativeRuntime/common/nativeRuntimeService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/nativeRuntime/electron-browser/nativeRuntimeService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/terminal/common/terminalSettingsService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/terminal/electron-browser/terminalSettingsService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/application/common/applicationService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/application/electron-browser/applicationService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/remoteDesktop/common/remoteDesktopService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/remoteDesktop/electron-browser/remoteDesktopService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/permissions/common/permissionService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/permissions/electron-browser/permissionService.ts",
       "kind": "import"
     },
     {
@@ -2218,6 +2293,46 @@
     {
       "from": "src/workbench/electron-browser/desktop.main.ts",
       "to": "src/platform/ipc/common/desktopApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/devices/common/deviceService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/devices/electron-browser/deviceService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/platform/configuration/common/configuration.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/platform/configuration/electron-browser/configurationService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/connection/common/connectionService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/connection/electron-browser/connectionService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/access/common/accessService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/access/electron-browser/accessService.ts",
       "kind": "import"
     },
     {
@@ -2517,6 +2632,27 @@
   "applicationDependencies": [
     "src/platform/ipc/common/desktopApi.ts",
     "src/workbench/browser/parts/titlebar/titlebarTabsControl.ts",
-    "src/workbench/services/tabs/common/tabServiceImpl.ts"
+    "src/workbench/services/tabs/common/tabServiceImpl.ts",
+    "src/platform/window/common/titlebar.ts",
+    "src/platform/window/common/windowMaterial.ts",
+    "src/platform/windows/electron-main/windowMaterial.ts",
+    "src/workbench/services/devices/common/deviceService.ts",
+    "src/workbench/services/devices/electron-browser/deviceService.ts",
+    "src/platform/configuration/common/configuration.ts",
+    "src/platform/configuration/electron-browser/configurationService.ts",
+    "src/workbench/services/connection/common/connectionService.ts",
+    "src/workbench/services/connection/electron-browser/connectionService.ts",
+    "src/workbench/services/access/common/accessService.ts",
+    "src/workbench/services/access/electron-browser/accessService.ts",
+    "src/workbench/services/permissions/common/permissionService.ts",
+    "src/workbench/services/permissions/electron-browser/permissionService.ts",
+    "src/workbench/services/remoteDesktop/common/remoteDesktopService.ts",
+    "src/workbench/services/remoteDesktop/electron-browser/remoteDesktopService.ts",
+    "src/workbench/services/application/common/applicationService.ts",
+    "src/workbench/services/application/electron-browser/applicationService.ts",
+    "src/workbench/services/terminal/common/terminalSettingsService.ts",
+    "src/workbench/services/terminal/electron-browser/terminalSettingsService.ts",
+    "src/workbench/services/nativeRuntime/common/nativeRuntimeService.ts",
+    "src/workbench/services/nativeRuntime/electron-browser/nativeRuntimeService.ts"
   ]
 }

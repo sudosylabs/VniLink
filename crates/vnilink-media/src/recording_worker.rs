@@ -1,7 +1,6 @@
 //! Bounded local recording worker. Storage never executes on a live-media task.
 use crate::{RecordingError, RecordingFailure, RecordingLimits, RecordingRetention, SegmentWriter};
 use std::{
-    fs::File,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -191,7 +190,7 @@ pub fn recover_desktop_recording(path: &Path) -> Result<crate::RecordingRecovery
     drop(file);
     vnilink_rename::rename_noreplace(&partial, &destination)?;
     #[cfg(unix)]
-    File::open(destination.parent().unwrap())?.sync_all()?;
+    std::fs::File::open(destination.parent().unwrap())?.sync_all()?;
     Ok(recovered)
 }
 

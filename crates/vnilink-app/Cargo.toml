@@ -19,6 +19,7 @@ test-support = []
 vnilink = { path = "../vnilink" }
 vnilink-audio = { path = "../vnilink-audio", features = ["native"] }
 vnilink-media = { path = "../vnilink-media" }
+arboard = { version = "=3.6.1", default-features = false, features = ["wayland-data-control"] }
 thiserror = "2"
 serde = { version = "=1.0.229", features = ["derive"] }
 

@@ -219,6 +219,9 @@ pub(crate) fn job_snapshot(snapshot: vnilink::JobSnapshot) -> FfiJobSnapshot {
 }
 
 impl VnilinkCore {
+    pub fn enable_filesystem_access(&self) -> Result<(), FfiError> {
+        self.inner.enable_filesystem_access().map_err(map_error)
+    }
     /// Start once per application core; progress reads do not drive network I/O.
     pub fn start_file_job_driver(&self) {
         self.inner.start_job_driver();
