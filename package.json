@@ -22,11 +22,13 @@
     "test:tooling": "node --test test/tooling/*.test.mjs",
     "check:upstream": "node build/check-vscode-source.mjs",
     "check": "npm run check:upstream && npm run format:check && npm run lint && npm run typecheck && npm run test:tooling",
+    "test:linux": "node scripts/test-linux.mjs",
     "test:ui": "node scripts/test.mjs",
     "test:native": "node --test test/native/*.test.mjs",
     "prepare": "husky",
     "precommit": "npm run check && cargo fmt --all -- --check && npm test",
-    "watch": "node scripts/dev.mjs --watch-only"
+    "watch": "node scripts/dev.mjs --watch-only",
+    "test:rust": "node scripts/test-rust.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

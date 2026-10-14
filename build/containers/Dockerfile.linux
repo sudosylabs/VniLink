@@ -1,0 +1,14 @@
+FROM node:22.20.0-trixie@sha256:95f3df86baccbe95a11a7bc175bb98e64e0a5f4daee75228cf0c484359ac38a8 AS node
+FROM rust:1.91.0-trixie@sha256:a0dba1c1b2c90585fc44421b55ddf8063323760dc644ba1d35f5b389ad3e8e14
+ENV DEBIAN_FRONTEND=noninteractive HUSKY=0 VNILINK_TEST_CONTAINER=1
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+COPY build/containers/linux-packages.txt /tmp/linux-packages.txt
+RUN apt-get update && xargs -a /tmp/linux-packages.txt apt-get install -y --no-install-recommends && rm -rf /var/lib/apt/lists/* && rustup component add rustfmt clippy rust-analyzer llvm-tools-preview
+COPY build/containers/linux-entrypoint.sh /usr/local/bin/vnilink-tests
+RUN chmod +x /usr/local/bin/vnilink-tests
+RUN useradd --create-home --uid 1000 vnilink && mkdir -p /usr/local/cargo/git
+# Large native test executables must not link concurrently in Docker Desktop.
+ENV CARGO_BUILD_JOBS=1
+ENTRYPOINT ["/usr/local/bin/vnilink-tests"]
