@@ -5,6 +5,7 @@ import { IConfigurationService, isMediaSources, type MediaSources } from '../../
 import type { NativeDevice } from '../../../../platform/engine/common/engine.js';
 import { INativeRuntimeService } from '../../../services/nativeRuntime/common/nativeRuntimeService.js';
 import { IPermissionService } from '../../../services/permissions/common/permissionService.js';
+import { wrapSelect } from './settingsControls.js';
 import { SettingsForm } from './settingsForm.js';
 import { SettingsStateObserver } from './settingsStateObserver.js';
 
@@ -30,7 +31,9 @@ export class MediaPage extends SettingsForm<MediaSources> {
 			list.setAttribute('aria-label', title);
 			const status = document.createElement('p');
 			status.className = 'settings-help';
-			section.append(list, status);
+			const picker = wrapSelect(list);
+			picker.classList.add('media-source-picker');
+			section.append(picker, status);
 			this.availability.set(key, status);
 			this.groups.set(key, list);
 		}

@@ -63,8 +63,12 @@
 	display: none;
 }
 
-.media-source-select {
+.media-page .media-source-picker {
 	margin-top: 22px;
+	width: 100%;
+}
+
+.media-source-select {
 	width: 100%;
 	padding: 10px 36px 10px 12px;
 	border: 1px solid var(--line);

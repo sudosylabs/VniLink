@@ -82,6 +82,7 @@ export async function verifyAccess(): Promise<void> {
 	} finally {
 		section.dispose();
 		local.dispose();
+		local.element.remove();
 		focused.dispose();
 	}
 	const empty = new PeerAccessSection({ ...service, listDevices: () => Promise.resolve([]) });

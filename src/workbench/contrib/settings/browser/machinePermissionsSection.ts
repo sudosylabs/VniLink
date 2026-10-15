@@ -27,7 +27,6 @@ export class MachinePermissionsSection extends Disposable {
 	public readonly element = document.createElement('section');
 	private readonly rows = new Map<PermissionKind, PermissionRow>();
 	private readonly message = document.createElement('p');
-	private readonly development = document.createElement('p');
 	private snapshot: PermissionSnapshot | undefined;
 	private busy = false;
 
@@ -76,12 +75,9 @@ export class MachinePermissionsSection extends Disposable {
 				}
 			}));
 		}
-		this.development.className = 'access-description';
-		this.development.hidden = true;
-		this.development.textContent = nls.localize('permissions.development', 'Development builds appear as Electron in system settings.');
 		this.message.className = 'access-status';
 		this.message.setAttribute('role', 'status');
-		controlsBody.append(this.development, this.message);
+		controlsBody.append(this.message);
 		this._register(new SettingsStateObserver(this.element, permissions.onDidFocusWindow, () => this.run({ type: 'status' })));
 		void this.run({ type: 'status' });
 	}
@@ -121,7 +117,6 @@ export class MachinePermissionsSection extends Disposable {
 				for (const permission of snapshot.permissions) {
 					this.render(permission);
 				}
-				this.development.hidden = !snapshot.development;
 				this.message.textContent = '';
 			}
 		} catch {

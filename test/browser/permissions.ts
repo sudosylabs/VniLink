@@ -37,6 +37,7 @@ export async function verifyMachinePermissions(): Promise<void> {
 	document.body.append(section.element);
 	try {
 		await settle();
+		assert(!section.element.textContent.includes('Development builds'), 'Permissions page retained development-only copy');
 		assert(commands.length === 1 && commands[0].type === 'status', 'Loading page prompted for permissions');
 		const camera = section.element.querySelector<HTMLButtonElement>('[data-permission-kind="camera"] button');
 		const screen = section.element.querySelector<HTMLButtonElement>('[data-permission-kind="screen"] button');
@@ -66,6 +67,7 @@ export async function verifyMachinePermissions(): Promise<void> {
 		assert(commands.length === count, 'Disposed permission page retained live actions');
 	} finally {
 		section.dispose();
+		section.element.remove();
 		focused.dispose();
 	}
 }

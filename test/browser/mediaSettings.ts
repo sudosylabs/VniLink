@@ -96,6 +96,7 @@ export async function verifyMediaSettings(): Promise<void> {
 		await settle();
 		assert(powerWrites === 1 && policy.lock_after_control, 'Power default did not reach the runtime service');
 		const camera = media.element.querySelector<HTMLSelectElement>('select[aria-label="Cameras"]');
+		assert(media.element.querySelectorAll('.settings-select > .vnilink-icon').length === 3, 'Media sources did not use the shared select presentation');
 		assert(!!camera && media.element.textContent.includes('Camera <one>') && !media.element.querySelector('one'), 'Media enumeration was missing or treated names as HTML');
 		if (camera) {
 			camera.value = 'camera-one';
