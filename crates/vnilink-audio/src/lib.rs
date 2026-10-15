@@ -12,7 +12,9 @@ mod resample;
 pub use codec::{AudioEncoder, Format, FRAME_SAMPLES, SAMPLE_RATE};
 pub use jitter::{AudioPlayback, PlaybackBlock, PlaybackStats};
 #[cfg(feature = "native")]
-pub use native::{audio_devices, AudioDevice, DeviceDirection, NativeCapture, NativeOutput};
+pub use native::{
+    audio_devices, default_device_id, AudioDevice, DeviceDirection, NativeCapture, NativeOutput,
+};
 pub use packet::AudioPacket;
 pub use resample::AudioResampler;
 

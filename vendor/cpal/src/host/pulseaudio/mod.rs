@@ -156,6 +156,14 @@ impl Host {
     }
 }
 
+impl Host {
+    /// Monitor of the server's current default sink, rather than a name heuristic.
+    pub fn default_loopback_device(&self) -> Option<Device> {
+        let Device::Sink { info: sink, .. } = self.default_output_device()? else { return None };
+        self.devices().ok()?.find(|device| matches!(device, Device::Source { info, .. } if info.monitor_of_sink_index == Some(sink.index)))
+    }
+}
+
 impl HostTrait for Host {
     type Devices = std::vec::IntoIter<Device>;
     type Device = Device;

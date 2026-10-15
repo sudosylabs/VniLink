@@ -35,6 +35,41 @@ fn host() -> Result<cpal::Host, Error> {
         Ok(cpal::default_host())
     }
 }
+/// Resolve the OS-selected endpoint without activating it. Linux system audio
+/// follows the monitor of the default sink; Windows uses that render endpoint.
+pub fn default_device_id(direction: DeviceDirection) -> Result<Option<String>, Error> {
+    let host = host()?;
+    let selected = match direction {
+        DeviceDirection::Input => host.default_input_device(),
+        DeviceDirection::Output => host.default_output_device(),
+        DeviceDirection::Loopback => {
+            #[cfg(target_os = "linux")]
+            {
+                let cpal::platform::HostInner::PulseAudio(pulse) = host.as_inner() else {
+                    return Ok(None);
+                };
+                pulse.default_loopback_device().map(Into::into)
+            }
+            #[cfg(target_os = "windows")]
+            {
+                host.default_output_device()
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+            {
+                None
+            }
+        }
+    };
+    selected
+        .map(|device| {
+            device
+                .id()
+                .map(|id| id.to_string())
+                .map_err(|_| Error::Device)
+        })
+        .transpose()
+}
+
 pub fn audio_devices() -> Result<Vec<AudioDevice>, Error> {
     let host = host()?;
     let mut result = Vec::new();

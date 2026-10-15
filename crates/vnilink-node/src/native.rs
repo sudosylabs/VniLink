@@ -398,13 +398,6 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
             if ids.is_empty() {
                 state.core.disable_camera().map_err(core_error)?;
             } else {
-                let devices = state.core.native_camera_devices().map_err(core_error)?;
-                if ids
-                    .iter()
-                    .any(|id| !devices.iter().any(|device| &device.id == id))
-                {
-                    return Err(Error::from_reason("Approved camera is unavailable"));
-                }
                 state
                     .core
                     .enable_native_camera(ids.clone())
