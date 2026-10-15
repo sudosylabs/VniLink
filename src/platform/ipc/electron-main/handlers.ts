@@ -24,6 +24,7 @@ export class DesktopIpcController extends Disposable {
 	private restartRevision = 0;
 	private owners = new Map<number, string>();
 	private configurationPending: Promise<unknown> = Promise.resolve();
+	private synchronizedPermissions: string | undefined;
 	private readonly releases = new Map<number, () => void>();
 
 	constructor(private readonly getWindow: () => BrowserWindow | null,
@@ -79,7 +80,12 @@ export class DesktopIpcController extends Disposable {
 				throw new Error('Invalid permission command');
 			}
 			const snapshot = await this.permissions.execute(command);
-			await synchronizeNativePermissions(this.engine, safePlatform, snapshot).catch(() => { /* The committed command remains valid when readback fails. */ });
+			const key = JSON.stringify(snapshot.permissions.map(permission => [permission.kind, permission.status]));
+			if (this.engine.available && key !== this.synchronizedPermissions) {
+				await synchronizeNativePermissions(this.engine, safePlatform, snapshot).then(() => {
+					this.synchronizedPermissions = key;
+				}).catch(() => { /* Keep OS state truthful; retry failed backend synchronization on the next read. */ });
+			}
 			return snapshot;
 		});
 	}
@@ -137,6 +143,9 @@ export class DesktopIpcController extends Disposable {
 				const runtime = async (snapshot: typeof previous): Promise<void> => {
 					if (!this.engine.available) {
 						return;
+					}
+					if (change.key === 'desktop.quality') {
+						await this.engine.execute({ type: 'setDesktopQualityDefaults', quality: snapshot.values['desktop.quality'] });
 					}
 					if (change.key === 'desktop.codec') {
 						await this.engine.execute({ type: 'setDesktopCodecDefault', codec: snapshot.values['desktop.codec'] });

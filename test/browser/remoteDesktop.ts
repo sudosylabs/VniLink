@@ -6,7 +6,7 @@ import { IConfigurationService, defaultConfiguration, type ConfigurationSnapshot
 import { Event as LifecycleEvent, Emitter } from '../../src/base/common/event.js';
 import { RemoteDesktopPage } from '../../src/workbench/contrib/settings/browser/remoteDesktopPage.js';
 import { DesktopQualityEditor } from '../../src/workbench/contrib/settings/browser/desktopQualityEditor.js';
-import type { IRemoteDesktopService, DesktopSettings, DesktopTarget } from '../../src/workbench/services/remoteDesktop/common/remoteDesktopService.js';
+import { IRemoteDesktopService, type DesktopSettings } from '../../src/workbench/services/remoteDesktop/common/remoteDesktopService.js';
 
 function assert(condition: boolean, message: string): void {
 	if (!condition) {
@@ -55,6 +55,16 @@ export async function verifyRemoteDesktop(): Promise<void> {
 		defaults.dispose();
 		changed.dispose();
 	}
+	const state: DesktopSettings = {
+		sessions: [], codecs: {
+			encode_baseline: false, encode_high: false, decode_baseline: true, decode_high: false, max_width: 3840, max_height: 2160, hardware: true, device: 'test', chroma444: false, additional: [
+				{ codec: 'Vp9', encode: true, decode: true, hardware: false },
+				{ codec: 'Av1', encode: false, decode: true, hardware: false },
+				{ codec: 'H265', encode: true, decode: false, hardware: true },
+			]
+		}
+	};
+	const service: IRemoteDesktopService = { _serviceBrand: undefined, available: true, load: () => Promise.resolve(state), displays: () => Promise.resolve([]), apply: () => Promise.reject(new Error('Session controls do not belong here')) };
 	const codecChanged = new Emitter<ConfigurationSnapshot>();
 	let codecSnapshot: ConfigurationSnapshot = { revision: 0, values: defaultConfiguration, error: null };
 	let codecFailure = false;
@@ -69,14 +79,15 @@ export async function verifyRemoteDesktop(): Promise<void> {
 			codecChanged.fire(codecSnapshot);
 			return Promise.resolve();
 		}
-	});
+	}, service);
 	try {
+		await settle();
 		const select = codecSection.element.querySelector<HTMLSelectElement>('select');
 		const save = codecSection.element.querySelector<HTMLButtonElement>('button');
 		if (!select || !save) {
 			throw new Error('Codec controls missing');
 		}
-		assert(select.value === 'auto' && select.options.length === 6 && save.disabled, 'Codec default/options incorrect');
+		assert(select.value === 'auto' && select.options.length === 4 && save.disabled, 'Codec default/options incorrect');
 		select.value = 'vp9';
 		select.dispatchEvent(new Event('change'));
 		assert(!save.disabled, 'Codec choice did not become dirty');
@@ -93,54 +104,20 @@ export async function verifyRemoteDesktop(): Promise<void> {
 		codecSection.dispose();
 		codecChanged.dispose();
 	}
-	const codecs = { encode_baseline: false, encode_high: false, decode_baseline: true, decode_high: false, max_width: 3840, max_height: 2160, hardware: true, device: 'test', chroma444: false };
-	let state: DesktopSettings = { sessions: [{ id: '1', generation: '7', role: 'Controller', name: '<Work>', quality: { max_bitrate_kbps: 5000, max_frame_rate: 30, max_width: 1920, max_height: 1080 } }], codecs };
-	let writes = 0;
-	let target: DesktopTarget | undefined;
-	let fail = false;
-	const service: IRemoteDesktopService = {
-		_serviceBrand: undefined, available: true, load: () => Promise.resolve(state), displays: () => Promise.resolve([{ id: '9', origin_x: 0, origin_y: 0, width: 1920, height: 1080, scale_percent: 100, rotation_deg: 0, revision: '1' }]), apply: (owner, quality) => {
-			writes++;
-			target = owner;
-			if (fail) {
-				return Promise.reject(new Error('Session ended'));
-			}
-			state = { ...state, sessions: [{ ...state.sessions[0], quality }] };
-			return Promise.resolve(state);
-		}
-	};
-	const instantiation = new InstantiationService(new ServiceCollection([IConfigurationService, { _serviceBrand: undefined, snapshot: { revision: 0, values: defaultConfiguration, error: null }, onDidChangeConfiguration: LifecycleEvent.None, initialize: () => Promise.resolve(), updateValue: () => Promise.resolve() }]), true);
-	const page = new RemoteDesktopPage(service, instantiation);
+	const instantiation = new InstantiationService(new ServiceCollection(
+		[IConfigurationService, { _serviceBrand: undefined, snapshot: { revision: 0, values: defaultConfiguration, error: null }, onDidChangeConfiguration: LifecycleEvent.None, initialize: () => Promise.resolve(), updateValue: () => Promise.resolve() }],
+		[IRemoteDesktopService, service],
+	), true);
+	const page = new RemoteDesktopPage(instantiation);
 	try {
 		await settle();
-		assert(page.element.textContent.includes('1920 × 1080 px'), 'Session display data missing');
-		const preset = page.element.querySelector<HTMLButtonElement>('.desktop-content > form [data-preset="smooth"]');
-		preset?.click();
-		assert(writes === 0, 'Preset wrote before Apply');
-		const form = page.element.querySelector('.desktop-content > form');
-		form?.dispatchEvent(new Event('submit', { cancelable: true }));
-		await settle();
-		assert(writes === 1 && target?.generation === '7' && state.sessions[0].quality.max_frame_rate === 60, 'Apply did not target selected session');
-		fail = true;
-		form?.dispatchEvent(new Event('submit', { cancelable: true }));
-		await settle();
-		assert(page.element.querySelector<HTMLFieldSetElement>('.desktop-content > form fieldset')?.disabled === true, 'Failed write left session editable');
-		page.dispose();
-		const before = writes;
-		form?.dispatchEvent(new Event('submit'));
-		await settle();
-		assert(writes === before, 'Disposed page still writes');
+		assert(page.element.textContent.includes('Default stream quality'), 'Global defaults missing without a session');
+		assert(!page.element.textContent.includes('Session overrides') && !page.element.textContent.includes('Video processing on this computer') && !page.element.textContent.includes('Displays'), 'Session-only sections remain in global settings');
+		const options = Array.from(page.element.querySelectorAll<HTMLOptionElement>('select option')).map(option => option.value);
+		assert(!options.includes('h265') && !options.includes('vp8') && options.includes('auto') && options.includes('vp9'), 'Unsupported viewer codecs were offered');
 	} finally {
 		page.dispose();
-	}
-	state = { ...state, sessions: [] };
-	const empty = new RemoteDesktopPage(service, instantiation);
-	try {
-		await settle();
-		assert(empty.element.textContent.includes('No active desktop session'), 'Empty desktop page fabricated a session');
-		assert(empty.element.querySelector<HTMLFieldSetElement>('.desktop-content > form fieldset')?.disabled === true, 'Quality controls enabled without session');
-	} finally {
-		empty.dispose();
+		instantiation.dispose();
 	}
 	const editor = new DesktopQualityEditor();
 	try {

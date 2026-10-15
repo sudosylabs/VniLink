@@ -34,6 +34,7 @@ export async function verifyMachinePermissions(): Promise<void> {
 		}
 	};
 	const section = new MachinePermissionsSection(service);
+	document.body.append(section.element);
 	try {
 		await settle();
 		assert(commands.length === 1 && commands[0].type === 'status', 'Loading page prompted for permissions');

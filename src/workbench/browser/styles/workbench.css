@@ -360,8 +360,3 @@ h2 {
 .settings-form [hidden] {
 	display: none;
 }
-
-.home-content > .appearance-page,
-.home-content > .access-page {
-	max-width: 900px;
-}

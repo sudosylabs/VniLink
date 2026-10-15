@@ -34,7 +34,7 @@ export class InputPage extends Disposable implements WorkbenchPage {
 		super();
 		this.element.className = 'input-page';
 		this.element.dataset.settingsPage = 'input';
-		this.element.append(createPageHeading(nls.localize('home.input', 'Keyboard & Mouse'), nls.localize('input.description', 'Default keyboard mapping and pointer behavior for all remote connections.')));
+		this.element.append(createPageHeading(nls.localize('home.input', 'Keyboard & Mouse'), nls.localize('input.description', 'Choose how your keyboard and mouse control remote computers. These defaults apply across your connections.')));
 		const content = document.createElement('div');
 		content.className = 'input-content';
 		const form = document.createElement('form');

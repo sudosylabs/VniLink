@@ -158,7 +158,7 @@ export class VniLinkApplication extends Disposable {
 
 	private applyConfiguration(): void {
 		nativeTheme.themeSource = this.configuration.snapshot.values['appearance.theme'];
-		this.nativeHost.setNativeBackgroundEnabled(this.configuration.snapshot.values['appearance.nativeBackground']);
+		this.nativeHost.setNativeBackgroundEnabled(true);
 		const window = this.window;
 		if (window && !window.isDestroyed() && window.webContents.mainFrame.url === applicationUrl) {
 			window.webContents.send('configuration:changed', this.configuration.snapshot);

@@ -1,3 +1,4 @@
+import { SettingsStateObserver } from './settingsStateObserver.js';
 import { appendAccessSection } from './accessSection.js';
 import * as nls from '../../../../nls.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
@@ -25,7 +26,6 @@ interface PermissionRow { status: HTMLElement; button: HTMLButtonElement; }
 export class MachinePermissionsSection extends Disposable {
 	public readonly element = document.createElement('section');
 	private readonly rows = new Map<PermissionKind, PermissionRow>();
-	private readonly refresh = document.createElement('button');
 	private readonly message = document.createElement('p');
 	private readonly development = document.createElement('p');
 	private snapshot: PermissionSnapshot | undefined;
@@ -38,10 +38,7 @@ export class MachinePermissionsSection extends Disposable {
 		header.className = 'access-section-header';
 		const title = document.createElement('h2');
 		title.textContent = nls.localize('permissions.heading', 'Permissions on this computer');
-		this.refresh.type = 'button';
-		this.refresh.className = 'access-text-button';
-		this.refresh.textContent = nls.localize('access.refresh', 'Refresh');
-		header.append(title, this.refresh);
+		header.append(title);
 		const help = document.createElement('p');
 		help.className = 'access-description';
 		help.textContent = nls.localize('permissions.help', 'Operating-system access for this app. Allowing access here does not give a paired device permission to use it.');
@@ -85,12 +82,7 @@ export class MachinePermissionsSection extends Disposable {
 		this.message.className = 'access-status';
 		this.message.setAttribute('role', 'status');
 		controlsBody.append(this.development, this.message);
-		this._register(addDisposableListener(this.refresh, 'click', () => {
-			void this.run({ type: 'status' });
-		}));
-		this._register(permissions.onDidFocusWindow(() => {
-			void this.run({ type: 'status' });
-		}));
+		this._register(new SettingsStateObserver(this.element, permissions.onDidFocusWindow, () => this.run({ type: 'status' })));
 		void this.run({ type: 'status' });
 	}
 
@@ -115,10 +107,12 @@ export class MachinePermissionsSection extends Disposable {
 			return;
 		}
 		this.busy = true;
-		this.element.setAttribute('aria-busy', 'true');
-		this.refresh.disabled = true;
-		for (const row of this.rows.values()) {
-			row.button.disabled = true;
+		const foreground = command.type !== 'status' || !this.snapshot;
+		if (foreground) {
+			this.element.setAttribute('aria-busy', 'true');
+			for (const row of this.rows.values()) {
+				row.button.disabled = true;
+			}
 		}
 		try {
 			const snapshot = await this.permissions.execute(command);
@@ -137,13 +131,12 @@ export class MachinePermissionsSection extends Disposable {
 					row.status.textContent = statuses.unknown;
 					row.status.dataset.status = 'unknown';
 				}
-				this.message.textContent = nls.localize('permissions.failed', 'Could not check or change OS access. Refresh to check the current status.');
+				this.message.textContent = nls.localize('permissions.failed', 'Could not check or change OS access. The status will be checked again automatically.');
 			}
 		} finally {
 			if (!this.disposed()) {
 				this.busy = false;
 				this.element.setAttribute('aria-busy', 'false');
-				this.refresh.disabled = false;
 				for (const row of this.rows.values()) {
 					row.button.disabled = !this.snapshot;
 				}

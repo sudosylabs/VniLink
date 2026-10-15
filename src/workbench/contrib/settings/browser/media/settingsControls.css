@@ -84,3 +84,32 @@
 		gap: 8px;
 	}
 }
+
+/* Section boundaries separate topics; rows do not add a second divider. */
+:is(.input-page, .terminal-page, .remote-desktop-page, .power-page, .recording-page, .media-page)
+	.settings-control-row {
+	border-bottom: 0;
+}
+
+:is(.input-page, .terminal-page, .power-page, .recording-page, .media-page) .settings-apply-row > button {
+	white-space: nowrap;
+	flex-shrink: 0;
+}
+
+:is(.input-page, .terminal-page, .power-page, .recording-page, .media-page) .settings-apply-row > .settings-help {
+	margin: 0;
+}
+
+:is(.input-page, .terminal-page, .remote-desktop-page, .power-page, .recording-page, .media-page)
+	.settings-apply-row
+	> .settings-help {
+	align-self: center;
+	line-height: 1.5;
+}
+
+:is(.input-page, .terminal-page, .remote-desktop-page, .power-page, .recording-page, .media-page) .settings-apply-row {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	align-items: center;
+	column-gap: 18px;
+}

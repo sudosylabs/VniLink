@@ -1,12 +1,12 @@
 .access-content {
-	margin: 28px 40px 40px;
+	margin: 52px 40px 48px;
 	max-width: 820px;
 }
 
 .access-section {
 	display: grid;
-	grid-template-columns: 220px minmax(0, 1fr);
-	gap: 36px;
+	grid-template-columns: minmax(0, 1fr);
+	gap: 30px;
 }
 
 .access-section + .access-section {
@@ -37,7 +37,8 @@
 }
 
 .access-section-intro > .access-description {
-	margin-top: 12px;
+	margin-top: 10px;
+	max-width: 68ch;
 }
 
 .access-text-button {
@@ -90,7 +91,6 @@
 	justify-content: space-between;
 	gap: 24px;
 	padding: 22px 0;
-	border-bottom: 1px solid var(--line);
 	cursor: pointer;
 }
 
@@ -197,7 +197,7 @@
 @media (width <= 1100px) {
 	.access-section {
 		grid-template-columns: minmax(0, 1fr);
-		gap: 24px;
+		gap: 30px;
 	}
 }
 
@@ -211,4 +211,9 @@
 		padding-right: 28px;
 		padding-left: 28px;
 	}
+}
+
+.access-section-body .access-description {
+	margin-top: 8px;
+	max-width: 62ch;
 }

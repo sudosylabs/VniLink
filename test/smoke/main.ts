@@ -162,12 +162,13 @@ class SmokeSuite {
 
 	private async verifyPreferences(window: BrowserWindow): Promise<void> {
 		await window.webContents.executeJavaScript(`(async () => {
+    const material = document.documentElement.dataset.windowMaterial;
     await window.vnilink.updateConfiguration({ key: 'appearance.theme', value: 'dark' });
     await window.vnilink.updateConfiguration({ key: 'appearance.nativeBackground', value: false });
     await new Promise((resolve, reject) => {
       const start = performance.now();
       function check() {
-        if (document.documentElement.dataset.windowMaterial === 'none' && getComputedStyle(document.querySelector('.home-content')).backgroundColor === 'rgb(32, 33, 36)') { resolve(); }
+        if (document.documentElement.dataset.windowMaterial === material && getComputedStyle(document.querySelector('.home-content')).backgroundColor === 'rgb(32, 33, 36)') { resolve(); }
         else if (performance.now() - start > 5000) { reject(new Error('Persisted appearance did not apply')); }
         else { requestAnimationFrame(check); }
       }
@@ -197,7 +198,7 @@ class SmokeSuite {
           switch: document.querySelectorAll('.appearance-page [role="switch"]').length });
       });
     })`);
-			assert.deepEqual(layout, { choices: 3, selected: 'dark', overflow: false, contained: true, headingVisible: true, switch: 1 });
+			assert.deepEqual(layout, { choices: 3, selected: 'dark', overflow: false, contained: true, headingVisible: true, switch: 0 });
 		} finally {
 			window.setSize(size[0], size[1]);
 		}

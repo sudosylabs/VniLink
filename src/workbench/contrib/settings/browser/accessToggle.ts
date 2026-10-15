@@ -29,15 +29,21 @@ export class AccessToggle extends Disposable {
 	}
 
 	public setValue(allowed: boolean): void {
-		this.input.checked = allowed;
+		if (this.input.checked !== allowed) {
+			this.input.checked = allowed;
+		}
 	}
 
 	public setEnabled(enabled: boolean): void {
-		this.input.disabled = !enabled;
+		if (this.input.disabled === enabled) {
+			this.input.disabled = !enabled;
+		}
 	}
 
 	public setDescription(description: string): void {
-		this.description.textContent = description;
+		if (this.description.textContent !== description) {
+			this.description.textContent = description;
+		}
 	}
 
 	public override dispose(): void {

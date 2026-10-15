@@ -17,7 +17,7 @@
 }
 
 .input-fields section + section {
-	margin-top: 36px;
+	margin-top: 24px;
 	padding-top: 28px;
 	border-top: 1px solid var(--line);
 }

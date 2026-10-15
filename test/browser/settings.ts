@@ -123,9 +123,8 @@ export async function verifySettingsPages(): Promise<void> {
 		assert(appearance.element.querySelector<HTMLElement>('.appearance-status')?.hidden === true, 'Appearance showed a routine save notice');
 		const dark = appearance.element.querySelector<HTMLInputElement>('input[type="radio"][value="dark"]');
 		const light = appearance.element.querySelector<HTMLInputElement>('input[type="radio"][value="light"]');
-		const material = appearance.element.querySelector<HTMLInputElement>('input[type="checkbox"]');
-		assert(!!dark && !!light && !!material, 'Appearance controls missing');
-		if (!dark || !light || !material) {
+		assert(!!dark && !!light, 'Appearance controls missing');
+		if (!dark || !light) {
 			return;
 		}
 		dark.checked = true;
@@ -133,10 +132,7 @@ export async function verifySettingsPages(): Promise<void> {
 		await settle();
 		assert(snapshot.values['appearance.theme'] === 'dark', 'Theme change bypassed configuration');
 		assert(appearance.element.querySelector<HTMLElement>('.appearance-status')?.hidden === true, 'Successful save left unnecessary feedback');
-		material.checked = false;
-		material.dispatchEvent(new Event('change'));
-		await settle();
-		assert(!snapshot.values['appearance.nativeBackground'], 'Material preference bypassed configuration');
+		assert(!appearance.element.textContent.includes('Translucent background'), 'Appearance retained the material setting');
 		appearanceWriteFails = true;
 		light.checked = true;
 		light.dispatchEvent(new Event('change'));

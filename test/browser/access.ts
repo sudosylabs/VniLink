@@ -1,3 +1,4 @@
+import { Emitter } from '../../src/base/common/event.js';
 import { PeerAccessSection } from '../../src/workbench/contrib/settings/browser/peerAccessSection.js';
 import { LocalSecuritySection } from '../../src/workbench/contrib/settings/browser/localSecuritySection.js';
 import type { IAccessService, PeerAccess, AccessPermission, LocalSecurity } from '../../src/workbench/services/access/common/accessService.js';
@@ -33,8 +34,10 @@ export async function verifyAccess(): Promise<void> {
 		},
 		setPolicy: () => Promise.reject(new Error('policy write failed')),
 	};
+	const focused = new Emitter<void>();
 	const section = new PeerAccessSection(service);
-	const local = new LocalSecuritySection(service);
+	const local = new LocalSecuritySection(service, { _serviceBrand: undefined, onDidFocusWindow: focused.event, execute: () => Promise.reject(new Error('Not exercised')) });
+	document.body.append(local.element);
 	try {
 		await settle();
 		const control = section.element.querySelector<HTMLInputElement>('[data-permission="control"]');
@@ -54,6 +57,14 @@ export async function verifyAccess(): Promise<void> {
 		assert(control.disabled && section.element.querySelector<HTMLElement>('.access-permissions')?.hidden === true, 'Unconfirmed permission remained editable');
 		const lock = local.element.querySelector<HTMLInputElement>('[data-policy="allow_lock"]');
 		assert(!!lock && lock.checked, 'Local policy was not loaded independently');
+		let completeRead: ((state: LocalSecurity) => void) | undefined;
+		service.loadPolicy = () => new Promise<LocalSecurity>(resolve => {
+			completeRead = resolve;
+		});
+		focused.fire();
+		assert(lock?.disabled === false, 'Background status read disabled a confirmed policy control');
+		completeRead?.(security);
+		await settle();
 		assert(local.element.querySelector<HTMLInputElement>('[data-policy="allow_restart"]')?.disabled === true, 'Unsupported system action remained editable');
 		assert(local.element.textContent.includes('Not supported on this computer'), 'Backend support was misrepresented');
 		if (lock) {
@@ -71,6 +82,7 @@ export async function verifyAccess(): Promise<void> {
 	} finally {
 		section.dispose();
 		local.dispose();
+		focused.dispose();
 	}
 	const empty = new PeerAccessSection({ ...service, listDevices: () => Promise.resolve([]) });
 	try {

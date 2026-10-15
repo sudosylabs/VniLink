@@ -11,14 +11,11 @@
 }
 
 .appearance-section {
-	padding: 24px;
-	border: 1px solid var(--line);
-	border-radius: 12px;
-	background: var(--appearance-surface);
+	padding: 0;
 }
 
 .appearance-section + .appearance-section {
-	margin-top: 20px;
+	margin-top: 36px;
 }
 
 .appearance-section h2 {
@@ -276,73 +273,6 @@
 	background: var(--accent);
 }
 
-.appearance-background-row {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 24px;
-	cursor: pointer;
-}
-
-.appearance-setting-title {
-	display: block;
-	font-size: 15px;
-	font-weight: 500;
-}
-
-.appearance-switch {
-	appearance: none;
-	position: relative;
-	flex-shrink: 0;
-	width: 36px;
-	height: 21px;
-	margin: 0;
-	border: 1px solid var(--line);
-	border-radius: 20px;
-	background: var(--appearance-hover);
-	cursor: pointer;
-}
-
-.appearance-switch::before {
-	content: '';
-	position: absolute;
-	top: 3px;
-	left: 3px;
-	width: 13px;
-	height: 13px;
-	border-radius: 50%;
-	background: var(--muted);
-}
-
-.appearance-switch:checked {
-	background: var(--appearance-accent);
-	border-color: var(--appearance-accent);
-}
-
-.appearance-switch:checked::before {
-	left: 18px;
-	background: var(--on-accent);
-}
-
-.appearance-switch:focus-visible {
-	outline: 2px solid var(--appearance-accent);
-	outline-offset: 3px;
-}
-
-.appearance-switch:disabled {
-	cursor: default;
-	opacity: 0.6;
-}
-
-.appearance-footnote {
-	margin: 18px 0 0;
-	padding-top: 16px;
-	border-top: 1px solid var(--line);
-	color: var(--muted);
-	font-size: 12px;
-	line-height: 1.5;
-}
-
 .appearance-status {
 	color: var(--muted);
 	font-size: 12px;
@@ -367,10 +297,6 @@
 	.appearance-form {
 		margin-right: 28px;
 		margin-left: 28px;
-	}
-
-	.appearance-section {
-		padding: 18px;
 	}
 
 	.theme-mode-picker {

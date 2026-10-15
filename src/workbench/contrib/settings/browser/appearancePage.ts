@@ -11,7 +11,6 @@ export class AppearancePage extends Disposable implements WorkbenchPage {
 	public readonly element = document.createElement('main');
 	public readonly actions: readonly TabAction[] = [];
 	private readonly theme = this._register(new ThemeModePicker());
-	private readonly material = document.createElement('input');
 	private readonly status = document.createElement('p');
 	private readonly retry = document.createElement('button');
 	private failedChange: ConfigurationUpdate | undefined;
@@ -31,26 +30,6 @@ export class AppearancePage extends Disposable implements WorkbenchPage {
 		description.className = 'appearance-description';
 		description.textContent = nls.localize('appearance.themeDescription', 'Choose a look, or let it change with your system.');
 		themes.append(heading, description, this.theme.element);
-		const background = document.createElement('section');
-		background.className = 'appearance-section appearance-background';
-		const label = document.createElement('label');
-		label.className = 'appearance-background-row';
-		const details = document.createElement('span');
-		const title = document.createElement('span');
-		title.className = 'appearance-setting-title';
-		title.textContent = nls.localize('appearance.material', 'Translucent background');
-		const help = document.createElement('span');
-		help.className = 'appearance-description';
-		help.textContent = nls.localize('appearance.backgroundHelp', 'Blend the sidebar and titlebar with your desktop.');
-		details.append(title, help);
-		this.material.type = 'checkbox';
-		this.material.className = 'appearance-switch';
-		this.material.setAttribute('role', 'switch');
-		label.append(details, this.material);
-		const fallback = document.createElement('p');
-		fallback.className = 'appearance-footnote';
-		fallback.textContent = nls.localize('appearance.fallback', 'Uses your system’s background effect where available. Reduced transparency and other accessibility preferences take priority.');
-		background.append(label, fallback);
 		this.retry.type = 'button';
 		this.retry.className = 'settings-button';
 		this.retry.textContent = nls.localize('settings.retrySave', 'Retry save');
@@ -59,7 +38,7 @@ export class AppearancePage extends Disposable implements WorkbenchPage {
 		this.status.setAttribute('role', 'status');
 		this.status.setAttribute('aria-atomic', 'true');
 		this.status.hidden = true;
-		form.append(themes, background, this.status, this.retry);
+		form.append(themes, this.status, this.retry);
 		this.element.append(form);
 		this._register(addDisposableListener(this.retry, 'click', () => {
 			if (this.failedChange) {
@@ -68,9 +47,6 @@ export class AppearancePage extends Disposable implements WorkbenchPage {
 		}));
 		this._register(this.theme.onDidSelect(value => {
 			void this.save({ key: 'appearance.theme', value });
-		}));
-		this._register(addDisposableListener(this.material, 'change', () => {
-			void this.save({ key: 'appearance.nativeBackground', value: this.material.checked });
 		}));
 		this._register(configuration.onDidChangeConfiguration(() => {
 			if (!this.saving && !this.failedChange) {
@@ -82,7 +58,6 @@ export class AppearancePage extends Disposable implements WorkbenchPage {
 
 	private render(): void {
 		this.theme.setValue(this.configuration.snapshot.values['appearance.theme']);
-		this.material.checked = this.configuration.snapshot.values['appearance.nativeBackground'];
 		this.setControlsEnabled(!this.saving && this.configuration.snapshot.error === null);
 		if (this.configuration.snapshot.error) {
 			this.status.textContent = this.configuration.snapshot.error;
@@ -129,7 +104,6 @@ export class AppearancePage extends Disposable implements WorkbenchPage {
 
 	private setControlsEnabled(enabled: boolean): void {
 		this.theme.setEnabled(enabled);
-		this.material.disabled = !enabled;
 	}
 
 	private isDisposed(): boolean {

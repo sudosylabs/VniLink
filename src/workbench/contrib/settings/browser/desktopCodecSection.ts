@@ -4,17 +4,19 @@ import { Disposable } from '../../../../base/common/lifecycle.js';
 import { addDisposableListener } from '../../../../base/browser/domEvent.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { isCodecPreference } from '../../../../platform/engine/common/engine.js';
+import { IRemoteDesktopService } from '../../../services/remoteDesktop/common/remoteDesktopService.js';
 import { createSelect, wrapSelect } from './settingsControls.js';
 
 export class DesktopCodecSection extends Disposable {
 	public readonly element = document.createElement('section');
-	private readonly select = createSelect([['auto', nls.localize('desktop.codecAuto', 'Auto (recommended)')], ['h264', 'H.264'], ['h265', 'H.265'], ['vp8', 'VP8'], ['vp9', 'VP9'], ['av1', 'AV1']]);
+	private readonly select = createSelect([['auto', nls.localize('desktop.codecAuto', 'Auto (recommended)')]]);
+	private loaded = false;
 	private readonly save = document.createElement('button');
 	private readonly status = document.createElement('p');
 	private baseline = this.configuration.snapshot.values['desktop.codec'];
 	private busy = false;
 
-	constructor(@IConfigurationService private readonly configuration: IConfigurationService) {
+	constructor(@IConfigurationService private readonly configuration: IConfigurationService, @IRemoteDesktopService private readonly desktop: IRemoteDesktopService) {
 		super();
 		this.element.className = 'desktop-processing-section';
 		const title = document.createElement('h2');
@@ -40,12 +42,13 @@ export class DesktopCodecSection extends Disposable {
 		this.element.append(title, form);
 		this.select.value = this.baseline;
 		this.update();
+		void this.loadCodecs();
 		this._register(addDisposableListener(this.select, 'change', () => {
 			this.status.textContent = '';
 			this.update();
 		}));
 		this._register(configuration.onDidChangeConfiguration(() => {
-			const clean = this.select.value === this.baseline;
+			const clean = this.select.value === this.baseline || !isCodecPreference(this.select.value);
 			this.baseline = configuration.snapshot.values['desktop.codec'];
 			if (clean && !this.busy) {
 				this.select.value = this.baseline;
@@ -58,12 +61,44 @@ export class DesktopCodecSection extends Disposable {
 		}));
 	}
 
+	private async loadCodecs(): Promise<void> {
+		try {
+			const { codecs } = await this.desktop.load();
+			if (this.disposed()) {
+				return;
+			}
+			const options: [string, string][] = [['auto', nls.localize('desktop.codecAuto', 'Auto (recommended)')]];
+			if (codecs.decode_baseline || codecs.decode_high) {
+				options.push(['h264', 'H.264']);
+			}
+			for (const codec of codecs.additional ?? []) {
+				if (codec.decode) {
+					options.push([{ H265: 'h265', Vp8: 'vp8', Vp9: 'vp9', Av1: 'av1' }[codec.codec], { H265: 'H.265', Vp8: 'VP8', Vp9: 'VP9', Av1: 'AV1' }[codec.codec]]);
+				}
+			}
+			this.select.replaceChildren(...Array.from(createSelect(options).options));
+			this.select.value = this.baseline;
+			if (!this.select.value) {
+				this.status.textContent = nls.localize('desktop.codecMissing', 'Your saved codec is unavailable on this computer. Choose Auto or another available codec.');
+			}
+			this.loaded = true;
+		} catch {
+			if (!this.disposed()) {
+				this.status.textContent = nls.localize('desktop.codecLoadFailed', 'Available codecs could not be checked.');
+			}
+		} finally {
+			if (!this.disposed()) {
+				this.update();
+			}
+		}
+	}
+
 	private disposed(): boolean {
 		return this._store.isDisposed;
 	}
 
 	private update(): void {
-		this.select.disabled = this.busy || !!this.configuration.snapshot.error;
+		this.select.disabled = this.busy || !this.loaded || !!this.configuration.snapshot.error;
 		this.save.disabled = this.select.disabled || this.select.value === this.baseline;
 		if (this.configuration.snapshot.error) {
 			this.status.textContent = this.configuration.snapshot.error;
