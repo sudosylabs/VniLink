@@ -14,6 +14,7 @@ export interface AppInfo {
 }
 
 export interface DesktopApi {
+	recordingDirectory(action: 'read' | 'choose' | 'destination'): Promise<string | null>;
 	getCaptureDisplays(): Promise<readonly NativeScreenSource[]>;
 	getRestartState(): Promise<RestartState>;
 	onRestartStateChanged(listener: (state: RestartState) => void): () => void;

@@ -35,7 +35,7 @@ export class ConfigurationStore extends Disposable {
 				if (typeof contents !== 'object' || contents === null || Array.isArray(contents)) {
 					throw new Error('Invalid configuration');
 				}
-				const values: unknown = { ...defaultConfiguration, ...contents };
+				const values: unknown = { ...defaultConfiguration, ...contents, ...('recording.defaults' in contents && typeof contents['recording.defaults'] === 'object' && contents['recording.defaults'] !== null ? { 'recording.defaults': { directory: '', ...contents['recording.defaults'] } } : {}) };
 				if (!isConfigurationValues(values)) {
 					throw new Error('Invalid configuration');
 				}

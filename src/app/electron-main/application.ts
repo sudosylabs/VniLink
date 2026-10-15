@@ -168,13 +168,13 @@ export class VniLinkApplication extends Disposable {
 	private async startEngine(): Promise<void> {
 		try {
 			await this.engine.start(this.options.temporaryEngine ?? false);
-			await this.restoreEngineDefaults();
 			const consent = new MachinePermissionService(safePlatform, !app.isPackaged, systemPreferences, () => Promise.reject(new Error('Startup cannot open permission settings')));
 			if (!this.options.temporaryEngine) {
 				await synchronizeNativePermissions(this.engine, safePlatform, consent.snapshot()).catch(() => {
 					this.logService.error('Native input backend could not be initialized.');
 				});
 			}
+			await this.restoreEngineDefaults();
 			const runtime = await this.engine.execute({ type: 'nativeRuntime' });
 			if (runtime.type === 'nativeRuntime') {
 				for (const backend of runtime.backends) {
@@ -194,6 +194,17 @@ export class VniLinkApplication extends Disposable {
 		await this.engine.execute({ type: 'setDesktopCodecDefault', codec: values['desktop.codec'] });
 		await this.engine.execute({ type: 'setDesktopQualityDefaults', quality: values['desktop.quality'] });
 		await this.engine.execute({ type: 'setInputDefaults', ...values['input.defaults'] });
+		const sources = values['media.sources'];
+		if (sources.cameras.length) {
+			await this.engine.execute({ type: 'setNativeCameraSources', ids: [...sources.cameras] }).catch((error: unknown) => {
+				this.logService.error('Saved camera source could not be opened.', error);
+			});
+		}
+		if (sources.microphones.length || sources.system.length) {
+			await this.engine.execute({ type: 'setNativeAudioSources', microphones: [...sources.microphones], system: [...sources.system] }).catch((error: unknown) => {
+				this.logService.error('Saved audio sources could not be opened.', error);
+			});
+		}
 		try {
 			const paths = values['files.roots'];
 			await this.engine.execute(paths.length || this.options.temporaryEngine ? { type: 'setFileRoots', paths: [...paths] } : { type: 'enableFilesystemAccess' });

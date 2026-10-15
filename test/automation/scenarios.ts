@@ -1,7 +1,7 @@
 /** Validated selectors shared by the CLI launcher and Electron suite. */
-export const browserScenarioNames = ['workbench', 'access', 'data-channels', 'files-terminal', 'home', 'icons', 'input', 'permissions', 'remote-desktop', 'settings', 'tabs'];
+export const browserScenarioNames = ['workbench', 'access', 'data-channels', 'files-terminal', 'home', 'icons', 'input', 'media-settings', 'permissions', 'remote-desktop', 'settings', 'tabs'];
 
-export const integrationScenarioNames = ['engine', 'navigation', 'window', 'appearance', 'reload'];
+export const integrationScenarioNames = ['engine', 'navigation', 'window', 'appearance', 'settings-layout', 'reload'];
 
 export const scenarioNames = [...browserScenarioNames, ...integrationScenarioNames];
 

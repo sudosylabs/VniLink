@@ -1,3 +1,4 @@
+import { IConfigurationService, defaultConfiguration } from '../../../../platform/configuration/common/configuration.js';
 import type { DesktopApi } from '../../../../platform/ipc/common/desktopApi.js';
 import type { NativeDevice, PowerPolicy, PowerStatus, EngineCommand, NativeScreenSource, NativeSharingStatus, RecordingStatus, RecordingRetention } from '../../../../platform/engine/common/engine.js';
 import type { INativeRuntimeService, NativeRuntime } from '../common/nativeRuntimeService.js';
@@ -6,7 +7,7 @@ export class NativeRuntimeService implements INativeRuntimeService {
 	declare public readonly _serviceBrand: undefined;
 	private pending: Promise<unknown> = Promise.resolve();
 
-	constructor(private readonly api: Pick<DesktopApi, 'engineCommand' | 'getCaptureDisplays'>, public readonly available: boolean) { }
+	constructor(private readonly api: Pick<DesktopApi, 'engineCommand' | 'getCaptureDisplays' | 'recordingDirectory'>, public readonly available: boolean, @IConfigurationService private readonly configuration?: IConfigurationService) { }
 
 	public async load(): Promise<NativeRuntime> {
 		if (!this.available) {
@@ -59,8 +60,17 @@ export class NativeRuntimeService implements INativeRuntimeService {
 		return Object.freeze({ ...reply.status });
 	}
 
-	public startRecording(target: { readonly id: string; readonly generation: string }, options: { readonly destination: string; readonly maxBytes: string; readonly maxDurationMs: string; readonly retention?: RecordingRetention }): Promise<Readonly<RecordingStatus>> {
-		return this.recording({ type: 'startRecording', sessionId: target.id, generation: target.generation, ...options });
+	public recordingDirectory(action: 'read' | 'choose'): Promise<string | null> {
+		return this.api.recordingDirectory(action);
+	}
+
+	public async startRecording(target: { readonly id: string; readonly generation: string }, options: { readonly destination?: string; readonly maxBytes?: string; readonly maxDurationMs?: string; readonly retention?: RecordingRetention }): Promise<Readonly<RecordingStatus>> {
+		const defaults = (this.configuration?.snapshot.values ?? defaultConfiguration)['recording.defaults'];
+		const destination = options.destination ?? await this.api.recordingDirectory('destination');
+		if (!destination) {
+			throw new Error('Recording destination unavailable');
+		}
+		return this.recording({ type: 'startRecording', sessionId: target.id, generation: target.generation, destination, maxBytes: options.maxBytes ?? defaults.maxBytes, maxDurationMs: options.maxDurationMs ?? defaults.maxDurationMs, retention: options.retention ?? { maxSegments: defaults.maxSegments, maxTotalBytes: defaults.maxTotalBytes } });
 	}
 
 	public recordingStatus(id: string): Promise<Readonly<RecordingStatus>> {

@@ -44,7 +44,7 @@ class SmokeSuite {
 			!('noticeHidden' in result) || result.noticeHidden !== true ||
 			!('api' in result) ||
 			JSON.stringify(result.api) !==
-			JSON.stringify(['decryptText', 'encryptText', 'engineCommand', 'getAppInfo', 'getCaptureDisplays', 'getConfiguration', 'getKeyStorageProvider', 'getRestartState', 'isEncryptionAvailable', 'nativeHostCommand', 'onConfigurationChanged', 'onRestartStateChanged', 'onWindowStateChanged', 'openDataChannel', 'openRelayDocumentation', 'permissionCommand', 'restartApplication', 'updateConfiguration'])
+			JSON.stringify(['decryptText', 'encryptText', 'engineCommand', 'getAppInfo', 'getCaptureDisplays', 'getConfiguration', 'getKeyStorageProvider', 'getRestartState', 'isEncryptionAvailable', 'nativeHostCommand', 'onConfigurationChanged', 'onRestartStateChanged', 'onWindowStateChanged', 'openDataChannel', 'openRelayDocumentation', 'permissionCommand', 'recordingDirectory', 'restartApplication', 'updateConfiguration'])
 		) {
 			throw new Error(`Unexpected renderer state: ${JSON.stringify(result)}`);
 		}
@@ -58,7 +58,7 @@ class SmokeSuite {
 				await driver.screenshot(name);
 			}
 		}
-		if (!this.selection.names.some((name: string) => ['engine', 'navigation', 'window', 'appearance', 'reload'].includes(name))) {
+		if (!this.selection.names.some((name: string) => ['engine', 'navigation', 'window', 'appearance', 'settings-layout', 'reload'].includes(name))) {
 			return;
 		}
 		const engine: unknown = await window.webContents.executeJavaScript(`(async () => {
@@ -114,6 +114,9 @@ class SmokeSuite {
 			await this.verifyPreferences(window);
 			await driver.screenshot('appearance');
 		}
+		if (this.selection.includes('settings-layout')) {
+			await this.verifySettingsLayout(window, driver);
+		}
 		if (this.selection.includes('reload')) {
 			this.enableDevelopmentReload(window);
 			for (let index = 0; index < 3; index++) {
@@ -123,6 +126,54 @@ class SmokeSuite {
 			await driver.screenshot('reload');
 		}
 		console.log(`PASS: ${this.selection.names.join(', ')}`);
+	}
+
+	private async verifySettingsLayout(window: BrowserWindow, driver: WindowDriver): Promise<void> {
+		const size = window.getSize();
+		try {
+			for (const theme of ['light', 'dark']) {
+				await window.webContents.executeJavaScript(`window.vnilink.updateConfiguration({ key: 'appearance.theme', value: ${JSON.stringify(theme)} })`);
+				for (const width of [1200, 760]) {
+					window.setSize(width, 820);
+					for (const category of ['appearance', 'access', 'desktop', 'input', 'terminal', 'media', 'recording', 'power', 'connection']) {
+						const layout: unknown = await window.webContents.executeJavaScript(`new Promise(resolve => {
+       document.querySelector('[data-section-id="${category}"]').click();
+       requestAnimationFrame(() => requestAnimationFrame(() => {
+        const content = document.querySelector('.home-content');
+        const page = content.querySelector('main');
+        const buttons = [...page.querySelectorAll('button')];
+        resolve({ overflow: content.scrollWidth > content.clientWidth, heading: page.querySelector('h1').textContent, refresh: buttons.some(button => button.textContent === 'Refresh'), session: page.textContent.includes('Session overrides'), device: page.textContent.includes('Device access'), container: getComputedStyle(page.querySelector('.appearance-section') ?? page).borderTopWidth });
+       }));
+      })`);
+						assert(record(layout) && layout.overflow === false, `${category} overflowed at ${String(width)}px`);
+						if (category === 'appearance') {
+							assert.equal(layout.container, '0px');
+						}
+						if (category === 'access') {
+							assert.equal(layout.refresh, false);
+							assert.equal(layout.device, false);
+						}
+						if (category === 'desktop') {
+							assert.equal(layout.session, false);
+						}
+						await window.webContents.executeJavaScript(`new Promise((resolve, reject) => {
+       const deadline = performance.now() + 10000;
+       const check = () => {
+        const page = document.querySelector('.home-content > main');
+        if (page.getAttribute('aria-busy') !== 'true') { resolve(true); }
+        else if (performance.now() > deadline) { reject(new Error('Settings read did not settle')); }
+        else { setTimeout(check, 20); }
+       };
+       check();
+      })`);
+						await driver.screenshot(`settings-${category}-${theme}-${String(width)}`);
+					}
+				}
+			}
+		} finally {
+			window.setSize(size[0], size[1]);
+			await window.webContents.executeJavaScript(`window.vnilink.updateConfiguration({ key: 'appearance.theme', value: 'system' })`);
+		}
 	}
 
 	private async verifyHomeNavigation(window: BrowserWindow): Promise<void> {
@@ -155,7 +206,7 @@ class SmokeSuite {
         refresh: document.querySelector('.view-action').getAttribute('aria-label') };
     })()`);
 		assert.deepEqual(result, {
-			labels: ['Devices', 'Appearance', 'Connection', 'Access & Security', 'Remote Desktop', 'Keyboard & Mouse', 'Terminal'],
+			labels: ['Devices', 'Appearance', 'Connection', 'Access & Security', 'Remote Desktop', 'Keyboard & Mouse', 'Terminal', 'Audio & Camera', 'Recording', 'Power'],
 			settings: 'Settings', fullHeight: true, selected: 'devices', refresh: 'Refresh devices',
 		});
 	}

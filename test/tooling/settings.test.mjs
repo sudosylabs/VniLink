@@ -295,3 +295,35 @@ test('codec choice persists and old settings migrate to Auto', async () => {
 		await rm(dir, { recursive: true, force: true });
 	}
 });
+
+test('media sources and recording defaults persist, reject invalid limits and preserve older configuration', async () => {
+	const dir = await mkdtemp(join(tmpdir(), 'vnilink-media-settings-'));
+	const path = join(dir, 'settings.json');
+	const store = new ConfigurationStore(path);
+	try {
+		const previous = { ...defaultConfiguration };
+		delete previous['media.sources'];
+		delete previous['recording.defaults'];
+		await writeFile(path, JSON.stringify(previous));
+		await store.initialize();
+		assert.equal(store.snapshot.error, null);
+		const sources = { cameras: ['camera-one'], microphones: ['mic-one'], system: [] };
+		await store.updateValue({ key: 'media.sources', value: sources });
+		sources.cameras.push('mutated');
+		const limits = { directory: '', maxBytes: '2097152', maxDurationMs: '60000', maxSegments: 2, maxTotalBytes: '4194304' };
+		await store.updateValue({ key: 'recording.defaults', value: limits });
+		assert(!isConfigurationUpdate({ key: 'recording.defaults', value: { ...limits, maxBytes: '0' } }));
+		assert(!isConfigurationUpdate({ key: 'media.sources', value: { cameras: [], microphones: ['same'], system: ['same'] } }));
+		const reopened = new ConfigurationStore(path);
+		try {
+			await reopened.initialize();
+			assert.deepEqual(reopened.snapshot.values['media.sources'].cameras, ['camera-one']);
+			assert.deepEqual(reopened.snapshot.values['recording.defaults'], limits);
+		} finally {
+			reopened.dispose();
+		}
+	} finally {
+		store.dispose();
+		await rm(dir, { recursive: true, force: true });
+	}
+});

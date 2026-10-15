@@ -3,6 +3,8 @@ import { synchronizeNativePermissions } from '../../engine/electron-main/nativeR
 import { MachinePermissionService } from '../../permissions/electron-main/permissionService.js';
 import { isPermissionCommand } from '../../permissions/common/permissions.js';
 import { release } from 'node:os';
+import { join } from 'node:path';
+import { mkdir } from 'node:fs/promises';
 import { platform as safePlatform } from '../../../base/common/process.js';
 import { isNativeHostRequest, type IWindowControlsOptions } from '../../native/common/native.js';
 import type { NativeHostMainService } from '../../native/electron-main/nativeHostMainService.js';
@@ -13,7 +15,7 @@ import { isEngineCommand, isNativeScreenSource } from '../../engine/common/engin
 import type { BrowserWindow } from 'electron';
 import { isChannelRequest } from '../../engine/common/dataChannel.js';
 import { randomUUID } from 'node:crypto';
-import { app, ipcMain, MessageChannelMain, systemPreferences, shell, screen } from 'electron';
+import { app, ipcMain, MessageChannelMain, systemPreferences, shell, screen, dialog } from 'electron';
 import type { AppInfo } from '../common/desktopApi.js';
 import type { ConfigurationStore } from '../../configuration/node/configurationStore.js';
 import { isConfigurationUpdate } from '../../configuration/common/configuration.js';
@@ -91,6 +93,25 @@ export class DesktopIpcController extends Disposable {
 	}
 
 	private registerApplicationHandlers(): void {
+		this.handle('app:recording-directory', async (event, action: unknown) => {
+			const window = this.trusted(event);
+			const directory = this.configuration.snapshot.values['recording.defaults'].directory || join(app.getPath('pictures'), 'VniLink');
+			if (action === 'read') {
+				return join(app.getPath('pictures'), 'VniLink');
+			}
+			if (action === 'choose') {
+				const result = await dialog.showOpenDialog(window, { defaultPath: directory, properties: ['openDirectory', 'createDirectory'] });
+				return result.canceled ? null : result.filePaths[0] ?? null;
+			}
+			if (action === 'destination') {
+				if (this.configuration.snapshot.error) {
+					throw new Error(this.configuration.snapshot.error);
+				}
+				await mkdir(directory, { recursive: true });
+				return join(directory, `VniLink-${randomUUID()}.mkv`);
+			}
+			throw new Error('Invalid recording directory action');
+		});
 		this.handle('app:restart-state', async (event) => {
 			this.trusted(event);
 			return await this.restartState();
@@ -150,6 +171,11 @@ export class DesktopIpcController extends Disposable {
 					if (change.key === 'desktop.codec') {
 						await this.engine.execute({ type: 'setDesktopCodecDefault', codec: snapshot.values['desktop.codec'] });
 					}
+					if (change.key === 'media.sources') {
+						const sources = snapshot.values['media.sources'];
+						await this.engine.execute({ type: 'setNativeCameraSources', ids: [...sources.cameras] });
+						await this.engine.execute({ type: 'setNativeAudioSources', microphones: [...sources.microphones], system: [...sources.system] });
+					}
 					if (change.key === 'input.defaults') {
 						await this.engine.execute({ type: 'setInputDefaults', ...snapshot.values['input.defaults'] });
 					}
@@ -158,7 +184,12 @@ export class DesktopIpcController extends Disposable {
 						await this.engine.execute(paths.length ? { type: 'setFileRoots', paths: [...paths] } : { type: 'enableFilesystemAccess' });
 					}
 				};
-				await runtime({ ...previous, values: { ...previous.values, [change.key]: change.value } });
+				try {
+					await runtime({ ...previous, values: { ...previous.values, [change.key]: change.value } });
+				} catch (error) {
+					await runtime(previous);
+					throw error;
+				}
 				let snapshot: typeof previous;
 				try {
 					snapshot = await this.configuration.updateValue(change);

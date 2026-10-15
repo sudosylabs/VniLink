@@ -8,12 +8,13 @@ export const INativeRuntimeService = createDecorator<INativeRuntimeService>('nat
 export interface INativeRuntimeService {
 	readonly _serviceBrand: undefined;
 	readonly available: boolean;
+	recordingDirectory(action: 'read' | 'choose'): Promise<string | null>;
 	load(): Promise<NativeRuntime>;
 	captureDisplays(): Promise<readonly NativeScreenSource[]>;
 	startSharing(source: NativeScreenSource): Promise<readonly NativeSharingStatus[]>;
 	stopSharing(): Promise<readonly NativeSharingStatus[]>;
 	sharingStatus(): Promise<readonly NativeSharingStatus[]>;
-	startRecording(target: { readonly id: string; readonly generation: string }, options: { readonly destination: string; readonly maxBytes: string; readonly maxDurationMs: string; readonly retention?: RecordingRetention }): Promise<Readonly<RecordingStatus>>;
+	startRecording(target: { readonly id: string; readonly generation: string }, options: { readonly destination?: string; readonly maxBytes?: string; readonly maxDurationMs?: string; readonly retention?: RecordingRetention }): Promise<Readonly<RecordingStatus>>;
 	recordingStatus(id: string): Promise<Readonly<RecordingStatus>>;
 	stopRecording(id: string): Promise<Readonly<RecordingStatus>>;
 	releaseRecording(id: string): Promise<void>;

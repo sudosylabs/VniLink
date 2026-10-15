@@ -16,7 +16,29 @@ export function isFileRoots(value: unknown): value is readonly string[] {
 	return Array.isArray(value) && value.length <= 16 && new Set(value).size === value.length && value.every((path: unknown) => typeof path === 'string' && path.length > 0 && path.length <= 4096 && !path.includes('\0') && (path.startsWith('/') || /^[a-z]:[\\/]/i.test(path) || /^\\\\[^\\]+\\[^\\]+/.test(path)));
 }
 
+export interface MediaSources { readonly cameras: readonly string[]; readonly microphones: readonly string[]; readonly system: readonly string[]; }
+
+export interface RecordingDefaults { readonly directory: string; readonly maxBytes: string; readonly maxDurationMs: string; readonly maxSegments: number; readonly maxTotalBytes: string; }
+
+export function isMediaSources(value: unknown): value is MediaSources {
+	if (typeof value !== 'object' || value === null || !('cameras' in value) || !('microphones' in value) || !('system' in value) || Object.keys(value).length !== 3) {
+		return false;
+	}
+	const valid = (ids: unknown): ids is string[] => Array.isArray(ids) && ids.length <= 32 && new Set(ids).size === ids.length && ids.every(id => typeof id === 'string' && id.length > 0 && id.length <= 2048 && !id.includes('\0'));
+	return valid(value.cameras) && valid(value.microphones) && valid(value.system) && value.microphones.length + value.system.length <= 32 && new Set([...value.microphones, ...value.system]).size === value.microphones.length + value.system.length;
+}
+
+export function isRecordingDefaults(value: unknown): value is RecordingDefaults {
+	if (typeof value !== 'object' || value === null || Object.keys(value).length !== 5) {
+		return false;
+	}
+	const decimal = (value: unknown, min: bigint, max: bigint): boolean => typeof value === 'string' && /^[1-9][0-9]{0,19}$/.test(value) && BigInt(value) >= min && BigInt(value) <= max;
+	return 'directory' in value && typeof value.directory === 'string' && (value.directory === '' || isFileRoots([value.directory])) && 'maxBytes' in value && decimal(value.maxBytes, 1048576n, 1099511627776n) && 'maxDurationMs' in value && decimal(value.maxDurationMs, 1000n, 86400000n) && 'maxTotalBytes' in value && decimal(value.maxTotalBytes, 1048576n, 1099511627776n) && 'maxSegments' in value && typeof value.maxSegments === 'number' && Number.isInteger(value.maxSegments) && value.maxSegments >= 1 && value.maxSegments <= 65535;
+}
+
 export interface ConfigurationValues {
+	readonly 'media.sources': MediaSources;
+	readonly 'recording.defaults': RecordingDefaults;
 	readonly 'input.defaults': InputDefaults;
 	readonly 'files.roots': readonly string[];
 	readonly 'desktop.codec': CodecPreference;
@@ -36,6 +58,8 @@ export interface ConfigurationSnapshot {
 }
 
 export const defaultConfiguration: ConfigurationValues = Object.freeze({
+	'media.sources': Object.freeze({ cameras: Object.freeze(['vnilink:auto-camera']), microphones: Object.freeze(['vnilink:default-microphone']), system: Object.freeze(['vnilink:default-system-audio']) }),
+	'recording.defaults': Object.freeze({ directory: '', maxBytes: '1073741824', maxDurationMs: '3600000', maxSegments: 10, maxTotalBytes: '10737418240' }),
 	'input.defaults': Object.freeze({ mode: 'Character', swap: false, pointer: Object.freeze({ sensitivity_percent: 100, reverse_wheel: false, swap_buttons: false }) }),
 	'files.roots': Object.freeze([]),
 	'desktop.codec': 'auto',
@@ -52,13 +76,17 @@ export function isConfigurationValues(value: unknown): value is ConfigurationVal
 		&& 'desktop.quality' in value && isQualityLimits(value['desktop.quality'])
 		&& 'input.defaults' in value && isInputDefaults(value['input.defaults'])
 		&& 'files.roots' in value && isFileRoots(value['files.roots'])
-		&& Object.keys(value).length === 6;
+		&& 'media.sources' in value && isMediaSources(value['media.sources'])
+		&& 'recording.defaults' in value && isRecordingDefaults(value['recording.defaults'])
+		&& Object.keys(value).length === 8;
 }
 
 export function isConfigurationUpdate(value: unknown): value is ConfigurationUpdate {
 	return typeof value === 'object' && value !== null && 'key' in value && 'value' in value
 		&& Object.keys(value).length === 2
-		&& ((value.key === 'appearance.theme' && (value.value === 'system' || value.value === 'light' || value.value === 'dark'))
+		&& ((value.key === 'media.sources' && isMediaSources(value.value))
+			|| (value.key === 'recording.defaults' && isRecordingDefaults(value.value))
+			|| (value.key === 'appearance.theme' && (value.value === 'system' || value.value === 'light' || value.value === 'dark'))
 			|| (value.key === 'appearance.nativeBackground' && typeof value.value === 'boolean')
 			|| (value.key === 'input.defaults' && isInputDefaults(value.value))
 			|| (value.key === 'files.roots' && isFileRoots(value.value))
@@ -84,5 +112,5 @@ export interface IConfigurationService {
 }
 
 export function freezeConfiguration(values: ConfigurationValues): ConfigurationValues {
-	return Object.freeze({ ...values, 'desktop.quality': Object.freeze({ ...values['desktop.quality'] }), 'input.defaults': Object.freeze({ ...values['input.defaults'], pointer: Object.freeze({ ...values['input.defaults'].pointer }) }), 'files.roots': Object.freeze([...values['files.roots']]) });
+	return Object.freeze({ ...values, 'media.sources': Object.freeze({ cameras: Object.freeze([...values['media.sources'].cameras]), microphones: Object.freeze([...values['media.sources'].microphones]), system: Object.freeze([...values['media.sources'].system]) }), 'recording.defaults': Object.freeze({ ...values['recording.defaults'] }), 'desktop.quality': Object.freeze({ ...values['desktop.quality'] }), 'input.defaults': Object.freeze({ ...values['input.defaults'], pointer: Object.freeze({ ...values['input.defaults'].pointer }) }), 'files.roots': Object.freeze([...values['files.roots']]) });
 }

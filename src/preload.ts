@@ -26,6 +26,16 @@ ipcRenderer.on('engine:data-port', (event, requestId: unknown) => {
 });
 
 const api: DesktopApi = {
+	recordingDirectory: async action => {
+		if (!['read', 'choose', 'destination'].includes(action)) {
+			throw new Error('Invalid recording directory action');
+		}
+		const value: unknown = await ipcRenderer.invoke('app:recording-directory', action);
+		if (value !== null && typeof value !== 'string') {
+			throw new Error('Invalid recording directory');
+		}
+		return value;
+	},
 	getCaptureDisplays: async () => {
 		const sources: unknown = await ipcRenderer.invoke('app:capture-displays');
 		if (!isNativeScreenSources(sources)) {

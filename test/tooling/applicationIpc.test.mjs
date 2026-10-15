@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import test from 'node:test';
 import { build } from 'esbuild';
 
@@ -7,7 +8,7 @@ const output = await build({
 	stdin: { contents: `export { registerDesktopHandlers } from './src/platform/ipc/electron-main/handlers.js'; export { handlers, opened } from 'electron'; export { defaultConfiguration } from './src/platform/configuration/common/configuration.js';`, loader: 'ts', resolveDir: process.cwd() }, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json', plugins: [{
 		name: 'electron-fixture', setup(builder) {
 			builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }));
-			builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: `export const handlers = new Map(); export const opened = []; export const ipcMain = { handle: (name, callback) => handlers.set(name, callback), removeHandler: name => handlers.delete(name) }; export const app = { isPackaged: false, getVersion: () => 'test' }; export const shell = { openExternal: async url => opened.push(url) }; export const systemPreferences = {}; export const screen = { getAllDisplays: () => [] }; export class MessageChannelMain { constructor() { this.port1 = { close() {} }; this.port2 = { close() {} }; } }` }));
+			builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: `export const handlers = new Map(); export const opened = []; export const ipcMain = { handle: (name, callback) => handlers.set(name, callback), removeHandler: name => handlers.delete(name) }; export const app = { isPackaged: false, getVersion: () => 'test', getPath: () => '/Pictures' }; export const shell = { openExternal: async url => opened.push(url) }; export const dialog = { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) }; export const systemPreferences = {}; export const screen = { getAllDisplays: () => [] }; export class MessageChannelMain { constructor() { this.port1 = { close() {} }; this.port2 = { close() {} }; } }` }));
 		}
 	}]
 });
@@ -165,4 +166,58 @@ test('IPC owner releases registrations and rejects commands after disposal', asy
 	controller.dispose();
 	assert.equal(handlers.size, 0);
 	assert.throws(() => handler({ sender: contents, senderFrame: frame }), /disposed/);
+});
+
+test('media defaults roll back partial runtime writes without publishing a false saved preference', async () => {
+	const frame = { url: 'vnilink://app/index.html' };
+	const contents = { mainFrame: frame };
+	const window = { webContents: contents, isDestroyed: () => false };
+	const commands = [];
+	let snapshot = { revision: 0, values: defaultConfiguration, error: null };
+	let refused = false;
+	const engine = {
+		available: true, execute: command => {
+			commands.push(command);
+			if (command.type === 'setNativeAudioSources' && command.microphones.length && !refused) {
+				refused = true;
+				return Promise.reject(new Error('Audio source unavailable'));
+			}
+			return Promise.resolve({ type: 'done' });
+		}
+	};
+	const configuration = {
+		get snapshot() {
+			return snapshot;
+		}, updateValue: update => {
+			snapshot = { ...snapshot, values: { ...snapshot.values, [update.key]: update.value } };
+			return Promise.resolve(snapshot);
+		}
+	};
+	const controller = registerDesktopHandlers(() => window, frame.url, engine, {}, {}, configuration, () => { });
+	try {
+		await assert.rejects(handlers.get('configuration:update')({ sender: contents, senderFrame: frame }, { key: 'media.sources', value: { cameras: ['camera'], microphones: ['mic'], system: [] } }), /Audio source unavailable/);
+		assert.deepEqual(snapshot.values['media.sources'], defaultConfiguration['media.sources']);
+		assert.deepEqual(commands.map(command => command.type), ['setNativeCameraSources', 'setNativeAudioSources', 'setNativeCameraSources', 'setNativeAudioSources']);
+		assert.deepEqual(commands[2].ids, defaultConfiguration['media.sources'].cameras);
+		assert.deepEqual(commands[3].microphones, defaultConfiguration['media.sources'].microphones);
+	} finally {
+		controller.dispose();
+	}
+});
+
+test('recording default folder readback stays independent of a saved custom folder and trusts only the main frame', async () => {
+	const frame = { url: 'vnilink://app/index.html' };
+	const contents = { mainFrame: frame };
+	const window = { webContents: contents };
+	const snapshot = { values: { ...defaultConfiguration, 'recording.defaults': { ...defaultConfiguration['recording.defaults'], directory: '/custom-recordings' } }, error: null };
+	const controller = registerDesktopHandlers(() => window, frame.url, {}, {}, {}, { snapshot }, () => { });
+	try {
+		const request = handlers.get('app:recording-directory');
+		assert.equal(await request({ sender: contents, senderFrame: frame }, 'read'), join('/Pictures', 'VniLink'));
+		assert.equal(await request({ sender: contents, senderFrame: frame }, 'choose'), null);
+		await assert.rejects(request({ sender: contents, senderFrame: { ...frame } }, 'read'), /Untrusted/);
+		await assert.rejects(request({ sender: contents, senderFrame: frame }, 'unknown'), /Invalid/);
+	} finally {
+		controller.dispose();
+	}
 });

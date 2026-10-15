@@ -5,7 +5,7 @@ import { settingsCategories, type SettingsCategoryId } from '../../settings/comm
 
 export type HomeSectionId = 'devices' | SettingsCategoryId;
 
-const implementedCategories = settingsCategories.filter(category => !['files', 'media', 'recording', 'power'].includes(category.id));
+const implementedCategories = settingsCategories.filter(category => category.id !== 'files');
 
 export const homeNavigationGroups: readonly SidebarGroup[] = [
 	{ items: [{ id: 'devices', label: nls.localize('home.devices', 'Devices'), icon: Icons.devices }] },

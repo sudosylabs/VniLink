@@ -65,3 +65,37 @@ test('device approvals capture queued drafts and immutable runtime readback; fai
 	fail = true;
 	await assert.rejects(service.approveAudio(['mic'], []));
 });
+
+test('recording uses persisted defaults while retaining an explicit session destination and overrides', async () => {
+	const commands = [];
+	const defaults = { maxBytes: '2097152', maxDurationMs: '60000', maxSegments: 2, maxTotalBytes: '4194304' };
+	const status = { id: '4', phase: 'Recording', failure: null, frames: '0', bytes: '0', durationMs: '0', segments: 1 };
+	const service = new NativeRuntimeService({
+		engineCommand: command => {
+			commands.push(command);
+			return Promise.resolve({ type: 'recordingStatus', status });
+		}
+	}, true, { snapshot: { values: { 'recording.defaults': defaults } } });
+	await service.startRecording({ id: '1', generation: '7' }, { destination: '/chosen/session.mkv' });
+	assert.deepEqual(commands[0], { type: 'startRecording', sessionId: '1', generation: '7', destination: '/chosen/session.mkv', maxBytes: defaults.maxBytes, maxDurationMs: defaults.maxDurationMs, retention: { maxSegments: defaults.maxSegments, maxTotalBytes: defaults.maxTotalBytes } });
+	await service.startRecording({ id: '1', generation: '7' }, { destination: '/another.mkv', maxDurationMs: '120000' });
+	assert.equal(commands[1].maxDurationMs, '120000');
+	assert.equal(commands[1].maxBytes, defaults.maxBytes);
+});
+
+test('recording without a session destination resolves the persisted default folder through main-process integration', async () => {
+	const calls = [];
+	const service = new NativeRuntimeService({
+		recordingDirectory: async action => {
+			calls.push(action);
+			return '/Pictures/VniLink/new.mkv';
+		},
+		engineCommand: async command => {
+			calls.push(command);
+			return { type: 'recordingStatus', status: {} };
+		}
+	}, true);
+	await service.startRecording({ id: '1', generation: '2' }, {});
+	assert.equal(calls[0], 'destination');
+	assert.equal(calls[1].destination, '/Pictures/VniLink/new.mkv');
+});

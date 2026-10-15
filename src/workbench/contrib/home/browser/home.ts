@@ -1,3 +1,6 @@
+import { PowerPage } from '../../settings/browser/powerPage.js';
+import { MediaPage } from '../../settings/browser/mediaPage.js';
+import { RecordingPage } from '../../settings/browser/recordingPage.js';
 import { FilesPage } from '../../settings/browser/filesPage.js';
 import { TerminalPage } from '../../settings/browser/terminalPage.js';
 import { InputPage } from '../../settings/browser/inputPage.js';
@@ -56,24 +59,19 @@ export class HomeView extends Disposable implements WorkbenchView {
 	private getPage(id: HomeSectionId): WorkbenchPage {
 		let page = this.pages.get(id);
 		if (!page) {
-			if (id === 'devices') {
-				page = this.instantiationService.createInstance(DevicesPage);
-			} else if (id === 'appearance') {
-				page = this.instantiationService.createInstance(AppearancePage);
-			} else if (id === 'access') {
-				page = this.instantiationService.createInstance(AccessPage);
-			} else if (id === 'desktop') {
-				page = this.instantiationService.createInstance(RemoteDesktopPage);
-			} else if (id === 'input') {
-				page = this.instantiationService.createInstance(InputPage);
-			} else if (id === 'files') {
-				page = this.instantiationService.createInstance(FilesPage);
-			} else if (id === 'terminal') {
-				page = this.instantiationService.createInstance(TerminalPage);
-			} else if (id === 'connection') {
-				page = this.instantiationService.createInstance(ConnectionPage);
-			} else {
-				throw new Error(`Settings page has no implementation: ${id}`);
+			switch (id) {
+				case 'devices': page = this.instantiationService.createInstance(DevicesPage); break;
+				case 'appearance': page = this.instantiationService.createInstance(AppearancePage); break;
+				case 'access': page = this.instantiationService.createInstance(AccessPage); break;
+				case 'desktop': page = this.instantiationService.createInstance(RemoteDesktopPage); break;
+				case 'input': page = this.instantiationService.createInstance(InputPage); break;
+				case 'files': page = this.instantiationService.createInstance(FilesPage); break;
+				case 'terminal': page = this.instantiationService.createInstance(TerminalPage); break;
+				case 'power': page = this.instantiationService.createInstance(PowerPage); break;
+				case 'media': page = this.instantiationService.createInstance(MediaPage); break;
+				case 'recording': page = this.instantiationService.createInstance(RecordingPage); break;
+				case 'connection': page = this.instantiationService.createInstance(ConnectionPage); break;
+				default: throw new Error(`Settings page has no implementation: ${String(id)}`);
 			}
 			this.pages.set(id, this._register(page));
 		}

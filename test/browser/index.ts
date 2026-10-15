@@ -1,3 +1,4 @@
+import { verifyMediaSettings } from './mediaSettings.js';
 /** Independently selectable renderer scenarios; each owns its fixture teardown. */
 import { verifyWorkbenchLifecycle } from './workbench.js';
 import { verifyAccess } from './access.js';
@@ -15,7 +16,7 @@ export class BrowserScenarios {
 	private readonly scenarios = new Map<string, () => unknown>([
 		['workbench', verifyWorkbenchLifecycle], ['access', verifyAccess], ['data-channels', verifyDataChannels], ['files-terminal', verifyFileTerminalSettings],
 		['home', verifyHomeLifecycle], ['icons', verifyIcons], ['input', verifyInputPage],
-		['permissions', verifyMachinePermissions], ['remote-desktop', verifyRemoteDesktop], ['settings', verifySettingsPages], ['tabs', verifyTabs],
+		['media-settings', verifyMediaSettings], ['permissions', verifyMachinePermissions], ['remote-desktop', verifyRemoteDesktop], ['settings', verifySettingsPages], ['tabs', verifyTabs],
 	]);
 
 	public async run(name: string): Promise<boolean> {
