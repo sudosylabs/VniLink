@@ -630,7 +630,8 @@
       "path": "src/workbench/browser/parts/titlebar/media/modernTabs.css",
       "upstreamPath": "src/vs/workbench/contrib/modernUI/browser/media/tabs.css",
       "adapted": true,
-      "sha256": "e336803fc58083354b0c9741c6e6c3d052fb2d92ff18f7fed96b4215d55e8b0a"
+      "sha256": "e93cb8990921c3a0581279fd93681653d3cb04fe252d292c907baeff4c544610",
+      "adaptation": "VniLink transparent titlebar tabs retain a shared label color and rounded selection outline; segmented dividers leave the active tab open, with side strokes ending at the reverse shoulders."
     },
     {
       "path": "src/base/browser/ui/aria/aria.ts",

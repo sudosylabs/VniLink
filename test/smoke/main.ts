@@ -327,10 +327,11 @@ class SmokeSuite {
       const region = selector => getComputedStyle(document.querySelector(selector)).getPropertyValue('-webkit-app-region');
       return { height: bounds.height, topGap: bounds.top - bar.top, bottomGap: bar.bottom - bounds.bottom,
         radius: getComputedStyle(tab.querySelector('.tab-fill')).borderTopLeftRadius,
+        fill: getComputedStyle(tab.querySelector('.tab-fill')).backgroundColor,
         strip: region('.tabs-scrollable'), container: region('.tabs-container'), tab: region('.tab'),
         close: tab.querySelector('.tab-close') !== null, action: region('.view-action') };
     })()`);
-		assert.deepEqual(tabs, { height: 35, topGap: height - 35, bottomGap: 0, radius: '12px', strip: 'drag', container: 'drag', tab: 'no-drag', close: false, action: 'no-drag' });
+		assert.deepEqual(tabs, { height: 35, topGap: height - 35, bottomGap: 0, radius: '12px', fill: 'rgba(0, 0, 0, 0)', strip: 'drag', container: 'drag', tab: 'no-drag', close: false, action: 'no-drag' });
 		const surfaces: unknown = await window.webContents.executeJavaScript(`(() => {
       const color = selector => getComputedStyle(document.querySelector(selector)).backgroundColor;
       return { mode: document.documentElement.dataset.windowMaterial, titlebar: color('.part.titlebar'), sidebar: color('.sidebar'), content: color('.home-content') };
