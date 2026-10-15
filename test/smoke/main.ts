@@ -142,10 +142,21 @@ class SmokeSuite {
         const content = document.querySelector('.home-content');
         const page = content.querySelector('main');
         const buttons = [...page.querySelectorAll('button')];
-        resolve({ overflow: content.scrollWidth > content.clientWidth, heading: page.querySelector('h1').textContent, refresh: buttons.some(button => button.textContent === 'Refresh'), session: page.textContent.includes('Session overrides'), device: page.textContent.includes('Device access'), container: getComputedStyle(page.querySelector('.appearance-section') ?? page).borderTopWidth });
+        const footers = [...page.querySelectorAll('.settings-apply-row')].flatMap(row => {
+         const button = row.querySelector('button');
+         const help = row.querySelector('.settings-help');
+         if (!button || !help || !help.textContent.trim()) return [];
+         const buttonBounds = button.getBoundingClientRect();
+         const helpBounds = help.getBoundingClientRect();
+         return [Math.abs(buttonBounds.top + buttonBounds.height / 2 - helpBounds.top - helpBounds.height / 2)];
+        });
+        resolve({ footers, overflow: content.scrollWidth > content.clientWidth, heading: page.querySelector('h1').textContent, refresh: buttons.some(button => button.textContent === 'Refresh'), session: page.textContent.includes('Session overrides'), device: page.textContent.includes('Device access'), container: getComputedStyle(page.querySelector('.appearance-section') ?? page).borderTopWidth });
        }));
       })`);
 						assert(record(layout) && layout.overflow === false, `${category} overflowed at ${String(width)}px`);
+						if (['input', 'media', 'recording', 'power'].includes(category)) {
+							assert(Array.isArray(layout.footers) && layout.footers.length > 0 && layout.footers.every((offset: unknown) => typeof offset === 'number' && offset <= 1), `${category} footer text was not centered with its button at ${String(width)}px: ${JSON.stringify(layout.footers)}`);
+						}
 						if (category === 'appearance') {
 							assert.equal(layout.container, '0px');
 						}
@@ -167,6 +178,10 @@ class SmokeSuite {
        check();
       })`);
 						await driver.screenshot(`settings-${category}-${theme}-${String(width)}`);
+						if (['input', 'media', 'recording', 'power'].includes(category)) {
+							await window.webContents.executeJavaScript(`document.querySelector('.home-content > main button[type="submit"]').closest('.settings-apply-row').scrollIntoView({ block: 'center' })`);
+							await driver.screenshot(`settings-footer-${category}-${theme}-${String(width)}`);
+						}
 					}
 				}
 			}

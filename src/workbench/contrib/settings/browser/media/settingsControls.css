@@ -66,6 +66,10 @@
 	margin-top: 20px;
 }
 
+.settings-apply-row > .settings-button.primary {
+	margin-top: 0;
+}
+
 .settings-apply-row button:disabled {
 	background: color-mix(in srgb, var(--text) 6%, transparent);
 	color: var(--muted);
