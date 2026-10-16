@@ -29,12 +29,16 @@ struct MemoryInner {
     record: Option<Vec<u8>>,
     load_fault: Option<StoreFault>,
     save_fault: Option<StoreFault>,
+    save_attempts: usize,
+    #[cfg(test)]
+    panic_on_save: bool,
 }
 
 #[derive(Clone, Copy)]
 enum StoreFault {
     Locked,
     Unavailable,
+    RecoveryRequired,
 }
 
 impl From<StoreFault> for Error {
@@ -42,6 +46,7 @@ impl From<StoreFault> for Error {
         match fault {
             StoreFault::Locked => Error::StoreLocked,
             StoreFault::Unavailable => Error::StoreUnavailable,
+            StoreFault::RecoveryRequired => Error::StoreRecoveryRequired,
         }
     }
 }
@@ -66,6 +71,9 @@ impl MemoryStore {
                 record: None,
                 load_fault: None,
                 save_fault: None,
+                save_attempts: 0,
+                #[cfg(test)]
+                panic_on_save: false,
             })),
         }
     }
@@ -93,13 +101,26 @@ impl MemoryStore {
         let fault = match error {
             Error::StoreLocked => StoreFault::Locked,
             Error::StoreUnavailable => StoreFault::Unavailable,
+            Error::StoreRecoveryRequired => StoreFault::RecoveryRequired,
             _ => panic!("the injected save fault must be a store error"),
         };
         lock(self).save_fault = Some(fault);
     }
 
+    /// The next save panics once, before it replaces the record.
+    #[cfg(test)]
+    pub(crate) fn panic_next_save(&self) {
+        lock(self).panic_on_save = true;
+    }
+
     pub(crate) fn record(&self) -> Option<Vec<u8>> {
         lock(self).record.clone()
+    }
+
+    /// Saves attempted since this store was created, including injected failures.
+    #[cfg(test)]
+    pub(crate) fn save_attempts(&self) -> usize {
+        lock(self).save_attempts
     }
 }
 
@@ -114,6 +135,12 @@ impl InstallationStore for MemoryStore {
 
     fn save(&self, record: &[u8]) -> Result<(), Error> {
         let mut inner = lock(self);
+        inner.save_attempts = inner.save_attempts.saturating_add(1);
+        #[cfg(test)]
+        if inner.panic_on_save {
+            inner.panic_on_save = false;
+            panic!("installation store test panic");
+        }
         if let Some(fault) = inner.save_fault.take() {
             return Err(fault.into());
         }

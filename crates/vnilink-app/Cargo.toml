@@ -13,7 +13,7 @@ crate-type = ["rlib"]
 
 [features]
 # Temporary loopback fixtures, unavailable in normal application builds.
-test-support = []
+test-support = ["vnilink/test-probes"]
 
 [dependencies]
 vnilink = { path = "../vnilink" }

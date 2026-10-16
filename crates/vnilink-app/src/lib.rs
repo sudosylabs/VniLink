@@ -8,8 +8,10 @@
 //!
 //! Call blocking methods from background threads. The core owns a Tokio runtime;
 //! calling its blocking control methods from an async executor is unsupported.
-//! Persistent installations require a credential store before opening the core.
-//! Store records contain secrets and must never be logged or exposed to the UI.
+//! Persistent installations require a [`CredentialStore`] before opening the
+//! core. That adapter supplies the installation record; it is not itself the
+//! platform credential store. Store records contain secrets and must never be
+//! logged or exposed to the UI.
 //!
 //! Media adapters remain available to Rust callers. Electron media transport and
 //! presentation are deliberately outside the current control-bridge work.
@@ -179,7 +181,7 @@ impl VnilinkCore {
         Ok(applied)
     }
 
-    /// Opens the persistent installation using a native credential store.
+    /// Opens the persistent installation through a [`CredentialStore`].
 
     pub fn open_persistent(store: Box<dyn CredentialStore>) -> Result<Self, FfiError> {
         let core = Core::open(
@@ -193,6 +195,29 @@ impl VnilinkCore {
             next_preview: AtomicU64::new(1),
             audio_coordinator: Arc::new(audio_native::AudioCoordinator::default()),
         })
+    }
+
+    /// Loopback core on an injected store. Relays stay disabled. Tests use this
+    /// so a real adapter can be armed without binding a public endpoint.
+    #[cfg(feature = "test-support")]
+    pub fn open_persistent_direct(store: Box<dyn CredentialStore>) -> Result<Self, FfiError> {
+        let core = Core::open_direct(
+            Arc::new(storage::NativeStore(store.into())),
+            RelaySettings::public_n0(),
+        )
+        .map_err(map_error)?;
+        Ok(Self {
+            inner: Arc::new(core),
+            previews: Mutex::new(HashMap::new()),
+            next_preview: AtomicU64::new(1),
+            audio_coordinator: Arc::new(audio_native::AudioCoordinator::default()),
+        })
+    }
+
+    /// How many times this core claimed endpoint close.
+    #[cfg(feature = "test-support")]
+    pub fn endpoint_close_count(&self) -> usize {
+        self.inner.endpoint_close_count()
     }
 
     /// Saved relays for the next launch. An empty list means public relays.

@@ -55,12 +55,18 @@ pub enum FfiError {
     Network { message: String },
     #[error("too many paired devices")]
     TooManyDevices,
-    #[error("the credential store is unavailable")]
+    /// Filesystem, database, or credential failure with no uncertain commit.
+    #[error("the installation store is unavailable")]
     StoreUnavailable,
+    /// The platform credential store refused access.
     #[error("the credential store is locked")]
     StoreLocked,
     #[error("the installation record is not valid")]
     CorruptRecord,
+    /// Durable outcome of a save is unknown. The bridge reports this as
+    /// `StoreUnavailable` and tells the caller to restart VniLink.
+    #[error("the installation store must be reopened and VniLink restarted")]
+    StoreRecoveryRequired,
     #[error("the pairing file is not valid")]
     InvalidPairingFile,
     #[error("the pairing check does not match")]
@@ -108,6 +114,7 @@ pub(crate) fn map_error(error: Error) -> FfiError {
         Error::StoreUnavailable => FfiError::StoreUnavailable,
         Error::StoreLocked => FfiError::StoreLocked,
         Error::CorruptRecord => FfiError::CorruptRecord,
+        Error::StoreRecoveryRequired => FfiError::StoreRecoveryRequired,
         Error::InvalidPairingFile => FfiError::InvalidPairingFile,
         Error::PairingCheckMismatch => FfiError::PairingCheckMismatch,
         Error::NoControlRequest => FfiError::NoControlRequest,

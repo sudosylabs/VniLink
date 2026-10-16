@@ -326,7 +326,7 @@ impl Core {
         let policy = policy.validate()?;
         let mut state = self.alive_state()?;
         let previous = std::mem::replace(&mut state.system_policy, policy);
-        if let Err(error) = persist(&self.shared, &state) {
+        if let Err(error) = persist(&self.shared, &mut state) {
             state.system_policy = previous;
             return Err(error);
         }

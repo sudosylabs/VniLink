@@ -1,3 +1,8 @@
 # Native video libraries and Rust use one ABI on Windows.
 [target.x86_64-pc-windows-gnu]
 linker = "x86_64-w64-mingw32-gcc"
+
+# SQLite creates the installation database and its rollback journal. 0600 is
+# the mode argument before umask, so those files are never group-readable.
+[env]
+LIBSQLITE3_FLAGS = "-DSQLITE_DEFAULT_FILE_PERMISSIONS=0600"

@@ -133,7 +133,7 @@ impl Core {
             return Err(Error::Busy);
         }
         let previous = std::mem::replace(&mut state.terminal_policy, policy);
-        if let Err(error) = persist(&self.shared, &state) {
+        if let Err(error) = persist(&self.shared, &mut state) {
             state.terminal_policy = previous;
             return Err(error);
         }

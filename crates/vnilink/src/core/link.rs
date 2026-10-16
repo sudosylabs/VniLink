@@ -74,7 +74,7 @@ pub(super) fn remember_peer_addresses(
     crate::address::install(&mut device, &announcement)?;
     let endpoint_id = device.display_id.clone();
     state.trust.pair(device)?;
-    if let Err(error) = persist(shared, &state) {
+    if let Err(error) = persist(shared, &mut state) {
         let _ = state.trust.pair(previous);
         return Err(error);
     }
@@ -106,7 +106,7 @@ pub(super) fn remember_peer_hostname(
     }
     let previous = state.trust.hostname_of(peer_key);
     state.trust.set_hostname(peer_key, name.clone())?;
-    if let Err(error) = persist(shared, &state) {
+    if let Err(error) = persist(shared, &mut state) {
         match previous {
             Some(previous) => {
                 let _ = state.trust.set_hostname(peer_key, previous);
@@ -160,7 +160,7 @@ impl Core {
             Some(name) => state.trust.set_pet_name(&key, name)?,
             None => state.trust.clear_pet_name(&key),
         }
-        if let Err(error) = persist(&self.shared, &state) {
+        if let Err(error) = persist(&self.shared, &mut state) {
             match previous {
                 Some(name) => {
                     let _ = state.trust.set_pet_name(&key, name);
@@ -291,7 +291,7 @@ pub(super) fn remember_peer_os(
     }
     let previous = state.trust.clone();
     state.trust.set_os(peer, os)?;
-    if let Err(error) = persist(shared, &state) {
+    if let Err(error) = persist(shared, &mut state) {
         state.trust = previous;
         return Err(error);
     }

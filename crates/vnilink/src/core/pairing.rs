@@ -271,7 +271,10 @@ impl Core {
             return Err(error);
         }
         if let Err(error) = persist_paired(&self.shared, &mut state, previous_trust) {
-            state.pairing_window = previous_window;
+            // A fatal save already cleared the window and stopped admission.
+            if !state.shut_down {
+                state.pairing_window = previous_window;
+            }
             let _ = pending.decision.send(false);
             return Err(error);
         }

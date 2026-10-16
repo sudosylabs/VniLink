@@ -4,11 +4,15 @@
 //! Management calls run on libuv workers. The separate data module uses
 //! bounded, nonblocking native drains and input queues outside this mutex.
 mod native;
+mod storage;
+
 use native::{
     TransferCapability, TransferNativeBackend, TransferNativeDevice, TransferPowerPolicy,
     TransferPowerStatus, TransferRecordingRetention, TransferRecordingStatus,
     TransferSharingStatus,
 };
+#[cfg(feature = "reset-installation")]
+pub use storage::reset_installation_cli;
 mod data;
 
 use napi::{bindgen_prelude::AsyncTask, Env, Error, Result, Status, Task};
@@ -16,7 +20,7 @@ use napi_derive::napi;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use vnilink_app::{CredentialStore, EventPoller, FfiError, FilesService, VideoPoller, VnilinkCore};
+use vnilink_app::{EventPoller, FfiError, FilesService, VideoPoller, VnilinkCore};
 
 /// Largest accepted command body. Clipboard text reaches 256 KiB and encoded
 /// frames cross as base64, so this must clear a ~1 MiB frame plus JSON shape.
@@ -443,24 +447,6 @@ fn transfer_display(display: &vnilink_app::FfiDisplay) -> TransferDisplay {
         rotation_deg: display.rotation_deg,
         scale_percent: display.scale_percent,
         revision: display.revision.to_string(),
-    }
-}
-
-struct NativeStore;
-impl CredentialStore for NativeStore {
-    fn load(&self) -> std::result::Result<Option<Vec<u8>>, FfiError> {
-        let entry =
-            keyring::Entry::new("com.vnilink.installation", "primary").map_err(store_error)?;
-        match entry.get_secret() {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(error) => Err(store_error(error)),
-        }
-    }
-    fn save(&self, record: Vec<u8>) -> std::result::Result<(), FfiError> {
-        keyring::Entry::new("com.vnilink.installation", "primary")
-            .and_then(|entry| entry.set_secret(&record))
-            .map_err(store_error)
     }
 }
 
@@ -1044,7 +1030,7 @@ enum Reply {
     Done,
 }
 
-// Commands serialize state mutations and keychain writes. Shutdown marks the
+// Commands serialize state mutations and installation saves. Shutdown marks the
 // instance closed; no later task can restart or mutate the old installation.
 // Video pollers stay here behind subscription ids because pollers cannot
 // cross the JSON bridge; callers poll and release them by id.
@@ -1078,7 +1064,9 @@ impl Task for OpenTask {
         let result = if self.temporary {
             VnilinkCore::create(true, vec![])
         } else {
-            VnilinkCore::open_persistent(Box::new(NativeStore))
+            VnilinkCore::open_persistent(Box::new(
+                storage::EncryptedInstallationStore::open_production().map_err(core_error)?,
+            ))
         };
         let core = result.map_err(core_error)?;
         let backends = if self.temporary {
@@ -2501,7 +2489,7 @@ fn ffi_error_name(error: &FfiError) -> &'static str {
         FfiError::Timeout => "Timeout",
         FfiError::Network { .. } => "Network",
         FfiError::TooManyDevices => "TooManyDevices",
-        FfiError::StoreUnavailable => "StoreUnavailable",
+        FfiError::StoreUnavailable | FfiError::StoreRecoveryRequired => "StoreUnavailable",
         FfiError::StoreLocked => "StoreLocked",
         FfiError::CorruptRecord => "CorruptRecord",
         FfiError::InvalidPairingFile => "InvalidPairingFile",
@@ -2514,9 +2502,24 @@ fn core_error(error: FfiError) -> Error {
     Error::from_reason(format!("{}: {error}", ffi_error_name(&error)))
 }
 
-fn store_error(error: keyring::Error) -> FfiError {
-    match error {
-        keyring::Error::NoStorageAccess(_) => FfiError::StoreLocked,
-        _ => FfiError::StoreUnavailable,
+#[cfg(test)]
+mod ffi_store_error {
+    use super::ffi_error_name;
+    use vnilink_app::FfiError;
+
+    #[test]
+    fn recovery_reuses_the_unavailable_name() {
+        let error = FfiError::StoreRecoveryRequired;
+        assert_eq!(ffi_error_name(&error), "StoreUnavailable");
+        assert_eq!(
+            format!("{}: {error}", ffi_error_name(&error)),
+            "StoreUnavailable: the installation store must be reopened and VniLink restarted"
+        );
+        assert_eq!(
+            ffi_error_name(&FfiError::StoreUnavailable),
+            "StoreUnavailable"
+        );
+        assert_eq!(ffi_error_name(&FfiError::StoreLocked), "StoreLocked");
+        assert_eq!(ffi_error_name(&FfiError::CorruptRecord), "CorruptRecord");
     }
 }

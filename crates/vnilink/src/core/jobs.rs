@@ -4278,7 +4278,7 @@ impl Core {
         let policy = policy.validate()?;
         let mut state = self.alive_state()?;
         let previous = std::mem::replace(&mut state.file_retention_policy, policy);
-        if let Err(error) = persist(&self.shared, &state) {
+        if let Err(error) = persist(&self.shared, &mut state) {
             state.file_retention_policy = previous;
             return Err(error);
         }
@@ -4300,7 +4300,7 @@ impl Core {
         let policy = policy.validate()?;
         let mut state = self.alive_state()?;
         let previous = std::mem::replace(&mut state.file_resource_policy, policy);
-        if let Err(error) = persist(&self.shared, &state) {
+        if let Err(error) = persist(&self.shared, &mut state) {
             state.file_resource_policy = previous;
             return Err(error);
         }

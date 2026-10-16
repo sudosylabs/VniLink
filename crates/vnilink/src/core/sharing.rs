@@ -34,7 +34,7 @@ impl Core {
                 return Ok(());
             }
             state.trust.sharing = policy;
-            if let Err(error) = persist(&self.shared, &state) {
+            if let Err(error) = persist(&self.shared, &mut state) {
                 state.trust.sharing = previous;
                 return Err(error);
             }

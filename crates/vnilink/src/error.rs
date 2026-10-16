@@ -51,12 +51,22 @@ pub enum Error {
     Network(String),
     #[error("at most {0} paired devices are supported")]
     TooManyDevices(usize),
-    #[error("the credential store is unavailable")]
+    /// The installation store could not complete an operation. Nothing was
+    /// committed, or the previous record is still the committed record.
+    /// Callers roll the in-memory change back and may continue.
+    #[error("the installation store is unavailable")]
     StoreUnavailable,
+    /// The platform credential store refused access. This is not a SQLite or
+    /// filesystem failure.
     #[error("the credential store is locked")]
     StoreLocked,
     #[error("the installation record is not valid")]
     CorruptRecord,
+    /// A save may have committed and its durable outcome is not known.
+    /// The core stops remote work. Reopen the installation after restarting
+    /// VniLink; do not retry the failed operation in this process.
+    #[error("the installation store must be reopened and VniLink restarted")]
+    StoreRecoveryRequired,
     #[error("the pairing file is not valid")]
     InvalidPairingFile,
     #[error("the pairing check does not match")]

@@ -28,9 +28,11 @@
 //! [`Core::open`] loads an opaque record through [`InstallationStore`]. The
 //! record holds the installation secret, paired devices, global sharing consent, used
 //! invitation nonces, and the relay setting, including a relay credential.
-//! The host writes those bytes to the platform credential store. [`Core::start`]
-//! keeps the same state only for the process. A locked, unavailable, or invalid
-//! record is returned as an error and is not replaced.
+//! The host chooses where those bytes live. The production adapter encrypts
+//! them in a local database and keeps only the encryption key in the platform
+//! credential store. [`Core::start`] keeps the same state only for the process.
+//! A locked, unavailable, or invalid record is returned as an error and is not
+//! replaced. An uncertain commit stops this core until the process restarts.
 //!
 //! # Pairing file
 //!

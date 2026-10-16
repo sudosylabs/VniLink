@@ -49,7 +49,7 @@ impl Core {
         let mut state = self.alive_state()?;
         let previous = state.power_policy;
         state.power_policy = policy;
-        if let Err(error) = persist(&self.shared, &state) {
+        if let Err(error) = persist(&self.shared, &mut state) {
             state.power_policy = previous;
             return Err(error);
         }
