@@ -84,7 +84,7 @@ fn independent_audio_grants_transport_real_opus_and_revoke_only_matching_source(
         controller.remote_audio_devices(parent.id, parent.generation, AudioKind::System),
         Err(Error::Unauthorized)
     ));
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::SystemAudio, true)
+    host.set_service_sharing(ServiceKind::SystemAudio, true)
         .unwrap();
     assert!(
         !host
@@ -100,7 +100,7 @@ fn independent_audio_grants_transport_real_opus_and_revoke_only_matching_source(
         .remote_audio_devices(parent.id, parent.generation, AudioKind::System)
         .unwrap();
     assert_eq!(devices, vec![factory.devices().unwrap()[0].clone()]);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Microphone, true)
+    host.set_service_sharing(ServiceKind::Microphone, true)
         .unwrap();
     let files = controller
         .attach_controller_service(parent.id, parent.generation, ServiceKind::Files)
@@ -140,7 +140,7 @@ fn independent_audio_grants_transport_real_opus_and_revoke_only_matching_source(
         received.is_some()
     });
     assert_eq!(received.take().unwrap(), expected);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Microphone, false)
+    host.set_service_sharing(ServiceKind::Microphone, false)
         .unwrap();
     wait(|| sources[1].1.is_cancelled() && mic.is_cancelled());
     assert!(!sources[0].1.is_cancelled());
@@ -241,7 +241,7 @@ fn cancelled_audio_startup_releases_late_backend_without_ending_files() {
         source: source.clone(),
     })))
     .unwrap();
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Microphone, true)
+    host.set_service_sharing(ServiceKind::Microphone, true)
         .unwrap();
     let parent = connect(&controller, &host);
     let files = controller
@@ -258,7 +258,7 @@ fn cancelled_audio_startup_releases_late_backend_without_ending_files() {
         opening_core.open_audio_service(owner.id, owner.generation, config(AudioKind::Microphone))
     });
     let startup = entering.recv_timeout(Duration::from_secs(8)).unwrap();
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Microphone, false)
+    host.set_service_sharing(ServiceKind::Microphone, false)
         .unwrap();
     wait(|| matches!(startup.check(), Err(Error::NoSession)));
     release.send(()).unwrap();

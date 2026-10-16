@@ -66,8 +66,7 @@ fn camera_grant_large_frame_and_independent_close() {
         controller.remote_camera_devices(connection.id, connection.generation),
         Err(Error::Unauthorized)
     ));
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Camera, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Camera, true).unwrap();
     assert_eq!(
         controller
             .remote_camera_devices(connection.id, connection.generation)
@@ -117,14 +116,12 @@ fn camera_revocation_and_backend_disable_stop_capture() {
     let controller = start_direct();
     let host = start_direct();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Camera, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Camera, true).unwrap();
     let factory = Arc::new(Factory::default());
     host.set_camera_factory(Some(factory.clone())).unwrap();
     let connection = connect(&controller, &host);
     for revoke in [true, false] {
-        host.authorize_service(&controller.endpoint_id(), ServiceKind::Camera, true)
-            .unwrap();
+        host.set_service_sharing(ServiceKind::Camera, true).unwrap();
         let owner = controller
             .attach_controller_service(connection.id, connection.generation, ServiceKind::Camera)
             .unwrap();
@@ -132,7 +129,7 @@ fn camera_revocation_and_backend_disable_stop_capture() {
             .open_camera_service(owner.id, owner.generation, config())
             .unwrap();
         if revoke {
-            host.authorize_service(&controller.endpoint_id(), ServiceKind::Camera, false)
+            host.set_service_sharing(ServiceKind::Camera, false)
                 .unwrap();
         } else {
             host.set_camera_factory(None).unwrap();
@@ -164,8 +161,7 @@ fn camera_unknown_device_and_invalid_config_do_not_start_capture() {
     let controller = start_direct();
     let host = start_direct();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Camera, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Camera, true).unwrap();
     let factory = Arc::new(Factory::default());
     host.set_camera_factory(Some(factory.clone())).unwrap();
     let connection = connect(&controller, &host);
@@ -196,8 +192,7 @@ fn camera_backend_failure_is_reported_without_closing_parent() {
     let controller = start_direct();
     let host = start_direct();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Camera, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Camera, true).unwrap();
     let factory = Arc::new(Factory::default());
     host.set_camera_factory(Some(factory.clone())).unwrap();
     let connection = connect(&controller, &host);
@@ -251,8 +246,7 @@ fn camera_startup_observes_owner_revoke_parent_loss_and_shutdown_without_externa
         let host = start_direct();
         let controller = start_direct();
         pair_for_control(&host, &controller);
-        host.authorize_service(&controller.endpoint_id(), ServiceKind::Camera, true)
-            .unwrap();
+        host.set_service_sharing(ServiceKind::Camera, true).unwrap();
         let (entered, ready) = std::sync::mpsc::sync_channel(1);
         let (completed, done) = std::sync::mpsc::sync_channel(1);
         let (_blocked, waiting) = std::sync::mpsc::channel();
@@ -272,7 +266,7 @@ fn camera_startup_observes_owner_revoke_parent_loss_and_shutdown_without_externa
             ready.recv_timeout(Duration::from_secs(5)).unwrap();
             match cause {
                 0 => host
-                    .authorize_service(&controller.endpoint_id(), ServiceKind::Camera, false)
+                    .set_service_sharing(ServiceKind::Camera, false)
                     .unwrap(),
                 1 => host
                     .stop_hosted_peer(host.hosted_sessions().unwrap()[0].id)
@@ -327,8 +321,7 @@ fn late_camera_backend_is_closed_without_admission_after_revoke() {
     let host = start_direct();
     let controller = start_direct();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Camera, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Camera, true).unwrap();
     let (entered, ready) = std::sync::mpsc::sync_channel(1);
     let (release, blocked) = std::sync::mpsc::channel();
     let source = CameraSource::new();
@@ -346,7 +339,7 @@ fn late_camera_backend_is_closed_without_admission_after_revoke() {
         let open =
             scope.spawn(|| controller.open_camera_service(owner.id, owner.generation, config()));
         ready.recv_timeout(Duration::from_secs(5)).unwrap();
-        host.authorize_service(&controller.endpoint_id(), ServiceKind::Camera, false)
+        host.set_service_sharing(ServiceKind::Camera, false)
             .unwrap();
         wait(|| host.hosted_services().unwrap().is_empty());
         release.send(()).unwrap();
@@ -383,8 +376,7 @@ fn camera_open_failure_publishes_and_success_clears() {
     let controller = start_direct();
     let host = start_direct();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Camera, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Camera, true).unwrap();
     host.set_camera_factory(Some(Arc::new(FailingFactory)))
         .unwrap();
     let connection = connect(&controller, &host);
@@ -467,10 +459,8 @@ fn camera_device_is_exclusive_across_peers_and_releases_on_close() {
     let b = start_direct();
     pair_for_control(&host, &a);
     pair_for_control(&host, &b);
-    host.authorize_service(&a.endpoint_id(), ServiceKind::Camera, true)
-        .unwrap();
-    host.authorize_service(&b.endpoint_id(), ServiceKind::Camera, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Camera, true).unwrap();
+    host.set_service_sharing(ServiceKind::Camera, true).unwrap();
     let ca = connect(&a, &host);
     let cb = connect(&b, &host);
     let oa = a

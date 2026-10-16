@@ -8,15 +8,10 @@ use iroh::{PublicKey, SecretKey};
 use crate::error::Error;
 use crate::invitation::{self, ReplayCache, MAX_DIRECT_ADDRS};
 use crate::relay::{CustomRelay, RelaySettings, MAX_CUSTOM_RELAYS};
-use crate::session::Grants;
 use crate::trust::{Device, Trust, MAX_DEVICES};
 
 const MAGIC: &[u8; 4] = b"VNLK";
-/// Version 2 appends the peer hostname section after the devices. Version 1
-/// records still decode, with no names. Version 3 adds independent Terminal
-/// and Camera grant bits; older records default both to denied. Version 4
-/// adds the System grant bit and the system-action policy; older records
-/// keep their other policies and default the new fields to denied.
+/// Installation record layout.
 const VERSION: u8 = 4;
 const MAX_RECORD_BYTES: usize = 1024 * 1024;
 const MAX_TEXT: usize = 512;
@@ -85,6 +80,7 @@ pub(crate) fn encode(
     body.extend(file_resource_policy.minimum_free_bytes.to_be_bytes());
     system_policy.validate()?;
     body.push(system_policy.bits());
+    body.extend_from_slice(&trust.sharing.bits().to_be_bytes());
     if body.len() + 4 > MAX_RECORD_BYTES {
         return Err(Error::InvalidSetting(
             "installation record field is too long",
@@ -108,20 +104,19 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Record, Error> {
     if crc32(signed) != checksum
         || signed.len() < 5
         || signed[..4] != *MAGIC
-        || !(1..=VERSION).contains(&signed[4])
+        || signed[4] != VERSION
     {
         return Err(Error::CorruptRecord);
     }
-    let version = signed[4];
     let mut reader = Reader {
         bytes: &signed[5..],
         cursor: 0,
     };
     let secret = reader.array::<32>()?;
     let relay = read_relay(&mut reader)?;
-    let trust = read_devices(&mut reader, &secret, version)?;
+    let mut trust = read_devices(&mut reader, &secret)?;
     let replay = read_replay(&mut reader)?;
-    let terminal_policy = if version >= 3 {
+    let terminal_policy = {
         let allow_persistence = match reader.byte()? {
             0 => false,
             1 => true,
@@ -137,10 +132,8 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Record, Error> {
         }
         .validate()
         .map_err(|_| Error::CorruptRecord)?
-    } else {
-        crate::terminal::TerminalPolicy::default()
     };
-    let file_retention_policy = if version >= 3 {
+    let file_retention_policy = {
         crate::job::FileRetentionPolicy {
             resume_cache_bytes: u64::from_be_bytes(reader.array()?),
             resume_cache_age_secs: u64::from_be_bytes(reader.array()?),
@@ -149,18 +142,14 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Record, Error> {
         }
         .validate()
         .map_err(|_| Error::CorruptRecord)?
-    } else {
-        crate::job::FileRetentionPolicy::default()
     };
-    let power_policy = if version >= 3 {
+    let power_policy = {
         let mut policy = crate::power::PowerPolicy::from_bits(reader.byte()?)?;
         policy.incoming_idle_secs = u32::from_be_bytes(reader.array()?);
         policy.outgoing_idle_secs = u32::from_be_bytes(reader.array()?);
         policy.validate().map_err(|_| Error::CorruptRecord)?
-    } else {
-        Default::default()
     };
-    let file_resource_policy = if version >= 3 {
+    let file_resource_policy = {
         crate::job::FileResourcePolicy {
             max_concurrent_receivers: u16::from_be_bytes(reader.array()?),
             max_reserved_bytes: u64::from_be_bytes(reader.array()?),
@@ -168,14 +157,11 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Record, Error> {
         }
         .validate()
         .map_err(|_| Error::CorruptRecord)?
-    } else {
-        crate::job::FileResourcePolicy::default()
     };
-    let system_policy = if version >= 4 {
+    let system_policy = {
         crate::system::SystemPolicy::from_bits(reader.byte()?).map_err(|_| Error::CorruptRecord)?
-    } else {
-        crate::system::SystemPolicy::default()
     };
+    trust.sharing = crate::SharingPolicy::from_bits(reader.u16()?)?;
     reader.finish()?;
     Ok(Record {
         secret,
@@ -236,14 +222,6 @@ fn write_devices(out: &mut Vec<u8>, trust: &Trust) -> Result<(), Error> {
         for addr in &device.direct {
             write_addr(out, *addr);
         }
-        let bits = u16::from(grant_bits(device.grants))
-            | (u16::from(device.terminal) << 3)
-            | (u16::from(device.camera) << 4)
-            | (u16::from(device.system_audio) << 6)
-            | (u16::from(device.microphone) << 7)
-            | (u16::from(device.recording) << 8)
-            | (u16::from(device.system_actions) << 9);
-        out.extend_from_slice(&bits.to_be_bytes());
     }
     Ok(())
 }
@@ -253,6 +231,19 @@ fn write_devices(out: &mut Vec<u8>, trust: &Trust) -> Result<(), Error> {
 fn write_names(out: &mut Vec<u8>, trust: &Trust) -> Result<(), Error> {
     write_name_map(out, trust.hostnames())?;
     write_name_map(out, trust.pet_names())?;
+    let operating_systems: Vec<_> = trust
+        .devices()
+        .filter_map(|device| {
+            trust
+                .os_of(&device.endpoint_id)
+                .map(|os| (device.endpoint_id, os))
+        })
+        .collect();
+    out.extend_from_slice(&(operating_systems.len() as u16).to_be_bytes());
+    for (endpoint, os) in operating_systems {
+        out.extend_from_slice(&endpoint);
+        out.push(os.encode());
+    }
     Ok(())
 }
 
@@ -344,7 +335,7 @@ fn read_relay(reader: &mut Reader<'_>) -> Result<RelaySettings, Error> {
     }
 }
 
-fn read_devices(reader: &mut Reader<'_>, secret: &[u8; 32], version: u8) -> Result<Trust, Error> {
+fn read_devices(reader: &mut Reader<'_>, secret: &[u8; 32]) -> Result<Trust, Error> {
     let count = u16::from_be_bytes(reader.array()?) as usize;
     if count > MAX_DEVICES {
         return Err(Error::CorruptRecord);
@@ -389,15 +380,6 @@ fn read_devices(reader: &mut Reader<'_>, secret: &[u8; 32], version: u8) -> Resu
             }
             direct.push(addr);
         }
-        let bits = if version >= 3 {
-            reader.u16()?
-        } else {
-            u16::from(reader.byte()?)
-        };
-        if bits & !(if version >= 3 { 1023 } else { 7 }) != 0 {
-            return Err(Error::CorruptRecord);
-        }
-        let grants = grants_from_bits((bits & 39) as u8)?;
         if trust.get(&endpoint_id).is_some() {
             return Err(Error::CorruptRecord);
         }
@@ -407,25 +389,31 @@ fn read_devices(reader: &mut Reader<'_>, secret: &[u8; 32], version: u8) -> Resu
                 display_id,
                 relays,
                 direct,
-                grants,
-                terminal: version >= 3 && bits & 8 != 0,
-                camera: version >= 3 && bits & 16 != 0,
-                system_audio: version >= 3 && bits & 64 != 0,
-                microphone: version >= 3 && bits & 128 != 0,
-                recording: version >= 3 && bits & 256 != 0,
-                system_actions: version >= 3 && bits & 512 != 0,
             })
             .map_err(|_| Error::CorruptRecord)?;
     }
-    if version >= 2 {
-        read_names(reader, &mut trust)?;
-    }
+    read_names(reader, &mut trust)?;
     Ok(trust)
 }
 
 fn read_names(reader: &mut Reader<'_>, trust: &mut Trust) -> Result<(), Error> {
     read_name_map(reader, trust, true)?;
     read_name_map(reader, trust, false)?;
+    let count = reader.u16()? as usize;
+    if count > MAX_DEVICES {
+        return Err(Error::CorruptRecord);
+    }
+    for _ in 0..count {
+        let endpoint = reader.array()?;
+        if trust.os_of(&endpoint).is_some() {
+            return Err(Error::CorruptRecord);
+        }
+        let os =
+            crate::OperatingSystem::decode(reader.byte()?).map_err(|_| Error::CorruptRecord)?;
+        trust
+            .set_os(&endpoint, os)
+            .map_err(|_| Error::CorruptRecord)?;
+    }
     Ok(())
 }
 
@@ -516,35 +504,6 @@ fn read_addr(reader: &mut Reader<'_>) -> Result<SocketAddr, Error> {
     Ok(addr)
 }
 
-fn grant_bits(grants: Grants) -> u8 {
-    let mut bits = 0;
-    if grants.view {
-        bits |= 32;
-    }
-    if grants.control {
-        bits |= 1;
-    }
-    if grants.clipboard {
-        bits |= 2;
-    }
-    if grants.transfer {
-        bits |= 4;
-    }
-    bits
-}
-
-fn grants_from_bits(bits: u8) -> Result<Grants, Error> {
-    if bits & !0b100111 != 0 {
-        return Err(Error::CorruptRecord);
-    }
-    Ok(Grants {
-        view: bits & 32 != 0,
-        control: bits & 1 != 0,
-        clipboard: bits & 2 != 0,
-        transfer: bits & 4 != 0,
-    })
-}
-
 struct Reader<'a> {
     bytes: &'a [u8],
     cursor: usize,
@@ -620,18 +579,6 @@ fn crc32(bytes: &[u8]) -> u32 {
         }
     }
     !crc
-}
-
-#[cfg(test)]
-pub(crate) fn frame(payload: &[u8]) -> Vec<u8> {
-    let mut body = Vec::with_capacity(5 + payload.len() + 4);
-    body.extend_from_slice(MAGIC);
-    // Hand-built malformed-record fixtures use the original v1 payload shape.
-    body.push(1);
-    body.extend_from_slice(payload);
-    let checksum = crc32(&body);
-    body.extend_from_slice(&checksum.to_be_bytes());
-    body
 }
 
 #[cfg(test)]

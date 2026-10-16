@@ -216,6 +216,7 @@ impl Core {
         ))?;
         let input_cleanup = Arc::new(AtomicUsize::new(0));
         let shared = Arc::new(Shared {
+            sharing_serial: Mutex::new(()),
             power_factory: Mutex::new(power::Factory {
                 revision: 0,
                 adapter: None,
@@ -469,7 +470,9 @@ impl Core {
                     pet_name: state.trust.pet_name_of(&device.endpoint_id),
                     relays: device.relays.clone(),
                     direct: device.direct.clone(),
-                    grants: device.grants,
+                    grants: state.trust.sharing.grants(),
+                    os: state.trust.os_of(&device.endpoint_id),
+                    presence: super::link::presence(&state, &device.display_id),
                 })
                 .collect(),
             incoming: state.incoming_latest().map(session_info),

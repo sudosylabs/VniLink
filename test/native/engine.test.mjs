@@ -72,9 +72,18 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 		await assert.rejects(async () => second.execute(JSON.stringify({ type: 'publishVideo' })));
 		await execute(second, { type: 'setPeerName', endpointId: a.endpoint_id, name: 'My computer' });
 		assert.equal((await execute(second, { type: 'snapshot' })).snapshot.devices[0].pet_name, 'My computer');
-		await execute(second, { type: 'authorize', endpointId: a.endpoint_id, view: true, control: false, clipboard: false, transfer: false });
+		const policy = (await execute(second, { type: 'sharingPolicy' })).policy;
+		assert(Object.values(policy).every(value => value === false));
+		await execute(second, { type: 'setSharingPolicy', policy: { view: true } });
+		await execute(second, { type: 'setSharingPolicy', policy: { terminal: true } });
+		assert.equal((await execute(second, { type: 'sharingPolicy' })).policy.view, true);
+		assert.equal((await execute(second, { type: 'sharingPolicy' })).policy.terminal, true);
+		for (const policy of [{}, { files: null }, { files: 'yes' }, { files: true, extra: false }]) {
+			await assert.rejects(execute(second, { type: 'setSharingPolicy', policy }));
+		}
+		assert.equal(device.os, process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux');
+		assert.equal(device.presence, 'disconnected');
 		assert.deepEqual((await execute(second, { type: 'snapshot' })).snapshot.devices[0].grants, { view: true, control: false, clipboard: false, transfer: false });
-		await execute(second, { type: 'revoke', endpointId: a.endpoint_id });
 		await execute(second, { type: 'unpair', endpointId: a.endpoint_id });
 		assert.equal((await execute(second, { type: 'snapshot' })).snapshot.devices.length, 0);
 	} finally {

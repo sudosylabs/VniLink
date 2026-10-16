@@ -867,8 +867,7 @@ mod tests {
         host.set_video_codecs(caps).unwrap();
         pair(&host, &controller);
         pair(&controller, &host);
-        host.authorize(controller.endpoint_id(), true, true, false, false)
-            .unwrap();
+        host.set_desktop_sharing(true, true, false, false).unwrap();
         host.start_hosting().unwrap();
         let pending = controller
             .begin_connect_services(host.endpoint_id())
@@ -892,22 +891,14 @@ mod tests {
             columns: 80,
             media: None,
         };
-        host.authorize_service(
-            controller.endpoint_id(),
-            vnilink_app::FfiServiceKind::Desktop,
-            false,
-        )
-        .unwrap();
+        host.set_service_sharing(vnilink_app::FfiServiceKind::Desktop, false)
+            .unwrap();
         assert!(
             open.compute().is_err(),
             "a neutral connection must not bypass Desktop authorization"
         );
-        host.authorize_service(
-            controller.endpoint_id(),
-            vnilink_app::FfiServiceKind::Desktop,
-            true,
-        )
-        .unwrap();
+        host.set_service_sharing(vnilink_app::FfiServiceKind::Desktop, true)
+            .unwrap();
         let video = open.compute().unwrap();
         assert!(
             open.compute().is_err(),
@@ -1031,12 +1022,8 @@ mod tests {
             .unwrap();
         host.set_file_roots(vec![destination.to_string_lossy().into()])
             .unwrap();
-        host.authorize_service(
-            controller.endpoint_id(),
-            vnilink_app::FfiServiceKind::Files,
-            true,
-        )
-        .unwrap_err();
+        host.set_service_sharing(vnilink_app::FfiServiceKind::Files, true)
+            .unwrap();
         std::fs::create_dir_all(root.join("controller-blobs")).unwrap();
         std::fs::create_dir_all(root.join("host-blobs")).unwrap();
         controller
@@ -1046,22 +1033,13 @@ mod tests {
             .unwrap();
         pair(&host, &controller);
         pair(&controller, &host);
-        host.authorize(controller.endpoint_id(), true, true, false, false)
+        host.set_desktop_sharing(true, true, false, false).unwrap();
+        host.set_service_sharing(vnilink_app::FfiServiceKind::Terminal, true)
             .unwrap();
-        host.authorize_service(
-            controller.endpoint_id(),
-            vnilink_app::FfiServiceKind::Terminal,
-            true,
-        )
-        .unwrap();
-        host.authorize_service(
-            controller.endpoint_id(),
-            vnilink_app::FfiServiceKind::Files,
-            true,
-        )
-        .unwrap();
+        host.set_service_sharing(vnilink_app::FfiServiceKind::Files, true)
+            .unwrap();
         controller
-            .authorize_service(host.endpoint_id(), vnilink_app::FfiServiceKind::Files, true)
+            .set_service_sharing(vnilink_app::FfiServiceKind::Files, true)
             .unwrap();
         host.enable_native_terminal(
             "/bin/sh".into(),

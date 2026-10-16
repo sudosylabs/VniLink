@@ -290,6 +290,7 @@ pub(super) async fn handle_host_request(
             files_only,
             services_only,
             hostname: hello_hostname,
+            os: hello_os,
         } => {
             // Hello carries a decode bit, not a profile bit; every decoder we
             // ship handles both profiles, so High is a host-encoder decision.
@@ -314,7 +315,9 @@ pub(super) async fn handle_host_request(
                 // The file already told the controller who this host is. The
                 // digits typed here tell the host who the controller is.
                 // Without an open allow switch the reject stays immediate.
-                Err(Error::Unauthorized) => {
+                Err(Error::Unauthorized | Error::NotPaired)
+                    if lock(&shared.state).trust.get(peer.as_bytes()).is_none() =>
+                {
                     match wait_for_control_approval(shared, connection, peer, stop_rx).await {
                         ControlAnswer::Approved => admission(
                             &lock(&shared.state),
@@ -397,6 +400,8 @@ pub(super) async fn handle_host_request(
                                 peer.as_bytes(),
                                 hello_hostname,
                             );
+                            let _ =
+                                super::link::remember_peer_os(shared, peer.as_bytes(), hello_os);
                             let desktop_stop = lock(&shared.state)
                                 .incoming
                                 .get(&info.id)
@@ -454,6 +459,7 @@ pub(super) async fn handle_host_request(
                                         },
                                     quality: info.quality.unwrap_or(agreed),
                                     hostname: crate::hostname::local_hostname(),
+                                    os: crate::OperatingSystem::local(),
                                 },
                             )
                             .await;

@@ -98,8 +98,9 @@ fn unpaired_peers_fail_before_dialing() {
         Err(FfiError::NotPaired)
     ));
     assert!(matches!(core.disconnect(), Err(FfiError::NoSession)));
+    core.set_desktop_sharing(true, true, false, false).unwrap();
     assert!(matches!(
-        core.authorize(other.endpoint_id(), true, true, false, false),
+        core.connect(other.endpoint_id()),
         Err(FfiError::NotPaired)
     ));
     assert!(matches!(
@@ -202,8 +203,7 @@ fn independent_controller_handles_cross_the_ffi() {
             .unwrap();
         host.accept_invitation(controller.create_invitation(60).unwrap())
             .unwrap();
-        host.authorize(controller.endpoint_id(), true, true, false, false)
-            .unwrap();
+        host.set_desktop_sharing(true, true, false, false).unwrap();
     }
     let pending_a = controller.begin_connect(a.endpoint_id()).unwrap();
     let pending_b = controller.begin_connect(b.endpoint_id()).unwrap();
@@ -527,4 +527,26 @@ fn backend_state_publish_flows_into_availability_and_clears() {
     assert!(!cleared
         .reasons
         .contains(&FfiAvailabilityReason::DeniedOsPermission));
+}
+
+#[test]
+fn sharing_updates_cross_the_facade_without_widening_or_resetting_consent() {
+    let core = open_core();
+    let update: crate::FfiSharingPolicyUpdate =
+        serde_json::from_str(r#"{"view":true,"files":true}"#).unwrap();
+    core.set_sharing_policy(update).unwrap();
+    core.set_sharing_policy(crate::FfiSharingPolicyUpdate {
+        terminal: Some(true),
+        files: Some(false),
+        ..Default::default()
+    })
+    .unwrap();
+    let policy = core.sharing_policy().unwrap();
+    assert!(policy.view);
+    assert!(policy.terminal);
+    assert!(!policy.files);
+    assert!(!policy.camera);
+    for invalid in [r#"{"files":null}"#, r#"{"files":1}"#, r#"{"extra":true}"#] {
+        assert!(serde_json::from_str::<crate::FfiSharingPolicyUpdate>(invalid).is_err());
+    }
 }

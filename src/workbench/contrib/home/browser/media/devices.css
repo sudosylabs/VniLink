@@ -1,0 +1,19 @@
+.device-list {
+	width: 100%;
+	max-width: 900px;
+	margin: 24px auto;
+}
+
+.device-row {
+	display: flex;
+	align-items: center;
+	overflow-wrap: anywhere;
+	gap: 12px;
+	padding: 16px 0;
+	border-bottom: 1px solid var(--line);
+}
+
+.device-details {
+	margin-left: auto;
+	color: var(--muted);
+}

@@ -103,15 +103,12 @@ fn pair(host: &Core, controller: &Core, extra: Option<SocketAddr>) -> Vec<Socket
     controller.accept_invitation(&host_token).unwrap();
     let (controller_token, _) = invitation_with(controller, extra);
     host.accept_invitation(&controller_token).unwrap();
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: false,
+    })
     .unwrap();
     host_direct
 }
@@ -186,27 +183,12 @@ fn an_announcement_round_trips_and_keeps_grants() {
     );
 
     let mut device = Device {
-        terminal: false,
-        camera: false,
-        system_audio: false,
-        microphone: false,
-        recording: false,
-        system_actions: false,
         endpoint_id: [4; 32],
         display_id: "peer".to_string(),
         relays: vec!["https://old.example.com".to_string()],
         direct: vec!["198.51.100.8:8".parse().unwrap()],
-        grants: Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: false,
-        },
     };
     address::install(&mut device, &announcement).unwrap();
-    assert!(device.grants.control);
-    assert!(!device.grants.clipboard);
-    assert!(!device.grants.transfer);
     assert_eq!(device.endpoint_id, [4; 32]);
     assert_eq!(device.relays, announcement.relays);
     assert!(!device.direct.contains(&"198.51.100.8:8".parse().unwrap()));

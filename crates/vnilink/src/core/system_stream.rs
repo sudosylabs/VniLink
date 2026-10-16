@@ -976,7 +976,7 @@ fn restore_privacy_lease(lease: &PrivacyLease) -> ((bool, bool), Option<Error>) 
 /// current slot; a failed native restore keeps the lease (ownership is
 /// not forgotten and Core keeps reporting the restriction) and the
 /// failure reports to the caller for retry.
-fn release_all_privacy(shared: &Shared) -> Result<(), Error> {
+pub(super) fn release_all_privacy(shared: &Shared) -> Result<(), Error> {
     let _serial = lock(&shared.privacy_serial);
     let held = {
         let mut state = lock(&shared.state);
@@ -1272,7 +1272,7 @@ mod review_authority_tests {
 fn admitted_system_owner(host: &Core, controller: &Core) -> (Admission, RemoteSystemService) {
     use crate::tests::support::pair_for_control;
     pair_for_control(host, controller);
-    host.authorize_service(&controller.endpoint_id(), crate::ServiceKind::System, true)
+    host.set_service_sharing(crate::ServiceKind::System, true)
         .unwrap();
     let parent = controller
         .begin_connect_services(&host.endpoint_id())
@@ -1371,7 +1371,7 @@ mod worker_start_gate_tests {
         pair_for_control(&host, &controller);
         let actions = Arc::new(Actions(std::sync::atomic::AtomicUsize::new(0)));
         host.set_system_actions(Some(actions.clone())).unwrap();
-        host.authorize_service(&controller.endpoint_id(), crate::ServiceKind::System, true)
+        host.set_service_sharing(crate::ServiceKind::System, true)
             .unwrap();
         host.set_system_policy(crate::SystemPolicy {
             allow_restart: true,
@@ -1494,7 +1494,7 @@ mod worker_start_gate_tests {
         host.set_system_actions(Some(actions.clone())).unwrap();
         // Mid-queue permission revoke: refused, native never runs.
         let (state, detail) = stood_down_outcome(&runtime, &host, admission, || {
-            host.authorize_service(&controller.endpoint_id(), crate::ServiceKind::System, false)
+            host.set_service_sharing(crate::ServiceKind::System, false)
                 .unwrap();
         });
         assert_eq!(state, OperationState::Refused);
@@ -1570,10 +1570,19 @@ mod v7_privacy_admission_probe {
             )
         });
         ready.recv().unwrap();
-        host.authorize_service(&controller.endpoint_id(), ServiceKind::System, false)
-            .unwrap();
-        assert!(admit(&host.shared, admission.service_id).is_err());
-        drop(serial);
+        std::thread::scope(|scope| {
+            let revoking = scope.spawn(|| host.set_service_sharing(ServiceKind::System, false));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while admit(&host.shared, admission.service_id).is_ok() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "revocation did not fence admission"
+                );
+                std::thread::yield_now();
+            }
+            drop(serial);
+            revoking.join().unwrap().unwrap();
+        });
         let outcome = worker.join().unwrap();
         let applied = actions.1.load(Ordering::SeqCst);
         let _ = release_all_privacy(&host.shared);

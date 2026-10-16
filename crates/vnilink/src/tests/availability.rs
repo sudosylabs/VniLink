@@ -183,8 +183,7 @@ fn core_query_combines_backends_policies_and_grants() {
         .unwrap();
     assert!(!files.available);
     assert_eq!(files.reasons, [AvailabilityReason::DeniedPeerGrant]);
-    host.authorize_service(&peer, ServiceKind::Files, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Files, true).unwrap();
     assert!(
         host.capability_availability(Some(&peer), Capability::Files)
             .unwrap()
@@ -244,7 +243,7 @@ fn core_query_combines_backends_policies_and_grants() {
         .capability_availability(Some(&peer), Capability::Recording)
         .unwrap();
     assert_eq!(recording.reasons, [AvailabilityReason::DeniedPeerGrant]);
-    host.authorize_recording(&peer, true).unwrap();
+    host.set_recording_sharing(true).unwrap();
     assert!(
         host.capability_availability(Some(&peer), Capability::Recording)
             .unwrap()

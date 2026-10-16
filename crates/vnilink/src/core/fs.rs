@@ -794,7 +794,11 @@ mod listing_tests {
     static STALE_PARKED: AtomicBool = AtomicBool::new(false);
     static STALE_RELEASED: AtomicBool = AtomicBool::new(false);
 
-    const STALE_PEER: [u8; 32] = [0xA5; 32];
+    const STALE_PEER: [u8; 32] = [
+        0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        0x66, 0x66,
+    ];
 
     fn stale_park_probe(_unit: u64, cancelled: &AtomicBool) {
         if STALE_PARKED.swap(true, Ordering::SeqCst) {
@@ -845,6 +849,7 @@ mod listing_tests {
             published_rev: AtomicU64::new(0),
         };
         let mut state = lock(&host.shared.state);
+        state.trust.sharing.files = true;
         state.incoming.insert(session_id, session);
         state
             .trust
@@ -853,18 +858,6 @@ mod listing_tests {
                 display_id: String::new(),
                 relays: Vec::new(),
                 direct: Vec::new(),
-                grants: crate::session::Grants {
-                    view: false,
-                    control: false,
-                    clipboard: false,
-                    transfer: true,
-                },
-                terminal: false,
-                camera: false,
-                system_audio: false,
-                microphone: false,
-                recording: false,
-                system_actions: false,
             })
             .unwrap();
     }
@@ -907,7 +900,14 @@ mod listing_tests {
             finish_probe: None,
         };
         let (result_tx, result_rx) = std::sync::mpsc::channel();
+        struct ReleaseOnDrop;
+        impl Drop for ReleaseOnDrop {
+            fn drop(&mut self) {
+                STALE_RELEASED.store(true, Ordering::Release);
+            }
+        }
         std::thread::scope(|scope| {
+            let _release = ReleaseOnDrop;
             scope.spawn(|| {
                 parked_rt.block_on(async {
                     let served = serve_list_page(
@@ -955,9 +955,7 @@ mod listing_tests {
             assert_eq!(page.total, 2, "sibling list changed while parked");
             // Revoke the transfer grant while parked, then release: the
             // stale completion must not publish its page.
-            lock(&host.shared.state)
-                .trust
-                .authorize(&STALE_PEER, crate::session::Grants::default())
+            host.set_desktop_sharing(crate::session::Grants::default())
                 .unwrap();
             STALE_RELEASED.store(true, Ordering::SeqCst);
             let (response, body) = result_rx

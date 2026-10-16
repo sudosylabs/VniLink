@@ -248,15 +248,12 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
             .unwrap(),
     )
     .unwrap();
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: false,
-            clipboard: false,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: false,
+        clipboard: false,
+        transfer: false,
+    })
     .unwrap();
     let parent = controller
         .begin_connect_services(&host.endpoint_id())
@@ -292,8 +289,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
         ))
     ));
     assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0);
-    host.authorize_recording(&controller.endpoint_id(), true)
-        .unwrap();
+    host.set_recording_sharing(true).unwrap();
     wait(|| desktop.recording_allowed().unwrap());
     // Capture is already encoding when a viewer starts a recording.
     let mut encoder = MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
@@ -378,8 +374,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
         1_000_000
     );
     wait(|| revoked.status().frames == 1);
-    host.authorize_recording(&controller.endpoint_id(), false)
-        .unwrap();
+    host.set_recording_sharing(false).unwrap();
     wait(|| !desktop.recording_allowed().unwrap());
     wait(|| revoked.status().phase == RecordingPhase::Finished);
     assert_eq!(revoked.status().frames, 1);
@@ -410,8 +405,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
     );
     // A mid-stream encoder profile change rolls the recording to a new
     // segment instead of failing it; both segments stay self-contained.
-    host.authorize_recording(&controller.endpoint_id(), true)
-        .unwrap();
+    host.set_recording_sharing(true).unwrap();
     wait(|| desktop.recording_allowed().unwrap());
     let roll = DesktopRecorder::start(
         &desktop,

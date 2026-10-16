@@ -846,15 +846,12 @@ fn setting_roots_is_refused_during_an_active_session() {
         .create_invitation(Duration::from_secs(60))
         .unwrap();
     host.accept_invitation(&back).unwrap();
-    host.authorize(
-        &controller.endpoint_id(),
-        crate::session::Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: true,
-        },
-    )
+    host.set_desktop_sharing(crate::session::Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: true,
+    })
     .unwrap();
     controller
         .connect(&host.endpoint_id())
@@ -873,15 +870,12 @@ fn pair_with_transfer(host: &Core, controller: &Core) {
         .create_invitation(Duration::from_secs(60))
         .unwrap();
     host.accept_invitation(&back).unwrap();
-    host.authorize(
-        &controller.endpoint_id(),
-        crate::session::Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: true,
-        },
-    )
+    host.set_desktop_sharing(crate::session::Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: true,
+    })
     .unwrap();
 }
 
@@ -1149,15 +1143,12 @@ fn files_only_needs_transfer_not_control_or_decoder() {
         .create_invitation(Duration::from_secs(60))
         .unwrap();
     host.accept_invitation(&back).unwrap();
-    host.authorize(
-        &controller.endpoint_id(),
-        crate::session::Grants {
-            view: false,
-            control: false,
-            clipboard: false,
-            transfer: true,
-        },
-    )
+    host.set_desktop_sharing(crate::session::Grants {
+        view: false,
+        control: false,
+        clipboard: false,
+        transfer: true,
+    })
     .unwrap();
     host.enable_filesystem_access().unwrap();
     let files = FilesystemLocation::new(host.file_roots().unwrap(), &root);
@@ -1396,15 +1387,12 @@ fn delete_during_active_transfer_is_refused() {
         FilesystemLocation::new(controller.file_roots().unwrap(), &controller_root);
     pair_with_transfer(&host, &controller);
     controller
-        .authorize(
-            &host.endpoint_id(),
-            crate::session::Grants {
-                view: false,
-                control: false,
-                clipboard: false,
-                transfer: true,
-            },
-        )
+        .set_desktop_sharing(crate::session::Grants {
+            view: false,
+            control: false,
+            clipboard: false,
+            transfer: true,
+        })
         .unwrap();
     controller.connect(&host.endpoint_id()).unwrap();
 

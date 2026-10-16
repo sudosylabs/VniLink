@@ -4016,7 +4016,7 @@ mod lifecycle_tests {
             clipboard: false,
             transfer: true,
         };
-        host.authorize(&controller.endpoint_id(), grants).unwrap();
+        host.set_desktop_sharing(grants).unwrap();
         controller.connect(&host.endpoint_id()).unwrap();
         let (id, generation, epoch) = {
             let state = lock(&host.shared.state);
@@ -4031,9 +4031,12 @@ mod lifecycle_tests {
             ));
             (session.id, session.generation, epoch)
         };
-        host.authorize(&controller.endpoint_id(), crate::session::Grants::default())
-            .unwrap();
-        host.authorize(&controller.endpoint_id(), grants).unwrap();
+        host.set_desktop_sharing(crate::session::Grants {
+            transfer: false,
+            ..grants
+        })
+        .unwrap();
+        host.set_desktop_sharing(grants).unwrap();
         let state = lock(&host.shared.state);
         assert!(!prepared_download_permitted(
             &state, &peer, id, generation, epoch

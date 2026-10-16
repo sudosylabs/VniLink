@@ -63,6 +63,7 @@ mod service_jobs;
 mod service_permissions;
 pub(crate) mod service_stream;
 mod services;
+mod sharing;
 pub use audio_stream::RemoteAudioService;
 pub use camera_stream::RemoteCameraService;
 pub use system_stream::RemoteSystemService;
@@ -146,6 +147,8 @@ impl std::fmt::Debug for CoreConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceInfo {
+    pub os: Option<crate::OperatingSystem>,
+    pub presence: crate::DevicePresence,
     pub endpoint_id: String,
     pub hostname: Option<String>,
     pub pet_name: Option<String>,
@@ -472,6 +475,8 @@ pub struct ControlRequest {
 }
 
 struct Shared {
+    /// Serializes persisted sharing changes and their native revocation cleanup.
+    sharing_serial: Mutex<()>,
     power_factory: Mutex<power::Factory>,
     power_status: Mutex<[crate::power::PowerStatus; 2]>,
     file_retention_policy: Arc<Mutex<crate::job::FileRetentionPolicy>>,
@@ -753,59 +758,13 @@ fn parse_endpoint_id(value: &str) -> Result<[u8; 32], Error> {
     Ok(*key.as_bytes())
 }
 
-/// Rewrites one device's grants with persist-or-rollback. Returns the previous
-/// grants. Both authorize and revoke funnel through here so a failed save
-/// never leaves memory ahead of the store.
-fn store_grants(
-    shared: &Shared,
-    state: &mut State,
-    key: &[u8; 32],
-    grants: Grants,
-    clear_service_grants: bool,
-) -> Result<Grants, Error> {
-    let previous = state
-        .trust
-        .get(key)
-        .map(|device| device.grants)
-        .ok_or(Error::NotPaired)?;
-    let previous_device = state.trust.get(key).cloned().ok_or(Error::NotPaired)?;
-    state.trust.authorize(key, grants)?;
-    if clear_service_grants {
-        state
-            .trust
-            .authorize_service(key, crate::ServiceKind::Terminal, false)?;
-        state
-            .trust
-            .authorize_service(key, crate::ServiceKind::Camera, false)?;
-        state
-            .trust
-            .authorize_service(key, crate::ServiceKind::SystemAudio, false)?;
-        state
-            .trust
-            .authorize_service(key, crate::ServiceKind::Microphone, false)?;
-        state
-            .trust
-            .authorize_service(key, crate::ServiceKind::System, false)?;
-        state.trust.authorize_recording(key, false)?;
-    }
-    if let Err(error) = persist(shared, state) {
-        let _ = state.trust.pair(previous_device);
-        return Err(error);
-    }
-    if previous.transfer != grants.transfer {
-        let epoch = state.transfer_epochs.entry(*key).or_default();
-        *epoch = epoch.saturating_add(1);
-    }
-    desktop_stream::reconcile_grants(shared, state, key, grants);
-    Ok(previous)
-}
-
 /// Removes one device with persist-or-rollback. Returns the removed device.
 /// A failed save restores it and never leaves memory ahead of the store.
 fn forget_device(shared: &Shared, state: &mut State, key: &[u8; 32]) -> Result<Device, Error> {
+    let previous = state.trust.clone();
     let removed = state.trust.remove(key).ok_or(Error::NotPaired)?;
     if let Err(error) = persist(shared, state) {
-        let _ = state.trust.pair(removed.clone());
+        state.trust = previous;
         return Err(error);
     }
     Ok(removed)

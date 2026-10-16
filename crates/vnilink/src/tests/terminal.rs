@@ -53,7 +53,7 @@ fn native_terminal_round_trip_resize_exit_and_sibling_lifetime() {
             crate::ServicePhase::Failed(_)
         )
     });
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Terminal, true)
+    host.set_service_sharing(ServiceKind::Terminal, true)
         .unwrap();
     let files = controller
         .attach_controller_service(connection.id, connection.generation, ServiceKind::Files)
@@ -112,7 +112,7 @@ fn terminal_revoke_and_backend_disable_cancel_only_terminal() {
     let host = start_direct();
     pair_for_control(&host, &controller);
     host.set_terminal_factory(Some(native())).unwrap();
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Terminal, true)
+    host.set_service_sharing(ServiceKind::Terminal, true)
         .unwrap();
     let connection = connect(&controller, &host);
     for disable in [false, true] {
@@ -125,7 +125,7 @@ fn terminal_revoke_and_backend_disable_cancel_only_terminal() {
         if disable {
             host.set_terminal_factory(None).unwrap();
         } else {
-            host.authorize_service(&controller.endpoint_id(), ServiceKind::Terminal, false)
+            host.set_service_sharing(ServiceKind::Terminal, false)
                 .unwrap();
         }
         wait(|| terminal.is_cancelled() && host.hosted_services().unwrap().is_empty());
@@ -133,7 +133,7 @@ fn terminal_revoke_and_backend_disable_cancel_only_terminal() {
             controller.controller_session(connection.id).unwrap().phase,
             SessionPhase::Active
         );
-        host.authorize_service(&controller.endpoint_id(), ServiceKind::Terminal, true)
+        host.set_service_sharing(ServiceKind::Terminal, true)
             .unwrap();
     }
     assert!(
@@ -188,7 +188,7 @@ fn terminal_backpressure_does_not_prevent_close_or_parent_disconnect() {
     let host = start_direct();
     pair_for_control(&host, &controller);
     host.set_terminal_factory(Some(native())).unwrap();
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Terminal, true)
+    host.set_service_sharing(ServiceKind::Terminal, true)
         .unwrap();
     let connection = connect(&controller, &host);
     for disconnect in [false, true] {
@@ -241,7 +241,7 @@ fn terminal_backend_start_failure_leaves_parent_active() {
     let host = start_direct();
     pair_for_control(&host, &controller);
     host.set_terminal_factory(Some(Arc::new(Failed))).unwrap();
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Terminal, true)
+    host.set_service_sharing(ServiceKind::Terminal, true)
         .unwrap();
     let connection = connect(&controller, &host);
     let owner = controller
@@ -265,7 +265,7 @@ fn persistent_terminal_reconnect_restores_shell_identity_history_and_environment
     let host = start_direct();
     pair_for_control(&host, &controller);
     host.set_terminal_factory(Some(native())).unwrap();
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Terminal, true)
+    host.set_service_sharing(ServiceKind::Terminal, true)
         .unwrap();
     let connection = connect(&controller, &host);
     let owner = controller
@@ -353,7 +353,7 @@ fn simultaneous_terminal_shells_are_independent() {
     let host = start_direct();
     pair_for_control(&host, &controller);
     host.set_terminal_factory(Some(native())).unwrap();
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Terminal, true)
+    host.set_service_sharing(ServiceKind::Terminal, true)
         .unwrap();
     let connection = connect(&controller, &host);
     let open = || {
@@ -397,10 +397,8 @@ fn detached_terminal_is_peer_scoped_and_revoke_removes_retained_shell() {
     pair_for_control(&host, &owner);
     pair_for_control(&host, &other);
     host.set_terminal_factory(Some(native())).unwrap();
-    for peer in [&owner, &other] {
-        host.authorize_service(&peer.endpoint_id(), ServiceKind::Terminal, true)
-            .unwrap();
-    }
+    host.set_service_sharing(ServiceKind::Terminal, true)
+        .unwrap();
     let connection = connect(&owner, &host);
     let service = owner
         .attach_controller_service(connection.id, connection.generation, ServiceKind::Terminal)
@@ -456,7 +454,7 @@ fn detached_terminal_is_peer_scoped_and_revoke_removes_retained_shell() {
         Err(Error::Unauthorized)
     ));
     assert_eq!(host.hosted_terminal_sessions().unwrap()[0].id, retained.id);
-    host.authorize_service(&owner.endpoint_id(), ServiceKind::Terminal, false)
+    host.set_service_sharing(ServiceKind::Terminal, false)
         .unwrap();
     wait(|| host.hosted_terminal_sessions().unwrap().is_empty());
     assert_eq!(
@@ -475,7 +473,7 @@ fn persistent_terminal_close_bypasses_stalled_input() {
     let host = start_direct();
     pair_for_control(&host, &controller);
     host.set_terminal_factory(Some(native())).unwrap();
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Terminal, true)
+    host.set_service_sharing(ServiceKind::Terminal, true)
         .unwrap();
     let connection = connect(&controller, &host);
     let owner = controller
@@ -544,7 +542,7 @@ fn delayed_startup_cancel_releases_backend() {
     let controller = start_direct();
     let host = start_direct();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Terminal, true)
+    host.set_service_sharing(ServiceKind::Terminal, true)
         .unwrap();
     let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
     let (_release_tx, release_rx) = std::sync::mpsc::channel();
@@ -565,7 +563,7 @@ fn delayed_startup_cancel_releases_backend() {
         let handle = s.spawn(|| controller.open_terminal_service(owner.id, owner.generation, SIZE));
         entered_rx.recv_timeout(Duration::from_secs(8)).unwrap();
         assert!(factory.opened.load(std::sync::atomic::Ordering::SeqCst));
-        host.authorize_service(&controller.endpoint_id(), ServiceKind::Terminal, false)
+        host.set_service_sharing(ServiceKind::Terminal, false)
             .unwrap();
         done.recv_timeout(Duration::from_secs(1)).unwrap();
         handle.join().unwrap()
@@ -617,7 +615,7 @@ fn terminal_capacity_counts_pending_startup_and_keeps_peers_independent() {
     let b = start_direct();
     for peer in [&a, &b] {
         pair_for_control(&host, peer);
-        host.authorize_service(&peer.endpoint_id(), ServiceKind::Terminal, true)
+        host.set_service_sharing(ServiceKind::Terminal, true)
             .unwrap();
     }
     let policy = crate::terminal::TerminalPolicy {

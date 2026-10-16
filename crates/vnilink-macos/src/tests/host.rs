@@ -137,8 +137,8 @@ mod twin {
             clipboard: false,
             transfer: false,
         };
-        host.authorize(&viewer.endpoint_id(), grants).unwrap();
-        viewer.authorize(&host.endpoint_id(), grants).unwrap();
+        host.set_desktop_sharing(grants).unwrap();
+        viewer.set_desktop_sharing(grants).unwrap();
     }
 
     struct IdleCapture;

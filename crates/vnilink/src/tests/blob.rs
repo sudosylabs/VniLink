@@ -75,15 +75,12 @@ fn pair(host: &Core, controller: &Core, transfer: bool) {
         .create_invitation(Duration::from_secs(60))
         .unwrap();
     host.accept_invitation(&back).unwrap();
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer,
+    })
     .unwrap();
 }
 
@@ -148,15 +145,12 @@ fn blob_spike_serves_both_directions() {
     let controller = start_direct();
     let (_hs, _cs) = paired_with_dirs(&host, &controller, true, "both");
     controller
-        .authorize(
-            &host.endpoint_id(),
-            Grants {
-                view: false,
-                control: false,
-                clipboard: false,
-                transfer: true,
-            },
-        )
+        .set_desktop_sharing(Grants {
+            view: false,
+            control: false,
+            clipboard: false,
+            transfer: true,
+        })
         .unwrap();
 
     let data = payload(9 * 1024 * 1024 + 17);

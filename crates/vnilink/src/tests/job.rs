@@ -119,15 +119,12 @@ fn pair_with_transfer(host: &Core, controller: &Core) {
         .create_invitation(Duration::from_secs(60))
         .unwrap();
     host.accept_invitation(&back).unwrap();
-    host.authorize(
-        &controller.endpoint_id(),
-        crate::session::Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: true,
-        },
-    )
+    host.set_desktop_sharing(crate::session::Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: true,
+    })
     .unwrap();
 }
 
@@ -157,15 +154,12 @@ fn setup_with_access(
     }
     pair_with_transfer(&host, &controller);
     controller
-        .authorize(
-            &host.endpoint_id(),
-            crate::session::Grants {
-                view: false,
-                control: false,
-                clipboard: false,
-                transfer: true,
-            },
-        )
+        .set_desktop_sharing(crate::session::Grants {
+            view: false,
+            control: false,
+            clipboard: false,
+            transfer: true,
+        })
         .unwrap();
     (host, controller, host_scratch, controller_scratch)
 }
@@ -451,15 +445,12 @@ fn interrupted_download_resumes_with_byte_reuse() {
             .unwrap(),
     )
     .unwrap();
-    host.authorize(
-        &receiver_a.endpoint_id(),
-        crate::session::Grants {
-            view: false,
-            control: false,
-            clipboard: false,
-            transfer: true,
-        },
-    )
+    host.set_desktop_sharing(crate::session::Grants {
+        view: false,
+        control: false,
+        clipboard: false,
+        transfer: true,
+    })
     .unwrap();
 
     // 9 MiB clears the legacy cap with room to spare: it must stream.
@@ -602,15 +593,12 @@ fn job_restart_resumes_unfinished_files() {
     )
     .unwrap();
     controller
-        .authorize(
-            &host.endpoint_id(),
-            crate::session::Grants {
-                view: false,
-                control: false,
-                clipboard: false,
-                transfer: true,
-            },
-        )
+        .set_desktop_sharing(crate::session::Grants {
+            view: false,
+            control: false,
+            clipboard: false,
+            transfer: true,
+        })
         .unwrap();
     controller.connect(&host.endpoint_id()).unwrap();
     controller.job_resume(job).unwrap();
@@ -812,7 +800,8 @@ fn revoke_pauses_and_reauthorize_resumes() {
     // Revoke mid-job: the next poll stops instead of fetching. The
     // record only settles once polled; the snapshot before that still
     // shows the in-flight state.
-    host.revoke(&controller.endpoint_id()).unwrap();
+    host.set_service_sharing(crate::ServiceKind::Files, false)
+        .unwrap();
     let next = controller.job_poll(job).unwrap();
     assert_eq!(next.state, JobState::Interrupted);
     assert_eq!(next.files_done, 1);
@@ -821,17 +810,13 @@ fn revoke_pauses_and_reauthorize_resumes() {
     // Re-authorize and resume to an exact tree. Revocation dropped the
     // host's offers, so the host sender re-offers before the receiver
     // retries its fetch.
-    host.authorize(
-        &controller.endpoint_id(),
-        crate::session::Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: true,
-        },
-    )
+    host.set_desktop_sharing(crate::session::Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: true,
+    })
     .unwrap();
-    controller.connect(&host.endpoint_id()).unwrap();
     let host_job = host.job_list().unwrap()[0].id;
     host.job_resume(host_job).unwrap();
     controller.job_resume(job).unwrap();
@@ -1431,15 +1416,12 @@ fn nested_sender_resume_resolves_correct_file() {
     )
     .unwrap();
     controller
-        .authorize(
-            &host.endpoint_id(),
-            crate::session::Grants {
-                view: false,
-                control: false,
-                clipboard: false,
-                transfer: true,
-            },
-        )
+        .set_desktop_sharing(crate::session::Grants {
+            view: false,
+            control: false,
+            clipboard: false,
+            transfer: true,
+        })
         .unwrap();
     controller.connect(&host.endpoint_id()).unwrap();
     // Sender resume with nested source must not mis-resolve to root/pack/...
@@ -1763,15 +1745,12 @@ fn cross_filesystem_publication_succeeds() {
         std::fs::write(controller_scratch.join("root/a.txt"), payload(2048, 404)).unwrap();
         pair_with_transfer(&host, &controller);
         controller
-            .authorize(
-                &host.endpoint_id(),
-                crate::session::Grants {
-                    view: false,
-                    control: false,
-                    clipboard: false,
-                    transfer: true,
-                },
-            )
+            .set_desktop_sharing(crate::session::Grants {
+                view: false,
+                control: false,
+                clipboard: false,
+                transfer: true,
+            })
             .unwrap();
         controller.connect(&host.endpoint_id()).unwrap();
         let job = controller
@@ -1796,15 +1775,12 @@ fn cross_filesystem_publication_succeeds() {
         std::fs::write(controller_scratch.join("root/a.txt"), payload(2048, 404)).unwrap();
         pair_with_transfer(&host, &controller);
         controller
-            .authorize(
-                &host.endpoint_id(),
-                crate::session::Grants {
-                    view: false,
-                    control: false,
-                    clipboard: false,
-                    transfer: true,
-                },
-            )
+            .set_desktop_sharing(crate::session::Grants {
+                view: false,
+                control: false,
+                clipboard: false,
+                transfer: true,
+            })
             .unwrap();
         controller.connect(&host.endpoint_id()).unwrap();
         let job = controller
@@ -1989,12 +1965,8 @@ fn service_jobs_complete_both_directions(neutral: bool) {
     std::fs::write(cs.join("root/up.bin"), &upload_bytes).unwrap();
     std::fs::write(hs.join("root/down.bin"), &download_bytes).unwrap();
     let (owner, _pipe) = if neutral {
-        host.authorize_service(
-            &controller.endpoint_id(),
-            crate::ServiceKind::Desktop,
-            false,
-        )
-        .unwrap();
+        host.set_service_sharing(crate::ServiceKind::Desktop, false)
+            .unwrap();
         host.set_video_codecs(crate::VideoCodecCaps::default())
             .unwrap();
         controller
@@ -2296,15 +2268,12 @@ fn service_jobs_closing_one_computer_keeps_another_transfer_active() {
         FilesystemLocation::new(second.file_roots().unwrap(), &second_disk.join("root"));
     pair_with_transfer(&second, &controller);
     controller
-        .authorize(
-            &second.endpoint_id(),
-            crate::Grants {
-                view: false,
-                control: false,
-                clipboard: false,
-                transfer: true,
-            },
-        )
+        .set_desktop_sharing(crate::Grants {
+            view: false,
+            control: false,
+            clipboard: false,
+            transfer: true,
+        })
         .unwrap();
     let bytes = payload(65536, 149);
     std::fs::write(cs.join("root/shared.bin"), &bytes).unwrap();
@@ -2699,15 +2668,12 @@ fn files_adoption_survives_both_core_restarts_with_verified_download() {
     let controller = reopen(controller_key, &cs);
     pair_with_transfer(&host, &controller);
     controller
-        .authorize(
-            &host.endpoint_id(),
-            crate::session::Grants {
-                view: false,
-                control: false,
-                clipboard: false,
-                transfer: true,
-            },
-        )
+        .set_desktop_sharing(crate::session::Grants {
+            view: false,
+            control: false,
+            clipboard: false,
+            transfer: true,
+        })
         .unwrap();
     let (fresh, _pipe) = connect_files(&controller, &host);
     assert!(controller
@@ -3072,15 +3038,12 @@ fn revoked_cross_volume_publish_never_lands_and_locks_stay_free() {
         .recv_timeout(Duration::from_secs(5))
         .expect("snapshot blocked during parked copy")
         .unwrap();
-    host.authorize(
-        &controller.endpoint_id(),
-        crate::session::Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(crate::session::Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: false,
+    })
     .unwrap();
     prestage_gate::release();
     let receiver_state = worker.join().expect("driver thread panicked");
@@ -3284,15 +3247,12 @@ fn parked_mkdir_and_stage_sync_leave_locks_free() {
     bounded("snapshot during parked stage sync", move || {
         snapshot_host.snapshot().unwrap();
     });
-    host.authorize(
-        &controller.endpoint_id(),
-        crate::session::Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(crate::session::Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: false,
+    })
     .unwrap();
     publish_gate::release_sync();
     let receiver_state = worker.join().expect("driver thread panicked");
@@ -3562,15 +3522,12 @@ fn persisted_replace_refuses_replaced_root_at_same_path() {
     controller.set_file_roots(vec![root.clone()]).unwrap();
     pair_with_transfer(&host, &controller);
     controller
-        .authorize(
-            &host.endpoint_id(),
-            crate::session::Grants {
-                view: false,
-                control: false,
-                clipboard: false,
-                transfer: true,
-            },
-        )
+        .set_desktop_sharing(crate::session::Grants {
+            view: false,
+            control: false,
+            clipboard: false,
+            transfer: true,
+        })
         .unwrap();
     controller.connect_files(&host.endpoint_id()).unwrap();
     controller.job_resume(job).unwrap();

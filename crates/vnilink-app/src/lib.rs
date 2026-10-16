@@ -58,7 +58,8 @@ mod terminal;
 pub use services::{
     DesktopService, FfiAdaptationReason, FfiCloseCause, FfiDesktopControlState, FfiDesktopCursor,
     FfiDesktopCursorImage, FfiDesktopInfo, FfiDesktopMediaStatus, FfiServiceInfo, FfiServiceKind,
-    FfiServicePermissions, FfiServicePhase, FfiServiceSupport, FilesService, ServiceLeasePoller,
+    FfiServicePermissions, FfiServicePhase, FfiServiceSupport, FfiSharingPolicy,
+    FfiSharingPolicyUpdate, FilesService, ServiceLeasePoller,
 };
 pub use system::{
     FfiHostSystemReport, FfiOperationState, FfiPrivacyState, FfiSessionState, FfiSystemAction,
@@ -359,25 +360,21 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
-    pub fn authorize(
+    pub fn set_desktop_sharing(
         &self,
-        endpoint_id: String,
         view: bool,
         control: bool,
         clipboard: bool,
         transfer: bool,
     ) -> Result<(), FfiError> {
         self.inner
-            .authorize(
-                &endpoint_id,
-                vnilink::Grants {
-                    view,
+            .set_desktop_sharing(vnilink::Grants {
+                view,
 
-                    control,
-                    clipboard,
-                    transfer,
-                },
-            )
+                control,
+                clipboard,
+                transfer,
+            })
             .map_err(map_error)
     }
 

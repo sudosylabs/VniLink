@@ -18,6 +18,7 @@ fn control_messages_round_trip() {
             files_only: false,
             services_only: false,
             hostname: Some("mac-mini".to_string()),
+            os: crate::OperatingSystem::local(),
         },
         ControlMessage::Hello {
             version: PROTOCOL_VERSION,
@@ -27,6 +28,7 @@ fn control_messages_round_trip() {
             files_only: false,
             services_only: false,
             hostname: None,
+            os: crate::OperatingSystem::local(),
         },
         ControlMessage::Hello {
             version: PROTOCOL_VERSION,
@@ -36,6 +38,7 @@ fn control_messages_round_trip() {
             files_only: false,
             services_only: false,
             hostname: Some("mac-mini".to_string()),
+            os: crate::OperatingSystem::local(),
         },
         ControlMessage::Accept {
             stamp: SessionStamp::new(7, 3),
@@ -44,6 +47,7 @@ fn control_messages_round_trip() {
             codec: crate::protocol::CODEC_H264_HIGH,
             quality,
             hostname: None,
+            os: crate::OperatingSystem::local(),
         },
         ControlMessage::Accept {
             stamp: SessionStamp::new(7, 3),
@@ -52,6 +56,7 @@ fn control_messages_round_trip() {
             codec: crate::protocol::CODEC_H264,
             quality,
             hostname: Some("linux-laptop".to_string()),
+            os: crate::OperatingSystem::local(),
         },
         ControlMessage::Accept {
             stamp: SessionStamp::new(7, 3),
@@ -60,6 +65,7 @@ fn control_messages_round_trip() {
             codec: crate::protocol::CODEC_H264,
             quality,
             hostname: None,
+            os: crate::OperatingSystem::local(),
         },
         ControlMessage::Reject(RejectCode::Unauthorized),
         ControlMessage::Input {
@@ -106,6 +112,7 @@ fn hello_accept_and_quality_shapes_are_validated() {
         files_only: false,
         services_only: false,
         hostname: None,
+        os: crate::OperatingSystem::local(),
     }
     .encode();
     // Corrupt the frame rate to 0.
@@ -122,6 +129,7 @@ fn hello_accept_and_quality_shapes_are_validated() {
         files_only: false,
         services_only: false,
         hostname: None,
+        os: crate::OperatingSystem::local(),
     }
     .encode();
     bad_decode[13] = 2;
@@ -156,11 +164,12 @@ fn hostname_shapes_are_validated() {
         files_only: false,
         services_only: false,
         hostname,
+        os: crate::OperatingSystem::local(),
     };
     // v5 carries both mode flags (17 bytes base); v4 has one (16), v1-v3 none (15).
     // An invalid name encodes as absent; it never breaks the session.
     let encoded = hello(Some("  ".to_string())).encode();
-    assert_eq!(encoded.len(), 17);
+    assert_eq!(encoded.len(), 18);
     assert_eq!(ControlMessage::decode(&encoded).unwrap(), hello(None));
     // A v3 desktop Hello omits the flag and still round-trips as files_only=false.
     let mut v3hello = hello(Some("mac-mini".to_string()));
@@ -171,7 +180,7 @@ fn hostname_shapes_are_validated() {
         *version = 3;
     }
     let v3encoded = v3hello.encode();
-    assert_eq!(v3encoded.len(), 14 + 1 + "mac-mini".len());
+    assert_eq!(v3encoded.len(), 14 + 2 + "mac-mini".len());
     let back = ControlMessage::decode(&v3encoded).unwrap();
     assert!(matches!(
         back,
@@ -446,6 +455,7 @@ fn neutral_hello_has_a_strict_version_five_mode_flag() {
         files_only: true,
         services_only: true,
         hostname: Some("service-host".into()),
+        os: crate::OperatingSystem::local(),
     };
     let bytes = hello.encode();
     assert_eq!((bytes[14], bytes[15]), (1, 1));
@@ -475,6 +485,7 @@ fn neutral_hello_has_a_strict_version_five_mode_flag() {
             files_only: version >= 4,
             services_only: false,
             hostname: Some("old-host".into()),
+            os: crate::OperatingSystem::local(),
         };
         assert_eq!(ControlMessage::decode(&old.encode()).unwrap(), old);
     }
@@ -580,4 +591,51 @@ fn topology_and_one_display_selection_round_trip() {
         ),
         Err(Error::Malformed)
     ));
+}
+
+#[test]
+fn handshake_os_is_bounded_and_every_truncation_is_rejected_without_panicking() {
+    for os in [
+        crate::OperatingSystem::Macos,
+        crate::OperatingSystem::Windows,
+        crate::OperatingSystem::Linux,
+        crate::OperatingSystem::Other,
+    ] {
+        let quality = Quality::new(2_000, 30, 1920, 1080).unwrap();
+        for message in [
+            ControlMessage::Hello {
+                version: PROTOCOL_VERSION,
+                codec: crate::protocol::CODEC_H264,
+                quality,
+                decode: true,
+                files_only: true,
+                services_only: true,
+                hostname: Some("workstation".into()),
+                os,
+            },
+            ControlMessage::Accept {
+                stamp: SessionStamp::new(1, 1),
+                monitor_width: 0,
+                monitor_height: 0,
+                codec: 0,
+                quality,
+                hostname: Some("workstation".into()),
+                os,
+            },
+        ] {
+            let mut bytes = message.encode();
+            assert_eq!(ControlMessage::decode(&bytes).unwrap(), message);
+            for length in 0..bytes.len() {
+                assert!(
+                    ControlMessage::decode(&bytes[..length]).is_err(),
+                    "accepted truncated handshake {length}"
+                );
+            }
+            *bytes.last_mut().unwrap() = 4;
+            assert!(matches!(
+                ControlMessage::decode(&bytes),
+                Err(Error::Malformed)
+            ));
+        }
+    }
 }

@@ -400,9 +400,9 @@ fn two_desktop_owners_fail_only_the_removed_display() {
     .unwrap();
     pair_for_control(&host, &first);
     pair_for_control(&host, &second);
-    host.authorize_service(&first.endpoint_id(), ServiceKind::Desktop, true)
+    host.set_service_sharing(ServiceKind::Desktop, true)
         .unwrap();
-    host.authorize_service(&second.endpoint_id(), ServiceKind::Desktop, true)
+    host.set_service_sharing(ServiceKind::Desktop, true)
         .unwrap();
     let left = screen(1, 0, 0, 1920, 1080, 0, 100);
     let right = screen(2, -1920, 0, 1280, 800, 90, 200);

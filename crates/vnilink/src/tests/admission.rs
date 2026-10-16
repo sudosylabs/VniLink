@@ -39,30 +39,24 @@ fn pairing_does_not_grant_control_and_a_grant_is_directional() {
         Err(Error::Unauthorized)
     ));
 
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: false,
-            control: false,
-            clipboard: true,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: false,
+        control: false,
+        clipboard: true,
+        transfer: false,
+    })
     .unwrap();
     assert!(matches!(
         controller.connect(&host.endpoint_id()),
         Err(Error::Unauthorized)
     ));
 
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: false,
+    })
     .unwrap();
     let session = controller.connect(&host.endpoint_id()).unwrap();
     assert_eq!(session.phase, SessionPhase::Active);
@@ -140,15 +134,12 @@ fn peers_past_capacity_are_rejected_while_live_sessions_stay_active() {
             .create_invitation(Duration::from_secs(60))
             .unwrap();
         host.accept_invitation(&back).unwrap();
-        host.authorize(
-            &controller.endpoint_id(),
-            Grants {
-                view: true,
-                control: true,
-                clipboard: false,
-                transfer: false,
-            },
-        )
+        host.set_desktop_sharing(Grants {
+            view: true,
+            control: true,
+            clipboard: false,
+            transfer: false,
+        })
         .unwrap();
     }
     let mut sessions = Vec::new();
@@ -213,15 +204,12 @@ fn accepting_a_new_invitation_neither_adds_nor_removes_grants() {
             .unwrap(),
     )
     .unwrap();
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: false,
-            control: false,
-            clipboard: true,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: false,
+        control: false,
+        clipboard: true,
+        transfer: false,
+    })
     .unwrap();
     let info = host
         .accept_invitation(
@@ -249,19 +237,18 @@ fn accepting_a_new_invitation_neither_adds_nor_removes_grants() {
 }
 
 #[test]
-fn re_pairing_after_revoke_keeps_the_empty_grants() {
+fn re_pairing_uses_unchanged_global_consent() {
     let host = start_direct();
     let controller = start_direct();
     pair_for_control(&host, &controller);
     host.revoke(&controller.endpoint_id()).unwrap();
-    // A later pairing file from the same peer refreshes addresses. The
-    // revoked grants stay revoked; the write path re-reads them instead of
-    // restoring what the first read saw.
+    // Forgetting identity does not change installation-wide consent.
+    // A new invitation restores identity under the same global policy.
     let back = controller
         .create_invitation(Duration::from_secs(60))
         .unwrap();
     let info = host.accept_invitation(&back).unwrap();
-    assert!(!info.grants.control);
+    assert!(info.grants.control);
     assert!(!info.grants.clipboard);
     assert!(!info.grants.transfer);
     let device = host
@@ -271,13 +258,12 @@ fn re_pairing_after_revoke_keeps_the_empty_grants() {
         .into_iter()
         .find(|device| device.endpoint_id == controller.endpoint_id())
         .unwrap();
-    assert!(!device.grants.control);
-    assert!(matches!(
-        controller.connect(&host.endpoint_id()),
-        Err(Error::Unauthorized)
-    ));
+    assert!(device.grants.control);
+    assert_eq!(
+        controller.connect(&host.endpoint_id()).unwrap().phase,
+        SessionPhase::Active
+    );
 }
-
 #[test]
 fn connect_requires_pairing_and_hosting() {
     let host = start_direct();
@@ -297,15 +283,12 @@ fn connect_requires_pairing_and_hosting() {
             .unwrap(),
     )
     .unwrap();
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: false,
+    })
     .unwrap();
     assert!(matches!(
         controller.connect(&host.endpoint_id()),
@@ -406,15 +389,12 @@ fn admission_publishes_the_session_lifecycle() {
         }
         other => panic!("paired event was {other:?}"),
     }
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: false,
+    })
     .unwrap();
     match take_matching(&host_events, |event| {
         matches!(event, CoreEvent::DeviceAuthorized { .. })
@@ -487,9 +467,9 @@ fn admission_publishes_the_session_lifecycle() {
     );
     host.revoke(&controller.endpoint_id()).unwrap();
     match take_matching(&host_events, |event| {
-        matches!(event, CoreEvent::DeviceRevoked { .. })
+        matches!(event, CoreEvent::DeviceUnpaired { .. })
     }) {
-        CoreEvent::DeviceRevoked { endpoint_id } => {
+        CoreEvent::DeviceUnpaired { endpoint_id } => {
             assert_eq!(endpoint_id, controller.endpoint_id());
         }
         other => panic!("revoked event was {other:?}"),

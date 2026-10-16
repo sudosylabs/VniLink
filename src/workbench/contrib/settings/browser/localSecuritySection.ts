@@ -32,7 +32,7 @@ export class LocalSecuritySection extends Disposable {
 		header.append(heading);
 		const help = document.createElement('p');
 		help.className = 'access-description';
-		help.textContent = nls.localize('security.policyHelp', 'Allow these requests from devices with System actions permission. These switches set VniLink’s rules; they do not run an action or grant operating-system access.');
+		help.textContent = nls.localize('security.policyHelp', 'Allow these requests from paired devices when System actions sharing is enabled. These switches set VniLink’s rules; they do not run an action or grant operating-system access.');
 		const controlsBody = document.createElement('div');
 		appendAccessSection(this.element, header, help, [controlsBody]);
 		for (const [key, , title, description] of this.definitions) {

@@ -3,7 +3,7 @@
 use super::*;
 
 use super::blob::drop_blob_offers;
-use super::clipboard::{drop_peer_clipboard_files, open_controller_clipboard};
+use super::clipboard::open_controller_clipboard;
 use super::link::{remember_peer_addresses, write_addresses};
 use super::video::{video_inbox, video_recv_loop};
 use super::wire::{read_frame, read_session_frame, write_frame};
@@ -39,84 +39,22 @@ impl Drop for ControllerTasks {
 }
 
 impl Core {
-    pub fn authorize(&self, endpoint_id: &str, grants: Grants) -> Result<(), Error> {
-        let key = parse_endpoint_id(endpoint_id)?;
-        {
-            let mut state = self.alive_state()?;
-            store_grants(&self.shared, &mut state, &key, grants, false)?;
-            if !grants.transfer {
-                let incoming: Vec<u64> = state
-                    .incoming
-                    .values()
-                    .filter(|session| session.peer_key == key)
-                    .map(|session| session.id)
-                    .collect();
-                for record in state.hosted_services.values_mut().filter(|record| {
-                    incoming.contains(&record.info.connection_id)
-                        && record.info.kind == crate::ServiceKind::Files
-                }) {
-                    if record.change(
-                        record.info.generation,
-                        crate::ServicePhase::Closed(crate::CloseCause::Revoked),
-                    ) {
-                        self.shared.events.publish(CoreEvent::HostedServiceChanged {
-                            service: record.info.clone(),
-                        });
-                    }
-                }
-            }
-        }
-        if !grants.transfer {
-            drop_blob_offers(&self.shared, &key);
-            super::jobs::interrupt_peer_jobs(&self.shared, &key);
-        }
-        if !grants.clipboard {
-            drop_peer_clipboard_files(&self.shared, &key);
-        }
-        self.shared.events.publish(CoreEvent::DeviceAuthorized {
-            endpoint_id: endpoint_id.to_owned(),
-        });
-        Ok(())
+    pub fn set_desktop_sharing(&self, grants: Grants) -> Result<(), Error> {
+        self.update_sharing_policy(|policy| {
+            policy.view = grants.view;
+            policy.control = grants.control;
+            policy.clipboard = grants.clipboard;
+            policy.files = grants.transfer;
+        })
     }
 
     pub fn revoke(&self, endpoint_id: &str) -> Result<(), Error> {
-        let key = parse_endpoint_id(endpoint_id)?;
-        let mut stopped = Vec::new();
-        {
-            let mut state = self.alive_state()?;
-            store_grants(&self.shared, &mut state, &key, Grants::default(), true)?;
-            let live: Vec<u64> = state
-                .incoming
-                .values()
-                .filter(|session| session.peer_key == key && !finished(&session.phase))
-                .map(|session| session.id)
-                .collect();
-            if !live.is_empty() {
-                state.generation = state.generation.saturating_add(1);
-                for id in live {
-                    if let Some(session) = state.incoming.get_mut(&id) {
-                        session.phase = SessionPhase::Stopping;
-                        stopped.push(session.stop.clone());
-                    }
-                }
-            }
-        }
-        for stop in stopped {
-            let _ = stop.send(true);
-        }
-        drop_blob_offers(&self.shared, &key);
-        super::jobs::interrupt_peer_jobs(&self.shared, &key);
-        drop_peer_clipboard_files(&self.shared, &key);
-        self.shared.events.publish(CoreEvent::DeviceRevoked {
-            endpoint_id: endpoint_id.to_owned(),
-        });
-        Ok(())
+        self.unpair(endpoint_id)
     }
 
     /// Forgets a paired device entirely.
     ///
-    /// Unlike [`Core::revoke`], which keeps the device with empty grants, the
-    /// device is removed: later dials fail with [`Error::NotPaired`], and an
+    /// The device is removed: later dials fail with [`Error::NotPaired`], and an
     /// unknown device reports that without touching any session. A live
     /// session with that peer ends on either role and releases held input
     /// like any local stop; the controller does not redial. This is local
@@ -655,6 +593,7 @@ pub(super) async fn establish(
                 files_only: files_only_flag,
                 services_only,
                 hostname: crate::hostname::local_hostname(),
+                os: crate::OperatingSystem::local(),
             },
         )
         .await?;
@@ -666,6 +605,7 @@ pub(super) async fn establish(
                 codec: agreed,
                 quality,
                 hostname: accept_hostname,
+                os: accept_os,
             } => {
                 let separate_cursor =
                     version >= 3 && agreed & crate::protocol::SEPARATE_CURSOR != 0;
@@ -697,6 +637,7 @@ pub(super) async fn establish(
                     &device.endpoint_id,
                     accept_hostname,
                 );
+                let _ = super::link::remember_peer_os(shared, &device.endpoint_id, accept_os);
                 {
                     let mut state = lock(&shared.state);
                     if let Some(session) = state.outgoing.get_mut(&local_id) {

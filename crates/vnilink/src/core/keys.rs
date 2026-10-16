@@ -1019,26 +1019,20 @@ mod review_v9_legacy_input {
                     .open_desktop_service(owner.id, owner.generation)
                     .unwrap(),
             );
-            host.authorize(
-                &peer.endpoint_id(),
-                crate::Grants {
-                    view: true,
-                    control: false,
-                    clipboard: false,
-                    transfer: false,
-                },
-            )
+            host.set_desktop_sharing(crate::Grants {
+                view: true,
+                control: false,
+                clipboard: false,
+                transfer: false,
+            })
             .unwrap();
             if mode == 3 {
-                host.authorize(
-                    &peer.endpoint_id(),
-                    crate::Grants {
-                        view: true,
-                        control: true,
-                        clipboard: false,
-                        transfer: false,
-                    },
-                )
+                host.set_desktop_sharing(crate::Grants {
+                    view: true,
+                    control: true,
+                    clipboard: false,
+                    transfer: false,
+                })
                 .unwrap();
             } else {
                 let legacy_id = lock(&host.shared.state)

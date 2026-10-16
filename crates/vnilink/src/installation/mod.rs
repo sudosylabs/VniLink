@@ -125,4 +125,4 @@ impl InstallationStore for MemoryStore {
 pub(crate) use record::{decode, encode};
 
 #[cfg(test)]
-pub(crate) use record::{checksum, frame};
+pub(crate) use record::checksum;

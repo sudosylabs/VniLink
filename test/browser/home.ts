@@ -47,9 +47,10 @@ export async function verifyHomeLifecycle(): Promise<void> {
 			return devices;
 		},
 		onDidChangeDevices: changed.event,
+		initialize: () => Promise.resolve(),
 		refresh() {
 			requests++;
-			devices = [{ id: 'peer', name: '<b>Remote computer</b>' }];
+			devices = [{ id: 'peer', name: '<b>Remote computer</b>', os: 'linux', presence: 'connected' }];
 			changed.fire(devices);
 			return Promise.resolve();
 		},

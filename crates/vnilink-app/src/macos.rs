@@ -915,8 +915,7 @@ mod viewer_tests {
             .unwrap();
         host.accept_invitation(controller.create_invitation(60).unwrap())
             .unwrap();
-        host.authorize(controller.endpoint_id(), true, false, false, true)
-            .unwrap();
+        host.set_desktop_sharing(true, false, false, true).unwrap();
         let parent = controller
             .begin_connect_services(host.endpoint_id())
             .unwrap();
@@ -1014,8 +1013,7 @@ mod viewer_tests {
                 .unwrap();
             host.accept_invitation(viewer.create_invitation(60).unwrap())
                 .unwrap();
-            host.authorize(viewer.endpoint_id(), true, true, false, true)
-                .unwrap();
+            host.set_desktop_sharing(true, true, false, true).unwrap();
             let parent = viewer.begin_connect_services(host.endpoint_id()).unwrap();
             let until = std::time::Instant::now() + Duration::from_secs(5);
             while viewer.controller_session(parent.id).unwrap().phase
@@ -1127,8 +1125,7 @@ mod viewer_tests {
                 .unwrap();
             host.accept_invitation(viewer.create_invitation(60).unwrap())
                 .unwrap();
-            host.authorize(viewer.endpoint_id(), true, true, false, true)
-                .unwrap();
+            host.set_desktop_sharing(true, true, false, true).unwrap();
             let parent = viewer.begin_connect_services(host.endpoint_id()).unwrap();
             let until = std::time::Instant::now() + Duration::from_secs(5);
             while viewer.controller_session(parent.id).unwrap().phase
@@ -1320,8 +1317,7 @@ mod viewer_tests {
                 .unwrap();
             host.accept_invitation(viewer.create_invitation(60).unwrap())
                 .unwrap();
-            host.authorize(viewer.endpoint_id(), true, true, false, true)
-                .unwrap();
+            host.set_desktop_sharing(true, true, false, true).unwrap();
             let parent = viewer.begin_connect_services(host.endpoint_id()).unwrap();
             let until = std::time::Instant::now() + Duration::from_secs(5);
             while viewer.controller_session(parent.id).unwrap().phase
@@ -1437,8 +1433,7 @@ mod viewer_tests {
             .unwrap();
         host.accept_invitation(controller.create_invitation(60).unwrap())
             .unwrap();
-        host.authorize(controller.endpoint_id(), true, true, false, false)
-            .unwrap();
+        host.set_desktop_sharing(true, true, false, false).unwrap();
         let parent = controller
             .begin_connect_services(host.endpoint_id())
             .unwrap();
@@ -1559,8 +1554,7 @@ mod viewer_tests {
             .unwrap();
         host.accept_invitation(controller.create_invitation(60).unwrap())
             .unwrap();
-        host.authorize(controller.endpoint_id(), true, true, false, false)
-            .unwrap();
+        host.set_desktop_sharing(true, true, false, false).unwrap();
         let session = controller.connect(host.endpoint_id()).unwrap();
         let viewer = controller
             .mac_viewer(session.id, session.generation)

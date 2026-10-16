@@ -98,3 +98,6 @@ mod camera_tests;
 
 #[path = "tests/power.rs"]
 mod power_tests;
+
+#[path = "tests/sharing.rs"]
+mod sharing_tests;

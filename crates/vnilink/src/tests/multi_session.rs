@@ -54,15 +54,12 @@ fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() {
             .unwrap();
         host.set_capture(Box::new(Capture)).unwrap();
         pair_for_control(host, &controller);
-        host.authorize(
-            &controller.endpoint_id(),
-            Grants {
-                view: true,
-                control: true,
-                clipboard: true,
-                transfer: false,
-            },
-        )
+        host.set_desktop_sharing(Grants {
+            view: true,
+            control: true,
+            clipboard: true,
+            transfer: false,
+        })
         .unwrap();
     }
     let events = controller.subscribe().unwrap();
@@ -298,8 +295,7 @@ fn cancellation_during_approval_and_reconnect_do_not_stop_the_other_session() {
         &controller,
         controller.begin_connect(&a.endpoint_id()).unwrap().id,
     );
-    b.authorize(&controller.endpoint_id(), Grants::default())
-        .unwrap();
+    b.unpair(&controller.endpoint_id()).unwrap();
     b.export_pairing_file(Duration::from_secs(60), true)
         .unwrap();
     let pending = controller.begin_connect(&b.endpoint_id()).unwrap();
@@ -310,14 +306,17 @@ fn cancellation_during_approval_and_reconnect_do_not_stop_the_other_session() {
     if b.control_request().unwrap().is_some() {
         b.reject_control_request().unwrap();
     }
-    b.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            ..Grants::default()
-        },
+    b.accept_invitation(
+        &controller
+            .create_invitation(Duration::from_secs(60))
+            .unwrap(),
     )
+    .unwrap();
+    b.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        ..Grants::default()
+    })
     .unwrap();
     let sb = active(
         &controller,
@@ -381,22 +380,16 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() {
     std::fs::write(dir.join("b/root/b.txt"), b"B's bytes").unwrap();
     for host in [&a, &b] {
         pair_for_control(host, &controller);
-        host.authorize(
-            &controller.endpoint_id(),
-            Grants {
-                transfer: true,
-                ..Grants::default()
-            },
-        )
+        host.set_desktop_sharing(Grants {
+            transfer: true,
+            ..Grants::default()
+        })
         .unwrap();
         controller
-            .authorize(
-                &host.endpoint_id(),
-                Grants {
-                    transfer: true,
-                    ..Grants::default()
-                },
-            )
+            .set_desktop_sharing(Grants {
+                transfer: true,
+                ..Grants::default()
+            })
             .unwrap();
         active(
             &controller,
@@ -547,13 +540,10 @@ fn a_saturated_viewer_does_not_slow_another_viewer() {
     let fast = start_direct();
     for viewer in [&slow, &fast] {
         pair_for_control(&host, viewer);
-        host.authorize(
-            &viewer.endpoint_id(),
-            Grants {
-                view: true,
-                ..Grants::default()
-            },
-        )
+        host.set_desktop_sharing(Grants {
+            view: true,
+            ..Grants::default()
+        })
         .unwrap();
     }
     let sa = active(&slow, slow.begin_connect(&host.endpoint_id()).unwrap().id);
@@ -660,34 +650,19 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() {
     for peer in [&fast, &slow, &files, &term] {
         pair_for_control(&host, peer);
     }
-    for peer in [&fast, &slow] {
-        host.authorize(
-            &peer.endpoint_id(),
-            Grants {
-                view: true,
-                ..Grants::default()
-            },
-        )
-        .unwrap();
-    }
-    host.authorize(
-        &files.endpoint_id(),
-        Grants {
-            transfer: true,
-            ..Grants::default()
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        transfer: true,
+        ..Grants::default()
+    })
     .unwrap();
     files
-        .authorize(
-            &host.endpoint_id(),
-            Grants {
-                transfer: true,
-                ..Grants::default()
-            },
-        )
+        .set_desktop_sharing(Grants {
+            transfer: true,
+            ..Grants::default()
+        })
         .unwrap();
-    host.authorize_service(&term.endpoint_id(), ServiceKind::Terminal, true)
+    host.set_service_sharing(ServiceKind::Terminal, true)
         .unwrap();
 
     let sa = active(&fast, fast.begin_connect(&host.endpoint_id()).unwrap().id);
@@ -788,7 +763,7 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() {
 
     // Revoke the terminal peer mid-run: both shells close, the viewers and
     // the finished job lane continue.
-    host.authorize_service(&term.endpoint_id(), ServiceKind::Terminal, false)
+    host.set_service_sharing(ServiceKind::Terminal, false)
         .unwrap();
     wait(|| sh_first.is_cancelled() && sh_second.is_cancelled());
     host.publish_video(ha, EncodedFrame::h264(true, 777, vec![9]).unwrap())
@@ -908,16 +883,11 @@ fn stop_hosting_cancels_live_owners_and_refuses_new_sessions() {
     host.set_capture(Box::new(Capture)).unwrap();
     pair_for_control(&host, &a);
     pair_for_control(&host, &b);
-    for peer in [&a, &b] {
-        host.authorize(
-            &peer.endpoint_id(),
-            Grants {
-                view: true,
-                ..Grants::default()
-            },
-        )
-        .unwrap();
-    }
+    host.set_desktop_sharing(Grants {
+        view: true,
+        ..Grants::default()
+    })
+    .unwrap();
     let mut owners = Vec::new();
     for peer in [&a, &b] {
         let pending = peer.begin_connect_services(&host.endpoint_id()).unwrap();

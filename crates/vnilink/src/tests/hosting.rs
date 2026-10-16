@@ -224,9 +224,7 @@ fn revoke_stops_the_session_releases_input_and_blocks_reconnect() {
     wait_closed(&host, SessionRole::Host);
     wait_closed(&controller, SessionRole::Controller);
     let devices = host.snapshot().unwrap().devices;
-    assert_eq!(devices.len(), 1);
-    assert_eq!(devices[0].endpoint_id, controller.endpoint_id());
-    assert!(!devices[0].grants.control);
+    assert!(devices.is_empty());
     assert!(matches!(
         controller.connect(&host.endpoint_id()),
         Err(Error::Unauthorized)
@@ -347,15 +345,12 @@ fn removing_control_mid_session_stops_applying_input() {
         )
         .unwrap();
     wait_applied(&applied, &[InputEvent::key_down(crate::input::usage::A)]);
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: false,
-            clipboard: true,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: false,
+        clipboard: true,
+        transfer: false,
+    })
     .unwrap();
     controller
         .submit_input(
@@ -463,17 +458,14 @@ fn concurrent_peers_operate_independently_within_capacity() {
     std::fs::create_dir_all(&root).unwrap();
     host.enable_filesystem_access().unwrap();
     let location = FilesystemLocation::new(host.file_roots().unwrap(), &root);
-    host.authorize_service(&worker.endpoint_id(), crate::ServiceKind::Files, true)
+    host.set_service_sharing(crate::ServiceKind::Files, true)
         .unwrap();
-    host.authorize(
-        &worker.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: true,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: true,
+    })
     .unwrap();
 
     // Two viewers and one worker are live at once with distinct records.

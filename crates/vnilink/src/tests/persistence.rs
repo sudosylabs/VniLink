@@ -75,8 +75,7 @@ fn restart_keeps_the_endpoint_grants_and_addresses() {
         .create_invitation(Duration::from_secs(60))
         .unwrap();
     host.accept_invitation(&invitation).unwrap();
-    host.authorize(&controller.endpoint_id(), all_grants())
-        .unwrap();
+    host.set_desktop_sharing(all_grants()).unwrap();
     let id = host.endpoint_id();
     let secret = host.export_identity();
     let devices = host.snapshot().unwrap().devices;
@@ -127,8 +126,7 @@ fn reaccepting_an_invitation_keeps_saved_grants() {
         .create_invitation(Duration::from_secs(60))
         .unwrap();
     host.accept_invitation(&first).unwrap();
-    host.authorize(&controller.endpoint_id(), all_grants())
-        .unwrap();
+    host.set_desktop_sharing(all_grants()).unwrap();
     let second = controller
         .create_invitation(Duration::from_secs(60))
         .unwrap();
@@ -221,8 +219,7 @@ fn reset_identity_forgets_trust_and_keeps_the_saved_relay() {
         .create_invitation(Duration::from_secs(120))
         .unwrap();
     host.accept_invitation(&invitation).unwrap();
-    host.authorize(&controller.endpoint_id(), all_grants())
-        .unwrap();
+    host.set_desktop_sharing(all_grants()).unwrap();
     let settings = credentialed_relay();
     host.set_relay(settings.clone()).unwrap();
     assert_eq!(host.relay_configuration().unwrap(), settings);
@@ -306,7 +303,7 @@ fn a_failed_save_keeps_the_previous_record() {
     store.fail_next_save(Error::StoreLocked);
     drain(&events);
     assert!(matches!(
-        host.authorize(&controller.endpoint_id(), all_grants()),
+        host.set_desktop_sharing(all_grants()),
         Err(Error::StoreLocked)
     ));
     assert_eq!(
@@ -316,8 +313,7 @@ fn a_failed_save_keeps_the_previous_record() {
     assert!(!saw(&events, |event| {
         matches!(event, CoreEvent::DeviceAuthorized { .. })
     }));
-    host.authorize(&controller.endpoint_id(), all_grants())
-        .unwrap();
+    host.set_desktop_sharing(all_grants()).unwrap();
 
     let again = controller
         .create_invitation(Duration::from_secs(60))
@@ -330,15 +326,12 @@ fn a_failed_save_keeps_the_previous_record() {
     assert_eq!(host.snapshot().unwrap().devices[0].grants, all_grants());
     host.accept_invitation(&again).unwrap();
     assert_eq!(host.snapshot().unwrap().devices[0].grants, all_grants());
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: false,
+    })
     .unwrap();
 
     let host_invitation = host.create_invitation(Duration::from_secs(60)).unwrap();
@@ -413,14 +406,18 @@ fn unpair_removal_and_rollback_persist() {
     host.accept_invitation(&invitation).unwrap();
     assert_eq!(host.snapshot().unwrap().devices.len(), 1);
 
-    // A failed save restores the device and emits nothing.
+    host.set_peer_pet_name(&controller.endpoint_id(), Some("Office computer"))
+        .unwrap();
+    let before = host.snapshot().unwrap().devices;
+    assert_eq!(before[0].os, Some(crate::OperatingSystem::local()));
+    // A failed save restores the entire identity and metadata, and emits nothing.
     store.fail_next_save(Error::StoreLocked);
     drain(&events);
     assert!(matches!(
         host.unpair(&controller.endpoint_id()),
         Err(Error::StoreLocked)
     ));
-    assert_eq!(host.snapshot().unwrap().devices.len(), 1);
+    assert_eq!(host.snapshot().unwrap().devices, before);
     assert!(!saw(&events, |event| {
         matches!(event, CoreEvent::DeviceUnpaired { .. })
     }));
@@ -455,13 +452,12 @@ fn service_permissions_are_independent_persisted_and_rollback_before_revocation(
         host.service_permissions(&id).unwrap(),
         ServicePermissions::default()
     );
-    host.authorize_service(&id, Kind::Terminal, true).unwrap();
-    host.authorize_service(&id, Kind::Camera, true).unwrap();
-    host.authorize_service(&id, Kind::SystemAudio, true)
-        .unwrap();
-    host.authorize_service(&id, Kind::Microphone, true).unwrap();
-    host.authorize_recording(&id, true).unwrap();
-    host.authorize(&id, all_grants()).unwrap();
+    host.set_service_sharing(Kind::Terminal, true).unwrap();
+    host.set_service_sharing(Kind::Camera, true).unwrap();
+    host.set_service_sharing(Kind::SystemAudio, true).unwrap();
+    host.set_service_sharing(Kind::Microphone, true).unwrap();
+    host.set_recording_sharing(true).unwrap();
+    host.set_desktop_sharing(all_grants()).unwrap();
     assert_eq!(
         host.service_permissions(&id).unwrap(),
         ServicePermissions {
@@ -475,7 +471,7 @@ fn service_permissions_are_independent_persisted_and_rollback_before_revocation(
             system_actions: false
         }
     );
-    host.authorize_service(&id, Kind::Files, false).unwrap();
+    host.set_service_sharing(Kind::Files, false).unwrap();
     assert_eq!(
         host.service_permissions(&id).unwrap(),
         ServicePermissions {
@@ -493,20 +489,20 @@ fn service_permissions_are_independent_persisted_and_rollback_before_revocation(
     let saved = store.record().unwrap();
     store.fail_next_save(Error::StoreLocked);
     assert!(matches!(
-        host.authorize_service(&id, Kind::Terminal, false),
+        host.set_service_sharing(Kind::Terminal, false),
         Err(Error::StoreLocked)
     ));
     assert!(host.service_permissions(&id).unwrap().terminal);
     assert_eq!(store.record().unwrap(), saved);
     store.fail_next_save(Error::StoreLocked);
     assert!(matches!(
-        host.authorize_service(&id, Kind::SystemAudio, false),
+        host.set_service_sharing(Kind::SystemAudio, false),
         Err(Error::StoreLocked)
     ));
     assert!(host.service_permissions(&id).unwrap().system_audio);
     store.fail_next_save(Error::StoreLocked);
     assert!(matches!(
-        host.authorize_recording(&id, false),
+        host.set_recording_sharing(false),
         Err(Error::StoreLocked)
     ));
     assert!(host.service_permissions(&id).unwrap().recording);
@@ -553,20 +549,13 @@ fn service_permissions_are_independent_persisted_and_rollback_before_revocation(
             system_actions: false
         }
     );
-    reopened.revoke(&id).unwrap();
-    assert_eq!(
-        reopened.service_permissions(&id).unwrap(),
-        ServicePermissions::default()
-    );
     reopened.unpair(&id).unwrap();
     assert!(matches!(
         reopened.service_permissions(&id),
         Err(Error::NotPaired)
     ));
-    assert!(matches!(
-        reopened.authorize_service(&id, Kind::Camera, true),
-        Err(Error::NotPaired)
-    ));
+    reopened.set_service_sharing(Kind::Camera, true).unwrap();
+    assert!(reopened.sharing_policy().unwrap().camera);
 }
 
 #[test]

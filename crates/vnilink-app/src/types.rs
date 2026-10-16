@@ -175,6 +175,8 @@ pub struct FfiSessionInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct FfiDeviceInfo {
+    pub os: Option<String>,
+    pub presence: String,
     pub endpoint_id: String,
     pub hostname: Option<String>,
     pub pet_name: Option<String>,
@@ -516,6 +518,22 @@ pub(crate) fn session_info(info: vnilink::SessionInfo) -> FfiSessionInfo {
 
 pub(crate) fn device_info(info: vnilink::DeviceInfo) -> FfiDeviceInfo {
     FfiDeviceInfo {
+        os: info.os.map(|os| {
+            match os {
+                vnilink::OperatingSystem::Macos => "macos",
+                vnilink::OperatingSystem::Windows => "windows",
+                vnilink::OperatingSystem::Linux => "linux",
+                vnilink::OperatingSystem::Other => "other",
+            }
+            .to_string()
+        }),
+        presence: match info.presence {
+            vnilink::DevicePresence::Connected => "connected",
+            vnilink::DevicePresence::Connecting => "connecting",
+            vnilink::DevicePresence::Reconnecting => "reconnecting",
+            vnilink::DevicePresence::Disconnected => "disconnected",
+        }
+        .to_string(),
         endpoint_id: info.endpoint_id,
         hostname: info.hostname,
         pet_name: info.pet_name,

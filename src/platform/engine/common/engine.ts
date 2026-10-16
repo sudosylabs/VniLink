@@ -1,6 +1,12 @@
 export interface Grants { view: boolean; control: boolean; clipboard: boolean; transfer: boolean; }
 
-export interface Device { endpoint_id: string; hostname: string | null; pet_name: string | null; relays: string[]; direct: string[]; grants: Grants; }
+export type OperatingSystem = 'macos' | 'windows' | 'linux' | 'other';
+
+export type DevicePresence = 'connected' | 'connecting' | 'reconnecting' | 'disconnected';
+
+export interface SharingPolicy { view: boolean; control: boolean; clipboard: boolean; files: boolean; terminal: boolean; camera: boolean; system_audio: boolean; microphone: boolean; recording: boolean; system_actions: boolean; }
+
+export interface Device { os: OperatingSystem | null; presence: DevicePresence; endpoint_id: string; hostname: string | null; pet_name: string | null; relays: string[]; direct: string[]; grants: Grants; }
 
 export interface Capabilities {
 	desktop_capture: boolean; keyboard: boolean; pointer: boolean; clipboard: boolean; file_transfer: boolean; audio: boolean; monitors: number; h264_encode: boolean; h264_decode: boolean;
@@ -28,11 +34,6 @@ export interface ServiceSummary {
 	id: string; connectionId: string; generation: string; peer_id: string;
 	kind: ServiceKind;
 	phase: string | { Closed: { cause: string } } | { Failed: { message: string } };
-}
-
-export interface ServicePermissions {
-	desktop: boolean; files: boolean; terminal: boolean; camera: boolean;
-	system_audio: boolean; microphone: boolean; recording: boolean; system_actions: boolean;
 }
 
 export interface SystemPolicy { allow_lock: boolean; allow_restart: boolean; allow_shutdown: boolean; allow_privacy: boolean; }
@@ -99,9 +100,8 @@ export type EngineCommand =
 	| { type: 'controllerSessionPaths'; sessionId: string }
 	| { type: 'pollEvents'; subscriptionId: string; maxEvents: number }
 	| { type: 'releaseEvents'; subscriptionId: string }
-	| { type: 'servicePermissions'; endpointId: string }
-	| { type: 'authorizeService'; endpointId: string; kind: ServiceKind; allowed: boolean }
-	| { type: 'authorizeRecording'; endpointId: string; allowed: boolean }
+	| { type: 'sharingPolicy' }
+	| { type: 'setSharingPolicy'; policy: Partial<SharingPolicy> }
 	| { type: 'systemPolicy' }
 	| { type: 'setSystemPolicy'; policy: SystemPolicy }
 	| { type: 'terminalPolicy' }
@@ -120,7 +120,6 @@ export type EngineCommand =
 	| { type: 'openPairingFile'; bytes: number[] }
 	| { type: 'openPairingFileBase64'; data: string }
 	| { type: 'confirmPairing'; previewId: string; digits: string }
-	| ({ type: 'authorize'; endpointId: string } & Grants)
 	| { type: 'revoke' | 'unpair'; endpointId: string }
 	| { type: 'setPeerName'; endpointId: string; name: string }
 	| { type: 'connect' | 'beginConnect'; endpointId: string }
@@ -213,7 +212,7 @@ export type EngineReply =
 	| { type: 'ownerSession'; session: SessionInfo | null }
 	| { type: 'eventSubscription'; subscriptionId: string }
 	| { type: 'events'; events: EngineEvent[]; lagged: string }
-	| { type: 'servicePermissions'; permissions: ServicePermissions }
+	| { type: 'sharingPolicy'; policy: SharingPolicy }
 	| { type: 'systemPolicy'; policy: SystemPolicy; support: SystemSupport }
 	| { type: 'terminalPolicy'; policy: TerminalPolicy }
 	| { type: 'terminalSessions'; sessions: TerminalSession[] }
@@ -332,8 +331,12 @@ function serviceKind(value: unknown): value is ServiceSummary['kind'] {
 		|| value === 'SystemAudio' || value === 'Microphone' || value === 'System';
 }
 
-function servicePermissions(value: unknown): value is ServicePermissions {
-	return record(value) && ['desktop', 'files', 'terminal', 'camera', 'system_audio', 'microphone', 'recording', 'system_actions'].every(key => typeof value[key] === 'boolean') && Object.keys(value).length === 8;
+function sharingPolicyUpdate(value: unknown): boolean {
+	return record(value) && Object.keys(value).length > 0 && Object.entries(value).every(([key, field]) => ['view', 'control', 'clipboard', 'files', 'terminal', 'camera', 'system_audio', 'microphone', 'recording', 'system_actions'].includes(key) && typeof field === 'boolean');
+}
+
+function sharingPolicy(value: unknown): value is SharingPolicy {
+	return record(value) && ['view', 'control', 'clipboard', 'files', 'terminal', 'camera', 'system_audio', 'microphone', 'recording', 'system_actions'].every(key => typeof value[key] === 'boolean') && Object.keys(value).length === 10;
 }
 
 function terminalPolicy(value: unknown): value is TerminalPolicy {
@@ -457,7 +460,7 @@ function grants(value: Record<string, unknown>): boolean {
 }
 
 function device(value: unknown): value is Device {
-	return record(value) && text(value.endpoint_id) && (value.hostname === null || text(value.hostname)) && (value.pet_name === null || text(value.pet_name)) && strings(value.relays) && strings(value.direct) && record(value.grants) && grants(value.grants);
+	return record(value) && (value.os === null || typeof value.os === 'string' && ['macos', 'windows', 'linux', 'other'].includes(value.os)) && typeof value.presence === 'string' && ['connected', 'connecting', 'reconnecting', 'disconnected'].includes(value.presence) && Object.keys(value).length === 8 && text(value.endpoint_id) && (value.hostname === null || text(value.hostname)) && (value.pet_name === null || text(value.pet_name)) && strings(value.relays) && strings(value.direct) && record(value.grants) && grants(value.grants);
 }
 
 function capabilities(value: unknown): value is Capabilities {
@@ -491,7 +494,6 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'openPairingFile': keys = ['bytes']; valid = bytes(value.bytes); break;
 		case 'openPairingFileBase64': keys = ['data']; valid = base64(value.data); break;
 		case 'confirmPairing': keys = ['previewId', 'digits']; valid = decimal(value.previewId) && typeof value.digits === 'string' && /^[0-9]{3}$/.test(value.digits); break;
-		case 'authorize': keys = ['endpointId', 'view', 'control', 'clipboard', 'transfer']; valid = text(value.endpointId) && grants(value); break;
 		case 'revoke': case 'unpair': keys = ['endpointId']; valid = text(value.endpointId); break;
 		case 'setPeerName': keys = ['endpointId', 'name']; valid = text(value.endpointId) && text(value.name) && value.name.length <= 256; break;
 		case 'connect': case 'beginConnect': case 'connectFiles': case 'beginConnectFiles': keys = ['endpointId']; valid = text(value.endpointId); break;
@@ -542,9 +544,8 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'sessionPaths': case 'controllerSessionPaths': keys = ['sessionId']; valid = decimal(value.sessionId); break;
 		case 'pollEvents': keys = ['subscriptionId', 'maxEvents']; valid = decimal(value.subscriptionId) && typeof value.maxEvents === 'number' && Number.isInteger(value.maxEvents) && value.maxEvents >= 1 && value.maxEvents <= 256; break;
 		case 'releaseEvents': keys = ['subscriptionId']; valid = decimal(value.subscriptionId); break;
-		case 'servicePermissions': keys = ['endpointId']; valid = text(value.endpointId); break;
-		case 'authorizeService': keys = ['endpointId', 'kind', 'allowed']; valid = text(value.endpointId) && serviceKind(value.kind) && typeof value.allowed === 'boolean'; break;
-		case 'authorizeRecording': keys = ['endpointId', 'allowed']; valid = text(value.endpointId) && typeof value.allowed === 'boolean'; break;
+		case 'sharingPolicy': keys = []; valid = true; break;
+		case 'setSharingPolicy': keys = ['policy']; valid = sharingPolicyUpdate(value.policy); break;
 		case 'systemPolicy': keys = []; valid = true; break;
 		case 'setSystemPolicy': keys = ['policy']; valid = systemPolicy(value.policy); break;
 		case 'terminalPolicy': keys = []; valid = true; break;
@@ -611,7 +612,7 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'ownerSession': return session(value.session) && Object.keys(value).length === 2;
 		case 'eventSubscription': return decimal(value.subscriptionId) && Object.keys(value).length === 2;
 		case 'events': return Array.isArray(value.events) && value.events.length <= 256 && value.events.every((item: unknown) => isEngineEvent(item)) && decimal(value.lagged) && Object.keys(value).length === 3;
-		case 'servicePermissions': return servicePermissions(value.permissions) && Object.keys(value).length === 2;
+		case 'sharingPolicy': return sharingPolicy(value.policy) && Object.keys(value).length === 2;
 		case 'systemPolicy': return systemPolicy(value.policy) && systemSupport(value.support) && Object.keys(value).length === 3;
 		case 'terminalPolicy': return terminalPolicy(value.policy) && Object.keys(value).length === 2;
 		case 'terminalSessions': return terminalSessions(value.sessions) && Object.keys(value).length === 2;

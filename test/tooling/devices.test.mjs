@@ -27,7 +27,7 @@ function deferred() {
 }
 
 function device(id, pet_name = null, hostname = null) {
-	return { endpoint_id: id, pet_name, hostname };
+	return { endpoint_id: id, pet_name, hostname, os: 'linux', presence: 'connected' };
 }
 
 test('device state maps names, publishes empty results and cannot be mutated by consumers', async () => {
@@ -42,8 +42,8 @@ test('device state maps names, publishes empty results and cannot be mutated by 
 	service.onDidChangeDevices(devices => events.push(devices));
 	try {
 		await service.refresh(new AbortController().signal);
-		assert.deepEqual(service.devices, [{ id: 'one', name: 'Personal' }, { id: 'two', name: 'Host' }, { id: 'three', name: 'three' }]);
-		assert.throws(() => service.devices.push({ id: 'bad', name: 'bad' }), TypeError);
+		assert.deepEqual(service.devices, [{ id: 'one', name: 'Personal', os: 'linux', presence: 'connected' }, { id: 'two', name: 'Host', os: 'linux', presence: 'connected' }, { id: 'three', name: 'three', os: 'linux', presence: 'connected' }]);
+		assert.throws(() => service.devices.push({ id: 'bad', name: 'bad', os: 'linux', presence: 'connected' }), TypeError);
 		assert.throws(() => {
 			service.devices[0].name = 'bad';
 		}, TypeError);
@@ -75,7 +75,7 @@ test('an older snapshot cannot overwrite a newer refresh', async () => {
 		await fresh;
 		first.resolve(snapshot([device('old')]));
 		await old;
-		assert.deepEqual(service.devices, [{ id: 'new', name: 'new' }]);
+		assert.deepEqual(service.devices, [{ id: 'new', name: 'new', os: 'linux', presence: 'connected' }]);
 		assert.equal(events, 1);
 	} finally {
 		service.dispose();
@@ -129,7 +129,7 @@ test('failed refresh preserves the previous snapshot and surfaces current failur
 		await assert.rejects(service.refresh(new AbortController().signal), /Expected engine snapshot/);
 		reply = new Error('Transport unavailable');
 		await assert.rejects(service.refresh(new AbortController().signal), /Transport unavailable/);
-		assert.deepEqual(service.devices, [{ id: 'saved', name: 'saved' }]);
+		assert.deepEqual(service.devices, [{ id: 'saved', name: 'saved', os: 'linux', presence: 'connected' }]);
 	} finally {
 		service.dispose();
 	}
@@ -150,4 +150,91 @@ test('unavailable, cancelled and disposed services never send requests', async (
 	service.dispose();
 	await service.refresh(new AbortController().signal);
 	assert.equal(calls, 0);
+});
+
+test('event-driven presence refresh is stable, recovers after failure and releases subscriptions', async context => {
+	context.mock.timers.enable({ apis: ['setTimeout'] });
+	let state = 'connected';
+	let failPoll = false;
+	let lagged = '0';
+	let events = [];
+	const calls = [];
+	let nextHandle = 0;
+	const service = new DeviceService({
+		async engineCommand(command) {
+			calls.push(command);
+			if (command.type === 'subscribeEvents') {
+				return { type: 'eventSubscription', subscriptionId: String(++nextHandle) };
+			}
+			if (command.type === 'releaseEvents') {
+				return { type: 'done' };
+			}
+			if (command.type === 'snapshot') {
+				return snapshot([{ ...device('peer'), presence: state }]);
+			}
+			if (command.type === 'pollEvents') {
+				if (failPoll) {
+					failPoll = false;
+					throw new Error('lost subscription');
+				}
+				const reply = { type: 'events', events, lagged };
+				events = [];
+				lagged = '0';
+				return reply;
+			}
+			throw new Error(command.type);
+		}
+	}, true);
+	let changes = 0;
+	service.onDidChangeDevices(() => changes++);
+	const settle = async () => {
+		for (let step = 0; step < 20; step++) {
+			await Promise.resolve();
+		}
+	};
+	try {
+		await service.initialize();
+		assert.equal(service.devices[0].presence, 'connected');
+		events = [{ type: 'sessionChanged' }];
+		context.mock.timers.tick(500);
+		await settle();
+		assert.equal(changes, 1, 'unchanged snapshots must not rebuild the device list');
+		state = 'reconnecting';
+		lagged = '1';
+		context.mock.timers.tick(500);
+		await settle();
+		assert.equal(service.devices[0].presence, 'reconnecting');
+		failPoll = true;
+		context.mock.timers.tick(500);
+		await settle();
+		assert.equal(service.devices[0].presence, 'unknown');
+		state = 'disconnected';
+		context.mock.timers.tick(500);
+		await settle();
+		assert.equal(service.devices[0].presence, 'disconnected');
+		assert.equal(nextHandle, 2);
+	} finally {
+		service.dispose();
+		await settle();
+	}
+	assert.deepEqual(calls.filter(command => command.type === 'releaseEvents').map(command => command.subscriptionId), ['1', '2']);
+});
+
+test('subscription arriving after disposal is released without reading a snapshot', async () => {
+	const pending = deferred();
+	const calls = [];
+	const service = new DeviceService({
+		async engineCommand(command) {
+			calls.push(command);
+			if (command.type === 'subscribeEvents') {
+				return pending.promise;
+			}
+			return { type: 'done' };
+		}
+	}, true);
+	const starting = service.initialize();
+	service.dispose();
+	pending.resolve({ type: 'eventSubscription', subscriptionId: '12' });
+	await starting;
+	assert.deepEqual(calls, [{ type: 'subscribeEvents' }, { type: 'releaseEvents', subscriptionId: '12' }]);
 });

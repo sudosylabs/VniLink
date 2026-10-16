@@ -71,15 +71,12 @@ fn main() {
     controller.accept_invitation(&token).expect("paired");
     let back = controller.create_invitation(ttl).expect("invitation");
     host.accept_invitation(&back).expect("paired");
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: false,
+    })
     .expect("authorized");
     host.start_hosting().expect("hosting");
 

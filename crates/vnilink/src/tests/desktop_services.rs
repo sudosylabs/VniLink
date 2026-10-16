@@ -51,8 +51,7 @@ fn neutral_desktop_stream_fallback_cursor_and_files_are_independent() {
     host.enable_filesystem_access().unwrap();
     let location = FilesystemLocation::new(host.file_roots().unwrap(), &scratch.0);
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Files, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Files, true).unwrap();
     let pending = controller
         .begin_connect_services(&host.endpoint_id())
         .unwrap();
@@ -131,7 +130,7 @@ fn neutral_desktop_opens_reopens_without_reconnecting_and_releases_input() {
     }))
     .unwrap();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Desktop, false)
+    host.set_service_sharing(ServiceKind::Desktop, false)
         .unwrap();
     let pending = controller
         .begin_connect_services(&host.endpoint_id())
@@ -152,7 +151,7 @@ fn neutral_desktop_opens_reopens_without_reconnecting_and_releases_input() {
         Err(crate::Error::Unauthorized)
     ));
     assert!(host.hosted_services().unwrap().is_empty());
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Desktop, true)
+    host.set_service_sharing(ServiceKind::Desktop, true)
         .unwrap();
     let first = controller
         .open_desktop_service(owner.id, owner.generation)
@@ -239,7 +238,7 @@ fn neutral_desktop_opens_reopens_without_reconnecting_and_releases_input() {
     assert_eq!(controller.controller_session(session.id).unwrap(), session);
     second.submit_input(key).unwrap();
     wait(|| applied.lock().unwrap().len() == 7);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Desktop, false)
+    host.set_service_sharing(ServiceKind::Desktop, false)
         .unwrap();
     wait(|| second.is_cancelled() && applied.lock().unwrap().len() == 8);
     assert_eq!(controller.controller_session(session.id).unwrap(), session);
@@ -802,7 +801,7 @@ fn view_only_desktop_cannot_acquire_input_and_input_revoke_preserves_video() {
         clipboard: false,
         transfer: false,
     };
-    host.authorize(&controller.endpoint_id(), grants).unwrap();
+    host.set_desktop_sharing(grants).unwrap();
     let pending = controller
         .begin_connect_services(&host.endpoint_id())
         .unwrap();
@@ -835,13 +834,10 @@ fn view_only_desktop_cannot_acquire_input_and_input_revoke_preserves_video() {
         desktop.control_state().unwrap(),
         crate::DesktopControlState::Viewing
     );
-    host.authorize(
-        &controller.endpoint_id(),
-        crate::Grants {
-            control: true,
-            ..grants
-        },
-    )
+    host.set_desktop_sharing(crate::Grants {
+        control: true,
+        ..grants
+    })
     .unwrap();
     desktop.acquire_control().unwrap();
     wait(|| desktop.control_state().unwrap() == crate::DesktopControlState::Controlling);
@@ -849,7 +845,7 @@ fn view_only_desktop_cannot_acquire_input_and_input_revoke_preserves_video() {
         .submit_input(InputEvent::key_down(crate::input::usage::B))
         .unwrap();
     wait(|| !events.lock().unwrap().is_empty());
-    host.authorize(&controller.endpoint_id(), grants).unwrap();
+    host.set_desktop_sharing(grants).unwrap();
     wait(|| desktop.control_state().unwrap() == crate::DesktopControlState::Viewing);
     assert_eq!(
         *events.lock().unwrap(),
@@ -870,7 +866,7 @@ fn view_only_desktop_cannot_acquire_input_and_input_revoke_preserves_video() {
         video.recv_timeout(Duration::from_secs(5)).unwrap().payload,
         vec![7]
     );
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Desktop, false)
+    host.set_service_sharing(ServiceKind::Desktop, false)
         .unwrap();
     wait(|| desktop.is_cancelled());
     assert_eq!(
