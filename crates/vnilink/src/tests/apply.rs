@@ -28,15 +28,12 @@ fn keyboard_and_pointer_events_are_applied_and_released() {
         .create_invitation(Duration::from_secs(60))
         .unwrap();
     host.accept_invitation(&back).unwrap();
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: false,
+    })
     .unwrap();
     let session = controller.connect(&host.endpoint_id()).unwrap();
     assert_eq!(session.monitor_width, 1920);

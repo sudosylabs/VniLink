@@ -14,8 +14,6 @@ use vnilink_media::{EncodeParams, EncodedSample, Error, RawFrame, VideoEncoder};
 #[cfg(windows)]
 use windows::core::Interface;
 #[cfg(windows)]
-use windows::Win32::Foundation::VARIANT_TRUE;
-#[cfg(windows)]
 use windows::Win32::Media::MediaFoundation::{
     CODECAPI_AVEncVideoForceKeyFrame, ICodecAPI, IMFMediaType, IMFSample, IMFTransform,
     MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Video, MFStartup,
@@ -30,7 +28,7 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 #[cfg(windows)]
-use windows::Win32::System::Variant::{VARIANT, VT_BOOL};
+use windows::Win32::System::Variant::{VARIANT, VT_UI4};
 
 #[cfg(windows)]
 use crate::bitstream::h264_access_unit;
@@ -271,14 +269,14 @@ fn rejected(err: windows::core::Error) -> Error {
 }
 
 /// Asks the encoder to make its next output picture an IDR, before the input
-/// sample is processed. A default (zeroed) variant with a boolean true is
-/// all the codec API takes.
+/// sample is processed. CODECAPI_AVEncVideoForceKeyFrame requires a ULONG
+/// (VT_UI4); a boolean variant is rejected by the Microsoft encoder.
 #[cfg(windows)]
 unsafe fn force_idr(transform: &IMFTransform) -> windows::core::Result<()> {
     let api: ICodecAPI = transform.cast()?;
     let mut value = VARIANT::default();
-    (*value.Anonymous.Anonymous).vt = VT_BOOL;
-    (*value.Anonymous.Anonymous).Anonymous.boolVal = VARIANT_TRUE;
+    (*value.Anonymous.Anonymous).vt = VT_UI4;
+    (*value.Anonymous.Anonymous).Anonymous.ulVal = 1;
     api.SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &value)
 }
 

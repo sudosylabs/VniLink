@@ -11,7 +11,6 @@ import { MultiplexLogger } from './log.js';
 export class LogService extends Disposable implements ILogService {
 
 	declare public readonly _serviceBrand: undefined;
-
 	private readonly logger: ILogger;
 
 	constructor(primaryLogger: ILogger, otherLoggers: ILogger[] = []) {

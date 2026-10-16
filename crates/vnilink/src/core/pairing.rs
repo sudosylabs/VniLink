@@ -34,7 +34,7 @@ impl Core {
     ///
     /// `ttl` follows the invitation rules: 1 second through 15 minutes.
     /// `allow_control` stays on this computer. While the file is unexpired,
-    /// one incoming controller can be granted control after
+    /// one incoming peer can be remembered after
     /// [`Core::confirm_control_request`]. The returned bytes do not contain
     /// that switch. The app writes them to a file ending in
     /// [`crate::PAIRING_FILE_EXTENSION`]. The steps are in
@@ -117,7 +117,7 @@ impl Core {
         crate::pairing::control_digits(&self.local_endpoint_id())
     }
 
-    /// The controller waiting for this host to grant control, if one is connected.
+    /// The authenticated peer waiting for this host to remember its identity.
     pub fn control_request(&self) -> Result<Option<ControlRequest>, Error> {
         let state = self.alive_state()?;
         Ok(state
@@ -129,10 +129,9 @@ impl Core {
             }))
     }
 
-    /// Grants control to the waiting controller when the digits match that screen.
+    /// Remembers the waiting peer when the digits match its screen.
     ///
-    /// Control is added to any grants the owner authorized before; clipboard
-    /// and file transfer stay as they were. A mismatch rejects the connection
+    /// Global sharing consent is unchanged. A mismatch rejects the connection
     /// and saves nothing, as does an approval after the pairing window
     /// expired. The pairing file can still admit a later attempt until the
     /// invitation itself expires.
@@ -173,49 +172,19 @@ impl Core {
         // owner authorized earlier. Pairing alone never adds a grant. The
         // grants are re-read inside the write section below, so a revoke
         // that lands between the two cannot be overwritten here.
-        let fallback = {
-            let state = self.alive_state()?;
-            state
-                .trust
-                .get(&opened.endpoint_id)
-                .map(|device| device.grants)
-                .unwrap_or_default()
-        };
         let info = {
             let mut state = self.alive_state()?;
-            let previous_device = state.trust.get(&opened.endpoint_id).cloned();
+            let previous_trust = state.trust.clone();
             let previous_replay = state.replay.clone();
-            let kept = state
-                .trust
-                .get(&opened.endpoint_id)
-                .map(|device| device.grants)
-                .unwrap_or(fallback);
             if let Err(error) = state.replay.remember(nonce, opened.expires_at_ms, now_ms) {
                 state.replay = previous_replay;
                 return Err(error);
             }
             if let Err(error) = state.trust.pair(Device {
-                terminal: previous_device
-                    .as_ref()
-                    .is_some_and(|device| device.terminal),
-                camera: previous_device.as_ref().is_some_and(|device| device.camera),
-                system_audio: previous_device
-                    .as_ref()
-                    .is_some_and(|device| device.system_audio),
-                recording: previous_device
-                    .as_ref()
-                    .is_some_and(|device| device.recording),
-                microphone: previous_device
-                    .as_ref()
-                    .is_some_and(|device| device.microphone),
-                system_actions: previous_device
-                    .as_ref()
-                    .is_some_and(|device| device.system_actions),
                 endpoint_id: opened.endpoint_id,
                 display_id: display.clone(),
                 relays: opened.relays.clone(),
                 direct: opened.direct.clone(),
-                grants: kept,
             }) {
                 state.replay = previous_replay;
                 return Err(error);
@@ -223,35 +192,26 @@ impl Core {
             // The writer named itself in the invitation: keep it for this
             // computer's device list, before the first session. An absent
             // name keeps whatever a previous pairing stored.
-            let previous_name = state.trust.hostname_of(&opened.endpoint_id);
+            state.trust.set_os(&opened.endpoint_id, opened.os)?;
             if let Some(name) = opened.hostname.clone() {
                 if let Err(error) = state.trust.set_hostname(&opened.endpoint_id, name) {
                     state.replay = previous_replay;
                     return Err(error);
                 }
             }
-            if let Err(error) = persist_paired(
-                &self.shared,
-                &mut state,
-                &opened.endpoint_id,
-                previous_device,
-            ) {
+            if let Err(error) = persist_paired(&self.shared, &mut state, previous_trust) {
                 state.replay = previous_replay;
-                match previous_name {
-                    Some(previous) => {
-                        let _ = state.trust.set_hostname(&opened.endpoint_id, previous);
-                    }
-                    None => state.trust.clear_hostname(&opened.endpoint_id),
-                }
                 return Err(error);
             }
             DeviceInfo {
                 endpoint_id: display.clone(),
+                os: Some(opened.os),
+                presence: super::link::presence(&state, &display),
                 hostname: state.trust.hostname_of(&opened.endpoint_id),
                 pet_name: state.trust.pet_name_of(&opened.endpoint_id),
                 relays: opened.relays.clone(),
                 direct: opened.direct.clone(),
-                grants: kept,
+                grants: state.trust.sharing.grants(),
             }
         };
         self.shared.events.publish(CoreEvent::DevicePaired {
@@ -270,7 +230,7 @@ impl Core {
             let _ = pending.decision.send(false);
             return Err(Error::PairingCheckMismatch);
         }
-        let previous = state.trust.get(&pending.endpoint_id).cloned();
+        let previous_trust = state.trust.clone();
         let previous_window = state.pairing_window.take();
         // The Hello parked up to a minute. A switch that expired while the
         // owner hesitated no longer grants.
@@ -289,53 +249,38 @@ impl Core {
             let _ = pending.decision.send(false);
             return Err(Error::InvitationExpired);
         }
-        // Approving control adds the control grant to whatever the owner
-        // authorized before. Clipboard and transfer stay as they were.
-        let mut grants = previous
-            .as_ref()
-            .map(|device| device.grants)
-            .unwrap_or_default();
-        grants.control = true;
-        grants.view = true;
+        // Pairing remembers identity; only global sharing settings grant services.
         let info = DeviceInfo {
+            os: None,
+            presence: crate::DevicePresence::Disconnected,
             endpoint_id: pending.display_id.clone(),
             hostname: state.trust.hostname_of(&pending.endpoint_id),
             pet_name: state.trust.pet_name_of(&pending.endpoint_id),
             relays: pending.relays.clone(),
             direct: pending.direct.clone(),
-            grants,
+            grants: state.trust.sharing.grants(),
         };
         if let Err(error) = state.trust.pair(Device {
-            terminal: previous.as_ref().is_some_and(|device| device.terminal),
-            camera: previous.as_ref().is_some_and(|device| device.camera),
-            system_audio: previous.as_ref().is_some_and(|device| device.system_audio),
-            recording: previous.as_ref().is_some_and(|device| device.recording),
-            microphone: previous.as_ref().is_some_and(|device| device.microphone),
-            system_actions: previous
-                .as_ref()
-                .is_some_and(|device| device.system_actions),
             endpoint_id: pending.endpoint_id,
             display_id: pending.display_id.clone(),
             relays: pending.relays.clone(),
             direct: pending.direct.clone(),
-            grants,
         }) {
             state.pairing_window = previous_window;
             let _ = pending.decision.send(false);
             return Err(error);
         }
-        if let Err(error) = persist_paired(&self.shared, &mut state, &pending.endpoint_id, previous)
-        {
-            state.pairing_window = previous_window;
+        if let Err(error) = persist_paired(&self.shared, &mut state, previous_trust) {
+            // A fatal save already cleared the window and stopped admission.
+            if !state.shut_down {
+                state.pairing_window = previous_window;
+            }
             let _ = pending.decision.send(false);
             return Err(error);
         }
         drop(state);
         let _ = pending.decision.send(true);
         self.shared.events.publish(CoreEvent::DevicePaired {
-            endpoint_id: info.endpoint_id.clone(),
-        });
-        self.shared.events.publish(CoreEvent::DeviceAuthorized {
             endpoint_id: info.endpoint_id.clone(),
         });
         Ok(info)
@@ -353,18 +298,10 @@ pub(super) enum ControlAnswer {
 fn persist_paired(
     shared: &Shared,
     state: &mut State,
-    endpoint_id: &[u8; 32],
-    previous: Option<Device>,
+    previous: crate::trust::Trust,
 ) -> Result<(), Error> {
     if let Err(error) = persist(shared, state) {
-        match previous {
-            Some(device) => {
-                let _ = state.trust.pair(device);
-            }
-            None => {
-                state.trust.remove(endpoint_id);
-            }
-        }
+        state.trust = previous;
         return Err(error);
     }
     Ok(())

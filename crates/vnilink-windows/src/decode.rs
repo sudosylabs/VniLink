@@ -17,7 +17,7 @@ use windows::Win32::Media::MediaFoundation::{
     CLSID_MSH264DecoderMFT, IMFTransform, MFCreateMemoryBuffer, MFCreateSample, MFStartup,
     MFVideoFormat_H264, MFVideoFormat_NV12, MFSTARTUP_NOSOCKET, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
     MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES,
-    MF_E_TRANSFORM_NEED_MORE_INPUT, MF_VERSION,
+    MF_E_TRANSFORM_NEED_MORE_INPUT, MF_LOW_LATENCY, MF_VERSION,
 };
 #[cfg(windows)]
 use windows::Win32::System::Com::{
@@ -142,6 +142,9 @@ fn open_transform(width: u16, height: u16) -> windows::core::Result<IMFTransform
         MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)?;
         let transform: IMFTransform =
             CoCreateInstance(&CLSID_MSH264DecoderMFT, None, CLSCTX_INPROC_SERVER)?;
+        // Remote frames must be presented immediately. Playback buffering can
+        // otherwise return NEED_MORE_INPUT for a valid initial keyframe.
+        transform.GetAttributes()?.SetUINT32(&MF_LOW_LATENCY, 1)?;
         // The nominal rate only fills the media type. Decoding follows input.
         // The parameter sets travel in band on keyframes, so the input type
         // carries no sequence-header blob.

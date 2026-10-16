@@ -6,6 +6,7 @@ import layers from './build/lint/layers.mjs';
 import imports from './build/lint/imports.mjs';
 import synchronousFs from './build/lint/synchronousFs.mjs';
 import { upstreamIgnores } from './build/sourceScope.mjs';
+
 export default [
 	{ ignores: ['node_modules/**', 'out/**', 'dist/**', 'target/**', 'vendor/**', 'crates/**', 'docs/**', 'assets/**', ...upstreamIgnores] },
 	{ ...js.configs.recommended, files: ['**/*.mjs'] },

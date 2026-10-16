@@ -621,17 +621,14 @@ fn v11_recording_totals(frame_count: u64, wall: bool) {
         .unwrap();
     host.accept_invitation(&peer.create_invitation(Duration::from_secs(60)).unwrap())
         .unwrap();
-    host.authorize(
-        &peer.endpoint_id(),
-        Grants {
-            view: true,
-            control: false,
-            clipboard: false,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: false,
+        clipboard: false,
+        transfer: false,
+    })
     .unwrap();
-    host.authorize_recording(&peer.endpoint_id(), true).unwrap();
+    host.set_recording_sharing(true).unwrap();
     let parent = peer.begin_connect_services(&host.endpoint_id()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     while peer.controller_session(parent.id).unwrap().phase != SessionPhase::Active {
@@ -746,17 +743,14 @@ fn review_v12_failed_recorder_preserves_finalized_segment_totals() {
         .unwrap();
     host.accept_invitation(&peer.create_invitation(Duration::from_secs(60)).unwrap())
         .unwrap();
-    host.authorize(
-        &peer.endpoint_id(),
-        Grants {
-            view: true,
-            control: false,
-            clipboard: false,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: false,
+        clipboard: false,
+        transfer: false,
+    })
     .unwrap();
-    host.authorize_recording(&peer.endpoint_id(), true).unwrap();
+    host.set_recording_sharing(true).unwrap();
     let parent = peer.begin_connect_services(&host.endpoint_id()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     while peer.controller_session(parent.id).unwrap().phase != SessionPhase::Active {

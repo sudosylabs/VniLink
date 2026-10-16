@@ -9,9 +9,13 @@ async function load(entry) {
 	const bundle = await build({ entryPoints: [fileURLToPath(new URL(entry, import.meta.url))], bundle: true, write: false, format: 'esm', platform: 'node' });
 	return import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 }
+
 const log = await load('../../src/platform/log/common/log.ts');
+
 const { BufferLogger } = await load('../../src/platform/log/common/bufferLog.ts');
+
 const { LogService } = await load('../../src/platform/log/common/logService.ts');
+
 const performance = await load('../../src/base/common/performance.ts');
 
 test('log levels parse, print and order like upstream', () => {
@@ -22,6 +26,7 @@ test('log levels parse, print and order like upstream', () => {
 	assert.equal(log.DEFAULT_LOG_LEVEL, log.LogLevel.Info);
 	assert.ok(log.LogLevel.Trace < log.LogLevel.Debug && log.LogLevel.Debug < log.LogLevel.Error);
 });
+
 test('buffered logs flush to the late logger in order', () => {
 	const buffer = new BufferLogger(log.LogLevel.Trace);
 	buffer.info('first');
@@ -39,6 +44,7 @@ test('buffered logs flush to the late logger in order', () => {
 	assert.ok(seen.some(line => line.includes('first')));
 	assert.ok(seen.some(line => line.includes('second')));
 });
+
 test('log service multiplexes and follows level changes', () => {
 	const primary = new log.ConsoleLogger(log.LogLevel.Error, false);
 	const service = new LogService(primary);
@@ -47,6 +53,7 @@ test('log service multiplexes and follows level changes', () => {
 	assert.equal(service.getLevel(), log.LogLevel.Trace);
 	service.dispose();
 });
+
 test('native titlebar height resolves through platform utilities', async () => {
 	const windowUtils = await load('../../src/platform/window/common/window.ts');
 	assert.equal(windowUtils.getNativeTitlebarHeight.length, 1);
@@ -73,6 +80,7 @@ test('native titlebar height resolves through platform utilities', async () => {
 	}
 	assert.deepEqual(offenders, []);
 });
+
 test('performance marks record and clear', () => {
 	performance.mark('vnilink/test-mark');
 	const marks = performance.getMarks().filter(mark => mark.name === 'vnilink/test-mark');
@@ -83,10 +91,12 @@ test('performance marks record and clear', () => {
 });
 
 test('message logging preserves error arguments and falls back safely for circular values', () => {
-	const circular = {}; circular.self = circular;
+	const circular = {};
+	circular.self = circular;
 	assert.equal(log.format([circular, Symbol('value')]), '[object Object] Symbol(value)');
 	class CaptureLogger extends log.AbstractMessageLogger {
 		messages = [];
+
 		log(level, message) {
 			this.messages.push({ level, message });
 		}

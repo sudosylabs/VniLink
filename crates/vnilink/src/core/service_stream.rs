@@ -154,6 +154,23 @@ impl RemoteFilesService {
         })
         .map(|_| ())
     }
+    pub fn delete(
+        &self,
+        root: u64,
+        path: &str,
+        name: &str,
+        expected: Option<fs::EntryToken>,
+    ) -> Result<(), Error> {
+        self.request(fs::Request::Delete {
+            id: 1,
+            generation: 0,
+            root,
+            path: path.into(),
+            name: name.into(),
+            expected,
+        })
+        .map(|_| ())
+    }
 }
 
 impl Core {
@@ -511,7 +528,8 @@ async fn exchange(
     match &mut request {
         fs::Request::List { generation, .. }
         | fs::Request::Mkdir { generation, .. }
-        | fs::Request::Rename { generation, .. } => *generation = stamp.generation,
+        | fs::Request::Rename { generation, .. }
+        | fs::Request::Delete { generation, .. } => *generation = stamp.generation,
     }
     let list = matches!(request, fs::Request::List { .. });
     write(send, fs::encode_request(&request)?).await?;
@@ -519,17 +537,7 @@ async fn exchange(
     if response.id != 1 {
         return Err(Error::Malformed);
     }
-    match response.status {
-        0 => {}
-        fs::STATUS_EXISTS => return Err(Error::FileExists),
-        fs::STATUS_DENIED => return Err(Error::TransferDenied),
-        fs::STATUS_STALE => return Err(Error::StaleSession),
-        _ => {
-            return Err(Error::InvalidSetting(
-                "the remote filesystem refused the request",
-            ))
-        }
-    }
+    super::fs::status_error(response.status, &response.message)?;
     if list {
         Ok(super::fs::FsOutcome::Page(
             fs::decode_list_body(&read(recv).await?).map_err(|e| e.to_error())?,

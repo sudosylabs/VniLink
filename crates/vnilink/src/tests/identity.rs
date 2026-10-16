@@ -77,7 +77,7 @@ fn shutdown_is_idempotent_and_later_calls_report_it() {
         Err(Error::ShutDown)
     ));
     assert!(matches!(
-        core.authorize(&other.endpoint_id(), Grants::default()),
+        core.set_desktop_sharing(Grants::default()),
         Err(Error::ShutDown)
     ));
     assert!(matches!(
@@ -173,22 +173,13 @@ fn unknown_devices_and_garbage_ids_are_rejected() {
         clipboard: false,
         transfer: false,
     };
-    assert!(matches!(
-        host.authorize(&stranger.endpoint_id(), control),
-        Err(Error::NotPaired)
-    ));
+    host.set_desktop_sharing(control).unwrap();
+    assert!(host.snapshot().unwrap().devices.is_empty());
     assert!(matches!(
         host.revoke(&stranger.endpoint_id()),
         Err(Error::NotPaired)
     ));
     for id in ["", "not-a-key", "zzzz"] {
-        assert!(
-            matches!(
-                host.authorize(id, Grants::default()),
-                Err(Error::InvalidSetting(_))
-            ),
-            "{id}"
-        );
         assert!(
             matches!(host.connect(id), Err(Error::InvalidSetting(_))),
             "{id}"

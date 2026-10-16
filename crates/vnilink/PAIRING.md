@@ -1,40 +1,30 @@
 # Pairing with a `.vnl` file
 
-Two computers meet by handing each other a file. The signed invitation inside the file is the proof. Connect, after that, uses the Iroh relays this installation already has. There is no pairing server and no mailbox.
+One signed file introduces two computers. Iroh carries the authenticated connection after that introduction, using the installation's configured relays and direct addresses. There is no VniLink pairing, directory or presence server.
 
-## What the person does
+## Owner confirmation
 
-1. On the computer that will be controlled, turn on Allow control and export a pairing file. The screen shows three digits. The app saves the bytes as a file ending in `.vnl`.
-2. Move that file with AirDrop, a message, email, or a USB stick. Iroh cannot carry this first file, because neither computer knows the other's address yet.
-3. On the other computer, open the file. The screen shows the same three digits. Type the digits from the computer that wrote the file. This saves that computer so Connect can dial it. It does not grant control.
-4. Connect. The controller's screen shows a second set of three digits, from `control_check`. The controlled computer shows the same digits and asks for them. Type those digits there. Control is granted for this controller only, added to any clipboard or transfer grants the owner authorized before.
-5. Later, Connect uses the saved device. The file is not asked for again while the saved addresses still work.
+1. Export a `.vnl` file with incoming pairing approval enabled. This opens a local pairing window for the file's lifetime, at most fifteen minutes; it does not enable sharing.
+2. Give the file to the other computer. Import it and confirm the three digits shown by its writer. This remembers the writer's identity, hostname, OS family and addresses.
+3. Start a neutral connection with `Core::begin_connect_services`. The writer asks its owner to confirm the importing computer's three digits from `Core::control_check`. `Core::confirm_control_request` remembers that authenticated endpoint. A rejection, mismatch or expired window does not remember it.
+4. Once approved, both computers remember each other. Either can connect again or request services without a second file. Each computer must be hosting to accept incoming connections.
 
-Allow control is a switch on the computer that exports the file. It is not stored in the file, so editing the file cannot turn it on. The switch lasts until the invitation expires (at most 15 minutes), until one controller is granted, or until the process stops. A restart needs a new file.
+The existing `allow_control` export argument and `control_request` API names refer to the local pairing approval window. They do not grant screen control. A pending approval expires after sixty seconds. Pairing approval consumes the local window; later introductions require another export.
 
-The host has about one minute to type the controller's digits after Connect starts. Reject, a mismatch, or an approval after the switch expired ends that attempt. The file can be used for another attempt until it expires.
+## Global sharing
 
-## What the library does
+`SharingPolicy` belongs to the installation, not to a device. Fresh installations start with sharing disabled. The owner can allow screen viewing/control, files, terminal, camera, microphone, system audio, clipboard, recording and system actions. A remembered identity is required even when sharing is enabled.
 
-1. `Core::export_pairing_file` signs the same `vnl1.` invitation as `create_invitation` and wraps it in `VNLF` version 1 bytes. The app writes those bytes. The library does not choose a path.
-2. `Core::open_pairing_file` checks the signature and expiry. `Core::confirm_pairing` calls `accept_invitation` when the typed digits match. A mismatch emits no event.
-3. The file digits are the first three decimal digits of a SHA-256 over the writer's endpoint id, the invitation nonce, and the expiry. `pairing/check.rs` owns that layout.
-4. `Core::connect` dials the saved relays and direct addresses. When the host's switch is on, an unknown controller is held for up to 60 seconds instead of being rejected at once. `Core::confirm_control_request` saves that authenticated endpoint and grants control. The control digits are a different hash, over the controller's endpoint id only.
-5. With the switch off, or with no unexpired export, an unknown controller is rejected immediately.
+`Core::change_sharing_policy` applies an atomic partial change; `Core::set_sharing_policy` replaces the whole policy. Consent is persisted before revoking live work. Failed persistence leaves the previous consent and work unchanged. Disabling a service denies new requests and closes affected hosted owners across all paired devices. Disabling recording invalidates existing recording leases. Unrelated services remain connected; enabling a service never starts it automatically.
 
-## Files
+Native permissions, backend availability and remote action rules are independent gates. An OS label is descriptive metadata, never authorization. Forgetting a device removes its remembered identity and ends its connections without changing global sharing.
 
-| File | What it owns |
-| --- | --- |
-| `src/pairing/mod.rs` | The steps above |
-| `src/pairing/file.rs` | `.vnl` bytes, `PairingFile`, `PairingPreview` |
-| `src/pairing/check.rs` | The two three-digit checks |
-| `src/core/pairing.rs` | `export_pairing_file`, `open_pairing_file`, `confirm_pairing`, `control_check`, `confirm_control_request` |
-| `src/tests/pairing.rs` | Loopback tests, included from `src/tests.rs` |
+## Metadata and presence
 
-The file format and the digits live in `src/pairing/`. The wait for the host's answer is in `src/core/pairing.rs`, beside the pairing calls.
+The signed invitation contains the writer's OS family (`macos`, `windows`, `linux`, or `other`). Authenticated Hello/Accept messages refresh metadata in both directions. The installation record retains it alongside names and addresses.
 
-## Still open
+Presence describes existing sessions: connected, connecting, reconnecting or disconnected. An active connection in either direction wins over older closed records. The workbench listens to engine lifecycle events and refreshes snapshots; it never infers online status from cached addresses or sends new presence probes. A failed engine read is unknown state rather than proof that a peer disconnected.
 
-- Keyboard positions, the Control/Command swap, and finished text are `KEYBOARD.md`. A native window and one-monitor capture are still open. README section 11 is not complete.
-- Clipboard and file transfer stay off in this flow. A later `authorize` can turn them on. Clipboard is `CLIPBOARD.md`. File transfer is `TRANSFER.md`. A dropped session dials the saved device again; that path is `RECONNECT.md`.
+## Ownership and checks
+
+`src/pairing/` owns file framing and the two three-digit checks. `src/core/pairing.rs` owns approval and remembered identities; `src/core/sharing.rs` owns global consent transactions and revocation. `src/core/link.rs` derives presence. Tests cover signed metadata, malformed handshakes, pairing in both directions without video support, policy persistence/rollback, concurrent partial writes and service teardown.

@@ -16,8 +16,8 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::Duration;
 
 use iroh::{Endpoint, EndpointAddr, PublicKey, SecretKey};
@@ -63,6 +63,7 @@ mod service_jobs;
 mod service_permissions;
 pub(crate) mod service_stream;
 mod services;
+mod sharing;
 pub use audio_stream::RemoteAudioService;
 pub use camera_stream::RemoteCameraService;
 pub use system_stream::RemoteSystemService;
@@ -146,6 +147,8 @@ impl std::fmt::Debug for CoreConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceInfo {
+    pub os: Option<crate::OperatingSystem>,
+    pub presence: crate::DevicePresence,
     pub endpoint_id: String,
     pub hostname: Option<String>,
     pub pet_name: Option<String>,
@@ -472,6 +475,8 @@ pub struct ControlRequest {
 }
 
 struct Shared {
+    /// Serializes persisted sharing changes and their native revocation cleanup.
+    sharing_serial: Mutex<()>,
     power_factory: Mutex<power::Factory>,
     power_status: Mutex<[crate::power::PowerStatus; 2]>,
     file_retention_policy: Arc<Mutex<crate::job::FileRetentionPolicy>>,
@@ -479,6 +484,24 @@ struct Shared {
     secret: SecretKey,
     relay: RelaySettings,
     store: Option<Arc<dyn InstallationStore>>,
+    /// Closes the endpoint after a storage fence without borrowing `Core`.
+    runtime_handle: tokio::runtime::Handle,
+    self_weak: Weak<Shared>,
+    /// 0 idle, 1 closing, 2 finished. A claim that does not finish the close
+    /// returns to 0 so a later shutdown can retry. The core stays fenced.
+    teardown_phase: AtomicU8,
+    teardown_lock: Mutex<()>,
+    teardown_cv: Condvar,
+    #[cfg(any(test, feature = "test-probes"))]
+    close_count: AtomicUsize,
+    /// Non-zero test budget, in milliseconds, for a blocked blob or endpoint
+    /// close. A real close keeps the production limit.
+    #[cfg(test)]
+    teardown_budget_ms: AtomicU64,
+    #[cfg(test)]
+    block_blob_shutdown: AtomicBool,
+    #[cfg(test)]
+    block_endpoint_close: AtomicBool,
     events: EventHub,
     state: Mutex<State>,
     desktop: Arc<Mutex<Option<Box<dyn HostDesktop>>>>,
@@ -753,59 +776,13 @@ fn parse_endpoint_id(value: &str) -> Result<[u8; 32], Error> {
     Ok(*key.as_bytes())
 }
 
-/// Rewrites one device's grants with persist-or-rollback. Returns the previous
-/// grants. Both authorize and revoke funnel through here so a failed save
-/// never leaves memory ahead of the store.
-fn store_grants(
-    shared: &Shared,
-    state: &mut State,
-    key: &[u8; 32],
-    grants: Grants,
-    clear_service_grants: bool,
-) -> Result<Grants, Error> {
-    let previous = state
-        .trust
-        .get(key)
-        .map(|device| device.grants)
-        .ok_or(Error::NotPaired)?;
-    let previous_device = state.trust.get(key).cloned().ok_or(Error::NotPaired)?;
-    state.trust.authorize(key, grants)?;
-    if clear_service_grants {
-        state
-            .trust
-            .authorize_service(key, crate::ServiceKind::Terminal, false)?;
-        state
-            .trust
-            .authorize_service(key, crate::ServiceKind::Camera, false)?;
-        state
-            .trust
-            .authorize_service(key, crate::ServiceKind::SystemAudio, false)?;
-        state
-            .trust
-            .authorize_service(key, crate::ServiceKind::Microphone, false)?;
-        state
-            .trust
-            .authorize_service(key, crate::ServiceKind::System, false)?;
-        state.trust.authorize_recording(key, false)?;
-    }
-    if let Err(error) = persist(shared, state) {
-        let _ = state.trust.pair(previous_device);
-        return Err(error);
-    }
-    if previous.transfer != grants.transfer {
-        let epoch = state.transfer_epochs.entry(*key).or_default();
-        *epoch = epoch.saturating_add(1);
-    }
-    desktop_stream::reconcile_grants(shared, state, key, grants);
-    Ok(previous)
-}
-
 /// Removes one device with persist-or-rollback. Returns the removed device.
 /// A failed save restores it and never leaves memory ahead of the store.
 fn forget_device(shared: &Shared, state: &mut State, key: &[u8; 32]) -> Result<Device, Error> {
+    let previous = state.trust.clone();
     let removed = state.trust.remove(key).ok_or(Error::NotPaired)?;
     if let Err(error) = persist(shared, state) {
-        let _ = state.trust.pair(removed.clone());
+        state.trust = previous;
         return Err(error);
     }
     Ok(removed)
@@ -823,7 +800,7 @@ struct Installed {
     store: Option<Arc<dyn InstallationStore>>,
 }
 
-fn persist(shared: &Shared, state: &State) -> Result<(), Error> {
+fn persist(shared: &Shared, state: &mut State) -> Result<(), Error> {
     let Some(store) = &shared.store else {
         return Ok(());
     };
@@ -838,7 +815,238 @@ fn persist(shared: &Shared, state: &State) -> Result<(), Error> {
         &state.file_resource_policy,
         &state.system_policy,
     )?;
-    store.save(&bytes)
+    save_installation(shared, state, store.as_ref(), &bytes)
+}
+
+/// Writes installation bytes. An uncertain commit fences this core before
+/// the error returns. The caller still holds `state` and must drop it before
+/// endpoint teardown can finish; teardown is scheduled, not run, here.
+fn save_installation(
+    shared: &Shared,
+    state: &mut State,
+    store: &dyn InstallationStore,
+    bytes: &[u8],
+) -> Result<(), Error> {
+    // A panic leaves the durable outcome unknown and skips every `Err` fence.
+    // Catch it while this caller still holds `state`, then report the same
+    // restart-required error so the caller can roll the change back.
+    let saved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| store.save(bytes)));
+    match saved {
+        Ok(Err(Error::StoreRecoveryRequired)) | Err(_) => {
+            fence_unrecoverable(shared, state);
+            Err(Error::StoreRecoveryRequired)
+        }
+        Ok(other) => other,
+    }
+}
+
+/// Stops admission and owned remote work. `shut_down` is set by the caller
+/// before this runs so service synchronization reports shutdown.
+fn stop_owned_work(state: &mut State, shared: &Shared) {
+    state.pairing_window = None;
+    state.control_request = None;
+    for session in state.incoming.values_mut() {
+        signal_stop(Some(session));
+    }
+    for session in state.outgoing.values_mut() {
+        signal_stop(Some(session));
+    }
+    let jobs: Vec<_> = lock(&shared.job_cancel).values().cloned().collect();
+    for stop in jobs {
+        let _ = stop.send(true);
+    }
+    for terminal in lock(&shared.terminal_sessions).values() {
+        terminal.stop.store(true, Ordering::Release);
+    }
+    services::synchronize(state, &shared.events);
+}
+
+fn fence_unrecoverable(shared: &Shared, state: &mut State) {
+    if !state.shut_down {
+        state.shut_down = true;
+        stop_owned_work(state, shared);
+    }
+    schedule_endpoint_close(shared);
+}
+
+/// Claims endpoint close and runs it after `state` is free. Safe to call
+/// while the caller still holds `state`: the task waits for that lock.
+///
+/// Blob shutdown and endpoint close each get the teardown budget. A blob
+/// timeout still closes the endpoint. A close that does not finish releases
+/// the claim so a later shutdown can retry. The core stays fenced.
+fn schedule_endpoint_close(shared: &Shared) {
+    if !claim_endpoint_close(shared) {
+        return;
+    }
+    let Some(arc) = shared.self_weak.upgrade() else {
+        mark_teardown_finished(shared);
+        return;
+    };
+    let handle = arc.runtime_handle.clone();
+    handle.spawn(async move {
+        if !wait_until_state_unlocked(&arc).await {
+            release_teardown_claim(&arc);
+            return;
+        }
+        let blob = {
+            let mut blobs = lock(&arc.blob_store);
+            blobs.take()
+        };
+        let block_blob = take_blob_block(&arc);
+        if blob.is_some() || block_blob {
+            let limit = teardown_limit(&arc, block_blob);
+            let stalled = tokio::time::timeout(limit, async move {
+                if let Some(blob) = blob {
+                    let _ = blob.shutdown().await;
+                }
+                if block_blob {
+                    std::future::pending::<()>().await;
+                }
+            })
+            .await
+            .is_err();
+            if stalled {
+                eprintln!("vnilink: installation blob close exceeded 5s; restart required");
+            }
+        }
+        if close_endpoint(&arc).await {
+            mark_teardown_finished(&arc);
+        } else {
+            eprintln!("vnilink: installation endpoint close exceeded 5s; restart required");
+            release_teardown_claim(&arc);
+        }
+    });
+}
+
+fn claim_endpoint_close(shared: &Shared) -> bool {
+    if shared
+        .teardown_phase
+        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return false;
+    }
+    #[cfg(any(test, feature = "test-probes"))]
+    shared.close_count.fetch_add(1, Ordering::Relaxed);
+    true
+}
+
+fn teardown_limit(shared: &Shared, shortened: bool) -> Duration {
+    #[cfg(test)]
+    if shortened {
+        let millis = shared.teardown_budget_ms.load(Ordering::Acquire);
+        if millis > 0 {
+            return Duration::from_millis(millis);
+        }
+    }
+    let _ = (shared, shortened);
+    Duration::from_secs(5)
+}
+
+fn take_blob_block(shared: &Shared) -> bool {
+    #[cfg(test)]
+    {
+        shared.block_blob_shutdown.swap(false, Ordering::AcqRel)
+    }
+    #[cfg(not(test))]
+    {
+        let _ = shared;
+        false
+    }
+}
+
+fn take_close_block(shared: &Shared) -> bool {
+    #[cfg(test)]
+    {
+        shared.block_endpoint_close.swap(false, Ordering::AcqRel)
+    }
+    #[cfg(not(test))]
+    {
+        let _ = shared;
+        false
+    }
+}
+
+async fn wait_until_state_unlocked(shared: &Arc<Shared>) -> bool {
+    let started = std::time::Instant::now();
+    let budget = Duration::from_secs(5);
+    loop {
+        match shared.state.try_lock() {
+            Ok(_guard) => return true,
+            Err(std::sync::TryLockError::Poisoned(_)) => return true,
+            Err(std::sync::TryLockError::WouldBlock) => {}
+        }
+        if started.elapsed() >= budget {
+            eprintln!("vnilink: installation shutdown did not start within 5s; restart required");
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+}
+
+async fn close_endpoint(shared: &Arc<Shared>) -> bool {
+    let blocked = take_close_block(shared);
+    let limit = teardown_limit(shared, blocked);
+    let endpoint = shared.endpoint.clone();
+    tokio::time::timeout(limit, async move {
+        if blocked {
+            std::future::pending::<()>().await;
+        }
+        endpoint.close().await;
+    })
+    .await
+    .is_ok()
+}
+
+fn mark_teardown_finished(shared: &Shared) {
+    let _guard = lock(&shared.teardown_lock);
+    if shared
+        .teardown_phase
+        .compare_exchange(1, 2, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        shared.teardown_cv.notify_all();
+    }
+}
+
+/// Returns the claim so a later shutdown can close the endpoint.
+fn release_teardown_claim(shared: &Shared) {
+    let _guard = lock(&shared.teardown_lock);
+    if shared
+        .teardown_phase
+        .compare_exchange(1, 0, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        shared.teardown_cv.notify_all();
+    }
+}
+
+/// Waits until a close finishes or its claim is released.
+fn wait_for_endpoint_close(shared: &Shared) {
+    let guard = lock(&shared.teardown_lock);
+    let mut guard = guard;
+    let started = std::time::Instant::now();
+    loop {
+        let phase = shared.teardown_phase.load(Ordering::Acquire);
+        if phase != 1 {
+            return;
+        }
+        let left = Duration::from_secs(5).saturating_sub(started.elapsed());
+        if left.is_zero() {
+            eprintln!("vnilink: installation endpoint close exceeded 5s; restart required");
+            return;
+        }
+        let (next, wait) = shared
+            .teardown_cv
+            .wait_timeout(guard, left)
+            .unwrap_or_else(|poison| poison.into_inner());
+        guard = next;
+        if wait.timed_out() && shared.teardown_phase.load(Ordering::Acquire) == 1 {
+            eprintln!("vnilink: installation endpoint close exceeded 5s; restart required");
+            return;
+        }
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

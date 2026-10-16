@@ -95,7 +95,7 @@ fn microphone_permission() -> bool {
     } // Native WASAPI/PulseAudio still enforce OS/server device access.
 }
 /// Native sources are classified by the platform, never by a display name.
-fn available_sources() -> Result<Vec<AudioDevice>, vnilink::Error> {
+fn physical_sources() -> Result<Vec<AudioDevice>, vnilink::Error> {
     let available = vnilink_audio::audio_devices()
         .map_err(|_| vnilink::Error::Unsupported("native audio enumeration"))?;
     let mut sources: Vec<_> = available
@@ -119,6 +119,66 @@ fn available_sources() -> Result<Vec<AudioDevice>, vnilink::Error> {
     sources.shrink_to_fit();
     Ok(sources)
 }
+const DEFAULT_MICROPHONE: &str = "vnilink:default-microphone";
+const DEFAULT_SYSTEM: &str = "vnilink:default-system-audio";
+
+fn default_source(
+    kind: AudioKind,
+    sources: &[AudioDevice],
+) -> Result<Option<AudioDevice>, vnilink::Error> {
+    #[cfg(target_os = "macos")]
+    if kind == AudioKind::System {
+        return Ok(sources.iter().find(|device| device.kind == kind).cloned());
+    }
+    let direction = if kind == AudioKind::Microphone {
+        vnilink_audio::DeviceDirection::Input
+    } else {
+        vnilink_audio::DeviceDirection::Loopback
+    };
+    let id = vnilink_audio::default_device_id(direction)
+        .map_err(|_| vnilink::Error::Unsupported("default audio endpoint"))?;
+    Ok(sources
+        .iter()
+        .find(|device| Some(&device.id) == id.as_ref() && device.kind == kind)
+        .cloned())
+}
+
+fn available_sources() -> Result<Vec<AudioDevice>, vnilink::Error> {
+    let mut sources = physical_sources()?;
+    for (kind, alias) in [
+        (AudioKind::Microphone, DEFAULT_MICROPHONE),
+        (AudioKind::System, DEFAULT_SYSTEM),
+    ] {
+        if let Some(device) = default_source(kind, &sources)? {
+            sources.push(AudioDevice {
+                id: alias.into(),
+                name: format!("System default ({})", device.name),
+                kind,
+            });
+        }
+    }
+    Ok(sources)
+}
+
+fn resolve_source(config: &AudioConfig) -> Result<AudioConfig, vnilink::Error> {
+    if config.device_id == DEFAULT_MICROPHONE || config.device_id == DEFAULT_SYSTEM {
+        let expected = if config.kind == AudioKind::Microphone {
+            DEFAULT_MICROPHONE
+        } else {
+            DEFAULT_SYSTEM
+        };
+        if config.device_id != expected {
+            return Err(vnilink::Error::Unauthorized);
+        }
+        let device = default_source(config.kind, &physical_sources()?)?
+            .ok_or(vnilink::Error::Unsupported("default audio endpoint"))?;
+        let mut resolved = config.clone();
+        resolved.device_id = device.id;
+        return Ok(resolved);
+    }
+    Ok(config.clone())
+}
+
 enum NativeInput {
     Device(vnilink_audio::NativeCapture),
     #[cfg(target_os = "macos")]
@@ -129,6 +189,7 @@ impl NativeInput {
         config: &AudioConfig,
         startup: &vnilink::BackendStartup,
     ) -> Result<Self, vnilink::Error> {
+        startup.check()?;
         #[cfg(target_os = "macos")]
         if config.kind == AudioKind::System {
             return vnilink_macos::MacSystemAudio::open(
@@ -193,20 +254,20 @@ impl HostAudioFactory for NativeFactory {
         if config.kind == AudioKind::Microphone && !microphone_permission() {
             return Err(vnilink::Error::Unsupported("microphone permission"));
         }
+        let requested = resolve_source(&config)?;
         // Display filters identify the same Mac system mix. Avoid duplicate
         // physical audio capture through two differently named display sources.
         #[cfg(target_os = "macos")]
         let resource_id = if config.kind == AudioKind::System {
             "sck-system-mix"
         } else {
-            &config.device_id
+            &requested.device_id
         };
         #[cfg(not(target_os = "macos"))]
-        let resource_id = &config.device_id;
+        let resource_id = &requested.device_id;
         let resource = self.coordinator.capture(resource_id, config.kind)?;
         let source = AudioSource::new();
         let producer = source.clone();
-        let requested = config.clone();
         let worker_startup = startup.clone();
         let (ready, result) = std::sync::mpsc::sync_channel(1);
         std::thread::Builder::new()
@@ -217,7 +278,12 @@ impl HostAudioFactory for NativeFactory {
                     worker_startup.check()?;
                     let mut capture = NativeInput::open(&requested, &worker_startup)?;
                     worker_startup.check()?;
-                    let mut admitted = false;
+                    let mut admitted = config.kind == AudioKind::System;
+                    if admitted {
+                        // Loopback APIs may deliver nothing while the system is quiet.
+                        // Successful native start is readiness; never fabricate captured PCM.
+                        let _ = ready.send(Ok(()));
+                    }
                     let mut last = Instant::now();
                     while !producer.is_cancelled() {
                         if !admitted {
@@ -233,7 +299,9 @@ impl HostAudioFactory for NativeFactory {
                                 }
                             }
                             None => {
-                                if last.elapsed() > Duration::from_secs(3) {
+                                if config.kind != AudioKind::System
+                                    && last.elapsed() > Duration::from_secs(3)
+                                {
                                     return Err(vnilink::Error::Timeout);
                                 }
                                 std::thread::sleep(Duration::from_millis(2));
@@ -279,11 +347,15 @@ impl HostAudioFactory for NativeFactory {
 }
 
 pub struct NativeAudioPlayback {
+    error: Arc<Mutex<Option<FfiError>>>,
     stop: Arc<AtomicBool>,
     service: Arc<AudioService>,
 }
 
 impl NativeAudioPlayback {
+    pub fn error(&self) -> Option<FfiError> {
+        self.error.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
     pub fn close(&self) {
         self.stop.store(true, Ordering::Release);
         self.service.close();
@@ -311,8 +383,9 @@ impl VnilinkCore {
             })
             .collect())
     }
-    /// Registers explicit local approvals. No device activation, default-source
-    /// fallback, peer grant or native permission prompt happens here.
+    /// Registers local source choices. Default aliases resolve when capture opens;
+    /// explicit devices never fall back after unplug. Peer grants and OS consent
+    /// are checked independently when a stream opens.
     pub fn enable_native_audio(
         &self,
         microphone_ids: Vec<String>,
@@ -323,12 +396,13 @@ impl VnilinkCore {
                 "too many approved audio sources",
             )));
         }
-        if !microphone_ids.is_empty() && !microphone_permission() {
-            return Err(map_error(vnilink::Error::Unsupported(
-                "microphone permission",
-            )));
-        }
-        let available = available_sources().map_err(map_error)?;
+        let explicit = microphone_ids.iter().any(|id| id != DEFAULT_MICROPHONE)
+            || system_source_ids.iter().any(|id| id != DEFAULT_SYSTEM);
+        let available = if explicit {
+            available_sources().map_err(map_error)?
+        } else {
+            Vec::new()
+        };
         let mut approved = Vec::new();
         let mut ids = HashSet::new();
         for (kind, list) in [
@@ -340,6 +414,16 @@ impl VnilinkCore {
                     return Err(map_error(vnilink::Error::InvalidSetting(
                         "duplicate audio source",
                     )));
+                }
+                if (kind == AudioKind::Microphone && id == DEFAULT_MICROPHONE)
+                    || (kind == AudioKind::System && id == DEFAULT_SYSTEM)
+                {
+                    approved.push(AudioDevice {
+                        id,
+                        name: "System default".into(),
+                        kind,
+                    });
+                    continue;
                 }
                 let device = available
                     .iter()
@@ -375,6 +459,13 @@ impl VnilinkCore {
             })
             .collect())
     }
+    /// Resolve and follow the receiving computer's default output, on every platform.
+    pub fn start_default_native_audio_playback(
+        &self,
+        service: Arc<AudioService>,
+    ) -> Result<Arc<NativeAudioPlayback>, FfiError> {
+        self.start_native_audio_playback(service, crate::audio_output::DEFAULT_OUTPUT.into())
+    }
     pub fn start_native_audio_playback(
         &self,
         service: Arc<AudioService>,
@@ -395,6 +486,8 @@ impl VnilinkCore {
         if player.playback_claimed.swap(true, Ordering::AcqRel) {
             return Err(map_error(vnilink::Error::Busy));
         }
+        let error = Arc::new(Mutex::new(None));
+        let worker_error = error.clone();
         let (ready, result) = std::sync::mpsc::sync_channel(1);
         let spawned = std::thread::Builder::new()
             .name("vnilink-audio-playback".into())
@@ -405,15 +498,15 @@ impl VnilinkCore {
                         return Err(vnilink::Error::NoSession);
                     }
                     let format = player.config().channels;
-                    let mut output = vnilink_audio::NativeOutput::open(
+                    let mut output = crate::audio_output::PlaybackOutput::open(
+                        crate::audio_output::NativeOutputBackend,
                         &output_id,
                         if format == 1 {
                             vnilink_audio::Format::Mono
                         } else {
                             vnilink_audio::Format::Stereo
                         },
-                    )
-                    .map_err(|_| vnilink::Error::Unsupported("native audio playback"))?;
+                    )?;
                     if player.is_cancelled() || worker_stop.load(Ordering::Acquire) {
                         return Err(vnilink::Error::NoSession);
                     }
@@ -423,8 +516,8 @@ impl VnilinkCore {
                             .poll_internal()
                             .map_err(|_| vnilink::Error::Unsupported("audio playback ended"))?
                         {
-                            output.push(&block.samples).map_err(|_| {
-                                vnilink::Error::Unsupported("native audio output ended")
+                            output.push(&block.samples, || {
+                                worker_stop.load(Ordering::Acquire) || player.is_cancelled()
                             })?;
                         } else {
                             std::thread::sleep(Duration::from_millis(2));
@@ -433,6 +526,8 @@ impl VnilinkCore {
                     Ok(())
                 };
                 if let Err(error) = run() {
+                    let error = map_error(error);
+                    *worker_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(error.clone());
                     let _ = ready.send(Err(error));
                 }
                 worker_stop.store(true, Ordering::Release);
@@ -444,14 +539,18 @@ impl VnilinkCore {
             return Err(map_error(vnilink::Error::Unsupported("audio worker")));
         }
         match result.recv_timeout(Duration::from_secs(6)) {
-            Ok(Ok(())) => Ok(Arc::new(NativeAudioPlayback { stop, service })),
+            Ok(Ok(())) => Ok(Arc::new(NativeAudioPlayback {
+                error,
+                stop,
+                service,
+            })),
             outcome => {
                 stop.store(true, Ordering::Release);
                 service.close();
-                Err(map_error(match outcome {
+                Err(match outcome {
                     Ok(Err(error)) => error,
-                    _ => vnilink::Error::Timeout,
-                }))
+                    _ => map_error(vnilink::Error::Timeout),
+                })
             }
         }
     }
@@ -460,6 +559,35 @@ impl VnilinkCore {
 #[cfg(test)]
 mod resource_tests {
     use super::*;
+
+    #[test]
+    fn default_alias_cannot_select_another_source_kind_and_explicit_ids_stay_explicit() {
+        for (id, kind) in [
+            (DEFAULT_MICROPHONE, AudioKind::System),
+            (DEFAULT_SYSTEM, AudioKind::Microphone),
+        ] {
+            let config = AudioConfig {
+                device_id: id.into(),
+                kind,
+                channels: 2,
+                voice: false,
+            };
+            assert!(matches!(
+                resolve_source(&config),
+                Err(vnilink::Error::Unauthorized)
+            ));
+        }
+        let explicit = AudioConfig {
+            device_id: "unplugged-explicit-device".into(),
+            kind: AudioKind::Microphone,
+            channels: 1,
+            voice: false,
+        };
+        assert_eq!(
+            resolve_source(&explicit).unwrap().device_id,
+            explicit.device_id
+        );
+    }
 
     #[test]
     fn capture_limits_and_exclusivity_release_with_the_owner() {

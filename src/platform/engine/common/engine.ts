@@ -1,6 +1,12 @@
 export interface Grants { view: boolean; control: boolean; clipboard: boolean; transfer: boolean; }
 
-export interface Device { endpoint_id: string; hostname: string | null; pet_name: string | null; relays: string[]; direct: string[]; grants: Grants; }
+export type OperatingSystem = 'macos' | 'windows' | 'linux' | 'other';
+
+export type DevicePresence = 'connected' | 'connecting' | 'reconnecting' | 'disconnected';
+
+export interface SharingPolicy { view: boolean; control: boolean; clipboard: boolean; files: boolean; terminal: boolean; camera: boolean; system_audio: boolean; microphone: boolean; recording: boolean; system_actions: boolean; }
+
+export interface Device { os: OperatingSystem | null; presence: DevicePresence; endpoint_id: string; hostname: string | null; pet_name: string | null; relays: string[]; direct: string[]; grants: Grants; }
 
 export interface Capabilities {
 	desktop_capture: boolean; keyboard: boolean; pointer: boolean; clipboard: boolean; file_transfer: boolean; audio: boolean; monitors: number; h264_encode: boolean; h264_decode: boolean;
@@ -30,12 +36,8 @@ export interface ServiceSummary {
 	phase: string | { Closed: { cause: string } } | { Failed: { message: string } };
 }
 
-export interface ServicePermissions {
-	desktop: boolean; files: boolean; terminal: boolean; camera: boolean;
-	system_audio: boolean; microphone: boolean; recording: boolean; system_actions: boolean;
-}
-
 export interface SystemPolicy { allow_lock: boolean; allow_restart: boolean; allow_shutdown: boolean; allow_privacy: boolean; }
+
 export interface SystemSupport { lock: boolean; restart: boolean; shutdown: boolean; privacy: boolean; }
 
 export interface TerminalPolicy {
@@ -75,6 +77,7 @@ export type SessionPhase = string | { Failed: { message: string } };
 export interface SessionPath { relay: boolean; selected: boolean; rtt_ms: string; tx_bytes: string; rx_bytes: string; }
 
 export type VideoCodec = 'h264' | 'h265' | 'vp8' | 'vp9' | 'av1';
+
 export interface VideoFrame { codec: VideoCodec; keyframe: boolean; timestamp_us: string; data: string; display_id: string; revision: string; }
 
 export interface RelayInfo { url: string; authenticated: boolean; }
@@ -97,9 +100,8 @@ export type EngineCommand =
 	| { type: 'controllerSessionPaths'; sessionId: string }
 	| { type: 'pollEvents'; subscriptionId: string; maxEvents: number }
 	| { type: 'releaseEvents'; subscriptionId: string }
-	| { type: 'servicePermissions'; endpointId: string }
-	| { type: 'authorizeService'; endpointId: string; kind: ServiceKind; allowed: boolean }
-	| { type: 'authorizeRecording'; endpointId: string; allowed: boolean }
+	| { type: 'sharingPolicy' }
+	| { type: 'setSharingPolicy'; policy: Partial<SharingPolicy> }
 	| { type: 'systemPolicy' }
 	| { type: 'setSystemPolicy'; policy: SystemPolicy }
 	| { type: 'terminalPolicy' }
@@ -118,7 +120,6 @@ export type EngineCommand =
 	| { type: 'openPairingFile'; bytes: number[] }
 	| { type: 'openPairingFileBase64'; data: string }
 	| { type: 'confirmPairing'; previewId: string; digits: string }
-	| ({ type: 'authorize'; endpointId: string } & Grants)
 	| { type: 'revoke' | 'unpair'; endpointId: string }
 	| { type: 'setPeerName'; endpointId: string; name: string }
 	| { type: 'connect' | 'beginConnect'; endpointId: string }
@@ -211,7 +212,7 @@ export type EngineReply =
 	| { type: 'ownerSession'; session: SessionInfo | null }
 	| { type: 'eventSubscription'; subscriptionId: string }
 	| { type: 'events'; events: EngineEvent[]; lagged: string }
-	| { type: 'servicePermissions'; permissions: ServicePermissions }
+	| { type: 'sharingPolicy'; policy: SharingPolicy }
 	| { type: 'systemPolicy'; policy: SystemPolicy; support: SystemSupport }
 	| { type: 'terminalPolicy'; policy: TerminalPolicy }
 	| { type: 'terminalSessions'; sessions: TerminalSession[] }
@@ -319,6 +320,7 @@ function systemPolicy(value: unknown): value is SystemPolicy {
 	return record(value) && typeof value.allow_lock === 'boolean' && typeof value.allow_restart === 'boolean'
 		&& typeof value.allow_shutdown === 'boolean' && typeof value.allow_privacy === 'boolean' && Object.keys(value).length === 4;
 }
+
 function systemSupport(value: unknown): value is SystemSupport {
 	return record(value) && typeof value.lock === 'boolean' && typeof value.restart === 'boolean'
 		&& typeof value.shutdown === 'boolean' && typeof value.privacy === 'boolean' && Object.keys(value).length === 4;
@@ -329,8 +331,12 @@ function serviceKind(value: unknown): value is ServiceSummary['kind'] {
 		|| value === 'SystemAudio' || value === 'Microphone' || value === 'System';
 }
 
-function servicePermissions(value: unknown): value is ServicePermissions {
-	return record(value) && ['desktop', 'files', 'terminal', 'camera', 'system_audio', 'microphone', 'recording', 'system_actions'].every(key => typeof value[key] === 'boolean') && Object.keys(value).length === 8;
+function sharingPolicyUpdate(value: unknown): boolean {
+	return record(value) && Object.keys(value).length > 0 && Object.entries(value).every(([key, field]) => ['view', 'control', 'clipboard', 'files', 'terminal', 'camera', 'system_audio', 'microphone', 'recording', 'system_actions'].includes(key) && typeof field === 'boolean');
+}
+
+function sharingPolicy(value: unknown): value is SharingPolicy {
+	return record(value) && ['view', 'control', 'clipboard', 'files', 'terminal', 'camera', 'system_audio', 'microphone', 'recording', 'system_actions'].every(key => typeof value[key] === 'boolean') && Object.keys(value).length === 10;
 }
 
 function terminalPolicy(value: unknown): value is TerminalPolicy {
@@ -454,7 +460,7 @@ function grants(value: Record<string, unknown>): boolean {
 }
 
 function device(value: unknown): value is Device {
-	return record(value) && text(value.endpoint_id) && (value.hostname === null || text(value.hostname)) && (value.pet_name === null || text(value.pet_name)) && strings(value.relays) && strings(value.direct) && record(value.grants) && grants(value.grants);
+	return record(value) && (value.os === null || typeof value.os === 'string' && ['macos', 'windows', 'linux', 'other'].includes(value.os)) && typeof value.presence === 'string' && ['connected', 'connecting', 'reconnecting', 'disconnected'].includes(value.presence) && Object.keys(value).length === 8 && text(value.endpoint_id) && (value.hostname === null || text(value.hostname)) && (value.pet_name === null || text(value.pet_name)) && strings(value.relays) && strings(value.direct) && record(value.grants) && grants(value.grants);
 }
 
 function capabilities(value: unknown): value is Capabilities {
@@ -488,7 +494,6 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'openPairingFile': keys = ['bytes']; valid = bytes(value.bytes); break;
 		case 'openPairingFileBase64': keys = ['data']; valid = base64(value.data); break;
 		case 'confirmPairing': keys = ['previewId', 'digits']; valid = decimal(value.previewId) && typeof value.digits === 'string' && /^[0-9]{3}$/.test(value.digits); break;
-		case 'authorize': keys = ['endpointId', 'view', 'control', 'clipboard', 'transfer']; valid = text(value.endpointId) && grants(value); break;
 		case 'revoke': case 'unpair': keys = ['endpointId']; valid = text(value.endpointId); break;
 		case 'setPeerName': keys = ['endpointId', 'name']; valid = text(value.endpointId) && text(value.name) && value.name.length <= 256; break;
 		case 'connect': case 'beginConnect': case 'connectFiles': case 'beginConnectFiles': keys = ['endpointId']; valid = text(value.endpointId); break;
@@ -539,9 +544,8 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'sessionPaths': case 'controllerSessionPaths': keys = ['sessionId']; valid = decimal(value.sessionId); break;
 		case 'pollEvents': keys = ['subscriptionId', 'maxEvents']; valid = decimal(value.subscriptionId) && typeof value.maxEvents === 'number' && Number.isInteger(value.maxEvents) && value.maxEvents >= 1 && value.maxEvents <= 256; break;
 		case 'releaseEvents': keys = ['subscriptionId']; valid = decimal(value.subscriptionId); break;
-		case 'servicePermissions': keys = ['endpointId']; valid = text(value.endpointId); break;
-		case 'authorizeService': keys = ['endpointId', 'kind', 'allowed']; valid = text(value.endpointId) && serviceKind(value.kind) && typeof value.allowed === 'boolean'; break;
-		case 'authorizeRecording': keys = ['endpointId', 'allowed']; valid = text(value.endpointId) && typeof value.allowed === 'boolean'; break;
+		case 'sharingPolicy': keys = []; valid = true; break;
+		case 'setSharingPolicy': keys = ['policy']; valid = sharingPolicyUpdate(value.policy); break;
 		case 'systemPolicy': keys = []; valid = true; break;
 		case 'setSystemPolicy': keys = ['policy']; valid = systemPolicy(value.policy); break;
 		case 'terminalPolicy': keys = []; valid = true; break;
@@ -608,7 +612,7 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'ownerSession': return session(value.session) && Object.keys(value).length === 2;
 		case 'eventSubscription': return decimal(value.subscriptionId) && Object.keys(value).length === 2;
 		case 'events': return Array.isArray(value.events) && value.events.length <= 256 && value.events.every((item: unknown) => isEngineEvent(item)) && decimal(value.lagged) && Object.keys(value).length === 3;
-		case 'servicePermissions': return servicePermissions(value.permissions) && Object.keys(value).length === 2;
+		case 'sharingPolicy': return sharingPolicy(value.policy) && Object.keys(value).length === 2;
 		case 'systemPolicy': return systemPolicy(value.policy) && systemSupport(value.support) && Object.keys(value).length === 3;
 		case 'terminalPolicy': return terminalPolicy(value.policy) && Object.keys(value).length === 2;
 		case 'terminalSessions': return terminalSessions(value.sessions) && Object.keys(value).length === 2;
@@ -621,9 +625,13 @@ export function isEngineReply(value: unknown): value is EngineReply {
 }
 
 export const nativeCapabilityNames = ['desktopView', 'desktopControl', 'clipboard', 'files', 'terminal', 'camera', 'systemAudio', 'microphone', 'lock', 'restart', 'shutdown', 'privacy', 'recording'] as const;
+
 export type NativeCapabilityName = typeof nativeCapabilityNames[number];
+
 export interface NativeBackend { readonly name: string; readonly ready: boolean; readonly error: string | null; }
+
 export interface NativeCapability { readonly name: NativeCapabilityName; readonly available: boolean; readonly summary: string; }
+
 function nativeRuntime(value: Record<string, unknown>): boolean {
 	return Array.isArray(value.backends) && value.backends.length <= 32 && value.backends.every((backend: unknown) => record(backend) && typeof backend.name === 'string' && backend.name.length <= 64 && typeof backend.ready === 'boolean' && (backend.error === null || typeof backend.error === 'string' && backend.error.length <= 512) && Object.keys(backend).length === 3)
 		&& Array.isArray(value.capabilities) && value.capabilities.length === nativeCapabilityNames.length && value.capabilities.every((capability: unknown) => record(capability) && typeof capability.name === 'string' && nativeCapabilityNames.some(name => name === capability.name) && typeof capability.available === 'boolean' && typeof capability.summary === 'string' && capability.summary.length <= 512 && Object.keys(capability).length === 3)
@@ -631,44 +639,57 @@ function nativeRuntime(value: Record<string, unknown>): boolean {
 }
 
 export interface NativeDevice { readonly id: string; readonly name: string; readonly kind: 'camera' | 'microphone' | 'system' | 'output'; }
+
 export interface PowerPolicy { incoming_display: boolean; incoming_system: boolean; outgoing_display: boolean; outgoing_system: boolean; incoming_idle_secs: number; outgoing_idle_secs: number; lock_after_control: boolean; }
+
 export interface PowerStatus { readonly kind: 'Display' | 'System'; readonly owners: number; readonly phase: 'Idle' | 'Unavailable' | 'Starting' | 'Active' | 'Failed'; readonly error: string | null; }
+
 function nativeSourceIds(value: unknown): value is string[] {
 	return Array.isArray(value) && value.length <= 32 && value.every((id: unknown) => typeof id === 'string' && id.length > 0 && id.length <= 2048 && !id.includes('\0')) && new Set(value).size === value.length;
 }
+
 function nativeDevice(value: unknown): value is NativeDevice {
 	return record(value) && typeof value.id === 'string' && value.id.length > 0 && value.id.length <= 2048 && typeof value.name === 'string' && value.name.length <= 2048 && ['camera', 'microphone', 'system', 'output'].some(kind => kind === value.kind) && Object.keys(value).length === 3;
 }
+
 function powerPolicy(value: unknown): value is PowerPolicy {
 	return record(value) && ['incoming_display', 'incoming_system', 'outgoing_display', 'outgoing_system', 'lock_after_control'].every(key => typeof value[key] === 'boolean') && uint(value.incoming_idle_secs, 86400) && uint(value.outgoing_idle_secs, 86400) && Object.keys(value).length === 7;
 }
+
 function powerStatus(value: unknown): value is PowerStatus {
 	return record(value) && (value.kind === 'Display' || value.kind === 'System') && uint(value.owners, 4294967295) && ['Idle', 'Unavailable', 'Starting', 'Active', 'Failed'].some(phase => phase === value.phase) && (value.error === null || typeof value.error === 'string' && value.error.length <= 512) && Object.keys(value).length === 4;
 }
 
 export interface RecordingRetention { readonly maxSegments: number; readonly maxTotalBytes: string; }
+
 export interface RecordingStatus { readonly id: string; readonly phase: 'Starting' | 'Recording' | 'Finished' | 'Failed'; readonly failure: 'Startup' | 'Media' | 'Storage' | 'Limit' | 'SlowStorage' | 'FormatChanged' | null; readonly frames: string; readonly bytes: string; readonly durationMs: string; readonly segments: number; }
+
 function recordingRetention(value: unknown): value is RecordingRetention {
 	return record(value) && uint(value.maxSegments, 4294967295) && decimal(value.maxTotalBytes) && Object.keys(value).length === 2;
 }
+
 function recordingStatus(value: unknown): value is RecordingStatus {
 	return record(value) && decimal(value.id) && ['Starting', 'Recording', 'Finished', 'Failed'].some(phase => phase === value.phase) && (value.failure === null || ['Startup', 'Media', 'Storage', 'Limit', 'SlowStorage', 'FormatChanged'].some(failure => failure === value.failure)) && decimal(value.frames) && decimal(value.bytes) && decimal(value.durationMs) && uint(value.segments, 4294967295) && Object.keys(value).length === 7;
 }
 
 export interface NativeSharingStatus { readonly displayId: number; readonly phase: 'Starting' | 'Sharing' | 'Failed'; readonly error: string | null; }
+
 function sharingStatus(value: unknown): value is NativeSharingStatus {
 	return record(value) && uint(value.displayId, 4294967295) && ['Starting', 'Sharing', 'Failed'].some(phase => phase === value.phase) && (value.error === null || typeof value.error === 'string' && value.error.length <= 512) && Object.keys(value).length === 3;
 }
 
 export interface NativeScreenSource { readonly displayId: number; readonly width: number; readonly height: number; readonly pixelWidth: number; readonly pixelHeight: number; }
+
 export function isNativeScreenSource(value: unknown): value is NativeScreenSource {
 	return record(value) && typeof value.displayId === 'number' && uint(value.displayId, 4294967295) && value.displayId > 0 && [value.width, value.height, value.pixelWidth, value.pixelHeight].every(size => typeof size === 'number' && uint(size, 65535) && size >= 2) && Object.keys(value).length === 5;
 }
+
 export function isNativeScreenSources(value: unknown): value is NativeScreenSource[] {
 	return Array.isArray(value) && value.length <= 16 && value.every(isNativeScreenSource);
 }
 
 export type CodecPreference = 'auto' | VideoCodec;
+
 export function isCodecPreference(value: unknown): value is CodecPreference {
 	return typeof value === 'string' && ['auto', 'h264', 'h265', 'vp8', 'vp9', 'av1'].includes(value);
 }

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
+
 const output = await build({
 	entryPoints: [fileURLToPath(new URL('../../src/platform/encryption/electron-main/encryptionMainService.ts', import.meta.url))],
 	bundle: true, write: false, format: 'esm', platform: 'node',
@@ -15,7 +16,9 @@ const output = await build({
 		}
 	}],
 });
+
 const { EncryptionMainService } = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
+
 test('malformed encrypted values never appear in errors or logs', async () => {
 	const logs = [];
 	const service = new EncryptionMainService({ trace: (...args) => logs.push(args), error: (...args) => logs.push(args) });
@@ -29,6 +32,7 @@ test('malformed encrypted values never appear in errors or logs', async () => {
 	}
 	assert.equal(JSON.stringify(logs).includes(marker), false);
 });
+
 test('valid encrypted buffer JSON still round-trips through the adapter', async () => {
 	const service = new EncryptionMainService({ trace() { }, error() { } });
 	assert.equal(await service.decrypt(await service.encrypt('round-trip')), 'round-trip');

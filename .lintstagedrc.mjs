@@ -1,4 +1,5 @@
 import { isApplicationFile } from './build/sourceScope.mjs';
+
 function scoped(commands) {
 	return files => {
 		const selected = files.filter(isApplicationFile);
@@ -9,6 +10,7 @@ function scoped(commands) {
 		return commands.map(command => `${command} ${argumentsList}`);
 	};
 }
+
 export default {
 	'{src,test}/**/*.ts': scoped(['eslint --fix --max-warnings 0', 'node build/format.mjs --write --files']),
 	'{build,scripts,test}/**/*.mjs': scoped(['eslint --fix --max-warnings 0', 'node build/format.mjs --write --files']),

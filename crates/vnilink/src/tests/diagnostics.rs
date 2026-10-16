@@ -178,8 +178,7 @@ fn live_snapshot_lists_connections_services_and_counts() {
     let host = start_direct();
     let controller = start_direct();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Files, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Files, true).unwrap();
     let pending = controller
         .begin_connect_services(&host.endpoint_id())
         .unwrap();

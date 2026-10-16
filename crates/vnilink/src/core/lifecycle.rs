@@ -4,8 +4,9 @@ use super::*;
 
 use super::host::{accept_loop, bind_endpoint};
 
+use std::sync::atomic::Ordering;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::Duration;
 
 use iroh::{RelayMode, SecretKey};
@@ -30,9 +31,10 @@ impl Core {
     /// An empty store creates an identity, saves it, and uses
     /// [`OpenConfig::initial_relay`]. The next open restores that identity,
     /// the paired devices, their grants, used invitations, and the relay
-    /// setting. The host implements [`InstallationStore`] with the platform
-    /// credential store. [`crate::MemoryStore`] keeps the bytes only in this
-    /// process.
+    /// setting. The host implements [`InstallationStore`]. The production
+    /// adapter keeps the record in an encrypted database and the key in the
+    /// platform credential store. [`crate::MemoryStore`] keeps the bytes only
+    /// in this process.
     ///
     /// A locked, unavailable, or invalid store leaves any existing bytes
     /// where they are. The saved relay is the one that is bound, including
@@ -41,7 +43,8 @@ impl Core {
         Self::open_with(store, config, false)
     }
 
-    pub(crate) fn open_direct(
+    #[cfg(any(test, feature = "test-probes"))]
+    pub fn open_direct(
         store: Arc<dyn InstallationStore>,
         initial_relay: RelaySettings,
     ) -> Result<Self, Error> {
@@ -137,8 +140,8 @@ impl Core {
         )?;
         if fresh {
             let saved = {
-                let state = lock(&core.shared.state);
-                persist(&core.shared, &state)
+                let mut state = lock(&core.shared.state);
+                persist(&core.shared, &mut state)
             };
             if let Err(error) = saved {
                 core.shutdown();
@@ -203,6 +206,7 @@ impl Core {
             .thread_name("vnilink")
             .build()
             .map_err(Error::network)?;
+        let runtime_handle = runtime.handle().clone();
         let listen = if direct_only {
             Listen::Loopback
         } else {
@@ -215,7 +219,9 @@ impl Core {
             direct_only || !bound_relay.is_public(),
         ))?;
         let input_cleanup = Arc::new(AtomicUsize::new(0));
-        let shared = Arc::new(Shared {
+        let cleanup_executor = input_cleanup::Executor::new().map_err(Error::network)?;
+        let shared = Arc::new_cyclic(move |weak| Shared {
+            sharing_serial: Mutex::new(()),
             power_factory: Mutex::new(power::Factory {
                 revision: 0,
                 adapter: None,
@@ -228,6 +234,19 @@ impl Core {
             secret,
             relay: bound_relay,
             store,
+            runtime_handle,
+            self_weak: weak.clone(),
+            teardown_phase: AtomicU8::new(0),
+            teardown_lock: Mutex::new(()),
+            teardown_cv: Condvar::new(),
+            #[cfg(any(test, feature = "test-probes"))]
+            close_count: AtomicUsize::new(0),
+            #[cfg(test)]
+            teardown_budget_ms: AtomicU64::new(0),
+            #[cfg(test)]
+            block_blob_shutdown: AtomicBool::new(false),
+            #[cfg(test)]
+            block_endpoint_close: AtomicBool::new(false),
             events: EventHub::new(event_capacity),
             state: Mutex::new(State {
                 input_cleanup: input_cleanup.clone(),
@@ -265,7 +284,7 @@ impl Core {
             }),
             desktop: Arc::new(Mutex::new(None)),
             desktop_info: Mutex::new(None),
-            cleanup_executor: input_cleanup::Executor::new().map_err(Error::network)?,
+            cleanup_executor,
             desktop_owners: Arc::new(AtomicUsize::new(0)),
             input_cleanup,
             capture: Mutex::new(None),
@@ -327,37 +346,62 @@ impl Core {
 
     pub fn shutdown(&self) {
         // Settle the blob store first so its directory reopens cleanly.
+        // A storage fence may already have scheduled the same close.
         self.blob_close_store();
         {
             let mut state = lock(&self.shared.state);
-            if state.shut_down {
+            if !state.shut_down {
+                state.shut_down = true;
+                stop_owned_work(&mut state, &self.shared);
+            }
+        }
+        self.finish_endpoint_close();
+    }
+
+    /// Closes the endpoint once. A storage fence may already have claimed the
+    /// close; this waits for that task. A claim released without a finished
+    /// close is retried here. The core stays fenced when close does not finish.
+    fn finish_endpoint_close(&self) {
+        if !claim_endpoint_close(&self.shared) {
+            wait_for_endpoint_close(&self.shared);
+            if self.shared.teardown_phase.load(Ordering::Acquire) != 0 {
                 return;
             }
-            state.shut_down = true;
-            state.pairing_window = None;
-            state.control_request = None;
-            for session in state.incoming.values_mut() {
-                signal_stop(Some(session));
+            if !claim_endpoint_close(&self.shared) {
+                wait_for_endpoint_close(&self.shared);
+                return;
             }
-            for session in state.outgoing.values_mut() {
-                signal_stop(Some(session));
-            }
-            super::services::synchronize(&mut state, &self.shared.events);
         }
+        let blocked = take_close_block(&self.shared);
+        let limit = teardown_limit(&self.shared, blocked);
         let endpoint = self.shared.endpoint.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         self.runtime.spawn(async move {
-            endpoint.close().await;
-            let _ = tx.send(());
+            let closed = tokio::time::timeout(limit, async move {
+                if blocked {
+                    std::future::pending::<()>().await;
+                }
+                endpoint.close().await;
+            })
+            .await
+            .is_ok();
+            let _ = tx.send(closed);
         });
-        let _ = rx.recv_timeout(Duration::from_secs(5));
+        let observed = rx.recv_timeout(limit.saturating_add(Duration::from_secs(1)));
+        match observed {
+            Ok(true) => mark_teardown_finished(&self.shared),
+            _ => {
+                eprintln!("vnilink: installation endpoint close exceeded 5s; restart required");
+                release_teardown_claim(&self.shared);
+            }
+        }
     }
 
     pub fn endpoint_id(&self) -> String {
         self.shared.secret.public().to_string()
     }
 
-    /// Secret bytes for the platform credential store. Do not log them.
+    /// Secret bytes of the identity bound in this process. Do not log them.
     ///
     /// [`Core::open`] already saves this secret in the installation record.
     /// After [`Core::reset_identity`], the new secret is only in the store.
@@ -393,7 +437,7 @@ impl Core {
         }
         let previous = state.record_relay.clone();
         state.record_relay = relay;
-        if let Err(error) = persist(&self.shared, &state) {
+        if let Err(error) = persist(&self.shared, &mut state) {
             state.record_relay = previous;
             return Err(error);
         }
@@ -409,8 +453,8 @@ impl Core {
     /// unchanged.
     pub fn reset_identity(&self) -> Result<(), Error> {
         {
-            let state = self.alive_state()?;
-            let store = self.shared.store.as_ref().ok_or(Error::InvalidSetting(
+            let mut state = self.alive_state()?;
+            let store = self.shared.store.clone().ok_or(Error::InvalidSetting(
                 "resetting identity requires an installation store",
             ))?;
             let secret = SecretKey::generate();
@@ -425,7 +469,7 @@ impl Core {
                 &state.file_resource_policy,
                 &state.system_policy,
             )?;
-            store.save(&bytes)?;
+            save_installation(&self.shared, &mut state, store.as_ref(), &bytes)?;
         }
         self.shutdown();
         Ok(())
@@ -469,7 +513,9 @@ impl Core {
                     pet_name: state.trust.pet_name_of(&device.endpoint_id),
                     relays: device.relays.clone(),
                     direct: device.direct.clone(),
-                    grants: device.grants,
+                    grants: state.trust.sharing.grants(),
+                    os: state.trust.os_of(&device.endpoint_id),
+                    presence: super::link::presence(&state, &device.display_id),
                 })
                 .collect(),
             incoming: state.incoming_latest().map(session_info),
@@ -480,5 +526,44 @@ impl Core {
 
     pub fn capabilities(&self) -> Capabilities {
         desktop_capabilities(&self.shared)
+    }
+
+    /// How many times this core claimed endpoint close. A storage fence and
+    /// a later `shutdown` share one claim when that close finishes. A claim
+    /// released without a finished close can be claimed again.
+    #[cfg(any(test, feature = "test-probes"))]
+    pub fn endpoint_close_count(&self) -> usize {
+        self.shared.close_count.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn endpoint_is_closed(&self) -> bool {
+        self.shared.endpoint.is_closed()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn teardown_phase(&self) -> u8 {
+        self.shared.teardown_phase.load(Ordering::Acquire)
+    }
+
+    /// Shortens only a blocked blob shutdown or endpoint close. A real close
+    /// keeps the production budget.
+    #[cfg(test)]
+    pub(crate) fn arm_blocked_teardown(
+        &self,
+        budget: Duration,
+        block_blob: bool,
+        block_close: bool,
+    ) {
+        let millis = u64::try_from(budget.as_millis()).unwrap_or(0);
+        self.shared
+            .teardown_budget_ms
+            .store(millis, Ordering::Release);
+        self.shared
+            .block_blob_shutdown
+            .store(block_blob, Ordering::Release);
+        self.shared
+            .block_endpoint_close
+            .store(block_close, Ordering::Release);
     }
 }

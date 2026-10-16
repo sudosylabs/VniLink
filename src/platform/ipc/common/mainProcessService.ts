@@ -6,7 +6,9 @@
 
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 import type { IChannel } from '../../../base/parts/ipc/common/ipc.js';
+
 export const IMainProcessService = createDecorator<IMainProcessService>('mainProcessService');
+
 export interface IMainProcessService {
 	readonly _serviceBrand: undefined;
 	getChannel(channelName: string): IChannel;

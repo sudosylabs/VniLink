@@ -20,6 +20,7 @@ import type { ILocalizedString } from '../../../nls.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 
 export const ILogService = createDecorator<ILogService>('logService');
+
 export const ILoggerService = createDecorator<ILoggerService>('loggerService');
 
 function now(): string {
@@ -80,18 +81,15 @@ export function log(logger: ILogger, level: LogLevel, message: string): void {
 export function createUnexpectedErrorHandler(logger: ILogger): (error: unknown) => void {
 	let previousMessage: string | undefined;
 	let previousTime = 0;
-
 	return error => {
 		const message = toErrorMessage(error, true);
 		if (!message) {
 			return;
 		}
-
 		const now = Date.now();
 		if (message === previousMessage && now - previousTime <= 1000) {
 			return;
 		}
-
 		previousTime = now;
 		previousMessage = message;
 
@@ -101,6 +99,7 @@ export function createUnexpectedErrorHandler(logger: ILogger): (error: unknown) 
 }
 
 type ConsoleMethod = 'debug' | 'error' | 'info' | 'log' | 'warn';
+
 type ConsoleMethodFn = (...args: unknown[]) => void;
 
 /**
@@ -113,6 +112,7 @@ export const isDevConsoleLogForwardingEnabled = false
 	;
 
 let isConsoleForwarding = false;
+
 let isLogServiceConsoleEcho = false;
 
 function getConsoleMethod(method: ConsoleMethod): ConsoleMethodFn {
@@ -155,7 +155,6 @@ export function registerDevConsoleLogForwarder(logService: ILogService): IDispos
 		log: console.log,
 		warn: console.warn
 	};
-
 	const forward = (method: ConsoleMethod, level: LogLevel, args: unknown[]): void => {
 		if (!isLogServiceConsoleEcho) {
 			isConsoleForwarding = true;
@@ -167,10 +166,8 @@ export function registerDevConsoleLogForwarder(logService: ILogService): IDispos
 				isConsoleForwarding = false;
 			}
 		}
-
 		originalConsoleMethods[method].apply(console, args);
 	};
-
 	const wrappers: Record<ConsoleMethod, ConsoleMethodFn> = {
 		debug: (...args: unknown[]) => {
 			forward('debug', LogLevel.Debug, args);
@@ -188,13 +185,11 @@ export function registerDevConsoleLogForwarder(logService: ILogService): IDispos
 			forward('warn', LogLevel.Warning, args);
 		}
 	};
-
 	setConsoleMethod('debug', wrappers.debug);
 	setConsoleMethod('error', wrappers.error);
 	setConsoleMethod('info', wrappers.info);
 	setConsoleMethod('log', wrappers.log);
 	setConsoleMethod('warn', wrappers.warn);
-
 	return toDisposable(() => {
 		if (console.debug === wrappers.debug) {
 			console.debug = originalConsoleMethods.debug;
@@ -216,23 +211,18 @@ export function registerDevConsoleLogForwarder(logService: ILogService): IDispos
 
 export function format(args: readonly unknown[], verbose = false): string {
 	let result = '';
-
 	for (let i = 0; i < args.length; i++) {
 		let a = args[i];
-
 		if (a instanceof Error) {
 			a = toErrorMessage(a, verbose);
 		}
-
 		if (typeof a === 'object') {
 			try {
 				a = JSON.stringify(a);
 			} catch { /* Circular values fall back to their string representation. */ }
 		}
-
 		result += (i > 0 ? ' ' : '') + String(a);
 	}
-
 	return result;
 }
 
@@ -398,6 +388,7 @@ export abstract class AbstractLogger extends Disposable implements ILogger {
 
 	private level: LogLevel = DEFAULT_LOG_LEVEL;
 	private readonly _onDidChangeLogLevel: Emitter<LogLevel> = this._register(new Emitter<LogLevel>());
+
 	public get onDidChangeLogLevel(): Event<LogLevel> {
 		return this._onDidChangeLogLevel.event;
 	}
@@ -425,10 +416,15 @@ export abstract class AbstractLogger extends Disposable implements ILogger {
 	}
 
 	public abstract trace(message: string, ...args: unknown[]): void;
+
 	public abstract debug(message: string, ...args: unknown[]): void;
+
 	public abstract info(message: string, ...args: unknown[]): void;
+
 	public abstract warn(message: string, ...args: unknown[]): void;
+
 	public abstract error(message: string | Error, ...args: unknown[]): void;
+
 	public abstract flush(): void;
 }
 
@@ -480,7 +476,6 @@ export abstract class AbstractMessageLogger extends AbstractLogger implements IL
 
 	protected abstract log(level: LogLevel, message: string): void;
 }
-
 
 export class ConsoleMainLogger extends AbstractLogger implements ILogger {
 
@@ -605,7 +600,6 @@ export class ConsoleLogger extends AbstractLogger implements ILogger {
 		}
 	}
 
-
 	public flush(): void {
 		// noop
 	}
@@ -652,7 +646,6 @@ export class AdapterLogger extends AbstractLogger implements ILogger {
 		if (typeof msg === 'string') {
 			return msg;
 		}
-
 		return toErrorMessage(msg, this.canLog(LogLevel.Trace));
 	}
 
@@ -726,15 +719,11 @@ interface LoggerEntry { logger: ILogger | undefined; info: Mutable<ILoggerResour
 export abstract class AbstractLoggerService extends Disposable implements ILoggerService {
 
 	declare public readonly _serviceBrand: undefined;
-
 	private readonly _loggers = new ResourceMap<LoggerEntry>();
-
 	private _onDidChangeLoggers = this._register(new Emitter<{ added: ILoggerResource[]; removed: ILoggerResource[] }>);
 	public readonly onDidChangeLoggers = this._onDidChangeLoggers.event;
-
 	private _onDidChangeLogLevel = this._register(new Emitter<LogLevel | [URI, LogLevel]>);
 	public readonly onDidChangeLogLevel = this._onDidChangeLogLevel.event;
-
 	private _onDidChangeVisibility = this._register(new Emitter<[URI, boolean]>);
 	public readonly onDidChangeVisibility = this._onDidChangeVisibility.event;
 
@@ -792,7 +781,9 @@ export abstract class AbstractLoggerService extends Disposable implements ILogge
 	}
 
 	public setLogLevel(logLevel: LogLevel): void;
+
 	public setLogLevel(resource: URI, logLevel: LogLevel): void;
+
 	public setLogLevel(arg1: URI | LogLevel, arg2?: LogLevel): void {
 		if (URI.isUri(arg1)) {
 			if (arg2 === undefined) {
@@ -880,24 +871,41 @@ export abstract class AbstractLoggerService extends Disposable implements ILogge
 
 export class NullLogger implements ILogger {
 	public readonly onDidChangeLogLevel: Event<LogLevel> = new Emitter<LogLevel>().event;
+
 	public setLevel(level: LogLevel): void;
+
 	public setLevel(): void { /* Null logger ignores levels. */ }
+
 	public getLevel(): LogLevel {
 		return LogLevel.Info;
 	}
+
 	public trace(message: string, ...args: unknown[]): void;
+
 	public trace(): void { /* Null logger discards output. */ }
+
 	public debug(message: string, ...args: unknown[]): void;
+
 	public debug(): void { /* Null logger discards output. */ }
+
 	public info(message: string, ...args: unknown[]): void;
+
 	public info(): void { /* Null logger discards output. */ }
+
 	public warn(message: string, ...args: unknown[]): void;
+
 	public warn(): void { /* Null logger discards output. */ }
+
 	public error(message: string | Error, ...args: unknown[]): void;
+
 	public error(): void { /* Null logger discards output. */ }
+
 	public critical(message: string | Error, ...args: unknown[]): void;
+
 	public critical(): void { /* Null logger discards output. */ }
+
 	public dispose(): void { /* No resources. */ }
+
 	public flush(): void { /* No buffered output. */ }
 }
 
@@ -909,6 +917,7 @@ export class NullLoggerService extends AbstractLoggerService {
 	constructor() {
 		super(LogLevel.Off, URI.parse('log:///log'));
 	}
+
 	protected override doCreateLogger(): ILogger {
 		return new NullLogger();
 	}

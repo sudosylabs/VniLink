@@ -1,4 +1,4 @@
-//! Application file-manager surface: roots, listings, rename and jobs.
+//! Application file-manager surface: roots, listings, rename, delete and jobs.
 //!
 //! Every method follows the crate threading rule: call from a background
 //! thread, never the UI thread. `job_poll` advances at most one file but
@@ -291,6 +291,21 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
+    /// Deletes one local entry inside its parent folder. `expected`
+    /// carries the listing token; a replaced source is refused instead of
+    /// deleting a different object.
+    pub fn delete_entry(
+        &self,
+        root: u64,
+        path: String,
+        name: String,
+        expected: Option<FfiEntryToken>,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .delete_entry(root, &path, &name, expected.map(to_entry_token))
+            .map_err(map_error)
+    }
+
     /// Lists a directory on the controlled computer. Needs the live
     /// session id and generation.
     pub fn fs_list(
@@ -342,6 +357,28 @@ impl VnilinkCore {
                 &name,
                 expected.map(to_entry_token),
                 &new_name,
+            )
+            .map_err(map_error)
+    }
+
+    /// Remote delete mirrors `delete_entry` on the controlled computer.
+    pub fn fs_delete(
+        &self,
+        session_id: u64,
+        generation: u64,
+        root: u64,
+        path: String,
+        name: String,
+        expected: Option<FfiEntryToken>,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .fs_delete(
+                session_id,
+                generation,
+                root,
+                &path,
+                &name,
+                expected.map(to_entry_token),
             )
             .map_err(map_error)
     }

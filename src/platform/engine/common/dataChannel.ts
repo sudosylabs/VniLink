@@ -2,7 +2,9 @@ import { isEngineCommand, record } from './engine.js';
 import type { EngineCommand } from './engine.js';
 
 export type DataChannelKind = 'video' | 'terminal' | 'input' | 'files' | 'camera' | 'audio';
+
 export type MediaChannelConfig = { readonly type: 'camera'; readonly deviceId: string; readonly width: number; readonly height: number; readonly fps: number } | { readonly type: 'audio'; readonly deviceId: string; readonly sourceKind: 'Microphone' | 'System'; readonly channels: 1 | 2; readonly voice: boolean };
+
 export interface DataChannelRequest {
 	media?: MediaChannelConfig;
 	requestId: string;
@@ -12,6 +14,7 @@ export interface DataChannelRequest {
 	rows?: number;
 	columns?: number;
 }
+
 export interface DataPacket {
 	type: 'data';
 	sequence: number;
@@ -19,12 +22,14 @@ export interface DataPacket {
 	data?: Uint8Array;
 	metadata: string;
 }
+
 export interface DataChannelMetrics {
 	sent: number;
 	acknowledged: number;
 	pending: number;
 	lastAckMs: number;
 }
+
 export function isChannelRequest(value: unknown): value is DataChannelRequest {
 	return (
 		record(value) &&
@@ -40,12 +45,15 @@ export function isChannelRequest(value: unknown): value is DataChannelRequest {
 		)
 	);
 }
+
 export function id(value: unknown): value is string {
 	return typeof value === 'string' && /^[1-9]\d{0,19}$/.test(value) && BigInt(value) <= 18446744073709551615n;
 }
+
 export function dimension(value: unknown): value is number {
 	return typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 65535;
 }
+
 export function isInputCommand(value: unknown): value is EngineCommand {
 	return (
 		isEngineCommand(value) &&
@@ -62,6 +70,7 @@ export function isInputCommand(value: unknown): value is EngineCommand {
 		].includes(value.type)
 	);
 }
+
 export function isDataPacket(value: unknown): value is DataPacket {
 	return (
 		record(value) &&
@@ -94,4 +103,26 @@ export function isMediaChannelConfig(value: unknown): value is MediaChannelConfi
 		return dimension(value.width) && value.width <= 4096 && value.width % 2 === 0 && dimension(value.height) && value.height <= 4096 && value.height % 2 === 0 && dimension(value.fps) && value.fps <= 60;
 	}
 	return value.type === 'audio' && (value.sourceKind === 'Microphone' || value.sourceKind === 'System') && (value.channels === 1 || value.channels === 2) && typeof value.voice === 'boolean';
+}
+
+export type DesktopAudioOperation = { type: 'status' } | { type: 'enabled'; enabled: boolean } | { type: 'muted'; muted: boolean };
+
+export interface DesktopAudioStatus {
+	phase: 'starting' | 'playing' | 'muted' | 'unavailable' | 'stopped';
+	enabled: boolean;
+	muted: boolean;
+	error: { code: string; message: string } | null;
+}
+
+export function isDesktopAudioOperation(value: unknown): value is DesktopAudioOperation {
+	return record(value) && ((value.type === 'status' && Object.keys(value).length === 1)
+		|| (value.type === 'enabled' && typeof value.enabled === 'boolean' && Object.keys(value).length === 2)
+		|| (value.type === 'muted' && typeof value.muted === 'boolean' && Object.keys(value).length === 2));
+}
+
+export function isDesktopAudioStatus(value: unknown): value is DesktopAudioStatus {
+	return record(value) && Object.keys(value).length === 4 && typeof value.phase === 'string'
+		&& ['starting', 'playing', 'muted', 'unavailable', 'stopped'].includes(value.phase)
+		&& typeof value.enabled === 'boolean' && typeof value.muted === 'boolean'
+		&& (value.error === null || (record(value.error) && Object.keys(value.error).length === 2 && typeof value.error.code === 'string' && value.error.code.length > 0 && value.error.code.length <= 64 && typeof value.error.message === 'string' && value.error.message.length <= 2048));
 }

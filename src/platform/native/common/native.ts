@@ -7,6 +7,7 @@
 import type { WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
 import type { Event } from '../../../base/common/event.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
+
 export interface IWindowState {
 	readonly windowId: number;
 	readonly revision: number;
@@ -17,6 +18,7 @@ export interface IWindowState {
 	readonly zoomFactor: number;
 	readonly backgroundMaterial: WindowBackgroundMaterial;
 }
+
 export interface IWindowControlsOptions {
 	readonly targetWindowId?: number;
 	readonly height?: number;
@@ -24,10 +26,13 @@ export interface IWindowControlsOptions {
 	readonly backgroundColor?: string;
 	readonly foregroundColor?: string;
 }
+
 export interface ITargetWindowOptions {
 	readonly targetWindowId?: number;
 }
+
 export const INativeHostService = createDecorator<INativeHostService>('nativeHostService');
+
 export interface INativeHostService {
 	readonly _serviceBrand: undefined;
 	readonly windowId: number;
@@ -41,6 +46,7 @@ export interface INativeHostService {
 	setFullScreen(fullscreen: boolean, options?: ITargetWindowOptions): Promise<void>;
 	updateWindowControls(options: IWindowControlsOptions): Promise<void>;
 }
+
 export type NativeHostMethod =
 	| 'getWindowState'
 	| 'focusWindow'
@@ -50,6 +56,7 @@ export type NativeHostMethod =
 	| 'closeWindow'
 	| 'setFullScreen'
 	| 'updateWindowControls';
+
 export function isWindowState(value: unknown): value is IWindowState {
 	if (typeof value !== 'object' || value === null) {
 		return false;
@@ -78,6 +85,7 @@ export function isWindowState(value: unknown): value is IWindowState {
 		(value.backgroundMaterial === 'none' || value.backgroundMaterial === 'vibrancy' || value.backgroundMaterial === 'mica')
 	);
 }
+
 export function isNativeHostRequest(method: unknown, args: unknown): method is NativeHostMethod {
 	if (typeof method !== 'string' || !Array.isArray(args) || !Number.isSafeInteger(args[0]) || args[0] <= 0) {
 		return false;

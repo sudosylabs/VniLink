@@ -66,11 +66,12 @@ impl VideoPoller {
         }
         Ok(self
             .inner
-            .recv_timeout(std::time::Duration::from_millis(timeout_ms)))
+            .recv_timeout(std::time::Duration::from_millis(timeout_ms))
+            .map(Into::into))
     }
 
     pub fn try_recv(&self) -> Option<FfiEncodedFrame> {
-        self.inner.try_recv()
+        self.inner.try_recv().map(Into::into)
     }
 
     pub fn lagged(&self) -> u64 {

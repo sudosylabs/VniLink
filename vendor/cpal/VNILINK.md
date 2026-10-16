@@ -19,3 +19,5 @@ and rejects cleanup longer than two seconds. Physical Linux/PipeWire server
 loss and permissions must still be validated. Remove this patch when an
 upstream release provides equivalent cancellation. This vendor package has an
 isolated workspace to avoid running upstream device-opening examples/tests.
+
+The PulseAudio host exposes `default_loopback_device`, resolving the monitor of the current default sink by the server-provided sink index. VniLink uses it for the System default audio source; enumeration neither activates capture nor requests consent.

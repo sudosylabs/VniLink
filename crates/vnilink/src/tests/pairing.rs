@@ -128,7 +128,7 @@ fn an_expired_file_is_rejected() {
 }
 
 #[test]
-fn opening_a_file_saves_the_writer_and_the_host_grants_on_connect() {
+fn one_file_pairs_both_directions_without_granting_services() {
     let host = start_direct();
     let controller = start_direct();
     let file = host
@@ -155,27 +155,49 @@ fn opening_a_file_saves_the_writer_and_the_host_grants_on_connect() {
     host.start_hosting().unwrap();
     let host_events = host.subscribe().unwrap();
     let session = std::thread::scope(|scope| {
-        let connecting = scope.spawn(|| controller.connect(&host.endpoint_id()));
+        let connecting = scope.spawn(|| connect_neutral(&controller, &host));
         let request = wait_request(&host);
         assert_eq!(request.endpoint_id, controller.endpoint_id());
         assert_eq!(request.check, controller.control_check());
         let granted = host.confirm_control_request(&request.check).unwrap();
-        assert!(granted.grants.control);
+        assert!(!granted.grants.control);
         assert!(!granted.grants.clipboard);
         assert!(!granted.grants.transfer);
         connecting.join().unwrap().unwrap()
     });
     assert_eq!(session.role, SessionRole::Controller);
     assert_eq!(session.phase, SessionPhase::Active);
-    assert_eq!(pairing_counts(&host_events), (1, 1));
-    assert!(host.snapshot().unwrap().devices[0].grants.control);
+    assert_eq!(pairing_counts(&host_events), (1, 0));
+    assert!(!host.snapshot().unwrap().devices[0].grants.control);
     assert!(host.control_request().unwrap().is_none());
 
     controller.disconnect().unwrap();
     wait_closed(&host, SessionRole::Host);
     wait_closed(&controller, SessionRole::Controller);
-    let again = controller.connect(&host.endpoint_id()).unwrap();
+    let again = connect_neutral(&controller, &host).unwrap();
     assert_eq!(again.phase, SessionPhase::Active);
+    assert_eq!(saved.os, Some(crate::OperatingSystem::local()));
+    assert_eq!(
+        host.snapshot().unwrap().devices[0].os,
+        Some(crate::OperatingSystem::local())
+    );
+    assert_eq!(
+        host.snapshot().unwrap().devices[0].presence,
+        crate::DevicePresence::Connected
+    );
+    controller.start_hosting().unwrap();
+    assert_eq!(
+        connect_neutral(&host, &controller).unwrap().phase,
+        SessionPhase::Active
+    );
+    assert_eq!(
+        host.sharing_policy().unwrap(),
+        crate::SharingPolicy::default()
+    );
+    assert_eq!(
+        controller.sharing_policy().unwrap(),
+        crate::SharingPolicy::default()
+    );
 }
 
 #[test]
@@ -203,7 +225,7 @@ fn the_host_rejects_a_control_request_whose_digits_do_not_match() {
     exchange(&host, &controller, true);
     host.start_hosting().unwrap();
     let denied = std::thread::scope(|scope| {
-        let connecting = scope.spawn(|| controller.connect(&host.endpoint_id()));
+        let connecting = scope.spawn(|| connect_neutral(&controller, &host));
         let request = wait_request(&host);
         let wrong = if request.check == "000" { "001" } else { "000" };
         assert!(matches!(
@@ -220,7 +242,7 @@ fn the_host_rejects_a_control_request_whose_digits_do_not_match() {
     assert_eq!(controller.snapshot().unwrap().devices.len(), 1);
 
     let session = std::thread::scope(|scope| {
-        let connecting = scope.spawn(|| controller.connect(&host.endpoint_id()));
+        let connecting = scope.spawn(|| connect_neutral(&controller, &host));
         let request = wait_request(&host);
         host.confirm_control_request(&request.check).unwrap();
         connecting.join().unwrap().unwrap()
@@ -235,7 +257,7 @@ fn a_file_without_the_control_switch_does_not_ask_the_host() {
     exchange(&host, &controller, false);
     host.start_hosting().unwrap();
     let events = host.subscribe().unwrap();
-    let denied = controller.connect(&host.endpoint_id());
+    let denied = connect_neutral(&controller, &host);
     assert!(
         matches!(denied, Err(Error::Unauthorized)),
         "control switch off returned {denied:?}"
@@ -257,7 +279,7 @@ fn rejecting_the_control_request_leaves_the_file_usable() {
     exchange(&host, &controller, true);
     host.start_hosting().unwrap();
     let denied = std::thread::scope(|scope| {
-        let connecting = scope.spawn(|| controller.connect(&host.endpoint_id()));
+        let connecting = scope.spawn(|| connect_neutral(&controller, &host));
         let _request = wait_request(&host);
         host.reject_control_request().unwrap();
         connecting.join().unwrap()
@@ -268,7 +290,7 @@ fn rejecting_the_control_request_leaves_the_file_usable() {
         Err(Error::NoControlRequest)
     ));
     let session = std::thread::scope(|scope| {
-        let connecting = scope.spawn(|| controller.connect(&host.endpoint_id()));
+        let connecting = scope.spawn(|| connect_neutral(&controller, &host));
         let request = wait_request(&host);
         host.confirm_control_request(&controller.control_check())
             .unwrap();
@@ -298,7 +320,7 @@ fn approving_control_after_the_window_expires_is_refused() {
     controller.confirm_pairing(&preview, &file.check).unwrap();
     host.start_hosting().unwrap();
     std::thread::scope(|scope| {
-        let connecting = scope.spawn(|| controller.connect(&host.endpoint_id()));
+        let connecting = scope.spawn(|| connect_neutral(&controller, &host));
         let request = wait_request(&host);
         std::thread::sleep(Duration::from_secs(3));
         assert!(matches!(
@@ -321,15 +343,12 @@ fn accepting_a_second_invitation_keeps_authorized_grants() {
     let saved = controller.accept_invitation(&first).unwrap();
     assert!(!saved.grants.clipboard);
     controller
-        .authorize(
-            &host.endpoint_id(),
-            Grants {
-                view: false,
-                control: false,
-                clipboard: true,
-                transfer: true,
-            },
-        )
+        .set_desktop_sharing(Grants {
+            view: false,
+            control: false,
+            clipboard: true,
+            transfer: true,
+        })
         .unwrap();
     let second = host.create_invitation(Duration::from_secs(60)).unwrap();
     let kept = controller.accept_invitation(&second).unwrap();
@@ -339,7 +358,7 @@ fn accepting_a_second_invitation_keeps_authorized_grants() {
 }
 
 #[test]
-fn approving_control_keeps_authorized_clipboard_and_transfer() {
+fn remembered_peer_denied_by_global_policy_never_prompts_again() {
     let host = start_direct();
     let controller = start_direct();
     // The host pairs the controller first so it can authorize side grants.
@@ -348,30 +367,42 @@ fn approving_control_keeps_authorized_clipboard_and_transfer() {
         .unwrap();
     let preview = host.open_pairing_file(&listing.bytes).unwrap();
     host.confirm_pairing(&preview, &listing.check).unwrap();
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: false,
-            control: false,
-            clipboard: true,
-            transfer: true,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: false,
+        control: false,
+        clipboard: true,
+        transfer: true,
+    })
     .unwrap();
 
     exchange(&host, &controller, true);
     host.start_hosting().unwrap();
-    let session = std::thread::scope(|scope| {
-        let connecting = scope.spawn(|| controller.connect(&host.endpoint_id()));
-        let request = wait_request(&host);
-        let granted = host.confirm_control_request(&request.check).unwrap();
-        assert!(granted.grants.control);
-        assert!(granted.grants.clipboard);
-        assert!(granted.grants.transfer);
-        connecting.join().unwrap().unwrap()
-    });
+    assert!(matches!(
+        controller.connect(&host.endpoint_id()),
+        Err(Error::Unauthorized)
+    ));
+    assert!(host.control_request().unwrap().is_none());
+    let session = connect_neutral(&controller, &host).unwrap();
     assert_eq!(session.phase, SessionPhase::Active);
-    controller.disconnect().unwrap();
-    wait_closed(&host, SessionRole::Host);
-    wait_closed(&controller, SessionRole::Controller);
+    assert!(host.sharing_policy().unwrap().clipboard);
+    assert!(!host.sharing_policy().unwrap().view);
+}
+
+fn connect_neutral(controller: &Core, host: &Core) -> Result<crate::SessionInfo, Error> {
+    let pending = controller.begin_connect_services(&host.endpoint_id())?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let session = controller.controller_session(pending.id)?;
+        match session.phase {
+            SessionPhase::Active => return Ok(session),
+            SessionPhase::Failed(_) => return Err(Error::Unauthorized),
+            SessionPhase::Closed => return Err(Error::Unauthorized),
+            _ => {}
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "neutral connect timed out"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }

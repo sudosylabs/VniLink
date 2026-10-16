@@ -4,6 +4,7 @@ import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 
 const bundle = await build({ entryPoints: [fileURLToPath(new URL('../../src/platform/engine/common/engine.ts', import.meta.url))], bundle: true, write: false, format: 'esm', platform: 'node' });
+
 const { isEngineCommand, isEngineReply, isEngineEvent } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 
 test('control commands reject privileged methods, malformed IDs and extra authority', () => {
@@ -16,7 +17,7 @@ test('control commands reject privileged methods, malformed IDs and extra author
 	assert.equal(isEngineCommand({ type: 'openPairingFile', bytes: [256] }), false);
 	assert.equal(isEngineCommand({ type: 'createInvitation', ttlSeconds: 60 }), true);
 	assert.equal(isEngineCommand({ type: 'createInvitation', ttlSeconds: NaN }), false);
-	assert.equal(isEngineCommand({ type: 'authorize', endpointId: 'peer', view: true, control: true, clipboard: false, transfer: false }), true);
+	assert.equal(isEngineCommand({ type: 'authorize', endpointId: 'peer', view: true, control: true, clipboard: false, transfer: false }), false);
 	assert.equal(isEngineCommand({ type: 'authorize', endpointId: 'peer', view: true, control: true, clipboard: false }), false);
 	assert.equal(isEngineCommand({ type: 'connect', endpointId: 'peer' }), true);
 	assert.equal(isEngineCommand({ type: 'beginConnect', endpointId: 'peer' }), true);
@@ -32,6 +33,7 @@ test('control commands reject privileged methods, malformed IDs and extra author
 	assert.equal(isEngineCommand({ type: 'openPairingFileBase64', data: Buffer.from([1, 2, 3]).toString('base64') }), true);
 	assert.equal(isEngineCommand({ type: 'openPairingFileBase64', data: '!!!' }), false);
 });
+
 test('identity, codecs, relays and session settings validate exactly', () => {
 	assert.equal(isEngineCommand({ type: 'endpoint' }), true);
 	assert.equal(isEngineCommand({ type: 'endpoint', extra: true }), false);
@@ -76,6 +78,7 @@ test('identity, codecs, relays and session settings validate exactly', () => {
 	assert.equal(isEngineReply({ type: 'events', events: [{ type: 'hostingChanged', hosting: true }], lagged: '0' }), true);
 	assert.equal(isEngineReply({ type: 'events', events: [{ type: 'bogus' }], lagged: '0' }), false);
 });
+
 test('bridge events keep core names and lossless ids', () => {
 	assert.equal(isEngineEvent({ type: 'hostingChanged', hosting: false }), true);
 	assert.equal(isEngineEvent({ type: 'devicePaired', endpoint_id: 'peer' }), true);
@@ -96,11 +99,12 @@ test('bridge events keep core names and lossless ids', () => {
 	assert.equal(isEngineEvent({ type: 'hostLocked', locked: true, extra: 1 }), false);
 	assert.equal(isEngineEvent({ type: 'nope' }), false);
 });
+
 test('service commands validate kinds, policies, sessions and jobs exactly', () => {
-	assert.equal(isEngineCommand({ type: 'servicePermissions', endpointId: 'peer' }), true);
-	assert.equal(isEngineCommand({ type: 'authorizeService', endpointId: 'peer', kind: 'Terminal', allowed: true }), true);
+	assert.equal(isEngineCommand({ type: 'servicePermissions', endpointId: 'peer' }), false);
+	assert.equal(isEngineCommand({ type: 'authorizeService', endpointId: 'peer', kind: 'Terminal', allowed: true }), false);
 	assert.equal(isEngineCommand({ type: 'authorizeService', endpointId: 'peer', kind: 'Hologram', allowed: true }), false);
-	assert.equal(isEngineCommand({ type: 'authorizeRecording', endpointId: 'peer', allowed: false }), true);
+	assert.equal(isEngineCommand({ type: 'authorizeRecording', endpointId: 'peer', allowed: false }), false);
 	assert.equal(isEngineCommand({ type: 'terminalPolicy' }), true);
 	const policy = { allow_persistence: true, max_sessions: 4, max_sessions_per_peer: 2, history_bytes: 65536, replay_bytes: 16384, detached_timeout_secs: 300 };
 	assert.equal(isEngineCommand({ type: 'setTerminalPolicy', policy }), true);
@@ -118,7 +122,7 @@ test('service commands validate kinds, policies, sessions and jobs exactly', () 
 	assert.equal(isEngineCommand({ type: 'filesJobCancel', subscriptionId: '1', jobId: '2' }), true);
 	assert.equal(isEngineCommand({ type: 'filesJobResume', subscriptionId: '1', jobId: '2' }), true);
 	assert.equal(isEngineCommand({ type: 'filesJobCancel', subscriptionId: '1', jobId: 'nope' }), false);
-	assert.equal(isEngineReply({ type: 'servicePermissions', permissions: { desktop: true, files: true, terminal: false, camera: false, system_audio: false, microphone: false, recording: false, system_actions: false } }), true);
+	assert.equal(isEngineReply({ type: 'servicePermissions', permissions: { desktop: true, files: true, terminal: false, camera: false, system_audio: false, microphone: false, recording: false, system_actions: false } }), false);
 	assert.equal(isEngineReply({ type: 'terminalPolicy', policy }), true);
 	assert.equal(isEngineReply({ type: 'terminalSessions', sessions: [] }), true);
 	assert.equal(isEngineReply({ type: 'terminalSessions', sessions: [{ id: 'a', process_id: 42, shell: '/bin/zsh', rows: 24, columns: 80, persistent: true, attached: true }] }), true);
@@ -128,9 +132,20 @@ test('service commands validate kinds, policies, sessions and jobs exactly', () 
 	assert.equal(isEngineReply({ type: 'job', job: { ...job, state: 'Warping' } }), false);
 	assert.equal(isEngineReply({ type: 'fileJobsSubscription', subscriptionId: '5' }), true);
 });
+
 test('pairing handles cross the bridge as lossless decimal strings', () => {
 	const preview = { id: '18446744073709551615', endpoint_id: 'peer', check: '123', expires_at_ms: '18446744073709551615' };
 	assert.equal(isEngineReply({ type: 'pairingPreview', preview }), true);
 	assert.equal(isEngineReply({ type: 'pairingPreview', preview: { ...preview, id: Number(preview.id) } }), false);
 	assert.equal(isEngineReply({ type: 'device', device: { endpoint_id: 'peer' } }), false);
+});
+
+test('global sharing policy rejects missing fields, extras and peer-scoped writes', () => {
+	const policy = { view: false, control: false, clipboard: false, files: false, terminal: false, camera: false, system_audio: false, microphone: false, recording: false, system_actions: false };
+	assert.equal(isEngineCommand({ type: 'sharingPolicy' }), true);
+	assert.equal(isEngineCommand({ type: 'setSharingPolicy', policy }), true);
+	assert.equal(isEngineReply({ type: 'sharingPolicy', policy }), true);
+	assert.equal(isEngineCommand({ type: 'setSharingPolicy', policy: { ...policy, camera: 'yes' } }), false);
+	assert.equal(isEngineCommand({ type: 'setSharingPolicy', policy, endpointId: 'peer' }), false);
+	assert.equal(isEngineCommand({ type: 'setSharingPolicy', policy: { ...policy, extra: true } }), false);
 });

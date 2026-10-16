@@ -74,7 +74,7 @@ pub(super) fn remember_peer_addresses(
     crate::address::install(&mut device, &announcement)?;
     let endpoint_id = device.display_id.clone();
     state.trust.pair(device)?;
-    if let Err(error) = persist(shared, &state) {
+    if let Err(error) = persist(shared, &mut state) {
         let _ = state.trust.pair(previous);
         return Err(error);
     }
@@ -106,7 +106,7 @@ pub(super) fn remember_peer_hostname(
     }
     let previous = state.trust.hostname_of(peer_key);
     state.trust.set_hostname(peer_key, name.clone())?;
-    if let Err(error) = persist(shared, &state) {
+    if let Err(error) = persist(shared, &mut state) {
         match previous {
             Some(previous) => {
                 let _ = state.trust.set_hostname(peer_key, previous);
@@ -160,7 +160,7 @@ impl Core {
             Some(name) => state.trust.set_pet_name(&key, name)?,
             None => state.trust.clear_pet_name(&key),
         }
-        if let Err(error) = persist(&self.shared, &state) {
+        if let Err(error) = persist(&self.shared, &mut state) {
             match previous {
                 Some(name) => {
                     let _ = state.trust.set_pet_name(&key, name);
@@ -248,5 +248,83 @@ impl Core {
                 }
             })
             .collect())
+    }
+}
+
+/// Multiple services and directions may share a peer. A live connection wins
+/// over an older finished record; no relay or cached-address guess is involved.
+pub(super) fn presence(state: &State, peer: &str) -> crate::DevicePresence {
+    let phases: Vec<_> = state
+        .incoming
+        .values()
+        .chain(state.outgoing.values())
+        .filter(|session| session.peer_id == peer)
+        .map(|session| &session.phase)
+        .collect();
+    if phases.contains(&&SessionPhase::Active) {
+        crate::DevicePresence::Connected
+    } else if phases.contains(&&SessionPhase::Reconnecting) {
+        crate::DevicePresence::Reconnecting
+    } else if phases.iter().any(|phase| {
+        matches!(
+            phase,
+            SessionPhase::Connecting
+                | SessionPhase::Authenticated
+                | SessionPhase::Authorized
+                | SessionPhase::Negotiating
+        )
+    }) {
+        crate::DevicePresence::Connecting
+    } else {
+        crate::DevicePresence::Disconnected
+    }
+}
+
+pub(super) fn remember_peer_os(
+    shared: &Shared,
+    peer: &[u8; 32],
+    os: crate::OperatingSystem,
+) -> Result<(), Error> {
+    let mut state = lock(&shared.state);
+    if state.trust.get(peer).is_none() || state.trust.os_of(peer) == Some(os) {
+        return Ok(());
+    }
+    let previous = state.trust.clone();
+    state.trust.set_os(peer, os)?;
+    if let Err(error) = persist(shared, &mut state) {
+        state.trust = previous;
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+
+    #[test]
+    fn failed_first_hostname_save_preserves_signed_os_metadata() {
+        let store = crate::installation::MemoryStore::empty();
+        let host = Core::open_direct(Arc::new(store.clone()), RelaySettings::public_n0()).unwrap();
+        let peer = crate::tests::support::start_direct();
+        host.accept_invitation(&peer.create_invitation(Duration::from_secs(60)).unwrap())
+            .unwrap();
+        let key = parse_endpoint_id(&peer.endpoint_id()).unwrap();
+        {
+            let mut state = host.shared.state.lock().unwrap();
+            state.trust.clear_hostname(&key);
+            state
+                .trust
+                .set_os(&key, crate::OperatingSystem::Windows)
+                .unwrap();
+        }
+        store.fail_next_save(Error::StoreUnavailable);
+        assert!(matches!(
+            remember_peer_hostname(&host.shared, &key, Some("new name".into())),
+            Err(Error::StoreUnavailable)
+        ));
+        let device = &host.snapshot().unwrap().devices[0];
+        assert_eq!(device.hostname, None);
+        assert_eq!(device.os, Some(crate::OperatingSystem::Windows));
     }
 }

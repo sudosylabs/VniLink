@@ -7,7 +7,7 @@
 //! counts, not artifacts.
 
 use super::support::{pair_for_control, start_direct, RecordingDesktop};
-use crate::{Core, Error, Grants, ServiceKind, ServicePhase, SessionPhase};
+use crate::{Core, Grants, ServiceKind, SessionPhase};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -58,14 +58,11 @@ fn repeated_sessions_leave_no_residue() {
     }))
     .unwrap();
     pair_for_control(&host, &controller);
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            ..Grants::default()
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        ..Grants::default()
+    })
     .unwrap();
 
     // One warmup cycle so allocator and runtime caches settle before the

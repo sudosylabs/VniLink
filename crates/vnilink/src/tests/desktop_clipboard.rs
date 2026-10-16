@@ -44,16 +44,13 @@ fn owner(host: &Core) -> crate::ServiceInfo {
         .find(|s| s.kind == ServiceKind::Desktop)
         .unwrap()
 }
-fn grant(host: &Core, controller: &Core, clipboard: bool) {
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard,
-            transfer: false,
-        },
-    )
+fn grant(host: &Core, _controller: &Core, clipboard: bool) {
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard,
+        transfer: false,
+    })
     .unwrap();
 }
 

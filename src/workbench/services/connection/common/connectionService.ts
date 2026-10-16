@@ -6,8 +6,11 @@ export interface ConnectionSettings {
 	readonly saved: readonly Readonly<RelayInfo>[];
 	readonly active: { readonly publicRelay: boolean; readonly urls: readonly string[] };
 }
+
 export type ConnectionUpdate = { readonly mode: 'public' } | { readonly mode: 'custom'; readonly relays: readonly RelayInput[] };
+
 export const IConnectionService = createDecorator<IConnectionService>('connectionService');
+
 export interface IConnectionService {
 	readonly _serviceBrand: undefined;
 	readonly available: boolean;

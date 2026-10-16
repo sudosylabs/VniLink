@@ -64,15 +64,12 @@ fn pair(host: &Core, controller: &Core, clipboard: bool) {
         .create_invitation(Duration::from_secs(60))
         .unwrap();
     host.accept_invitation(&back).unwrap();
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard,
+        transfer: false,
+    })
     .unwrap();
 }
 
@@ -144,15 +141,12 @@ fn clipboard_requires_the_grant_and_leaves_the_session_up() {
         controller.submit_clipboard(session.id, session.generation + 1, "nope"),
         Err(Error::StaleSession)
     ));
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard: true,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard: true,
+        transfer: false,
+    })
     .unwrap();
     controller
         .submit_clipboard(session.id, session.generation, "secret-paste")
@@ -210,15 +204,12 @@ fn the_host_publishes_text_the_controller_can_read() {
         Err(Error::ClipboardDenied)
     ));
     assert!(controller.clipboard_text().unwrap().is_none());
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard: true,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard: true,
+        transfer: false,
+    })
     .unwrap();
     // Controller connect sends Ready before the host installs its side-stream
     // sender. Wait for that asynchronous setup rather than assuming scheduler

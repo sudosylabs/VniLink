@@ -198,6 +198,7 @@ pub(crate) enum ControlMessage {
         /// The controller's display name, if it has one. Stored on the peer
         /// record so the host's device list can name it. Display-only.
         hostname: Option<String>,
+        os: crate::OperatingSystem,
     },
     Accept {
         stamp: SessionStamp,
@@ -208,6 +209,7 @@ pub(crate) enum ControlMessage {
         /// The host's display name, if it has one. Stored on the peer record
         /// so the controller's device list can name it. Display-only.
         hostname: Option<String>,
+        os: crate::OperatingSystem,
     },
     Reject(RejectCode),
     Input {
@@ -284,6 +286,7 @@ impl ControlMessage {
                 files_only,
                 services_only,
                 hostname,
+                os,
             } => {
                 let mut bytes = Vec::with_capacity(16);
                 bytes.push(1);
@@ -301,6 +304,7 @@ impl ControlMessage {
                     bytes.push(u8::from(*services_only));
                 }
                 write_hostname(&mut bytes, hostname);
+                bytes.push(os.encode());
                 bytes
             }
             Self::Accept {
@@ -310,6 +314,7 @@ impl ControlMessage {
                 codec,
                 quality,
                 hostname,
+                os,
             } => {
                 let mut bytes = Vec::with_capacity(32);
                 bytes.push(2);
@@ -322,6 +327,7 @@ impl ControlMessage {
                 bytes.push(quality.max_frame_rate);
                 bytes.extend_from_slice(&quality.max_bitrate_kbps.to_be_bytes());
                 write_hostname(&mut bytes, hostname);
+                bytes.push(os.encode());
                 bytes
             }
             Self::Reject(code) => {
@@ -445,7 +451,12 @@ impl ControlMessage {
                     decode,
                     files_only,
                     services_only,
-                    hostname: read_hostname(&bytes[hostname_start..])?,
+                    hostname: read_hostname(
+                        bytes
+                            .get(hostname_start..bytes.len() - 1)
+                            .ok_or(Error::Malformed)?,
+                    )?,
+                    os: crate::OperatingSystem::decode(*bytes.last().ok_or(Error::Malformed)?)?,
                 })
             }
             2 if bytes.len() >= 32 => {
@@ -462,7 +473,10 @@ impl ControlMessage {
                     monitor_height: u16::from_be_bytes([bytes[19], bytes[20]]),
                     codec: bytes[21],
                     quality,
-                    hostname: read_hostname(&bytes[31..])?,
+                    hostname: read_hostname(
+                        bytes.get(31..bytes.len() - 1).ok_or(Error::Malformed)?,
+                    )?,
+                    os: crate::OperatingSystem::decode(*bytes.last().ok_or(Error::Malformed)?)?,
                 })
             }
             3 if bytes.len() == 3 => Ok(Self::Reject(RejectCode::from_u16(u16::from_be_bytes([

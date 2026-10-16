@@ -1,14 +1,23 @@
-import { spawn } from 'node:child_process';
 import electron from 'electron';
 import { fileURLToPath } from 'node:url';
+import { ProcessRunner } from '../build/lib/processes.mjs';
+import { NativeBuild } from '../build/lib/nativeBuild.mjs';
+
 const root = fileURLToPath(new URL('../', import.meta.url));
-const child = spawn(electron, [root, ...process.argv.slice(2)], { stdio: 'inherit', cwd: root });
-child.on('error', (error) => {
-	console.error(error); process.exitCode = 1;
+
+const runner = new ProcessRunner();
+
+process.once('SIGINT', () => {
+	void runner.stop();
 });
-child.on('exit', (code, signal) => {
-	process.exitCode = code ?? (signal ? 1 : 0);
+
+process.once('SIGTERM', () => {
+	void runner.stop();
 });
-for (const signal of ['SIGINT', 'SIGTERM']) {
-	process.on(signal, () => child.kill(signal));
+
+try {
+	await new NativeBuild(root, runner).assertFresh();
+	await runner.run(electron, [root, ...process.argv.slice(2)], { cwd: root });
+} finally {
+	await runner.stop();
 }

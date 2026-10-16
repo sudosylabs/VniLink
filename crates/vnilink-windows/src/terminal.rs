@@ -33,7 +33,8 @@ use windows::{
                 InitializeProcThreadAttributeList, OpenThread, TerminateProcess,
                 UpdateProcThreadAttribute, WaitForSingleObject, EXTENDED_STARTUPINFO_PRESENT,
                 LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
-                PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTUPINFOEXW, THREAD_TERMINATE,
+                PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+                THREAD_TERMINATE,
             },
             IO::CancelSynchronousIo,
         },
@@ -285,6 +286,10 @@ impl HostTerminalFactory for WindowsTerminalFactory {
         let attributes = Attributes::new(console)?;
         let mut info = STARTUPINFOEXW::default();
         info.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+        // Explicit null standard handles make the child use the pseudoconsole.
+        // Otherwise Windows can inherit the parent's redirected stdout/stderr
+        // and bypass the terminal output pipe (Microsoft terminal issue #4585).
+        info.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
         info.lpAttributeList = attributes.list;
         let program = wide(self.program.as_os_str());
         let directory = wide(self.directory.as_os_str());
@@ -443,7 +448,6 @@ mod tests {
         ));
     }
     #[test]
-    #[ignore = "requires actual Windows 10 1809+ ConPTY; GNU cross-compilation does not execute it"]
     fn conpty_executes_unicode_and_releases_its_process_on_close() {
         let factory = WindowsTerminalFactory::for_current_user().unwrap();
         let mut backend = factory

@@ -83,7 +83,7 @@ fn ffi_audio_callback_format_mute_owner_and_capability_contract() {
         .accept_invitation(host.create_invitation(60).unwrap())
         .unwrap();
     host.start_hosting().unwrap();
-    host.authorize_service(controller.endpoint_id(), FfiServiceKind::Microphone, true)
+    host.set_service_sharing(FfiServiceKind::Microphone, true)
         .unwrap();
     let source = Arc::new(Mutex::new(None));
     let encoder = Arc::new(Mutex::new(

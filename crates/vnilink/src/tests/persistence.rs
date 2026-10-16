@@ -75,8 +75,7 @@ fn restart_keeps_the_endpoint_grants_and_addresses() {
         .create_invitation(Duration::from_secs(60))
         .unwrap();
     host.accept_invitation(&invitation).unwrap();
-    host.authorize(&controller.endpoint_id(), all_grants())
-        .unwrap();
+    host.set_desktop_sharing(all_grants()).unwrap();
     let id = host.endpoint_id();
     let secret = host.export_identity();
     let devices = host.snapshot().unwrap().devices;
@@ -127,8 +126,7 @@ fn reaccepting_an_invitation_keeps_saved_grants() {
         .create_invitation(Duration::from_secs(60))
         .unwrap();
     host.accept_invitation(&first).unwrap();
-    host.authorize(&controller.endpoint_id(), all_grants())
-        .unwrap();
+    host.set_desktop_sharing(all_grants()).unwrap();
     let second = controller
         .create_invitation(Duration::from_secs(60))
         .unwrap();
@@ -150,7 +148,11 @@ fn locked_and_unavailable_stores_fail_without_writing() {
     );
     assert_eq!(
         Error::StoreUnavailable.to_string(),
-        "the credential store is unavailable"
+        "the installation store is unavailable"
+    );
+    assert_eq!(
+        Error::StoreRecoveryRequired.to_string(),
+        "the installation store must be reopened and VniLink restarted"
     );
     assert_eq!(
         Error::CorruptRecord.to_string(),
@@ -221,8 +223,7 @@ fn reset_identity_forgets_trust_and_keeps_the_saved_relay() {
         .create_invitation(Duration::from_secs(120))
         .unwrap();
     host.accept_invitation(&invitation).unwrap();
-    host.authorize(&controller.endpoint_id(), all_grants())
-        .unwrap();
+    host.set_desktop_sharing(all_grants()).unwrap();
     let settings = credentialed_relay();
     host.set_relay(settings.clone()).unwrap();
     assert_eq!(host.relay_configuration().unwrap(), settings);
@@ -306,7 +307,7 @@ fn a_failed_save_keeps_the_previous_record() {
     store.fail_next_save(Error::StoreLocked);
     drain(&events);
     assert!(matches!(
-        host.authorize(&controller.endpoint_id(), all_grants()),
+        host.set_desktop_sharing(all_grants()),
         Err(Error::StoreLocked)
     ));
     assert_eq!(
@@ -316,8 +317,7 @@ fn a_failed_save_keeps_the_previous_record() {
     assert!(!saw(&events, |event| {
         matches!(event, CoreEvent::DeviceAuthorized { .. })
     }));
-    host.authorize(&controller.endpoint_id(), all_grants())
-        .unwrap();
+    host.set_desktop_sharing(all_grants()).unwrap();
 
     let again = controller
         .create_invitation(Duration::from_secs(60))
@@ -330,15 +330,12 @@ fn a_failed_save_keeps_the_previous_record() {
     assert_eq!(host.snapshot().unwrap().devices[0].grants, all_grants());
     host.accept_invitation(&again).unwrap();
     assert_eq!(host.snapshot().unwrap().devices[0].grants, all_grants());
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: false,
+    })
     .unwrap();
 
     let host_invitation = host.create_invitation(Duration::from_secs(60)).unwrap();
@@ -413,14 +410,18 @@ fn unpair_removal_and_rollback_persist() {
     host.accept_invitation(&invitation).unwrap();
     assert_eq!(host.snapshot().unwrap().devices.len(), 1);
 
-    // A failed save restores the device and emits nothing.
+    host.set_peer_pet_name(&controller.endpoint_id(), Some("Office computer"))
+        .unwrap();
+    let before = host.snapshot().unwrap().devices;
+    assert_eq!(before[0].os, Some(crate::OperatingSystem::local()));
+    // A failed save restores the entire identity and metadata, and emits nothing.
     store.fail_next_save(Error::StoreLocked);
     drain(&events);
     assert!(matches!(
         host.unpair(&controller.endpoint_id()),
         Err(Error::StoreLocked)
     ));
-    assert_eq!(host.snapshot().unwrap().devices.len(), 1);
+    assert_eq!(host.snapshot().unwrap().devices, before);
     assert!(!saw(&events, |event| {
         matches!(event, CoreEvent::DeviceUnpaired { .. })
     }));
@@ -455,13 +456,12 @@ fn service_permissions_are_independent_persisted_and_rollback_before_revocation(
         host.service_permissions(&id).unwrap(),
         ServicePermissions::default()
     );
-    host.authorize_service(&id, Kind::Terminal, true).unwrap();
-    host.authorize_service(&id, Kind::Camera, true).unwrap();
-    host.authorize_service(&id, Kind::SystemAudio, true)
-        .unwrap();
-    host.authorize_service(&id, Kind::Microphone, true).unwrap();
-    host.authorize_recording(&id, true).unwrap();
-    host.authorize(&id, all_grants()).unwrap();
+    host.set_service_sharing(Kind::Terminal, true).unwrap();
+    host.set_service_sharing(Kind::Camera, true).unwrap();
+    host.set_service_sharing(Kind::SystemAudio, true).unwrap();
+    host.set_service_sharing(Kind::Microphone, true).unwrap();
+    host.set_recording_sharing(true).unwrap();
+    host.set_desktop_sharing(all_grants()).unwrap();
     assert_eq!(
         host.service_permissions(&id).unwrap(),
         ServicePermissions {
@@ -475,7 +475,7 @@ fn service_permissions_are_independent_persisted_and_rollback_before_revocation(
             system_actions: false
         }
     );
-    host.authorize_service(&id, Kind::Files, false).unwrap();
+    host.set_service_sharing(Kind::Files, false).unwrap();
     assert_eq!(
         host.service_permissions(&id).unwrap(),
         ServicePermissions {
@@ -493,20 +493,20 @@ fn service_permissions_are_independent_persisted_and_rollback_before_revocation(
     let saved = store.record().unwrap();
     store.fail_next_save(Error::StoreLocked);
     assert!(matches!(
-        host.authorize_service(&id, Kind::Terminal, false),
+        host.set_service_sharing(Kind::Terminal, false),
         Err(Error::StoreLocked)
     ));
     assert!(host.service_permissions(&id).unwrap().terminal);
     assert_eq!(store.record().unwrap(), saved);
     store.fail_next_save(Error::StoreLocked);
     assert!(matches!(
-        host.authorize_service(&id, Kind::SystemAudio, false),
+        host.set_service_sharing(Kind::SystemAudio, false),
         Err(Error::StoreLocked)
     ));
     assert!(host.service_permissions(&id).unwrap().system_audio);
     store.fail_next_save(Error::StoreLocked);
     assert!(matches!(
-        host.authorize_recording(&id, false),
+        host.set_recording_sharing(false),
         Err(Error::StoreLocked)
     ));
     assert!(host.service_permissions(&id).unwrap().recording);
@@ -553,20 +553,13 @@ fn service_permissions_are_independent_persisted_and_rollback_before_revocation(
             system_actions: false
         }
     );
-    reopened.revoke(&id).unwrap();
-    assert_eq!(
-        reopened.service_permissions(&id).unwrap(),
-        ServicePermissions::default()
-    );
     reopened.unpair(&id).unwrap();
     assert!(matches!(
         reopened.service_permissions(&id),
         Err(Error::NotPaired)
     ));
-    assert!(matches!(
-        reopened.authorize_service(&id, Kind::Camera, true),
-        Err(Error::NotPaired)
-    ));
+    reopened.set_service_sharing(Kind::Camera, true).unwrap();
+    assert!(reopened.sharing_policy().unwrap().camera);
 }
 
 #[test]
@@ -744,4 +737,260 @@ fn relay_restart_required_includes_credentials_and_clears_when_reverted() {
     assert!(core.relay_restart_required().unwrap());
     core.set_relay(original).unwrap();
     assert!(!core.relay_restart_required().unwrap());
+}
+
+fn assert_fenced(host: &Core, store: &MemoryStore, before: &[u8], attempts_after_failure: usize) {
+    assert_eq!(store.record().as_deref(), Some(before));
+    assert_eq!(store.save_attempts(), attempts_after_failure);
+    assert!(matches!(host.snapshot(), Err(Error::ShutDown)));
+    assert!(matches!(
+        host.set_desktop_sharing(all_grants()),
+        Err(Error::ShutDown)
+    ));
+    assert_eq!(store.save_attempts(), attempts_after_failure);
+    host.shutdown();
+    assert_eq!(host.endpoint_close_count(), 1);
+}
+
+#[test]
+fn the_first_uncertain_save_does_not_keep_an_identity() {
+    let store = MemoryStore::empty();
+    store.fail_next_save(Error::StoreRecoveryRequired);
+    assert!(matches!(
+        Core::open_direct(Arc::new(store.clone()), RelaySettings::public_n0()),
+        Err(Error::StoreRecoveryRequired)
+    ));
+    assert!(store.record().is_none());
+    assert_eq!(store.save_attempts(), 1);
+}
+
+#[test]
+fn an_unavailable_save_does_not_fence_the_engine() {
+    let store = MemoryStore::empty();
+    let host = open_loop(&store, RelaySettings::public_n0());
+    let before = store.record().unwrap();
+    let attempts = store.save_attempts();
+    store.fail_next_save(Error::StoreUnavailable);
+    let events = host.subscribe().unwrap();
+    drain(&events);
+    assert!(matches!(
+        host.set_desktop_sharing(all_grants()),
+        Err(Error::StoreUnavailable)
+    ));
+    assert_eq!(store.record().as_deref(), Some(before.as_slice()));
+    assert_eq!(store.save_attempts(), attempts + 1);
+    assert!(host.snapshot().unwrap().devices.is_empty());
+    assert!(!saw(&events, |event| {
+        matches!(event, CoreEvent::DeviceAuthorized { .. })
+    }));
+    host.set_desktop_sharing(all_grants()).unwrap();
+    assert_eq!(store.save_attempts(), attempts + 2);
+    assert_eq!(host.sharing_policy().unwrap().grants(), all_grants());
+    host.shutdown();
+    assert_eq!(host.endpoint_close_count(), 1);
+}
+
+#[test]
+fn an_uncertain_consent_save_fences_without_a_second_write() {
+    let store = MemoryStore::empty();
+    let host = open_loop(&store, RelaySettings::public_n0());
+    let before = store.record().unwrap();
+    let attempts = store.save_attempts();
+    store.fail_next_save(Error::StoreRecoveryRequired);
+    let events = host.subscribe().unwrap();
+    drain(&events);
+    assert!(matches!(
+        host.set_desktop_sharing(all_grants()),
+        Err(Error::StoreRecoveryRequired)
+    ));
+    assert!(!saw(&events, |event| {
+        matches!(event, CoreEvent::DeviceAuthorized { .. })
+    }));
+    assert_fenced(&host, &store, &before, attempts + 1);
+}
+
+#[test]
+fn an_uncertain_pairing_save_fences_without_remembering_the_peer() {
+    let store = MemoryStore::empty();
+    let host = open_loop(&store, RelaySettings::public_n0());
+    let controller = peer();
+    let invitation = controller
+        .create_invitation(Duration::from_secs(60))
+        .unwrap();
+    let before = store.record().unwrap();
+    let attempts = store.save_attempts();
+    store.fail_next_save(Error::StoreRecoveryRequired);
+    let events = host.subscribe().unwrap();
+    drain(&events);
+    assert!(matches!(
+        host.accept_invitation(&invitation),
+        Err(Error::StoreRecoveryRequired)
+    ));
+    assert!(!saw(&events, |event| {
+        matches!(event, CoreEvent::DevicePaired { .. })
+    }));
+    assert_fenced(&host, &store, &before, attempts + 1);
+}
+
+#[test]
+fn an_uncertain_forget_save_fences_and_keeps_the_paired_record() {
+    let store = MemoryStore::empty();
+    let host = open_loop(&store, RelaySettings::public_n0());
+    let controller = peer();
+    let invitation = controller
+        .create_invitation(Duration::from_secs(60))
+        .unwrap();
+    host.accept_invitation(&invitation).unwrap();
+    let before = store.record().unwrap();
+    let attempts = store.save_attempts();
+    store.fail_next_save(Error::StoreRecoveryRequired);
+    let events = host.subscribe().unwrap();
+    drain(&events);
+    assert!(matches!(
+        host.revoke(&controller.endpoint_id()),
+        Err(Error::StoreRecoveryRequired)
+    ));
+    assert!(!saw(&events, |event| {
+        matches!(
+            event,
+            CoreEvent::DeviceUnpaired { .. } | CoreEvent::DeviceRevoked { .. }
+        )
+    }));
+    assert_fenced(&host, &store, &before, attempts + 1);
+}
+
+#[test]
+fn an_uncertain_reset_keeps_the_saved_record_and_the_bound_secret() {
+    let store = MemoryStore::empty();
+    let host = open_loop(&store, RelaySettings::public_n0());
+    let before = store.record().unwrap();
+    let secret = host.export_identity();
+    let attempts = store.save_attempts();
+    store.fail_next_save(Error::StoreRecoveryRequired);
+    assert!(matches!(
+        host.reset_identity(),
+        Err(Error::StoreRecoveryRequired)
+    ));
+    assert_eq!(host.export_identity(), secret);
+    assert_fenced(&host, &store, &before, attempts + 1);
+    let reopened = open_loop(&store, RelaySettings::public_n0());
+    assert_eq!(reopened.export_identity(), secret);
+}
+
+#[test]
+fn an_uncertain_control_approval_fences_before_the_peer_is_saved() {
+    let store = MemoryStore::empty();
+    let host = open_loop(&store, RelaySettings::public_n0());
+    let controller = peer();
+    let file = host
+        .export_pairing_file(Duration::from_secs(60), true)
+        .unwrap();
+    let preview = controller.open_pairing_file(&file.bytes).unwrap();
+    controller.confirm_pairing(&preview, &file.check).unwrap();
+    host.start_hosting().unwrap();
+    let pending = controller
+        .begin_connect_services(&host.endpoint_id())
+        .unwrap();
+    let request = wait_control_request(&host);
+    let before = store.record().unwrap();
+    let attempts = store.save_attempts();
+    store.fail_next_save(Error::StoreRecoveryRequired);
+    let events = host.subscribe().unwrap();
+    drain(&events);
+    assert!(matches!(
+        host.confirm_control_request(&request.check),
+        Err(Error::StoreRecoveryRequired)
+    ));
+    assert!(!saw(&events, |event| {
+        matches!(event, CoreEvent::DevicePaired { .. })
+    }));
+    assert_fenced(&host, &store, &before, attempts + 1);
+    let _ = pending;
+    let _ = controller;
+}
+
+#[test]
+fn a_panicking_save_fences_the_core_and_leaves_terminal_consent_unsaved() {
+    use crate::ServiceKind;
+    let store = MemoryStore::empty();
+    let host = open_loop(&store, RelaySettings::public_n0());
+    let before = store.record().unwrap();
+    let attempts = store.save_attempts();
+    store.panic_next_save();
+    let saved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        host.set_service_sharing(ServiceKind::Terminal, true)
+    }));
+    let error = saved.expect("the save panic stays inside the core");
+    assert!(matches!(error, Err(Error::StoreRecoveryRequired)));
+    assert_eq!(store.record().as_deref(), Some(before.as_slice()));
+    assert_eq!(store.save_attempts(), attempts + 1);
+    assert!(matches!(host.start_hosting(), Err(Error::ShutDown)));
+    assert!(matches!(
+        host.set_desktop_sharing(all_grants()),
+        Err(Error::ShutDown)
+    ));
+    assert!(matches!(host.sharing_policy(), Err(Error::ShutDown)));
+    host.shutdown();
+    assert_eq!(host.endpoint_close_count(), 1);
+}
+
+#[test]
+fn a_blocked_blob_shutdown_still_closes_the_endpoint() {
+    let store = MemoryStore::empty();
+    let host = open_loop(&store, RelaySettings::public_n0());
+    host.arm_blocked_teardown(Duration::from_millis(40), true, false);
+    store.fail_next_save(Error::StoreRecoveryRequired);
+    assert!(matches!(
+        host.set_desktop_sharing(all_grants()),
+        Err(Error::StoreRecoveryRequired)
+    ));
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !host.endpoint_is_closed() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(host.endpoint_is_closed());
+    assert_eq!(host.teardown_phase(), 2);
+    assert!(matches!(host.start_hosting(), Err(Error::ShutDown)));
+    host.shutdown();
+    assert_eq!(host.endpoint_close_count(), 1);
+}
+
+#[test]
+fn a_timed_out_endpoint_close_can_be_retried() {
+    let store = MemoryStore::empty();
+    let host = open_loop(&store, RelaySettings::public_n0());
+    host.arm_blocked_teardown(Duration::from_millis(40), true, true);
+    store.fail_next_save(Error::StoreRecoveryRequired);
+    assert!(matches!(
+        host.set_desktop_sharing(all_grants()),
+        Err(Error::StoreRecoveryRequired)
+    ));
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while host.teardown_phase() == 1 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(host.teardown_phase(), 0);
+    assert!(!host.endpoint_is_closed());
+    assert!(matches!(host.start_hosting(), Err(Error::ShutDown)));
+    host.shutdown();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !host.endpoint_is_closed() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(host.endpoint_is_closed());
+    assert_eq!(host.teardown_phase(), 2);
+    assert_eq!(host.endpoint_close_count(), 2);
+}
+
+fn wait_control_request(host: &Core) -> crate::ControlRequest {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(request) = host.control_request().unwrap() {
+            return request;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("the host did not report a control request");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }

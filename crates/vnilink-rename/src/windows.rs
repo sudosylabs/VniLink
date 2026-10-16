@@ -63,6 +63,28 @@ pub fn directory_identity(file: &std::fs::File) -> io::Result<(u64, u64)> {
     ))
 }
 
+/// Queries a listed object's identity without following a final reparse
+/// point. Unlike recording admission, listings also identify directories
+/// and files with multiple hard links, and need no content-read permission.
+pub fn entry_identity(path: &Path) -> io::Result<(u64, u64)> {
+    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+    let file = std::fs::OpenOptions::new()
+        .access_mode(0)
+        .share_mode(1 | 2 | 4)
+        .custom_flags(0x0200_0000 | 0x0020_0000)
+        .open(path)?;
+    let mut info = HandleInformation::default();
+    // SAFETY: the owned File keeps the handle live, and the correctly laid
+    // out information structure remains writable throughout the syscall.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((
+        u64::from(info.volume),
+        (u64::from(info.index_high) << 32) | u64::from(info.index_low),
+    ))
+}
+
 pub fn open_single_link_file_rw(path: &Path) -> io::Result<std::fs::File> {
     use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
     let file = std::fs::OpenOptions::new()
@@ -163,11 +185,21 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("existing")).unwrap(), b"destination");
         std::fs::create_dir(dir.join("folder")).unwrap();
         std::fs::write(dir.join("folder/child"), b"child").unwrap();
-        let open = std::fs::File::open(dir.join("folder/child")).unwrap();
+        let open = open_directory(&dir.join("folder")).unwrap();
+        let identity = directory_identity(&open).unwrap();
         rename_noreplace(&dir.join("folder"), &dir.join("renamed")).unwrap();
         assert!(!dir.join("folder").exists());
         assert_eq!(std::fs::read(dir.join("renamed/child")).unwrap(), b"child");
-        assert_eq!(open.metadata().unwrap().len(), 5);
+        assert_eq!(directory_identity(&open).unwrap(), identity);
+        assert_eq!(
+            directory_identity(&open_directory(&dir.join("renamed")).unwrap()).unwrap(),
+            identity
+        );
+        assert_eq!(entry_identity(&dir.join("renamed")).unwrap(), identity);
+        let source_identity = entry_identity(&dir.join("source")).unwrap();
+        let destination_identity = entry_identity(&dir.join("existing")).unwrap();
+        assert_ne!(source_identity, destination_identity);
+        assert_ne!(source_identity, identity);
         assert!(available_storage(&dir).unwrap() > 0);
     }
 }
@@ -257,4 +289,110 @@ pub fn drive_roots() -> io::Result<Vec<std::path::PathBuf>> {
         .filter(|i| drives & (1 << i) != 0)
         .map(|i| std::path::PathBuf::from(format!("{}:\\", char::from(b'A' + i))))
         .collect())
+}
+
+/// Delete exactly the listed object. Every ancestor and visited directory is
+/// held without FILE_SHARE_DELETE, so pathname enumeration cannot be redirected
+/// through a renamed ancestor or a replacement junction. Leaves are removed by
+/// their DELETE-authorized handle, never by re-resolving a public pathname.
+pub fn delete_tree_checked(path: &Path, expected: (u64, u64)) -> io::Result<()> {
+    if !path.is_absolute() {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let ancestors: Vec<_> = path.ancestors().skip(1).collect();
+    if ancestors.len() > 64 {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let mut pins = Vec::new();
+    for ancestor in ancestors.into_iter().rev() {
+        let pin = pin_delete_entry(ancestor, false)?;
+        directory_identity(&pin)?;
+        pins.push(pin);
+    }
+    let mut remaining = 10_000usize;
+    delete_pinned_node(path, Some(expected), expected.0, 0, &mut remaining)
+}
+fn pin_delete_entry(path: &Path, delete: bool) -> io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .access_mode(0x80 | if delete { 0x0001_0000 } else { 0 }) // FILE_READ_ATTRIBUTES | DELETE
+        .share_mode(1 | 2) // deny renaming/deleting this component until its handle closes
+        .custom_flags(0x0200_0000 | 0x0020_0000) // backup semantics, open reparse point itself
+        .open(path)
+}
+fn delete_pinned_node(
+    path: &Path,
+    expected: Option<(u64, u64)>,
+    volume: u64,
+    depth: usize,
+    remaining: &mut usize,
+) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    if depth > 64 || *remaining == 0 {
+        return Err(io::Error::other("managed subtree exceeds cleanup bounds"));
+    }
+    *remaining -= 1;
+    let node = pin_delete_entry(path, true)?;
+    let mut info = HandleInformation::default();
+    // SAFETY: live owned handle, correctly laid out writable output structure.
+    if unsafe { GetFileInformationByHandle(node.as_raw_handle(), &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let identity = (
+        u64::from(info.volume),
+        (u64::from(info.index_high) << 32) | u64::from(info.index_low),
+    );
+    if identity.0 != volume || expected.is_some_and(|expected| expected != identity) {
+        return Err(io::Error::other("managed subtree changed"));
+    }
+    if info.attributes & 0x400 == 0 && info.attributes & 0x10 != 0 {
+        for entry in std::fs::read_dir(path)? {
+            delete_pinned_node(&entry?.path(), None, volume, depth + 1, remaining)?;
+        }
+    }
+    delete_file_object(&node)
+}
+
+#[cfg(test)]
+mod deletion_tests {
+    use super::*;
+    fn scratch() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "vnilink-delete-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&path).unwrap();
+        path
+    }
+    #[test]
+    fn directory_pin_prevents_a_concurrent_path_replacement() {
+        let path = scratch();
+        let child = path.join("selected");
+        std::fs::create_dir(&child).unwrap();
+        let pinned = pin_delete_entry(&child, false).unwrap();
+        assert!(std::fs::rename(&child, path.join("moved")).is_err());
+        drop(pinned);
+        std::fs::rename(&child, path.join("moved")).unwrap();
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn deletion_refuses_a_replacement_and_removes_only_the_selected_tree() {
+        let path = scratch();
+        let child = path.join("selected");
+        std::fs::create_dir(&child).unwrap();
+        std::fs::write(child.join("owned"), b"selected").unwrap();
+        let identity = entry_identity(&child).unwrap();
+        std::fs::rename(&child, path.join("saved")).unwrap();
+        std::fs::create_dir(&child).unwrap();
+        std::fs::write(child.join("sentinel"), b"unrelated").unwrap();
+        assert!(delete_tree_checked(&child, identity).is_err());
+        assert_eq!(std::fs::read(child.join("sentinel")).unwrap(), b"unrelated");
+        delete_tree_checked(&path.join("saved"), identity).unwrap();
+        assert!(!path.join("saved").exists());
+        assert_eq!(std::fs::read(child.join("sentinel")).unwrap(), b"unrelated");
+        std::fs::remove_dir_all(path).unwrap();
+    }
 }

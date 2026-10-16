@@ -8,19 +8,34 @@ import { contextBridge, ipcRenderer } from 'electron';
 import { isAppInfo } from './platform/ipc/common/desktopApi.js';
 import type { DesktopApi } from './platform/ipc/common/desktopApi.js';
 import { isConfigurationSnapshot, isConfigurationUpdate } from './platform/configuration/common/configuration.js';
+
 if (!process.sandboxed || !process.contextIsolated) {
 	throw new Error('Renderer isolation required');
 }
+
 const channelRequests = new Set<string>();
+
 ipcRenderer.on('engine:data-port', (event, requestId: unknown) => {
 	if (typeof requestId !== 'string' || !channelRequests.delete(requestId)) {
 		for (const port of event.ports) {
 			port.close();
-		} return;
+		}
+		return;
 	}
 	window.postMessage({ type: 'vnilink:data-port', requestId }, location.origin, event.ports);
 });
+
 const api: DesktopApi = {
+	recordingDirectory: async action => {
+		if (!['read', 'choose', 'destination'].includes(action)) {
+			throw new Error('Invalid recording directory action');
+		}
+		const value: unknown = await ipcRenderer.invoke('app:recording-directory', action);
+		if (value !== null && typeof value !== 'string') {
+			throw new Error('Invalid recording directory');
+		}
+		return value;
+	},
 	getCaptureDisplays: async () => {
 		const sources: unknown = await ipcRenderer.invoke('app:capture-displays');
 		if (!isNativeScreenSources(sources)) {
@@ -41,7 +56,8 @@ const api: DesktopApi = {
 				listener(state);
 			}
 		};
-		ipcRenderer.on('app:restart-state', handler); return () => {
+		ipcRenderer.on('app:restart-state', handler);
+		return () => {
 			ipcRenderer.removeListener('app:restart-state', handler);
 		};
 	},
@@ -97,7 +113,8 @@ const api: DesktopApi = {
 		try {
 			await ipcRenderer.invoke('engine:open-data-channel', request);
 		} catch (error) {
-			channelRequests.delete(request.requestId); throw error;
+			channelRequests.delete(request.requestId);
+			throw error;
 		}
 	},
 	engineCommand: async (command) => {
@@ -173,4 +190,5 @@ const api: DesktopApi = {
 		};
 	},
 };
+
 contextBridge.exposeInMainWorld('vnilink', api);

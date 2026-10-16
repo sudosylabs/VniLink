@@ -1,3 +1,4 @@
+use crate::tests::filesystem_location::FilesystemLocation;
 use crate::*;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -67,7 +68,7 @@ fn pair(host: &VnilinkCore, controller: &VnilinkCore, clipboard: bool, transfer:
         .unwrap();
     host.accept_invitation(controller.create_invitation(60).unwrap())
         .unwrap();
-    host.authorize(controller.endpoint_id(), true, true, clipboard, transfer)
+    host.set_desktop_sharing(true, true, clipboard, transfer)
         .unwrap();
     host.start_hosting().unwrap();
 }
@@ -92,7 +93,8 @@ fn service_handles_and_cancellation_cross_the_ffi_boundary() {
                 .as_nanos()
         )));
     std::fs::create_dir(&scratch.0).unwrap();
-    host.inner.set_file_roots(vec![scratch.0.clone()]).unwrap();
+    host.inner.enable_filesystem_access().unwrap();
+    let host_files = FilesystemLocation::new(host.inner.file_roots().unwrap(), &scratch.0);
     let session = controller.connect(host.endpoint_id()).unwrap();
     let events = controller.subscribe_events().unwrap();
     let desktop = controller
@@ -116,13 +118,15 @@ fn service_handles_and_cancellation_cross_the_ffi_boundary() {
     let pipe = controller
         .open_files_service(files.id, files.generation)
         .unwrap();
-    let root = host.inner.file_roots().unwrap()[0].0;
-    pipe.mkdir(root, "".into(), "folder".into()).unwrap();
-    let page = pipe.list(root, "".into(), 0, 20).unwrap();
+    pipe.mkdir(host_files.root, host_files.path(""), "folder".into())
+        .unwrap();
+    let page = pipe
+        .list(host_files.root, host_files.path(""), 0, 20)
+        .unwrap();
     assert_eq!(page.entries.len(), 1);
     pipe.rename(
-        root,
-        "".into(),
+        host_files.root,
+        host_files.path(""),
         "folder".into(),
         Some(page.entries[0].token),
         "renamed".into(),
@@ -223,14 +227,14 @@ fn native_desktop_contract_covers_shortcuts_clipboard_and_bidirectional_files() 
         .inner
         .set_blob_directory(root.join("controller-blobs"))
         .unwrap();
-    host.inner.set_file_roots(vec![host_dir.clone()]).unwrap();
-    controller
-        .inner
-        .set_file_roots(vec![controller_dir.clone()])
-        .unwrap();
+    host.inner.enable_filesystem_access().unwrap();
+    let host_files = FilesystemLocation::new(host.inner.file_roots().unwrap(), &host_dir);
+    controller.inner.enable_filesystem_access().unwrap();
+    let controller_files =
+        FilesystemLocation::new(controller.inner.file_roots().unwrap(), &controller_dir);
     pair(&host, &controller, true, true);
     controller
-        .authorize(host.endpoint_id(), false, false, false, true)
+        .set_desktop_sharing(false, false, false, true)
         .unwrap();
     let session = controller.connect(host.endpoint_id()).unwrap();
     // All transitions follow the same path as the Mac native key adapter.
@@ -290,10 +294,22 @@ fn native_desktop_contract_covers_shortcuts_clipboard_and_bidirectional_files() 
     std::fs::write(controller_dir.join("sent.bin"), [0, 255, 10]).unwrap();
     std::fs::write(host_dir.join("returned.bin"), [4, 2]).unwrap();
     let up = controller
-        .job_submit_upload(host.endpoint_id(), 0, "sent.bin".into(), 0, "".into())
+        .job_submit_upload(
+            host.endpoint_id(),
+            controller_files.root,
+            controller_files.path("sent.bin"),
+            host_files.root,
+            host_files.path(""),
+        )
         .unwrap();
     let down = controller
-        .job_submit_download(host.endpoint_id(), 0, "returned.bin".into(), 0, "".into())
+        .job_submit_download(
+            host.endpoint_id(),
+            host_files.root,
+            host_files.path("returned.bin"),
+            controller_files.root,
+            controller_files.path(""),
+        )
         .unwrap();
     let host_jobs: Vec<u64> = host
         .inner
@@ -384,14 +400,14 @@ fn service_jobs_cross_the_ffi_boundary() {
         .inner
         .set_blob_directory(scratch.0.join("controller-blobs"))
         .unwrap();
-    host.inner.set_file_roots(vec![host_root.clone()]).unwrap();
-    controller
-        .inner
-        .set_file_roots(vec![controller_root.clone()])
-        .unwrap();
+    host.inner.enable_filesystem_access().unwrap();
+    let host_files = FilesystemLocation::new(host.inner.file_roots().unwrap(), &host_root);
+    controller.inner.enable_filesystem_access().unwrap();
+    let controller_files =
+        FilesystemLocation::new(controller.inner.file_roots().unwrap(), &controller_root);
     pair(&host, &controller, false, true);
     controller
-        .authorize(host.endpoint_id(), false, false, false, true)
+        .set_desktop_sharing(false, false, false, true)
         .unwrap();
     let session = controller.connect(host.endpoint_id()).unwrap();
     let owner = controller
@@ -406,10 +422,10 @@ fn service_jobs_cross_the_ffi_boundary() {
         .files_service_upload(
             owner.id,
             owner.generation,
-            0,
-            "up.txt".into(),
-            0,
-            "uploaded".into(),
+            controller_files.root,
+            controller_files.path("up.txt"),
+            host_files.root,
+            host_files.path("uploaded"),
         )
         .unwrap();
     let up_rx = host.inner.job_list().unwrap()[0].id;
@@ -429,10 +445,10 @@ fn service_jobs_cross_the_ffi_boundary() {
         .files_service_download(
             owner.id,
             owner.generation,
-            0,
-            "down.txt".into(),
-            0,
-            "cancelled".into(),
+            host_files.root,
+            host_files.path("down.txt"),
+            controller_files.root,
+            controller_files.path("cancelled"),
         )
         .unwrap();
     assert_eq!(
@@ -453,10 +469,10 @@ fn service_jobs_cross_the_ffi_boundary() {
         .files_service_download(
             owner.id,
             owner.generation,
-            0,
-            "down.txt".into(),
-            0,
-            "later".into()
+            host_files.root,
+            host_files.path("down.txt"),
+            controller_files.root,
+            controller_files.path("later")
         )
         .is_err());
     assert_eq!(
@@ -484,11 +500,11 @@ fn service_permissions_cross_ffi_without_enabling_missing_backends() {
             system_actions: false
         }
     );
-    host.authorize_service(id.clone(), FfiServiceKind::Terminal, true)
+    host.set_service_sharing(FfiServiceKind::Terminal, true)
         .unwrap();
-    host.authorize_service(id.clone(), FfiServiceKind::Camera, true)
+    host.set_service_sharing(FfiServiceKind::Camera, true)
         .unwrap();
-    host.authorize_service(id.clone(), FfiServiceKind::Files, false)
+    host.set_service_sharing(FfiServiceKind::Files, false)
         .unwrap();
     assert_eq!(
         host.service_permissions(id.clone()).unwrap(),
@@ -504,7 +520,7 @@ fn service_permissions_cross_ffi_without_enabling_missing_backends() {
         }
     );
     // Legacy native authorization only changes its three legacy fields.
-    host.authorize(id.clone(), true, true, false, true).unwrap();
+    host.set_desktop_sharing(true, true, false, true).unwrap();
     assert!(host.service_permissions(id.clone()).unwrap().terminal);
     let session = controller.connect(host.endpoint_id()).unwrap();
     let support = controller
@@ -519,20 +535,12 @@ fn service_permissions_cross_ffi_without_enabling_missing_backends() {
         ),
         Err(FfiError::Unsupported { .. })
     ));
-    host.revoke(id.clone()).unwrap();
-    assert_eq!(
-        host.service_permissions(id).unwrap(),
-        FfiServicePermissions {
-            desktop: false,
-            files: false,
-            terminal: false,
-            camera: false,
-            system_audio: false,
-            microphone: false,
-            recording: false,
-            system_actions: false
-        }
-    );
+    host.unpair(id.clone()).unwrap();
+    assert!(matches!(
+        host.service_permissions(id),
+        Err(FfiError::NotPaired)
+    ));
+    assert!(host.sharing_policy().unwrap().terminal);
 }
 
 #[test]
@@ -540,7 +548,7 @@ fn neutral_connections_cross_ffi_without_desktop_or_transfer_grants() {
     let host = core();
     let controller = core();
     pair(&host, &controller, false, false);
-    host.authorize(controller.endpoint_id(), false, false, false, false)
+    host.set_desktop_sharing(false, false, false, false)
         .unwrap();
     host.set_video_codecs(empty_codecs()).unwrap();
     controller.set_video_codecs(empty_codecs()).unwrap();
@@ -575,7 +583,7 @@ fn neutral_connections_cross_ffi_without_desktop_or_transfer_grants() {
         controller.open_files_service(owner.id, owner.generation),
         Err(FfiError::TransferDenied)
     ));
-    host.authorize_service(controller.endpoint_id(), FfiServiceKind::Files, true)
+    host.set_service_sharing(FfiServiceKind::Files, true)
         .unwrap();
     let pipe = controller
         .open_files_service(owner.id, owner.generation)
@@ -667,8 +675,7 @@ fn recording_ffi_checks_installation_and_consent_before_creating_files() {
     let denied = controller.start_desktop_recording(desktop.clone(), path.clone(), limits, None);
     assert_eq!(denied.err(), Some(FfiError::Unauthorized));
     assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0);
-    host.authorize_recording(controller.endpoint_id(), true)
-        .unwrap();
+    host.set_recording_sharing(true).unwrap();
     let until = Instant::now() + Duration::from_secs(5);
     while !desktop.inner.recording_allowed().unwrap() {
         assert!(Instant::now() < until);
@@ -695,8 +702,7 @@ fn recording_ffi_checks_installation_and_consent_before_creating_files() {
         .start_desktop_recording(desktop.clone(), path, limits, None)
         .unwrap();
     assert_eq!(recording.status().phase, FfiRecordingPhase::Starting);
-    host.authorize_recording(controller.endpoint_id(), false)
-        .unwrap();
+    host.set_recording_sharing(false).unwrap();
     let until = Instant::now() + Duration::from_secs(5);
     while recording.status().phase != FfiRecordingPhase::Failed {
         assert!(Instant::now() < until);
@@ -800,6 +806,21 @@ fn neutral_desktop_input_video_and_reopen_cross_ffi() {
     first.close();
     assert!(!second.is_cancelled());
     assert!(first.submit_pointer(20, 30, 1, 1).is_err());
+    // Local close is immediate; the host observes its stream retirement
+    // asynchronously. Reopening another stream does not order that delivery.
+    let until = Instant::now() + Duration::from_secs(5);
+    while host
+        .hosted_services()
+        .unwrap()
+        .iter()
+        .any(|service| service.id == remote.id && service.phase == FfiServicePhase::Active)
+    {
+        assert!(
+            Instant::now() < until,
+            "closed Desktop owner remained active on the host"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert!(host
         .publish_desktop_video(remote.id, remote.generation, true, 11, vec![9])
         .is_err());
@@ -922,8 +943,7 @@ fn desktop_clipboard_ack_and_owner_event_cross_ffi() {
     assert!(events.poll(32).into_iter().any(
         |event| matches!(event, FfiEvent::DesktopClipboardReceived { service } if service == owner)
     ));
-    host.authorize(controller.endpoint_id(), true, true, false, false)
-        .unwrap();
+    host.set_desktop_sharing(true, true, false, false).unwrap();
     assert!(matches!(
         desktop.submit_clipboard("denied".into()),
         Err(FfiError::ClipboardDenied)
@@ -946,7 +966,7 @@ fn files_handle_owns_submission_queue_and_cleanup() {
     let controller = core();
     pair(&host, &controller, false, true);
     controller
-        .authorize(host.endpoint_id(), false, false, false, true)
+        .set_desktop_sharing(false, false, false, true)
         .unwrap();
     let directory = std::env::temp_dir().join(format!(
         "vnilink-app-owned-jobs-{}-{}",
@@ -965,13 +985,19 @@ fn files_handle_owns_submission_queue_and_cleanup() {
     let _cleanup = Cleanup(directory.clone());
     for (core, name) in [(&host, "host"), (&controller, "controller")] {
         std::fs::create_dir_all(directory.join(name).join("root")).unwrap();
-        core.inner
-            .set_file_roots(vec![directory.join(name).join("root")])
-            .unwrap();
+        core.inner.enable_filesystem_access().unwrap();
         core.inner
             .set_blob_directory(directory.join(name).join("blobs"))
             .unwrap();
     }
+    let host_files = FilesystemLocation::new(
+        host.inner.file_roots().unwrap(),
+        &directory.join("host").join("root"),
+    );
+    let controller_files = FilesystemLocation::new(
+        controller.inner.file_roots().unwrap(),
+        &directory.join("controller").join("root"),
+    );
     std::fs::write(
         directory.join("controller/root/source.txt"),
         b"scoped contents",
@@ -993,7 +1019,12 @@ fn files_handle_owns_submission_queue_and_cleanup() {
         .open_files_service(info.id, info.generation)
         .unwrap();
     let job = files
-        .upload(0, "source.txt".into(), 0, "upload".into())
+        .upload(
+            controller_files.root,
+            controller_files.path("source.txt"),
+            host_files.root,
+            host_files.path("upload"),
+        )
         .unwrap();
     assert_eq!(
         files
@@ -1013,7 +1044,12 @@ fn files_handle_owns_submission_queue_and_cleanup() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(files
-        .upload(0, "source.txt".into(), 0, "refused".into())
+        .upload(
+            controller_files.root,
+            controller_files.path("source.txt"),
+            host_files.root,
+            host_files.path("refused")
+        )
         .is_err());
     assert!(files.job_resume(job).is_err());
     assert_eq!(files.job_cancel(job).unwrap().state, FfiJobState::Cancelled);
@@ -1031,7 +1067,12 @@ fn files_handle_owns_submission_queue_and_cleanup() {
     assert!(files.jobs().unwrap().is_empty());
     std::fs::write(directory.join("host/root/return.txt"), b"return contents").unwrap();
     let download = replacement
-        .download(0, "return.txt".into(), 0, "download".into())
+        .download(
+            host_files.root,
+            host_files.path("return.txt"),
+            controller_files.root,
+            controller_files.path("download"),
+        )
         .unwrap();
     let until = Instant::now() + Duration::from_secs(8);
     while replacement.job_snapshot(download).unwrap().state != FfiJobState::Complete {
@@ -1067,7 +1108,7 @@ fn terminal_ffi_round_trip_resize_exit_and_close() {
         std::env::temp_dir().to_string_lossy().into_owned(),
     )
     .unwrap();
-    host.authorize_service(controller.endpoint_id(), FfiServiceKind::Terminal, true)
+    host.set_service_sharing(FfiServiceKind::Terminal, true)
         .unwrap();
     let pending = controller
         .begin_connect_services(host.endpoint_id())
@@ -1154,7 +1195,7 @@ fn native_camera_callback_and_frame_queue_cross_ffi() {
     let produced = Arc::new(Mutex::new(None));
     host.install_camera_provider(Box::new(Provider(produced.clone())))
         .unwrap();
-    host.authorize_service(controller.endpoint_id(), FfiServiceKind::Camera, true)
+    host.set_service_sharing(FfiServiceKind::Camera, true)
         .unwrap();
     let connection = controller
         .begin_connect_services(host.endpoint_id())
@@ -1190,7 +1231,7 @@ fn native_camera_callback_and_frame_queue_cross_ffi() {
     let source = produced.lock().unwrap().clone().unwrap();
     assert!(source.take_keyframe_request());
     let expected = FfiEncodedFrame {
-        codec: vnilink::VideoCodec::H264,
+        codec: crate::FfiVideoCodec::H264,
         keyframe: true,
         timestamp_us: 42,
         payload: vec![9; 300_000],
@@ -1339,7 +1380,7 @@ fn camera_provider_sees_startup_cancellation_through_ffi() {
     let host = core();
     let controller = core();
     pair(&host, &controller, false, false);
-    host.authorize_service(controller.endpoint_id(), FfiServiceKind::Camera, true)
+    host.set_service_sharing(FfiServiceKind::Camera, true)
         .unwrap();
     let (entered, ready) = std::sync::mpsc::sync_channel(1);
     let (finished, done) = std::sync::mpsc::sync_channel(1);
@@ -1371,7 +1412,7 @@ fn camera_provider_sees_startup_cancellation_through_ffi() {
             )
         });
         ready.recv_timeout(Duration::from_secs(5)).unwrap();
-        host.authorize_service(controller.endpoint_id(), FfiServiceKind::Camera, false)
+        host.set_service_sharing(FfiServiceKind::Camera, false)
             .unwrap();
         done.recv_timeout(Duration::from_secs(1)).unwrap();
         assert!(open.join().unwrap().is_err());
@@ -1465,9 +1506,9 @@ fn system_actions_cross_ffi_with_policy_refusal_and_no_side_effects() {
     let host = core();
     let controller = core();
     pair(&host, &controller, false, false);
-    host.authorize(controller.endpoint_id(), false, false, false, false)
+    host.set_desktop_sharing(false, false, false, false)
         .unwrap();
-    host.authorize_service(controller.endpoint_id(), FfiServiceKind::System, true)
+    host.set_service_sharing(FfiServiceKind::System, true)
         .unwrap();
     // Default policy refuses shutdown without touching any native backend.
     let pending = controller
@@ -1547,7 +1588,7 @@ fn clipboard_files_cross_the_ffi_boundary() {
         .unwrap();
     pair(&host, &controller, true, true);
     controller
-        .authorize(host.endpoint_id(), true, true, true, true)
+        .set_desktop_sharing(true, true, true, true)
         .unwrap();
     let session = controller.connect(host.endpoint_id()).unwrap();
     let incoming = host.snapshot().unwrap().incoming.unwrap();

@@ -1,9 +1,10 @@
 import { Buffer } from 'node:buffer';
-import { dimension, isInputCommand } from '../common/dataChannel.js';
+import { dimension, isInputCommand, isDesktopAudioOperation, isDesktopAudioStatus } from '../common/dataChannel.js';
 import type { DataChannelRequest } from '../common/dataChannel.js';
 import { record } from '../common/engine.js';
 
 export interface NativeDataChannel {
+	desktopAudio(operation: string): string;
 	read(): { kind: string; data?: Uint8Array | null; metadata: string } | null;
 	write(data: Uint8Array): void;
 	resize(rows: number, columns: number): void;
@@ -11,6 +12,7 @@ export interface NativeDataChannel {
 	close(): void | Promise<void>;
 	fileOperation(command: string): Promise<string>;
 }
+
 export interface DataPort {
 	postMessage(message: unknown): void;
 	on(event: 'message', listener: (event: { data: unknown }) => void): void;
@@ -31,6 +33,7 @@ export class DataChannelHost {
 	private lastAckMs = 0;
 	private fileBusy = false;
 	private cancelBusy = false;
+
 	constructor(
 		private readonly port: DataPort,
 		private readonly request: DataChannelRequest,
@@ -44,6 +47,7 @@ export class DataChannelHost {
 		});
 		port.start();
 	}
+
 	public start(native: NativeDataChannel): void {
 		if (this.closed) {
 			const closing = native.close();
@@ -58,6 +62,7 @@ export class DataChannelHost {
 			this.pump();
 		}
 	}
+
 	private receive(message: unknown): void {
 		if (this.closed || !record(message)) {
 			return;
@@ -78,6 +83,14 @@ export class DataChannelHost {
 				} else {
 					this.pump();
 				}
+				return;
+			}
+			if (message.type === 'desktopAudio' && (this.request.kind === 'video' || this.request.kind === 'input') && Number.isSafeInteger(message.id) && Number(message.id) > 0 && isDesktopAudioOperation(message.operation)) {
+				const status: unknown = JSON.parse(this.native.desktopAudio(JSON.stringify(message.operation)));
+				if (!isDesktopAudioStatus(status)) {
+					throw new Error('Invalid desktop audio status');
+				}
+				this.port.postMessage({ type: 'desktopAudio', id: message.id, status });
 				return;
 			}
 			if (message.type === 'metrics') {
@@ -171,6 +184,7 @@ export class DataChannelHost {
 			this.fail();
 		}
 	}
+
 	private pump(): void {
 		if (
 			this.closed ||
@@ -211,6 +225,7 @@ export class DataChannelHost {
 			this.fail();
 		}
 	}
+
 	public fail(): void {
 		if (this.closed) {
 			return;
@@ -221,6 +236,7 @@ export class DataChannelHost {
 			this.close();
 		}
 	}
+
 	public close(): void {
 		if (this.closed) {
 			return;

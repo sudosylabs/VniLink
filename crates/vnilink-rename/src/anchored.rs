@@ -678,13 +678,14 @@ pub fn remove_tree_at(parent: BorrowedFd, name: &str) -> io::Result<()> {
         ));
     }
     let mut remaining = 10_000usize;
-    remove_tree_inner(parent, name, 0, &mut remaining)
+    remove_tree_inner(parent, name, 0, &mut remaining, None)
 }
 fn remove_tree_inner(
     parent: BorrowedFd,
     name: &str,
     depth: usize,
     remaining: &mut usize,
+    expected: Option<(u64, u64)>,
 ) -> io::Result<()> {
     if depth > 64 || *remaining == 0 {
         return Err(io::Error::new(
@@ -694,6 +695,12 @@ fn remove_tree_inner(
     }
     *remaining -= 1;
     let before = stat_at(parent, name)?;
+    if expected.is_some_and(|identity| identity != (before.dev, before.ino)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "managed subtree changed",
+        ));
+    }
     if before.is_dir && !before.is_symlink {
         if before.dev != fstat_dev_ino(parent)?.0 {
             return Err(io::Error::new(
@@ -713,7 +720,7 @@ fn remove_tree_inner(
             let entry = entry.to_str().ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidData, "managed entry encoding")
             })?;
-            remove_tree_inner(child.as_fd(), entry, depth + 1, remaining)?;
+            remove_tree_inner(child.as_fd(), entry, depth + 1, remaining, None)?;
         }
         let current = stat_at(parent, name)?;
         if (current.dev, current.ino) != (before.dev, before.ino)
@@ -835,5 +842,170 @@ mod bounded_list_tests {
         assert_eq!(second.len(), 6);
         assert_eq!(first, second);
         std::fs::remove_dir_all(&root).unwrap();
+    }
+}
+
+/// A selected object isolated from public filename churn before destructive work.
+/// A failed or abandoned cleanup leaves its private recovery namespace intact.
+pub struct DeleteCandidate {
+    parent: OwnedFd,
+    private: OwnedFd,
+    name: String,
+    expected: (u64, u64),
+}
+impl DeleteCandidate {
+    pub fn stage(parent: BorrowedFd<'_>, name: &str, expected: (u64, u64)) -> io::Result<Self> {
+        use std::{io::Read, os::fd::AsFd};
+        let original = cstr_name(name)?;
+        let parent = parent.try_clone_to_owned()?;
+        let mut random = [0u8; 16];
+        std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+        let private_name = format!(
+            ".vnldelete.{}",
+            random
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
+        let private_c = cstr_name(&private_name)?;
+        // SAFETY: the owned parent fd and terminated name remain live. Only
+        // this owner can access entries in the new private namespace.
+        if unsafe { libc::mkdirat(parent.as_raw_fd(), private_c.as_ptr(), 0o700) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let private = match open_child(parent.as_fd(), &private_name) {
+            Ok(private) => private,
+            Err(error) => {
+                // SAFETY: remove only the exclusively created, empty directory.
+                unsafe {
+                    libc::unlinkat(parent.as_raw_fd(), private_c.as_ptr(), libc::AT_REMOVEDIR);
+                }
+                return Err(error);
+            }
+        };
+        let candidate = Self {
+            parent,
+            private,
+            name: private_name,
+            expected,
+        };
+        let child = cstr_name("candidate")?;
+        crate::recording_retention::rename(
+            candidate.parent.as_raw_fd(),
+            &original,
+            candidate.private.as_raw_fd(),
+            &child,
+        )?;
+        let actual = stat_at(candidate.private.as_fd(), "candidate")?;
+        if actual.is_symlink || (actual.dev, actual.ino) != expected {
+            // No replacement is destroyed. Restore without overwriting another
+            // public entry; a collision leaves the object recoverable inside.
+            crate::recording_retention::rename(
+                candidate.private.as_raw_fd(),
+                &child,
+                candidate.parent.as_raw_fd(),
+                &original,
+            )?;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "delete source changed",
+            ));
+        }
+        Ok(candidate)
+    }
+    pub fn finish(self) -> io::Result<()> {
+        use std::os::fd::AsFd;
+        let mut remaining = 10_000usize;
+        remove_tree_inner(
+            self.private.as_fd(),
+            "candidate",
+            0,
+            &mut remaining,
+            Some(self.expected),
+        )
+    }
+}
+impl Drop for DeleteCandidate {
+    fn drop(&mut self) {
+        use std::os::fd::AsFd;
+        let owned = fstat_dev_ino(self.private.as_fd());
+        let current = stat_at(self.parent.as_fd(), &self.name);
+        if matches!((owned, current), (Ok(identity), Ok(current)) if identity == (current.dev, current.ino))
+        {
+            if let Ok(name) = cstr_name(&self.name) {
+                // SAFETY: best-effort empty-directory removal, never recursion.
+                unsafe {
+                    libc::unlinkat(self.parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod delete_candidate_tests {
+    use super::*;
+    use std::os::fd::AsFd;
+    fn scratch() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "vnilink-delete-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&path).unwrap();
+        path
+    }
+    #[test]
+    fn replacing_the_public_staging_directory_never_redirects_cleanup() {
+        let path = scratch();
+        std::fs::create_dir(path.join("selected")).unwrap();
+        std::fs::write(path.join("selected/owned"), b"selected").unwrap();
+        let parent = open_root(&path).unwrap();
+        let before = stat_at(parent.as_fd(), "selected").unwrap();
+        let candidate =
+            DeleteCandidate::stage(parent.as_fd(), "selected", (before.dev, before.ino)).unwrap();
+        let namespace = std::fs::read_dir(&path)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        std::fs::rename(&namespace, path.join("saved-private")).unwrap();
+        std::fs::create_dir(&namespace).unwrap();
+        std::fs::write(namespace.join("sentinel"), b"unrelated").unwrap();
+        candidate.finish().unwrap();
+        assert_eq!(
+            std::fs::read(namespace.join("sentinel")).unwrap(),
+            b"unrelated"
+        );
+        assert_eq!(
+            std::fs::read_dir(path.join("saved-private"))
+                .unwrap()
+                .count(),
+            0
+        );
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn replacing_a_listed_file_with_a_folder_restores_the_replacement() {
+        let path = scratch();
+        std::fs::write(path.join("selected"), b"original").unwrap();
+        let parent = open_root(&path).unwrap();
+        let before = stat_at(parent.as_fd(), "selected").unwrap();
+        std::fs::rename(path.join("selected"), path.join("original")).unwrap();
+        std::fs::create_dir(path.join("selected")).unwrap();
+        std::fs::write(path.join("selected/sentinel"), b"replacement").unwrap();
+        assert!(
+            DeleteCandidate::stage(parent.as_fd(), "selected", (before.dev, before.ino)).is_err()
+        );
+        assert_eq!(
+            std::fs::read(path.join("selected/sentinel")).unwrap(),
+            b"replacement"
+        );
+        assert_eq!(std::fs::read(path.join("original")).unwrap(), b"original");
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 2);
+        std::fs::remove_dir_all(path).unwrap();
     }
 }

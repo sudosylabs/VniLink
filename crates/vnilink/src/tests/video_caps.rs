@@ -312,7 +312,7 @@ fn auto_and_explicit_codec_survive_owned_desktop_transport_and_reject_mismatched
             pair_for_control(&host, &viewer);
             host.set_video_codecs(caps.clone()).unwrap();
             viewer.set_video_codecs(caps).unwrap();
-            host.authorize_service(&viewer.endpoint_id(), ServiceKind::Desktop, true)
+            host.set_service_sharing(ServiceKind::Desktop, true)
                 .unwrap();
             let pending = viewer.begin_connect_services(&host.endpoint_id()).unwrap();
             let deadline = std::time::Instant::now() + Duration::from_secs(5);

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { build } from 'esbuild';
+
 const output = await build({
 	stdin: { contents: `export { WindowMaterial } from './src/platform/windows/electron-main/windowMaterial.js'; export { resolveWindowMaterial } from './src/platform/window/common/windowMaterial.js'; export { nativeTheme } from 'electron';`, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, platform: 'node', format: 'esm', plugins: [{
 		name: 'theme-fixture', setup(builder) {
@@ -9,7 +10,9 @@ const output = await build({
 		}
 	}]
 });
+
 const { WindowMaterial, resolveWindowMaterial, nativeTheme } = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
+
 test('native backdrop policy gates OS versions and accessibility preferences', () => {
 	for (const [platform, release, expected] of [['darwin', '25.0.0', 'vibrancy'], ['win32', '10.0.22621', 'mica'], ['win32', '10.0.22000', 'none'], ['win32', '10.0.19045', 'none'], ['linux', '6.8.0', 'none'], ['darwin', 'invalid', 'none']]) {
 		assert.equal(resolveWindowMaterial(platform, release, false, false), expected);
@@ -17,10 +20,12 @@ test('native backdrop policy gates OS versions and accessibility preferences', (
 		assert.equal(resolveWindowMaterial(platform, release, false, true), 'none');
 	}
 });
+
 function windowFixture() {
 	const calls = [];
 	return { calls, isDestroyed: () => false, setBackgroundMaterial: value => calls.push(['material', value]), setVibrancy: value => calls.push(['vibrancy', value]), setBackgroundColor: value => calls.push(['background', value]) };
 }
+
 test('Mica follows transparency and theme changes and disposes its listener', () => {
 	const window = windowFixture();
 	const material = new WindowMaterial(window, 'win32', '10.0.22631');
@@ -45,6 +50,7 @@ test('Mica follows transparency and theme changes and disposes its listener', ()
 	assert.equal(window.calls.length, count);
 	assert.equal(nativeTheme.listenerCount('updated'), 0);
 });
+
 test('macOS uses sidebar vibrancy and a failed native backdrop stays opaque', () => {
 	const window = windowFixture();
 	const material = new WindowMaterial(window, 'darwin', '25.0.0');

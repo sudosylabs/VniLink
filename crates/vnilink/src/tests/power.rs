@@ -226,8 +226,7 @@ fn desktop_idle_expiry_keeps_parent_and_files_owner_and_does_not_count_media_req
     let controller = start_direct();
     host.set_capture(Box::new(ShutdownCapture)).unwrap();
     let desktop = open(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Files, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Files, true).unwrap();
     let parent = controller.controller_sessions().unwrap().remove(0);
     let files_owner = controller
         .attach_controller_service(parent.id, parent.generation, ServiceKind::Files)

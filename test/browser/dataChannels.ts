@@ -10,7 +10,8 @@ export async function verifyDataChannels(): Promise<boolean> {
 			}, () => {
 				throw new Error('Startup failure escaped its promise');
 			});
-			accepted = true; channel.close();
+			accepted = true;
+			channel.close();
 		} catch { /* Unknown sessions must fail without losing the engine. */ }
 		if (accepted) {
 			throw new Error('Unknown data session was accepted');

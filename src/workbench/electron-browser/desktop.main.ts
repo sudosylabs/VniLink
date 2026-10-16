@@ -1,3 +1,9 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted for VniLink: native window controls and window state only.
+ *--------------------------------------------------------------------------------------------*/
+
 import { INativeRuntimeService } from '../services/nativeRuntime/common/nativeRuntimeService.js';
 import { NativeRuntimeService } from '../services/nativeRuntime/electron-browser/nativeRuntimeService.js';
 import { ITerminalSettingsService } from '../services/terminal/common/terminalSettingsService.js';
@@ -9,18 +15,13 @@ import { RemoteDesktopService } from '../services/remoteDesktop/electron-browser
 import { IPermissionService } from '../services/permissions/common/permissionService.js';
 import { PermissionService } from '../services/permissions/electron-browser/permissionService.js';
 import '../services/tabs/common/tabServiceImpl.js';
-/*---------------------------------------------------------------------------------------------
- *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: native window controls and window state only.
- *--------------------------------------------------------------------------------------------*/
-
 import '../../platform/theme/browser/themeService.js';
 import '../services/host/electron-browser/nativeHostService.js';
-import { InstantiationService } from '../../platform/instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../platform/instantiation/common/serviceCollection.js';
 import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.js';
-import { getSingletonServiceDescriptors } from '../../platform/instantiation/common/extensions.js';
+import { Disposable } from '../../base/common/lifecycle.js';
+import { Workbench } from '../browser/workbench.js';
+import { NativeTitlebarPart } from './parts/titlebar/titlebarPart.js';
 import { IMainProcessService } from '../../platform/ipc/common/mainProcessService.js';
 import { MainProcessService } from '../../platform/ipc/electron-browser/mainProcessService.js';
 import { INativeHostService } from '../../platform/native/common/native.js';
@@ -34,22 +35,48 @@ import { IConnectionService } from '../services/connection/common/connectionServ
 import { ConnectionService } from '../services/connection/electron-browser/connectionService.js';
 import { IAccessService } from '../services/access/common/accessService.js';
 import { AccessService } from '../services/access/electron-browser/accessService.js';
-export function createWorkbenchServices(api: DesktopApi, info: AppInfo): InstantiationService {
-	const services = new ServiceCollection(
-		[IMainProcessService, new SyncDescriptor(MainProcessService, [api, info.windowId])],
-		[INativeHostService, new SyncDescriptor(NativeHostService, [info.windowId])],
-		[IApplicationService, new SyncDescriptor(ApplicationService, [api])],
-		[ITerminalSettingsService, new SyncDescriptor(TerminalSettingsService, [api, info.engineConnected])],
-		[INativeRuntimeService, new SyncDescriptor(NativeRuntimeService, [api, info.engineConnected])],
-		[IRemoteDesktopService, new SyncDescriptor(RemoteDesktopService, [api, info.engineConnected])],
-		[IPermissionService, new SyncDescriptor(PermissionService, [api])],
-		[IAccessService, new SyncDescriptor(AccessService, [api, info.engineConnected])],
-		[IConnectionService, new SyncDescriptor(ConnectionService, [api, info.engineConnected])],
-		[IDeviceService, new SyncDescriptor(DeviceService, [api, info.engineConnected])],
-		[IConfigurationService, new SyncDescriptor(ConfigurationService, [api])],
-	);
-	for (const [id, descriptor] of getSingletonServiceDescriptors()) {
-		services.set(id, descriptor);
+
+export class DesktopMain extends Disposable {
+	private opened: Promise<void> | undefined;
+
+	constructor(private readonly api: DesktopApi, private readonly info: AppInfo) {
+		super();
 	}
-	return new InstantiationService(services, true);
+
+	public open(): Promise<void> {
+		this.opened ??= this.createWorkbench();
+		return this.opened;
+	}
+
+	private async createWorkbench(): Promise<void> {
+		if (this._store.isDisposed) {
+			throw new Error('Desktop main disposed');
+		}
+		const workbench = this._register(new Workbench(document.body, this.info, this.initServices(), (services, onError) => services.createInstance(NativeTitlebarPart, this.info.osRelease, onError)));
+		try {
+			await workbench.startup();
+		} catch (error) {
+			this.dispose();
+			throw error;
+		}
+	}
+
+	private initServices(): ServiceCollection {
+		const api = this.api;
+		const info = this.info;
+		const services = new ServiceCollection(
+			[IMainProcessService, new SyncDescriptor(MainProcessService, [api, info.windowId])],
+			[INativeHostService, new SyncDescriptor(NativeHostService, [info.windowId])],
+			[IApplicationService, new SyncDescriptor(ApplicationService, [api])],
+			[ITerminalSettingsService, new SyncDescriptor(TerminalSettingsService, [api, info.engineConnected])],
+			[INativeRuntimeService, new SyncDescriptor(NativeRuntimeService, [api, info.engineConnected])],
+			[IRemoteDesktopService, new SyncDescriptor(RemoteDesktopService, [api, info.engineConnected])],
+			[IPermissionService, new SyncDescriptor(PermissionService, [api])],
+			[IAccessService, new SyncDescriptor(AccessService, [api, info.engineConnected])],
+			[IConnectionService, new SyncDescriptor(ConnectionService, [api, info.engineConnected])],
+			[IDeviceService, new SyncDescriptor(DeviceService, [api, info.engineConnected])],
+			[IConfigurationService, new SyncDescriptor(ConfigurationService, [api])],
+		);
+		return services;
+	}
 }

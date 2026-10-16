@@ -12,18 +12,27 @@ use vnilink_app::{
     VnilinkCore,
 };
 
+/// Channel owners are private bridge resources; do not retain their closed records.
+fn retire_service(core: &VnilinkCore, id: u64, generation: u64) {
+    if core.close_controller_service(id, generation).is_ok() {
+        let _ = core.forget_controller_service(id);
+    }
+}
+
 /// Video and input share one Desktop owner, without holding the command mutex.
 #[derive(Default)]
 pub(crate) struct DesktopChannels(Mutex<HashMap<(u64, u64), Weak<DesktopOwner>>>);
 pub(super) struct DesktopOwner {
     core: Arc<VnilinkCore>,
     pub(super) service: Arc<vnilink_app::DesktopService>,
+    audio: Arc<vnilink_app::DesktopAudio>,
 }
 impl Drop for DesktopOwner {
     fn drop(&mut self) {
+        self.audio.close();
         self.service.close();
         let info = self.service.info();
-        let _ = self.core.close_controller_service(info.id, info.generation);
+        retire_service(&self.core, info.id, info.generation);
     }
 }
 impl DesktopChannels {
@@ -49,12 +58,14 @@ impl DesktopChannels {
         let service = match core.open_desktop_service(owner.id, owner.generation) {
             Ok(service) => service,
             Err(error) => {
-                let _ = core.close_controller_service(owner.id, owner.generation);
+                retire_service(core, owner.id, owner.generation);
                 return Err(core_error(error));
             }
         };
+        let audio = vnilink_app::DesktopAudio::start(core.clone(), &service);
         let handle = Arc::new(DesktopOwner {
             core: core.clone(),
+            audio,
             service,
         });
         channels.insert((id, generation), Arc::downgrade(&handle));
@@ -340,6 +351,46 @@ impl DataChannel {
         }))
     }
 
+    /// Control/status only; decoded desktop audio never crosses the renderer boundary.
+    #[napi]
+    pub fn desktop_audio(&self, operation: String) -> Result<String> {
+        self.check()?;
+        if !matches!(self.kind.as_str(), "video" | "input") || operation.len() > 128 {
+            return Err(Error::from_reason("Invalid desktop audio target"));
+        }
+        let raw: serde_json::Value = serde_json::from_str(&operation)
+            .map_err(|_| Error::from_reason("Invalid desktop audio operation"))?;
+        let keys = if raw["type"] == "status" { 1 } else { 2 };
+        if raw.as_object().is_none_or(|object| object.len() != keys) {
+            return Err(Error::from_reason("Invalid desktop audio operation"));
+        }
+        let operation: DesktopAudioOperation = serde_json::from_str(&operation)
+            .map_err(|_| Error::from_reason("Invalid desktop audio operation"))?;
+        let desktop = self
+            .desktop
+            .lock()
+            .map_err(|_| Error::from_reason("Desktop unavailable"))?;
+        let audio = &desktop
+            .as_ref()
+            .ok_or_else(|| Error::from_reason("Desktop unavailable"))?
+            .audio;
+        match operation {
+            DesktopAudioOperation::Status => {}
+            DesktopAudioOperation::Enabled { enabled } => audio.set_enabled(enabled),
+            DesktopAudioOperation::Muted { muted } => audio.set_muted(muted),
+        }
+        let status = audio.status();
+        let phase = match status.phase {
+            vnilink_app::DesktopAudioPhase::Starting => "starting",
+            vnilink_app::DesktopAudioPhase::Playing => "playing",
+            vnilink_app::DesktopAudioPhase::Muted => "muted",
+            vnilink_app::DesktopAudioPhase::Unavailable => "unavailable",
+            vnilink_app::DesktopAudioPhase::Stopped => "stopped",
+        };
+        Ok(serde_json::json!({"phase":phase,"enabled":status.enabled,"muted":status.muted,
+            "error":status.error.map(|error| serde_json::json!({"code":super::ffi_error_name(&error),"message":error.to_string()}))}).to_string())
+    }
+
     #[napi]
     pub fn close(&self) -> AsyncTask<CloseTask> {
         AsyncTask::new(self.take_cleanup())
@@ -441,7 +492,7 @@ impl Task for CloseTask {
             let _ = self.core.job_cancel(job);
         }
         if let Some((id, generation)) = self.owner.take() {
-            let _ = self.core.close_controller_service(id, generation);
+            retire_service(&self.core, id, generation);
         }
         self.files.take();
         self.desktop.take();
@@ -450,6 +501,14 @@ impl Task for CloseTask {
     fn resolve(&mut self, _: Env, _: ()) -> Result<()> {
         Ok(())
     }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+enum DesktopAudioOperation {
+    Status,
+    Enabled { enabled: bool },
+    Muted { muted: bool },
 }
 
 #[derive(serde::Deserialize)]
@@ -541,9 +600,7 @@ impl Task for OpenChannelTask {
             ) {
                 Ok(service) => Some(service),
                 Err(error) => {
-                    let _ = self
-                        .core
-                        .close_controller_service(owner.id, owner.generation);
+                    retire_service(&self.core, owner.id, owner.generation);
                     return Err(core_error(error));
                 }
             }
@@ -554,9 +611,7 @@ impl Task for OpenChannelTask {
             match self.core.open_files_service(owner.id, owner.generation) {
                 Ok(service) => Some(service),
                 Err(error) => {
-                    let _ = self
-                        .core
-                        .close_controller_service(owner.id, owner.generation);
+                    retire_service(&self.core, owner.id, owner.generation);
                     return Err(core_error(error));
                 }
             }
@@ -571,9 +626,7 @@ impl Task for OpenChannelTask {
                 fps,
             }) = &self.media
             else {
-                let _ = self
-                    .core
-                    .close_controller_service(owner.id, owner.generation);
+                retire_service(&self.core, owner.id, owner.generation);
                 return Err(Error::from_reason("Invalid camera configuration"));
             };
             match self.core.open_camera_service(
@@ -588,9 +641,7 @@ impl Task for OpenChannelTask {
             ) {
                 Ok(service) => Some(service),
                 Err(error) => {
-                    let _ = self
-                        .core
-                        .close_controller_service(owner.id, owner.generation);
+                    retire_service(&self.core, owner.id, owner.generation);
                     return Err(core_error(error));
                 }
             }
@@ -605,9 +656,7 @@ impl Task for OpenChannelTask {
                 voice,
             }) = &self.media
             else {
-                let _ = self
-                    .core
-                    .close_controller_service(owner.id, owner.generation);
+                retire_service(&self.core, owner.id, owner.generation);
                 return Err(Error::from_reason("Invalid audio configuration"));
             };
             let kind = if source_kind == "Microphone" {
@@ -627,9 +676,7 @@ impl Task for OpenChannelTask {
             ) {
                 Ok(service) => Some(service),
                 Err(error) => {
-                    let _ = self
-                        .core
-                        .close_controller_service(owner.id, owner.generation);
+                    retire_service(&self.core, owner.id, owner.generation);
                     return Err(core_error(error));
                 }
             }
@@ -867,8 +914,7 @@ mod tests {
         host.set_video_codecs(caps).unwrap();
         pair(&host, &controller);
         pair(&controller, &host);
-        host.authorize(controller.endpoint_id(), true, true, false, false)
-            .unwrap();
+        host.set_desktop_sharing(true, true, false, false).unwrap();
         host.start_hosting().unwrap();
         let pending = controller
             .begin_connect_services(host.endpoint_id())
@@ -892,22 +938,14 @@ mod tests {
             columns: 80,
             media: None,
         };
-        host.authorize_service(
-            controller.endpoint_id(),
-            vnilink_app::FfiServiceKind::Desktop,
-            false,
-        )
-        .unwrap();
+        host.set_service_sharing(vnilink_app::FfiServiceKind::Desktop, false)
+            .unwrap();
         assert!(
             open.compute().is_err(),
             "a neutral connection must not bypass Desktop authorization"
         );
-        host.authorize_service(
-            controller.endpoint_id(),
-            vnilink_app::FfiServiceKind::Desktop,
-            true,
-        )
-        .unwrap();
+        host.set_service_sharing(vnilink_app::FfiServiceKind::Desktop, true)
+            .unwrap();
         let video = open.compute().unwrap();
         assert!(
             open.compute().is_err(),
@@ -921,6 +959,27 @@ mod tests {
         open.generation = session.generation;
         open.kind = "input".into();
         let input = open.compute().unwrap();
+        let status: serde_json::Value =
+            serde_json::from_str(&video.desktop_audio(r#"{"type":"status"}"#.into()).unwrap())
+                .unwrap();
+        assert_eq!(status["enabled"], true);
+        assert!(video
+            .desktop_audio(r#"{"type":"status","extra":true}"#.into())
+            .is_err());
+        assert!(video
+            .desktop_audio(r#"{"type":"muted","muted":1}"#.into())
+            .is_err());
+        input
+            .desktop_audio(r#"{"type":"muted","muted":true}"#.into())
+            .unwrap();
+        let status: serde_json::Value =
+            serde_json::from_str(&video.desktop_audio(r#"{"type":"status"}"#.into()).unwrap())
+                .unwrap();
+        assert_eq!(
+            status["muted"], true,
+            "video and input share one audio companion"
+        );
+
         let owner = video
             .desktop
             .lock()
@@ -967,6 +1026,7 @@ mod tests {
         }
         input.take_cleanup().compute().unwrap();
         assert!(input.input(key.clone()).is_err());
+        assert!(input.desktop_audio(r#"{"type":"status"}"#.into()).is_err());
         assert_eq!(
             controller.controller_service(owner.id).unwrap().phase,
             vnilink_app::FfiServicePhase::Active
@@ -981,10 +1041,7 @@ mod tests {
         video.take_cleanup().compute().unwrap();
         replacement.input(key).unwrap();
         replacement.take_cleanup().compute().unwrap();
-        assert!(matches!(
-            controller.controller_service(owner.id).unwrap().phase,
-            vnilink_app::FfiServicePhase::Closed { .. }
-        ));
+        assert!(controller.controller_service(owner.id).is_err());
         assert_eq!(
             controller.controller_session(session.id).unwrap().phase,
             vnilink_app::FfiSessionPhase::Active
@@ -1004,6 +1061,7 @@ mod tests {
             owner.id
         );
         reopened.take_cleanup().compute().unwrap();
+        assert!(controller.controller_services().unwrap().is_empty());
         controller.shutdown();
         host.shutdown();
     }
@@ -1031,12 +1089,8 @@ mod tests {
             .unwrap();
         host.set_file_roots(vec![destination.to_string_lossy().into()])
             .unwrap();
-        host.authorize_service(
-            controller.endpoint_id(),
-            vnilink_app::FfiServiceKind::Files,
-            true,
-        )
-        .unwrap_err();
+        host.set_service_sharing(vnilink_app::FfiServiceKind::Files, true)
+            .unwrap();
         std::fs::create_dir_all(root.join("controller-blobs")).unwrap();
         std::fs::create_dir_all(root.join("host-blobs")).unwrap();
         controller
@@ -1046,22 +1100,13 @@ mod tests {
             .unwrap();
         pair(&host, &controller);
         pair(&controller, &host);
-        host.authorize(controller.endpoint_id(), true, true, false, false)
+        host.set_desktop_sharing(true, true, false, false).unwrap();
+        host.set_service_sharing(vnilink_app::FfiServiceKind::Terminal, true)
             .unwrap();
-        host.authorize_service(
-            controller.endpoint_id(),
-            vnilink_app::FfiServiceKind::Terminal,
-            true,
-        )
-        .unwrap();
-        host.authorize_service(
-            controller.endpoint_id(),
-            vnilink_app::FfiServiceKind::Files,
-            true,
-        )
-        .unwrap();
+        host.set_service_sharing(vnilink_app::FfiServiceKind::Files, true)
+            .unwrap();
         controller
-            .authorize_service(host.endpoint_id(), vnilink_app::FfiServiceKind::Files, true)
+            .set_service_sharing(vnilink_app::FfiServiceKind::Files, true)
             .unwrap();
         host.enable_native_terminal(
             "/bin/sh".into(),

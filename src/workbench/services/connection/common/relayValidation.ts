@@ -1,5 +1,6 @@
 import * as nls from '../../../../nls.js';
 import type { RelayInput } from '../../../../platform/engine/common/engine.js';
+
 export interface RelayValidationIssue {
 	readonly index: number;
 	readonly field: 'url' | 'token';

@@ -1,3 +1,4 @@
+use super::filesystem_location::FilesystemLocation;
 use super::support::{pair_for_control, start_direct, RecordingDesktop};
 use crate::camera::{CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory};
 use crate::terminal::TerminalSize;
@@ -208,8 +209,7 @@ fn pending_owner_can_close_without_cancelling_parent_approval() {
     let controller = start_direct();
     let host = start_direct();
     pair_for_control(&host, &controller);
-    host.authorize(&controller.endpoint_id(), Grants::default())
-        .unwrap();
+    host.unpair(&controller.endpoint_id()).unwrap();
     host.export_pairing_file(Duration::from_secs(60), true)
         .unwrap();
     let pending = controller.begin_connect(&host.endpoint_id()).unwrap();
@@ -250,8 +250,7 @@ fn rejected_admission_fails_attached_services() {
     let controller = start_direct();
     let host = start_direct();
     pair_for_control(&host, &controller);
-    host.authorize(&controller.endpoint_id(), Grants::default())
-        .unwrap();
+    host.unpair(&controller.endpoint_id()).unwrap();
     host.export_pairing_file(Duration::from_secs(60), true)
         .unwrap();
     let pending = controller.begin_connect(&host.endpoint_id()).unwrap();
@@ -282,13 +281,10 @@ fn unsupported_kinds_and_record_limits_do_not_change_connection() {
     let controller = start_direct();
     let host = start_direct();
     pair_for_control(&host, &controller);
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            transfer: true,
-            ..Grants::default()
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        transfer: true,
+        ..Grants::default()
+    })
     .unwrap();
     let session = active(
         &controller,
@@ -349,7 +345,8 @@ fn remote_files_pipe_routes_real_operations_and_closes_independently() {
     std::fs::create_dir(&scratch.0).unwrap();
     let controller = start_direct();
     let host = start_direct();
-    host.set_file_roots(vec![scratch.0.clone()]).unwrap();
+    host.enable_filesystem_access().unwrap();
+    let location = FilesystemLocation::new(host.file_roots().unwrap(), &scratch.0);
     pair_for_control(&host, &controller);
     let session = active(
         &controller,
@@ -371,15 +368,12 @@ fn remote_files_pipe_routes_real_operations_and_closes_independently() {
         Err(Error::TransferDenied)
     ));
     assert!(host.hosted_services().unwrap().is_empty());
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            transfer: true,
-            clipboard: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        transfer: true,
+        clipboard: false,
+    })
     .unwrap();
     let files = controller
         .open_files_service(owner.id, owner.generation)
@@ -388,9 +382,12 @@ fn remote_files_pipe_routes_real_operations_and_closes_independently() {
         controller.open_files_service(owner.id, owner.generation),
         Err(Error::Busy)
     ));
-    let root = host.file_roots().unwrap()[0].0;
-    files.mkdir(root, "", "original").unwrap();
-    let listing = files.list(root, "", 0, 20).unwrap();
+    files
+        .mkdir(location.root, &location.path(""), "original")
+        .unwrap();
+    let listing = files
+        .list(location.root, &location.path(""), 0, 20)
+        .unwrap();
     assert_eq!(
         listing
             .entries
@@ -401,8 +398,8 @@ fn remote_files_pipe_routes_real_operations_and_closes_independently() {
     );
     files
         .rename(
-            root,
-            "",
+            location.root,
+            &location.path(""),
             "original",
             Some(listing.entries[0].token),
             "renamed",
@@ -412,7 +409,14 @@ fn remote_files_pipe_routes_real_operations_and_closes_independently() {
     assert!(!scratch.0.join("original").exists());
     // A retained service pipe must not consume/block legacy filesystem streams.
     let legacy = controller
-        .fs_list(session.id, session.generation, root, "", 0, 20)
+        .fs_list(
+            session.id,
+            session.generation,
+            location.root,
+            &location.path(""),
+            0,
+            20,
+        )
         .unwrap();
     assert_eq!(
         legacy
@@ -434,7 +438,10 @@ fn remote_files_pipe_routes_real_operations_and_closes_independently() {
     wait(|| host.hosted_services().unwrap().is_empty());
     assert!(!screen_work.is_cancelled());
     assert_eq!(controller.controller_session(session.id).unwrap(), session);
-    assert!(matches!(files.list(root, "", 0, 20), Err(Error::NoSession)));
+    assert!(matches!(
+        files.list(location.root, &location.path(""), 0, 20),
+        Err(Error::NoSession)
+    ));
     let next = controller
         .attach_controller_service(session.id, session.generation, ServiceKind::Files)
         .unwrap();
@@ -450,16 +457,21 @@ fn remote_files_pipe_routes_real_operations_and_closes_independently() {
     let revoked = controller
         .open_files_service(next.id, next.generation)
         .unwrap();
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Terminal, true)
+    host.set_service_sharing(ServiceKind::Terminal, true)
         .unwrap();
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Camera, true)
-        .unwrap();
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Camera, false)
+    host.set_service_sharing(ServiceKind::Camera, true).unwrap();
+    host.set_service_sharing(ServiceKind::Camera, false)
         .unwrap();
     assert!(!revoked.is_cancelled());
-    assert_eq!(revoked.list(root, "", 0, 20).unwrap().entries.len(), 1);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Files, false)
-        .unwrap();
+    assert_eq!(
+        revoked
+            .list(location.root, &location.path(""), 0, 20)
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
+    host.set_service_sharing(ServiceKind::Files, false).unwrap();
     let permissions = host.service_permissions(&controller.endpoint_id()).unwrap();
     assert!(permissions.desktop && permissions.terminal);
     assert!(!permissions.files && !permissions.camera);
@@ -505,7 +517,7 @@ fn remote_service_negotiation_rejects_incompatible_or_stale_requests() {
     }
     // Permission and backend availability are distinct. An explicit grant
     // changes Denied to Unsupported without creating a shell/camera backend.
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Terminal, true)
+    host.set_service_sharing(ServiceKind::Terminal, true)
         .unwrap();
     assert_eq!(
         controller
@@ -537,8 +549,7 @@ fn remote_service_negotiation_rejects_incompatible_or_stale_requests() {
             .unwrap(),
         vec![1, 2, 0]
     );
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Camera, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Camera, true).unwrap();
     assert_eq!(
         controller
             .test_service_frame(
@@ -566,15 +577,12 @@ fn remote_files_pipe_reconnect_preserves_owner_and_fences_old_backend() {
     let controller = start_direct();
     let host = start_direct();
     pair_for_control(&host, &controller);
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            transfer: true,
-            clipboard: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        transfer: true,
+        clipboard: false,
+    })
     .unwrap();
     let session = active(
         &controller,
@@ -632,10 +640,10 @@ fn neutral_connection_admits_without_feature_grants_and_gates_real_files() {
     std::fs::create_dir(&scratch.0).unwrap();
     let host = start_direct();
     let controller = start_direct();
-    host.set_file_roots(vec![scratch.0.clone()]).unwrap();
+    host.enable_filesystem_access().unwrap();
+    let location = FilesystemLocation::new(host.file_roots().unwrap(), &scratch.0);
     pair_for_control(&host, &controller);
-    host.authorize(&controller.endpoint_id(), Grants::default())
-        .unwrap();
+    host.set_desktop_sharing(Grants::default()).unwrap();
     host.set_video_codecs(crate::VideoCodecCaps::default())
         .unwrap();
     controller
@@ -685,16 +693,28 @@ fn neutral_connection_admits_without_feature_grants_and_gates_real_files() {
         Err(Error::TransferDenied)
     ));
     assert!(host.hosted_services().unwrap().is_empty());
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Files, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Files, true).unwrap();
     let pipe = controller
         .open_files_service(owner.id, owner.generation)
         .unwrap();
-    pipe.mkdir(0, "", "owned").unwrap();
-    assert_eq!(pipe.list(0, "", 0, 20).unwrap().entries[0].name, "owned");
+    pipe.mkdir(location.root, &location.path(""), "owned")
+        .unwrap();
+    assert_eq!(
+        pipe.list(location.root, &location.path(""), 0, 20)
+            .unwrap()
+            .entries[0]
+            .name,
+        "owned"
+    );
     // Even with Transfer, legacy mutations cannot bypass service admission.
     assert!(controller
-        .fs_mkdir(session.id, session.generation, 0, "", "legacy")
+        .fs_mkdir(
+            session.id,
+            session.generation,
+            location.root,
+            &location.path(""),
+            "legacy"
+        )
         .is_err());
     assert!(!scratch.0.join("legacy").exists());
     let old_lease = controller
@@ -715,14 +735,19 @@ fn neutral_connection_admits_without_feature_grants_and_gates_real_files() {
         .open_files_service(fresh.id, fresh.generation)
         .unwrap();
     pipe.close();
-    assert_eq!(next.list(0, "", 0, 20).unwrap().entries[0].name, "owned");
+    assert_eq!(
+        next.list(location.root, &location.path(""), 0, 20)
+            .unwrap()
+            .entries[0]
+            .name,
+        "owned"
+    );
     assert!(controller
         .controller_session(session.id)
         .unwrap()
         .quality
         .is_none());
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Files, false)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Files, false).unwrap();
     wait(|| next.is_cancelled());
     assert_eq!(
         controller.controller_session(session.id).unwrap().phase,
@@ -731,7 +756,7 @@ fn neutral_connection_admits_without_feature_grants_and_gates_real_files() {
 }
 
 #[test]
-fn neutral_connection_does_not_ask_an_unpaired_host_for_control_approval() {
+fn neutral_pairing_needs_host_consent_and_does_not_enable_features() {
     let host = start_direct();
     let controller = start_direct();
     host.start_hosting().unwrap();
@@ -745,16 +770,16 @@ fn neutral_connection_does_not_ask_an_unpaired_host_for_control_approval() {
     let pending = controller
         .begin_connect_services(&host.endpoint_id())
         .unwrap();
-    wait(|| {
-        matches!(
-            controller.controller_session(pending.id).unwrap().phase,
-            SessionPhase::Failed(_)
-        )
-    });
-    assert!(host.snapshot().unwrap().incoming.is_none());
-    while let Some(event) = events.try_recv() {
-        assert!(!matches!(event, CoreEvent::ControlRequested { .. }));
-    }
+    wait(|| host.control_request().unwrap().is_some());
+    host.confirm_control_request(&controller.control_check())
+        .unwrap();
+    active(&controller, pending.id);
+    assert_eq!(host.snapshot().unwrap().devices.len(), 1);
+    assert_eq!(
+        host.sharing_policy().unwrap(),
+        crate::SharingPolicy::default()
+    );
+    assert!(events.try_recv().is_some());
 }
 
 #[test]
@@ -774,15 +799,15 @@ fn adopted_desktop_close_releases_input_and_preserves_files_for_every_close_path
             close
         )));
         std::fs::create_dir_all(&root.0).unwrap();
-        host.set_file_roots(vec![root.0.clone()]).unwrap();
+        host.enable_filesystem_access().unwrap();
+        let location = FilesystemLocation::new(host.file_roots().unwrap(), &root.0);
         let applied = Arc::new(std::sync::Mutex::new(Vec::new()));
         host.set_desktop(Box::new(super::support::RecordingDesktop {
             events: applied.clone(),
         }))
         .unwrap();
         pair_for_control(&host, &controller);
-        host.authorize_service(&controller.endpoint_id(), ServiceKind::Files, true)
-            .unwrap();
+        host.set_service_sharing(ServiceKind::Files, true).unwrap();
         let session = controller.connect(&host.endpoint_id()).unwrap();
         let incoming = host.snapshot().unwrap().incoming.unwrap();
         let desktop = desktop(&controller, &session);
@@ -841,7 +866,7 @@ fn adopted_desktop_close_releases_input_and_preserves_files_for_every_close_path
                 .close_hosted_service(remote.id, remote.generation)
                 .unwrap(),
             3 => host
-                .authorize_service(&controller.endpoint_id(), ServiceKind::Desktop, false)
+                .set_service_sharing(ServiceKind::Desktop, false)
                 .unwrap(),
             _ => drop(handle),
         }
@@ -889,9 +914,13 @@ fn adopted_desktop_close_releases_input_and_preserves_files_for_every_close_path
             host.snapshot().unwrap().incoming.unwrap().phase,
             SessionPhase::Active
         );
-        pipe.mkdir(0, "", "after-desktop-close").unwrap();
+        pipe.mkdir(location.root, &location.path(""), "after-desktop-close")
+            .unwrap();
         assert_eq!(
-            pipe.list(0, "", 0, 20).unwrap().entries[0].name,
+            pipe.list(location.root, &location.path(""), 0, 20)
+                .unwrap()
+                .entries[0]
+                .name,
             "after-desktop-close"
         );
         assert!(!pipe.is_cancelled());
@@ -929,7 +958,9 @@ fn adopted_desktop_close_releases_input_and_preserves_files_for_every_close_path
             .unwrap();
         pipe.close();
         assert!(!fresh_pipe.is_cancelled());
-        fresh_pipe.mkdir(0, "", "after-reconnect").unwrap();
+        fresh_pipe
+            .mkdir(location.root, &location.path(""), "after-reconnect")
+            .unwrap();
     }
 }
 
@@ -1076,8 +1107,8 @@ fn connect_services(controller: &Core, host: &Core) -> SessionInfo {
 fn all_services_share_one_parent_and_close_independently() {
     let controller = start_direct();
     let host = start_direct();
-    let root = scratch_dir("all");
-    host.set_file_roots(vec![root.0.clone()]).unwrap();
+    let _root = scratch_dir("all");
+    host.enable_filesystem_access().unwrap();
     host.set_desktop(Box::new(RecordingDesktop {
         events: Arc::new(Mutex::new(Vec::new())),
     }))
@@ -1095,8 +1126,7 @@ fn all_services_share_one_parent_and_close_independently() {
         ServiceKind::Terminal,
         ServiceKind::Camera,
     ] {
-        host.authorize_service(&controller.endpoint_id(), kind, true)
-            .unwrap();
+        host.set_service_sharing(kind, true).unwrap();
     }
 
     let parent = connect_services(&controller, &host);
@@ -1237,19 +1267,18 @@ fn files_and_terminal_start_without_capture_or_desktop_decoder() {
     let controller = start_direct();
     let host = start_direct();
     let root = scratch_dir("nocapture");
-    host.set_file_roots(vec![root.0.clone()]).unwrap();
+    host.enable_filesystem_access().unwrap();
+    let location = FilesystemLocation::new(host.file_roots().unwrap(), &root.0);
     host.set_terminal_factory(Some(test_terminal_factory()))
         .unwrap();
     // No capture, no desktop adapter, no H.264 encoder on the host.
     host.set_video_codecs(crate::VideoCodecCaps::default())
         .unwrap();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Files, true)
+    host.set_service_sharing(ServiceKind::Files, true).unwrap();
+    host.set_service_sharing(ServiceKind::Terminal, true)
         .unwrap();
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Terminal, true)
-        .unwrap();
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Camera, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Camera, true).unwrap();
     let camera_factory = Arc::new(TestCameraFactory::default());
     host.set_camera_factory(Some(camera_factory)).unwrap();
 
@@ -1264,7 +1293,9 @@ fn files_and_terminal_start_without_capture_or_desktop_decoder() {
     let files = controller
         .open_files_service(files_owner.id, files_owner.generation)
         .unwrap();
-    files.mkdir(0, "", "no-capture").unwrap();
+    files
+        .mkdir(location.root, &location.path(""), "no-capture")
+        .unwrap();
     assert!(root.0.join("no-capture").is_dir());
 
     let terminal_owner = controller
@@ -1418,14 +1449,13 @@ fn revoke_and_idle_expiry_name_their_causes() {
     let host = start_direct();
     let root = scratch_dir("cause-files");
     std::fs::create_dir_all(&root.0).unwrap();
-    host.set_file_roots(vec![root.0.clone()]).unwrap();
+    host.enable_filesystem_access().unwrap();
     host.set_desktop(Box::new(RecordingDesktop {
         events: Arc::new(Mutex::new(Vec::new())),
     }))
     .unwrap();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Files, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Files, true).unwrap();
     let parent = connect_services(&controller, &host);
     let files_owner = controller
         .attach_controller_service(parent.id, parent.generation, ServiceKind::Files)
@@ -1442,8 +1472,7 @@ fn revoke_and_idle_expiry_name_their_causes() {
     // The revoke event proves the cause: the serve task's guard may remove
     // the record before any poll observes the finished phase.
     let host_events = host.subscribe().unwrap();
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Files, false)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Files, false).unwrap();
     let mut saw_revoked = false;
     let deadline = Instant::now() + Duration::from_secs(8);
     while !saw_revoked && Instant::now() < deadline {
@@ -1509,7 +1538,7 @@ fn removing_a_backend_device_closes_its_hosted_services() {
     host.set_terminal_factory(Some(test_terminal_factory()))
         .unwrap();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Terminal, true)
+    host.set_service_sharing(ServiceKind::Terminal, true)
         .unwrap();
     let parent = connect_services(&controller, &host);
     let owner = controller
@@ -1589,8 +1618,7 @@ fn stalled_native_camera_open_cancels_cleanly_and_adopts_nothing_late() {
     });
     host.set_camera_factory(Some(stall.clone())).unwrap();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Camera, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::Camera, true).unwrap();
     let parent = connect_services(&controller, &host);
     let owner = controller
         .attach_controller_service(parent.id, parent.generation, ServiceKind::Camera)
@@ -1647,13 +1675,10 @@ fn files_only_and_terminal_only_connections_never_request_capture() {
     host.set_terminal_factory(Some(test_terminal_factory()))
         .unwrap();
     pair_for_control(&host, &controller);
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            transfer: true,
-            ..Grants::default()
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        transfer: true,
+        ..Grants::default()
+    })
     .unwrap();
 
     // Files-only leg: the session carries jobs, never video.
@@ -1678,7 +1703,7 @@ fn files_only_and_terminal_only_connections_never_request_capture() {
     wait(|| controller.controller_session(files.id).unwrap().phase == SessionPhase::Closed);
 
     // Terminal-only leg: a live shell with output, still no capture target.
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::Terminal, true)
+    host.set_service_sharing(ServiceKind::Terminal, true)
         .unwrap();
     let parent = connect_services(&controller, &host);
     let owner = controller
@@ -1710,4 +1735,78 @@ fn files_only_and_terminal_only_connections_never_request_capture() {
     terminal.close();
     controller.shutdown();
     host.shutdown();
+}
+
+#[test]
+fn global_file_revocation_closes_both_peers_without_stopping_desktops_or_reopening_old_owners() {
+    let host = start_direct();
+    let a = start_direct();
+    let b = start_direct();
+    host.enable_filesystem_access().unwrap();
+    host.set_capture(Box::new(TestCapture)).unwrap();
+    for peer in [&a, &b] {
+        pair_for_control(&host, peer);
+    }
+    host.set_service_sharing(ServiceKind::Files, true).unwrap();
+    let mut connections = Vec::new();
+    for peer in [&a, &b] {
+        let parent = connect_services(peer, &host);
+        let screen = peer
+            .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
+            .unwrap();
+        let desktop = peer
+            .open_desktop_service(screen.id, screen.generation)
+            .unwrap();
+        let owner = peer
+            .attach_controller_service(parent.id, parent.generation, ServiceKind::Files)
+            .unwrap();
+        let files = peer.open_files_service(owner.id, owner.generation).unwrap();
+        connections.push((peer, parent, owner, files, desktop));
+    }
+    let events = host.subscribe().unwrap();
+    host.set_service_sharing(ServiceKind::Files, false).unwrap();
+    let mut revoked = std::collections::BTreeSet::new();
+    while let Some(event) = events.try_recv() {
+        if let CoreEvent::HostedServiceChanged { service } = event {
+            if service.kind == ServiceKind::Files
+                && service.phase == ServicePhase::Closed(CloseCause::Revoked)
+            {
+                revoked.insert(service.peer_id);
+            }
+        }
+    }
+    assert_eq!(
+        revoked,
+        [a.endpoint_id(), b.endpoint_id()].into_iter().collect()
+    );
+    for (peer, parent, owner, files, desktop) in &connections {
+        wait(|| files.is_cancelled());
+        assert_eq!(
+            peer.controller_service(owner.id).unwrap().phase,
+            ServicePhase::Closed(CloseCause::PeerClose)
+        );
+        assert!(files.is_cancelled());
+        assert_eq!(
+            peer.controller_session(parent.id).unwrap().phase,
+            SessionPhase::Active
+        );
+        assert!(desktop.desktop_info().is_ok());
+    }
+    host.set_service_sharing(ServiceKind::Files, true).unwrap();
+    for (peer, parent, owner, files, _) in &connections {
+        assert!(
+            files.is_cancelled(),
+            "enabling must never revive an old file handle"
+        );
+        assert!(matches!(
+            peer.open_files_service(owner.id, owner.generation),
+            Err(Error::NoSession)
+        ));
+        let replacement = peer
+            .attach_controller_service(parent.id, parent.generation, ServiceKind::Files)
+            .unwrap();
+        assert!(peer
+            .open_files_service(replacement.id, replacement.generation)
+            .is_ok());
+    }
 }

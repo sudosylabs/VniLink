@@ -1019,26 +1019,20 @@ mod review_v9_legacy_input {
                     .open_desktop_service(owner.id, owner.generation)
                     .unwrap(),
             );
-            host.authorize(
-                &peer.endpoint_id(),
-                crate::Grants {
-                    view: true,
-                    control: false,
-                    clipboard: false,
-                    transfer: false,
-                },
-            )
+            host.set_desktop_sharing(crate::Grants {
+                view: true,
+                control: false,
+                clipboard: false,
+                transfer: false,
+            })
             .unwrap();
             if mode == 3 {
-                host.authorize(
-                    &peer.endpoint_id(),
-                    crate::Grants {
-                        view: true,
-                        control: true,
-                        clipboard: false,
-                        transfer: false,
-                    },
-                )
+                host.set_desktop_sharing(crate::Grants {
+                    view: true,
+                    control: true,
+                    clipboard: false,
+                    transfer: false,
+                })
                 .unwrap();
             } else {
                 let legacy_id = lock(&host.shared.state)
@@ -1054,6 +1048,11 @@ mod review_v9_legacy_input {
         }
         proceed.send(()).unwrap();
         let until = Instant::now() + Duration::from_secs(5);
+        // Sending the release does not mean the native worker has consumed
+        // it yet. Observe its acknowledgement before tearing down its owner.
+        while !completed.load(Ordering::Acquire) && Instant::now() < until {
+            std::thread::yield_now();
+        }
         if !text && available {
             while lock(&events).len() < 2 && Instant::now() < until {
                 std::thread::yield_now();
@@ -1181,6 +1180,9 @@ mod v11_legacy_cancel_probe {
         pair_for_control(&host, &rejected);
         assert!(rejected.connect(&host.endpoint_id()).is_err());
         proceed.send(()).unwrap();
+        // Give completion its own bound; creating the replacement peers must
+        // not consume the native acknowledgement's timeout budget.
+        let deadline = Instant::now() + Duration::from_secs(5);
         while lock(&applied).len() != 2
             || lock(&host.shared.state)
                 .incoming_slots

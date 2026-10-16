@@ -196,15 +196,12 @@ fn capture_worker_exit(idle: bool, exit: CaptureExit) {
             .unwrap(),
     )
     .unwrap();
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: false,
+    })
     .unwrap();
     host.start_hosting().unwrap();
     let parent = controller
@@ -276,7 +273,7 @@ fn capture_worker_exit(idle: bool, exit: CaptureExit) {
         CaptureExit::Owner => handle.close(),
         CaptureExit::Parent => controller.disconnect_session(parent.id).unwrap(),
         CaptureExit::Revoke => host
-            .authorize_service(&controller.endpoint_id(), ServiceKind::Desktop, false)
+            .set_service_sharing(ServiceKind::Desktop, false)
             .unwrap(),
         CaptureExit::Stop => stop.store(true, Ordering::Release),
         CaptureExit::Shutdown => host.shutdown(),

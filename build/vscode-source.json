@@ -2,7 +2,7 @@
   "repository": "https://github.com/microsoft/vscode",
   "ref": "1.141.0",
   "commit": "2a59476c9bfcb90b3ddc372c36762471b7dfad1c",
-  "sourceModifications": "Import specifiers flattened into src; adapted modules retain native window controls and service registration, integrating VniLink view tabs and contextual actions while removing editor and unrelated application services. Each adapted file is marked.",
+  "sourceModifications": "Import specifiers flattened into src; adapted modules retain native window controls and service registration, integrating VniLink view tabs and contextual actions while removing editor and unrelated application services. Each adapted file is marked. Desktop composition is class-owned; adapted presentation modules use shared semantic palette variables. ARIA announcements are copied from the pinned upstream revision.",
   "runtimeIntegrated": true,
   "files": [
     {
@@ -495,18 +495,18 @@
       "path": "src/platform/ipc/common/mainProcessService.ts",
       "upstreamPath": "src/vs/platform/ipc/common/mainProcessService.ts",
       "adapted": true,
-      "sha256": "2e1ab6199be2796a9df329c36bd210f5025c7df17b972620cc30e29e50bc7f3c"
+      "sha256": "9a199d102134767ad0a18136d669c1f720d9b893393f449d28f40cc6f3795390"
     },
     {
       "path": "src/platform/ipc/electron-browser/mainProcessService.ts",
       "upstreamPath": "src/vs/platform/ipc/electron-browser/mainProcessService.ts",
       "adapted": true,
-      "sha256": "09901fcea861345d2a78633e3173200010787cff0d17e5fa9ce14875464ed02c"
+      "sha256": "ebd33d3510375ccdd4201b62b4f67041f23e08e8a8dbe401e84430726aea24a4"
     },
     {
       "path": "src/platform/native/common/native.ts",
       "upstreamPath": "src/vs/platform/native/common/native.ts",
-      "sha256": "b0598c07474176fe6f28b354852968e0ceb2af0f9f1085d5b761e86a0eac9c7d",
+      "sha256": "4a660b837ff659d0bb87ef350c86cda7f49fb90edbb4eeb4cddea765b1d6ad7d",
       "changedImports": 0,
       "adapted": true
     },
@@ -514,32 +514,32 @@
       "path": "src/platform/native/common/nativeHostService.ts",
       "upstreamPath": "src/vs/platform/native/common/nativeHostService.ts",
       "adapted": true,
-      "sha256": "3ab246f2a93a65238c242cec060518266ae7be93026cec31071ff31dd22b5c6f"
+      "sha256": "280440d90cb65737fc55c3938474b69b63d90a0ab00918ca94156e7577786eb5"
     },
     {
       "path": "src/platform/native/electron-main/nativeHostMainService.ts",
       "upstreamPath": "src/vs/platform/native/electron-main/nativeHostMainService.ts",
       "adapted": true,
-      "sha256": "ea1ac9b9340c66b59ddafb17fbfce4fe1f73ed9ba0c71321d0d870c03b190ec5"
+      "sha256": "9c4baf644b444732efb51239b6addba95b283faa8dad826f51456937989663b4"
     },
     {
       "path": "src/platform/theme/browser/themeService.ts",
       "upstreamPath": "src/vs/workbench/services/themes/browser/workbenchThemeService.ts",
       "adapted": true,
-      "sha256": "e0a98cffbf42bb32f3b677b258f9cb112dcc9e741e2fe585210b3caa2a12038a",
+      "sha256": "9deef7d380c72d132714aa49a66ab8c1390aebf97cca63dd9d8a399e0f6f7ab8",
       "adaptation": "New system-theme adapter using the upstream theme-service registration pattern."
     },
     {
       "path": "src/platform/theme/common/themeService.ts",
       "upstreamPath": "src/vs/platform/theme/common/themeService.ts",
-      "sha256": "362c87ea690454b86faaf9225b544ce9fd831b6f2992d8e8e780d243a5bf1006",
+      "sha256": "9415e9b5f6c34d115abb4e387cbbcfa256c45b9a7b08a44ec13256dd7363d461",
       "changedImports": 0,
       "adapted": true
     },
     {
       "path": "src/platform/window/common/window.ts",
       "upstreamPath": "src/vs/platform/window/common/window.ts",
-      "sha256": "bb59de1bf41782bfb3c51afba1772a57882f4582a7b21bc34e0356bd74ac2239",
+      "sha256": "caea024af8c8760dca3e331cf57e68ffd48f2af381fddb469ecc886e507ea9c4",
       "changedImports": 0,
       "adapted": true
     },
@@ -590,7 +590,7 @@
     {
       "path": "src/workbench/browser/parts/titlebar/titlebarPart.ts",
       "upstreamPath": "src/vs/workbench/browser/parts/titlebar/titlebarPart.ts",
-      "sha256": "6475423991bd1ef46b41cf19accfc943b9daccef83d4423f9bf6db20d0525485",
+      "sha256": "15aa91d22a80061103225d1df9f6927ad26a5ffd748e5eb7d127f0abeaf99a8b",
       "changedImports": 0,
       "adapted": true
     },
@@ -598,19 +598,19 @@
       "path": "src/workbench/electron-browser/desktop.main.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/desktop.main.ts",
       "adapted": true,
-      "sha256": "854b1016a3cc03078b905a8bcd6940510d832e2ac1af34c2b7e2055e7ac6ab51"
+      "sha256": "69517fa8244d86842a6fc46dc2815f481b440de9884f63d14c155d2e80d47c68"
     },
     {
       "path": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
-      "sha256": "e3cbe182c8f450d072d1c21dd43e5665273847f63efaff0bcd941dc2b58e1bd9",
+      "sha256": "0a5b4cfb46deb829d29f14dedd2fe6385d859eefd874767f7a8f78bae1d09735",
       "changedImports": 0,
       "adapted": true
     },
     {
       "path": "src/workbench/services/host/browser/host.ts",
       "upstreamPath": "src/vs/workbench/services/host/browser/host.ts",
-      "sha256": "b85c3e37ff71e97e8c61f5cf2ae5d8b0ee024a35a21baed06a2f580acce0325f",
+      "sha256": "3e4d743c008479453ad62f0386de6fef6b38d54187ebc7398016408a58286e40",
       "changedImports": 0,
       "adapted": true
     },
@@ -618,7 +618,7 @@
       "path": "src/workbench/services/host/electron-browser/nativeHostService.ts",
       "upstreamPath": "src/vs/workbench/services/host/electron-browser/nativeHostService.ts",
       "adapted": true,
-      "sha256": "6d3207d88987cd1e8903b4e3b83a4f1cfa04b6ac9d6043ab809e548d552ef287"
+      "sha256": "cd7f83509e5e83251b269f625c4592467cb2286031a54d18f80e8dc31190703c"
     },
     {
       "path": "src/base/browser/window.ts",
@@ -630,15 +630,98 @@
       "path": "src/workbench/browser/parts/titlebar/media/modernTabs.css",
       "upstreamPath": "src/vs/workbench/contrib/modernUI/browser/media/tabs.css",
       "adapted": true,
-      "sha256": "e336803fc58083354b0c9741c6e6c3d052fb2d92ff18f7fed96b4215d55e8b0a"
+      "sha256": "e93cb8990921c3a0581279fd93681653d3cb04fe252d292c907baeff4c544610",
+      "adaptation": "VniLink transparent titlebar tabs retain a shared label color and rounded selection outline; segmented dividers leave the active tab open, with side strokes ending at the reverse shoulders."
+    },
+    {
+      "path": "src/base/browser/ui/aria/aria.ts",
+      "upstreamPath": "src/vs/base/browser/ui/aria/aria.ts",
+      "sha256": "61098dabc4f0069ff9d51e4b4262147e1c29ca58713eaa0782ef243d3cd63d27",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/ui/aria/aria.css",
+      "upstreamPath": "src/vs/base/browser/ui/aria/aria.css",
+      "sha256": "c6cea3b56d90a2754b2ac362e81792e55495ebae36194e65e35cd655f71f9775",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/dom.ts",
+      "upstreamPath": "src/vs/base/browser/dom.ts",
+      "sha256": "5963e909ab4c16e4810714f39dac72e5e2253d53ed85129b04ce21b90571af8f",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/numbers.ts",
+      "upstreamPath": "src/vs/base/common/numbers.ts",
+      "sha256": "1e197ffa6ca2e60f43eaa25f0930674ad4d348b293ad607a69186d0ddc744ab3",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/keyCodes.ts",
+      "upstreamPath": "src/vs/base/common/keyCodes.ts",
+      "sha256": "7e059bb385cae572916c3aac8770831c86a0f7d4b6da250b9d0d745143bd20f1",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/mouseEvent.ts",
+      "upstreamPath": "src/vs/base/browser/mouseEvent.ts",
+      "sha256": "1294a8d4cba678bbee9ba1e67acf1e8adcc5cfe556800b57637d1748c613c214",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/iframe.ts",
+      "upstreamPath": "src/vs/base/browser/iframe.ts",
+      "sha256": "4bdd13fb9d4e8cc6e60e9a02ae0d627d790077fb568f46d173746d22deda8c20",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/browser.ts",
+      "upstreamPath": "src/vs/base/browser/browser.ts",
+      "sha256": "8dbb98957266777088901ebc896da986eecba73f16db3b8a5929d0394342399a",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/keyboardEvent.ts",
+      "upstreamPath": "src/vs/base/browser/keyboardEvent.ts",
+      "sha256": "c0080f6875ce679e4140d6faeae4ccb2f8d0b26fa2946d0c5f24ec5c39206aba",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/keybindings.ts",
+      "upstreamPath": "src/vs/base/common/keybindings.ts",
+      "sha256": "7d45fe47f4371c0c5513dfc0d544b04ccab88789ef08d5bbbf00ca93928faa49",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/canIUse.ts",
+      "upstreamPath": "src/vs/base/browser/canIUse.ts",
+      "sha256": "0d0e1910902339bb7bc37c2fed83e800dc8ef4d020e9aa79f26f14d5b0383886",
+      "changedImports": 0
+    },
+    {
+      "path": "src/typings/editContext.d.ts",
+      "upstreamPath": "src/typings/editContext.d.ts",
+      "sha256": "348174814b3a7c4c9ad1ac2a6e467cb3fd700c3d452e065eb8875201bb74672e",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/hash.ts",
+      "upstreamPath": "src/vs/base/common/hash.ts",
+      "sha256": "6faa20253ab7162b626f36f73009ebb30c0a22d2277cb9d97926cebb00fbd6bf",
+      "adapted": true,
+      "changedImports": 0
     }
   ],
   "scope": "Native window controls, titlebar presentation, DI registration and their recursive dependencies",
   "roots": [
+    "src/base/browser/ui/aria/aria.ts",
     "src/base/browser/window.ts",
+    "src/platform/instantiation/common/instantiationService.ts",
     "src/platform/native/electron-main/nativeHostMainService.ts",
     "src/platform/windows/electron-main/windows.ts",
     "src/typings/base-common.d.ts",
+    "src/typings/editContext.d.ts",
     "src/typings/thenable.d.ts",
     "src/typings/vscode-globals-nls.d.ts",
     "src/typings/vscode-globals-product.d.ts",
@@ -2620,14 +2703,17 @@
     "src/typings/base-common.d.ts",
     "src/typings/thenable.d.ts",
     "src/typings/vscode-globals-nls.d.ts",
-    "src/typings/vscode-globals-product.d.ts"
+    "src/typings/vscode-globals-product.d.ts",
+    "src/typings/editContext.d.ts"
   ],
   "entryPoints": [
     "src/workbench/electron-browser/desktop.main.ts",
     "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
     "src/platform/native/electron-main/nativeHostMainService.ts",
     "src/platform/windows/electron-main/windows.ts",
-    "src/base/browser/window.ts"
+    "src/base/browser/window.ts",
+    "src/base/browser/ui/aria/aria.ts",
+    "src/platform/instantiation/common/instantiationService.ts"
   ],
   "applicationDependencies": [
     "src/platform/ipc/common/desktopApi.ts",
@@ -2653,6 +2739,7 @@
     "src/workbench/services/terminal/common/terminalSettingsService.ts",
     "src/workbench/services/terminal/electron-browser/terminalSettingsService.ts",
     "src/workbench/services/nativeRuntime/common/nativeRuntimeService.ts",
-    "src/workbench/services/nativeRuntime/electron-browser/nativeRuntimeService.ts"
+    "src/workbench/services/nativeRuntime/electron-browser/nativeRuntimeService.ts",
+    "src/workbench/browser/workbench.ts"
   ]
 }

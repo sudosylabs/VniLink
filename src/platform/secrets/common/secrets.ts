@@ -1,6 +1,8 @@
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 import type { Event } from '../../../base/common/event.js';
+
 export const SECRET_STORAGE_PREFIX = 'secret://';
+
 export function secretStorageKey(key: string): string {
 	return `${SECRET_STORAGE_PREFIX}${key}`;
 }
@@ -10,6 +12,7 @@ export function secretStorageKey(key: string): string {
  */
 export class SequencerByKey {
 	private readonly promises = new Map<string, Promise<unknown>>();
+
 	public queue<T>(key: string, task: () => Promise<T>): Promise<T> {
 		const pending = this.promises.get(key) ?? Promise.resolve();
 		const next: Promise<T> = pending.then(task, task);
@@ -23,6 +26,7 @@ export class SequencerByKey {
 		return next;
 	}
 }
+
 export async function readEncryptedSecret(
 	key: string,
 	storageGet: (fullKey: string) => string | undefined,
@@ -34,6 +38,7 @@ export async function readEncryptedSecret(
 	}
 	return await decrypt(encrypted);
 }
+
 export async function writeEncryptedSecret(
 	key: string,
 	value: string,
@@ -43,7 +48,9 @@ export async function writeEncryptedSecret(
 	const encrypted = await encrypt(value);
 	storageSet(secretStorageKey(key), encrypted);
 }
+
 export const ISecretStorageService = createDecorator<ISecretStorageService>('secretStorageService');
+
 export interface ISecretStorageService {
 	readonly _serviceBrand: undefined;
 	readonly onDidChangeSecret: Event<string>;

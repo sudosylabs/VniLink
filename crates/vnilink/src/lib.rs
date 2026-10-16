@@ -26,19 +26,22 @@
 //! # Installation record
 //!
 //! [`Core::open`] loads an opaque record through [`InstallationStore`]. The
-//! record holds the installation secret, paired devices, grants, used
+//! record holds the installation secret, paired devices, global sharing consent, used
 //! invitation nonces, and the relay setting, including a relay credential.
-//! The host writes those bytes to the platform credential store. [`Core::start`]
-//! keeps the same state only for the process. A locked, unavailable, or invalid
-//! record is returned as an error and is not replaced.
+//! The host chooses where those bytes live. The production adapter encrypts
+//! them in a local database and keeps only the encryption key in the platform
+//! credential store. [`Core::start`] keeps the same state only for the process.
+//! A locked, unavailable, or invalid record is returned as an error and is not
+//! replaced. An uncertain commit stops this core until the process restarts.
 //!
 //! # Pairing file
 //!
 //! [`Core::export_pairing_file`] returns the bytes of a `.vnl` file. The other
 //! computer opens that file and [`Core::confirm_pairing`] saves the device
-//! when the typed digits match the writer's screen. Control is granted later,
-//! on the writer's computer, when that person types the digits from
-//! [`Core::control_check`]. The session then uses the relays already
+//! when the typed digits match the writer's screen. The writer remembers the
+//! importing computer after its owner confirms [`Core::control_check`].
+//! Pairing does not grant services; [`Core::change_sharing_policy`] sets
+//! installation-wide consent. The session uses the relays already
 //! configured for this installation. The steps are in `crates/vnilink/PAIRING.md`.
 //!
 //! # Reconnect
@@ -81,6 +84,7 @@ pub mod camera;
 mod clipboard;
 mod codec;
 mod core;
+mod device_metadata;
 pub mod diagnostics;
 mod error;
 mod events;
@@ -89,6 +93,7 @@ mod hostname;
 mod input;
 mod installation;
 mod invitation;
+pub use device_metadata::{DevicePresence, OperatingSystem};
 pub mod job;
 mod keyboard;
 mod manifest;
@@ -154,7 +159,7 @@ pub use protocol::{
 pub use relay::{CustomRelay, RelaySettings};
 pub use service::{
     CloseCause, ServiceInfo, ServiceKind, ServiceLease, ServicePermissions, ServicePhase,
-    ServiceSupport, MAX_SERVICE_RECORDS,
+    ServiceSupport, SharingPolicy, SharingPolicyUpdate, MAX_SERVICE_RECORDS,
 };
 pub use session::{Grants, SessionInfo, SessionPhase, SessionRole};
 pub use system::{

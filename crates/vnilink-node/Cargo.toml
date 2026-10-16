@@ -7,7 +7,13 @@ rust-version.workspace = true
 publish = false
 
 [lib]
-crate-type = ["cdylib"]
+# rlib lets the reset binary and `cargo test` link this crate. The Node addon
+# remains the cdylib.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# Developer-only installation reset binary. Normal application builds omit it.
+reset-installation = []
 
 [dependencies]
 vnilink-app = { path = "../vnilink-app" }
@@ -16,15 +22,42 @@ napi-derive = "=3.6.3"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 base64 = "=0.22.1"
+chacha20poly1305 = "=0.11.0"
+dirs = "=5.0.1"
+getrandom = "=0.2.17"
+# 0.40 requires cfg_select, which rustc 1.91.0 still treats as unstable.
+# 0.39.0 bundles SQLite 3.51.3 and builds on this toolchain.
+# `hooks` is compiled so tests can turn COMMIT into a rollback. Production
+# never registers a hook.
+rusqlite = { version = "=0.39.0", features = ["bundled", "limits", "hooks"] }
+sha2 = "=0.11.0"
+zeroize = "=1.9.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.189"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "=3.6.3", features = ["apple-native"] }
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "=3.6.3", features = ["windows-native"] }
+windows = { version = "=0.61.3", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "=3.6.3", features = ["sync-secret-service", "crypto-rust"] }
+
+[[bin]]
+name = "vnilink-reset-installation"
+path = "src/bin/vnilink-reset-installation.rs"
+required-features = ["reset-installation"]
 
 [build-dependencies]
 napi-build = "=2.4.1"

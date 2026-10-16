@@ -146,7 +146,7 @@ impl CameraService {
         self.inner.is_cancelled()
     }
     pub fn poll(&self) -> Option<FfiEncodedFrame> {
-        self.inner.try_recv()
+        self.inner.try_recv().map(Into::into)
     }
     pub fn lagged(&self) -> u64 {
         self.inner.lagged()
@@ -224,7 +224,25 @@ impl VnilinkCore {
     }
     /// Opt-in selection made locally, never camera selection by an unapproved
     /// remote ID. macOS OS consent must already have been granted.
-    pub fn enable_native_camera(&self, approved_device_ids: Vec<String>) -> Result<(), FfiError> {
+    pub fn enable_native_camera(
+        &self,
+        mut approved_device_ids: Vec<String>,
+    ) -> Result<(), FfiError> {
+        if approved_device_ids
+            .iter()
+            .any(|id| id == "vnilink:auto-camera")
+        {
+            if approved_device_ids.len() != 1 {
+                return Err(map_error(vnilink::Error::InvalidSetting(
+                    "automatic camera cannot be combined with explicit cameras",
+                )));
+            }
+            approved_device_ids = self
+                .native_camera_devices()?
+                .first()
+                .map(|device| vec![device.id.clone()])
+                .unwrap_or_default();
+        }
         #[cfg(target_os = "macos")]
         let factory =
             vnilink_macos::MacCameraFactory::new(approved_device_ids).map_err(map_error)?;

@@ -11,11 +11,10 @@ export function buildOptions(root) {
 		node('src/preload.ts', 'preload.cjs'),
 		node('test/smoke/main.ts', 'smoke.cjs'),
 		browser('src/renderer.ts', 'renderer/renderer.js'),
-		browser('test/browser/icons.ts', 'icon-tests.js', { format: 'iife', globalName: 'iconTests' }),
-		browser('test/browser/dataChannels.ts', 'data-channel-tests.js', { format: 'iife', globalName: 'dataChannelTests' }),
-		browser('test/browser/tabs.ts', 'tab-tests.js', { format: 'iife', globalName: 'tabTests' }),
+		browser('test/browser/index.ts', 'browser-tests.js', { format: 'iife', globalName: 'browserTests' }),
 	];
 }
+
 export function resources(root) {
 	return [
 		['src/workbench/browser/index.html', 'renderer/index.html'],

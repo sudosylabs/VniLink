@@ -965,6 +965,7 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                             files_only: false,
                             services_only: false,
                             hostname: None,
+                            os: crate::OperatingSystem::local(),
                         }
                         .encode(),
                     );
@@ -1004,6 +1005,7 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                                         files_only: false,
                                         services_only: false,
                                         hostname: None,
+                                        os: crate::OperatingSystem::local(),
                                     }
                                     .encode(),
                                 );
@@ -1574,7 +1576,9 @@ pub(super) async fn serve(
                 *lock(&desktop.cleanup_slot) = Some(Arc::new(super::input_cleanup::AdmissionSlot(
                     shared.desktop_owners.clone(),
                 )));
-                desktop.set_recording_allowed(state.trust.get(&peer).is_some_and(|d| d.recording));
+                desktop.set_recording_allowed(
+                    state.trust.get(&peer).is_some() && state.trust.sharing.recording,
+                );
                 let stop = tokio::sync::watch::channel(false).0;
                 let receiver = stop.subscribe();
                 // Opening requests control once; a busy host admits a viewer.
@@ -1648,6 +1652,7 @@ pub(super) async fn serve(
                 },
             quality: desktop.info.quality,
             hostname: None,
+            os: crate::OperatingSystem::local(),
         }
         .encode(),
     );
@@ -2581,8 +2586,7 @@ mod v8_native_input_lock_probe {
             std::thread::yield_now();
         };
         // Revocation must settle while the native adapter remains parked.
-        host.authorize(&peer.endpoint_id(), crate::Grants::default())
-            .unwrap();
+        host.set_desktop_sharing(crate::Grants::default()).unwrap();
         proceed.send(()).unwrap();
         if let Some(worker) = worker {
             worker.join().unwrap().unwrap();

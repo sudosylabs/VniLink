@@ -1,15 +1,26 @@
 import { Emitter } from '../../../../base/common/event.js';
+import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import type { DesktopApi } from '../../../../platform/ipc/common/desktopApi.js';
-import type { EngineReply } from '../../../../platform/engine/common/engine.js';
-import type { DeviceSummary, IDeviceService } from '../common/deviceService.js';
+import type { EngineCommand, EngineReply, ControlRequestInfo } from '../../../../platform/engine/common/engine.js';
+import type { DeviceSummary, IDeviceService, PairingFile } from '../common/deviceService.js';
 
 export class DeviceService extends Disposable implements IDeviceService {
 	declare public readonly _serviceBrand: undefined;
 	private readonly changed = this._register(new Emitter<readonly DeviceSummary[]>());
 	public readonly onDidChangeDevices = this.changed.event;
+	private readonly stateChanged = this._register(new Emitter<void>());
+	public readonly onDidChangeState = this.stateChanged.event;
+	private loaded = false;
+	private failed = false;
 	private current: readonly DeviceSummary[] = Object.freeze([]);
 	private revision = 0;
+	private subscription: string | undefined;
+	private needsRefresh = true;
+	private readonly lifetime = new AbortController();
+	private readonly polling = this._register(new RunOnceScheduler(() => {
+		void this.poll();
+	}, 500));
 
 	constructor(
 		private readonly api: Pick<DesktopApi, 'engineCommand'>,
@@ -18,12 +29,26 @@ export class DeviceService extends Disposable implements IDeviceService {
 		super();
 	}
 
+	private started = false;
+
+	public async initialize(): Promise<void> {
+		if (this.started || !this.available || this.isDisposed()) {
+			return;
+		}
+		this.started = true;
+		await this.start();
+	}
+
+	public get state(): 'loading' | 'ready' | 'unavailable' {
+		return !this.available || this.failed ? 'unavailable' : this.loaded ? 'ready' : 'loading';
+	}
+
 	public get devices(): readonly DeviceSummary[] {
 		return this.current;
 	}
 
 	public async refresh(signal: AbortSignal): Promise<void> {
-		if (signal.aborted || this._store.isDisposed) {
+		if (signal.aborted || this.isDisposed()) {
 			return;
 		}
 		if (!this.available) {
@@ -37,6 +62,7 @@ export class DeviceService extends Disposable implements IDeviceService {
 			if (!this.isCurrentRequest(revision, signal)) {
 				return;
 			}
+			this.setState(true);
 			throw error;
 		}
 		// IPC cannot cancel this request; fence its result instead.
@@ -44,16 +70,192 @@ export class DeviceService extends Disposable implements IDeviceService {
 			return;
 		}
 		if (reply.type !== 'snapshot') {
+			this.setState(true);
 			throw new Error('Expected engine snapshot');
 		}
-		this.current = Object.freeze(reply.snapshot.devices.map(device => Object.freeze({
+		this.setState(false);
+		const next = Object.freeze(reply.snapshot.devices.map(device => Object.freeze({
 			id: device.endpoint_id,
 			name: device.pet_name ?? device.hostname ?? device.endpoint_id,
+			os: device.os,
+			presence: device.presence,
 		})));
+		if (JSON.stringify(next) !== JSON.stringify(this.current)) {
+			this.current = next;
+			this.changed.fire(this.current);
+		}
+	}
+
+	/** Establish identity/presence without opening any remote service. */
+	public async connect(id: string): Promise<void> {
+		const reply = await this.execute({ type: 'beginConnectServices', endpointId: id });
+		if (reply.type !== 'session') {
+			throw new Error('Invalid connection reply');
+		}
+		await this.refresh(this.lifetime.signal);
+	}
+
+	public async rename(id: string, name: string): Promise<void> {
+		await this.execute({ type: 'setPeerName', endpointId: id, name });
+		await this.refresh(this.lifetime.signal);
+	}
+
+	public async forget(id: string): Promise<void> {
+		await this.execute({ type: 'unpair', endpointId: id });
+		await this.refresh(this.lifetime.signal);
+	}
+
+	public async exportPairingFile(): Promise<PairingFile> {
+		await this.execute({ type: 'startHosting' });
+		const reply = await this.execute({ type: 'exportPairingFile', ttlSeconds: 900, allowControl: true });
+		if (reply.type !== 'pairingFile') {
+			throw new Error('Invalid pairing file reply');
+		}
+		return { bytes: reply.file.bytes, check: reply.file.check, expiresAt: Number(reply.file.expires_at_ms) };
+	}
+
+	public async pair(bytes: Uint8Array, digits: string): Promise<string> {
+		const preview = await this.execute({ type: 'openPairingFile', bytes: Array.from(bytes) });
+		if (preview.type !== 'pairingPreview') {
+			throw new Error('Invalid pairing preview');
+		}
+		// Consume every opened handle, including a failed code check. Do not keep
+		// engine previews alive while a file picker or confirmation view is open.
+		const reply = await this.api.engineCommand({ type: 'confirmPairing', previewId: preview.preview.id, digits });
+		if (reply.type !== 'device') {
+			throw new Error('Invalid pairing confirmation');
+		}
+		await this.execute({ type: 'startHosting' });
+		await this.refresh(this.lifetime.signal);
+		return reply.device.endpoint_id;
+	}
+
+	public async pairingCheck(): Promise<string> {
+		const reply = await this.execute({ type: 'controlCheck' });
+		if (reply.type !== 'check') {
+			throw new Error('Invalid pairing check');
+		}
+		return reply.check;
+	}
+
+	public async incomingPairing(): Promise<ControlRequestInfo | null> {
+		const reply = await this.execute({ type: 'controlRequest' });
+		if (reply.type !== 'controlRequest') {
+			throw new Error('Invalid incoming pairing request');
+		}
+		return reply.request;
+	}
+
+	public async approvePairing(digits: string): Promise<void> {
+		await this.execute({ type: 'confirmControlRequest', digits });
+		await this.refresh(this.lifetime.signal);
+	}
+
+	public async rejectPairing(): Promise<void> {
+		await this.execute({ type: 'rejectControlRequest' });
+	}
+
+	private execute(command: EngineCommand): Promise<EngineReply> {
+		if (!this.available || this.isDisposed()) {
+			return Promise.reject(new Error('Device service unavailable'));
+		}
+		return this.api.engineCommand(command);
+	}
+
+	private async start(): Promise<void> {
+		try {
+			const reply = await this.api.engineCommand({ type: 'subscribeEvents' });
+			if (reply.type !== 'eventSubscription') {
+				throw new Error('Invalid device event subscription');
+			}
+			if (this.isDisposed()) {
+				await this.api.engineCommand({ type: 'releaseEvents', subscriptionId: reply.subscriptionId });
+				return;
+			}
+			this.subscription = reply.subscriptionId;
+			// Accept remembered peers while the app is open. Rust still gates every
+			// service with global consent and unknown peers with owner confirmation.
+			await this.execute({ type: 'startHosting' });
+			await this.refresh(this.lifetime.signal);
+			this.needsRefresh = false;
+		} catch {
+			this.markUnknown();
+		} finally {
+			if (!this.isDisposed()) {
+				this.polling.schedule();
+			}
+		}
+	}
+
+	private async poll(): Promise<void> {
+		if (this.isDisposed()) {
+			return;
+		}
+		if (!this.subscription) {
+			await this.start();
+			return;
+		}
+		try {
+			const reply = await this.api.engineCommand({ type: 'pollEvents', subscriptionId: this.subscription, maxEvents: 256 });
+			if (reply.type !== 'events') {
+				throw new Error('Invalid device event reply');
+			}
+			if (this.needsRefresh || reply.lagged !== '0' || reply.events.some(event => ['devicePaired', 'deviceAuthorized', 'deviceRevoked', 'deviceUnpaired', 'peerRenamed', 'sessionChanged'].includes(event.type))) {
+				await this.refresh(this.lifetime.signal);
+				this.needsRefresh = false;
+			}
+		} catch {
+			this.needsRefresh = true;
+			const subscriptionId = this.subscription;
+			this.subscription = undefined;
+			if (subscriptionId) {
+				await this.api.engineCommand({ type: 'releaseEvents', subscriptionId }).catch(() => undefined);
+			}
+			this.markUnknown();
+		} finally {
+			if (!this.isDisposed()) {
+				this.polling.schedule();
+			}
+		}
+	}
+
+	private setState(failed: boolean): void {
+		if (this.isDisposed()) {
+			return;
+		}
+		const previous = this.state;
+		this.loaded = true;
+		this.failed = failed;
+		if (previous !== this.state) {
+			this.stateChanged.fire();
+		}
+	}
+
+	private markUnknown(): void {
+		this.setState(true);
+		if (this.isDisposed() || this.current.every(device => device.presence === 'unknown')) {
+			return;
+		}
+		this.current = Object.freeze(this.current.map(device => Object.freeze({ ...device, presence: 'unknown' as const })));
 		this.changed.fire(this.current);
 	}
 
-	private isCurrentRequest(revision: number, signal: AbortSignal): boolean {
-		return !signal.aborted && !this._store.isDisposed && revision === this.revision;
+	public override dispose(): void {
+		this.lifetime.abort();
+		const subscriptionId = this.subscription;
+		this.subscription = undefined;
+		super.dispose();
+		if (subscriptionId) {
+			void this.api.engineCommand({ type: 'releaseEvents', subscriptionId }).catch(() => undefined);
+		}
 	}
+
+	private isCurrentRequest(revision: number, signal: AbortSignal): boolean {
+		return !signal.aborted && !this.isDisposed() && revision === this.revision;
+	}
+
+	private isDisposed(): boolean {
+		return this._store.isDisposed;
+	}
+
 }

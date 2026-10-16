@@ -3,6 +3,9 @@ export const Icons = Object.freeze({
 	home: 'home',
 	computers: 'computers',
 	devices: 'devices',
+	apple: 'apple',
+	windows: 'windows',
+	linux: 'linux',
 	remoteDesktop: 'remoteDesktop',
 	refresh: 'refresh',
 	restart: 'restart',
@@ -28,5 +31,7 @@ export const Icons = Object.freeze({
 	maximize: 'maximize',
 	restore: 'restore',
 } as const);
+
 export type IconId = typeof Icons[keyof typeof Icons];
+
 export type IconVariant = 'outlined' | 'filled';

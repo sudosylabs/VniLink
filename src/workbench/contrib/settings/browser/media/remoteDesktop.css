@@ -1,0 +1,100 @@
+.desktop-content {
+	max-width: 720px;
+	margin: 28px 40px 40px;
+}
+
+.desktop-content h2,
+.desktop-quality-editor legend {
+	font-size: 14px;
+	font-weight: 500;
+	margin: 0;
+	padding: 0;
+}
+
+.desktop-setting-title {
+	display: block;
+	font-size: 13px;
+}
+
+.desktop-quality-editor {
+	border: 0;
+	padding: 0;
+	margin: 28px 0 0;
+	min-width: 0;
+}
+
+.desktop-number-control,
+.desktop-dimensions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--muted);
+	flex-shrink: 0;
+}
+
+.desktop-quality-presets {
+	display: flex;
+	flex-shrink: 0;
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	overflow: hidden;
+}
+
+.desktop-quality-presets button {
+	padding: 6px 10px;
+	font-size: 12px;
+	background: transparent;
+	color: var(--muted);
+}
+
+.desktop-quality-presets button + button {
+	border-left: 1px solid var(--line);
+}
+
+.desktop-quality-presets button[aria-pressed='true'] {
+	background: color-mix(in srgb, var(--text) 10%, transparent);
+	color: var(--text);
+}
+
+.desktop-quality-presets button:hover {
+	background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.desktop-quality-editor:disabled {
+	opacity: 0.5;
+}
+
+.desktop-quality-editor:disabled button,
+.settings-text-button:disabled {
+	cursor: default;
+}
+
+.desktop-processing-section {
+	margin-top: 24px;
+	padding-top: 28px;
+	border-top: 1px solid var(--line);
+}
+
+@media (width <= 800px) {
+	.desktop-content {
+		margin-right: 28px;
+		margin-left: 28px;
+	}
+}
+
+.desktop-defaults-section {
+	padding-bottom: 0;
+	margin-bottom: 0;
+}
+
+.desktop-defaults-section .desktop-quality-editor {
+	margin-top: 16px;
+}
+
+.remote-desktop-page .settings-status:empty {
+	display: none;
+}
+
+.desktop-quality-summary:empty {
+	display: none;
+}

@@ -64,7 +64,7 @@ fn unknown_devices_have_no_name() {
 }
 
 #[test]
-fn names_survive_a_restart_and_old_records_still_open() {
+fn names_survive_a_restart_in_the_current_record() {
     let store = MemoryStore::empty();
     let host = open_loop(&store, RelaySettings::public_n0());
     let controller = start_direct();
@@ -81,35 +81,25 @@ fn names_survive_a_restart_and_old_records_still_open() {
         own
     );
 
-    // A version 1 record (no hostname section) still opens, with no names.
     let secret = SecretKey::generate();
     let peer_key = SecretKey::generate();
     let peer_id = *peer_key.public().as_bytes();
-    assert_ne!(peer_id, *secret.public().as_bytes());
-    let mut body = Vec::new();
-    body.extend_from_slice(b"VNLK");
-    body.push(1);
-    body.extend_from_slice(&secret.to_bytes());
-    body.push(0); // public relay
-    body.extend_from_slice(&1u16.to_be_bytes());
-    body.extend_from_slice(&peer_id);
-    body.push(0); // no relays
-    body.push(0); // no direct addresses
-    body.push(0b001); // control grant
-    body.extend_from_slice(&0u16.to_be_bytes()); // empty replay cache
-    let checksum = installation::checksum(&body);
-    body.extend_from_slice(&checksum.to_be_bytes());
-    let record = installation::decode(&body).unwrap();
-    assert!(record.trust.hostname_of(&peer_id).is_none());
-    let device = record.trust.get(&peer_id).unwrap();
-    assert!(device.grants.control);
-
+    let mut current_trust = crate::trust::Trust::default();
+    current_trust
+        .pair(crate::trust::Device {
+            endpoint_id: peer_id,
+            display_id: peer_key.public().to_string(),
+            relays: vec![],
+            direct: vec![],
+        })
+        .unwrap();
+    let record_trust = current_trust;
     // And the current encoder writes version 4, which round-trips names.
     let bytes = installation::encode(
         &secret.to_bytes(),
         &RelaySettings::public_n0(),
-        &record.trust,
-        &record.replay,
+        &record_trust,
+        &crate::invitation::ReplayCache::new(),
         &crate::terminal::TerminalPolicy::default(),
         &crate::job::FileRetentionPolicy::default(),
         &crate::power::PowerPolicy::default(),
@@ -117,7 +107,6 @@ fn names_survive_a_restart_and_old_records_still_open() {
         &crate::system::SystemPolicy::default(),
     )
     .unwrap();
-    assert_eq!(body[4], 1);
     assert_eq!(bytes[4], 4);
     let again = installation::decode(&bytes).unwrap();
     assert!(again.trust.get(&peer_id).is_some());

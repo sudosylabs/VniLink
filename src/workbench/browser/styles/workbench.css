@@ -1,15 +1,7 @@
+@import url('../../../platform/theme/browser/media/colors.css');
+
 :root {
 	color-scheme: light dark;
-
-	--canvas: #fafafa;
-	--sidebar: #f1f1f3;
-	--chrome: #ececef;
-	--text: #242426;
-	--muted: #737378;
-	--line: #dedee2;
-	--selected: #fff;
-	--native-chrome: rgb(248 248 250 / 58%);
-
 	font:
 		13px -apple-system,
 		BlinkMacSystemFont,
@@ -160,19 +152,6 @@ h2 {
 .settings-placeholder {
 	margin: 32px 40px;
 	color: var(--muted);
-}
-
-@media (prefers-color-scheme: dark) {
-	:root {
-		--canvas: #202124;
-		--sidebar: #26272b;
-		--chrome: #2c2d31;
-		--text: #e6e6e8;
-		--muted: #999ba2;
-		--line: #383a40;
-		--selected: #36383e;
-		--native-chrome: rgb(32 33 36 / 22%);
-	}
 }
 
 .view-stack {
@@ -380,9 +359,4 @@ h2 {
 .setting-error[hidden],
 .settings-form [hidden] {
 	display: none;
-}
-
-.home-content > .appearance-page,
-.home-content > .access-page {
-	max-width: 900px;
 }

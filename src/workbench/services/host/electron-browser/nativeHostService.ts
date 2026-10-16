@@ -9,14 +9,17 @@ import { Emitter } from '../../../../base/common/event.js';
 import { INativeHostService } from '../../../../platform/native/common/native.js';
 import { IHostService } from '../browser/host.js';
 import { registerSingleton, InstantiationType } from '../../../../platform/instantiation/common/extensions.js';
+
 export class WorkbenchHostService extends Disposable implements IHostService {
 	declare public readonly _serviceBrand: undefined;
 	private readonly changed = this._register(new Emitter<boolean>());
 	public readonly onDidChangeFocus = this.changed.event;
 	private focused = document.hasFocus();
+
 	public get hasFocus(): boolean {
 		return this.focused;
 	}
+
 	constructor(@INativeHostService nativeHostService: INativeHostService) {
 		super();
 		this._register(
@@ -29,4 +32,5 @@ export class WorkbenchHostService extends Disposable implements IHostService {
 		);
 	}
 }
+
 registerSingleton(IHostService, WorkbenchHostService, InstantiationType.Delayed);

@@ -6,12 +6,15 @@
 
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 import type { Event } from '../../../base/common/event.js';
+
 export const IThemeService = createDecorator<IThemeService>('themeService');
+
 export interface ITitlebarTheme {
 	readonly background: string;
 	readonly foreground: string;
 	readonly inactiveForeground: string;
 }
+
 export interface IThemeService {
 	readonly _serviceBrand: undefined;
 	readonly onDidColorThemeChange: Event<ITitlebarTheme>;

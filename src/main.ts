@@ -1,2 +1,3 @@
-import { startApplication } from './app/electron-main/application.js';
-void startApplication();
+import { VniLinkApplication } from './app/electron-main/application.js';
+
+void new VniLinkApplication().start();

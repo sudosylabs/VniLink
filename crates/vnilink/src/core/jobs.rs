@@ -23,8 +23,11 @@ use crate::fs;
 use crate::job::{self, ConflictChoice, JobDirection, JobSnapshot, JobState};
 use crate::manifest::{self, Manifest, ManifestEntry};
 use crate::session::Grant;
+#[cfg(unix)]
 use iroh_blobs::api::blobs::AddPathOptions;
+#[cfg(unix)]
 use iroh_blobs::api::proto::ImportMode;
+#[cfg(unix)]
 use iroh_blobs::BlobFormat;
 
 const JOBS_FILE: &str = "jobs.json";
@@ -2577,10 +2580,11 @@ pub(super) async fn verify_serve_source(
     }
 }
 
-/// True when renaming `rel/name` under `root` would disturb an active
-/// transfer: the entry is a source of a sender job or a destination (base
-/// or manifest path) of a receiver job. Terminal jobs never block; anything
-/// resumable does, so publication cannot strand or recreate the old path.
+/// True when renaming or deleting `rel/name` under `root` would disturb an
+/// active transfer: the entry is a source of a sender job or a destination
+/// (base or manifest path) of a receiver job. Delete uses this same overlap
+/// rule. Terminal jobs never block; anything resumable does, so publication
+/// cannot strand or recreate the old path.
 pub(super) fn rename_blocked(shared: &Shared, root: u64, rel: &str, name: &str) -> bool {
     let jobs = lock(&shared.jobs);
     rename_blocked_with(&jobs, root, rel, name)
@@ -3891,6 +3895,9 @@ async fn prepare_host_manifest(
             .await
             .map_err(|_| job::STATUS_ERROR)??
         };
+        // Windows has no serve-time verified handle, so a path reference
+        // would keep serving whatever later replaces the source. Copy the
+        // bytes that were scanned.
         #[cfg(not(unix))]
         let abs_path = file.absolute.clone();
         #[cfg(not(unix))]
@@ -3902,12 +3909,19 @@ async fn prepare_host_manifest(
         let expected_hash = Core::hash_fd_async(file_fd, super::blob::HashHooks::none())
             .await
             .map_err(|_| job::STATUS_ERROR)?;
+        #[cfg(unix)]
         let tag = store
             .add_path_with_opts(AddPathOptions {
                 path: abs_path,
                 format: BlobFormat::Raw,
                 mode: ImportMode::TryReference,
             })
+            .temp_tag()
+            .await
+            .map_err(|_| job::STATUS_ERROR)?;
+        #[cfg(not(unix))]
+        let tag = store
+            .add_path(abs_path)
             .temp_tag()
             .await
             .map_err(|_| job::STATUS_ERROR)?;
@@ -4002,7 +4016,7 @@ mod lifecycle_tests {
             clipboard: false,
             transfer: true,
         };
-        host.authorize(&controller.endpoint_id(), grants).unwrap();
+        host.set_desktop_sharing(grants).unwrap();
         controller.connect(&host.endpoint_id()).unwrap();
         let (id, generation, epoch) = {
             let state = lock(&host.shared.state);
@@ -4017,9 +4031,12 @@ mod lifecycle_tests {
             ));
             (session.id, session.generation, epoch)
         };
-        host.authorize(&controller.endpoint_id(), crate::session::Grants::default())
-            .unwrap();
-        host.authorize(&controller.endpoint_id(), grants).unwrap();
+        host.set_desktop_sharing(crate::session::Grants {
+            transfer: false,
+            ..grants
+        })
+        .unwrap();
+        host.set_desktop_sharing(grants).unwrap();
         let state = lock(&host.shared.state);
         assert!(!prepared_download_permitted(
             &state, &peer, id, generation, epoch
@@ -4079,6 +4096,7 @@ mod lifecycle_tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn legacy_leg_adopts_pin_on_first_destination_use() {
         let core = Core::boot(
             CoreConfig {
@@ -4260,7 +4278,7 @@ impl Core {
         let policy = policy.validate()?;
         let mut state = self.alive_state()?;
         let previous = std::mem::replace(&mut state.file_retention_policy, policy);
-        if let Err(error) = persist(&self.shared, &state) {
+        if let Err(error) = persist(&self.shared, &mut state) {
             state.file_retention_policy = previous;
             return Err(error);
         }
@@ -4282,7 +4300,7 @@ impl Core {
         let policy = policy.validate()?;
         let mut state = self.alive_state()?;
         let previous = std::mem::replace(&mut state.file_resource_policy, policy);
-        if let Err(error) = persist(&self.shared, &state) {
+        if let Err(error) = persist(&self.shared, &mut state) {
             state.file_resource_policy = previous;
             return Err(error);
         }

@@ -138,8 +138,7 @@ fn paired_system() -> (Core, Core, Arc<FakeActions>) {
     let actions = Arc::new(FakeActions::full());
     host.set_system_actions(Some(actions.clone())).unwrap();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::System, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::System, true).unwrap();
     (host, controller, actions)
 }
 
@@ -157,8 +156,7 @@ fn grant_policy_and_backend_gate_every_execution() {
         controller.open_system_service(owner.id, owner.generation),
         Err(Error::Unauthorized)
     ));
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::System, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::System, true).unwrap();
     // Grant without a backend: open succeeds for support discovery, but the
     // execution is refused and retained as an auditable operation.
     let system = controller
@@ -249,8 +247,7 @@ fn privacy_lease_is_exclusive_and_close_restores() {
     let (host, controller, actions) = paired_system();
     let second = start_direct();
     pair_for_control(&host, &second);
-    host.authorize_service(&second.endpoint_id(), ServiceKind::System, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::System, true).unwrap();
     host.set_system_policy(SystemPolicy {
         allow_privacy: true,
         ..SystemPolicy::default()
@@ -293,7 +290,7 @@ fn revoke_restores_privacy_and_fences_late_requests() {
     let system = open_system(&controller, &parent);
     system.set_privacy(false, true).unwrap();
     assert!(actions.calls.lock().unwrap().input_blocked);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::System, false)
+    host.set_service_sharing(ServiceKind::System, false)
         .unwrap();
     wait(|| !actions.calls.lock().unwrap().input_blocked);
     assert!(system.set_privacy(false, false).is_err());
@@ -407,12 +404,10 @@ fn privacy_narrowing_restores_exactly_once_and_failed_save_preserves_lease() {
     host.set_system_actions(Some(actions.clone())).unwrap();
     let holder = start_direct();
     pair_for_control(&host, &holder);
-    host.authorize_service(&holder.endpoint_id(), ServiceKind::System, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::System, true).unwrap();
     let sibling = start_direct();
     pair_for_control(&host, &sibling);
-    host.authorize_service(&sibling.endpoint_id(), ServiceKind::System, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::System, true).unwrap();
     host.set_system_policy(SystemPolicy {
         allow_privacy: true,
         ..SystemPolicy::default()
@@ -521,8 +516,7 @@ fn input_only_enable_skips_unsupported_display_facility() {
     });
     host.set_system_actions(Some(actions.clone())).unwrap();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::System, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::System, true).unwrap();
     host.set_system_policy(SystemPolicy {
         allow_privacy: true,
         ..SystemPolicy::default()
@@ -764,8 +758,7 @@ fn refused_enable_applies_nothing_and_reports_default() {
     });
     host.set_system_actions(Some(actions.clone())).unwrap();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::System, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::System, true).unwrap();
     host.set_system_policy(SystemPolicy {
         allow_privacy: true,
         ..SystemPolicy::default()
@@ -842,8 +835,7 @@ fn stuck_fresh_apply_retains_acknowledged_remainder() {
     });
     host.set_system_actions(Some(actions.clone())).unwrap();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::System, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::System, true).unwrap();
     host.set_system_policy(SystemPolicy {
         allow_privacy: true,
         ..SystemPolicy::default()
@@ -879,8 +871,7 @@ fn input_only_owner_close_restores_without_touching_display() {
     });
     host.set_system_actions(Some(actions.clone())).unwrap();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::System, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::System, true).unwrap();
     host.set_system_policy(SystemPolicy {
         allow_privacy: true,
         ..SystemPolicy::default()
@@ -961,8 +952,7 @@ fn partial_restore_keeps_remainder_and_repeated_narrowing_retries() {
     });
     host.set_system_actions(Some(actions.clone())).unwrap();
     pair_for_control(&host, &controller);
-    host.authorize_service(&controller.endpoint_id(), ServiceKind::System, true)
-        .unwrap();
+    host.set_service_sharing(ServiceKind::System, true).unwrap();
     host.set_system_policy(SystemPolicy {
         allow_privacy: true,
         ..SystemPolicy::default()

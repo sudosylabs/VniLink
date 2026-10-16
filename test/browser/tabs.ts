@@ -1,29 +1,17 @@
-import { verifyFileTerminalSettings } from './fileTerminalSettings.js';
-import { verifyInputPage } from './input.js';
-import { verifyRemoteDesktop } from './remoteDesktop.js';
-import { verifyMachinePermissions } from './permissions.js';
 import { TabService } from '../../src/workbench/services/tabs/common/tabServiceImpl.js';
 import type { TabAction } from '../../src/workbench/services/tabs/common/tabService.js';
 import { TitlebarTabsControl } from '../../src/workbench/browser/parts/titlebar/titlebarTabsControl.js';
 import { ViewHost, type WorkbenchView } from '../../src/workbench/browser/parts/views/viewHost.js';
 import { Emitter } from '../../src/base/common/event.js';
 import { Icons } from '../../src/base/common/icons.js';
-import { verifyAccess } from './access.js';
-import { verifySettingsPages } from './settings.js';
-import { verifyHomeLifecycle } from './home.js';
+
 function assert(condition: boolean, message: string): void {
 	if (!condition) {
 		throw new Error(message);
 	}
 }
+
 export async function verifyTabs(): Promise<boolean> {
-	await verifyFileTerminalSettings();
-	await verifyInputPage();
-	await verifyHomeLifecycle();
-	await verifySettingsPages();
-	await verifyAccess();
-	await verifyMachinePermissions();
-	await verifyRemoteDesktop();
 	const service = new TabService();
 	const fixture = document.createElement('div');
 	fixture.className = 'part titlebar';
@@ -93,12 +81,18 @@ export async function verifyTabs(): Promise<boolean> {
 			'View state was not preserved on switching',
 		);
 		assert(disposed === 0, 'Switching disposed a view');
+		assert(getComputedStyle(fixture).boxShadow === 'none', 'Titlebar divider still crosses the transparent active tab');
 		const fill = root.querySelector<HTMLElement>('[aria-selected="true"] .tab-fill');
 		assert(fill !== null && getComputedStyle(fill).borderTopLeftRadius === '12px', 'Modern tab fill is not rounded');
 		assert(fill !== null && getComputedStyle(fill).borderBottomWidth === '0px', 'Connected active tab has a bottom divider');
+		assert(fill !== null && getComputedStyle(fill).bottom === '7px' && getComputedStyle(fill, '::before').bottom === '-7px', 'Active side strokes overlap the reverse shoulders');
 		const close = root.querySelector<HTMLElement>('[aria-selected="true"] .tab-close');
 		assert(close !== null && getComputedStyle(close).borderRadius === '3px', 'Close hover target is not square');
-		assert(fill !== null && getComputedStyle(fill).backgroundColor === getComputedStyle(content).backgroundColor, 'Active tab does not share the content surface');
+		assert(fill !== null && getComputedStyle(fill).backgroundColor === 'rgba(0, 0, 0, 0)', 'Active tab masked the titlebar background');
+		assert(fill !== null && getComputedStyle(fill).borderTopWidth === '1px' && getComputedStyle(fill).borderTopColor !== 'rgba(0, 0, 0, 0)', 'Active tab lost its selection outline');
+		const active = root.querySelector<HTMLElement>('[aria-selected="true"]');
+		const inactive = root.querySelector<HTMLElement>('[aria-selected="false"]');
+		assert(active !== null && inactive !== null && getComputedStyle(active).color === getComputedStyle(inactive).color, 'Tab selection still changed the label color');
 		const action = root.querySelector<HTMLButtonElement>('.view-action');
 		assert(action?.getAttribute('aria-label') === 'Action first', 'Toolbar does not follow active tab');
 		action?.click();

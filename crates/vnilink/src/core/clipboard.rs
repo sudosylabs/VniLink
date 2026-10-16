@@ -947,13 +947,10 @@ mod snapshot_tests {
         assert!(!host.snapshot().unwrap().capabilities.clipboard);
         host.accept_invitation(&peer.create_invitation(Duration::from_secs(60)).unwrap())
             .unwrap();
-        host.authorize(
-            &peer.endpoint_id(),
-            Grants {
-                clipboard: true,
-                ..Grants::default()
-            },
-        )
+        host.set_desktop_sharing(Grants {
+            clipboard: true,
+            ..Grants::default()
+        })
         .unwrap();
         let (entered_tx, entered_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -1070,16 +1067,13 @@ mod paste_preparation_guard_tests {
         })))
         .unwrap();
         pair_for_control(&host, &controller);
-        for (core, peer) in [(&host, &controller), (&controller, &host)] {
-            core.authorize(
-                &peer.endpoint_id(),
-                crate::Grants {
-                    view: true,
-                    control: true,
-                    clipboard: true,
-                    transfer: true,
-                },
-            )
+        for core in [&host, &controller] {
+            core.set_desktop_sharing(crate::Grants {
+                view: true,
+                control: true,
+                clipboard: true,
+                transfer: true,
+            })
             .unwrap();
         }
         let session = controller.connect(&host.endpoint_id()).unwrap();
@@ -1226,16 +1220,13 @@ mod paste_preparation_guard_tests {
         })))
         .unwrap();
         pair_for_control(&host, &controller);
-        for (core, peer) in [(&host, &controller), (&controller, &host)] {
-            core.authorize(
-                &peer.endpoint_id(),
-                crate::Grants {
-                    view: true,
-                    control: true,
-                    clipboard: true,
-                    transfer: true,
-                },
-            )
+        for core in [&host, &controller] {
+            core.set_desktop_sharing(crate::Grants {
+                view: true,
+                control: true,
+                clipboard: true,
+                transfer: true,
+            })
             .unwrap();
         }
         let session = controller.connect(&host.endpoint_id()).unwrap();
@@ -1316,16 +1307,13 @@ mod paste_preparation_guard_tests {
             })))
             .unwrap();
         pair_for_control(&host, &controller);
-        for (core, peer) in [(&host, &controller), (&controller, &host)] {
-            core.authorize(
-                &peer.endpoint_id(),
-                crate::Grants {
-                    view: true,
-                    control: true,
-                    clipboard: true,
-                    transfer: true,
-                },
-            )
+        for core in [&host, &controller] {
+            core.set_desktop_sharing(crate::Grants {
+                view: true,
+                control: true,
+                clipboard: true,
+                transfer: true,
+            })
             .unwrap();
         }
         let session = controller.connect(&host.endpoint_id()).unwrap();

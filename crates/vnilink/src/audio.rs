@@ -69,8 +69,9 @@ pub trait HostAudioFactory: Send + Sync {
     fn supports(&self, kind: AudioKind) -> bool;
     /// Only locally approved sources. Never open devices while enumerating.
     fn devices(&self) -> Result<Vec<AudioDevice>, Error>;
-    /// Return after a first packet proves native capture/codec started. Check
-    /// startup cancellation and OS authorization before activating a source.
+    /// Return after native capture starts successfully (and, for microphones,
+    /// the first packet). System loopback may be silent without producing buffers.
+    /// Check startup cancellation and OS authorization before activating a source.
     fn open(&self, config: AudioConfig, startup: BackendStartup) -> Result<AudioBackend, Error>;
 }
 pub struct AudioSource {

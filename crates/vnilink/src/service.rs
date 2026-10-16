@@ -353,3 +353,190 @@ mod startup_tests {
         }
     }
 }
+
+/// Installation-wide sharing consent for every paired device. OS consent and
+/// backend availability remain independent checks. Enabling never starts work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SharingPolicy {
+    pub view: bool,
+    pub control: bool,
+    pub clipboard: bool,
+    pub files: bool,
+    pub terminal: bool,
+    pub camera: bool,
+    pub system_audio: bool,
+    pub microphone: bool,
+    pub recording: bool,
+    pub system_actions: bool,
+}
+
+impl SharingPolicy {
+    pub(crate) fn grants(self) -> crate::Grants {
+        crate::Grants {
+            view: self.view,
+            control: self.control,
+            clipboard: self.clipboard,
+            transfer: self.files,
+        }
+    }
+
+    pub(crate) fn permissions(self) -> ServicePermissions {
+        ServicePermissions {
+            desktop: self.view,
+            files: self.files,
+            terminal: self.terminal,
+            camera: self.camera,
+            system_audio: self.system_audio,
+            microphone: self.microphone,
+            recording: self.recording,
+            system_actions: self.system_actions,
+        }
+    }
+
+    pub(crate) fn bits(self) -> u16 {
+        let fields = [
+            self.view,
+            self.control,
+            self.clipboard,
+            self.files,
+            self.terminal,
+            self.camera,
+            self.system_audio,
+            self.microphone,
+            self.recording,
+            self.system_actions,
+        ];
+        fields
+            .into_iter()
+            .enumerate()
+            .fold(0, |bits, (index, allowed)| {
+                bits | (u16::from(allowed) << index)
+            })
+    }
+
+    pub(crate) fn from_bits(bits: u16) -> Result<Self, crate::Error> {
+        if bits & !1023 != 0 {
+            return Err(crate::Error::CorruptRecord);
+        }
+        Ok(Self {
+            view: bits & 1 != 0,
+            control: bits & 2 != 0,
+            clipboard: bits & 4 != 0,
+            files: bits & 8 != 0,
+            terminal: bits & 16 != 0,
+            camera: bits & 32 != 0,
+            system_audio: bits & 64 != 0,
+            microphone: bits & 128 != 0,
+            recording: bits & 256 != 0,
+            system_actions: bits & 512 != 0,
+        })
+    }
+}
+
+/// Atomic changes to global consent; omitted permissions retain their saved value.
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SharingPolicyUpdate {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub view: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub control: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub clipboard: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub files: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub terminal: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub camera: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub system_audio: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub microphone: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub recording: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub system_actions: Option<bool>,
+}
+
+impl SharingPolicyUpdate {
+    pub(crate) fn apply(self, policy: &mut SharingPolicy) {
+        if let Some(value) = self.view {
+            policy.view = value;
+        }
+        if let Some(value) = self.control {
+            policy.control = value;
+        }
+        if let Some(value) = self.clipboard {
+            policy.clipboard = value;
+        }
+        if let Some(value) = self.files {
+            policy.files = value;
+        }
+        if let Some(value) = self.terminal {
+            policy.terminal = value;
+        }
+        if let Some(value) = self.camera {
+            policy.camera = value;
+        }
+        if let Some(value) = self.system_audio {
+            policy.system_audio = value;
+        }
+        if let Some(value) = self.microphone {
+            policy.microphone = value;
+        }
+        if let Some(value) = self.recording {
+            policy.recording = value;
+        }
+        if let Some(value) = self.system_actions {
+            policy.system_actions = value;
+        }
+    }
+}
+
+fn sharing_boolean<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<bool>, D::Error> {
+    <bool as serde::Deserialize>::deserialize(deserializer).map(Some)
+}

@@ -27,7 +27,6 @@ import maximizeOutlined from '@phosphor-icons/core/assets/regular/square.svg';
 import maximizeFilled from '@phosphor-icons/core/assets/fill/square-fill.svg';
 import restoreOutlined from '@phosphor-icons/core/assets/regular/copy.svg';
 import restoreFilled from '@phosphor-icons/core/assets/fill/copy-fill.svg';
-
 import connectionOutlined from '@phosphor-icons/core/assets/regular/plugs.svg';
 import connectionFilled from '@phosphor-icons/core/assets/fill/plugs-fill.svg';
 import securityOutlined from '@phosphor-icons/core/assets/regular/shield-check.svg';
@@ -44,17 +43,24 @@ import recordingOutlined from '@phosphor-icons/core/assets/regular/record.svg';
 import recordingFilled from '@phosphor-icons/core/assets/fill/record-fill.svg';
 import powerOutlined from '@phosphor-icons/core/assets/regular/power.svg';
 import powerFilled from '@phosphor-icons/core/assets/fill/power-fill.svg';
-
 import devicesOutlined from '@phosphor-icons/core/assets/regular/devices.svg';
 import devicesFilled from '@phosphor-icons/core/assets/fill/devices-fill.svg';
 import remoteDesktopOutlined from '@phosphor-icons/core/assets/regular/computer-tower.svg';
 import remoteDesktopFilled from '@phosphor-icons/core/assets/fill/computer-tower-fill.svg';
-
 import appearanceOutlined from '@phosphor-icons/core/assets/regular/palette.svg';
 import appearanceFilled from '@phosphor-icons/core/assets/fill/palette-fill.svg';
+import appleOutlined from '@phosphor-icons/core/assets/regular/apple-logo.svg';
+import appleFilled from '@phosphor-icons/core/assets/fill/apple-logo-fill.svg';
+import windowsOutlined from '@phosphor-icons/core/assets/regular/windows-logo.svg';
+import windowsFilled from '@phosphor-icons/core/assets/fill/windows-logo-fill.svg';
+import linuxOutlined from '@phosphor-icons/core/assets/regular/linux-logo.svg';
+import linuxFilled from '@phosphor-icons/core/assets/fill/linux-logo-fill.svg';
 
 // The only place that knows the icon provider and its filenames.
 const assets: Record<IconId, Record<IconVariant, string>> = {
+	apple: { outlined: appleOutlined, filled: appleFilled },
+	windows: { outlined: windowsOutlined, filled: windowsFilled },
+	linux: { outlined: linuxOutlined, filled: linuxFilled },
 	appearance: { outlined: appearanceOutlined, filled: appearanceFilled },
 	connection: { outlined: connectionOutlined, filled: connectionFilled },
 	security: { outlined: securityOutlined, filled: securityFilled },
@@ -82,6 +88,7 @@ const assets: Record<IconId, Record<IconVariant, string>> = {
 	maximize: { outlined: maximizeOutlined, filled: maximizeFilled },
 	restore: { outlined: restoreOutlined, filled: restoreFilled },
 };
+
 export function iconSvg(icon: IconId, variant: IconVariant): string {
 	return assets[icon][variant];
 }

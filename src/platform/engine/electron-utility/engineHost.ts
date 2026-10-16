@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { record } from '../common/engine.js';
 
 interface NativeEngine { execute(command: string): Promise<string>; openDataChannel(kind: string, sessionId: string, generation: string, rows: number, columns: number, media?: string): Promise<NativeDataChannel>; }
+
 interface Addon { openEngine(): Promise<NativeEngine>; openTemporaryEngine(): Promise<NativeEngine>; }
 
 function isAddon(value: unknown): value is Addon {
@@ -17,28 +18,39 @@ export class EngineHost {
 	private shuttingDown = false;
 	private readonly inputSessions = new Set<string>();
 	private readonly channels = new Map<string, Set<DataChannelHost>>();
+
 	constructor(private readonly port: Electron.ParentPort) { }
+
 	public listen(): void {
 		this.port.on('message', (event: { data: unknown; ports: Electron.MessagePortMain[] }) => {
 			if (record(event.data) && event.data.type === 'closeDataChannels' && typeof event.data.owner === 'string') {
 				for (const channel of this.channels.get(event.data.owner) ?? []) {
 					channel.close();
-				} this.channels.delete(event.data.owner); return;
+				}
+				this.channels.delete(event.data.owner);
+				return;
 			}
 			if (record(event.data) && event.data.type === 'attachDataChannel') {
-				const request = event.data.request; const owner = event.data.owner; const port = event.ports[0];
+				const request = event.data.request;
+				const owner = event.data.owner;
+				const port = event.ports[0];
 				if (!this.engine || this.shuttingDown || typeof owner !== 'string' || !isChannelRequest(request)) {
 					for (const port of event.ports) {
 						port.close();
-					} return;
+					}
+					return;
 				}
 				const channels = this.channels.get(owner) ?? new Set<DataChannelHost>();
 				if (channels.size >= 8) {
-					port.postMessage({ type: 'error' }); port.close(); return;
+					port.postMessage({ type: 'error' });
+					port.close();
+					return;
 				}
 				const inputKey = `${request.sessionId}:${request.generation}`;
 				if (request.kind === 'input' && this.inputSessions.has(inputKey)) {
-					port.postMessage({ type: 'error' }); port.close(); return;
+					port.postMessage({ type: 'error' });
+					port.close();
+					return;
 				}
 				if (request.kind === 'input') {
 					this.inputSessions.add(inputKey);
@@ -48,19 +60,23 @@ export class EngineHost {
 					channels.delete(channel);
 					if (request.kind === 'input') {
 						this.inputSessions.delete(inputKey);
-					} if (channels.size === 0) {
+					}
+					if (channels.size === 0) {
 						this.channels.delete(owner);
 					}
-				}); channels.add(channel);
+				});
+				channels.add(channel);
 				void this.engine.openDataChannel(request.kind, request.sessionId, request.generation, request.rows ?? 24, request.columns ?? 80, request.media ? JSON.stringify(request.media) : undefined).then(native => {
 					channel.start(native);
 				}, () => {
 					channel.fail();
-				}); return;
+				});
+				return;
 			}
 			this.onMessage(event.data);
 		});
 	}
+
 	public async open(): Promise<void> {
 		try {
 			const addon: unknown = createRequire(__filename)(join(__dirname, 'native', 'vnilink.node'));
@@ -70,9 +86,11 @@ export class EngineHost {
 			this.engine = await (process.argv.includes('--temporary') ? addon.openTemporaryEngine() : addon.openEngine());
 			this.port.postMessage({ ready: true });
 		} catch {
-			this.port.postMessage({ ready: false }); process.exit(1);
+			this.port.postMessage({ ready: false });
+			process.exit(1);
 		}
 	}
+
 	private onMessage(message: unknown): void {
 		// Shape-checked only: command validation lives at the IPC boundary and in
 		// Rust, so this host never kills the process over a bad caller. Unknown
@@ -84,10 +102,12 @@ export class EngineHost {
 		const command = message.command;
 		const shutdown = record(command) && command.type === 'shutdown' && Object.keys(command).length === 1;
 		if (!record(command)) {
-			this.port.postMessage({ id, error: 'Invalid engine command' }); return;
+			this.port.postMessage({ id, error: 'Invalid engine command' });
+			return;
 		}
 		void this.execute(id, command, shutdown);
 	}
+
 	private async execute(id: number, command: Record<string, unknown>, shutdown: boolean): Promise<void> {
 		try {
 			if (!this.engine) {
@@ -110,9 +130,8 @@ export class EngineHost {
 			// untouched so only one boundary parses its shape.
 			const reply: unknown = JSON.parse(await this.engine.execute(JSON.stringify(command)));
 			this.port.postMessage({ id, reply });
-			if (shutdown) {
-				process.exit(0);
-			}
+			// The main-process owner terminates this utility after receiving the
+			// shutdown reply. Exiting here can discard the queued acknowledgement.
 		} catch (error) {
 			// Native error strings name the reason only, never secrets.
 			const reason = error instanceof Error && error.message.length > 0 ? error.message : 'Engine operation failed';
@@ -127,6 +146,9 @@ const port = process.parentPort;
 if (!port) {
 	throw new Error('Engine host requires a parent');
 }
+
 const host = new EngineHost(port);
+
 host.listen();
+
 void host.open();

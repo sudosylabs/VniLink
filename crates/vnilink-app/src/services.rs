@@ -188,10 +188,8 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
-    pub fn authorize_recording(&self, endpoint_id: String, allowed: bool) -> Result<(), FfiError> {
-        self.inner
-            .authorize_recording(&endpoint_id, allowed)
-            .map_err(map_error)
+    pub fn set_recording_sharing(&self, allowed: bool) -> Result<(), FfiError> {
+        self.inner.set_recording_sharing(allowed).map_err(map_error)
     }
     pub fn service_permissions(
         &self,
@@ -211,14 +209,9 @@ impl VnilinkCore {
             })
             .map_err(map_error)
     }
-    pub fn authorize_service(
-        &self,
-        endpoint_id: String,
-        kind: FfiServiceKind,
-        allowed: bool,
-    ) -> Result<(), FfiError> {
+    pub fn set_service_sharing(&self, kind: FfiServiceKind, allowed: bool) -> Result<(), FfiError> {
         self.inner
-            .authorize_service(&endpoint_id, kind.into(), allowed)
+            .set_service_sharing(kind.into(), allowed)
             .map_err(map_error)
     }
 
@@ -610,6 +603,21 @@ impl FilesService {
             .rename(root, &path, &name, expected, &new_name)
             .map_err(map_error)
     }
+    pub fn delete(
+        &self,
+        root: u64,
+        path: String,
+        name: String,
+        expected: Option<crate::FfiEntryToken>,
+    ) -> Result<(), FfiError> {
+        let expected = expected.map(|token| vnilink::EntryToken {
+            dev: token.dev,
+            ino: token.ino,
+        });
+        self.inner
+            .delete(root, &path, &name, expected)
+            .map_err(map_error)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -707,7 +715,7 @@ impl VnilinkCore {
         frame: crate::FfiEncodedFrame,
     ) -> Result<(), FfiError> {
         self.inner
-            .publish_desktop_video(id, generation, frame)
+            .publish_desktop_video(id, generation, frame.into_core()?)
             .map_err(map_error)
     }
 
@@ -951,5 +959,157 @@ impl DesktopService {
     }
     pub fn media_status(&self) -> Result<FfiDesktopMediaStatus, FfiError> {
         self.inner.media_status().map(Into::into).map_err(map_error)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FfiSharingPolicy {
+    pub view: bool,
+    pub control: bool,
+    pub clipboard: bool,
+    pub files: bool,
+    pub terminal: bool,
+    pub camera: bool,
+    pub system_audio: bool,
+    pub microphone: bool,
+    pub recording: bool,
+    pub system_actions: bool,
+}
+
+impl From<vnilink::SharingPolicy> for FfiSharingPolicy {
+    fn from(value: vnilink::SharingPolicy) -> Self {
+        Self {
+            view: value.view,
+            control: value.control,
+            clipboard: value.clipboard,
+            files: value.files,
+            terminal: value.terminal,
+            camera: value.camera,
+            system_audio: value.system_audio,
+            microphone: value.microphone,
+            recording: value.recording,
+            system_actions: value.system_actions,
+        }
+    }
+}
+
+impl From<FfiSharingPolicy> for vnilink::SharingPolicy {
+    fn from(value: FfiSharingPolicy) -> Self {
+        Self {
+            view: value.view,
+            control: value.control,
+            clipboard: value.clipboard,
+            files: value.files,
+            terminal: value.terminal,
+            camera: value.camera,
+            system_audio: value.system_audio,
+            microphone: value.microphone,
+            recording: value.recording,
+            system_actions: value.system_actions,
+        }
+    }
+}
+
+/// Atomic changes to global consent; omitted permissions retain their saved value.
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FfiSharingPolicyUpdate {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub view: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub control: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub clipboard: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub files: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub terminal: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub camera: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub system_audio: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub microphone: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub recording: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub system_actions: Option<bool>,
+}
+
+fn sharing_boolean<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<bool>, D::Error> {
+    <bool as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
+impl From<FfiSharingPolicyUpdate> for vnilink::SharingPolicyUpdate {
+    fn from(value: FfiSharingPolicyUpdate) -> Self {
+        Self {
+            view: value.view,
+            control: value.control,
+            clipboard: value.clipboard,
+            files: value.files,
+            terminal: value.terminal,
+            camera: value.camera,
+            system_audio: value.system_audio,
+            microphone: value.microphone,
+            recording: value.recording,
+            system_actions: value.system_actions,
+        }
+    }
+}
+
+impl VnilinkCore {
+    pub fn sharing_policy(&self) -> Result<FfiSharingPolicy, FfiError> {
+        self.inner
+            .sharing_policy()
+            .map(Into::into)
+            .map_err(map_error)
+    }
+    pub fn set_sharing_policy(&self, policy: FfiSharingPolicyUpdate) -> Result<(), FfiError> {
+        self.inner
+            .change_sharing_policy(policy.into())
+            .map_err(map_error)
     }
 }

@@ -1,70 +1,52 @@
 import type { DesktopApi } from '../../../../platform/ipc/common/desktopApi.js';
-import type { Device, ServiceKind, EngineReply, SystemPolicy, SystemSupport } from '../../../../platform/engine/common/engine.js';
-import { AccessReadbackError, type AccessPermission, type PeerAccess, type LocalSecurity, type IAccessService } from '../common/accessService.js';
-import type { DeviceSummary } from '../../devices/common/deviceService.js';
-const systemCapabilities: Record<keyof SystemPolicy, keyof SystemSupport> = { allow_lock: 'lock', allow_restart: 'restart', allow_shutdown: 'shutdown', allow_privacy: 'privacy' };
-const services: Record<Exclude<AccessPermission, 'control' | 'clipboard' | 'recording'>, ServiceKind> = {
-	view: 'Desktop', files: 'Files', terminal: 'Terminal', camera: 'Camera', systemAudio: 'SystemAudio', microphone: 'Microphone', systemActions: 'System',
-};
+import type { SharingPolicy, SystemPolicy, SystemSupport } from '../../../../platform/engine/common/engine.js';
+import { AccessReadbackError, AccessWriteError, type LocalSecurity, type IAccessService } from '../common/accessService.js';
 
-/** Each write changes one permission, with fresh reads preserving unrelated grants. */
+const systemCapabilities: Record<keyof SystemPolicy, keyof SystemSupport> = { allow_lock: 'lock', allow_restart: 'restart', allow_shutdown: 'shutdown', allow_privacy: 'privacy' };
+
+/** Serialized writes patch global consent atomically in the engine. */
 export class AccessService implements IAccessService {
 	declare public readonly _serviceBrand: undefined;
 	private pending: Promise<unknown> = Promise.resolve();
+
 	constructor(private readonly api: Pick<DesktopApi, 'engineCommand'>, public readonly available: boolean) { }
-	private async devices(): Promise<readonly Device[]> {
+
+	public async loadSharing(): Promise<Readonly<SharingPolicy>> {
 		if (!this.available) {
-			throw new Error('Access service unavailable');
+			throw new Error('Sharing policy unavailable');
 		}
-		const reply = await this.api.engineCommand({ type: 'snapshot' });
-		if (reply.type !== 'snapshot') {
-			throw new Error('Invalid device reply');
+		const reply = await this.api.engineCommand({ type: 'sharingPolicy' });
+		if (reply.type !== 'sharingPolicy') {
+			throw new Error('Invalid sharing policy reply');
 		}
-		return reply.snapshot.devices;
+		return Object.freeze({ ...reply.policy });
 	}
-	public async listDevices(): Promise<readonly DeviceSummary[]> {
-		return (await this.devices()).map(device => ({ id: device.endpoint_id, name: device.pet_name ?? device.hostname ?? device.endpoint_id }));
-	}
-	private async device(id: string): Promise<Device> {
-		const device = (await this.devices()).find(device => device.endpoint_id === id);
-		if (!device) {
-			throw new Error('Device is no longer paired');
-		}
-		return device;
-	}
-	public async loadPeer(id: string): Promise<PeerAccess> {
-		const device = await this.device(id);
-		const reply = await this.api.engineCommand({ type: 'servicePermissions', endpointId: id });
-		if (reply.type !== 'servicePermissions') {
-			throw new Error('Invalid permissions reply');
-		}
-		const permissions = reply.permissions;
-		return {
-			device: { id, name: device.pet_name ?? device.hostname ?? id },
-			permissions: { view: permissions.desktop, control: device.grants.control, clipboard: device.grants.clipboard, files: permissions.files, terminal: permissions.terminal, camera: permissions.camera, systemAudio: permissions.system_audio, microphone: permissions.microphone, recording: permissions.recording, systemActions: permissions.system_actions },
-		};
-	}
-	public setPermission(id: string, permission: AccessPermission, allowed: boolean): Promise<PeerAccess> {
+
+	public setSharing(changes: Partial<SharingPolicy>): Promise<Readonly<SharingPolicy>> {
 		return this.queue(async () => {
-			const device = await this.device(id);
-			let reply: EngineReply;
-			if (permission === 'control' || permission === 'clipboard') {
-				reply = await this.api.engineCommand({ type: 'authorize', endpointId: id, ...device.grants, [permission]: allowed });
-			} else if (permission === 'recording') {
-				reply = await this.api.engineCommand({ type: 'authorizeRecording', endpointId: id, allowed });
-			} else {
-				reply = await this.api.engineCommand({ type: 'authorizeService', endpointId: id, kind: services[permission], allowed });
-			}
-			if (reply.type !== 'done') {
-				throw new Error('Invalid permission write reply');
+			if (!this.available) {
+				throw new Error('Sharing policy unavailable');
 			}
 			try {
-				return await this.loadPeer(id);
+				const reply = await this.api.engineCommand({ type: 'setSharingPolicy', policy: changes });
+				if (reply.type !== 'done') {
+					throw new Error('Invalid sharing policy update reply');
+				}
+			} catch (error) {
+				let policy: Readonly<SharingPolicy> | undefined;
+				try {
+					policy = await this.loadSharing();
+				} catch { /* Keep state unknown until a successful read. */ }
+				throw new AccessWriteError(policy, error);
+			}
+			try {
+				return await this.loadSharing();
 			} catch {
 				throw new AccessReadbackError();
 			}
 		});
 	}
+
 	public async loadPolicy(): Promise<LocalSecurity> {
 		if (!this.available) {
 			throw new Error('Access service unavailable');
@@ -75,6 +57,7 @@ export class AccessService implements IAccessService {
 		}
 		return { policy: reply.policy, support: reply.support };
 	}
+
 	public setPolicy(key: keyof SystemPolicy, allowed: boolean): Promise<LocalSecurity> {
 		return this.queue(async () => {
 			const current = await this.loadPolicy();
@@ -92,7 +75,10 @@ export class AccessService implements IAccessService {
 			}
 		});
 	}
+
 	private queue<T>(task: () => Promise<T>): Promise<T> {
-		const result = this.pending.then(task); this.pending = result.catch(() => undefined); return result;
+		const result = this.pending.then(task);
+		this.pending = result.catch(() => undefined);
+		return result;
 	}
 }

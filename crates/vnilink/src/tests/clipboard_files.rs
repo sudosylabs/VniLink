@@ -33,15 +33,12 @@ fn pair(host: &Core, controller: &Core, clipboard: bool) {
         .create_invitation(Duration::from_secs(60))
         .unwrap();
     host.accept_invitation(&back).unwrap();
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard,
+        transfer: false,
+    })
     .unwrap();
 }
 
@@ -115,15 +112,12 @@ fn file_selection_requires_the_grant_and_leaves_the_session_up() {
         controller.submit_clipboard_files(session.id, session.generation + 1, &offer),
         Err(Error::StaleSession)
     ));
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard: true,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard: true,
+        transfer: false,
+    })
     .unwrap();
     controller
         .submit_clipboard_files(session.id, session.generation, &offer)
@@ -248,15 +242,12 @@ fn withdrawing_the_grant_drops_offers_while_the_session_survives() {
         .unwrap();
     publish_ready(&host, hosted.id, &from_host);
     wait_until(|| controller.clipboard_files().unwrap().is_some());
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: false,
+    })
     .unwrap();
     // The host's stored offer is withdrawn: a selection stays a live paste
     // capability after the grant is gone.
@@ -271,15 +262,12 @@ fn withdrawing_the_grant_drops_offers_while_the_session_survives() {
         controller.clipboard_files().unwrap().unwrap().selection,
         from_host
     );
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard: true,
-            transfer: false,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard: true,
+        transfer: false,
+    })
     .unwrap();
     controller
         .submit_clipboard_files(session.id, session.generation, &from_controller)
@@ -603,15 +591,12 @@ fn pair_with(host: &Core, controller: &Core, clipboard: bool, transfer: bool) {
         .create_invitation(Duration::from_secs(60))
         .unwrap();
     host.accept_invitation(&back).unwrap();
-    host.authorize(
-        &controller.endpoint_id(),
-        Grants {
-            view: true,
-            control: true,
-            clipboard,
-            transfer,
-        },
-    )
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard,
+        transfer,
+    })
     .unwrap();
 }
 
@@ -704,9 +689,7 @@ fn paste_round_trip_fetches_offered_bytes_in_both_directions() {
     host.set_clipboard_file_source(Some(host_source.clone()))
         .unwrap();
     pair_with(&host, &controller, true, true);
-    controller
-        .authorize(&host.endpoint_id(), transfer_grants())
-        .unwrap();
+    controller.set_desktop_sharing(transfer_grants()).unwrap();
     let session = controller.connect(&host.endpoint_id()).unwrap();
     let hosted = host.snapshot().unwrap().incoming.unwrap();
 
@@ -786,16 +769,13 @@ fn paste_needs_the_transfer_grant_on_both_sides() {
         host.prepare_incoming_paste(hosted.id, 1),
         Err(Error::TransferDenied)
     ));
-    host.authorize(&controller.endpoint_id(), transfer_grants())
-        .unwrap();
+    host.set_desktop_sharing(transfer_grants()).unwrap();
     // Source side refuses: the controller never granted the host Transfer.
     assert!(matches!(
         host.prepare_incoming_paste(hosted.id, 1),
         Err(Error::TransferDenied)
     ));
-    controller
-        .authorize(&host.endpoint_id(), transfer_grants())
-        .unwrap();
+    controller.set_desktop_sharing(transfer_grants()).unwrap();
     let prepared = host.prepare_incoming_paste(hosted.id, 1).unwrap();
     assert_eq!(prepared.files.len(), 1);
 }
@@ -815,9 +795,7 @@ fn stale_revision_is_rejected_before_any_wire_traffic() {
         .set_clipboard_file_source(Some(source.clone()))
         .unwrap();
     pair_with(&host, &controller, true, true);
-    controller
-        .authorize(&host.endpoint_id(), transfer_grants())
-        .unwrap();
+    controller.set_desktop_sharing(transfer_grants()).unwrap();
     let session = controller.connect(&host.endpoint_id()).unwrap();
     let hosted = host.snapshot().unwrap().incoming.unwrap();
     std::fs::write(controller_scratch.files().join("a.txt"), b"a").unwrap();
@@ -869,9 +847,7 @@ fn vanished_source_file_fails_the_paste_honestly() {
         .set_clipboard_file_source(Some(Arc::new(DirSource::new(controller_scratch.files()))))
         .unwrap();
     pair_with(&host, &controller, true, true);
-    controller
-        .authorize(&host.endpoint_id(), transfer_grants())
-        .unwrap();
+    controller.set_desktop_sharing(transfer_grants()).unwrap();
     let session = controller.connect(&host.endpoint_id()).unwrap();
     let hosted = host.snapshot().unwrap().incoming.unwrap();
     let victim = controller_scratch.files().join("gone.txt");
@@ -903,9 +879,7 @@ fn missing_resolver_fails_fast_on_the_wire_status() {
     // No file source installed on the controller: the refusal rides the
     // ready frame, since the dial side writes no statuses.
     pair_with(&host, &controller, true, true);
-    controller
-        .authorize(&host.endpoint_id(), transfer_grants())
-        .unwrap();
+    controller.set_desktop_sharing(transfer_grants()).unwrap();
     let session = controller.connect(&host.endpoint_id()).unwrap();
     let hosted = host.snapshot().unwrap().incoming.unwrap();
     std::fs::write(controller_scratch.files().join("a.txt"), b"a").unwrap();
@@ -948,9 +922,7 @@ fn slow_preparation_does_not_stall_text_paste() {
         .set_clipboard_file_source(Some(source.clone()))
         .unwrap();
     pair_with(&host, &controller, true, true);
-    controller
-        .authorize(&host.endpoint_id(), transfer_grants())
-        .unwrap();
+    controller.set_desktop_sharing(transfer_grants()).unwrap();
     let session = controller.connect(&host.endpoint_id()).unwrap();
     let hosted = host.snapshot().unwrap().incoming.unwrap();
     std::fs::write(controller_scratch.files().join("slow.bin"), [9u8; 64]).unwrap();
@@ -1000,9 +972,7 @@ fn same_path_reoffer_during_preparation_refuses_the_stale_revision() {
         .set_clipboard_file_source(Some(source.clone()))
         .unwrap();
     pair_with(&host, &controller, true, true);
-    controller
-        .authorize(&host.endpoint_id(), transfer_grants())
-        .unwrap();
+    controller.set_desktop_sharing(transfer_grants()).unwrap();
     let session = controller.connect(&host.endpoint_id()).unwrap();
     let hosted = host.snapshot().unwrap().incoming.unwrap();
     std::fs::write(controller_scratch.files().join("a.txt"), b"12345").unwrap();
@@ -1060,9 +1030,7 @@ fn second_concurrent_prepare_is_busy() {
         .set_clipboard_file_source(Some(source.clone()))
         .unwrap();
     pair_with(&host, &controller, true, true);
-    controller
-        .authorize(&host.endpoint_id(), transfer_grants())
-        .unwrap();
+    controller.set_desktop_sharing(transfer_grants()).unwrap();
     let session = controller.connect(&host.endpoint_id()).unwrap();
     let hosted = host.snapshot().unwrap().incoming.unwrap();
     std::fs::write(controller_scratch.files().join("a.txt"), b"a").unwrap();
@@ -1099,9 +1067,7 @@ fn large_file_paste_streams_past_legacy_caps() {
         .set_clipboard_file_source(Some(Arc::new(DirSource::new(controller_scratch.files()))))
         .unwrap();
     pair_with(&host, &controller, true, true);
-    controller
-        .authorize(&host.endpoint_id(), transfer_grants())
-        .unwrap();
+    controller.set_desktop_sharing(transfer_grants()).unwrap();
     let session = controller.connect(&host.endpoint_id()).unwrap();
     let hosted = host.snapshot().unwrap().incoming.unwrap();
     // 40 MiB clears the 32 MiB whole-bytes cap and the legacy 8 MiB

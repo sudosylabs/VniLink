@@ -1,3 +1,5 @@
+import { Event } from '../../base/common/event.js';
+import { Disposable } from '../../base/common/lifecycle.js';
 import { platform as safePlatform } from '../../base/common/process.js';
 import { synchronizeNativePermissions } from '../../platform/engine/electron-main/nativeRuntime.js';
 import { MachinePermissionService } from '../../platform/permissions/electron-main/permissionService.js';
@@ -21,104 +23,122 @@ import { registerDesktopHandlers } from '../../platform/ipc/electron-main/handle
 
 export const applicationUrl = 'vnilink://app/index.html';
 
-interface ApplicationOptions {
+export interface ApplicationOptions {
 	showWindow?: boolean;
 	temporaryEngine?: boolean;
 	onReady?: (window: BrowserWindow) => Promise<void>;
 }
-export async function startApplication(options: ApplicationOptions = {}): Promise<void> {
-	mark('vnilink/mainStart');
-	// `--verbose` maps to trace until the environment platform owns log levels.
-	const logService = new LogService(new ConsoleLogger(process.argv.includes('--verbose') ? LogLevel.Trace : LogLevel.Info));
-	app.setName('VniLink');
-	if (!app.requestSingleInstanceLock()) {
-		app.quit(); return;
+
+/** Main-process composition and shutdown owner. Remote capability policy remains in Rust. */
+export class VniLinkApplication extends Disposable {
+	private window: BrowserWindow | null = null;
+	private readonly logService: LogService;
+	private readonly engine = new EngineService();
+	private readonly encryption: EncryptionMainService;
+	private readonly configuration: ConfigurationStore;
+	private readonly services: InstantiationService;
+	private readonly nativeHost: NativeHostMainService;
+	private quitting = false;
+	private quitReady = false;
+	private restored = false;
+	private restarting = false;
+	private started: Promise<void> | undefined;
+	private stopped: Promise<void> | undefined;
+
+	constructor(private readonly options: ApplicationOptions = {}) {
+		super();
+		this.logService = new LogService(new ConsoleLogger(process.argv.includes('--verbose') ? LogLevel.Trace : LogLevel.Info));
+		this.encryption = new EncryptionMainService(this.logService);
+		this.configuration = this._register(new ConfigurationStore(join(app.getPath('userData'), 'settings.json')));
+		this.services = this._register(new InstantiationService(new ServiceCollection([INativeHostMainService, new SyncDescriptor(NativeHostMainService, [() => this.window])]), true));
+		this.nativeHost = this.services.invokeFunction(accessor => accessor.get(INativeHostMainService));
 	}
-	protocol.registerSchemesAsPrivileged([{ scheme: 'vnilink', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
-	let window: BrowserWindow | null = null;
-	const engine = new EngineService();
-	const encryption = new EncryptionMainService(logService);
-	const configuration = new ConfigurationStore(join(app.getPath('userData'), 'settings.json'));
-	const services = new InstantiationService(new ServiceCollection([INativeHostMainService, new SyncDescriptor(NativeHostMainService, [() => window])]), true);
-	const nativeHost = services.invokeFunction(accessor => accessor.get(INativeHostMainService));
-	nativeHost.onDidChangeWindowState(state => {
-		if (window && !window.isDestroyed() && state.windowId === window.id && window.webContents.mainFrame.url === applicationUrl) {
-			window.webContents.send('nativeHost:state', state);
-		}
-	});
-	app.on('will-quit', () => {
-		services.dispose();
-		configuration.dispose();
-		logService.dispose();
-	});
-	app.on('second-instance', () => {
-		if (window?.isMinimized()) {
-			window.restore();
-		}
-		window?.show(); window?.focus();
-	});
-	let quitting = false;
-	let restarting = false;
-	app.on('before-quit', event => {
-		if (quitting) {
+
+	public start(): Promise<void> {
+		this.started ??= this.startup();
+		return this.started;
+	}
+
+	private async startup(): Promise<void> {
+		this.checkRunning();
+		mark('vnilink/mainStart');
+		app.setName('VniLink');
+		if (!app.requestSingleInstanceLock()) {
+			this.dispose();
+			app.quit();
 			return;
 		}
-		event.preventDefault();
-		quitting = true;
-		void Promise.all([engine.stop(), configuration.flush()]).catch(() => {
-			logService.error('Engine shutdown failed');
-		}).finally(() => {
-			if (restarting && process.env.VNILINK_DEV === '1' && !app.isPackaged) {
-				app.exit(42);
-			} else {
+		protocol.registerSchemesAsPrivileged([{ scheme: 'vnilink', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
+		this.registerListeners();
+		try {
+			await app.whenReady();
+			this.checkRunning();
+			await this.configuration.initialize();
+			this.checkRunning();
+			this.applyConfiguration();
+			this._register(this.configuration.onDidChangeConfiguration(() => {
+				this.applyConfiguration();
+			}));
+			this.configureSession();
+			this.registerHandlers();
+			mark('vnilink/appReady');
+			await this.startEngine();
+			this.checkRunning();
+			const window = await this.openWindow();
+			this.restored = true;
+			mark('vnilink/windowReady');
+			await this.options.onReady?.(window);
+		} catch (error) {
+			if (this.quitting || this._store.isDisposed) {
+				return;
+			}
+			this.logService.error(error instanceof Error ? error : new Error(String(error)));
+			await this.shutdown();
+			this.dispose();
+			app.exit(1);
+		}
+	}
+
+	private checkRunning(): void {
+		if (this.quitting || this._store.isDisposed) {
+			throw new Error('Application stopped during startup');
+		}
+	}
+
+	private registerListeners(): void {
+		this._register(this.nativeHost.onDidChangeWindowState(state => {
+			const window = this.window;
+			if (window && !window.isDestroyed() && state.windowId === window.id && window.webContents.mainFrame.url === applicationUrl) {
+				window.webContents.send('nativeHost:state', state);
+			}
+		}));
+		this._register(Event.fromNodeEventEmitter<Electron.Event>(app, 'before-quit')(event => {
+			this.onBeforeQuit(event);
+		}));
+		this._register(Event.fromNodeEventEmitter<unknown>(app, 'will-quit')(() => {
+			this.dispose();
+		}));
+		this._register(Event.fromNodeEventEmitter<unknown>(app, 'second-instance')(() => {
+			this.focusWindow();
+		}));
+		this._register(Event.fromNodeEventEmitter<unknown>(app, 'activate')(() => {
+			if (this.restored && !this.quitting && BrowserWindow.getAllWindows().length === 0) {
+				void this.openWindow().catch((error: unknown) => {
+					this.logService.error(error instanceof Error ? error : new Error(String(error)));
+				});
+			}
+		}));
+		this._register(Event.fromNodeEventEmitter<unknown>(app, 'window-all-closed')(() => {
+			if (!isMacintosh) {
 				app.quit();
 			}
-		});
-	});
-	async function openWindow(): Promise<BrowserWindow> {
-		const current = createMainWindow();
-		registerDevelopmentWindow(current);
-		window = current;
-		nativeHost.registerWindow(current);
-		current.on('closed', () => {
-			if (window === current) {
-				window = null;
-			}
-		});
-		await current.loadURL(applicationUrl);
-		if (options.showWindow ?? true) {
-			current.show();
-		}
-		return current;
+		}));
 	}
-	app.on('activate', () => {
-		if (BrowserWindow.getAllWindows().length === 0) {
-			void openWindow().catch((error: unknown) => {
-				logService.error(error instanceof Error ? error : new Error(String(error)));
-			});
-		}
-	});
-	app.on('window-all-closed', () => {
-		if (!isMacintosh) {
-			app.quit();
-		}
-	});
-	try {
-		await app.whenReady();
-		await configuration.initialize();
-		const applyConfiguration = (): void => {
-			nativeTheme.themeSource = configuration.snapshot.values['appearance.theme'];
-			nativeHost.setNativeBackgroundEnabled(configuration.snapshot.values['appearance.nativeBackground']);
-			if (window && !window.isDestroyed() && window.webContents.mainFrame.url === applicationUrl) {
-				window.webContents.send('configuration:changed', configuration.snapshot);
-			}
-		};
-		applyConfiguration();
-		configuration.onDidChangeConfiguration(applyConfiguration);
-		mark('vnilink/appReady');
-		protocol.handle('vnilink', (request) => {
+
+	private configureSession(): void {
+		const allowed = new Set(['/index.html', '/renderer.js', '/renderer.css', '/app-icon.svg']);
+		protocol.handle('vnilink', request => {
 			const url = new URL(request.url);
-			const allowed = new Set(['/index.html', '/renderer.js', '/renderer.css', '/app-icon.svg']);
 			if (request.method !== 'GET' || url.hostname !== 'app' || url.port || url.username || url.password || !allowed.has(url.pathname)) {
 				return new Response('Not found', { status: 404 });
 			}
@@ -128,46 +148,159 @@ export async function startApplication(options: ApplicationOptions = {}): Promis
 			callback(false);
 		});
 		session.defaultSession.setPermissionCheckHandler(() => false);
-		registerDesktopHandlers(() => window, applicationUrl, engine, nativeHost, encryption, configuration, () => {
-			restarting = true;
-			if (app.isPackaged || process.env.VNILINK_DEV !== '1') {
-				app.relaunch();
-			}
-			app.quit();
-		});
+	}
+
+	private registerHandlers(): void {
+		this._register(registerDesktopHandlers(() => this.window, applicationUrl, this.engine, this.nativeHost, this.encryption, this.configuration, () => {
+			this.requestRestart();
+		}));
+	}
+
+	private applyConfiguration(): void {
+		nativeTheme.themeSource = this.configuration.snapshot.values['appearance.theme'];
+		this.nativeHost.setNativeBackgroundEnabled(true);
+		const window = this.window;
+		if (window && !window.isDestroyed() && window.webContents.mainFrame.url === applicationUrl) {
+			window.webContents.send('configuration:changed', this.configuration.snapshot);
+		}
+	}
+
+	private async startEngine(): Promise<void> {
 		try {
-			await engine.start(options.temporaryEngine ?? false);
-			await engine.execute({ type: 'setDesktopCodecDefault', codec: configuration.snapshot.values['desktop.codec'] });
-			await engine.execute({ type: 'setDesktopQualityDefaults', quality: configuration.snapshot.values['desktop.quality'] });
-			await engine.execute({ type: 'setInputDefaults', ...configuration.snapshot.values['input.defaults'] });
-			try {
-				const roots = configuration.snapshot.values['files.roots'];
-				await engine.execute(roots.length || options.temporaryEngine ? { type: 'setFileRoots', paths: [...roots] } : { type: 'enableFilesystemAccess' });
-			} catch {
-				logService.error('Shared folders could not be opened; file access remains disabled.');
-			}
+			await this.engine.start(this.options.temporaryEngine ?? false);
 			const consent = new MachinePermissionService(safePlatform, !app.isPackaged, systemPreferences, () => Promise.reject(new Error('Startup cannot open permission settings')));
-			if (!options.temporaryEngine) {
-				await synchronizeNativePermissions(engine, safePlatform, consent.snapshot()).catch(() => {
-					logService.error('Native input backend could not be initialized.');
+			if (!this.options.temporaryEngine) {
+				await synchronizeNativePermissions(this.engine, safePlatform, consent.snapshot()).catch(() => {
+					this.logService.error('Native input backend could not be initialized.');
 				});
 			}
-			const runtime = await engine.execute({ type: 'nativeRuntime' });
+			await this.restoreEngineDefaults();
+			const runtime = await this.engine.execute({ type: 'nativeRuntime' });
 			if (runtime.type === 'nativeRuntime') {
 				for (const backend of runtime.backends) {
 					if (!backend.ready) {
-						logService.error(backend.error ?? 'Native backend unavailable.');
+						this.logService.error(backend.error ?? 'Native backend unavailable.');
 					}
 				}
 			}
 			mark('vnilink/engineReady');
-		} catch {
-			logService.error('VniLink engine unavailable; secure installation could not be opened.');
+		} catch (error) {
+			this.logService.error('VniLink engine unavailable; secure installation could not be opened.', error);
 		}
-		const current = await openWindow();
-		mark('vnilink/windowReady');
-		await options.onReady?.(current);
-	} catch (error) {
-		logService.error(error instanceof Error ? error : new Error(String(error))); app.exit(1);
 	}
+
+	private async restoreEngineDefaults(): Promise<void> {
+		const values = this.configuration.snapshot.values;
+		await this.engine.execute({ type: 'setDesktopCodecDefault', codec: values['desktop.codec'] });
+		await this.engine.execute({ type: 'setDesktopQualityDefaults', quality: values['desktop.quality'] });
+		await this.engine.execute({ type: 'setInputDefaults', ...values['input.defaults'] });
+		const sources = values['media.sources'];
+		if (sources.cameras.length) {
+			await this.engine.execute({ type: 'setNativeCameraSources', ids: [...sources.cameras] }).catch((error: unknown) => {
+				this.logService.error('Saved camera source could not be opened.', error);
+			});
+		}
+		if (sources.microphones.length || sources.system.length) {
+			await this.engine.execute({ type: 'setNativeAudioSources', microphones: [...sources.microphones], system: [...sources.system] }).catch((error: unknown) => {
+				this.logService.error('Saved audio sources could not be opened.', error);
+			});
+		}
+		try {
+			const paths = values['files.roots'];
+			await this.engine.execute(paths.length || this.options.temporaryEngine ? { type: 'setFileRoots', paths: [...paths] } : { type: 'enableFilesystemAccess' });
+		} catch (error) {
+			this.logService.error('Shared folders could not be opened; file access remains disabled.', error);
+		}
+	}
+
+	private async openWindow(): Promise<BrowserWindow> {
+		this.checkRunning();
+		const window = createMainWindow();
+		registerDevelopmentWindow(window);
+		this.window = window;
+		this.nativeHost.registerWindow(window);
+		window.once('closed', () => {
+			if (this.window === window) {
+				this.window = null;
+			}
+		});
+		try {
+			await window.loadURL(applicationUrl);
+			if (this.quitting) {
+				throw new Error('Application stopped during window startup');
+			}
+			if (this.options.showWindow ?? true) {
+				window.show();
+			}
+			return window;
+		} catch (error) {
+			if (!window.isDestroyed()) {
+				window.destroy();
+			}
+			throw error;
+		}
+	}
+
+	private focusWindow(): void {
+		if (this.window?.isMinimized()) {
+			this.window.restore();
+		}
+		this.window?.show();
+		this.window?.focus();
+	}
+
+	private requestRestart(): void {
+		if (this.restarting) {
+			return;
+		}
+		this.restarting = true;
+		if (app.isPackaged || process.env.VNILINK_DEV !== '1') {
+			app.relaunch();
+		}
+		app.quit();
+	}
+
+	private onBeforeQuit(event: Electron.Event): void {
+		if (this.quitReady) {
+			return;
+		}
+		event.preventDefault();
+		if (this.quitting) {
+			return;
+		}
+		this.quitting = true;
+		void this.shutdown().finally(() => {
+			this.quitReady = true;
+			if (this.restarting && process.env.VNILINK_DEV === '1' && !app.isPackaged) {
+				app.exit(42);
+			} else {
+				app.quit();
+			}
+		});
+	}
+
+	private shutdown(): Promise<void> {
+		this.quitting = true;
+		this.stopped ??= this.shutdownServices();
+		return this.stopped;
+	}
+
+	private async shutdownServices(): Promise<void> {
+		const results = await Promise.allSettled([this.engine.stop(), this.configuration.flush()]);
+		for (const result of results) {
+			if (result.status === 'rejected') {
+				this.logService.error('Application shutdown failed', result.reason);
+			}
+		}
+	}
+
+	public override dispose(): void {
+		super.dispose();
+		this.logService.dispose();
+	}
+}
+
+/** Compatibility entry point for existing callers; the application instance owns all state. */
+export function startApplication(options: ApplicationOptions = {}): Promise<void> {
+	return new VniLinkApplication(options).start();
 }

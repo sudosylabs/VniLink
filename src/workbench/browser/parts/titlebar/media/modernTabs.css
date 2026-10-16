@@ -6,11 +6,11 @@
  *-------------------------------------------------------------------------------------------- */
 
 .part.titlebar {
-	box-shadow: inset 0 -1px var(--line);
+	overflow: clip;
 
 	--tab-height: 35px;
 	--tab-radius: 12px;
-	--tab-active-background: var(--canvas);
+	--tab-active-background: transparent;
 	--tab-hover-background: color-mix(in srgb, var(--text) 8%, var(--chrome));
 }
 
@@ -22,7 +22,53 @@
 
 .tabs-container {
 	align-items: stretch;
-	padding-inline: 7px;
+	padding-inline: 0;
+}
+
+/* Draw the divider in segments so transparency never exposes a line through
+ * the selected tab. The outer segments cover the native control reservations. */
+.tabs-and-actions-container::before,
+.tabs-and-actions-container::after {
+	content: '';
+	position: absolute;
+	bottom: 0;
+	width: 100vw;
+	height: 1px;
+	background: var(--line);
+	pointer-events: none;
+}
+
+.tabs-and-actions-container::before {
+	right: 100%;
+}
+
+.tabs-and-actions-container::after {
+	left: 100%;
+}
+
+.tabs-container::before,
+.tabs-container::after {
+	content: '';
+	flex: 0 0 7px;
+	background: linear-gradient(var(--line), var(--line)) left bottom / 100% 1px no-repeat;
+	pointer-events: none;
+}
+
+.tabs-container::after {
+	flex: 1 0 7px;
+}
+
+.tabs-container:has(> .tab:first-child[aria-selected='true'])::before {
+	background: none;
+}
+
+.tabs-container:has(> .tab:last-child[aria-selected='true'])::after {
+	background-position: right bottom;
+	background-size: calc(100% - 7px) 1px;
+}
+
+.view-actions {
+	box-shadow: inset 0 -1px var(--line);
 }
 
 .tab {
@@ -41,10 +87,27 @@
 	font-weight: 400;
 	background-color: transparent;
 	box-shadow: none;
-	color: var(--muted);
+	color: var(--text);
 	cursor: pointer;
 	white-space: nowrap;
 	-webkit-app-region: no-drag;
+}
+
+.tab:not([aria-selected='true'])::after {
+	content: '';
+	position: absolute;
+	inset: auto 0 0;
+	height: 1px;
+	background: var(--line);
+	pointer-events: none;
+}
+
+.tab:has(+ .tab[aria-selected='true'])::after {
+	right: 7px;
+}
+
+.tab[aria-selected='true'] + .tab::after {
+	left: 7px;
 }
 
 .tab-fill {
@@ -69,11 +132,8 @@
 	min-width: 0;
 }
 
-.tab[aria-selected='true'] {
-	color: var(--text);
-}
-
 .tab[aria-selected='true'] > .tab-fill {
+	bottom: 7px;
 	background-color: var(--tab-active-background);
 	border-color: var(--line);
 	border-bottom: 0;
@@ -132,8 +192,8 @@
 	}
 }
 
-/* Adapted from VS Code connectedEditorTabs.css: the active cap and reverse
- * rounded shoulders replace the strip separator with the content surface. */
+/* Adapted from VS Code connectedEditorTabs.css: retain the active cap and
+ * reverse rounded outline while revealing the titlebar through both. */
 
 .tabs-scrollable {
 	align-self: flex-end;
@@ -144,7 +204,7 @@
 .tab[aria-selected='true'] > .tab-fill::after {
 	content: '';
 	position: absolute;
-	bottom: 0;
+	bottom: -7px;
 	width: 7px;
 	height: 7px;
 	box-sizing: border-box;
@@ -156,12 +216,10 @@
 	right: 100%;
 	border-right: 1px solid var(--line);
 	border-bottom-right-radius: 7px;
-	box-shadow: 3.5px 3.5px 0 3.5px var(--tab-active-background);
 }
 
 .tab[aria-selected='true'] > .tab-fill::after {
 	left: 100%;
 	border-left: 1px solid var(--line);
 	border-bottom-left-radius: 7px;
-	box-shadow: -3.5px 3.5px 0 3.5px var(--tab-active-background);
 }

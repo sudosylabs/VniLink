@@ -4,11 +4,15 @@
 //! Management calls run on libuv workers. The separate data module uses
 //! bounded, nonblocking native drains and input queues outside this mutex.
 mod native;
+mod storage;
+
 use native::{
     TransferCapability, TransferNativeBackend, TransferNativeDevice, TransferPowerPolicy,
     TransferPowerStatus, TransferRecordingRetention, TransferRecordingStatus,
     TransferSharingStatus,
 };
+#[cfg(feature = "reset-installation")]
+pub use storage::reset_installation_cli;
 mod data;
 
 use napi::{bindgen_prelude::AsyncTask, Env, Error, Result, Status, Task};
@@ -16,9 +20,7 @@ use napi_derive::napi;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use vnilink_app::{
-    CredentialStore, EventPoller, FfiError, FfiServiceKind, FilesService, VideoPoller, VnilinkCore,
-};
+use vnilink_app::{EventPoller, FfiError, FilesService, VideoPoller, VnilinkCore};
 
 /// Largest accepted command body. Clipboard text reaches 256 KiB and encoded
 /// frames cross as base64, so this must clear a ~1 MiB frame plus JSON shape.
@@ -81,17 +83,7 @@ struct TransferRelay {
 
 use vnilink_app::FfiVideoCodecCaps as TransferVideoCodecCaps;
 
-#[derive(Serialize)]
-struct TransferServicePermissions {
-    desktop: bool,
-    files: bool,
-    terminal: bool,
-    camera: bool,
-    system_audio: bool,
-    microphone: bool,
-    recording: bool,
-    system_actions: bool,
-}
+use vnilink_app::FfiSharingPolicy as TransferSharingPolicy;
 
 use vnilink_app::FfiSystemPolicy as TransferSystemPolicy;
 
@@ -178,19 +170,6 @@ fn transfer_job(snapshot: &vnilink_app::FfiJobSnapshot) -> TransferJob {
         skipped_symlinks: snapshot.skipped_symlinks.to_string(),
         waiting_file: snapshot.waiting_file.clone(),
         error: snapshot.error.clone(),
-    }
-}
-
-fn service_kind(value: &str) -> Result<FfiServiceKind> {
-    match value {
-        "Desktop" => Ok(FfiServiceKind::Desktop),
-        "Files" => Ok(FfiServiceKind::Files),
-        "Terminal" => Ok(FfiServiceKind::Terminal),
-        "Camera" => Ok(FfiServiceKind::Camera),
-        "SystemAudio" => Ok(FfiServiceKind::SystemAudio),
-        "Microphone" => Ok(FfiServiceKind::Microphone),
-        "System" => Ok(FfiServiceKind::System),
-        _ => Err(Error::new(Status::InvalidArg, "Invalid service kind")),
     }
 }
 
@@ -471,24 +450,6 @@ fn transfer_display(display: &vnilink_app::FfiDisplay) -> TransferDisplay {
     }
 }
 
-struct NativeStore;
-impl CredentialStore for NativeStore {
-    fn load(&self) -> std::result::Result<Option<Vec<u8>>, FfiError> {
-        let entry =
-            keyring::Entry::new("com.vnilink.installation", "primary").map_err(store_error)?;
-        match entry.get_secret() {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(error) => Err(store_error(error)),
-        }
-    }
-    fn save(&self, record: Vec<u8>) -> std::result::Result<(), FfiError> {
-        keyring::Entry::new("com.vnilink.installation", "primary")
-            .and_then(|entry| entry.set_secret(&record))
-            .map_err(store_error)
-    }
-}
-
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 enum Command {
@@ -549,20 +510,9 @@ enum Command {
         subscription_id: String,
     },
     SubscribeVideo,
-    ServicePermissions {
-        #[serde(rename = "endpointId")]
-        endpoint_id: String,
-    },
-    AuthorizeService {
-        #[serde(rename = "endpointId")]
-        endpoint_id: String,
-        kind: String,
-        allowed: bool,
-    },
-    AuthorizeRecording {
-        #[serde(rename = "endpointId")]
-        endpoint_id: String,
-        allowed: bool,
+    SharingPolicy,
+    SetSharingPolicy {
+        policy: vnilink_app::FfiSharingPolicyUpdate,
     },
     SystemPolicy,
     SetSystemPolicy {
@@ -642,14 +592,6 @@ enum Command {
         #[serde(rename = "previewId")]
         preview_id: String,
         digits: String,
-    },
-    Authorize {
-        #[serde(rename = "endpointId")]
-        endpoint_id: String,
-        view: bool,
-        control: bool,
-        clipboard: bool,
-        transfer: bool,
     },
     Revoke {
         #[serde(rename = "endpointId")]
@@ -1043,8 +985,8 @@ enum Reply {
         events: Vec<serde_json::Value>,
         lagged: String,
     },
-    ServicePermissions {
-        permissions: TransferServicePermissions,
+    SharingPolicy {
+        policy: TransferSharingPolicy,
     },
     SystemPolicy {
         policy: TransferSystemPolicy,
@@ -1088,7 +1030,7 @@ enum Reply {
     Done,
 }
 
-// Commands serialize state mutations and keychain writes. Shutdown marks the
+// Commands serialize state mutations and installation saves. Shutdown marks the
 // instance closed; no later task can restart or mutate the old installation.
 // Video pollers stay here behind subscription ids because pollers cannot
 // cross the JSON bridge; callers poll and release them by id.
@@ -1122,7 +1064,9 @@ impl Task for OpenTask {
         let result = if self.temporary {
             VnilinkCore::create(true, vec![])
         } else {
-            VnilinkCore::open_persistent(Box::new(NativeStore))
+            VnilinkCore::open_persistent(Box::new(
+                storage::EncryptedInstallationStore::open_production().map_err(core_error)?,
+            ))
         };
         let core = result.map_err(core_error)?;
         let backends = if self.temporary {
@@ -1816,17 +1760,6 @@ impl EngineBridge {
                         .map_err(core_error)?,
                 }
             }
-            Command::Authorize {
-                endpoint_id,
-                view,
-                control,
-                clipboard,
-                transfer,
-            } => {
-                core.authorize(endpoint_id.clone(), *view, *control, *clipboard, *transfer)
-                    .map_err(core_error)?;
-                Reply::Done
-            }
             Command::Revoke { endpoint_id } => {
                 core.revoke(endpoint_id.clone()).map_err(core_error)?;
                 Reply::Done
@@ -1909,43 +1842,11 @@ impl EngineBridge {
     fn services(state: &mut State, command: &Command) -> Result<Reply> {
         let reply: Reply =
             match command {
-                Command::ServicePermissions { endpoint_id } => {
-                    let permissions = state
-                        .core
-                        .service_permissions(endpoint_id.clone())
-                        .map_err(core_error)?;
-                    Reply::ServicePermissions {
-                        permissions: TransferServicePermissions {
-                            desktop: permissions.desktop,
-                            files: permissions.files,
-                            terminal: permissions.terminal,
-                            camera: permissions.camera,
-                            system_audio: permissions.system_audio,
-                            microphone: permissions.microphone,
-                            recording: permissions.recording,
-                            system_actions: permissions.system_actions,
-                        },
-                    }
-                }
-                Command::AuthorizeService {
-                    endpoint_id,
-                    kind,
-                    allowed,
-                } => {
-                    state
-                        .core
-                        .authorize_service(endpoint_id.clone(), service_kind(kind)?, *allowed)
-                        .map_err(core_error)?;
-                    Reply::Done
-                }
-                Command::AuthorizeRecording {
-                    endpoint_id,
-                    allowed,
-                } => {
-                    state
-                        .core
-                        .authorize_recording(endpoint_id.clone(), *allowed)
-                        .map_err(core_error)?;
+                Command::SharingPolicy => Reply::SharingPolicy {
+                    policy: state.core.sharing_policy().map_err(core_error)?,
+                },
+                Command::SetSharingPolicy { policy } => {
+                    state.core.set_sharing_policy(*policy).map_err(core_error)?;
                     Reply::Done
                 }
                 Command::SystemPolicy => {
@@ -2207,7 +2108,6 @@ impl EngineBridge {
             | Command::OpenPairingFile { .. }
             | Command::OpenPairingFileBase64 { .. }
             | Command::ConfirmPairing { .. }
-            | Command::Authorize { .. }
             | Command::Revoke { .. }
             | Command::Unpair { .. }
             | Command::SetPeerName { .. }
@@ -2315,9 +2215,8 @@ impl EngineBridge {
             Command::SubscribeEvents
             | Command::PollEvents { .. }
             | Command::ReleaseEvents { .. } => Self::events(state, command),
-            Command::ServicePermissions { .. }
-            | Command::AuthorizeService { .. }
-            | Command::AuthorizeRecording { .. }
+            Command::SharingPolicy
+            | Command::SetSharingPolicy { .. }
             | Command::SystemPolicy
             | Command::SetSystemPolicy { .. }
             | Command::TerminalPolicy
@@ -2395,6 +2294,16 @@ impl CommandShape {
         let Some(kind) = object.get("type").and_then(|kind| kind.as_str()) else {
             return false;
         };
+        if kind == "setSharingPolicy"
+            && !object
+                .get("policy")
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|policy| {
+                    !policy.is_empty() && policy.values().all(serde_json::Value::is_boolean)
+                })
+        {
+            return false;
+        }
         let expected: &[&str] = match kind {
             "snapshot" | "disconnect" | "shutdown" => &["type"],
             "endpoint"
@@ -2413,14 +2322,6 @@ impl CommandShape {
             "openPairingFile" => &["type", "bytes"],
             "openPairingFileBase64" => &["type", "data"],
             "confirmPairing" => &["type", "previewId", "digits"],
-            "authorize" => &[
-                "type",
-                "endpointId",
-                "view",
-                "control",
-                "clipboard",
-                "transfer",
-            ],
             "revoke" | "unpair" => &["type", "endpointId"],
             "setPeerName" => &["type", "endpointId", "name"],
             "connect" | "beginConnect" | "connectFiles" | "beginConnectFiles" => {
@@ -2532,9 +2433,8 @@ impl CommandShape {
             | "controllerSessionPaths" => &["type", "sessionId"],
             "pollEvents" => &["type", "subscriptionId", "maxEvents"],
             "releaseEvents" => &["type", "subscriptionId"],
-            "servicePermissions" => &["type", "endpointId"],
-            "authorizeService" => &["type", "endpointId", "kind", "allowed"],
-            "authorizeRecording" => &["type", "endpointId", "allowed"],
+            "sharingPolicy" => &["type"],
+            "setSharingPolicy" => &["type", "policy"],
             "systemPolicy" => &["type"],
             "setSystemPolicy" => &["type", "policy"],
             "terminalPolicy" => &["type"],
@@ -2589,7 +2489,7 @@ fn ffi_error_name(error: &FfiError) -> &'static str {
         FfiError::Timeout => "Timeout",
         FfiError::Network { .. } => "Network",
         FfiError::TooManyDevices => "TooManyDevices",
-        FfiError::StoreUnavailable => "StoreUnavailable",
+        FfiError::StoreUnavailable | FfiError::StoreRecoveryRequired => "StoreUnavailable",
         FfiError::StoreLocked => "StoreLocked",
         FfiError::CorruptRecord => "CorruptRecord",
         FfiError::InvalidPairingFile => "InvalidPairingFile",
@@ -2602,9 +2502,24 @@ fn core_error(error: FfiError) -> Error {
     Error::from_reason(format!("{}: {error}", ffi_error_name(&error)))
 }
 
-fn store_error(error: keyring::Error) -> FfiError {
-    match error {
-        keyring::Error::NoStorageAccess(_) => FfiError::StoreLocked,
-        _ => FfiError::StoreUnavailable,
+#[cfg(test)]
+mod ffi_store_error {
+    use super::ffi_error_name;
+    use vnilink_app::FfiError;
+
+    #[test]
+    fn recovery_reuses_the_unavailable_name() {
+        let error = FfiError::StoreRecoveryRequired;
+        assert_eq!(ffi_error_name(&error), "StoreUnavailable");
+        assert_eq!(
+            format!("{}: {error}", ffi_error_name(&error)),
+            "StoreUnavailable: the installation store must be reopened and VniLink restarted"
+        );
+        assert_eq!(
+            ffi_error_name(&FfiError::StoreUnavailable),
+            "StoreUnavailable"
+        );
+        assert_eq!(ffi_error_name(&FfiError::StoreLocked), "StoreLocked");
+        assert_eq!(ffi_error_name(&FfiError::CorruptRecord), "CorruptRecord");
     }
 }

@@ -31,4 +31,5 @@ export const synchronousFsRule = {
 		};
 	},
 };
+
 export default { rules: { 'no-sync-fs': synchronousFsRule } };

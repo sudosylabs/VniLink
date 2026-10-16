@@ -308,9 +308,12 @@ impl VnilinkCore {
             .inner
             .open_audio_service(id, generation, config.into())
             .map_err(map_error)?;
-        let playback =
+        let mut playback =
             vnilink_audio::AudioPlayback::new(inner.config().format().map_err(map_error)?)
                 .map_err(|_| map_error(vnilink::Error::Unsupported("Opus audio decoder")))?;
+        if inner.config().kind == vnilink::audio::AudioKind::System {
+            playback.allow_silent_gaps();
+        }
         Ok(Arc::new(AudioService {
             inner,
             core: self.inner.clone(),

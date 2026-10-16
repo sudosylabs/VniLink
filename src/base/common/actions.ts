@@ -62,6 +62,7 @@ export interface IActionChangeEvent {
 export class Action extends Disposable implements IAction {
 
 	protected _onDidChange = this._register(new Emitter<IActionChangeEvent>());
+
 	public get onDidChange() {
 		return this._onDidChange.event;
 	}
@@ -177,11 +178,13 @@ export interface IRunEvent {
 export class ActionRunner extends Disposable implements IActionRunner {
 
 	private readonly _onWillRun = this._register(new Emitter<IRunEvent>());
+
 	public get onWillRun() {
 		return this._onWillRun.event;
 	}
 
 	private readonly _onDidRun = this._register(new Emitter<IRunEvent>());
+
 	public get onDidRun() {
 		return this._onDidRun.event;
 	}
@@ -190,16 +193,13 @@ export class ActionRunner extends Disposable implements IActionRunner {
 		if (!action.enabled) {
 			return;
 		}
-
 		this._onWillRun.fire({ action });
-
 		let error: Error | undefined = undefined;
 		try {
 			await this.runAction(action, context);
 		} catch (e) {
 			error = e as Error | undefined;
 		}
-
 		this._onDidRun.fire({ action, error });
 	}
 
@@ -224,7 +224,6 @@ export class Separator implements IAction {
 				out = list;
 			}
 		}
-
 		return out;
 	}
 
@@ -247,14 +246,13 @@ export class Separator implements IAction {
 	}
 
 	public static readonly ID = 'vs.actions.separator';
-
 	public readonly id: string = Separator.ID;
-
 	public readonly label: string = '';
 	public readonly tooltip: string = '';
 	public readonly class: string = 'separator';
 	public readonly enabled: boolean = false;
 	public readonly checked: undefined = undefined;
+
 	public async run() { /* interface stub: separators perform no work */ }
 }
 
@@ -266,8 +264,8 @@ export class SubmenuAction implements IAction {
 	public readonly tooltip: string = '';
 	public readonly enabled: boolean = true;
 	public readonly checked: undefined = undefined;
-
 	private readonly _actions: readonly IAction[];
+
 	public get actions(): readonly IAction[] {
 		return this._actions;
 	}

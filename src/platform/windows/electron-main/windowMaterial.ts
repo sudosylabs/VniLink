@@ -20,6 +20,7 @@ export class WindowMaterial extends Disposable {
 			this.changed.fire();
 		}));
 	}
+
 	private update(): void {
 		if (this.window.isDestroyed()) {
 			return;
@@ -40,6 +41,7 @@ export class WindowMaterial extends Disposable {
 			this.window.setBackgroundColor(fallback);
 		}
 	}
+
 	public setEnabled(enabled: boolean): void {
 		if (this.enabled === enabled || this._store.isDisposed) {
 			return;

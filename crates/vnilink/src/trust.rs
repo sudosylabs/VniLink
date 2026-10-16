@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
 use crate::error::Error;
-use crate::session::{Grant, Grants};
+use crate::session::Grant;
 
 pub(crate) const MAX_DEVICES: usize = 128;
 
@@ -12,17 +12,12 @@ pub(crate) struct Device {
     pub display_id: String,
     pub relays: Vec<String>,
     pub direct: Vec<SocketAddr>,
-    pub grants: Grants,
-    pub terminal: bool,
-    pub camera: bool,
-    pub system_audio: bool,
-    pub microphone: bool,
-    pub recording: bool,
-    pub system_actions: bool,
 }
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Trust {
+    pub(crate) sharing: crate::SharingPolicy,
+    operating_systems: BTreeMap<[u8; 32], crate::OperatingSystem>,
     devices: BTreeMap<[u8; 32], Device>,
     /// Display names peers reported, by endpoint id. Display-only metadata
     /// beside the security-critical record: renaming never affects grants,
@@ -42,60 +37,25 @@ impl Trust {
         Ok(())
     }
 
-    pub(crate) fn authorize(
-        &mut self,
-        endpoint_id: &[u8; 32],
-        grants: Grants,
-    ) -> Result<(), Error> {
-        let device = self.devices.get_mut(endpoint_id).ok_or(Error::NotPaired)?;
-        device.grants = grants;
-        Ok(())
-    }
-
     pub(crate) fn service_permissions(
         &self,
         endpoint_id: &[u8; 32],
     ) -> Result<crate::ServicePermissions, Error> {
-        let device = self.get(endpoint_id).ok_or(Error::NotPaired)?;
-        Ok(crate::ServicePermissions {
-            desktop: device.grants.view,
-            files: device.grants.transfer,
-            terminal: device.terminal,
-            camera: device.camera,
-            system_audio: device.system_audio,
-            microphone: device.microphone,
-            recording: device.recording,
-            system_actions: device.system_actions,
-        })
+        self.get(endpoint_id).ok_or(Error::NotPaired)?;
+        Ok(self.sharing.permissions())
     }
 
-    pub(crate) fn authorize_recording(
-        &mut self,
-        endpoint_id: &[u8; 32],
-        allowed: bool,
-    ) -> Result<(), Error> {
-        self.devices
-            .get_mut(endpoint_id)
-            .ok_or(Error::NotPaired)?
-            .recording = allowed;
-        Ok(())
+    pub(crate) fn os_of(&self, endpoint: &[u8; 32]) -> Option<crate::OperatingSystem> {
+        self.operating_systems.get(endpoint).copied()
     }
-    pub(crate) fn authorize_service(
+
+    pub(crate) fn set_os(
         &mut self,
-        endpoint_id: &[u8; 32],
-        kind: crate::ServiceKind,
-        allowed: bool,
+        endpoint: &[u8; 32],
+        os: crate::OperatingSystem,
     ) -> Result<(), Error> {
-        let device = self.devices.get_mut(endpoint_id).ok_or(Error::NotPaired)?;
-        match kind {
-            crate::ServiceKind::Desktop => device.grants.view = allowed,
-            crate::ServiceKind::Files => device.grants.transfer = allowed,
-            crate::ServiceKind::Terminal => device.terminal = allowed,
-            crate::ServiceKind::Camera => device.camera = allowed,
-            crate::ServiceKind::SystemAudio => device.system_audio = allowed,
-            crate::ServiceKind::Microphone => device.microphone = allowed,
-            crate::ServiceKind::System => device.system_actions = allowed,
-        }
+        self.get(endpoint).ok_or(Error::NotPaired)?;
+        self.operating_systems.insert(*endpoint, os);
         Ok(())
     }
 
@@ -115,6 +75,7 @@ impl Trust {
     }
 
     pub(crate) fn remove(&mut self, endpoint_id: &[u8; 32]) -> Option<Device> {
+        self.operating_systems.remove(endpoint_id);
         self.hostnames.remove(endpoint_id);
         self.pet_names.remove(endpoint_id);
         self.devices.remove(endpoint_id)
@@ -177,14 +138,15 @@ impl Trust {
     }
 
     pub(crate) fn granted(&self, endpoint_id: &[u8; 32], grant: Grant) -> bool {
-        let Some(device) = self.devices.get(endpoint_id) else {
+        let Some(_device) = self.devices.get(endpoint_id) else {
             return false;
         };
+        let grants = self.sharing.grants();
         match grant {
-            Grant::View => device.grants.view,
-            Grant::Control => device.grants.control,
-            Grant::Clipboard => device.grants.clipboard,
-            Grant::Transfer => device.grants.transfer,
+            Grant::View => grants.view,
+            Grant::Control => grants.control,
+            Grant::Clipboard => grants.clipboard,
+            Grant::Transfer => grants.transfer,
         }
     }
 

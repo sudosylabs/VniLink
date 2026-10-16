@@ -114,7 +114,8 @@
     "./workbench/services/host/browser/host.ts",
     "./workbench/services/host/electron-browser/nativeHostService.ts",
     "./assets.d.ts",
-    "./base/browser/window.ts"
+    "./base/browser/window.ts",
+    "./typings/editContext.d.ts"
   ],
   "include": [],
   "exclude": []

@@ -5,7 +5,9 @@ import { validateRelays } from '../common/relayValidation.js';
 export class ConnectionService implements IConnectionService {
 	declare public readonly _serviceBrand: undefined;
 	private pending: Promise<unknown> = Promise.resolve();
+
 	constructor(private readonly api: Pick<DesktopApi, 'engineCommand'>, public readonly available: boolean) { }
+
 	public async load(): Promise<ConnectionSettings> {
 		if (!this.available) {
 			throw new Error('Connection service unavailable');
@@ -24,6 +26,7 @@ export class ConnectionService implements IConnectionService {
 			active: Object.freeze({ publicRelay: active.snapshot.public_relay, urls: Object.freeze([...active.snapshot.relay_urls]) }),
 		};
 	}
+
 	public save(update: ConnectionUpdate): Promise<ConnectionSettings> {
 		// Capture drafts so queued saves cannot change underneath the writer.
 		const draft: ConnectionUpdate = update.mode === 'public' ? { mode: 'public' } : { mode: 'custom', relays: update.relays.map(relay => ({ ...relay })) };

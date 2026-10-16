@@ -195,15 +195,12 @@ mod review_v11 {
                 .unwrap();
             host.accept_invitation(&viewer.create_invitation(Duration::from_secs(60)).unwrap())
                 .unwrap();
-            host.authorize(
-                &viewer.endpoint_id(),
-                crate::Grants {
-                    view: true,
-                    control: true,
-                    clipboard: false,
-                    transfer: false,
-                },
-            )
+            host.set_desktop_sharing(crate::Grants {
+                view: true,
+                control: true,
+                clipboard: false,
+                transfer: false,
+            })
             .unwrap();
             viewer.connect(&host.endpoint_id()).unwrap();
         }
