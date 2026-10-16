@@ -296,7 +296,7 @@ fn file_identity(file: &File) -> io::Result<(u64, u64)> {
 }
 
 #[cfg(unix)]
-fn rename(
+pub(crate) fn rename(
     old_dir: std::os::fd::RawFd,
     old: &std::ffi::CStr,
     new_dir: std::os::fd::RawFd,
