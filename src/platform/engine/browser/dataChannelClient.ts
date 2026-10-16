@@ -1,5 +1,5 @@
-import { isDataPacket, isChannelRequest } from '../common/dataChannel.js';
-import type { DataChannelRequest, DataPacket, FileOperation, DataChannelMetrics } from '../common/dataChannel.js';
+import { isDesktopAudioOperation, isDesktopAudioStatus, isDataPacket, isChannelRequest } from '../common/dataChannel.js';
+import type { DataChannelRequest, DataPacket, FileOperation, DataChannelMetrics, DesktopAudioOperation, DesktopAudioStatus } from '../common/dataChannel.js';
 import type { DesktopApi } from '../../ipc/common/desktopApi.js';
 import { record } from '../common/engine.js';
 import type { EngineCommand } from '../common/engine.js';
@@ -16,6 +16,7 @@ export class DataChannelClient {
 	public metrics: DataChannelMetrics = { sent: 0, acknowledged: 0, pending: 0, lastAckMs: 0 };
 	private readonly pendingWrites = new Map<number, { resolve(): void; reject(error: Error): void }>();
 	private nextWrite = 0;
+	private audioPending: { id: number; resolve(value: DesktopAudioStatus): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> } | undefined;
 	private readonly filePending = new Map<number, { cancel: boolean; resolve(value: string): void; reject(error: Error): void }>();
 
 	constructor(
@@ -121,6 +122,19 @@ export class DataChannelClient {
 				};
 				return;
 			}
+			if (record(message) && message.type === 'desktopAudio') {
+				if (!Number.isSafeInteger(message.id) || typeof message.id !== 'number' || message.id <= 0 || !isDesktopAudioStatus(message.status)) {
+					throw new Error('Invalid desktop audio status');
+				}
+				const pending = this.audioPending;
+				if (pending?.id !== message.id) {
+					return; // A timed-out request must not close a healthy desktop.
+				}
+				this.audioPending = undefined;
+				clearTimeout(pending.timer);
+				pending.resolve(message.status);
+				return;
+			}
 			if (record(message) && message.type === 'closed') {
 				this.close();
 				return;
@@ -224,6 +238,29 @@ export class DataChannelClient {
 		});
 	}
 
+	public async desktopAudio(operation: DesktopAudioOperation): Promise<DesktopAudioStatus> {
+		if (this.closed || this.audioPending || !isDesktopAudioOperation(operation) || this.nextWrite >= Number.MAX_SAFE_INTEGER) {
+			throw new Error('Desktop audio operation unavailable');
+		}
+		return await new Promise<DesktopAudioStatus>((resolve, reject) => {
+			const id = ++this.nextWrite;
+			const timer = setTimeout(() => {
+				if (this.audioPending?.id === id) {
+					this.audioPending = undefined;
+					reject(new Error('Desktop audio operation timed out'));
+				}
+			}, 5000);
+			this.audioPending = { id, resolve, reject, timer };
+			try {
+				this.port.postMessage({ type: 'desktopAudio', id, operation });
+			} catch (error) {
+				clearTimeout(timer);
+				this.audioPending = undefined;
+				reject(error instanceof Error ? error : new Error('Desktop audio message failed'));
+			}
+		});
+	}
+
 	public resize(rows: number, columns: number): void {
 		if (!this.closed) {
 			this.port.postMessage({ type: 'resize', rows, columns });
@@ -244,6 +281,11 @@ export class DataChannelClient {
 		}
 		this.closed = true;
 		clearInterval(this.heartbeat);
+		if (this.audioPending) {
+			clearTimeout(this.audioPending.timer);
+			this.audioPending.reject(new Error('Data channel closed'));
+			this.audioPending = undefined;
+		}
 		if (this.pointerTimer) {
 			clearTimeout(this.pointerTimer);
 		}

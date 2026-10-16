@@ -189,6 +189,7 @@ impl NativeInput {
         config: &AudioConfig,
         startup: &vnilink::BackendStartup,
     ) -> Result<Self, vnilink::Error> {
+        startup.check()?;
         #[cfg(target_os = "macos")]
         if config.kind == AudioKind::System {
             return vnilink_macos::MacSystemAudio::open(
@@ -277,7 +278,12 @@ impl HostAudioFactory for NativeFactory {
                     worker_startup.check()?;
                     let mut capture = NativeInput::open(&requested, &worker_startup)?;
                     worker_startup.check()?;
-                    let mut admitted = false;
+                    let mut admitted = config.kind == AudioKind::System;
+                    if admitted {
+                        // Loopback APIs may deliver nothing while the system is quiet.
+                        // Successful native start is readiness; never fabricate captured PCM.
+                        let _ = ready.send(Ok(()));
+                    }
                     let mut last = Instant::now();
                     while !producer.is_cancelled() {
                         if !admitted {
@@ -293,7 +299,9 @@ impl HostAudioFactory for NativeFactory {
                                 }
                             }
                             None => {
-                                if last.elapsed() > Duration::from_secs(3) {
+                                if config.kind != AudioKind::System
+                                    && last.elapsed() > Duration::from_secs(3)
+                                {
                                     return Err(vnilink::Error::Timeout);
                                 }
                                 std::thread::sleep(Duration::from_millis(2));
@@ -339,11 +347,15 @@ impl HostAudioFactory for NativeFactory {
 }
 
 pub struct NativeAudioPlayback {
+    error: Arc<Mutex<Option<FfiError>>>,
     stop: Arc<AtomicBool>,
     service: Arc<AudioService>,
 }
 
 impl NativeAudioPlayback {
+    pub fn error(&self) -> Option<FfiError> {
+        self.error.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
     pub fn close(&self) {
         self.stop.store(true, Ordering::Release);
         self.service.close();
@@ -447,6 +459,13 @@ impl VnilinkCore {
             })
             .collect())
     }
+    /// Resolve and follow the receiving computer's default output, on every platform.
+    pub fn start_default_native_audio_playback(
+        &self,
+        service: Arc<AudioService>,
+    ) -> Result<Arc<NativeAudioPlayback>, FfiError> {
+        self.start_native_audio_playback(service, crate::audio_output::DEFAULT_OUTPUT.into())
+    }
     pub fn start_native_audio_playback(
         &self,
         service: Arc<AudioService>,
@@ -467,6 +486,8 @@ impl VnilinkCore {
         if player.playback_claimed.swap(true, Ordering::AcqRel) {
             return Err(map_error(vnilink::Error::Busy));
         }
+        let error = Arc::new(Mutex::new(None));
+        let worker_error = error.clone();
         let (ready, result) = std::sync::mpsc::sync_channel(1);
         let spawned = std::thread::Builder::new()
             .name("vnilink-audio-playback".into())
@@ -477,15 +498,15 @@ impl VnilinkCore {
                         return Err(vnilink::Error::NoSession);
                     }
                     let format = player.config().channels;
-                    let mut output = vnilink_audio::NativeOutput::open(
+                    let mut output = crate::audio_output::PlaybackOutput::open(
+                        crate::audio_output::NativeOutputBackend,
                         &output_id,
                         if format == 1 {
                             vnilink_audio::Format::Mono
                         } else {
                             vnilink_audio::Format::Stereo
                         },
-                    )
-                    .map_err(|_| vnilink::Error::Unsupported("native audio playback"))?;
+                    )?;
                     if player.is_cancelled() || worker_stop.load(Ordering::Acquire) {
                         return Err(vnilink::Error::NoSession);
                     }
@@ -495,8 +516,8 @@ impl VnilinkCore {
                             .poll_internal()
                             .map_err(|_| vnilink::Error::Unsupported("audio playback ended"))?
                         {
-                            output.push(&block.samples).map_err(|_| {
-                                vnilink::Error::Unsupported("native audio output ended")
+                            output.push(&block.samples, || {
+                                worker_stop.load(Ordering::Acquire) || player.is_cancelled()
                             })?;
                         } else {
                             std::thread::sleep(Duration::from_millis(2));
@@ -505,6 +526,8 @@ impl VnilinkCore {
                     Ok(())
                 };
                 if let Err(error) = run() {
+                    let error = map_error(error);
+                    *worker_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(error.clone());
                     let _ = ready.send(Err(error));
                 }
                 worker_stop.store(true, Ordering::Release);
@@ -516,14 +539,18 @@ impl VnilinkCore {
             return Err(map_error(vnilink::Error::Unsupported("audio worker")));
         }
         match result.recv_timeout(Duration::from_secs(6)) {
-            Ok(Ok(())) => Ok(Arc::new(NativeAudioPlayback { stop, service })),
+            Ok(Ok(())) => Ok(Arc::new(NativeAudioPlayback {
+                error,
+                stop,
+                service,
+            })),
             outcome => {
                 stop.store(true, Ordering::Release);
                 service.close();
-                Err(map_error(match outcome {
+                Err(match outcome {
                     Ok(Err(error)) => error,
-                    _ => vnilink::Error::Timeout,
-                }))
+                    _ => map_error(vnilink::Error::Timeout),
+                })
             }
         }
     }

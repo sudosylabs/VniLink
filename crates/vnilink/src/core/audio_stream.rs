@@ -153,6 +153,7 @@ impl Core {
                 }
                 Ok((mut send, mut recv, actual)) => {
                     let format = actual.format().unwrap();
+                    let kind = actual.kind;
                     let _ = ready.send(Ok(actual));
                     let run = async {
                         loop {
@@ -164,6 +165,9 @@ impl Core {
                             .map_err(|_| Error::Timeout)??;
                             if bytes == [0] {
                                 break;
+                            }
+                            if bytes == [3] && kind == AudioKind::System {
+                                continue; // Source is silent; this is liveness, not an Opus frame.
                             }
                             if bytes == [2] {
                                 return Err(Error::Unsupported("remote audio capture ended"));
@@ -370,6 +374,7 @@ pub(super) async fn serve(
         let sending = async {
             let mut tick = tokio::time::interval(Duration::from_millis(10));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut last_write = std::time::Instant::now();
             loop {
                 if backend.source.is_cancelled() {
                     write(
@@ -390,7 +395,16 @@ pub(super) async fn serve(
                     )
                     .await
                     .map_err(|_| Error::Timeout)??;
+                    last_write = std::time::Instant::now();
                 } else {
+                    if kind == AudioKind::System
+                        && last_write.elapsed() >= Duration::from_millis(500)
+                    {
+                        tokio::time::timeout(Duration::from_millis(500), write(&mut send, vec![3]))
+                            .await
+                            .map_err(|_| Error::Timeout)??;
+                        last_write = std::time::Instant::now();
+                    }
                     tokio::select! {_=backend.source.notified()=>{},_=tick.tick()=>{}}
                 }
             }

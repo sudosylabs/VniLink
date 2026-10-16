@@ -336,3 +336,64 @@ fn explicit_native_device_loopback_transports_and_decodes_tone() {
     );
     output_worker.join().unwrap();
 }
+
+#[test]
+fn bursty_system_audio_and_silent_pause_resume_keep_one_capture_clock() {
+    let now = Instant::now();
+    let frames = packets(10, Format::Stereo);
+    let mut player = AudioPlayback::new(Format::Stereo).unwrap();
+    player.allow_silent_gaps();
+    // A native 50 ms callback completes two 20 ms packets and retains 10 ms.
+    // The following callback completes three; no frame is invented in between.
+    let mut received = 0;
+    let mut decoded = 0;
+    for ms in (0..=200).step_by(10) {
+        let count = match ms {
+            0 => 2,
+            50 => 3,
+            100 => 2,
+            150 => 3,
+            _ => 0,
+        };
+        for _ in 0..count {
+            player
+                .push(frames[received].clone(), now + Duration::from_millis(ms))
+                .unwrap();
+            received += 1;
+        }
+        if let Some(block) = player.poll(now + Duration::from_millis(ms)).unwrap() {
+            if !block.concealed {
+                decoded += 1;
+            }
+        }
+    }
+    for ms in (220..=500).step_by(20) {
+        if let Some(block) = player.poll(now + Duration::from_millis(ms)).unwrap() {
+            if !block.concealed {
+                decoded += 1;
+            }
+        }
+    }
+    assert_eq!(decoded, 10, "200 ms of captured PCM must remain 200 ms");
+    assert_eq!(player.stats().received, 10);
+    assert_eq!(player.stats().late, 0);
+    assert!(player.poll(now + Duration::from_secs(5)).unwrap().is_none());
+    let mut resumed_encoder = AudioEncoder::new(Format::Stereo, false).unwrap();
+    let resumed = (0..=10)
+        .map(|_| resumed_encoder.encode(&tone(0, 2)).unwrap())
+        .last()
+        .unwrap();
+    let resumed_at = now + Duration::from_secs(5);
+    player.set_muted(true);
+    player.push(resumed, resumed_at).unwrap();
+    let block = player
+        .poll(resumed_at + Duration::from_millis(60))
+        .unwrap()
+        .unwrap();
+    assert!(
+        !block.concealed,
+        "resumed packets must not be classified as stale"
+    );
+    assert!(block.samples.iter().all(|sample| *sample == 0.0));
+    assert_eq!(player.stats().late, 0);
+}

@@ -1,9 +1,10 @@
 import { Buffer } from 'node:buffer';
-import { dimension, isInputCommand } from '../common/dataChannel.js';
+import { dimension, isInputCommand, isDesktopAudioOperation, isDesktopAudioStatus } from '../common/dataChannel.js';
 import type { DataChannelRequest } from '../common/dataChannel.js';
 import { record } from '../common/engine.js';
 
 export interface NativeDataChannel {
+	desktopAudio(operation: string): string;
 	read(): { kind: string; data?: Uint8Array | null; metadata: string } | null;
 	write(data: Uint8Array): void;
 	resize(rows: number, columns: number): void;
@@ -82,6 +83,14 @@ export class DataChannelHost {
 				} else {
 					this.pump();
 				}
+				return;
+			}
+			if (message.type === 'desktopAudio' && (this.request.kind === 'video' || this.request.kind === 'input') && Number.isSafeInteger(message.id) && Number(message.id) > 0 && isDesktopAudioOperation(message.operation)) {
+				const status: unknown = JSON.parse(this.native.desktopAudio(JSON.stringify(message.operation)));
+				if (!isDesktopAudioStatus(status)) {
+					throw new Error('Invalid desktop audio status');
+				}
+				this.port.postMessage({ type: 'desktopAudio', id: message.id, status });
 				return;
 			}
 			if (message.type === 'metrics') {

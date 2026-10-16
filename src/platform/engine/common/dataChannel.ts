@@ -104,3 +104,25 @@ export function isMediaChannelConfig(value: unknown): value is MediaChannelConfi
 	}
 	return value.type === 'audio' && (value.sourceKind === 'Microphone' || value.sourceKind === 'System') && (value.channels === 1 || value.channels === 2) && typeof value.voice === 'boolean';
 }
+
+export type DesktopAudioOperation = { type: 'status' } | { type: 'enabled'; enabled: boolean } | { type: 'muted'; muted: boolean };
+
+export interface DesktopAudioStatus {
+	phase: 'starting' | 'playing' | 'muted' | 'unavailable' | 'stopped';
+	enabled: boolean;
+	muted: boolean;
+	error: { code: string; message: string } | null;
+}
+
+export function isDesktopAudioOperation(value: unknown): value is DesktopAudioOperation {
+	return record(value) && ((value.type === 'status' && Object.keys(value).length === 1)
+		|| (value.type === 'enabled' && typeof value.enabled === 'boolean' && Object.keys(value).length === 2)
+		|| (value.type === 'muted' && typeof value.muted === 'boolean' && Object.keys(value).length === 2));
+}
+
+export function isDesktopAudioStatus(value: unknown): value is DesktopAudioStatus {
+	return record(value) && Object.keys(value).length === 4 && typeof value.phase === 'string'
+		&& ['starting', 'playing', 'muted', 'unavailable', 'stopped'].includes(value.phase)
+		&& typeof value.enabled === 'boolean' && typeof value.muted === 'boolean'
+		&& (value.error === null || (record(value.error) && Object.keys(value.error).length === 2 && typeof value.error.code === 'string' && value.error.code.length > 0 && value.error.code.length <= 64 && typeof value.error.message === 'string' && value.error.message.length <= 2048));
+}

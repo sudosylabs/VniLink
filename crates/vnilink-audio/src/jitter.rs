@@ -34,6 +34,7 @@ pub struct AudioPlayback {
     missing: u8,
     muted: bool,
     started: bool,
+    silent_gaps: bool,
     stats: PlaybackStats,
 }
 impl AudioPlayback {
@@ -47,8 +48,15 @@ impl AudioPlayback {
             missing: 0,
             muted: false,
             started: false,
+            silent_gaps: false,
             stats: PlaybackStats::default(),
         })
+    }
+    /// System loopback can pause its source clock during silence. Once its queue
+    /// drains and concealment ends, anchor resumed packets to a fresh local deadline.
+    /// Microphone streams retain their continuously advancing packet clock.
+    pub fn allow_silent_gaps(&mut self) {
+        self.silent_gaps = true;
     }
     /// Mute consumes packets and advances decoder state; it does not stop capture.
     pub fn set_muted(&mut self, muted: bool) {
@@ -148,6 +156,13 @@ impl AudioPlayback {
                 self.decoder.decode_float(&[], &mut samples, false)?;
             } else if self.missing == 4 {
                 self.decoder.reset_state()?;
+                if self.silent_gaps && self.packets.is_empty() {
+                    self.expected = None;
+                    self.deadline = None;
+                    self.started = false;
+                    self.missing = 0;
+                    self.stats.discontinuities += 1;
+                }
             }
         }
         if self.muted {

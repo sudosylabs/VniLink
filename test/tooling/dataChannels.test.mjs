@@ -223,3 +223,64 @@ test('video publication identifies its codec and refuses ambiguous packets', asy
 		assert(isEngineReply({ type: 'videoFrame', frame: { codec, keyframe: true, timestamp_us: '0', data: 'AQ==', display_id: '1', revision: '1' } }));
 	}
 });
+
+test('desktop audio controls validate exact shapes and never carry decoded audio', async () => {
+	const { isDesktopAudioOperation, isDesktopAudioStatus } = await load('../../src/platform/engine/common/dataChannel.ts');
+	const status = { phase: 'unavailable', enabled: true, muted: false, error: { code: 'Unsupported', message: 'No output' } };
+	assert(isDesktopAudioOperation({ type: 'status' }));
+	assert(isDesktopAudioOperation({ type: 'muted', muted: true }));
+	assert(isDesktopAudioOperation({ type: 'enabled', enabled: false }));
+	assert(!isDesktopAudioOperation({ type: 'status', sessionId: 'another' }));
+	assert(!isDesktopAudioOperation({ type: 'muted', muted: 1 }));
+	assert(!isDesktopAudioOperation({ type: 'enabled', enabled: true, muted: true }));
+	assert(isDesktopAudioStatus(status));
+	assert(!isDesktopAudioStatus({ ...status, phase: 'invented' }));
+	assert(!isDesktopAudioStatus({ ...status, data: new Uint8Array([1]) }));
+	assert(!isDesktopAudioStatus({ ...status, error: { ...status.error, code: 'x'.repeat(65) } }));
+	const f = fixture();
+	try {
+		f.native.desktopAudio = operation => {
+			assert.deepEqual(JSON.parse(operation), { type: 'status' });
+			return JSON.stringify(status);
+		};
+		f.host.start(f.native);
+		f.receive({ type: 'desktopAudio', id: 1, operation: { type: 'status' } });
+		assert.deepEqual(f.messages.at(-1), { type: 'desktopAudio', id: 1, status });
+		assert.equal(f.closed, 0, 'unavailable audio must leave video running');
+		f.packets.push({ kind: 'video', data: Buffer.from([7]), metadata: '{}' });
+		await until(() => f.messages.some(message => message.type === 'data'));
+		assert.equal(f.messages.find(message => message.type === 'data').kind, 'video');
+	} finally {
+		f.host.close();
+	}
+});
+
+test('renderer audio requests survive stale replies and close rejects a pending control', async () => {
+	const { port1, port2 } = new MessageChannel();
+	const errors = [];
+	const messages = [];
+	port2.on('message', message => messages.push(message));
+	const frames = [];
+	const client = new DataChannelClient(port1, packet => frames.push(packet), error => errors.push(error));
+	const status = { phase: 'muted', enabled: true, muted: true, error: null };
+	try {
+		const pending = client.desktopAudio({ type: 'muted', muted: true });
+		await until(() => messages.some(message => message.type === 'desktopAudio'));
+		const request = messages.find(message => message.type === 'desktopAudio');
+		port2.postMessage({ type: 'desktopAudio', id: request.id + 100, status });
+		port2.postMessage({ type: 'desktopAudio', id: request.id, status });
+		assert.deepEqual(await pending, status);
+		port2.postMessage({ type: 'desktopAudio', id: request.id, status });
+		port2.postMessage({ type: 'data', sequence: 1, kind: 'video', data: new Uint8Array([7]), metadata: '{}' });
+		await until(() => frames.length === 1);
+		assert.deepEqual(errors, []);
+		const closing = client.desktopAudio({ type: 'status' });
+		const rejected = assert.rejects(closing, /closed/);
+		client.close();
+		await rejected;
+		await assert.rejects(client.desktopAudio({ type: 'status' }), /unavailable/);
+	} finally {
+		client.close();
+		port2.close();
+	}
+});

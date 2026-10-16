@@ -16,6 +16,9 @@
 
 mod audio;
 mod audio_native;
+mod audio_output;
+mod desktop_audio;
+pub use desktop_audio::{DesktopAudio, DesktopAudioPhase, DesktopAudioStatus};
 #[cfg(test)]
 mod audio_tests;
 mod native;
