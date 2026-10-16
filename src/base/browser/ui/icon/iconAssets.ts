@@ -49,9 +49,18 @@ import remoteDesktopOutlined from '@phosphor-icons/core/assets/regular/computer-
 import remoteDesktopFilled from '@phosphor-icons/core/assets/fill/computer-tower-fill.svg';
 import appearanceOutlined from '@phosphor-icons/core/assets/regular/palette.svg';
 import appearanceFilled from '@phosphor-icons/core/assets/fill/palette-fill.svg';
+import appleOutlined from '@phosphor-icons/core/assets/regular/apple-logo.svg';
+import appleFilled from '@phosphor-icons/core/assets/fill/apple-logo-fill.svg';
+import windowsOutlined from '@phosphor-icons/core/assets/regular/windows-logo.svg';
+import windowsFilled from '@phosphor-icons/core/assets/fill/windows-logo-fill.svg';
+import linuxOutlined from '@phosphor-icons/core/assets/regular/linux-logo.svg';
+import linuxFilled from '@phosphor-icons/core/assets/fill/linux-logo-fill.svg';
 
 // The only place that knows the icon provider and its filenames.
 const assets: Record<IconId, Record<IconVariant, string>> = {
+	apple: { outlined: appleOutlined, filled: appleFilled },
+	windows: { outlined: windowsOutlined, filled: windowsFilled },
+	linux: { outlined: linuxOutlined, filled: linuxFilled },
 	appearance: { outlined: appearanceOutlined, filled: appearanceFilled },
 	connection: { outlined: connectionOutlined, filled: connectionFilled },
 	security: { outlined: securityOutlined, filled: securityFilled },

@@ -35,6 +35,7 @@ export async function verifyHomeLifecycle(): Promise<void> {
 		viewport.remove();
 	}
 	const changed = new Emitter<readonly DeviceSummary[]>();
+	const stateChanged = new Emitter<void>();
 	let devices: readonly DeviceSummary[] = [];
 	let requests = 0;
 	let restartRequired = false;
@@ -42,12 +43,17 @@ export async function verifyHomeLifecycle(): Promise<void> {
 	const restartChanged = new Emitter<void>();
 	const service: IDeviceService = {
 		_serviceBrand: undefined,
-		available: true,
+		available: true, state: 'ready', onDidChangeState: stateChanged.event,
 		get devices() {
 			return devices;
 		},
 		onDidChangeDevices: changed.event,
 		initialize: () => Promise.resolve(),
+		connect: () => Promise.resolve(), rename: () => Promise.resolve(), forget: () => Promise.resolve(),
+		exportPairingFile: () => Promise.reject(new Error('Not used')),
+		pair: () => Promise.reject(new Error('Not used')),
+		pairingCheck: () => Promise.resolve('123'), incomingPairing: () => Promise.resolve(null),
+		approvePairing: () => Promise.resolve(), rejectPairing: () => Promise.resolve(),
 		refresh() {
 			requests++;
 			devices = [{ id: 'peer', name: '<b>Remote computer</b>', os: 'linux', presence: 'connected' }];
@@ -95,13 +101,15 @@ export async function verifyHomeLifecycle(): Promise<void> {
 		assert(changed.hasListeners(), 'Devices page did not subscribe to state');
 		home.dispose();
 		assert(!changed.hasListeners(), 'Disposing Home left a device listener');
+		const disposedContent = devicesPage.textContent;
 		back.click();
 		changed.fire([]);
-		assert(devicesPage.textContent.includes('<b>Remote computer</b>'), 'Disposed page still renders changes');
+		assert(devicesPage.textContent === disposedContent, 'Disposed page still renders changes');
 	} finally {
 		home.dispose();
 		services.dispose();
 		changed.dispose();
+		stateChanged.dispose();
 		restartChanged.dispose();
 	}
 }

@@ -166,7 +166,7 @@ test('event-driven presence refresh is stable, recovers after failure and releas
 			if (command.type === 'subscribeEvents') {
 				return { type: 'eventSubscription', subscriptionId: String(++nextHandle) };
 			}
-			if (command.type === 'releaseEvents') {
+			if (command.type === 'releaseEvents' || command.type === 'startHosting') {
 				return { type: 'done' };
 			}
 			if (command.type === 'snapshot') {
@@ -237,4 +237,61 @@ test('subscription arriving after disposal is released without reading a snapsho
 	pending.resolve({ type: 'eventSubscription', subscriptionId: '12' });
 	await starting;
 	assert.deepEqual(calls, [{ type: 'subscribeEvents' }, { type: 'releaseEvents', subscriptionId: '12' }]);
+});
+
+test('device commands use neutral connections and consume a fresh pairing preview on every attempt', async () => {
+	const commands = [];
+	let attempt = 0;
+	const service = new DeviceService({
+		async engineCommand(command) {
+			commands.push(command);
+			switch (command.type) {
+				case 'openPairingFile': return { type: 'pairingPreview', preview: { id: String(++attempt), endpoint_id: 'peer', check: '042', expires_at_ms: '1000' } };
+				case 'confirmPairing':
+					if (command.digits !== '042') {
+						throw new Error('PairingCheckMismatch');
+					}
+					return { type: 'device', device: device('peer') };
+				case 'snapshot': return snapshot([device('peer')]);
+				case 'beginConnectServices': return { type: 'session', session: { id: '1' } };
+				default: return { type: 'done' };
+			}
+		}
+	}, true);
+	try {
+		await assert.rejects(service.pair(new Uint8Array([1, 2]), '123'), /PairingCheckMismatch/);
+		assert.equal(await service.pair(new Uint8Array([1, 2]), '042'), 'peer');
+		assert.deepEqual(commands.filter(command => command.type === 'confirmPairing'), [
+			{ type: 'confirmPairing', previewId: '1', digits: '123' },
+			{ type: 'confirmPairing', previewId: '2', digits: '042' },
+		]);
+		assert.equal(commands.some(command => command.type === 'setSharingPolicy'), false);
+		await service.connect('peer');
+		assert.deepEqual(commands.at(-2), { type: 'beginConnectServices', endpointId: 'peer' });
+	} finally {
+		service.dispose();
+	}
+});
+
+test('empty failed reads expose unavailable state and recover without invented devices', async () => {
+	let failed = true;
+	const service = new DeviceService({
+		async engineCommand() {
+			if (failed) {
+				throw new Error('Engine unavailable');
+			}
+			return snapshot([]);
+		}
+	}, true);
+	try {
+		assert.equal(service.state, 'loading');
+		await assert.rejects(service.refresh(new AbortController().signal));
+		assert.equal(service.state, 'unavailable');
+		assert.deepEqual(service.devices, []);
+		failed = false;
+		await service.refresh(new AbortController().signal);
+		assert.equal(service.state, 'ready');
+	} finally {
+		service.dispose();
+	}
 });

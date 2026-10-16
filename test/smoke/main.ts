@@ -24,6 +24,67 @@ class SmokeSuite {
 		return this.application.run((window, driver) => this.verify(window, driver));
 	}
 
+	private async verifyDeviceLayouts(window: BrowserWindow, driver: WindowDriver): Promise<void> {
+		const size = window.getSize();
+		const theme = nativeTheme.themeSource;
+		try {
+			for (const mode of ['light', 'dark'] as const) {
+				nativeTheme.themeSource = mode;
+				window.setSize(1400, 900);
+				await window.webContents.executeJavaScript(`browserTests.browserScenarios.showDeviceFixture('selected')`);
+				await window.webContents.executeJavaScript(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+				await driver.screenshot(`devices-selected-${mode}`);
+			}
+			window.setSize(800, 800);
+			await window.webContents.executeJavaScript(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+			const overflow: unknown = await window.webContents.executeJavaScript(`(() => {
+				const page = document.querySelector('.device-fixture main');
+				return page.scrollWidth > page.clientWidth;
+			})()`);
+			assert.equal(overflow, false, 'Device panel overflows a narrow window');
+			await driver.screenshot('devices-selected-narrow');
+			for (const state of ['empty', 'unavailable']) {
+				await window.webContents.executeJavaScript(`browserTests.browserScenarios.showDeviceFixture(${JSON.stringify(state)})`);
+				await window.webContents.executeJavaScript(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+				await driver.screenshot(`devices-${state}`);
+			}
+			// Verify Chromium's real file-download path, but cancel before writing.
+			const download = new Promise<string>((resolve, reject) => {
+				const timer = setTimeout(() => {
+					window.webContents.session.removeListener('will-download', listener);
+					reject(new Error('Invitation download did not start'));
+				}, 5000);
+				const listener = (_event: Electron.Event, item: Electron.DownloadItem): void => {
+					clearTimeout(timer);
+					item.cancel();
+					resolve(item.getFilename());
+				};
+				window.webContents.session.once('will-download', listener);
+			});
+			await window.webContents.executeJavaScript(`browserTests.browserScenarios.showDeviceFixture('empty'); browserTests.browserScenarios.shareFixtureInvitation()`);
+			assert.equal(await download, 'VniLink.vnl');
+			const code: unknown = await window.webContents.executeJavaScript(`document.querySelector('.device-fixture output').textContent`);
+			assert.equal(code, '042');
+			await window.webContents.executeJavaScript(`(async () => {
+				browserTests.browserScenarios.requestFixturePairing();
+				const page = document.querySelector('.device-fixture');
+				const deadline = Date.now() + 3000;
+				while (page.querySelector('.device-pairing form').hidden) {
+					if (Date.now() > deadline) { throw new Error('Incoming pairing form did not appear'); }
+					await new Promise(resolve => requestAnimationFrame(resolve));
+				}
+				if (page.querySelector('output').textContent) { throw new Error('Incoming confirmation disclosed the expected code'); }
+				const input = page.querySelector('.device-pairing input[type="text"]');
+				input.value = '731';
+				page.querySelector('.device-pairing form').dispatchEvent(new Event('submit', { cancelable: true }));
+			})()`);
+		} finally {
+			await window.webContents.executeJavaScript(`browserTests.browserScenarios.clearDeviceFixture()`);
+			nativeTheme.themeSource = theme;
+			window.setSize(size[0], size[1]);
+		}
+	}
+
 	private async verify(window: BrowserWindow, driver: WindowDriver): Promise<void> {
 		await driver.ready();
 		const result: unknown = await window.webContents.executeJavaScript(`(async () => {
@@ -56,6 +117,9 @@ class SmokeSuite {
 			if (this.selection.includes(name)) {
 				await driver.browserScenario(name);
 				await driver.screenshot(name);
+				if (name === 'devices') {
+					await this.verifyDeviceLayouts(window, driver);
+				}
 			}
 		}
 		if (!this.selection.names.some((name: string) => ['engine', 'navigation', 'window', 'appearance', 'settings-layout', 'reload'].includes(name))) {
@@ -77,7 +141,7 @@ class SmokeSuite {
 			!isEngineReply(engine.snapshot) ||
 			engine.snapshot.type !== 'snapshot' ||
 			engine.snapshot.snapshot.endpoint_id.length !== 64 ||
-			engine.snapshot.snapshot.hosting ||
+			!engine.snapshot.snapshot.hosting ||
 			!isEngineReply(engine.invitation) ||
 			engine.invitation.type !== 'invitation' ||
 			!engine.invitation.token ||
