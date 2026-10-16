@@ -15,6 +15,7 @@ export abstract class SettingsForm<T> extends Disposable implements WorkbenchPag
 	protected readonly status = document.createElement('p');
 	private readonly save = document.createElement('button');
 	private baseline: T | undefined;
+	private available = false;
 	private busy = false;
 	private reading = false;
 	private revision = 0;
@@ -106,7 +107,7 @@ export abstract class SettingsForm<T> extends Disposable implements WorkbenchPag
 	}
 
 	protected update(): void {
-		this.fields.disabled = this.busy || this.baseline === undefined;
+		this.fields.disabled = this.busy || !this.available;
 		const draft = this.draft();
 		this.save.disabled = this.fields.disabled || draft === undefined || JSON.stringify(draft) === JSON.stringify(this.baseline);
 	}
@@ -126,13 +127,14 @@ export abstract class SettingsForm<T> extends Disposable implements WorkbenchPag
 				return;
 			}
 			this.baseline = value;
+			this.available = true;
 			if (clean && (initial || JSON.stringify(value) !== draftBeforeRead) && JSON.stringify(this.draft()) === draftBeforeRead) {
 				this.render(value);
 			}
 			this.status.textContent = '';
 		} catch (error) {
 			if (!this.disposed() && revision === this.revision) {
-				this.baseline = undefined;
+				this.available = false;
 				this.status.textContent = error instanceof Error ? error.message : nls.localize('settings.unavailable', 'Settings could not be loaded.');
 			}
 		} finally {
@@ -157,6 +159,7 @@ export abstract class SettingsForm<T> extends Disposable implements WorkbenchPag
 			const saved = await this.write(value);
 			if (!this.disposed()) {
 				this.baseline = saved;
+				this.available = true;
 				this.render(saved);
 				this.status.textContent = '';
 			}

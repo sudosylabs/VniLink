@@ -92,6 +92,13 @@ export async function verifyMediaSettings(): Promise<void> {
 		await refresh;
 		pendingPowerRead = undefined;
 		assert(lock?.checked === true, 'Background refresh discarded an edit made while reading settings');
+		pendingPowerRead = Promise.reject(new Error('Temporary read failure'));
+		await power.refresh();
+		assert(power.element.querySelector<HTMLFieldSetElement>('fieldset')?.disabled === true, 'Failed read left uncertain settings writable');
+		pendingPowerRead = undefined;
+		await power.refresh();
+		assert(lock?.checked === true, 'Read recovery discarded an unsaved power draft');
+		assert(power.element.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled === false, 'Recovered dirty draft could not be saved');
 		submit(power.element);
 		await settle();
 		assert(powerWrites === 1 && policy.lock_after_control, 'Power default did not reach the runtime service');
