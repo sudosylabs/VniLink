@@ -19,7 +19,7 @@ class LinuxValidation {
 			await this.processes.run('docker', ['info', '--format', '{{.OSType}} {{.Architecture}}']);
 			await this.processes.run('docker', ['build', '-f', 'build/containers/Dockerfile.linux', '-t', 'vnilink-linux-validation:local', '.'], { cwd: this.root });
 			launched = true;
-			await this.processes.run('docker', ['run', '--name', container, '--init', '--mount', `type=bind,source=${this.root},target=/source,readonly`, '--mount', `type=bind,source=${output},target=/evidence`, '--mount', 'type=volume,source=vnilink-linux-cargo-registry,target=/usr/local/cargo/registry', '--mount', 'type=volume,source=vnilink-linux-trixie-rust191-target,target=/work/target', '--mount', 'type=volume,source=vnilink-linux-node-modules,target=/work/node_modules', 'vnilink-linux-validation:local']);
+			await this.processes.run('docker', ['run', '--name', container, '--shm-size=512m', '--init', '--mount', `type=bind,source=${this.root},target=/source,readonly`, '--mount', `type=bind,source=${output},target=/evidence`, '--mount', 'type=volume,source=vnilink-linux-cargo-registry,target=/usr/local/cargo/registry', '--mount', 'type=volume,source=vnilink-linux-trixie-rust191-target,target=/work/target', '--mount', 'type=volume,source=vnilink-linux-node-modules,target=/work/node_modules', 'vnilink-linux-validation:local']);
 		} finally {
 			await this.processes.stop();
 			if (launched) {
