@@ -1,100 +1,101 @@
 import * as nls from '../../../nls.js';
-import { Disposable } from '../../../base/common/lifecycle.js';
+import { addDisposableListener, EventType, h, triggerDownload, triggerUpload } from '../../../base/browser/dom.js';
+import { StandardKeyboardEvent } from '../../../base/browser/keyboardEvent.js';
+import { Button } from '../../../base/browser/ui/button/button.js';
+import { InputBox } from '../../../base/browser/ui/inputbox/inputBox.js';
 import { RunOnceScheduler } from '../../../base/common/async.js';
-import { addDisposableListener } from '../../../base/browser/domEvent.js';
-import type { IDeviceService } from '../../services/devices/deviceService.js';
+import { KeyCode } from '../../../base/common/keyCodes.js';
+import { Disposable } from '../../../base/common/lifecycle.js';
+import { defaultButtonStyles, defaultInputBoxStyles } from '../../../platform/theme/browser/defaultStyles.js';
+import { IDeviceService } from '../../services/devices/deviceService.js';
 
-/** Owns the file/confirmation presentation, not pairing or authorization policy. */
+/** Invitations larger than this are not VniLink invitations. */
+const maxInvitationSize = 65_536;
+
+/** How often an open invitation checks for an incoming pairing request. */
+const requestPollInterval = 500;
+
+/** Digits in a pairing confirmation code. */
+const codePattern = /^[0-9]{3}$/;
+
+/**
+ * Presents invitations and pairing confirmation. Pairing and authorization
+ * policy live in the engine; this view only carries files and digits.
+ */
 export class DevicePairing extends Disposable {
-	public readonly element = document.createElement('section');
-	public readonly importButton = document.createElement('button');
-	public readonly shareButton = document.createElement('button');
-	private readonly file = document.createElement('input');
-	private readonly heading = document.createElement('h2');
-	private readonly description = document.createElement('p');
-	private readonly code = document.createElement('output');
-	private readonly form = document.createElement('form');
-	private readonly digits = document.createElement('input');
-	private readonly submit = document.createElement('button');
-	private readonly reject = document.createElement('button');
-	private readonly message = document.createElement('p');
-	private readonly dismiss = document.createElement('button');
+	public readonly element: HTMLElement;
+	private readonly heading: HTMLElement;
+	private readonly description: HTMLElement;
+	private readonly code: HTMLElement;
+	private readonly form: HTMLElement;
+	private readonly message: HTMLElement;
+	private readonly digits: InputBox;
+	private readonly submit: Button;
+	private readonly reject: Button;
+	private readonly dismiss: Button;
 	private preview: Uint8Array | undefined;
 	private incomingId: string | undefined;
 	private expiresAt = 0;
 	private awaitingEndpoint: string | undefined;
 	private busy = false;
 	private revision = 0;
-	private readonly downloads = new Set<string>();
-	private readonly polling = this._register(new RunOnceScheduler(() => void this.poll(), 500));
+	// Incoming requests have no engine event, so an open invitation polls for them.
+	private readonly polling = this._register(new RunOnceScheduler(() => void this.poll(), requestPollInterval));
 
-	constructor(private readonly devices: IDeviceService) {
+	constructor(@IDeviceService private readonly devices: IDeviceService) {
 		super();
-		this.element.className = 'device-pairing';
+		const section = h('section.device-pairing', [
+			h('h2@heading'),
+			h('p.device-help@description'),
+			h('output.device-pairing-code@code', { 'aria-label': nls.localize('devices.code', 'Confirmation code') }),
+			h('div.device-pairing-form@form', [h('label@label')]),
+			h('p.device-feedback@message', { role: 'status' }),
+		]);
+		this.element = section.root;
 		this.element.hidden = true;
-		this.importButton.type = 'button';
-		this.importButton.className = 'device-button primary';
-		this.importButton.textContent = nls.localize('devices.import', 'Import invitation');
-		this.shareButton.type = 'button';
-		this.shareButton.className = 'device-button';
-		this.shareButton.textContent = nls.localize('devices.share', 'Share this computer');
-		this.file.type = 'file';
-		this.file.accept = '.vnl';
-		this.file.hidden = true;
-		this.description.className = 'device-help';
-		this.code.className = 'device-pairing-code';
-		this.code.setAttribute('aria-label', nls.localize('devices.code', 'Confirmation code'));
-		const label = document.createElement('label');
-		label.textContent = nls.localize('devices.enterCode', 'Code shown on the other computer');
-		this.digits.type = 'text';
-		this.digits.inputMode = 'numeric';
-		this.digits.autocomplete = 'off';
-		this.digits.pattern = '[0-9]{3}';
-		this.digits.maxLength = 3;
-		this.digits.required = true;
-		label.append(this.digits);
-		this.submit.type = 'submit';
-		this.submit.className = 'device-button primary';
-		this.submit.textContent = nls.localize('devices.confirm', 'Confirm');
-		this.reject.type = 'button';
-		this.reject.className = 'device-button';
-		this.reject.textContent = nls.localize('devices.reject', 'Reject');
-		this.form.append(label, this.submit, this.reject);
+		this.heading = section.heading;
+		this.description = section.description;
+		this.code = section.code;
+		this.form = section.form;
 		this.form.hidden = true;
-		this.dismiss.type = 'button';
-		this.dismiss.className = 'device-button';
-		this.dismiss.textContent = nls.localize('devices.dismiss', 'Close');
-		this.message.className = 'device-feedback';
-		this.message.setAttribute('role', 'status');
-		this.element.append(this.heading, this.description, this.code, this.form, this.message, this.dismiss, this.file);
-		this._register(devices.onDidChangeDevices(known => {
+		this.message = section.message;
+		section.label.append(nls.localize('devices.enterCode', 'Code shown on the other computer'));
+		this.digits = this._register(new InputBox(section.label, undefined, { inputBoxStyles: defaultInputBoxStyles }));
+		this.digits.inputElement.inputMode = 'numeric';
+		this.digits.inputElement.autocomplete = 'off';
+		this.digits.inputElement.maxLength = 3;
+		this.submit = this.createButton(this.form, nls.localize('devices.confirm', 'Confirm'), true);
+		this.reject = this.createButton(this.form, nls.localize('devices.reject', 'Reject'));
+		this.dismiss = this.createButton(this.element, nls.localize('devices.dismiss', 'Close'));
+		this.registerListeners();
+		this.setBusy(false);
+	}
+
+	private createButton(container: HTMLElement, label: string, primary = false): Button {
+		const button = this._register(new Button(container, { ...defaultButtonStyles, secondary: !primary, title: false }));
+		button.label = label;
+		button.element.classList.add('device-button', ...(primary ? ['primary'] : []));
+		return button;
+	}
+
+	private registerListeners(): void {
+		this._register(this.devices.onDidChangeDevices(known => {
 			if (this.awaitingEndpoint && known.some(device => device.id === this.awaitingEndpoint && device.presence === 'connected')) {
 				this.awaitingEndpoint = undefined;
 				this.code.textContent = '';
 				this.message.textContent = nls.localize('devices.paired', 'Computer paired. Your sharing settings still control what it can access.');
 			}
 		}));
-		this.setBusy(false);
-		this._register(addDisposableListener(this.importButton, 'click', () => {
-			this.file.click();
-		}));
-		this._register(addDisposableListener(this.shareButton, 'click', () => {
-			this.run(() => this.share());
-		}));
-		this._register(addDisposableListener(this.file, 'change', () => {
-			const file = this.file.files?.[0];
-			this.file.value = '';
-			if (file) {
-				this.run(() => this.open(file));
+		this._register(addDisposableListener(this.digits.inputElement, EventType.KEY_DOWN, event => {
+			if (new StandardKeyboardEvent(event).equals(KeyCode.Enter)) {
+				event.preventDefault();
+				this.confirmCode();
 			}
 		}));
-		this._register(addDisposableListener(this.form, 'submit', event => {
-			event.preventDefault();
-			if (this.form.reportValidity()) {
-				this.run(() => this.confirm());
-			}
+		this._register(this.submit.onDidClick(() => {
+			this.confirmCode();
 		}));
-		this._register(addDisposableListener(this.reject, 'click', () => {
+		this._register(this.reject.onDidClick(() => {
 			this.run(async () => {
 				await this.devices.rejectPairing();
 				this.incomingId = undefined;
@@ -102,12 +103,31 @@ export class DevicePairing extends Disposable {
 				this.message.textContent = nls.localize('devices.rejected', 'Pairing request rejected.');
 			});
 		}));
-		this._register(addDisposableListener(this.dismiss, 'click', () => {
+		this._register(this.dismiss.onDidClick(() => {
 			this.revision++;
 			this.preview = undefined;
 			this.element.hidden = true;
-			this.importButton.focus();
 		}));
+	}
+
+	/** Opens an invitation from another computer; without `file`, asks the user to choose one. */
+	public importInvitation(file?: File): void {
+		if (this.busy || this.incomingId) {
+			return;
+		}
+		this.run(async () => {
+			const chosen = file ?? (await triggerUpload())?.[0];
+			if (chosen) {
+				await this.open(chosen);
+			}
+		});
+	}
+
+	/** Creates an invitation for this computer and downloads it. */
+	public shareInvitation(): void {
+		if (!this.busy && !this.incomingId) {
+			this.run(() => this.share());
+		}
 	}
 
 	private begin(title: string, description: string): number {
@@ -125,7 +145,7 @@ export class DevicePairing extends Disposable {
 
 	private async open(file: File): Promise<void> {
 		const revision = this.begin(nls.localize('devices.importTitle', 'Pair another computer'), nls.localize('devices.importHelp', 'Ask the person who created this invitation for the three digits shown on their screen.'));
-		if (file.size > 65536 || !file.size) {
+		if (file.size > maxInvitationSize || !file.size) {
 			throw new Error(nls.localize('devices.fileSize', 'Choose a valid .vnl invitation smaller than 64 KB.'));
 		}
 		const bytes = new Uint8Array(await file.arrayBuffer());
@@ -135,7 +155,7 @@ export class DevicePairing extends Disposable {
 		this.preview = bytes;
 		this.incomingId = undefined;
 		this.form.hidden = false;
-		this.reject.hidden = true;
+		this.reject.element.hidden = true;
 		this.digits.focus();
 	}
 
@@ -145,21 +165,19 @@ export class DevicePairing extends Disposable {
 		if (!this.current(revision)) {
 			return;
 		}
-		for (const previous of this.downloads) {
-			URL.revokeObjectURL(previous);
-		}
-		this.downloads.clear();
-		const url = URL.createObjectURL(new Blob([new Uint8Array(file.bytes)], { type: 'application/octet-stream' }));
-		this.downloads.add(url);
-		const download = document.createElement('a');
-		download.href = url;
-		download.download = 'VniLink.vnl';
-		this.element.append(download);
-		download.click();
-		download.remove();
+		triggerDownload(new Uint8Array(file.bytes), 'VniLink.vnl');
 		this.code.textContent = file.check;
 		this.expiresAt = file.expiresAt;
 		this.polling.schedule();
+	}
+
+	private confirmCode(): void {
+		if (!codePattern.test(this.digits.value)) {
+			this.message.textContent = nls.localize('devices.codeFormat', 'Enter the three digits shown on the other computer.');
+			this.digits.focus();
+			return;
+		}
+		this.run(() => this.confirm());
 	}
 
 	private async confirm(): Promise<void> {
@@ -193,7 +211,7 @@ export class DevicePairing extends Disposable {
 	}
 
 	private async poll(): Promise<void> {
-		if (!this.expiresAt || this.disposed()) {
+		if (!this.expiresAt || this.isDisposed()) {
 			return;
 		}
 		if (Date.now() >= this.expiresAt) {
@@ -206,14 +224,14 @@ export class DevicePairing extends Disposable {
 		}
 		try {
 			const request = await this.devices.incomingPairing();
-			if (this.disposed() || this.busy || this.preview) {
+			if (this.isDisposed() || this.busy || this.preview) {
 				return;
 			}
 			if (request && request.endpoint_id !== this.incomingId) {
 				this.begin(nls.localize('devices.approveTitle', 'Approve this computer'), nls.localize('devices.approveHelp', 'Ask the other person for the three digits on their screen before pairing.'));
 				this.incomingId = request.endpoint_id;
 				this.form.hidden = false;
-				this.reject.hidden = false;
+				this.reject.element.hidden = false;
 				this.setBusy(false);
 			} else if (!request && this.incomingId) {
 				this.incomingId = undefined;
@@ -222,36 +240,37 @@ export class DevicePairing extends Disposable {
 				this.message.textContent = nls.localize('devices.requestExpired', 'The pairing request ended. The other computer can try again.');
 			}
 		} catch {
-			if (!this.disposed()) {
+			if (!this.isDisposed()) {
 				this.message.textContent = nls.localize('devices.approvalUnavailable', 'Unable to check incoming pairing requests. Retrying…');
 			}
 		} finally {
-			if (!this.disposed() && this.expiresAt) {
+			if (!this.isDisposed() && this.expiresAt) {
 				this.polling.schedule();
 			}
 		}
 	}
 
-	private disposed(): boolean {
+	/** Re-read after every await: the view can close while a request is in flight. */
+	private isDisposed(): boolean {
 		return this._store.isDisposed;
 	}
 
 	private current(revision: number): boolean {
-		return !this.disposed() && this.revision === revision;
+		return !this.isDisposed() && this.revision === revision;
 	}
 
 	private run(action: () => Promise<void>): void {
-		if (this.busy || this.disposed()) {
+		if (this.busy || this.isDisposed()) {
 			return;
 		}
 		this.setBusy(true);
-		void action().catch((error: unknown) => {
-			if (!this.disposed()) {
+		action().catch((error: unknown) => {
+			if (!this.isDisposed()) {
 				this.element.hidden = false;
 				this.message.textContent = error instanceof Error ? error.message : nls.localize('devices.pairingFailed', 'Pairing failed. Try again.');
 			}
 		}).finally(() => {
-			if (!this.disposed()) {
+			if (!this.isDisposed()) {
 				this.setBusy(false);
 			}
 		});
@@ -260,13 +279,15 @@ export class DevicePairing extends Disposable {
 	private setBusy(value: boolean): void {
 		this.busy = value;
 		this.element.setAttribute('aria-busy', String(value));
-		for (const button of [this.importButton, this.shareButton, this.submit, this.reject, this.dismiss]) {
-			button.disabled = value || !this.devices.available;
+		const enabled = !value && this.devices.available;
+		this.submit.enabled = enabled;
+		this.reject.enabled = enabled;
+		this.dismiss.enabled = enabled && !this.incomingId;
+		if (value) {
+			this.digits.disable();
+		} else {
+			this.digits.enable();
 		}
-		this.dismiss.disabled ||= !!this.incomingId;
-		this.importButton.disabled ||= !!this.incomingId;
-		this.shareButton.disabled ||= !!this.incomingId;
-		this.digits.disabled = value;
 		if (!value && !this.form.hidden && !this.element.hidden) {
 			this.digits.focus();
 		}
@@ -274,10 +295,6 @@ export class DevicePairing extends Disposable {
 
 	public override dispose(): void {
 		this.revision++;
-		for (const url of this.downloads) {
-			URL.revokeObjectURL(url);
-		}
-		this.downloads.clear();
 		super.dispose();
 	}
 }

@@ -69,14 +69,14 @@ class SmokeSuite {
 				browserTests.browserScenarios.requestFixturePairing();
 				const page = document.querySelector('.device-fixture');
 				const deadline = Date.now() + 3000;
-				while (page.querySelector('.device-pairing form').hidden) {
+				while (page.querySelector('.device-pairing-form').hidden) {
 					if (Date.now() > deadline) { throw new Error('Incoming pairing form did not appear'); }
 					await new Promise(resolve => requestAnimationFrame(resolve));
 				}
 				if (page.querySelector('output').textContent) { throw new Error('Incoming confirmation disclosed the expected code'); }
 				const input = page.querySelector('.device-pairing input[type="text"]');
 				input.value = '731';
-				page.querySelector('.device-pairing form').dispatchEvent(new Event('submit', { cancelable: true }));
+				input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
 			})()`);
 		} finally {
 			await window.webContents.executeJavaScript(`browserTests.browserScenarios.clearDeviceFixture()`);

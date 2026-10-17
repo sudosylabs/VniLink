@@ -18,6 +18,12 @@
       "changedImports": 0
     },
     {
+      "path": "src/base/browser/contextmenu.ts",
+      "upstreamPath": "src/vs/base/browser/contextmenu.ts",
+      "sha256": "a8727762bdf48e93b265185774b9c94878d9068030df5365acae389e4f58d064",
+      "changedImports": 0
+    },
+    {
       "path": "src/base/browser/cssValue.ts",
       "upstreamPath": "src/vs/base/browser/cssValue.ts",
       "sha256": "9658ca3ef7224212adf41906561e39d20c81e28357afe61fe6993048420be27a",
@@ -84,9 +90,21 @@
       "changedImports": 0
     },
     {
+      "path": "src/base/browser/formattedTextRenderer.ts",
+      "upstreamPath": "src/vs/base/browser/formattedTextRenderer.ts",
+      "sha256": "3919097c1bdf33846e71d178171c977e6bc6e4d57a57935fd95275304f7d6d4f",
+      "changedImports": 0
+    },
+    {
       "path": "src/base/browser/globalPointerMoveMonitor.ts",
       "upstreamPath": "src/vs/base/browser/globalPointerMoveMonitor.ts",
       "sha256": "ff70745de738cf368059f17609e40076d36299663fcbcbd3342e3ec235448320",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/history.ts",
+      "upstreamPath": "src/vs/base/browser/history.ts",
+      "sha256": "441f93668751b08a5df3ec70fd884ac509e7040e0e165d1de781db107467a263",
       "changedImports": 0
     },
     {
@@ -156,6 +174,18 @@
       "changedImports": 0
     },
     {
+      "path": "src/base/browser/ui/button/button.css",
+      "upstreamPath": "src/vs/base/browser/ui/button/button.css",
+      "sha256": "dbba08ece8bb96593f71582e9949da9c31c079c26b4b8996fbc66d1b608a4e40",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/ui/button/button.ts",
+      "upstreamPath": "src/vs/base/browser/ui/button/button.ts",
+      "sha256": "c600ae93affa8451ebcf189a59c31288ac7dc99a6c6d61b7721f2a4f13a1f3f0",
+      "changedImports": 0
+    },
+    {
       "path": "src/base/browser/ui/contextview/contextview.css",
       "upstreamPath": "src/vs/base/browser/ui/contextview/contextview.css",
       "sha256": "4d9b79d2bc8c93757cecf239a56a3b28a79834c8375b02dd7722ab4fed50c57a",
@@ -177,6 +207,18 @@
       "path": "src/base/browser/ui/dnd/dnd.ts",
       "upstreamPath": "src/vs/base/browser/ui/dnd/dnd.ts",
       "sha256": "7f94b96885b2f82ca8193199a0c4a6db1740e02b9107b1bdf2ea6453b6da9b73",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/ui/dropdown/dropdown.css",
+      "upstreamPath": "src/vs/base/browser/ui/dropdown/dropdown.css",
+      "sha256": "efcd6c2dc1760a99872dd3b8defaf48b6632e1322981ded14cc24b211147bdb5",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/ui/dropdown/dropdown.ts",
+      "upstreamPath": "src/vs/base/browser/ui/dropdown/dropdown.ts",
+      "sha256": "c69297c3ec8491ea81dc702ae852b1ea89da47379a312fb89fa1a83178bf77fa",
       "changedImports": 0
     },
     {
@@ -222,6 +264,18 @@
       "changedImports": 0
     },
     {
+      "path": "src/base/browser/ui/inputbox/inputBox.css",
+      "upstreamPath": "src/vs/base/browser/ui/inputbox/inputBox.css",
+      "sha256": "f8915354d2bb99998466d59d497378035ee36f83b9d78d3ed5973461c11fc990",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/ui/inputbox/inputBox.ts",
+      "upstreamPath": "src/vs/base/browser/ui/inputbox/inputBox.ts",
+      "sha256": "378bd5d808a74009907dd77ccb318a673de5802060cc4e946ab26df1ef9dd58d",
+      "changedImports": 0
+    },
+    {
       "path": "src/base/browser/ui/list/list.css",
       "upstreamPath": "src/vs/base/browser/ui/list/list.css",
       "sha256": "04a914629ae687da97e6d3f70b83da70bae2728992eaad197d18806b96cb1f03",
@@ -261,6 +315,12 @@
       "path": "src/base/browser/ui/list/splice.ts",
       "upstreamPath": "src/vs/base/browser/ui/list/splice.ts",
       "sha256": "c27b1eafa9f346aeab891c0ef3f81e790a367ca1ec3cef56abff5dae6805645f",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/ui/menu/menu.ts",
+      "upstreamPath": "src/vs/base/browser/ui/menu/menu.ts",
+      "sha256": "e2b9723e4c8b5d811b75467943b80de0b718128972bcb8ea24f8c73adde2ec8e",
       "changedImports": 0
     },
     {
@@ -517,6 +577,12 @@
       "changedImports": 0
     },
     {
+      "path": "src/base/common/history.ts",
+      "upstreamPath": "src/vs/base/common/history.ts",
+      "sha256": "734cfdf9cf48d036e9812b9f52267a573b41d8d93ef14588ec2e104e3c7a7d1d",
+      "changedImports": 0
+    },
+    {
       "path": "src/base/common/htmlContent.ts",
       "upstreamPath": "src/vs/base/common/htmlContent.ts",
       "sha256": "ec745b418aa22d6cbb67f61e84e3bb9ac9e098460292f4f9407d7ef6c78f74c4",
@@ -634,6 +700,12 @@
       "path": "src/base/common/naturalLanguage/korean.ts",
       "upstreamPath": "src/vs/base/common/naturalLanguage/korean.ts",
       "sha256": "d83d601048e15772da3d5140d82dff002b53755469b7def09cb6f247e179a44d",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/navigator.ts",
+      "upstreamPath": "src/vs/base/common/navigator.ts",
+      "sha256": "a651c06d33eca7b1d3f1723ec1de8745fd4e6bc0e337bbe346697ed8d4b90ba3",
       "changedImports": 0
     },
     {
@@ -1370,9 +1442,14 @@
   "scope": "Native window controls, titlebar presentation, DI registration and their recursive dependencies",
   "roots": [
     "src/base/browser/dom.ts",
+    "src/base/browser/keyboardEvent.ts",
     "src/base/browser/ui/actionbar/actionViewItems.ts",
     "src/base/browser/ui/actionbar/actionbar.ts",
     "src/base/browser/ui/aria/aria.ts",
+    "src/base/browser/ui/button/button.ts",
+    "src/base/browser/ui/inputbox/inputBox.ts",
+    "src/base/browser/ui/list/list.ts",
+    "src/base/browser/ui/list/listWidget.ts",
     "src/base/browser/window.ts",
     "src/base/common/actions.ts",
     "src/base/common/arrays.ts",
@@ -1381,6 +1458,7 @@
     "src/base/common/errors.ts",
     "src/base/common/event.ts",
     "src/base/common/hash.ts",
+    "src/base/common/keyCodes.ts",
     "src/base/common/lifecycle.ts",
     "src/base/common/map.ts",
     "src/base/common/objects.ts",
@@ -4397,6 +4475,281 @@
       "kind": "import"
     },
     {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/browser/dnd.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/browser/domStylesheets.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/browser/cssValue.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/browser/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/browser/keyboardEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/browser/touch.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/browser/ui/aria/aria.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/browser/ui/list/splice.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/browser/ui/scrollbar/scrollableElementOptions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/common/arrays.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/common/async.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/common/color.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/common/decorators.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/common/filters.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/common/keyCodes.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/common/numbers.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/common/scrollable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/common/sequence.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/browser/ui/list/list.css",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/browser/ui/list/list.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/browser/ui/list/listView.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/browser/mouseEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listWidget.ts",
+      "to": "src/base/common/observable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/browser/dnd.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/browser/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/browser/mouseEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/browser/touch.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/browser/ui/scrollbar/scrollableElement.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/common/arrays.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/common/async.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/common/decorators.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/common/range.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/common/scrollable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/common/sequence.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/browser/ui/list/list.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/browser/ui/list/rangeMap.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/browser/ui/list/rowCache.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/browser/ui/aria/aria.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/browser/ui/scrollbar/scrollableElementOptions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/common/numbers.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/listView.ts",
+      "to": "src/base/browser/ui/dnd/dnd.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/dnd/dnd.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/dnd/dnd.ts",
+      "to": "src/base/browser/ui/dnd/dnd.css",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/scrollbar/scrollableElementOptions.ts",
+      "to": "src/base/common/scrollable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/scrollable.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/scrollable.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
       "from": "src/base/browser/ui/aria/aria.ts",
       "to": "src/base/browser/dom.ts",
       "kind": "import"
@@ -4407,188 +4760,103 @@
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "from": "src/base/browser/ui/list/rowCache.ts",
       "to": "src/base/browser/dom.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "from": "src/base/browser/ui/list/rowCache.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/rowCache.ts",
+      "to": "src/base/browser/ui/list/list.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/list.ts",
+      "to": "src/base/browser/dnd.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/list.ts",
       "to": "src/base/browser/keyboardEvent.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
-      "to": "src/base/browser/ui/actionbar/actionViewItems.ts",
+      "from": "src/base/browser/ui/list/list.ts",
+      "to": "src/base/browser/mouseEvent.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
-      "to": "src/base/browser/ui/hover/hoverDelegateFactory.ts",
+      "from": "src/base/browser/ui/list/list.ts",
+      "to": "src/base/browser/touch.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
-      "to": "src/base/browser/ui/hover/hoverDelegate.ts",
+      "from": "src/base/browser/ui/list/list.ts",
+      "to": "src/base/browser/ui/list/listView.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
-      "to": "src/base/common/actions.ts",
+      "from": "src/base/browser/ui/list/list.ts",
+      "to": "src/base/common/lifecycle.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "from": "src/base/browser/touch.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/touch.ts",
+      "to": "src/base/browser/window.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/touch.ts",
+      "to": "src/base/common/decorators.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/touch.ts",
       "to": "src/base/common/event.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
-      "to": "src/base/common/keyCodes.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "from": "src/base/browser/touch.ts",
       "to": "src/base/common/lifecycle.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
-      "to": "src/base/common/types.ts",
+      "from": "src/base/browser/touch.ts",
+      "to": "src/base/common/linkedList.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
-      "to": "src/base/browser/ui/actionbar/actionbar.css",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hoverDelegate.ts",
-      "to": "src/base/browser/ui/hover/hover.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hoverDelegate.ts",
-      "to": "src/base/browser/ui/hover/hoverWidget.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hoverDelegate.ts",
-      "to": "src/base/common/htmlContent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hoverDelegate.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/htmlContent.ts",
-      "to": "src/base/common/errors.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/htmlContent.ts",
-      "to": "src/base/common/iconLabels.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/htmlContent.ts",
-      "to": "src/base/common/network.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/htmlContent.ts",
-      "to": "src/base/common/resources.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/htmlContent.ts",
-      "to": "src/base/common/strings.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/htmlContent.ts",
-      "to": "src/base/common/uri.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/iconLabels.ts",
-      "to": "src/base/common/filters.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/iconLabels.ts",
-      "to": "src/base/common/strings.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/iconLabels.ts",
-      "to": "src/base/common/themables.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/filters.ts",
-      "to": "src/base/common/charCode.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/filters.ts",
-      "to": "src/base/common/map.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/filters.ts",
-      "to": "src/base/common/naturalLanguage/korean.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/filters.ts",
-      "to": "src/base/common/normalization.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/filters.ts",
-      "to": "src/base/common/strings.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/normalization.ts",
-      "to": "src/base/common/map.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hoverWidget.ts",
+      "from": "src/base/browser/dnd.ts",
       "to": "src/base/browser/dom.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/hover/hoverWidget.ts",
-      "to": "src/base/browser/keyboardEvent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hoverWidget.ts",
-      "to": "src/base/browser/ui/scrollbar/scrollableElement.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hoverWidget.ts",
-      "to": "src/base/common/keyCodes.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hoverWidget.ts",
+      "from": "src/base/browser/dnd.ts",
       "to": "src/base/common/lifecycle.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/hover/hoverWidget.ts",
-      "to": "src/base/browser/ui/hover/hoverWidget.css",
+      "from": "src/base/browser/dnd.ts",
+      "to": "src/base/common/mime.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/hover/hoverWidget.ts",
-      "to": "src/nls.ts",
+      "from": "src/base/common/mime.ts",
+      "to": "src/base/common/path.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/rangeMap.ts",
+      "to": "src/base/common/range.ts",
       "kind": "import"
     },
     {
@@ -4667,16 +4935,6 @@
       "kind": "import"
     },
     {
-      "from": "src/base/common/scrollable.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/scrollable.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
       "from": "src/base/browser/ui/widget.ts",
       "to": "src/base/browser/dom.ts",
       "kind": "import"
@@ -4699,36 +4957,6 @@
     {
       "from": "src/base/browser/ui/widget.ts",
       "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/touch.ts",
-      "to": "src/base/browser/dom.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/touch.ts",
-      "to": "src/base/browser/window.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/touch.ts",
-      "to": "src/base/common/decorators.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/touch.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/touch.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/touch.ts",
-      "to": "src/base/common/linkedList.ts",
       "kind": "import"
     },
     {
@@ -4799,11 +5027,6 @@
     {
       "from": "src/base/browser/globalPointerMoveMonitor.ts",
       "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/scrollbar/scrollableElementOptions.ts",
-      "to": "src/base/common/scrollable.ts",
       "kind": "import"
     },
     {
@@ -4912,6 +5135,226 @@
       "kind": "import"
     },
     {
+      "from": "src/base/browser/event.ts",
+      "to": "src/base/browser/touch.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/event.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/event.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/filters.ts",
+      "to": "src/base/common/charCode.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/filters.ts",
+      "to": "src/base/common/map.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/filters.ts",
+      "to": "src/base/common/naturalLanguage/korean.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/filters.ts",
+      "to": "src/base/common/normalization.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/filters.ts",
+      "to": "src/base/common/strings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/normalization.ts",
+      "to": "src/base/common/map.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/color.ts",
+      "to": "src/base/common/charCode.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/list/splice.ts",
+      "to": "src/base/common/sequence.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/cssValue.ts",
+      "to": "src/base/common/color.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/cssValue.ts",
+      "to": "src/base/common/network.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/cssValue.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/domStylesheets.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/domStylesheets.ts",
+      "to": "src/base/common/observable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/domStylesheets.ts",
+      "to": "src/base/browser/browser.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/domStylesheets.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/domStylesheets.ts",
+      "to": "src/base/browser/window.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/browser/cssValue.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/browser/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/browser/formattedTextRenderer.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/browser/history.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/browser/ui/actionbar/actionbar.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/browser/ui/aria/aria.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/browser/ui/contextview/contextview.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/browser/ui/hover/hoverDelegate2.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/browser/ui/scrollbar/scrollableElement.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/browser/ui/widget.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/common/history.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/common/objects.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/common/scrollable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/browser/ui/inputbox/inputBox.css",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/nls.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/inputbox/inputBox.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/history.ts",
+      "to": "src/base/common/collections.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/history.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/history.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/history.ts",
+      "to": "src/base/common/navigator.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverDelegate2.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverDelegate2.ts",
+      "to": "src/base/browser/ui/hover/hover.ts",
+      "kind": "import"
+    },
+    {
       "from": "src/base/browser/ui/hover/hover.ts",
       "to": "src/base/browser/ui/hover/hoverDelegate.ts",
       "kind": "import"
@@ -4944,6 +5387,211 @@
     {
       "from": "src/base/common/layout.ts",
       "to": "src/base/common/range.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/htmlContent.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/htmlContent.ts",
+      "to": "src/base/common/iconLabels.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/htmlContent.ts",
+      "to": "src/base/common/network.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/htmlContent.ts",
+      "to": "src/base/common/resources.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/htmlContent.ts",
+      "to": "src/base/common/strings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/htmlContent.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/iconLabels.ts",
+      "to": "src/base/common/filters.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/iconLabels.ts",
+      "to": "src/base/common/strings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/iconLabels.ts",
+      "to": "src/base/common/themables.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverWidget.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverWidget.ts",
+      "to": "src/base/browser/keyboardEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverWidget.ts",
+      "to": "src/base/browser/ui/scrollbar/scrollableElement.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverWidget.ts",
+      "to": "src/base/common/keyCodes.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverWidget.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverWidget.ts",
+      "to": "src/base/browser/ui/hover/hoverWidget.css",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverWidget.ts",
+      "to": "src/nls.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverDelegate.ts",
+      "to": "src/base/browser/ui/hover/hover.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverDelegate.ts",
+      "to": "src/base/browser/ui/hover/hoverWidget.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverDelegate.ts",
+      "to": "src/base/common/htmlContent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverDelegate.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/contextview/contextview.ts",
+      "to": "src/base/browser/canIUse.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/contextview/contextview.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/contextview/contextview.ts",
+      "to": "src/base/browser/domStylesheets.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/contextview/contextview.ts",
+      "to": "src/base/browser/mouseEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/contextview/contextview.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/contextview/contextview.ts",
+      "to": "src/base/common/layout.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/contextview/contextview.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/contextview/contextview.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/contextview/contextview.ts",
+      "to": "src/base/browser/ui/contextview/contextview.css",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/contextview/contextview.ts",
+      "to": "src/base/common/layout.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/browser/keyboardEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/browser/ui/actionbar/actionViewItems.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/browser/ui/hover/hoverDelegateFactory.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/browser/ui/hover/hoverDelegate.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/common/keyCodes.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/browser/ui/actionbar/actionbar.css",
       "kind": "import"
     },
     {
@@ -5044,16 +5692,6 @@
     {
       "from": "src/base/browser/ui/actionbar/actionViewItems.ts",
       "to": "src/base/browser/ui/hover/hoverDelegate2.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hoverDelegate2.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hoverDelegate2.ts",
-      "to": "src/base/browser/ui/hover/hover.ts",
       "kind": "import"
     },
     {
@@ -5332,451 +5970,6 @@
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/browser/dnd.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/browser/dom.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/browser/domStylesheets.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/browser/cssValue.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/browser/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/browser/keyboardEvent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/browser/touch.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/browser/ui/aria/aria.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/browser/ui/list/splice.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/browser/ui/scrollbar/scrollableElementOptions.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/common/arrays.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/common/async.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/common/color.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/common/decorators.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/common/filters.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/common/keyCodes.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/common/numbers.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/common/platform.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/common/scrollable.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/common/sequence.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/common/types.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/browser/ui/list/list.css",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/browser/ui/list/list.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/browser/ui/list/listView.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/browser/mouseEvent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listWidget.ts",
-      "to": "src/base/common/observable.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/browser/dnd.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/browser/dom.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/browser/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/browser/mouseEvent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/browser/touch.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/browser/ui/scrollbar/scrollableElement.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/common/arrays.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/common/async.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/common/decorators.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/common/range.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/common/scrollable.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/common/sequence.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/browser/ui/list/list.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/browser/ui/list/rangeMap.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/browser/ui/list/rowCache.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/common/errors.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/browser/ui/aria/aria.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/browser/ui/scrollbar/scrollableElementOptions.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/common/numbers.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/listView.ts",
-      "to": "src/base/browser/ui/dnd/dnd.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/dnd/dnd.ts",
-      "to": "src/base/browser/dom.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/dnd/dnd.ts",
-      "to": "src/base/browser/ui/dnd/dnd.css",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/rowCache.ts",
-      "to": "src/base/browser/dom.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/rowCache.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/rowCache.ts",
-      "to": "src/base/browser/ui/list/list.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/list.ts",
-      "to": "src/base/browser/dnd.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/list.ts",
-      "to": "src/base/browser/keyboardEvent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/list.ts",
-      "to": "src/base/browser/mouseEvent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/list.ts",
-      "to": "src/base/browser/touch.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/list.ts",
-      "to": "src/base/browser/ui/list/listView.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/list.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/dnd.ts",
-      "to": "src/base/browser/dom.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/dnd.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/dnd.ts",
-      "to": "src/base/common/mime.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/mime.ts",
-      "to": "src/base/common/path.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/rangeMap.ts",
-      "to": "src/base/common/range.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/event.ts",
-      "to": "src/base/browser/touch.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/event.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/event.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/color.ts",
-      "to": "src/base/common/charCode.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/list/splice.ts",
-      "to": "src/base/common/sequence.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/cssValue.ts",
-      "to": "src/base/common/color.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/cssValue.ts",
-      "to": "src/base/common/network.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/cssValue.ts",
-      "to": "src/base/common/uri.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/domStylesheets.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/domStylesheets.ts",
-      "to": "src/base/common/observable.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/domStylesheets.ts",
-      "to": "src/base/browser/browser.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/domStylesheets.ts",
-      "to": "src/base/browser/dom.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/domStylesheets.ts",
-      "to": "src/base/browser/window.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/browser/canIUse.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/browser/dom.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/browser/domStylesheets.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/browser/mouseEvent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/common/layout.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/common/platform.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/common/types.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/browser/ui/contextview/contextview.css",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/common/layout.ts",
-      "kind": "import"
-    },
-    {
       "from": "src/base/browser/markdownRenderer.ts",
       "to": "src/base/common/errors.ts",
       "kind": "import"
@@ -5950,6 +6143,366 @@
       "from": "src/base/common/marked/marked.js",
       "to": "src/base/common/marked/cgmanifest.json",
       "kind": "declaration or attribution"
+    },
+    {
+      "from": "src/base/browser/history.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/formattedTextRenderer.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/formattedTextRenderer.ts",
+      "to": "src/base/browser/keyboardEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/formattedTextRenderer.ts",
+      "to": "src/base/browser/mouseEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/formattedTextRenderer.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/browser/contextmenu.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/browser/keyboardEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/browser/markdownRenderer.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/browser/touch.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/browser/ui/hover/hoverDelegateFactory.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/browser/ui/hover/hoverDelegate.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/browser/ui/iconLabel/iconLabels.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/common/codicons.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/common/color.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/common/htmlContent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/common/keyCodes.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/common/themables.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/browser/ui/button/button.css",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/nls.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/browser/ui/hover/hover.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/browser/ui/hover/hoverDelegate2.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/browser/ui/dropdown/dropdown.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/button/button.ts",
+      "to": "src/base/browser/domSanitize.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/dropdown/dropdown.ts",
+      "to": "src/base/browser/contextmenu.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/dropdown/dropdown.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/dropdown/dropdown.ts",
+      "to": "src/base/browser/keyboardEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/dropdown/dropdown.ts",
+      "to": "src/base/browser/touch.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/dropdown/dropdown.ts",
+      "to": "src/base/browser/ui/contextview/contextview.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/dropdown/dropdown.ts",
+      "to": "src/base/browser/ui/hover/hover.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/dropdown/dropdown.ts",
+      "to": "src/base/browser/ui/hover/hoverDelegate2.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/dropdown/dropdown.ts",
+      "to": "src/base/browser/ui/hover/hoverDelegateFactory.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/dropdown/dropdown.ts",
+      "to": "src/base/browser/ui/menu/menu.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/dropdown/dropdown.ts",
+      "to": "src/base/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/dropdown/dropdown.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/dropdown/dropdown.ts",
+      "to": "src/base/common/keyCodes.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/dropdown/dropdown.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/dropdown/dropdown.ts",
+      "to": "src/base/browser/ui/dropdown/dropdown.css",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/browser.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/touch.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/domStylesheets.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/keyboardEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/mouseEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/ui/actionbar/actionbar.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/ui/actionbar/actionViewItems.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/ui/scrollbar/scrollableElement.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/async.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/codicons.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/codiconsUtil.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/themables.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/iconLabels.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/keyCodes.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/keybindings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/scrollable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/strings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/layout.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/ui/contextview/contextview.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/contextmenu.ts",
+      "to": "src/base/browser/mouseEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/contextmenu.ts",
+      "to": "src/base/browser/ui/actionbar/actionViewItems.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/contextmenu.ts",
+      "to": "src/base/browser/ui/actionbar/actionbar.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/contextmenu.ts",
+      "to": "src/base/browser/ui/contextview/contextview.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/contextmenu.ts",
+      "to": "src/base/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/contextmenu.ts",
+      "to": "src/base/common/keybindings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/contextmenu.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
     }
   ],
   "compilerSupport": [
@@ -5961,9 +6514,14 @@
   ],
   "entryPoints": [
     "src/base/browser/dom.ts",
+    "src/base/browser/keyboardEvent.ts",
     "src/base/browser/ui/actionbar/actionViewItems.ts",
     "src/base/browser/ui/actionbar/actionbar.ts",
     "src/base/browser/ui/aria/aria.ts",
+    "src/base/browser/ui/button/button.ts",
+    "src/base/browser/ui/inputbox/inputBox.ts",
+    "src/base/browser/ui/list/list.ts",
+    "src/base/browser/ui/list/listWidget.ts",
     "src/base/browser/window.ts",
     "src/base/common/actions.ts",
     "src/base/common/arrays.ts",
@@ -5972,6 +6530,7 @@
     "src/base/common/errors.ts",
     "src/base/common/event.ts",
     "src/base/common/hash.ts",
+    "src/base/common/keyCodes.ts",
     "src/base/common/lifecycle.ts",
     "src/base/common/map.ts",
     "src/base/common/objects.ts",

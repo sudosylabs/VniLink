@@ -1,25 +1,28 @@
-import * as nls from '../../../nls.js';
-import { Disposable } from '../../../base/common/lifecycle.js';
-import { addDisposableListener } from '../../../base/browser/domEvent.js';
-import { Icons } from '../../../base/common/icons.js';
-import { renderIcon } from '../../../base/browser/ui/icon/icon.js';
-import { IDeviceService } from '../../services/devices/deviceService.js';
-import { IScreenSnapshotService } from '../../services/screenSnapshot/screenSnapshotService.js';
-import { createPageHeading, type IHomePage } from '../home/homePages.js';
-import { DeviceList } from './deviceList.js';
-import { DeviceDetails } from './deviceDetails.js';
-import { DevicePairing } from './devicePairing.js';
 import './media/devices.css';
+import * as nls from '../../../nls.js';
+import { addDisposableListener, append, EventType, h } from '../../../base/browser/dom.js';
+import { renderIcon } from '../../../base/browser/ui/icon/icon.js';
+import { Icons } from '../../../base/common/icons.js';
+import { Disposable } from '../../../base/common/lifecycle.js';
+import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
+import { IDeviceService } from '../../services/devices/deviceService.js';
+import { createPageHeading, type IHomePage } from '../home/homePages.js';
+import { DeviceDetails } from './deviceDetails.js';
+import { DeviceList } from './deviceList.js';
+import { DevicePairing } from './devicePairing.js';
 
-/** Composes known-device selection and pairing; service views own their own tabs. */
+/**
+ * Home's Devices page: remembered computers beside the selected one's
+ * details, with invitation pairing above them.
+ */
 export class DevicesPage extends Disposable implements IHomePage {
 	private static nextId = 0;
-	public readonly element = document.createElement('main');
-	private readonly body = document.createElement('div');
-	private readonly empty = document.createElement('section');
-	private readonly emptyTitle = document.createElement('h2');
-	private readonly emptyHelp = document.createElement('p');
-	private readonly feedback = document.createElement('p');
+	public readonly element: HTMLElement;
+	private readonly body: HTMLElement;
+	private readonly empty: HTMLElement;
+	private readonly emptyTitle: HTMLElement;
+	private readonly emptyHelp: HTMLElement;
+	private readonly feedback: HTMLElement;
 	private readonly list: DeviceList;
 	private readonly details: DeviceDetails;
 	private readonly pairing: DevicePairing;
@@ -27,81 +30,97 @@ export class DevicesPage extends Disposable implements IHomePage {
 
 	constructor(
 		@IDeviceService private readonly devices: IDeviceService,
-		@IScreenSnapshotService snapshots: IScreenSnapshotService,
+		@IInstantiationService instantiationService: IInstantiationService,
 	) {
 		super();
-		const id = `device-details-${String(DevicesPage.nextId++)}`;
-		this.list = this._register(new DeviceList(id));
-		this.details = this._register(new DeviceDetails(id, devices, snapshots));
-		this.pairing = this._register(new DevicePairing(devices));
-		this.element.className = 'devices-page';
-		const heading = createPageHeading(nls.localize('computers.heading', 'Devices'), nls.localize('computers.subheading', 'Your computers, connected.'));
-		this.element.tabIndex = -1;
-		this.empty.className = 'device-empty';
-		this.empty.append(renderIcon(Icons.devices), this.emptyTitle, this.emptyHelp);
-		this.body.className = 'devices-body';
-		const column = document.createElement('div');
-		column.className = 'devices-list-column';
-		column.append(this.list.element, this.empty);
-		this.feedback.className = 'device-feedback';
-		this.feedback.setAttribute('role', 'status');
-		this.body.append(column, this.details.element);
-		this.element.append(heading, this.pairing.element, this.feedback, this.body);
-		this._register(this.list.onDidSelect(id => {
-			this.selectedId = id;
-			this.render();
-		}));
-		this._register(this.details.onDidClose(() => {
-			const id = this.selectedId;
-			this.selectedId = undefined;
-			this.render();
-			this.list.focus(id);
-		}));
-		this._register(devices.onDidChangeState(() => {
-			this.render();
-		}));
-		this._register(devices.onDidChangeDevices(() => {
-			this.render();
-		}));
-		this._register(addDisposableListener(this.element, 'keydown', event => {
-			if ((event as KeyboardEvent).key === 'Escape' && this.selectedId) {
-				const id = this.selectedId;
-				this.selectedId = undefined;
-				this.render();
-				this.list.focus(id);
-			}
-		}));
+		const detailsId = `device-details-${String(DevicesPage.nextId++)}`;
+		this.list = this._register(new DeviceList(detailsId));
+		this.details = this._register(instantiationService.createInstance(DeviceDetails, detailsId));
+		this.pairing = this._register(instantiationService.createInstance(DevicePairing));
+		const page = h('main.devices-page', { tabindex: '-1' }, [
+			h('p.device-feedback@feedback', { role: 'status' }),
+			h('div.devices-body@body', [
+				h('div.devices-list-column@column', [
+					h('section.device-empty@empty', { role: 'status' }, [h('h2@emptyTitle'), h('p@emptyHelp')]),
+				]),
+			]),
+		]);
+		this.element = page.root;
+		this.body = page.body;
+		this.empty = page.empty;
+		this.emptyTitle = page.emptyTitle;
+		this.emptyHelp = page.emptyHelp;
+		this.feedback = page.feedback;
+		this.empty.prepend(renderIcon(Icons.devices));
+		page.column.prepend(this.list.element);
+		append(this.body, this.details.element);
+		this.element.prepend(createPageHeading(nls.localize('computers.heading', 'Devices'), nls.localize('computers.subheading', 'Your computers, connected.')), this.pairing.element);
+		this.registerListeners();
 		this.render();
-		void devices.initialize().catch(() => {
+		this.devices.initialize().catch(() => {
 			if (!this._store.isDisposed) {
 				this.feedback.textContent = nls.localize('devices.loadFailed', 'Unable to load devices. Restart VniLink to try again.');
 			}
 		});
 	}
 
-	public importInvitation(): void {
-		this.pairing.importButton.click();
+	private registerListeners(): void {
+		this._register(this.list.onDidSelect(device => {
+			this.selectedId = device.id;
+			this.render();
+		}));
+		this._register(this.details.onDidClose(() => {
+			this.closeDetails();
+		}));
+		this._register(this.devices.onDidChangeState(() => {
+			this.render();
+		}));
+		this._register(this.devices.onDidChangeDevices(() => {
+			this.render();
+		}));
+		this._register(addDisposableListener(this.element, EventType.KEY_DOWN, event => {
+			if (event.key === 'Escape' && this.selectedId) {
+				this.closeDetails();
+			}
+		}));
 	}
 
+	/** Opens an invitation from another computer; without `file`, asks the user to choose one. */
+	public importInvitation(file?: File): void {
+		this.pairing.importInvitation(file);
+	}
+
+	/** Creates an invitation for this computer and downloads it. */
 	public shareInvitation(): void {
-		this.pairing.shareButton.click();
+		this.pairing.shareInvitation();
+	}
+
+	private closeDetails(): void {
+		const id = this.selectedId;
+		this.selectedId = undefined;
+		this.render();
+		this.list.focus(id);
 	}
 
 	private render(): void {
 		const state = this.devices.state;
-		this.emptyTitle.textContent = state === 'loading' ? nls.localize('devices.loading', 'Loading computers…') : state === 'unavailable' ? nls.localize('devices.unavailable', 'Devices unavailable') : nls.localize('devices.emptyTitle', 'Bring your computers together');
-		this.emptyHelp.textContent = state === 'unavailable' ? nls.localize('devices.unavailableHelp', 'Unable to read devices from the connection engine. Restart VniLink to try again.') : state === 'loading' ? '' : nls.localize('devices.emptyHelp', 'Import a .vnl invitation from another computer, or share one from this computer to get started.');
-		this.empty.setAttribute('role', 'status');
-		const selected = this.devices.devices.find(device => device.id === this.selectedId);
+		this.emptyTitle.textContent = state === 'loading' ? nls.localize('devices.loading', 'Loading computers…')
+			: state === 'unavailable' ? nls.localize('devices.unavailable', 'Devices unavailable')
+				: nls.localize('devices.emptyTitle', 'Bring your computers together');
+		this.emptyHelp.textContent = state === 'unavailable' ? nls.localize('devices.unavailableHelp', 'Unable to read devices from the connection engine. Restart VniLink to try again.')
+			: state === 'loading' ? ''
+				: nls.localize('devices.emptyHelp', 'Import a .vnl invitation from another computer, or share one from this computer to get started.');
+		const known = this.devices.devices;
+		const selected = known.find(device => device.id === this.selectedId);
 		const lostFocus = !!this.selectedId && !selected && this.details.element.contains(document.activeElement);
 		this.selectedId = selected?.id;
-		this.list.update(this.devices.devices, this.selectedId);
+		this.list.update(known, this.selectedId);
 		this.details.update(selected);
 		this.body.classList.toggle('has-selection', !!selected);
-		this.empty.hidden = this.devices.devices.length > 0;
-		this.list.element.hidden = !this.devices.devices.length;
+		this.empty.hidden = known.length > 0;
+		this.list.element.hidden = !known.length;
 		if (lostFocus) {
-			if (this.devices.devices.length) {
+			if (known.length) {
 				this.list.focus();
 			} else {
 				this.element.focus();

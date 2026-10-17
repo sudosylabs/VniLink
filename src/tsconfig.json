@@ -206,7 +206,16 @@
     "./platform/environment/common/argv.ts",
     "./base/common/ternarySearchTree.ts",
     "./base/common/marked/marked.d.ts",
-    "./base/browser/dompurify/dompurify.d.ts"
+    "./base/browser/dompurify/dompurify.d.ts",
+    "./base/browser/ui/inputbox/inputBox.ts",
+    "./base/common/history.ts",
+    "./base/common/navigator.ts",
+    "./base/browser/history.ts",
+    "./base/browser/formattedTextRenderer.ts",
+    "./base/browser/ui/button/button.ts",
+    "./base/browser/ui/dropdown/dropdown.ts",
+    "./base/browser/ui/menu/menu.ts",
+    "./base/browser/contextmenu.ts"
   ],
   "include": [],
   "exclude": []

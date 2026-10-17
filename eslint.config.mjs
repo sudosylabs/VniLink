@@ -61,8 +61,8 @@ export default [
 	{ files: ['src/**/*.ts'], rules: { 'vnilink/no-sync-fs': 'error' } },
 	{
 		files: ['src/workbench/**/*.ts'],
-		// Devices and settings still build DOM by hand; they leave this list as they move to widgets.
-		ignores: ['src/workbench/contrib/devices/**', 'src/workbench/contrib/settings/**'],
+		// Settings still build DOM by hand; they leave this list when they move to widgets.
+		ignores: ['src/workbench/contrib/settings/**'],
 		rules: { 'vnilink/workbench-dom': 'error' },
 	},
 	{

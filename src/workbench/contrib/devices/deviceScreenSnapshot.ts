@@ -1,20 +1,28 @@
 import * as nls from '../../../nls.js';
+import { h } from '../../../base/browser/dom.js';
+import { Button } from '../../../base/browser/ui/button/button.js';
+import { IntervalTimer } from '../../../base/common/async.js';
 import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
+import { defaultButtonStyles } from '../../../platform/theme/browser/defaultStyles.js';
 import type { DeviceSummary } from '../../services/devices/deviceService.js';
 import type { ScreenSnapshotResult } from '../../services/screenSnapshot/screenSnapshot.js';
-import type { IScreenSnapshotService } from '../../services/screenSnapshot/screenSnapshotService.js';
+import { IScreenSnapshotService } from '../../services/screenSnapshot/screenSnapshotService.js';
+
+/** How often the "captured … ago" caption is refreshed. */
+const ageRefreshInterval = 15_000;
+
+/** How often a shown screenshot rechecks that the remote still allows viewing it. */
+const accessCheckInterval = 5_000;
 
 /** Still screenshot for the selected device. One request at a time; the image is not an input surface. */
 export class DeviceScreenSnapshot extends Disposable {
-	public readonly element = document.createElement('figure');
-	private readonly frame = document.createElement('div');
-	private readonly image = document.createElement('img');
-	private readonly caption = document.createElement('figcaption');
-	private readonly status = document.createElement('span');
-	private readonly age = document.createElement('span');
-	private readonly actions = document.createElement('div');
-	private readonly refresh = document.createElement('button');
-	private readonly consent = document.createElement('button');
+	public readonly element: HTMLElement;
+	private readonly frame: HTMLElement;
+	private readonly image: HTMLImageElement;
+	private readonly status: HTMLElement;
+	private readonly age: HTMLElement;
+	private readonly refresh: Button;
+	private readonly consent: Button;
 	private endpointId: string | undefined;
 	private deviceName = '';
 	private presence: DeviceSummary['presence'] | 'unknown' | undefined;
@@ -27,55 +35,56 @@ export class DeviceScreenSnapshot extends Disposable {
 	private shown: { endpointId: string; sessionId: string; generation: string } | undefined;
 	private statusText = '';
 
-	constructor(private readonly snapshots: IScreenSnapshotService) {
+	constructor(@IScreenSnapshotService private readonly snapshots: IScreenSnapshotService) {
 		super();
-		this.element.className = 'device-screen';
-		this.frame.className = 'device-screen-frame';
+		const figure = h('figure.device-screen', [
+			h('div.device-screen-frame@frame', [h('img@image', { alt: '' })]),
+			h('figcaption', [h('span.device-screen-status@status', { role: 'status' }), h('span.device-screen-age@age')]),
+			h('div.device-screen-actions@actions'),
+		]);
+		this.element = figure.root;
+		this.frame = figure.frame;
+		this.image = figure.image;
 		this.image.hidden = true;
-		this.image.alt = '';
-		this.status.className = 'device-screen-status';
-		this.status.setAttribute('role', 'status');
-		this.age.className = 'device-screen-age';
-		this.caption.append(this.status, this.age);
-		this.actions.className = 'device-screen-actions';
-		this.refresh.type = 'button';
-		this.refresh.className = 'device-button';
-		this.refresh.textContent = nls.localize('devices.refreshScreen', 'Refresh screen');
-		this.consent.type = 'button';
-		this.consent.className = 'device-button';
-		this.consent.hidden = true;
-		this.actions.append(this.refresh, this.consent);
-		this.frame.append(this.image);
-		this.element.append(this.frame, this.caption, this.actions);
+		this.status = figure.status;
+		this.age = figure.age;
+		this.refresh = this.createButton(figure.actions, nls.localize('devices.refreshScreen', 'Refresh screen'));
+		this.consent = this.createButton(figure.actions, '');
+		this.consent.element.hidden = true;
 		this._register(toDisposable(() => {
 			this.stop();
 			this.revoke();
 		}));
-		const ageTimer = setInterval(() => {
-			if (this.state === 'ready' && !this._store.isDisposed) {
+		const ageTimer = this._register(new IntervalTimer());
+		ageTimer.cancelAndSet(() => {
+			if (this.state === 'ready') {
 				this.age.textContent = captureAge(this.capturedUnixMs, Date.now());
 			}
-		}, 15_000);
-		const accessTimer = setInterval(() => {
-			if (this.state === 'ready' && !this._store.isDisposed) {
+		}, ageRefreshInterval);
+		const accessTimer = this._register(new IntervalTimer());
+		accessTimer.cancelAndSet(() => {
+			if (this.state === 'ready') {
 				this.checkAccess();
 			}
-		}, 5_000);
-		this._register(toDisposable(() => {
-			clearInterval(ageTimer);
-			clearInterval(accessTimer);
-		}));
-		this.refresh.addEventListener('click', () => {
+		}, accessCheckInterval);
+		this._register(this.refresh.onDidClick(() => {
 			if (this.state !== 'loading') {
 				this.begin(false);
 			}
-		});
-		this.consent.addEventListener('click', () => {
+		}));
+		this._register(this.consent.onDidClick(() => {
 			if (this.state !== 'loading') {
 				this.begin(true);
 			}
-		});
+		}));
 		this.render();
+	}
+
+	private createButton(container: HTMLElement, label: string): Button {
+		const button = this._register(new Button(container, { ...defaultButtonStyles, secondary: true, title: false }));
+		button.label = label;
+		button.element.classList.add('device-button');
+		return button;
 	}
 
 	public show(device: DeviceSummary | undefined): void {
@@ -230,15 +239,15 @@ export class DeviceScreenSnapshot extends Disposable {
 
 	private render(): void {
 		const connected = this.presence === 'connected';
-		this.refresh.disabled = this.state === 'loading' || !connected;
-		this.consent.disabled = this.state === 'loading' || !connected;
+		this.refresh.enabled = this.state !== 'loading' && connected;
+		this.consent.enabled = this.state !== 'loading' && connected;
 		this.frame.setAttribute('aria-busy', String(this.state === 'loading'));
 		const asking = this.state === 'needsPermission' || this.state === 'needsSourceSelection';
-		this.consent.hidden = !asking;
+		this.consent.element.hidden = !asking;
 		if (this.state === 'needsPermission') {
-			this.consent.textContent = nls.localize('devices.allowScreen', 'Allow screen capture');
+			this.consent.label = nls.localize('devices.allowScreen', 'Allow screen capture');
 		} else if (this.state === 'needsSourceSelection') {
-			this.consent.textContent = nls.localize('devices.chooseScreen', 'Choose screen');
+			this.consent.label = nls.localize('devices.chooseScreen', 'Choose screen');
 		}
 		if (this.state === 'ready') {
 			this.image.alt = nls.localize('devices.screenshotName', 'Screenshot of {0}', this.deviceName);

@@ -5,6 +5,10 @@ import type { DeviceSummary, IDeviceService, PairingFile } from '../../src/workb
 import type { ScreenAccess, ScreenSnapshotResult } from '../../src/workbench/services/screenSnapshot/screenSnapshot.js';
 import type { IScreenSnapshotService } from '../../src/workbench/services/screenSnapshot/screenSnapshotService.js';
 import { DevicesPage } from '../../src/workbench/contrib/devices/devicesPage.js';
+import { InstantiationService } from '../../src/platform/instantiation/common/instantiationService.js';
+import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
+import { IDeviceService as IDeviceServiceId } from '../../src/workbench/services/devices/deviceService.js';
+import { IScreenSnapshotService as IScreenSnapshotServiceId } from '../../src/workbench/services/screenSnapshot/screenSnapshotService.js';
 
 function assert(value: unknown, message: string): asserts value {
 	if (!value) {
@@ -50,13 +54,14 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 			this.state = 'unavailable';
 		}
 		this.snapshots = snapshots ?? new FixtureSnapshots();
-		this.page = this._register(new DevicesPage(this, this.snapshots));
+		const services = this._register(new InstantiationService(new ServiceCollection([IDeviceServiceId, this], [IScreenSnapshotServiceId, this.snapshots]), true));
+		this.page = this._register(services.createInstance(DevicesPage));
 		this.host.className = 'home-content device-fixture';
 		this.host.style.cssText = 'position:fixed;top:var(--titlebar-height);left:190px;right:0;bottom:0;z-index:10;';
 		this.host.append(this.page.element);
 		document.body.append(this.host);
 		if (state === 'selected') {
-			this.page.element.querySelector<HTMLButtonElement>('.device-row')?.click();
+			this.page.element.querySelector<HTMLElement>('.device-row')?.click();
 		}
 	}
 
@@ -171,38 +176,51 @@ export class FixtureSnapshots implements IScreenSnapshotService {
 	}
 }
 
+/** The list row that renders `row`; the list keeps focus and selection on these. */
+function listRow(row: Element): HTMLElement {
+	const element = row.closest<HTMLElement>('.monaco-list-row');
+	assert(element, 'Device row is not inside a list row');
+	return element;
+}
+
+function pressKey(target: Element, key: string, keyCode: number): void {
+	target.dispatchEvent(new KeyboardEvent('keydown', { key, keyCode, bubbles: true }));
+}
+
 export async function verifyDevices(): Promise<void> {
 	const fixture = new DevicePageFixture();
 	const page = fixture.page.element;
+	// List rows are recycled, so DOM order is not item order; address them by index.
+	const rows = () => [0, 1, 2].map(index => page.querySelector<HTMLElement>(`.monaco-list-row[data-index="${String(index)}"] .device-row`)).filter((row): row is HTMLElement => row !== null);
 	try {
 		const tabCount = document.querySelectorAll('[role="tab"]').length;
-		const rows = [...page.querySelectorAll<HTMLButtonElement>('.device-row')];
-		assert(rows.length === 3, 'Device fixture did not render');
+		assert(rows().length === 3, 'Device fixture did not render');
 		assert(!page.querySelector('.devices-toolbar'), 'Removed device actions are still presented');
-		rows[1].focus();
-		rows[1].click();
+		const list = page.querySelector<HTMLElement>('.device-list .monaco-list');
+		assert(list?.getAttribute('role') === 'list' && listRow(rows()[0]).getAttribute('role') === 'listitem', 'Devices are not an accessible list');
+		rows()[1].click();
 		assert(!page.querySelector<HTMLElement>('.device-panel')?.hidden, 'Selecting a device did not open details');
 		assert(document.querySelectorAll('[role="tab"]').length === tabCount, 'Device selection opened a titlebar tab');
-		fixture.update(fixture.devices.map(device => device.id === rows[1].dataset.deviceId ? { ...device, presence: 'connecting' } : device));
-		assert(document.activeElement === rows[1] && page.querySelectorAll('.device-row')[1] === rows[1], 'Presence update replaced the focused row');
-		assert(rows[1].getAttribute('aria-pressed') === 'true', 'Presence update lost selection');
-		rows[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
-		assert(document.activeElement === rows[2], 'Arrow navigation failed');
+		fixture.update(fixture.devices.map(device => device.id === 'b'.repeat(64) ? { ...device, presence: 'connecting' } : device));
+		assert(listRow(rows()[1]).getAttribute('aria-selected') === 'true', 'Presence update lost selection');
+		assert(rows()[1].textContent.includes('Connecting'), 'Presence update was not rendered');
+		list.focus();
+		pressKey(list, 'ArrowDown', 40);
+		assert(listRow(rows()[2]).classList.contains('focused'), 'Arrow navigation failed');
 		page.querySelector<HTMLButtonElement>('.device-close')?.click();
-		assert(document.activeElement === rows[1] && page.querySelector<HTMLElement>('.device-panel')?.hidden, 'Close did not restore list focus');
+		assert(document.activeElement === list && listRow(rows()[1]).classList.contains('focused') && page.querySelector<HTMLElement>('.device-panel')?.hidden, 'Close did not restore list focus');
 		fixture.update(fixture.devices.map(device => ({ ...device, presence: 'disconnected' })));
-		rows[1].click();
-		page.querySelector<HTMLButtonElement>('.device-panel .primary')?.click();
+		rows()[1].click();
+		page.querySelector<HTMLElement>('.device-panel .primary')?.click();
 		await settle();
 		assert(fixture.connects[0] === 'b'.repeat(64), 'Connect used the wrong endpoint');
 		const name = page.querySelector<HTMLInputElement>('.device-rename input');
-		const form = page.querySelector<HTMLFormElement>('.device-rename');
-		assert(name && form, 'Rename controls missing');
+		assert(name, 'Rename controls missing');
 		name.value = '<b>Personal</b>';
 		name.dispatchEvent(new Event('input'));
-		form.dispatchEvent(new Event('submit', { cancelable: true }));
+		pressKey(name, 'Enter', 13);
 		await settle();
-		assert(rows[1].textContent.includes('<b>Personal</b>') && !page.querySelector('b'), 'Rename rendered untrusted markup');
+		assert(rows()[1].textContent.includes('<b>Personal</b>') && !page.querySelector('b'), 'Rename rendered untrusted markup');
 		let reject: (reason: Error) => void = () => {
 			throw new Error('No pending request');
 		};
@@ -211,24 +229,19 @@ export async function verifyDevices(): Promise<void> {
 		});
 		name.value = 'Pending';
 		name.dispatchEvent(new Event('input'));
-		form.dispatchEvent(new Event('submit', { cancelable: true }));
-		rows[0].click();
+		pressKey(name, 'Enter', 13);
+		rows()[0].click();
 		reject(new Error('Old device failure'));
 		await settle();
 		assert(!page.querySelector('.device-panel')?.textContent.includes('Old device failure'), 'Late command error crossed selections');
-		page.querySelector<HTMLButtonElement>('.device-forget')?.click();
+		page.querySelector<HTMLElement>('.device-forget')?.click();
 		assert(fixture.devices.slice().length === 3, 'Forget removed a device without confirmation');
-		page.querySelector<HTMLButtonElement>('.device-forget-confirm button:last-child')?.click();
+		page.querySelector<HTMLElement>('.device-forget-confirm .monaco-button:last-child')?.click();
 		await settle();
 		assert(fixture.devices.length === 2 && page.querySelector<HTMLElement>('.device-panel')?.hidden, 'Forget did not close the removed selection');
-		const file = page.querySelector<HTMLInputElement>('input[type="file"]');
-		assert(file, 'Invitation picker missing');
-		const transfer = new DataTransfer();
-		transfer.items.add(new File(['VNLF'], 'test.vnl'));
-		file.files = transfer.files;
-		file.dispatchEvent(new Event('change'));
+		fixture.page.importInvitation(new File(['VNLF'], 'test.vnl'));
 		const deadline = Date.now() + 2000;
-		while (page.querySelector<HTMLFormElement>('.device-pairing form')?.hidden || page.querySelector<HTMLButtonElement>('.device-pairing button[type="submit"]')?.disabled) {
+		while (page.querySelector<HTMLElement>('.device-pairing-form')?.hidden || page.querySelector('.device-pairing-form .monaco-button.disabled')) {
 			assert(Date.now() < deadline, 'Invitation file read did not settle');
 			await new Promise<void>(resolve => {
 				requestAnimationFrame(() => {
@@ -238,10 +251,15 @@ export async function verifyDevices(): Promise<void> {
 		}
 		const code = page.querySelector<HTMLInputElement>('.device-pairing input[type="text"]');
 		assert(code && !code.value && !page.querySelector('output')?.textContent, 'Import disclosed or filled the expected digits');
-		code.value = '042';
-		page.querySelector<HTMLFormElement>('.device-pairing form')?.dispatchEvent(new Event('submit', { cancelable: true }));
+		code.value = '42';
+		pressKey(code, 'Enter', 13);
 		await settle();
-		assert(fixture.confirmation === '042' && page.querySelector('output')?.textContent === '731', `Pairing did not show reverse confirmation: ${fixture.confirmation}; ${page.querySelector('.device-pairing')?.textContent ?? ''}`);
+		const confirmation = (): string => fixture.confirmation;
+		assert(confirmation() === '' && page.querySelector('.device-pairing .device-feedback')?.textContent !== '', 'An incomplete code was submitted');
+		code.value = '042';
+		pressKey(code, 'Enter', 13);
+		await settle();
+		assert(confirmation() === '042' && page.querySelector('output')?.textContent === '731', `Pairing did not show reverse confirmation: ${confirmation()}; ${page.querySelector('.device-pairing')?.textContent ?? ''}`);
 	} finally {
 		fixture.dispose();
 	}
@@ -253,14 +271,14 @@ export async function verifyDeviceScreenshot(): Promise<void> {
 	const fixture = new DevicePageFixture('populated', snapshots);
 	const page = fixture.page.element;
 	try {
-		const rows = [...page.querySelectorAll<HTMLButtonElement>('.device-row')];
+		const rows = [0, 1, 2].map(index => page.querySelector<HTMLElement>(`.monaco-list-row[data-index="${String(index)}"] .device-row`)).filter((row): row is HTMLElement => row !== null);
 		rows[1].click();
 		assert(snapshots.calls.length === 0, 'A disconnected device requested a screenshot');
 		assert(page.querySelector('.device-screen figcaption')?.textContent === 'Connect to see this computer’s screen.', 'Disconnected screenshot copy is wrong');
 		rows[0].click();
 		assert(snapshots.calls[0] === 'a'.repeat(64) && page.querySelector('.device-screen img')?.getAttribute('src') === null, 'The screenshot appeared before the remote image arrived');
-		const refresh = page.querySelector<HTMLButtonElement>('.device-screen button');
-		assert(refresh !== null && refresh.textContent === 'Refresh screen' && refresh.disabled, 'Refresh was available while a screenshot was loading');
+		const refresh = page.querySelector<HTMLElement>('.device-screen .monaco-button');
+		assert(refresh !== null && refresh.textContent === 'Refresh screen' && refresh.classList.contains('disabled'), 'Refresh was available while a screenshot was loading');
 		rows[1].click();
 		snapshots.release(shot(Date.now(), 'late'));
 		await settle();
@@ -285,21 +303,21 @@ export async function verifyDeviceScreenshot(): Promise<void> {
 		await settle();
 		assert(page.querySelector('.device-screen figcaption')?.textContent === 'That computer has not allowed screen capture.', 'Permission state was not shown');
 		refresh.focus();
-		assert(document.activeElement === page.querySelector('.device-screen button'), 'Refresh cannot take keyboard focus');
+		assert(document.activeElement === page.querySelector('.device-screen .monaco-button'), 'Refresh cannot take keyboard focus');
 		const status = page.querySelector('.device-screen-status');
 		const age = page.querySelector('.device-screen-age');
 		assert(status?.getAttribute('role') === 'status' && age && !age.hasAttribute('role') && !page.querySelector('.device-screen figcaption')?.hasAttribute('role'), 'Capture age is announced as a live status');
-		const allow = [...page.querySelectorAll<HTMLButtonElement>('.device-screen button')].find(button => button.textContent === 'Allow screen capture');
+		const allow = [...page.querySelectorAll<HTMLElement>('.device-screen .monaco-button')].find(button => button.textContent === 'Allow screen capture');
 		assert(allow && !allow.hidden, 'Allow screen capture was not offered');
 		allow.click();
-		assert(snapshots.prompts.at(-1) === true && page.querySelector<HTMLButtonElement>('.device-screen button')?.disabled === true, 'Allow did not request consent');
+		assert(snapshots.prompts.at(-1) === true && page.querySelector('.device-screen .monaco-button')?.classList.contains('disabled') === true, 'Allow did not request consent');
 		snapshots.release({ status: 'cancelled' });
 		await settle();
-		assert(page.querySelector<HTMLButtonElement>('.device-screen button')?.disabled === false && page.querySelector('.device-screen figcaption')?.textContent === 'The screen could not be captured.', 'A cancelled screenshot left Refresh disabled');
-		page.querySelector<HTMLButtonElement>('.device-screen button')?.click();
+		assert(page.querySelector('.device-screen .monaco-button')?.classList.contains('disabled') === false && page.querySelector('.device-screen figcaption')?.textContent === 'The screen could not be captured.', 'A cancelled screenshot left Refresh disabled');
+		page.querySelector<HTMLElement>('.device-screen .monaco-button')?.click();
 		snapshots.release({ status: 'needsSourceSelection' });
 		await settle();
-		const choose = [...page.querySelectorAll<HTMLButtonElement>('.device-screen button')].find(button => button.textContent === 'Choose screen');
+		const choose = [...page.querySelectorAll<HTMLElement>('.device-screen .monaco-button')].find(button => button.textContent === 'Choose screen');
 		assert(choose && page.querySelector('.device-screen figcaption')?.textContent === 'Choose a screen on that computer, then refresh.', 'Choosing a screen was not offered');
 		choose.click();
 		assert(snapshots.prompts.at(-1) === true, 'Choose screen did not request a source');
