@@ -3,7 +3,7 @@ import test from 'node:test';
 import { fakeEngine } from './fixtures.mjs';
 import { build } from 'esbuild';
 
-const bundle = await build({ stdin: { contents: `export { synchronizeNativePermissions } from './src/platform/engine/electron-main/nativeRuntime.js'; export { NativeRuntimeService } from './src/workbench/services/nativeRuntime/electron-browser/nativeRuntimeService.js'; export { isEngineCommand, isEngineReply, nativeCapabilityNames } from './src/platform/engine/common/engine.js';`, loader: 'ts', resolveDir: process.cwd() }, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json' });
+const bundle = await build({ stdin: { contents: `export { synchronizeNativePermissions } from './src/platform/engine/electron-main/nativeRuntime.js'; export { NativeRuntimeService } from './src/workbench/services/nativeRuntime/nativeRuntimeServiceImpl.js'; export { isEngineCommand, isEngineReply, nativeCapabilityNames } from './src/platform/engine/common/engine.js';`, loader: 'ts', resolveDir: process.cwd() }, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json' });
 
 const { synchronizeNativePermissions, NativeRuntimeService, isEngineCommand, isEngineReply, nativeCapabilityNames } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 

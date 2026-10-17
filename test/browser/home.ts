@@ -1,10 +1,10 @@
-import { IApplicationService } from '../../src/workbench/services/application/common/applicationService.js';
-import { IConnectionService } from '../../src/workbench/services/connection/common/connectionService.js';
-import { IConfigurationService, defaultConfiguration } from '../../src/platform/configuration/common/configuration.js';
+import { IApplicationService } from '../../src/workbench/services/application/applicationService.js';
+import { IConnectionService } from '../../src/workbench/services/connection/connectionService.js';
+import { IConfigurationSnapshotService, defaultConfiguration } from '../../src/platform/configuration/common/configurationSnapshot.js';
 import { Event, Emitter } from '../../src/base/common/event.js';
-import { HomeView } from '../../src/workbench/contrib/home/browser/home.js';
-import { IDeviceService, type DeviceSummary } from '../../src/workbench/services/devices/common/deviceService.js';
-import { IScreenSnapshotService } from '../../src/workbench/services/screenSnapshot/common/screenSnapshotService.js';
+import { HomeView } from '../../src/workbench/contrib/home/homeView.js';
+import { IDeviceService, type DeviceSummary } from '../../src/workbench/services/devices/deviceService.js';
+import { IScreenSnapshotService } from '../../src/workbench/services/screenSnapshot/screenSnapshotService.js';
 import { InstantiationService } from '../../src/platform/instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
 
@@ -67,7 +67,7 @@ export async function verifyHomeLifecycle(): Promise<void> {
 			restarts++;
 			return Promise.resolve();
 		}, openRelayDocumentation: () => Promise.resolve()
-	}], [IDeviceService, service], [IScreenSnapshotService, { _serviceBrand: undefined, capture: () => Promise.resolve({ status: 'disconnected' as const }), access: () => Promise.resolve({ status: 'disconnected' as const }) }], [IConnectionService, { _serviceBrand: undefined, available: false, load: () => Promise.reject(new Error('Unavailable')), save: () => Promise.reject(new Error('Unavailable')) }], [IConfigurationService, { _serviceBrand: undefined, snapshot: { revision: 0, values: defaultConfiguration, error: null }, onDidChangeConfiguration: Event.None, initialize: () => Promise.resolve(), updateValue: () => Promise.resolve() }]), true);
+	}], [IDeviceService, service], [IScreenSnapshotService, { _serviceBrand: undefined, capture: () => Promise.resolve({ status: 'disconnected' as const }), access: () => Promise.resolve({ status: 'disconnected' as const }) }], [IConnectionService, { _serviceBrand: undefined, available: false, load: () => Promise.reject(new Error('Unavailable')), save: () => Promise.reject(new Error('Unavailable')) }], [IConfigurationSnapshotService, { _serviceBrand: undefined, snapshot: { revision: 0, values: defaultConfiguration, error: null }, onDidChangeConfiguration: Event.None, initialize: () => Promise.resolve(), updateValue: () => Promise.resolve() }]), true);
 	const home = services.createInstance(HomeView);
 	try {
 		assert(!home.element.querySelector('[data-section-id="files"]'), 'Files settings still appear in the sidebar');

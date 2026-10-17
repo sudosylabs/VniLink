@@ -1,10 +1,10 @@
 import { Emitter } from '../../src/base/common/event.js';
 import { Disposable } from '../../src/base/common/lifecycle.js';
 import type { ControlRequestInfo } from '../../src/platform/engine/common/engine.js';
-import type { DeviceSummary, IDeviceService, PairingFile } from '../../src/workbench/services/devices/common/deviceService.js';
-import type { ScreenAccess, ScreenSnapshotResult } from '../../src/workbench/services/screenSnapshot/common/screenSnapshot.js';
-import type { IScreenSnapshotService } from '../../src/workbench/services/screenSnapshot/common/screenSnapshotService.js';
-import { DevicesPage } from '../../src/workbench/contrib/home/browser/devicesPage.js';
+import type { DeviceSummary, IDeviceService, PairingFile } from '../../src/workbench/services/devices/deviceService.js';
+import type { ScreenAccess, ScreenSnapshotResult } from '../../src/workbench/services/screenSnapshot/screenSnapshot.js';
+import type { IScreenSnapshotService } from '../../src/workbench/services/screenSnapshot/screenSnapshotService.js';
+import { DevicesPage } from '../../src/workbench/contrib/devices/devicesPage.js';
 
 function assert(value: unknown, message: string): asserts value {
 	if (!value) {

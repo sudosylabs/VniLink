@@ -1,7 +1,7 @@
 import { Emitter } from '../../src/base/common/event.js';
-import { SharingSection } from '../../src/workbench/contrib/settings/browser/sharingSection.js';
-import { LocalSecuritySection } from '../../src/workbench/contrib/settings/browser/localSecuritySection.js';
-import type { IAccessService, LocalSecurity } from '../../src/workbench/services/access/common/accessService.js';
+import { SharingSection } from '../../src/workbench/contrib/settings/sharingSection.js';
+import { LocalSecuritySection } from '../../src/workbench/contrib/settings/localSecuritySection.js';
+import type { IAccessService, LocalSecurity } from '../../src/workbench/services/access/accessService.js';
 import type { SharingPolicy } from '../../src/platform/engine/common/engine.js';
 
 function assert(condition: boolean, message: string): void {

@@ -69,7 +69,7 @@ export default [
 		rules: { '@typescript-eslint/require-await': 'off', '@typescript-eslint/no-unsafe-enum-assignment': 'off', '@typescript-eslint/no-unsafe-enum-comparison': 'off' },
 	},
 	{
-		files: ['src/renderer.ts', 'src/**/browser/**/*.ts'],
+		files: ['src/renderer.ts', 'src/**/browser/**/*.ts', 'src/workbench/**/*.ts'],
 		languageOptions: { globals: { ...Object.fromEntries(Object.keys(globals.node).map(name => [name, 'off'])), ...globals.browser } },
 		rules: { 'no-restricted-globals': ['error', 'process', 'Buffer', 'require', '__dirname', '__filename', 'module', 'exports', 'global', 'setImmediate', 'clearImmediate'] },
 	},

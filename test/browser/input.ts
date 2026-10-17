@@ -1,5 +1,5 @@
-import { InputPage } from '../../src/workbench/contrib/settings/browser/inputPage.js';
-import { defaultConfiguration, type IConfigurationService, type ConfigurationSnapshot } from '../../src/platform/configuration/common/configuration.js';
+import { InputPage } from '../../src/workbench/contrib/settings/inputPage.js';
+import { defaultConfiguration, type IConfigurationSnapshotService, type ConfigurationSnapshot } from '../../src/platform/configuration/common/configurationSnapshot.js';
 import { Emitter } from '../../src/base/common/event.js';
 
 function assert(condition: boolean, message: string): void {
@@ -19,7 +19,7 @@ export async function verifyInputPage(): Promise<void> {
 	let snapshot = { revision: 0, values: defaultConfiguration, error: null };
 	let writes = 0;
 	let fail = false;
-	const service: IConfigurationService = {
+	const service: IConfigurationSnapshotService = {
 		_serviceBrand: undefined, get snapshot() {
 			return snapshot;
 		}, onDidChangeConfiguration: changes.event, initialize: () => Promise.resolve(), updateValue: change => {

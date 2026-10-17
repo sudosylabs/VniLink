@@ -30,7 +30,7 @@ test('desktop watcher rebuilds TS/CSS, handles atomic resource saves and leaves 
 		}
 		await put('src/renderer.ts', 'import "./style.css"; console.log("original");');
 		await put('src/style.css', 'body { color: red; }');
-		await put('src/workbench/browser/index.html', '<title>original</title>');
+		await put('src/workbench/index.html', '<title>original</title>');
 		await put('assets/desktop/app-icon.svg', '<svg/>');
 		await put('node_modules/@phosphor-icons/core/LICENSE', 'phosphor');
 		await put('LICENSE.vscode.txt', 'MIT');
@@ -42,9 +42,9 @@ test('desktop watcher rebuilds TS/CSS, handles atomic resource saves and leaves 
 		await put('src/main.ts', 'console.log("updated-main");');
 		await until(async () => (await readFile(join(root, 'out/renderer/renderer.js'), 'utf8')).includes('updated-renderer') && (await readFile(join(root, 'out/renderer/renderer.css'), 'utf8')).includes('color: blue') && (await readFile(join(root, 'out/main.cjs'), 'utf8')).includes('updated-main'));
 		await put('src/workbench/browser/replacement.html', '<title>atomic-save</title>');
-		await rename(join(root, 'src/workbench/browser/replacement.html'), join(root, 'src/workbench/browser/index.html'));
+		await rename(join(root, 'src/workbench/browser/replacement.html'), join(root, 'src/workbench/index.html'));
 		await until(async () => (await readFile(join(root, 'out/renderer/index.html'), 'utf8')).includes('atomic-save'));
-		await rm(join(root, 'src/workbench/browser/index.html'));
+		await rm(join(root, 'src/workbench/index.html'));
 		await until(async () => {
 			try {
 				await access(join(root, 'out/renderer/index.html'));
@@ -53,7 +53,7 @@ test('desktop watcher rebuilds TS/CSS, handles atomic resource saves and leaves 
 				return true;
 			}
 		});
-		await put('src/workbench/browser/index.html', '<title>restored</title>');
+		await put('src/workbench/index.html', '<title>restored</title>');
 		await until(async () => {
 			try {
 				return (await readFile(join(root, 'out/renderer/index.html'), 'utf8')).includes('restored');

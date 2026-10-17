@@ -8,7 +8,8 @@ export const layersRule = {
 	create(context) {
 		const filename = context.filename;
 		const source = relative(process.cwd(), filename).split(sep).join('/');
-		const browser = source === 'src/renderer.ts' || source.includes('/browser/');
+		// The workbench is renderer-only, so it has no environment folders of its own.
+		const browser = source === 'src/renderer.ts' || source.includes('/browser/') || source.startsWith('src/workbench/');
 		const common = source.includes('/common/');
 		const base = source.startsWith('src/base/');
 		const platform = source.startsWith('src/platform/');

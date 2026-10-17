@@ -1,4 +1,4 @@
-import { defaultConfiguration } from '../../src/platform/configuration/common/configuration.js';
+import { defaultConfiguration } from '../../src/platform/configuration/common/configurationSnapshot.js';
 import { isPermissionSnapshot } from '../../src/platform/permissions/common/permissions.js';
 import assert from 'node:assert/strict';
 import { getMacOSWindowControlsPosition } from '../../src/platform/window/common/window.js';

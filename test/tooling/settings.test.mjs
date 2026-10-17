@@ -6,9 +6,9 @@ import { mkdtemp, mkdir, readFile, writeFile, readdir, rm } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const output = await build({ stdin: { contents: `export { ConfigurationStore } from './src/platform/configuration/node/configurationStore.js'; export { ConfigurationService } from './src/platform/configuration/electron-browser/configurationService.js'; export { defaultConfiguration, isConfigurationUpdate, isConfigurationSnapshot } from './src/platform/configuration/common/configuration.js'; export { ConnectionService } from './src/workbench/services/connection/electron-browser/connectionService.js'; export { ConnectionReadbackError } from './src/workbench/services/connection/common/connectionService.js'; export { validateRelays } from './src/workbench/services/connection/common/relayValidation.js';`, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json' });
+const output = await build({ stdin: { contents: `export { ConfigurationStore } from './src/platform/configuration/node/configurationStore.js'; export { ConfigurationSnapshotService } from './src/platform/configuration/electron-browser/configurationSnapshotService.js'; export { defaultConfiguration, isConfigurationUpdate, isConfigurationSnapshot } from './src/platform/configuration/common/configurationSnapshot.js'; export { ConnectionService } from './src/workbench/services/connection/connectionServiceImpl.js'; export { ConnectionReadbackError } from './src/workbench/services/connection/connectionService.js'; export { validateRelays } from './src/workbench/services/connection/relayValidation.js';`, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json' });
 
-const { ConfigurationStore, ConfigurationService, defaultConfiguration, isConfigurationUpdate, isConfigurationSnapshot, ConnectionService, ConnectionReadbackError, validateRelays } = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
+const { ConfigurationStore, ConfigurationSnapshotService, defaultConfiguration, isConfigurationUpdate, isConfigurationSnapshot, ConnectionService, ConnectionReadbackError, validateRelays } = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
 
 test('local preferences survive reopen and concurrent writes preserve unrelated keys', async () => {
 	const dir = await mkdtemp(join(tmpdir(), 'vnilink-settings-'));
@@ -86,7 +86,7 @@ test('renderer configuration rejects stale initialization and releases its subsc
 	let finish;
 	let receive;
 	let unsubscribed = 0;
-	const service = new ConfigurationService(fakeMainProcess({
+	const service = new ConfigurationSnapshotService(fakeMainProcess({
 		configuration: {
 			call(command) {
 				return command === 'getSnapshot' ? new Promise(resolve => {

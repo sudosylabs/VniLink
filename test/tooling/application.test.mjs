@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { build } from 'esbuild';
 
-const output = await build({ stdin: { contents: `export { ApplicationService } from './src/workbench/services/application/electron-browser/applicationService.js'; export { Emitter } from './src/base/common/event.js'; export { relayDraftChanged } from './src/workbench/services/connection/common/relayConfiguration.js';`, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json' });
+const output = await build({ stdin: { contents: `export { ApplicationService } from './src/workbench/services/application/applicationServiceImpl.js'; export { Emitter } from './src/base/common/event.js'; export { relayDraftChanged } from './src/workbench/services/connection/relayConfiguration.js';`, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json' });
 
 const { ApplicationService, Emitter, relayDraftChanged } = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
 

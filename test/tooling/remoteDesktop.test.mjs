@@ -3,7 +3,7 @@ import test from 'node:test';
 import { fakeEngine } from './fixtures.mjs';
 import { build } from 'esbuild';
 
-const result = await build({ stdin: { contents: `export { RemoteDesktopService } from './src/workbench/services/remoteDesktop/electron-browser/remoteDesktopService.js'; export { DesktopReadbackError, isValidDesktopQuality } from './src/workbench/services/remoteDesktop/common/remoteDesktopService.js'; export { isEngineCommand, isEngineReply } from './src/platform/engine/common/engine.js';`, loader: 'ts', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node', tsconfig: 'tsconfig.json' });
+const result = await build({ stdin: { contents: `export { RemoteDesktopService } from './src/workbench/services/remoteDesktop/remoteDesktopServiceImpl.js'; export { DesktopReadbackError, isValidDesktopQuality } from './src/workbench/services/remoteDesktop/remoteDesktopService.js'; export { isEngineCommand, isEngineReply } from './src/platform/engine/common/engine.js';`, loader: 'ts', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node', tsconfig: 'tsconfig.json' });
 
 const { RemoteDesktopService, DesktopReadbackError, isValidDesktopQuality, isEngineCommand, isEngineReply } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 

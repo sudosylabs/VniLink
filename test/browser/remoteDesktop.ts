@@ -1,12 +1,12 @@
-import { DesktopCodecSection } from '../../src/workbench/contrib/settings/browser/desktopCodecSection.js';
-import { DesktopDefaultsSection } from '../../src/workbench/contrib/settings/browser/desktopDefaultsSection.js';
+import { DesktopCodecSection } from '../../src/workbench/contrib/settings/desktopCodecSection.js';
+import { DesktopDefaultsSection } from '../../src/workbench/contrib/settings/desktopDefaultsSection.js';
 import { InstantiationService } from '../../src/platform/instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
-import { IConfigurationService, defaultConfiguration, type ConfigurationSnapshot } from '../../src/platform/configuration/common/configuration.js';
+import { IConfigurationSnapshotService, defaultConfiguration, type ConfigurationSnapshot } from '../../src/platform/configuration/common/configurationSnapshot.js';
 import { Event as LifecycleEvent, Emitter } from '../../src/base/common/event.js';
-import { RemoteDesktopPage } from '../../src/workbench/contrib/settings/browser/remoteDesktopPage.js';
-import { DesktopQualityEditor } from '../../src/workbench/contrib/settings/browser/desktopQualityEditor.js';
-import { IRemoteDesktopService, type DesktopSettings } from '../../src/workbench/services/remoteDesktop/common/remoteDesktopService.js';
+import { RemoteDesktopPage } from '../../src/workbench/contrib/settings/remoteDesktopPage.js';
+import { DesktopQualityEditor } from '../../src/workbench/contrib/settings/desktopQualityEditor.js';
+import { IRemoteDesktopService, type DesktopSettings } from '../../src/workbench/services/remoteDesktop/remoteDesktopService.js';
 
 function assert(condition: boolean, message: string): void {
 	if (!condition) {
@@ -105,7 +105,7 @@ export async function verifyRemoteDesktop(): Promise<void> {
 		codecChanged.dispose();
 	}
 	const instantiation = new InstantiationService(new ServiceCollection(
-		[IConfigurationService, { _serviceBrand: undefined, snapshot: { revision: 0, values: defaultConfiguration, error: null }, onDidChangeConfiguration: LifecycleEvent.None, initialize: () => Promise.resolve(), updateValue: () => Promise.resolve() }],
+		[IConfigurationSnapshotService, { _serviceBrand: undefined, snapshot: { revision: 0, values: defaultConfiguration, error: null }, onDidChangeConfiguration: LifecycleEvent.None, initialize: () => Promise.resolve(), updateValue: () => Promise.resolve() }],
 		[IRemoteDesktopService, service],
 	), true);
 	const page = new RemoteDesktopPage(instantiation);

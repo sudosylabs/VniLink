@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { Emitter } from '../../../base/common/event.js';
-import { freezeConfiguration, defaultConfiguration, isConfigurationValues, isConfigurationUpdate, type ConfigurationSnapshot, type ConfigurationUpdate } from '../common/configuration.js';
+import { freezeConfiguration, defaultConfiguration, isConfigurationValues, isConfigurationUpdate, type ConfigurationSnapshot, type ConfigurationUpdate } from '../common/configurationSnapshot.js';
 
 /** Main-process owner. Disk commit precedes publication; failed writes keep old values. */
 export class ConfigurationStore extends Disposable {

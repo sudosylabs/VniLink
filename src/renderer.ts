@@ -1,6 +1,6 @@
 import { context } from './base/parts/sandbox/electron-browser/globals.js';
 import { isNativeWindowConfiguration } from './platform/window/common/windowConfiguration.js';
-import { DesktopMain } from './workbench/electron-browser/desktop.main.js';
+import { DesktopMain } from './workbench/desktop.main.js';
 
 void (async () => {
 	const configuration: unknown = await context.resolveConfiguration();

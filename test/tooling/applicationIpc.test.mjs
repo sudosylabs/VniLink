@@ -23,7 +23,7 @@ export default { ipcMain, BrowserWindow };`;
 /** Replaces the settings file store so commits can be refused on demand. */
 const store = `
 import { Emitter } from '${process.cwd()}/src/base/common/event.js';
-import { defaultConfiguration } from '${process.cwd()}/src/platform/configuration/common/configuration.js';
+import { defaultConfiguration } from '${process.cwd()}/src/platform/configuration/common/configurationSnapshot.js';
 export const disk = { fail: false, commits: 0, values: defaultConfiguration };
 export class ConfigurationStore {
 	onDidChangeConfiguration = new Emitter().event;
@@ -43,7 +43,7 @@ const output = await build({
 			export { RecordingMainService } from './src/platform/recording/electron-main/recordingMainService.js';
 			export { windowIdFromContext } from './src/platform/ipc/electron-main/windowContext.js';
 			export { setUnexpectedErrorHandler } from './src/base/common/errors.js';
-			export { defaultConfiguration } from './src/platform/configuration/common/configuration.js';
+			export { defaultConfiguration } from './src/platform/configuration/common/configurationSnapshot.js';
 			export { Event } from './src/base/common/event.js';
 			export { handlers, opened, windows } from 'electron';
 			export { disk } from 'fixture:store';`,

@@ -1,6 +1,6 @@
 import { Emitter } from '../../src/base/common/event.js';
-import { MachinePermissionsSection } from '../../src/workbench/contrib/settings/browser/machinePermissionsSection.js';
-import type { IPermissionService } from '../../src/workbench/services/permissions/common/permissionService.js';
+import { MachinePermissionsSection } from '../../src/workbench/contrib/settings/machinePermissionsSection.js';
+import type { IPermissionService } from '../../src/workbench/services/permissions/permissionService.js';
 import { permissionKinds, type PermissionCommand, type PermissionSnapshot } from '../../src/platform/permissions/common/permissions.js';
 
 function assert(condition: boolean, message: string): void {

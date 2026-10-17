@@ -1,8 +1,8 @@
 import { Emitter } from '../../src/base/common/event.js';
-import { FilesPage } from '../../src/workbench/contrib/settings/browser/filesPage.js';
-import { TerminalPage } from '../../src/workbench/contrib/settings/browser/terminalPage.js';
-import { defaultConfiguration, type IConfigurationService, type ConfigurationSnapshot } from '../../src/platform/configuration/common/configuration.js';
-import type { ITerminalSettingsService } from '../../src/workbench/services/terminal/common/terminalSettingsService.js';
+import { FilesPage } from '../../src/workbench/contrib/settings/filesPage.js';
+import { TerminalPage } from '../../src/workbench/contrib/settings/terminalPage.js';
+import { defaultConfiguration, type IConfigurationSnapshotService, type ConfigurationSnapshot } from '../../src/platform/configuration/common/configurationSnapshot.js';
+import type { ITerminalSettingsService } from '../../src/workbench/services/terminal/terminalSettingsService.js';
 
 function assert(condition: boolean, message: string): void {
 	if (!condition) {
@@ -20,7 +20,7 @@ export async function verifyFileTerminalSettings(): Promise<void> {
 	const changed = new Emitter<ConfigurationSnapshot>();
 	let snapshot: ConfigurationSnapshot = { revision: 0, values: defaultConfiguration, error: null };
 	let writes = 0;
-	const configuration: IConfigurationService = {
+	const configuration: IConfigurationSnapshotService = {
 		_serviceBrand: undefined, get snapshot() {
 			return snapshot;
 		}, onDidChangeConfiguration: changed.event, initialize: () => Promise.resolve(), updateValue: change => {

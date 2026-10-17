@@ -1,0 +1,123 @@
+import { isCodecPreference, type CodecPreference, isQualityLimits, type QualityLimits, type PointerSettings } from '../../engine/common/engine.js';
+import type { Event } from '../../../base/common/event.js';
+import { createDecorator } from '../../instantiation/common/instantiation.js';
+
+export interface InputDefaults { readonly mode: 'Character' | 'Map' | 'Translate'; readonly swap: boolean; readonly pointer: Readonly<PointerSettings>; }
+
+export function isInputDefaults(value: unknown): value is InputDefaults {
+	if (typeof value !== 'object' || value === null || !('mode' in value) || !('swap' in value) || !('pointer' in value) || Object.keys(value).length !== 3) {
+		return false;
+	}
+	const p = value.pointer;
+	return typeof value.mode === 'string' && ['Character', 'Map', 'Translate'].includes(value.mode) && typeof value.swap === 'boolean' && typeof p === 'object' && p !== null && 'sensitivity_percent' in p && typeof p.sensitivity_percent === 'number' && Number.isInteger(p.sensitivity_percent) && p.sensitivity_percent >= 1 && p.sensitivity_percent <= 400 && 'reverse_wheel' in p && typeof p.reverse_wheel === 'boolean' && 'swap_buttons' in p && typeof p.swap_buttons === 'boolean' && Object.keys(p).length === 3;
+}
+
+export function isFileRoots(value: unknown): value is readonly string[] {
+	return Array.isArray(value) && value.length <= 16 && new Set(value).size === value.length && value.every((path: unknown) => typeof path === 'string' && path.length > 0 && path.length <= 4096 && !path.includes('\0') && (path.startsWith('/') || /^[a-z]:[\\/]/i.test(path) || /^\\\\[^\\]+\\[^\\]+/.test(path)));
+}
+
+export interface MediaSources { readonly cameras: readonly string[]; readonly microphones: readonly string[]; readonly system: readonly string[]; }
+
+export interface RecordingDefaults { readonly directory: string; readonly maxBytes: string; readonly maxDurationMs: string; readonly maxSegments: number; readonly maxTotalBytes: string; }
+
+export function isMediaSources(value: unknown): value is MediaSources {
+	if (typeof value !== 'object' || value === null || !('cameras' in value) || !('microphones' in value) || !('system' in value) || Object.keys(value).length !== 3) {
+		return false;
+	}
+	const valid = (ids: unknown): ids is string[] => Array.isArray(ids) && ids.length <= 32 && new Set(ids).size === ids.length && ids.every(id => typeof id === 'string' && id.length > 0 && id.length <= 2048 && !id.includes('\0'));
+	return valid(value.cameras) && valid(value.microphones) && valid(value.system) && value.microphones.length + value.system.length <= 32 && new Set([...value.microphones, ...value.system]).size === value.microphones.length + value.system.length;
+}
+
+export function isRecordingDefaults(value: unknown): value is RecordingDefaults {
+	if (typeof value !== 'object' || value === null || Object.keys(value).length !== 5) {
+		return false;
+	}
+	const decimal = (value: unknown, min: bigint, max: bigint): boolean => typeof value === 'string' && /^[1-9][0-9]{0,19}$/.test(value) && BigInt(value) >= min && BigInt(value) <= max;
+	return 'directory' in value && typeof value.directory === 'string' && (value.directory === '' || isFileRoots([value.directory])) && 'maxBytes' in value && decimal(value.maxBytes, 1048576n, 1099511627776n) && 'maxDurationMs' in value && decimal(value.maxDurationMs, 1000n, 86400000n) && 'maxTotalBytes' in value && decimal(value.maxTotalBytes, 1048576n, 1099511627776n) && 'maxSegments' in value && typeof value.maxSegments === 'number' && Number.isInteger(value.maxSegments) && value.maxSegments >= 1 && value.maxSegments <= 65535;
+}
+
+export interface ConfigurationValues {
+	readonly 'media.sources': MediaSources;
+	readonly 'recording.defaults': RecordingDefaults;
+	readonly 'input.defaults': InputDefaults;
+	readonly 'files.roots': readonly string[];
+	readonly 'desktop.codec': CodecPreference;
+	readonly 'desktop.quality': Readonly<QualityLimits>;
+	readonly 'appearance.theme': 'system' | 'light' | 'dark';
+	readonly 'appearance.nativeBackground': boolean;
+}
+
+export type ConfigurationUpdate = {
+	[K in keyof ConfigurationValues]: { readonly key: K; readonly value: ConfigurationValues[K] }
+}[keyof ConfigurationValues];
+
+export interface ConfigurationSnapshot {
+	readonly revision: number;
+	readonly values: ConfigurationValues;
+	readonly error: string | null;
+}
+
+export const defaultConfiguration: ConfigurationValues = Object.freeze({
+	'media.sources': Object.freeze({ cameras: Object.freeze(['vnilink:auto-camera']), microphones: Object.freeze(['vnilink:default-microphone']), system: Object.freeze(['vnilink:default-system-audio']) }),
+	'recording.defaults': Object.freeze({ directory: '', maxBytes: '1073741824', maxDurationMs: '3600000', maxSegments: 10, maxTotalBytes: '10737418240' }),
+	'input.defaults': Object.freeze({ mode: 'Character', swap: false, pointer: Object.freeze({ sensitivity_percent: 100, reverse_wheel: false, swap_buttons: false }) }),
+	'files.roots': Object.freeze([]),
+	'desktop.codec': 'auto',
+	'desktop.quality': Object.freeze({ max_bitrate_kbps: 2000, max_frame_rate: 30, max_width: 1920, max_height: 1080 }),
+	'appearance.theme': 'system',
+	'appearance.nativeBackground': true,
+});
+
+export function isConfigurationValues(value: unknown): value is ConfigurationValues {
+	return typeof value === 'object' && value !== null
+		&& 'appearance.theme' in value && (value['appearance.theme'] === 'system' || value['appearance.theme'] === 'light' || value['appearance.theme'] === 'dark')
+		&& 'appearance.nativeBackground' in value && typeof value['appearance.nativeBackground'] === 'boolean'
+		&& 'desktop.codec' in value && isCodecPreference(value['desktop.codec'])
+		&& 'desktop.quality' in value && isQualityLimits(value['desktop.quality'])
+		&& 'input.defaults' in value && isInputDefaults(value['input.defaults'])
+		&& 'files.roots' in value && isFileRoots(value['files.roots'])
+		&& 'media.sources' in value && isMediaSources(value['media.sources'])
+		&& 'recording.defaults' in value && isRecordingDefaults(value['recording.defaults'])
+		&& Object.keys(value).length === 8;
+}
+
+export function isConfigurationUpdate(value: unknown): value is ConfigurationUpdate {
+	return typeof value === 'object' && value !== null && 'key' in value && 'value' in value
+		&& Object.keys(value).length === 2
+		&& ((value.key === 'media.sources' && isMediaSources(value.value))
+			|| (value.key === 'recording.defaults' && isRecordingDefaults(value.value))
+			|| (value.key === 'appearance.theme' && (value.value === 'system' || value.value === 'light' || value.value === 'dark'))
+			|| (value.key === 'appearance.nativeBackground' && typeof value.value === 'boolean')
+			|| (value.key === 'input.defaults' && isInputDefaults(value.value))
+			|| (value.key === 'files.roots' && isFileRoots(value.value))
+			|| (value.key === 'desktop.codec' && isCodecPreference(value.value))
+			|| (value.key === 'desktop.quality' && isQualityLimits(value.value)));
+}
+
+export function isConfigurationSnapshot(value: unknown): value is ConfigurationSnapshot {
+	return typeof value === 'object' && value !== null
+		&& 'revision' in value && typeof value.revision === 'number' && Number.isSafeInteger(value.revision) && value.revision >= 0
+		&& 'values' in value && isConfigurationValues(value.values)
+		&& 'error' in value && (value.error === null || typeof value.error === 'string') && Object.keys(value).length === 3;
+}
+
+/** Main-process IPC channel serving preferences. */
+export const CONFIGURATION_CHANNEL_NAME = 'configuration';
+
+/**
+ * VniLink's typed preference snapshot. The settings pages read it until they move to
+ * VS Code's `IConfigurationService`, which the same main-process channel also serves.
+ */
+export const IConfigurationSnapshotService = createDecorator<IConfigurationSnapshotService>('configurationSnapshotService');
+
+export interface IConfigurationSnapshotService {
+	readonly _serviceBrand: undefined;
+	readonly snapshot: ConfigurationSnapshot;
+	readonly onDidChangeConfiguration: Event<ConfigurationSnapshot>;
+	initialize(): Promise<void>;
+	updateValue(change: ConfigurationUpdate): Promise<void>;
+}
+
+export function freezeConfiguration(values: ConfigurationValues): ConfigurationValues {
+	return Object.freeze({ ...values, 'media.sources': Object.freeze({ cameras: Object.freeze([...values['media.sources'].cameras]), microphones: Object.freeze([...values['media.sources'].microphones]), system: Object.freeze([...values['media.sources'].system]) }), 'recording.defaults': Object.freeze({ ...values['recording.defaults'] }), 'desktop.quality': Object.freeze({ ...values['desktop.quality'] }), 'input.defaults': Object.freeze({ ...values['input.defaults'], pointer: Object.freeze({ ...values['input.defaults'].pointer }) }), 'files.roots': Object.freeze([...values['files.roots']]) });
+}

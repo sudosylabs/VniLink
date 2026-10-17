@@ -5,7 +5,7 @@ import { ILogService } from '../../log/common/log.js';
 import { IEngineMainService } from '../../engine/electron-main/engineMainService.js';
 import type { EngineMainService } from '../../engine/electron-main/engineMainService.js';
 import { ConfigurationStore } from '../node/configurationStore.js';
-import type { ConfigurationSnapshot, ConfigurationUpdate, ConfigurationValues } from '../common/configuration.js';
+import type { ConfigurationSnapshot, ConfigurationUpdate, ConfigurationValues } from '../common/configurationSnapshot.js';
 
 export const IConfigurationMainService = createDecorator<ConfigurationMainService>('configurationMainService');
 

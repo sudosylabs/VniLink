@@ -18,7 +18,7 @@ const { DataChannelClient } = await load('../../src/platform/engine/electron-bro
 
 const { isChannelRequest } = await load('../../src/platform/engine/common/dataChannel.ts');
 
-const { parseScreenSnapshot } = await load('../../src/workbench/services/screenSnapshot/common/screenSnapshot.ts');
+const { parseScreenSnapshot } = await load('../../src/workbench/services/screenSnapshot/screenSnapshot.ts');
 
 const request = { kind: 'video', requestId: 'test', sessionId: '1', generation: '2' };
 

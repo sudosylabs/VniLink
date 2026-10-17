@@ -9,7 +9,7 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 
 test('staged fixes preserve imported source while checking application files', () => {
 	const imported = `${root}src/platform/instantiation/common/instantiationService.ts`;
-	const application = `${root}src/workbench/browser/parts/titlebar/titlebarPart.ts`;
+	const application = `${root}src/workbench/parts/titlebar/titlebarPart.ts`;
 	assert.equal(isApplicationFile(imported), false);
 	assert.equal(isApplicationFile(application), true);
 	const commands = staged['{src,test}/**/*.ts']([imported, application]);

@@ -1,8 +1,8 @@
 import { Emitter } from '../../src/base/common/event.js';
-import { defaultConfiguration, type IConfigurationService, type ConfigurationSnapshot } from '../../src/platform/configuration/common/configuration.js';
-import { AppearancePage } from '../../src/workbench/contrib/settings/browser/appearancePage.js';
-import { ConnectionPage } from '../../src/workbench/contrib/settings/browser/connectionPage.js';
-import { ConnectionReadbackError, type ConnectionSettings, type IConnectionService } from '../../src/workbench/services/connection/common/connectionService.js';
+import { defaultConfiguration, type IConfigurationSnapshotService, type ConfigurationSnapshot } from '../../src/platform/configuration/common/configurationSnapshot.js';
+import { AppearancePage } from '../../src/workbench/contrib/settings/appearancePage.js';
+import { ConnectionPage } from '../../src/workbench/contrib/settings/connectionPage.js';
+import { ConnectionReadbackError, type ConnectionSettings, type IConnectionService } from '../../src/workbench/services/connection/connectionService.js';
 
 function assert(condition: boolean, message: string): void {
 	if (!condition) {
@@ -104,7 +104,7 @@ export async function verifySettingsPages(): Promise<void> {
 	const changed = new Emitter<ConfigurationSnapshot>();
 	let snapshot: ConfigurationSnapshot = { revision: 0, values: defaultConfiguration, error: null };
 	let appearanceWriteFails = false;
-	const configuration: IConfigurationService = {
+	const configuration: IConfigurationSnapshotService = {
 		_serviceBrand: undefined, get snapshot() {
 			return snapshot;
 		},

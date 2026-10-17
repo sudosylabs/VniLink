@@ -1,10 +1,10 @@
 import { Event as LifecycleEvent, Emitter } from '../../src/base/common/event.js';
-import { defaultConfiguration, type ConfigurationSnapshot, type IConfigurationService } from '../../src/platform/configuration/common/configuration.js';
-import type { INativeRuntimeService } from '../../src/workbench/services/nativeRuntime/common/nativeRuntimeService.js';
-import type { IPermissionService } from '../../src/workbench/services/permissions/common/permissionService.js';
-import { RecordingPage } from '../../src/workbench/contrib/settings/browser/recordingPage.js';
-import { PowerPage } from '../../src/workbench/contrib/settings/browser/powerPage.js';
-import { MediaPage } from '../../src/workbench/contrib/settings/browser/mediaPage.js';
+import { defaultConfiguration, type ConfigurationSnapshot, type IConfigurationSnapshotService } from '../../src/platform/configuration/common/configurationSnapshot.js';
+import type { INativeRuntimeService } from '../../src/workbench/services/nativeRuntime/nativeRuntimeService.js';
+import type { IPermissionService } from '../../src/workbench/services/permissions/permissionService.js';
+import { RecordingPage } from '../../src/workbench/contrib/settings/recordingPage.js';
+import { PowerPage } from '../../src/workbench/contrib/settings/powerPage.js';
+import { MediaPage } from '../../src/workbench/contrib/settings/mediaPage.js';
 import type { NativeDevice, PowerPolicy } from '../../src/platform/engine/common/engine.js';
 
 function assert(condition: boolean, message: string): void {
@@ -23,7 +23,7 @@ export async function verifyMediaSettings(): Promise<void> {
 	const changed = new Emitter<ConfigurationSnapshot>();
 	let snapshot: ConfigurationSnapshot = { revision: 0, values: defaultConfiguration, error: null };
 	let failed = false;
-	const configuration: IConfigurationService = {
+	const configuration: IConfigurationSnapshotService = {
 		_serviceBrand: undefined, get snapshot() {
 			return snapshot;
 		}, onDidChangeConfiguration: changed.event, initialize: () => Promise.resolve(), updateValue: update => {

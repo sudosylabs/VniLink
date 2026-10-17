@@ -1,7 +1,7 @@
-import { TabService } from '../../src/workbench/services/tabs/common/tabServiceImpl.js';
-import type { TabAction } from '../../src/workbench/services/tabs/common/tabService.js';
-import { TitlebarTabsControl } from '../../src/workbench/browser/parts/titlebar/titlebarTabsControl.js';
-import { ViewHost, type WorkbenchView } from '../../src/workbench/browser/parts/views/viewHost.js';
+import { TabService } from '../../src/workbench/services/tabs/tabServiceImpl.js';
+import type { TabAction } from '../../src/workbench/services/tabs/tabService.js';
+import { TitlebarTabsControl } from '../../src/workbench/parts/titlebar/titlebarTabsControl.js';
+import { ViewHost, type WorkbenchView } from '../../src/workbench/parts/views/viewHost.js';
 import { Emitter } from '../../src/base/common/event.js';
 import { Icons } from '../../src/base/common/icons.js';
 

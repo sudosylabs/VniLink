@@ -6,7 +6,7 @@ import { ESLint } from 'eslint';
 const eslint = new ESLint({ cwd: new URL('../../', import.meta.url).pathname });
 
 async function rulesFor(code) {
-	const [result] = await eslint.lintText(code, { filePath: 'src/workbench/browser/workbench.ts' });
+	const [result] = await eslint.lintText(code, { filePath: 'src/workbench/workbench.ts' });
 	return result.messages.map(message => message.ruleId);
 }
 

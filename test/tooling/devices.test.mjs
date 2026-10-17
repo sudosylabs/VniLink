@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
 const bundle = await build({
-	stdin: { contents: `export { DeviceService } from './src/workbench/services/devices/electron-browser/deviceService.js';`, loader: 'ts', resolveDir: root },
+	stdin: { contents: `export { DeviceService } from './src/workbench/services/devices/deviceServiceImpl.js';`, loader: 'ts', resolveDir: root },
 	bundle: true, write: false, platform: 'node', format: 'esm', target: 'node22', tsconfig: `${root}tsconfig.json`,
 });
 

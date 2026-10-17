@@ -3,7 +3,7 @@ import test from 'node:test';
 import { fakeEngine } from './fixtures.mjs';
 import { build } from 'esbuild';
 
-const bundle = await build({ stdin: { contents: `export { TerminalSettingsService } from './src/workbench/services/terminal/electron-browser/terminalSettingsService.js'; export { validTerminalPolicy } from './src/workbench/services/terminal/common/terminalSettingsService.js';`, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node', tsconfig: 'tsconfig.json' });
+const bundle = await build({ stdin: { contents: `export { TerminalSettingsService } from './src/workbench/services/terminal/terminalSettingsServiceImpl.js'; export { validTerminalPolicy } from './src/workbench/services/terminal/terminalSettingsService.js';`, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node', tsconfig: 'tsconfig.json' });
 
 const { TerminalSettingsService, validTerminalPolicy } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 

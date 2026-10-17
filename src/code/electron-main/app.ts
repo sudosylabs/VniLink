@@ -34,7 +34,7 @@ import { PermissionsChannel } from '../../platform/permissions/electron-main/per
 import { IPermissionsMainService, PermissionsMainService } from '../../platform/permissions/electron-main/permissionsMainService.js';
 import { RECORDING_CHANNEL_NAME } from '../../platform/recording/common/recording.js';
 import { IRecordingMainService, RecordingMainService } from '../../platform/recording/electron-main/recordingMainService.js';
-import { CONFIGURATION_CHANNEL_NAME } from '../../platform/configuration/common/configuration.js';
+import { CONFIGURATION_CHANNEL_NAME } from '../../platform/configuration/common/configurationSnapshot.js';
 import { WINDOW_CONFIGURATION_CHANNEL, type INativeWindowConfiguration } from '../../platform/window/common/windowConfiguration.js';
 import { IWindowsMainService, WindowsMainService } from '../../platform/windows/electron-main/windowsMainService.js';
 import { registerDevelopmentWindow } from './development.js';

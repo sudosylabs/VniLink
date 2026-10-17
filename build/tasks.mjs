@@ -17,7 +17,7 @@ export function buildOptions(root, { production = false, outputDirectory = join(
 
 export function resources(root, outputDirectory = join(root, 'out')) {
 	return [
-		['src/workbench/browser/index.html', 'renderer/index.html'],
+		['src/workbench/index.html', 'renderer/index.html'],
 		['assets/desktop/app-icon.svg', 'renderer/app-icon.svg'],
 		['node_modules/@phosphor-icons/core/LICENSE', 'licenses/phosphor-icons.txt'],
 		['LICENSE.vscode.txt', 'licenses/vscode.txt'],

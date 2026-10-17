@@ -3,7 +3,7 @@ import test from 'node:test';
 import { fakeEngine } from './fixtures.mjs';
 import { build } from 'esbuild';
 
-const result = await build({ stdin: { contents: `export { AccessService } from './src/workbench/services/access/electron-browser/accessService.js'; export { AccessReadbackError } from './src/workbench/services/access/common/accessService.js'; export { isEngineCommand, isEngineReply } from './src/platform/engine/common/engine.js';`, loader: 'ts', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node', tsconfig: 'tsconfig.json' });
+const result = await build({ stdin: { contents: `export { AccessService } from './src/workbench/services/access/accessServiceImpl.js'; export { AccessReadbackError } from './src/workbench/services/access/accessService.js'; export { isEngineCommand, isEngineReply } from './src/platform/engine/common/engine.js';`, loader: 'ts', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node', tsconfig: 'tsconfig.json' });
 
 const { AccessService, AccessReadbackError, isEngineCommand, isEngineReply } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 

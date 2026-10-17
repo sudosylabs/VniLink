@@ -1,8 +1,8 @@
 import { Event } from '../../src/base/common/event.js';
-import { IConfigurationService, defaultConfiguration } from '../../src/platform/configuration/common/configuration.js';
+import { IConfigurationSnapshotService, defaultConfiguration } from '../../src/platform/configuration/common/configurationSnapshot.js';
 import { SyncDescriptor } from '../../src/platform/instantiation/common/descriptors.js';
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
-import { Workbench } from '../../src/workbench/browser/workbench.js';
+import { Workbench } from '../../src/workbench/workbench.js';
 
 export async function verifyWorkbenchLifecycle(): Promise<void> {
 	let resolve: (() => void) | undefined;
@@ -28,7 +28,7 @@ export async function verifyWorkbenchLifecycle(): Promise<void> {
 		}
 	}
 	const parent = document.createElement('div');
-	const workbench = new Workbench(parent, { windowId: 1, osRelease: 'test', platform: 'darwin', version: 'test', engineAvailable: false, enableSmokeTestDriver: false }, new ServiceCollection([IConfigurationService, new SyncDescriptor(Configuration)]), () => {
+	const workbench = new Workbench(parent, { windowId: 1, osRelease: 'test', platform: 'darwin', version: 'test', engineAvailable: false, enableSmokeTestDriver: false }, new ServiceCollection([IConfigurationSnapshotService, new SyncDescriptor(Configuration)]), () => {
 		created++;
 		return {
 			create() {

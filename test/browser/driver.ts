@@ -1,4 +1,4 @@
-import type { BrowserWindowDriver } from '../../src/workbench/services/driver/browser/driver.js';
+import type { BrowserWindowDriver } from '../../src/workbench/services/driver/driver.js';
 
 /** The workbench's smoke-test driver; present only in isolated test launches. */
 export function windowDriver(): BrowserWindowDriver {

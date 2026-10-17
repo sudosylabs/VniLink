@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
-const bundle = await build({ stdin: { contents: `export { TabService } from './src/workbench/services/tabs/common/tabServiceImpl.js';`, loader: 'ts', resolveDir: root }, bundle: true, write: false, platform: 'node', format: 'esm', target: 'node22', tsconfig: `${root}tsconfig.json` });
+const bundle = await build({ stdin: { contents: `export { TabService } from './src/workbench/services/tabs/tabServiceImpl.js';`, loader: 'ts', resolveDir: root }, bundle: true, write: false, platform: 'node', format: 'esm', target: 'node22', tsconfig: `${root}tsconfig.json` });
 
 const { TabService } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 

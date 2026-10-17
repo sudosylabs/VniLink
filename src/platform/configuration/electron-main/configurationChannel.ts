@@ -1,7 +1,7 @@
 import type { Event } from '../../../base/common/event.js';
 import type { IServerChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { windowIdFromContext } from '../../ipc/electron-main/windowContext.js';
-import { isConfigurationUpdate } from '../common/configuration.js';
+import { isConfigurationUpdate } from '../common/configurationSnapshot.js';
 import type { ConfigurationMainService } from './configurationMainService.js';
 
 /** Serves preference snapshots and validated preference changes to windows. */
