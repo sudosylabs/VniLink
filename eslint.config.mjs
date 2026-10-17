@@ -6,6 +6,24 @@ import layers from './build/lint/layers.mjs';
 import imports from './build/lint/imports.mjs';
 import synchronousFs from './build/lint/synchronousFs.mjs';
 import { upstreamIgnores } from './build/sourceScope.mjs';
+import mustUseSuperDispose from './build/lint/vscode/code-must-use-super-dispose.ts';
+import declareServiceBrand from './build/lint/vscode/code-declare-service-brand.ts';
+import noDangerousTypeAssertions from './build/lint/vscode/code-no-dangerous-type-assertions.ts';
+import noPotentiallyUnsafeDisposables from './build/lint/vscode/code-no-potentially-unsafe-disposables.ts';
+import parameterPropertiesAccessibility from './build/lint/vscode/code-parameter-properties-must-have-explicit-accessibility.ts';
+import noAccessorAfterAwait from './build/lint/vscode/code-no-accessor-after-await.ts';
+import noLocalizationTemplateLiterals from './build/lint/vscode/code-no-localization-template-literals.ts';
+
+// Rules ported verbatim from VS Code's `.eslint-plugin-local`; see build/lint/vscode.
+const vscodeRules = {
+	'code-must-use-super-dispose': mustUseSuperDispose,
+	'code-declare-service-brand': declareServiceBrand,
+	'code-no-dangerous-type-assertions': noDangerousTypeAssertions,
+	'code-no-potentially-unsafe-disposables': noPotentiallyUnsafeDisposables,
+	'code-parameter-properties-must-have-explicit-accessibility': parameterPropertiesAccessibility,
+	'code-no-accessor-after-await': noAccessorAfterAwait,
+	'code-no-localization-template-literals': noLocalizationTemplateLiterals,
+};
 
 export default [
 	{ ignores: ['node_modules/**', 'out/**', 'dist/**', 'target/**', 'vendor/**', 'crates/**', 'docs/**', 'assets/**', ...upstreamIgnores] },
@@ -38,6 +56,11 @@ export default [
 		},
 	},
 	{ files: ['src/**/*.ts'], rules: { 'vnilink/no-sync-fs': 'error' } },
+	{
+		files: ['src/**/*.ts', 'test/**/*.ts'],
+		plugins: { local: { rules: vscodeRules } },
+		rules: Object.fromEntries(Object.keys(vscodeRules).map(name => [`local/${name}`, 'error'])),
+	},
 	{
 		// Upstream-faithful adaptive copy: the async contract methods are
 		// synchronous in implementation and the CLI switch is compared

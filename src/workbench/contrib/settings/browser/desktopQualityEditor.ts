@@ -32,7 +32,7 @@ export class DesktopQualityEditor extends Disposable {
 		for (const preset of qualityPresets) {
 			const button = document.createElement('button');
 			button.type = 'button';
-			button.textContent = nls.localize(`desktop.preset.${preset.id}`, preset.label);
+			button.textContent = preset.label;
 			button.dataset.preset = preset.id;
 			button.setAttribute('aria-pressed', 'false');
 			this.presets.set(preset.id, button);

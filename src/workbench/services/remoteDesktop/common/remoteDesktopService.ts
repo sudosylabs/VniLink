@@ -1,3 +1,4 @@
+import * as nls from '../../../../nls.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import type { DisplayInfo, QualityLimits, VideoCodecCaps } from '../../../../platform/engine/common/engine.js';
 
@@ -12,9 +13,9 @@ export function desktopTargetKey(target: DesktopTarget): string {
 }
 
 export const qualityPresets = [
-	{ id: 'bandwidth', label: 'Low bandwidth', quality: { max_bitrate_kbps: 2000, max_frame_rate: 24, max_width: 1280, max_height: 720 } },
-	{ id: 'balanced', label: 'Balanced', quality: { max_bitrate_kbps: 5000, max_frame_rate: 30, max_width: 1920, max_height: 1080 } },
-	{ id: 'smooth', label: 'Smooth', quality: { max_bitrate_kbps: 12000, max_frame_rate: 60, max_width: 1920, max_height: 1080 } },
+	{ id: 'bandwidth', label: nls.localize('desktop.preset.bandwidth', 'Low bandwidth'), quality: { max_bitrate_kbps: 2000, max_frame_rate: 24, max_width: 1280, max_height: 720 } },
+	{ id: 'balanced', label: nls.localize('desktop.preset.balanced', 'Balanced'), quality: { max_bitrate_kbps: 5000, max_frame_rate: 30, max_width: 1920, max_height: 1080 } },
+	{ id: 'smooth', label: nls.localize('desktop.preset.smooth', 'Smooth'), quality: { max_bitrate_kbps: 12000, max_frame_rate: 60, max_width: 1920, max_height: 1080 } },
 ] as const;
 
 export function isValidDesktopQuality(quality: QualityLimits): boolean {

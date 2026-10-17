@@ -9,7 +9,7 @@ export async function verifyWorkbenchLifecycle(): Promise<void> {
 	let disposed = 0;
 	let created = 0;
 	class Configuration {
-		public readonly _serviceBrand = undefined;
+		declare public readonly _serviceBrand: undefined;
 		public readonly snapshot = { revision: 0, values: defaultConfiguration, error: null };
 		public readonly onDidChangeConfiguration = Event.None;
 

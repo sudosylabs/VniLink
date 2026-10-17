@@ -40,7 +40,10 @@ export const upstreamIgnores = [...new Set(upstreamFiles.map(path => {
 	return path;
 }))];
 
+// Verbatim VS Code tooling copies (ESLint rules) keep upstream formatting.
+const upstreamToolingDirectories = ['build/lint/vscode/'];
+
 export function isApplicationFile(filename) {
 	const path = relative(root, resolve(filename)).split(sep).join('/');
-	return !upstream.has(path) && path !== 'build/vscode-source.json';
+	return !upstream.has(path) && path !== 'build/vscode-source.json' && !upstreamToolingDirectories.some(directory => path.startsWith(directory));
 }
