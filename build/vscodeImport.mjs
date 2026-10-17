@@ -68,6 +68,9 @@ function applicationTarget({ from, specifier }) {
 
 async function writeManifest(manifest) {
 	manifest.files.sort((left, right) => left.path.localeCompare(right.path, 'en'));
+	// A recorded copy is part of the graph, never its application boundary.
+	const copies = new Set(manifest.files.map(file => file.path));
+	manifest.applicationDependencies = manifest.applicationDependencies.filter(path => !copies.has(path));
 	let graph = await titlebarDependencies(manifest);
 	// Adapted copies may import application modules; record those as the graph's boundary.
 	const application = graph.unresolved.map(applicationTarget).filter(Boolean);
@@ -99,7 +102,7 @@ export async function importSources(upstreamDirectory, roots) {
 	const upstream = checkoutUrl(upstreamDirectory);
 	const manifest = await readManifest(upstream);
 	const known = new Set(manifest.files.map(file => file.path));
-	const copied = [];
+	const copies = new Map();
 	const pending = [...roots];
 	const seen = new Set();
 	while (pending.length) {
@@ -111,16 +114,12 @@ export async function importSources(upstreamDirectory, roots) {
 		const target = localPath(path);
 		const content = await readFile(new URL(path, upstream), 'utf8');
 		if (!known.has(target)) {
-			if (existsSync(new URL(target, root))) {
+			const flattened = /\.(ts|js|css)$/.test(path) ? flattenSource(content) : content;
+			if (existsSync(new URL(target, root)) && await readFile(new URL(target, root), 'utf8') !== flattened) {
 				// An application file owns this path; never overwrite it silently.
 				throw new Error(`${target} exists but is not a recorded upstream copy`);
 			}
-			const flattened = flattenSource(content);
-			await mkdir(dirname(new URL(target, root).pathname), { recursive: true });
-			await writeFile(new URL(target, root), flattened);
-			manifest.files.push({ path: target, upstreamPath: path, sha256: sha256(flattened), changedImports: 0 });
-			known.add(target);
-			copied.push(target);
+			copies.set(target, { upstreamPath: path, content: flattened });
 		}
 		for (const specifier of dependencies(path, content)) {
 			const dependency = resolveUpstream(upstream, path, specifier);
@@ -129,6 +128,21 @@ export async function importSources(upstreamDirectory, roots) {
 			}
 			pending.push(dependency);
 		}
+		if (path.endsWith('.js')) {
+			// Vendored JavaScript ships with its declarations and attribution.
+			for (const companion of [path.replace(/\.js$/, '.d.ts'), path.replace(/\.js$/, '.license.txt'), `${posix.dirname(path)}/cgmanifest.json`]) {
+				if (existsSync(new URL(companion, upstream))) {
+					pending.push(companion);
+				}
+			}
+		}
+	}
+	// Write only after the whole closure resolved, so a failure copies nothing.
+	const copied = [...copies.keys()];
+	for (const [target, { upstreamPath, content }] of copies) {
+		await mkdir(dirname(new URL(target, root).pathname), { recursive: true });
+		await writeFile(new URL(target, root), content);
+		manifest.files.push({ path: target, upstreamPath, sha256: sha256(content), changedImports: 0 });
 	}
 	for (const path of roots.map(localPath)) {
 		if (!manifest.entryPoints.includes(path)) {
