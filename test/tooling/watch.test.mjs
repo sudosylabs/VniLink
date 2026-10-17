@@ -21,7 +21,7 @@ test('desktop watcher rebuilds TS/CSS, handles atomic resource saves and leaves 
 		await mkdir(dirname(filename), { recursive: true });
 		await writeFile(filename, text);
 	}
-	const paths = ['src/main.ts', 'src/preload.ts', 'src/platform/engine/electron-utility/engineHost.ts', 'test/smoke/main.ts', 'test/browser/index.ts'];
+	const paths = ['src/main.ts', 'src/preload.ts', 'src/platform/engine/electron-utility/engineMain.ts', 'test/smoke/main.ts', 'test/browser/index.ts'];
 	let watcher;
 	try {
 		await put('tsconfig.json', '{}');

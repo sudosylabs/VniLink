@@ -7,7 +7,7 @@ export function buildOptions(root, { production = false, outputDirectory = join(
 	const browser = (entry, output, extra = {}) => ({ ...common, entryPoints: [entry], outfile: join(outputDirectory, output), platform: 'browser', target: 'chrome144', loader: { '.svg': 'text' }, ...extra });
 	return [
 		node('src/main.ts', 'main.cjs'),
-		node('src/platform/engine/electron-utility/engineHost.ts', 'engine.cjs'),
+		node('src/platform/engine/electron-utility/engineMain.ts', 'engine.cjs'),
 		node('src/preload.ts', 'preload.cjs'),
 		...(!production ? [node('test/smoke/main.ts', 'smoke.cjs')] : []),
 		browser('src/renderer.ts', 'renderer/renderer.js'),

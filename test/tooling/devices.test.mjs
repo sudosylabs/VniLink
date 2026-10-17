@@ -153,39 +153,26 @@ test('unavailable, cancelled and disposed services never send requests', async (
 	assert.equal(calls, 0);
 });
 
-test('event-driven presence refresh is stable, recovers after failure and releases subscriptions', async context => {
-	context.mock.timers.enable({ apis: ['setTimeout'] });
+test('device presence follows engine events, resyncs after gaps and follows engine availability', async () => {
 	let state = 'connected';
-	let failPoll = false;
-	let lagged = '0';
-	let events = [];
+	let failSnapshot = false;
 	const calls = [];
-	let nextHandle = 0;
-	const service = new DeviceService(fakeEngine({
+	const engine = fakeEngine({
 		async engineCommand(command) {
-			calls.push(command);
-			if (command.type === 'subscribeEvents') {
-				return { type: 'eventSubscription', subscriptionId: String(++nextHandle) };
-			}
-			if (command.type === 'releaseEvents' || command.type === 'startHosting') {
+			calls.push(command.type);
+			if (command.type === 'startHosting') {
 				return { type: 'done' };
 			}
 			if (command.type === 'snapshot') {
-				return snapshot([{ ...device('peer'), presence: state }]);
-			}
-			if (command.type === 'pollEvents') {
-				if (failPoll) {
-					failPoll = false;
-					throw new Error('lost subscription');
+				if (failSnapshot) {
+					throw new Error('Engine busy');
 				}
-				const reply = { type: 'events', events, lagged };
-				events = [];
-				lagged = '0';
-				return reply;
+				return snapshot([{ ...device('peer'), presence: state }]);
 			}
 			throw new Error(command.type);
 		}
-	}, true));
+	}, true);
+	const service = new DeviceService(engine);
 	let changes = 0;
 	service.onDidChangeDevices(() => changes++);
 	const settle = async () => {
@@ -196,48 +183,33 @@ test('event-driven presence refresh is stable, recovers after failure and releas
 	try {
 		await service.initialize();
 		assert.equal(service.devices[0].presence, 'connected');
-		events = [{ type: 'sessionChanged' }];
-		context.mock.timers.tick(500);
+		engine.fireEvents({ events: [{ type: 'hostLocked', locked: true }], resync: false });
 		await settle();
-		assert.equal(changes, 1, 'unchanged snapshots must not rebuild the device list');
+		assert.equal(calls.filter(type => type === 'snapshot').length, 1, 'Unrelated events must not re-read devices');
+		engine.fireEvents({ events: [{ type: 'peerRenamed', endpoint_id: 'peer', hostname: null }], resync: false });
+		await settle();
+		assert.equal(changes, 1, 'Unchanged snapshots must not rebuild the device list');
 		state = 'reconnecting';
-		lagged = '1';
-		context.mock.timers.tick(500);
+		engine.fireEvents({ events: [], resync: true });
 		await settle();
 		assert.equal(service.devices[0].presence, 'reconnecting');
-		failPoll = true;
-		context.mock.timers.tick(500);
+		failSnapshot = true;
+		engine.fireEvents({ events: [], resync: true });
 		await settle();
 		assert.equal(service.devices[0].presence, 'unknown');
+		failSnapshot = false;
+		engine.setAvailable(false);
+		assert.equal(service.state, 'unavailable');
 		state = 'disconnected';
-		context.mock.timers.tick(500);
+		engine.setAvailable(true);
 		await settle();
 		assert.equal(service.devices[0].presence, 'disconnected');
-		assert.equal(nextHandle, 2);
+		assert.equal(service.state, 'ready');
+		assert.equal(calls.filter(type => type === 'startHosting').length, 2);
 	} finally {
 		service.dispose();
-		await settle();
 	}
-	assert.deepEqual(calls.filter(command => command.type === 'releaseEvents').map(command => command.subscriptionId), ['1', '2']);
-});
-
-test('subscription arriving after disposal is released without reading a snapshot', async () => {
-	const pending = deferred();
-	const calls = [];
-	const service = new DeviceService(fakeEngine({
-		async engineCommand(command) {
-			calls.push(command);
-			if (command.type === 'subscribeEvents') {
-				return pending.promise;
-			}
-			return { type: 'done' };
-		}
-	}, true));
-	const starting = service.initialize();
-	service.dispose();
-	pending.resolve({ type: 'eventSubscription', subscriptionId: '12' });
-	await starting;
-	assert.deepEqual(calls, [{ type: 'subscribeEvents' }, { type: 'releaseEvents', subscriptionId: '12' }]);
+	assert.equal(engine.eventListeners, 0, 'Disposed service kept its engine event listener');
 });
 
 test('device commands use neutral connections and consume a fresh pairing preview on every attempt', async () => {

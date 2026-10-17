@@ -17,6 +17,9 @@ import type { EngineMainService } from './engineMainService.js';
 /** Commands that change relay settings and so may change whether a restart is required. */
 const relayCommands: ReadonlySet<EngineCommand['type']> = new Set(['saveCustomRelays', 'setRelayPublic', 'setRelayCustom']);
 
+/** Engine commands only the main process may send; windows receive events through `onDidReceiveEvents`. */
+const privateCommands: ReadonlySet<EngineCommand['type']> = new Set(['subscribeEvents', 'pollEvents', 'releaseEvents']);
+
 /**
  * Serves engine commands and data channels to windows. Commands are validated
  * here even though the renderer and Rust validate them too, and data channels
@@ -43,6 +46,7 @@ export class EngineChannel extends Disposable implements IServerChannel {
 		switch (event) {
 			case 'onDidChangeAvailability': return this.engine.onDidChangeAvailability as Event<T>;
 			case 'onDidChangeRestartRequired': return this.engine.onDidChangeRestartRequired as Event<T>;
+			case 'onDidReceiveEvents': return this.engine.onDidReceiveEvents as Event<T>;
 		}
 		throw new Error(`Unknown engine event: ${event}`);
 	}
@@ -61,7 +65,7 @@ export class EngineChannel extends Disposable implements IServerChannel {
 	}
 
 	private async execute(command: unknown): Promise<EngineReply> {
-		if (!isEngineCommand(command)) {
+		if (!isEngineCommand(command) || privateCommands.has(command.type)) {
 			throw new Error('Invalid engine command');
 		}
 		if (command.type === 'startNativeScreenSharing') {

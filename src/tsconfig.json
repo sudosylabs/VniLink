@@ -127,7 +127,12 @@
     "./base/common/defaultAccount.ts",
     "./base/parts/ipc/common/ipc.electron.ts",
     "./base/parts/ipc/electron-main/ipc.electron.ts",
-    "./base/parts/ipc/electron-main/ipcMain.ts"
+    "./base/parts/ipc/electron-main/ipcMain.ts",
+    "./base/parts/ipc/electron-main/ipc.mp.ts",
+    "./base/parts/ipc/common/ipc.mp.ts",
+    "./base/common/uuid.ts",
+    "./base/parts/ipc/node/ipc.mp.ts",
+    "./base/parts/sandbox/node/electronTypes.ts"
   ],
   "include": [],
   "exclude": []

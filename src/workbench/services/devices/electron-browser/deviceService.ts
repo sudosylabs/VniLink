@@ -1,8 +1,11 @@
 import { Emitter } from '../../../../base/common/event.js';
-import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
-import { IEngineService } from '../../../../platform/engine/common/engineService.js';
-import type { EngineCommand, EngineReply, ControlRequestInfo } from '../../../../platform/engine/common/engine.js';
+import { IEngineService, type EngineEventBatch } from '../../../../platform/engine/common/engineService.js';
+import type { EngineCommand, EngineEvent, EngineReply, ControlRequestInfo } from '../../../../platform/engine/common/engine.js';
+
+/** Engine events after which the device list may have changed. */
+const deviceEvents: ReadonlySet<EngineEvent['type']> = new Set(['devicePaired', 'deviceAuthorized', 'deviceRevoked', 'deviceUnpaired', 'peerRenamed', 'sessionChanged']);
+
 import type { DeviceSummary, IDeviceService, PairingFile } from '../common/deviceService.js';
 
 export class DeviceService extends Disposable implements IDeviceService {
@@ -15,12 +18,7 @@ export class DeviceService extends Disposable implements IDeviceService {
 	private failed = false;
 	private current: readonly DeviceSummary[] = Object.freeze([]);
 	private revision = 0;
-	private subscription: string | undefined;
-	private needsRefresh = true;
 	private readonly lifetime = new AbortController();
-	private readonly polling = this._register(new RunOnceScheduler(() => {
-		void this.poll();
-	}, 500));
 
 	constructor(@IEngineService private readonly engine: IEngineService) {
 		super();
@@ -37,6 +35,16 @@ export class DeviceService extends Disposable implements IDeviceService {
 			return;
 		}
 		this.started = true;
+		this._register(this.engine.onDidReceiveEvents(batch => {
+			this.onEvents(batch);
+		}));
+		this._register(this.engine.onDidChangeAvailability(available => {
+			if (available) {
+				void this.start();
+			} else {
+				this.markUnknown();
+			}
+		}));
 		await this.start();
 	}
 
@@ -165,59 +173,22 @@ export class DeviceService extends Disposable implements IDeviceService {
 
 	private async start(): Promise<void> {
 		try {
-			const reply = await this.engine.execute({ type: 'subscribeEvents' });
-			if (reply.type !== 'eventSubscription') {
-				throw new Error('Invalid device event subscription');
-			}
-			if (this.isDisposed()) {
-				await this.engine.execute({ type: 'releaseEvents', subscriptionId: reply.subscriptionId });
-				return;
-			}
-			this.subscription = reply.subscriptionId;
 			// Accept remembered peers while the app is open. Rust still gates every
 			// service with global consent and unknown peers with owner confirmation.
 			await this.execute({ type: 'startHosting' });
 			await this.refresh(this.lifetime.signal);
-			this.needsRefresh = false;
 		} catch {
 			this.markUnknown();
-		} finally {
-			if (!this.isDisposed()) {
-				this.polling.schedule();
-			}
 		}
 	}
 
-	private async poll(): Promise<void> {
-		if (this.isDisposed()) {
+	private onEvents(batch: EngineEventBatch): void {
+		if (this.isDisposed() || !(batch.resync || batch.events.some(event => deviceEvents.has(event.type)))) {
 			return;
 		}
-		if (!this.subscription) {
-			await this.start();
-			return;
-		}
-		try {
-			const reply = await this.engine.execute({ type: 'pollEvents', subscriptionId: this.subscription, maxEvents: 256 });
-			if (reply.type !== 'events') {
-				throw new Error('Invalid device event reply');
-			}
-			if (this.needsRefresh || reply.lagged !== '0' || reply.events.some(event => ['devicePaired', 'deviceAuthorized', 'deviceRevoked', 'deviceUnpaired', 'peerRenamed', 'sessionChanged'].includes(event.type))) {
-				await this.refresh(this.lifetime.signal);
-				this.needsRefresh = false;
-			}
-		} catch {
-			this.needsRefresh = true;
-			const subscriptionId = this.subscription;
-			this.subscription = undefined;
-			if (subscriptionId) {
-				await this.engine.execute({ type: 'releaseEvents', subscriptionId }).catch(() => undefined);
-			}
+		void this.refresh(this.lifetime.signal).catch(() => {
 			this.markUnknown();
-		} finally {
-			if (!this.isDisposed()) {
-				this.polling.schedule();
-			}
-		}
+		});
 	}
 
 	private setState(failed: boolean): void {
@@ -243,12 +214,7 @@ export class DeviceService extends Disposable implements IDeviceService {
 
 	public override dispose(): void {
 		this.lifetime.abort();
-		const subscriptionId = this.subscription;
-		this.subscription = undefined;
 		super.dispose();
-		if (subscriptionId) {
-			void this.engine.execute({ type: 'releaseEvents', subscriptionId }).catch(() => undefined);
-		}
 	}
 
 	private isCurrentRequest(revision: number, signal: AbortSignal): boolean {

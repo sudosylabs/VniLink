@@ -133,6 +133,9 @@ test('relay commands refresh restart state, and a failed readback still reports 
 	};
 	const channel = new EngineChannel(engine, {}, {}, {});
 	await assert.rejects(channel.call('window:1', 'execute', { type: 'shutdown' }), /Invalid/);
+	for (const command of [{ type: 'subscribeEvents' }, { type: 'pollEvents', subscriptionId: '1', maxEvents: 1 }, { type: 'releaseEvents', subscriptionId: '1' }]) {
+		await assert.rejects(channel.call('window:1', 'execute', command), /Invalid/, `${command.type} must stay private to main`);
+	}
 	await channel.call('window:1', 'execute', { type: 'setRelayPublic' });
 	assert.equal(refreshes, 1);
 	refreshFails = true;

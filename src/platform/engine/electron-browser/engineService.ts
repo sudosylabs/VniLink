@@ -1,10 +1,10 @@
-import { Emitter } from '../../../base/common/event.js';
+import { Emitter, type Event } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import type { IChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { IMainProcessService } from '../../ipc/common/mainProcessService.js';
 import type { DataChannelRequest } from '../common/dataChannel.js';
 import { isEngineReply, type EngineCommand, type EngineReply } from '../common/engine.js';
-import { ENGINE_CHANNEL_NAME, type IEngineService } from '../common/engineService.js';
+import { ENGINE_CHANNEL_NAME, type EngineEventBatch, type IEngineService } from '../common/engineService.js';
 
 /** Window side of the engine channel; keeps availability and restart state current. */
 export class EngineService extends Disposable implements IEngineService {
@@ -14,6 +14,7 @@ export class EngineService extends Disposable implements IEngineService {
 	public readonly onDidChangeAvailability = this.availabilityChanged.event;
 	private readonly restartRequiredChanged = this._register(new Emitter<boolean>());
 	public readonly onDidChangeRestartRequired = this.restartRequiredChanged.event;
+	public readonly onDidReceiveEvents: Event<EngineEventBatch>;
 	private _available: boolean;
 	private _restartRequired = false;
 
@@ -24,6 +25,7 @@ export class EngineService extends Disposable implements IEngineService {
 		super();
 		this._available = available;
 		this.channel = mainProcessService.getChannel(ENGINE_CHANNEL_NAME);
+		this.onDidReceiveEvents = this.channel.listen<EngineEventBatch>('onDidReceiveEvents');
 		this._register(this.channel.listen<boolean>('onDidChangeAvailability')(value => {
 			this.setAvailable(value);
 		}));

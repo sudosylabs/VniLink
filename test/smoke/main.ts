@@ -138,9 +138,21 @@ class SmokeSuite {
     let sessionError = '';
     try { await engine.execute({ type: 'disconnect' }); } catch (error) { sessionError = String(error); }
     const afterError = await engine.execute({ type: 'snapshot' });
+    const hostingEvent = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { listener.dispose(); reject(new Error('No hosting event arrived')); }, 5000);
+      const listener = engine.onDidReceiveEvents(batch => {
+        const event = batch.events.find(candidate => candidate.type === 'hostingChanged' && candidate.hosting === false);
+        if (event) { clearTimeout(timer); listener.dispose(); resolve(event); }
+      });
+    });
+    await engine.execute({ type: 'stopHosting' });
+    const firstBatch = await hostingEvent;
+    await engine.execute({ type: 'startHosting' });
+    let privateRejected = false;
+    try { await engine.execute({ type: 'subscribeEvents' }); } catch { privateRejected = true; }
     let unknownChannelRejected = false;
     try { await window.driver.mainProcess.getChannel('encryption').call('encrypt', 'secret'); } catch { unknownChannelRejected = true; }
-    return { snapshot, invitation, invalidRejected, sessionError, afterError, unknownChannelRejected };
+    return { snapshot, invitation, invalidRejected, sessionError, afterError, unknownChannelRejected, firstBatch, privateRejected };
   })()`);
 		if (
 			!record(engine) ||
@@ -156,7 +168,9 @@ class SmokeSuite {
 			!engine.sessionError.includes('NoSession') ||
 			!isEngineReply(engine.afterError) ||
 			engine.afterError.type !== 'snapshot' ||
-			engine.unknownChannelRejected !== true
+			engine.unknownChannelRejected !== true ||
+			!record(engine.firstBatch) || engine.firstBatch.type !== 'hostingChanged' ||
+			engine.privateRejected !== true
 		) {
 			throw new Error('Native control bridge failed');
 		}
