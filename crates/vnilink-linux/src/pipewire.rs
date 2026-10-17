@@ -175,6 +175,11 @@ impl PortalCapture {
         (self.width, self.height)
     }
 
+    /// When PipeWire last pushed a picture. Idle polls do not move this.
+    pub fn attested_at(&self) -> Option<std::time::Instant> {
+        self.shared.channel.pushed_at()
+    }
+
     /// Arrangement of the frame most recently returned by [`Self::poll_frame`].
     pub fn last_delivery(&self) -> Option<PortalDelivery> {
         *self.delivery.lock().expect("portal delivery")

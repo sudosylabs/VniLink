@@ -172,6 +172,7 @@ impl Core {
                 ServiceKind::Microphone => "microphone service",
                 ServiceKind::Files => "files service",
                 ServiceKind::System => "system service",
+                ServiceKind::ScreenSnapshot => "screen snapshot on a files-only connection",
             }));
         }
         if state.services.len() >= crate::MAX_SERVICE_RECORDS {

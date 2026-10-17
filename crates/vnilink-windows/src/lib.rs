@@ -35,8 +35,12 @@ pub use plan::{WindowsPlan, SECURE_DESKTOP_SUPPORTED};
 #[cfg(windows)]
 pub use capture::WindowsCapture;
 #[cfg(windows)]
+mod snapshot;
+#[cfg(windows)]
 pub use host::serve_windows;
 pub use host::HostSession;
+#[cfg(windows)]
+pub use snapshot::WindowsSnapshot;
 
 #[cfg(test)]
 #[path = "tests.rs"]

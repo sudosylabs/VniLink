@@ -31,6 +31,14 @@ pub trait FrameSource {
     fn cursor(&self) -> Option<vnilink::CursorState> {
         None
     }
+    /// When the OS last attested these pixels. `None` means this source cannot
+    /// tell a new acquisition from a retimestamped cache.
+    fn attested_at(&self) -> Option<std::time::Instant> {
+        None
+    }
+    fn attested_display(&self) -> &str {
+        ""
+    }
     /// Shared topology revision the polled pictures attest, read live
     /// for every published frame. 0 means unknown: the fanout stamps the
     /// current topology revision instead. Captures whose geometry is
@@ -206,6 +214,7 @@ where
             std::thread::sleep(std::time::Duration::from_millis(10));
             continue;
         };
+        offer_snapshot(core, capture, &frame);
         if let Some(cursor) = capture.cursor() {
             if separate_cursor {
                 match core.publish_cursor(session_id, generation, cursor) {
@@ -234,6 +243,20 @@ where
             std::thread::sleep(remaining);
         }
     }
+}
+
+fn offer_snapshot(core: &Core, capture: &impl FrameSource, frame: &RawFrame) {
+    let Some(at) = capture.attested_at() else {
+        return;
+    };
+    core.offer_attested_picture(
+        at,
+        frame.width(),
+        frame.height(),
+        frame.stride(),
+        frame.pixels(),
+        capture.attested_display(),
+    );
 }
 
 /// Capture/encode for one neutral Desktop instance, never its parent session.
@@ -303,6 +326,7 @@ where
             std::thread::sleep(std::time::Duration::from_millis(10));
             continue;
         };
+        offer_snapshot(core, capture, &frame);
         if let Some(cursor) = capture.cursor() {
             if info.separate_cursor {
                 match core.publish_desktop_cursor(service_id, generation, cursor) {

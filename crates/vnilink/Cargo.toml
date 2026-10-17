@@ -25,8 +25,12 @@ vnilink-audio = { path = "../vnilink-audio" }
 rand = "0.10"
 sha2 = "=0.11.0"
 blake3 = "=1.8.7"
+jpeg-encoder = "=0.6.1"
 thiserror = "2"
 tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+jpeg-decoder = "=0.3.2"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 x11rb = "=0.14.0"

@@ -186,6 +186,14 @@ impl FrameSource for WaylandCapture {
     fn size(&self) -> (u16, u16) {
         self.capture.size()
     }
+    fn attested_at(&self) -> Option<std::time::Instant> {
+        self.capture.attested_at()
+    }
+
+    fn attested_display(&self) -> &str {
+        "portal"
+    }
+
     fn poll_frame(&self, time: u64) -> Result<Option<RawFrame>, Error> {
         if self.input.connection.closed.load(Ordering::Acquire) {
             return Err(Error::CaptureRejected(

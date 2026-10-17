@@ -28,7 +28,7 @@ export interface VideoCodecCaps {
 
 export interface RelayInput { url: string; authenticated: boolean; replacementToken: string; }
 
-export type ServiceKind = 'Desktop' | 'Files' | 'Terminal' | 'Camera' | 'SystemAudio' | 'Microphone' | 'System';
+export type ServiceKind = 'Desktop' | 'Files' | 'Terminal' | 'Camera' | 'SystemAudio' | 'Microphone' | 'System' | 'ScreenSnapshot';
 
 export interface ServiceSummary {
 	id: string; connectionId: string; generation: string; peer_id: string;
@@ -328,7 +328,7 @@ function systemSupport(value: unknown): value is SystemSupport {
 
 function serviceKind(value: unknown): value is ServiceSummary['kind'] {
 	return value === 'Desktop' || value === 'Files' || value === 'Terminal' || value === 'Camera'
-		|| value === 'SystemAudio' || value === 'Microphone' || value === 'System';
+		|| value === 'SystemAudio' || value === 'Microphone' || value === 'System' || value === 'ScreenSnapshot';
 }
 
 function sharingPolicyUpdate(value: unknown): boolean {

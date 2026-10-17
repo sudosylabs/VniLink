@@ -58,6 +58,8 @@ pub use recording::{
     FfiRecordingRecovery, FfiRecordingRetention, FfiRecordingStatus, RecordingHandle,
 };
 mod services;
+mod snapshot;
+pub use snapshot::{snapshot_error_outcome, FfiScreenAccess, FfiScreenSnapshot};
 mod system;
 mod terminal;
 pub use services::{

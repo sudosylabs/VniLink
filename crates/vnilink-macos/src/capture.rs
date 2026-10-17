@@ -88,6 +88,24 @@ impl ScreenPlan {
         self.shows_cursor
     }
 
+    /// A short, cursor-free stream sized for one thumbnail. The caller picks
+    /// a fitted size so the output keeps the display's aspect ratio.
+    pub fn snapshot(width: u16, height: u16) -> Result<Self, Error> {
+        if width == 0
+            || height == 0
+            || width > vnilink::snapshot::MAX_SNAPSHOT_WIDTH
+            || height > vnilink::snapshot::MAX_SNAPSHOT_HEIGHT
+        {
+            return Err(Error::InvalidSetting("snapshot size is out of range"));
+        }
+        Ok(Self {
+            width,
+            height,
+            frame_rate: 5,
+            shows_cursor: false,
+        })
+    }
+
     /// BGRA, one monitor, cursor hidden unless the plan asks for it.
     #[cfg(target_os = "macos")]
     pub fn configuration(&self) -> SCStreamConfiguration {
@@ -267,11 +285,49 @@ impl ScreenCapture {
         (self.width, self.height)
     }
 
+    /// When ScreenCaptureKit last pushed a picture. Idle polls do not move this.
+    pub fn attested_at(&self) -> Option<std::time::Instant> {
+        self.channel.pushed_at()
+    }
+
     /// Current pixels without waiting for screen damage. Failure is checked
     /// before cached pixels, so a stopped capture cannot look healthy forever.
     pub fn poll_frame(&self, timestamp_us: u64) -> Result<Option<vnilink_media::RawFrame>, Error> {
         poll_channel(&self.channel, timestamp_us)
     }
+
+    /// Opens the primary display at a fitted thumbnail size. The first polled
+    /// frame is a new acquisition; drop the capture to stop the stream.
+    pub fn open_snapshot(startup: &vnilink::BackendStartup) -> Result<(Self, String), Error> {
+        startup
+            .check()
+            .map_err(|_| Error::CaptureRejected("desktop capture startup cancelled or expired"))?;
+        let content = SCShareableContent::get()
+            .map_err(|_| Error::CaptureRejected("Screen Recording permission was not granted"))?;
+        startup
+            .check()
+            .map_err(|_| Error::CaptureRejected("desktop capture startup cancelled or expired"))?;
+        // SAFETY: CGMainDisplayID takes no pointer and returns the main display id.
+        let primary = unsafe { CGMainDisplayID() };
+        let displays = content.displays();
+        let display = displays
+            .iter()
+            .find(|display| display.display_id() == primary)
+            .or_else(|| displays.first())
+            .ok_or(Error::CaptureRejected("no display is available"))?;
+        let (width, height) = vnilink::snapshot::fitted_size(display.width(), display.height())
+            .ok_or(Error::CaptureRejected("no display is available"))?;
+        let plan = ScreenPlan::snapshot(width, height)?;
+        let display_id = display.display_id();
+        let capture = Self::start_display(&plan, Some(display_id), startup)?;
+        Ok((capture, display_id.to_string()))
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGMainDisplayID() -> u32;
 }
 
 #[cfg(target_os = "macos")]

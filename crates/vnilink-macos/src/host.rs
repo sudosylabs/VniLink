@@ -25,6 +25,10 @@ impl FrameSource for crate::capture::ScreenCapture {
     fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
         self.poll_frame(timestamp_us)
     }
+
+    fn attested_at(&self) -> Option<std::time::Instant> {
+        crate::capture::ScreenCapture::attested_at(self)
+    }
 }
 
 /// Copy ScreenCaptureKit frames into `core` until `stop` is set or the hosted

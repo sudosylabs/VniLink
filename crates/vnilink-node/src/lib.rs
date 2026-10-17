@@ -221,6 +221,7 @@ impl EventTransfer {
             vnilink_app::FfiServiceKind::SystemAudio => "SystemAudio",
             vnilink_app::FfiServiceKind::Microphone => "Microphone",
             vnilink_app::FfiServiceKind::System => "System",
+            vnilink_app::FfiServiceKind::ScreenSnapshot => "ScreenSnapshot",
         }
     }
 

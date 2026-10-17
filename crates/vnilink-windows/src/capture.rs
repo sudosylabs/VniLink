@@ -32,6 +32,8 @@ pub struct WindowsCapture {
     size: (u16, u16),
     last: Mutex<Option<RawFrame>>,
     pointer: Mutex<crate::cursor::Pointer>,
+    /// Last successful acquire or timeout. An error clears it.
+    attested: Mutex<Option<std::time::Instant>>,
 }
 
 /// Desktop Duplication handles before the format and size are validated.
@@ -58,7 +60,17 @@ impl WindowsCapture {
             size: frame_size(desktop.width, desktop.height)?,
             last: Mutex::new(None),
             pointer: Mutex::new(crate::cursor::Pointer::default()),
+            attested: Mutex::new(None),
         })
+    }
+
+    /// When Desktop Duplication last attested the picture, including a timeout
+    /// that means the desktop has not changed. Access loss clears it.
+    pub fn attested_at(&self) -> Option<std::time::Instant> {
+        *self
+            .attested
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
     }
 
     pub fn size(&self) -> (u16, u16) {
@@ -75,11 +87,19 @@ impl WindowsCapture {
             .unwrap_or_else(|poison| poison.into_inner());
         // Check the native source even when pixels are cached: access loss or
         // permission denial must not be hidden by an old picture.
-        let frame = crate::idle::picture(
-            unsafe { self.acquire(timestamp_us) },
-            &mut last,
-            timestamp_us,
-        )?;
+        let acquired = unsafe { self.acquire(timestamp_us) };
+        if acquired.is_ok() {
+            *self
+                .attested
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = Some(std::time::Instant::now());
+        } else {
+            *self
+                .attested
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = None;
+        }
+        let frame = crate::idle::picture(acquired, &mut last, timestamp_us)?;
         frame
             .map(|frame| {
                 self.pointer

@@ -29,6 +29,8 @@ import { NativeHostService } from '../../platform/native/common/nativeHostServic
 import type { DesktopApi, AppInfo } from '../../platform/ipc/common/desktopApi.js';
 import { IDeviceService } from '../services/devices/common/deviceService.js';
 import { DeviceService } from '../services/devices/electron-browser/deviceService.js';
+import { IScreenSnapshotService } from '../services/screenSnapshot/common/screenSnapshotService.js';
+import { ScreenSnapshotService } from '../services/screenSnapshot/electron-browser/screenSnapshotService.js';
 import { IConfigurationService } from '../../platform/configuration/common/configuration.js';
 import { ConfigurationService } from '../../platform/configuration/electron-browser/configurationService.js';
 import { IConnectionService } from '../services/connection/common/connectionService.js';
@@ -75,6 +77,7 @@ export class DesktopMain extends Disposable {
 			[IAccessService, new SyncDescriptor(AccessService, [api, info.engineConnected])],
 			[IConnectionService, new SyncDescriptor(ConnectionService, [api, info.engineConnected])],
 			[IDeviceService, new SyncDescriptor(DeviceService, [api, info.engineConnected])],
+			[IScreenSnapshotService, new SyncDescriptor(ScreenSnapshotService, [api, info.engineConnected])],
 			[IConfigurationService, new SyncDescriptor(ConfigurationService, [api])],
 		);
 		return services;

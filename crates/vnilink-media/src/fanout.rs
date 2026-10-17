@@ -493,6 +493,16 @@ where
                 }
                 Err(error) => break Err(error.into()),
             };
+            if let Some(at) = capture.attested_at() {
+                core.offer_attested_picture(
+                    at,
+                    frame.width(),
+                    frame.height(),
+                    frame.stride(),
+                    frame.pixels(),
+                    &capture_display.to_string(),
+                );
+            }
             let cursor = capture.cursor();
             slot.publish(
                 frame,

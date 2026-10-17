@@ -64,6 +64,7 @@ mod service_permissions;
 pub(crate) mod service_stream;
 mod services;
 mod sharing;
+pub(crate) mod snapshot;
 pub use audio_stream::RemoteAudioService;
 pub use camera_stream::RemoteCameraService;
 pub use system_stream::RemoteSystemService;
@@ -449,6 +450,8 @@ struct State {
     pairing_window: Option<PairingWindow>,
     control_request: Option<PendingControl>,
     next_control_request: u64,
+    /// Last admitted screenshot per peer. Entries expire after a minute.
+    snapshot_recent: HashMap<[u8; 32], std::time::Instant>,
 }
 
 struct PairingWindow {
@@ -528,6 +531,9 @@ struct Shared {
     // lock. UI snapshots must never acquire that lock to query availability.
     clipboard_available: AtomicBool,
     camera_factory: Mutex<Option<Arc<dyn crate::camera::HostCameraFactory>>>,
+    snapshot_factory: Mutex<Option<Arc<dyn crate::snapshot::HostSnapshotFactory>>>,
+    /// One attested desktop picture, replaced at most once a second.
+    snapshot_tap: Mutex<Option<Arc<snapshot::AttestedShot>>>,
     /// Camera device ids with a live host serve. One opener per device;
     /// a second concurrent open is refused with structured Busy.
     camera_open: Mutex<HashSet<String>>,

@@ -16,6 +16,8 @@ pub enum ServiceKind {
     SystemAudio,
     Microphone,
     System,
+    /// One still screenshot. Uses the same grant as [`ServiceKind::Desktop`].
+    ScreenSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +111,7 @@ impl ServiceSupport {
             ServiceKind::SystemAudio => self.system_audio,
             ServiceKind::Microphone => self.microphone,
             ServiceKind::System => self.system_actions,
+            ServiceKind::ScreenSnapshot => self.desktop,
         }
     }
 }

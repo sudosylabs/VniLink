@@ -26,6 +26,8 @@ pub use capture::{display_scale, ScreenPlan, FILEVAULT_PREBOOT_SUPPORTED};
 #[cfg(target_os = "macos")]
 pub use capture::{list_displays, ScreenCapture};
 #[cfg(target_os = "macos")]
+mod snapshot;
+#[cfg(target_os = "macos")]
 pub use decode::MacDecoder;
 #[cfg(target_os = "macos")]
 pub use encode::probe_hevc;
@@ -36,6 +38,8 @@ pub use host::{serve_desktop, serve_shared, serve_stream};
 pub use pixels::raw_frame_from_bgra;
 #[cfg(target_os = "macos")]
 pub use pixels::raw_frame_from_pixel_buffer;
+#[cfg(target_os = "macos")]
+pub use snapshot::MacSnapshot;
 
 #[cfg(test)]
 #[path = "tests.rs"]

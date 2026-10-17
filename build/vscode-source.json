@@ -598,7 +598,7 @@
       "path": "src/workbench/electron-browser/desktop.main.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/desktop.main.ts",
       "adapted": true,
-      "sha256": "69517fa8244d86842a6fc46dc2815f481b440de9884f63d14c155d2e80d47c68"
+      "sha256": "dd2da77c0a366c9d15bc677c3dfa1856795fa159b54cb758315a289993b84a64"
     },
     {
       "path": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
@@ -2390,6 +2390,16 @@
     },
     {
       "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/screenSnapshot/common/screenSnapshotService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/screenSnapshot/electron-browser/screenSnapshotService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
       "to": "src/platform/configuration/common/configuration.ts",
       "kind": "import"
     },
@@ -2724,6 +2734,8 @@
     "src/platform/windows/electron-main/windowMaterial.ts",
     "src/workbench/services/devices/common/deviceService.ts",
     "src/workbench/services/devices/electron-browser/deviceService.ts",
+    "src/workbench/services/screenSnapshot/common/screenSnapshotService.ts",
+    "src/workbench/services/screenSnapshot/electron-browser/screenSnapshotService.ts",
     "src/platform/configuration/common/configuration.ts",
     "src/platform/configuration/electron-browser/configurationService.ts",
     "src/workbench/services/connection/common/connectionService.ts",

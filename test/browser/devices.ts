@@ -2,6 +2,8 @@ import { Emitter } from '../../src/base/common/event.js';
 import { Disposable } from '../../src/base/common/lifecycle.js';
 import type { ControlRequestInfo } from '../../src/platform/engine/common/engine.js';
 import type { DeviceSummary, IDeviceService, PairingFile } from '../../src/workbench/services/devices/common/deviceService.js';
+import type { ScreenAccess, ScreenSnapshotResult } from '../../src/workbench/services/screenSnapshot/common/screenSnapshot.js';
+import type { IScreenSnapshotService } from '../../src/workbench/services/screenSnapshot/common/screenSnapshotService.js';
 import { DevicesPage } from '../../src/workbench/contrib/home/browser/devicesPage.js';
 
 function assert(value: unknown, message: string): asserts value {
@@ -34,8 +36,9 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 	public confirmation = '';
 	public renameResult: Promise<void> | undefined;
 	public incoming: ControlRequestInfo | null = null;
+	public readonly snapshots: FixtureSnapshots;
 
-	constructor(state: DeviceFixtureState = 'populated') {
+	constructor(state: DeviceFixtureState = 'populated', snapshots?: FixtureSnapshots) {
 		super();
 		if (state === 'populated' || state === 'selected') {
 			this.devices = [
@@ -46,7 +49,8 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 		} else if (state === 'unavailable') {
 			this.state = 'unavailable';
 		}
-		this.page = this._register(new DevicesPage(this));
+		this.snapshots = snapshots ?? new FixtureSnapshots();
+		this.page = this._register(new DevicesPage(this, this.snapshots));
 		this.host.className = 'home-content device-fixture';
 		this.host.style.cssText = 'position:fixed;top:var(--titlebar-height);left:190px;right:0;bottom:0;z-index:10;';
 		this.host.append(this.page.element);
@@ -115,6 +119,55 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 	public override dispose(): void {
 		super.dispose();
 		this.host.remove();
+	}
+}
+
+const TINY_JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+
+const STUDIO = 'a'.repeat(64);
+
+function shot(capturedUnixMs: number, displayId: string, sessionId = '1', generation = '1'): ScreenSnapshotResult {
+	return { status: 'ready', jpeg: TINY_JPEG, width: 1, height: 1, capturedUnixMs, displayId, endpointId: STUDIO, sessionId, generation };
+}
+
+/** Records screenshot requests. The default result is a synthetic JPEG, not a captured desktop. */
+export class FixtureSnapshots implements IScreenSnapshotService {
+	declare public readonly _serviceBrand: undefined;
+	public calls: string[] = [];
+	public prompts: boolean[] = [];
+	public hold = false;
+	public result: ScreenSnapshotResult = shot(Date.now(), 'fixture');
+	public accessResult: ScreenAccess = { status: 'allowed', endpointId: '', sessionId: '1', generation: '1' };
+	private pending: ((result: ScreenSnapshotResult) => void)[] = [];
+
+	public capture(endpointId: string, signal: AbortSignal, prompt: boolean): Promise<ScreenSnapshotResult> {
+		this.calls.push(endpointId);
+		this.prompts.push(prompt);
+		return new Promise(resolve => {
+			signal.addEventListener('abort', () => {
+				resolve({ status: 'cancelled' });
+			}, { once: true });
+			if (!this.hold) {
+				resolve(this.result);
+				return;
+			}
+			this.pending.push(resolve);
+		});
+	}
+
+	public access(endpointId: string, signal: AbortSignal): Promise<ScreenAccess> {
+		if (signal.aborted) {
+			return Promise.resolve({ status: 'cancelled' });
+		}
+		const result = this.accessResult;
+		if (result.status === 'allowed') {
+			return Promise.resolve({ ...result, endpointId: result.endpointId || endpointId });
+		}
+		return Promise.resolve(result);
+	}
+
+	public release(result: ScreenSnapshotResult = this.result): void {
+		this.pending.shift()?.(result);
 	}
 }
 
@@ -189,6 +242,91 @@ export async function verifyDevices(): Promise<void> {
 		page.querySelector<HTMLFormElement>('.device-pairing form')?.dispatchEvent(new Event('submit', { cancelable: true }));
 		await settle();
 		assert(fixture.confirmation === '042' && page.querySelector('output')?.textContent === '731', `Pairing did not show reverse confirmation: ${fixture.confirmation}; ${page.querySelector('.device-pairing')?.textContent ?? ''}`);
+	} finally {
+		fixture.dispose();
+	}
+}
+
+export async function verifyDeviceScreenshot(): Promise<void> {
+	const snapshots = new FixtureSnapshots();
+	snapshots.hold = true;
+	const fixture = new DevicePageFixture('populated', snapshots);
+	const page = fixture.page.element;
+	try {
+		const rows = [...page.querySelectorAll<HTMLButtonElement>('.device-row')];
+		rows[1].click();
+		assert(snapshots.calls.length === 0, 'A disconnected device requested a screenshot');
+		assert(page.querySelector('.device-screen figcaption')?.textContent === 'Connect to see this computer’s screen.', 'Disconnected screenshot copy is wrong');
+		rows[0].click();
+		assert(snapshots.calls[0] === 'a'.repeat(64) && page.querySelector('.device-screen img')?.getAttribute('src') === null, 'The screenshot appeared before the remote image arrived');
+		const refresh = page.querySelector<HTMLButtonElement>('.device-screen button');
+		assert(refresh !== null && refresh.textContent === 'Refresh screen' && refresh.disabled, 'Refresh was available while a screenshot was loading');
+		rows[1].click();
+		snapshots.release(shot(Date.now(), 'late'));
+		await settle();
+		assert(page.querySelector('.device-screen img')?.hasAttribute('src') !== true, 'A late screenshot from the first computer was shown on the second');
+		const disconnectedCaption = page.querySelector('.device-screen figcaption');
+		assert(disconnectedCaption !== null && !disconnectedCaption.textContent.toLowerCase().includes('asleep'), 'The panel invented a sleep state');
+		rows[0].click();
+		const capturedAt = Date.now() - 5_000;
+		snapshots.release(shot(capturedAt, 'studio'));
+		await settle();
+		const image = page.querySelector<HTMLImageElement>('.device-screen img');
+		assert(image && !image.hidden && image.alt === 'Screenshot of Studio Mac' && image.src.startsWith('blob:'), 'The connected device did not show its screenshot');
+		assert(image.parentElement?.tagName !== 'BUTTON', 'The screenshot is an input surface');
+		assert(page.querySelector('.device-screen figcaption')?.textContent === 'Screen captured just now.', 'Capture age does not describe the acquisition');
+		const shown = image.src;
+		rows[2].click();
+		await settle();
+		assert(page.querySelector<HTMLImageElement>('.device-screen img')?.hidden === true, 'Leaving the connected device kept its image');
+		assert(shown.startsWith('blob:'), 'The test did not observe an object URL');
+		rows[0].click();
+		snapshots.release({ status: 'needsPermission' });
+		await settle();
+		assert(page.querySelector('.device-screen figcaption')?.textContent === 'That computer has not allowed screen capture.', 'Permission state was not shown');
+		refresh.focus();
+		assert(document.activeElement === page.querySelector('.device-screen button'), 'Refresh cannot take keyboard focus');
+		const status = page.querySelector('.device-screen-status');
+		const age = page.querySelector('.device-screen-age');
+		assert(status?.getAttribute('role') === 'status' && age && !age.hasAttribute('role') && !page.querySelector('.device-screen figcaption')?.hasAttribute('role'), 'Capture age is announced as a live status');
+		const allow = [...page.querySelectorAll<HTMLButtonElement>('.device-screen button')].find(button => button.textContent === 'Allow screen capture');
+		assert(allow && !allow.hidden, 'Allow screen capture was not offered');
+		allow.click();
+		assert(snapshots.prompts.at(-1) === true && page.querySelector<HTMLButtonElement>('.device-screen button')?.disabled === true, 'Allow did not request consent');
+		snapshots.release({ status: 'cancelled' });
+		await settle();
+		assert(page.querySelector<HTMLButtonElement>('.device-screen button')?.disabled === false && page.querySelector('.device-screen figcaption')?.textContent === 'The screen could not be captured.', 'A cancelled screenshot left Refresh disabled');
+		page.querySelector<HTMLButtonElement>('.device-screen button')?.click();
+		snapshots.release({ status: 'needsSourceSelection' });
+		await settle();
+		const choose = [...page.querySelectorAll<HTMLButtonElement>('.device-screen button')].find(button => button.textContent === 'Choose screen');
+		assert(choose && page.querySelector('.device-screen figcaption')?.textContent === 'Choose a screen on that computer, then refresh.', 'Choosing a screen was not offered');
+		choose.click();
+		assert(snapshots.prompts.at(-1) === true, 'Choose screen did not request a source');
+		snapshots.release({ status: 'cancelled' });
+		await settle();
+		const callsBefore = snapshots.calls.length;
+		fixture.update(fixture.devices.map(device => device.id === STUDIO ? { ...device, presence: 'disconnected' as const } : device));
+		await settle();
+		assert(page.querySelector<HTMLImageElement>('.device-screen img')?.hidden === true && page.querySelector('.device-screen figcaption')?.textContent === 'Connect to see this computer’s screen.', 'Disconnect kept the previous screen');
+		fixture.update(fixture.devices.map(device => device.id === STUDIO ? { ...device, presence: 'connected' as const } : device));
+		await settle();
+		assert(snapshots.calls.length === callsBefore + 1 && snapshots.prompts.at(-1) === false, 'Returning to connected did not refresh without prompting');
+		snapshots.release(shot(Date.now(), 'again'));
+		await settle();
+		assert(page.querySelector<HTMLImageElement>('.device-screen img')?.hidden === false, 'The reconnected computer did not show a new screenshot');
+		const beforeReplace = snapshots.calls.length;
+		snapshots.accessResult = { status: 'allowed', endpointId: STUDIO, sessionId: '2', generation: '9' };
+		fixture.update(fixture.devices);
+		await settle();
+		assert(snapshots.calls.length === beforeReplace + 1 && snapshots.prompts.at(-1) === false && page.querySelector<HTMLImageElement>('.device-screen img')?.hidden === true, 'A replaced connection kept the previous screenshot');
+		snapshots.release(shot(Date.now(), 'replaced', '2', '9'));
+		await settle();
+		assert(page.querySelector<HTMLImageElement>('.device-screen img')?.hidden === false, 'The replacement screenshot was not shown');
+		snapshots.accessResult = { status: 'denied' };
+		fixture.update(fixture.devices);
+		await settle();
+		assert(page.querySelector<HTMLImageElement>('.device-screen img')?.hidden === true && page.querySelector('.device-screen figcaption')?.textContent === 'Screen viewing is turned off on that computer.', 'A revoked view kept the screenshot');
 	} finally {
 		fixture.dispose();
 	}

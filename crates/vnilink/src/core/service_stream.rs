@@ -612,6 +612,7 @@ pub(super) async fn serve(
         5 => Some(ServiceKind::SystemAudio),
         6 => Some(ServiceKind::Microphone),
         7 => Some(ServiceKind::System),
+        8 => Some(ServiceKind::ScreenSnapshot),
         _ => None,
     };
     if matches!(body[1], 3 | 4) && remote_id == 0 && kind == 3 {
@@ -634,6 +635,9 @@ pub(super) async fn serve(
             parent_stop,
         )
         .await;
+    }
+    if body[1] == PROBE && remote_id == 0 && kind == crate::snapshot::WIRE_KIND {
+        return super::snapshot::probe(shared, connection_id, peer, send, stamp).await;
     }
     if body[1] == 2 && remote_id == 0 && matches!(kind, 4 | 5 | 6) {
         let supported = {
@@ -692,6 +696,9 @@ pub(super) async fn serve(
             && !(kind == 3 && session.services_only && lock(&shared.terminal_factory).is_some())
             && !(kind == 7 && session.services_only)
             && !(kind == 1 && !session.files_only && !*session.desktop_stop.borrow())
+            && !(kind == 8
+                && (session.services_only || !session.files_only)
+                && lock(&shared.snapshot_factory).is_some())
         {
             Err(1)
         } else if state.hosted_services.len() >= 16
@@ -700,6 +707,10 @@ pub(super) async fn serve(
                     && (Some(r.info.kind) == service_kind && kind != 3
                         || r.remote_id == Some(remote_id))
             })
+        {
+            Err(4)
+        } else if kind == 8
+            && !super::snapshot::snapshot_room(&state, &peer, std::time::Instant::now())
         {
             Err(4)
         } else {
@@ -730,6 +741,9 @@ pub(super) async fn serve(
                     .get_mut(&connection_id)
                     .ok_or(Error::NoSession)?
                     .desktop_owner = Some(id);
+            }
+            if kind == 8 {
+                super::snapshot::note_snapshot(&mut state, &peer, std::time::Instant::now());
             }
             shared
                 .events
@@ -835,6 +849,9 @@ pub(super) async fn serve(
     if kind == 7 {
         return super::system_stream::serve(shared, id, send, recv, parent_stop, service_stop)
             .await;
+    }
+    if kind == 8 {
+        return super::snapshot::serve(shared, peer, send, recv, parent_stop, service_stop).await;
     }
     write(&mut send, vec![VERSION, 0, 2]).await?;
     if kind == 1 {

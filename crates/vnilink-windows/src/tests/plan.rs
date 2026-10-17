@@ -1,6 +1,9 @@
 use vnilink_media::{CapturePlan, Error, Quality};
 
-use crate::plan::{frame_size, WindowsPlan, SECURE_DESKTOP_SUPPORTED};
+use crate::plan::{
+    frame_size, snapshot_prompts_for_consent, WindowsPlan, SECURE_DESKTOP_SUPPORTED,
+    SNAPSHOT_DISPLAY_ID,
+};
 
 fn plan() -> CapturePlan {
     let quality = Quality::new(2_500, 30, 1920, 1080).unwrap();
@@ -30,6 +33,13 @@ fn a_desktop_larger_than_one_frame_is_rejected() {
             "Desktop Duplication returned an empty frame"
         ))
     ));
+}
+
+#[test]
+fn a_screenshot_uses_the_first_output_and_does_not_ask_for_consent() {
+    assert_eq!(SNAPSHOT_DISPLAY_ID, "0");
+    assert!(!snapshot_prompts_for_consent(false));
+    assert!(!snapshot_prompts_for_consent(true));
 }
 
 #[test]

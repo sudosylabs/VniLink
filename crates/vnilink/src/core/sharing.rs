@@ -68,6 +68,7 @@ impl Core {
                     crate::ServiceKind::SystemAudio => permissions.system_audio,
                     crate::ServiceKind::Microphone => permissions.microphone,
                     crate::ServiceKind::System => permissions.system_actions,
+                    crate::ServiceKind::ScreenSnapshot => permissions.desktop,
                 };
                 if !allowed
                     && record.change(

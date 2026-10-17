@@ -95,6 +95,8 @@ mod terminal_tests;
 mod audio_tests;
 #[path = "tests/camera.rs"]
 mod camera_tests;
+#[path = "tests/snapshot.rs"]
+mod snapshot_tests;
 
 #[path = "tests/power.rs"]
 mod power_tests;

@@ -5,7 +5,9 @@ import { addDisposableListener } from '../../../../base/browser/domEvent.js';
 import { renderIcon } from '../../../../base/browser/ui/icon/icon.js';
 import { Icons } from '../../../../base/common/icons.js';
 import type { DeviceSummary, IDeviceService } from '../../../services/devices/common/deviceService.js';
+import type { IScreenSnapshotService } from '../../../services/screenSnapshot/common/screenSnapshotService.js';
 import { devicePlatform, devicePresence } from './deviceLabels.js';
+import { DeviceScreenSnapshot } from './deviceScreenSnapshot.js';
 
 /** Owns one selection and fences late command feedback when selection changes. */
 export class DeviceDetails extends Disposable {
@@ -21,10 +23,11 @@ export class DeviceDetails extends Disposable {
 	private readonly forget = document.createElement('button');
 	private readonly confirm = document.createElement('div');
 	private readonly status = document.createElement('p');
+	private readonly screen: DeviceScreenSnapshot;
 	private device: DeviceSummary | undefined;
 	private pending = new Set<string>();
 
-	constructor(id: string, private readonly devices: IDeviceService) {
+	constructor(id: string, private readonly devices: IDeviceService, snapshots: IScreenSnapshotService) {
 		super();
 		this.element.id = id;
 		this.element.className = 'device-panel';
@@ -77,7 +80,8 @@ export class DeviceDetails extends Disposable {
 		this.confirm.append(warning, cancel, remove);
 		this.status.className = 'device-feedback';
 		this.status.setAttribute('role', 'status');
-		this.element.append(header, this.title, this.state, this.identity, this.connect, help, form, this.forget, this.confirm, this.status);
+		this.screen = this._register(new DeviceScreenSnapshot(snapshots));
+		this.element.append(header, this.title, this.state, this.screen.element, this.identity, this.connect, help, form, this.forget, this.confirm, this.status);
 		this._register(addDisposableListener(close, 'click', () => {
 			this.closed.fire();
 		}));
@@ -119,6 +123,7 @@ export class DeviceDetails extends Disposable {
 		const changed = device?.id !== this.device?.id;
 		const clean = this.name.value === this.device?.name;
 		this.device = device;
+		this.screen.show(device);
 		this.element.hidden = !device;
 		if (!device) {
 			return;

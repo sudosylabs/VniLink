@@ -15,6 +15,8 @@ const { DataChannelClient } = await load('../../src/platform/engine/browser/data
 
 const { isChannelRequest } = await load('../../src/platform/engine/common/dataChannel.ts');
 
+const { parseScreenSnapshot } = await load('../../src/workbench/services/screenSnapshot/common/screenSnapshot.ts');
+
 const request = { kind: 'video', requestId: 'test', sessionId: '1', generation: '2' };
 
 function fixture(kind = 'video') {
@@ -33,6 +35,40 @@ function fixture(kind = 'video') {
 	};
 }
 
+function jpeg(width, height) {
+	return new Uint8Array([
+		0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08,
+		(height >> 8) & 0xff, height & 0xff,
+		(width >> 8) & 0xff, width & 0xff,
+		0x01, 0x01, 0x11, 0x00, 0xff, 0xd9,
+	]);
+}
+
+test('a screenshot packet rejects malformed images and accepts one bounded jpeg', () => {
+	const image = jpeg(8, 8);
+	const ready = { outcome: 'ready', width: 8, height: 8, capturedUnixMs: '1700000000000', displayId: 'display-7', mime: 'image/jpeg', endpointId: 'a'.repeat(64), sessionId: '1', generation: '2' };
+	const parsed = parseScreenSnapshot(JSON.stringify(ready), image);
+	assert.equal(parsed.status, 'ready');
+	assert.equal(parsed.width, 8);
+	assert.equal(parsed.capturedUnixMs, 1700000000000);
+	assert.equal(parsed.endpointId, 'a'.repeat(64));
+	assert.equal(parsed.generation, '2');
+	assert.equal(parseScreenSnapshot(JSON.stringify({ ...ready, extra: true }), image), undefined);
+	assert.equal(parseScreenSnapshot(JSON.stringify({ ...ready, width: 641 }), image), undefined);
+	assert.equal(parseScreenSnapshot(JSON.stringify({ ...ready, mime: 'image/png' }), image), undefined);
+	assert.equal(parseScreenSnapshot(JSON.stringify({ ...ready, capturedUnixMs: 1700000000000 }), image), undefined);
+	assert.equal(parseScreenSnapshot(JSON.stringify(ready), new Uint8Array([0xff, 0xd8, 0x00, 0xff, 0xd9])), undefined);
+	assert.equal(parseScreenSnapshot(JSON.stringify(ready), jpeg(4, 4)), undefined);
+	assert.equal(parseScreenSnapshot(JSON.stringify(ready), jpeg(800, 8)), undefined);
+	assert.deepEqual(parseScreenSnapshot(JSON.stringify({ outcome: 'needsPermission' }), undefined), { status: 'needsPermission' });
+	assert.deepEqual(parseScreenSnapshot(JSON.stringify({ outcome: 'needsSourceSelection' }), undefined), { status: 'needsSourceSelection' });
+	assert.deepEqual(parseScreenSnapshot(JSON.stringify({ outcome: 'cancelled' }), undefined), { status: 'cancelled' });
+	assert.deepEqual(parseScreenSnapshot(JSON.stringify({ outcome: 'replaced' }), undefined), { status: 'replaced' });
+	assert.equal(parseScreenSnapshot(JSON.stringify({ outcome: 'needsPermission', width: 1 }), undefined), undefined);
+	assert.equal(parseScreenSnapshot(JSON.stringify({ outcome: 'asleep' }), undefined), undefined);
+	assert.equal(parseScreenSnapshot(JSON.stringify({ outcome: 'allowed' }), undefined), undefined);
+});
+
 test('data requests reject loss of identity, invalid terminal sizes and additional authority', () => {
 	assert.equal(isChannelRequest(request), true);
 	assert.equal(isChannelRequest({ ...request, kind: ['video'] }), false);
@@ -41,6 +77,11 @@ test('data requests reject loss of identity, invalid terminal sizes and addition
 	assert.equal(isChannelRequest({ ...request, extra: true }), false);
 	assert.equal(isChannelRequest({ ...request, kind: 'terminal', rows: 24, columns: 80 }), true);
 	assert.equal(isChannelRequest({ ...request, kind: 'terminal', rows: 0, columns: 80 }), false);
+	assert.equal(isChannelRequest({ ...request, kind: 'snapshot' }), false);
+	assert.equal(isChannelRequest({ ...request, kind: 'snapshot', media: { type: 'snapshot', prompt: false, access: false } }), true);
+	assert.equal(isChannelRequest({ ...request, kind: 'snapshot', media: { type: 'snapshot', prompt: true, access: true } }), true);
+	assert.equal(isChannelRequest({ ...request, kind: 'snapshot', media: { type: 'snapshot', prompt: false } }), false);
+	assert.equal(isChannelRequest({ ...request, kind: 'snapshot', media: { type: 'camera', deviceId: 'x', width: 640, height: 360, fps: 5 } }), false);
 });
 
 test('binary output is ordered and a slow consumer cannot grow the IPC queue', () => {

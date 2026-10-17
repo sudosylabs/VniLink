@@ -25,6 +25,14 @@ impl FrameSource for crate::capture::WindowsCapture {
     fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
         self.poll_frame(timestamp_us)
     }
+
+    fn attested_at(&self) -> Option<std::time::Instant> {
+        crate::capture::WindowsCapture::attested_at(self)
+    }
+
+    fn attested_display(&self) -> &str {
+        "0"
+    }
 }
 
 /// Copy Desktop Duplication frames into `core` until `stop` is set or the

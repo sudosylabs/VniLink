@@ -1,5 +1,6 @@
 //! Native runtime registration. This installs factories, never starts capture or a shell.
 use crate::{error::map_error, FfiError, VnilinkCore};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct FfiNativeBackend {
@@ -16,6 +17,7 @@ impl VnilinkCore {
             ("clipboard", self.enable_native_clipboard()),
             ("video", self.prepare_native_video()),
             ("filesystem", self.enable_filesystem_access()),
+            ("snapshot", self.enable_native_snapshot()),
         ];
         operations
             .into_iter()
@@ -80,6 +82,26 @@ impl VnilinkCore {
             Err(map_error(vnilink::Error::Unsupported(
                 "native video backend",
             )))
+        }
+    }
+    /// Installs the one-shot screenshot capture. Registration does not prompt or capture.
+    pub fn enable_native_snapshot(&self) -> Result<(), FfiError> {
+        #[cfg(target_os = "macos")]
+        let factory = Arc::new(vnilink_macos::MacSnapshot);
+        #[cfg(target_os = "linux")]
+        let factory = Arc::new(vnilink_linux::LinuxSnapshot);
+        #[cfg(windows)]
+        let factory = Arc::new(vnilink_windows::WindowsSnapshot);
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+        {
+            self.inner
+                .set_snapshot_factory(Some(factory))
+                .map_err(map_error)
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+        {
+            let _ = self;
+            Err(map_error(vnilink::Error::Unsupported("screen snapshot")))
         }
     }
     /// OS consent is handled by Electron, and this path must never open an OS prompt.

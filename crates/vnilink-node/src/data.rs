@@ -96,6 +96,105 @@ pub struct DataChannel {
     camera: Mutex<Option<Arc<CameraService>>>,
     audio: Mutex<Option<Arc<AudioService>>>,
     closed: Arc<std::sync::atomic::AtomicBool>,
+    snapshot_cancel: Arc<std::sync::atomic::AtomicBool>,
+    snapshot: Arc<Mutex<SnapshotState>>,
+}
+
+enum SnapshotState {
+    Idle,
+    Pending,
+    Ready(DataEvent),
+}
+
+fn snapshot_failure(outcome: &str) -> DataEvent {
+    DataEvent {
+        kind: "snapshot".into(),
+        data: None,
+        metadata: serde_json::json!({ "outcome": outcome }).to_string(),
+    }
+}
+
+fn snapshot_event(
+    shot: vnilink_app::FfiScreenSnapshot,
+    endpoint_id: &str,
+    session_id: u64,
+    generation: u64,
+) -> DataEvent {
+    match shot {
+        vnilink_app::FfiScreenSnapshot::Ready {
+            jpeg,
+            width,
+            height,
+            captured_unix_ms,
+            display_id,
+        } => DataEvent {
+            kind: "snapshot".into(),
+            data: Some(jpeg.into()),
+            metadata: serde_json::json!({
+                "outcome": "ready",
+                "width": width,
+                "height": height,
+                "capturedUnixMs": captured_unix_ms.to_string(),
+                "displayId": display_id,
+                "mime": "image/jpeg",
+                "endpointId": endpoint_id,
+                "sessionId": session_id.to_string(),
+                "generation": generation.to_string(),
+            })
+            .to_string(),
+        },
+        other => snapshot_failure(snapshot_outcome(&other)),
+    }
+}
+
+fn snapshot_outcome(shot: &vnilink_app::FfiScreenSnapshot) -> &'static str {
+    match shot {
+        vnilink_app::FfiScreenSnapshot::Ready { .. } => "ready",
+        vnilink_app::FfiScreenSnapshot::NeedsPermission => "needsPermission",
+        vnilink_app::FfiScreenSnapshot::NeedsSourceSelection => "needsSourceSelection",
+        vnilink_app::FfiScreenSnapshot::Unavailable => "unavailable",
+        vnilink_app::FfiScreenSnapshot::TimedOut => "timedOut",
+        vnilink_app::FfiScreenSnapshot::Cancelled => "cancelled",
+    }
+}
+
+fn publish_snapshot(
+    core: Arc<VnilinkCore>,
+    id: u64,
+    generation: u64,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    mailbox: Arc<Mutex<SnapshotState>>,
+    prompt: bool,
+    access: bool,
+) {
+    let event = if access {
+        match core.screen_capture_access(id, generation) {
+            Ok(vnilink_app::FfiScreenAccess::Allowed) => snapshot_failure("allowed"),
+            Ok(vnilink_app::FfiScreenAccess::Denied) => snapshot_failure("sharingDisabled"),
+            Ok(vnilink_app::FfiScreenAccess::Unavailable) => snapshot_failure("unavailable"),
+            Err(error) => snapshot_failure(vnilink_app::snapshot_error_outcome(&error)),
+        }
+    } else {
+        match core.request_screen_snapshot(id, generation, &cancel, prompt) {
+            Ok(shot) => match core.controller_session(id) {
+                Ok(session) if session.generation == generation => {
+                    snapshot_event(shot, &session.peer_id, id, generation)
+                }
+                Ok(_) => snapshot_failure("replaced"),
+                Err(error) => snapshot_failure(vnilink_app::snapshot_error_outcome(&error)),
+            },
+            Err(error) => snapshot_failure(vnilink_app::snapshot_error_outcome(&error)),
+        }
+    };
+    if cancel.load(std::sync::atomic::Ordering::Acquire) {
+        return;
+    }
+    if let Ok(mut slot) = mailbox.lock() {
+        if cancel.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        *slot = SnapshotState::Ready(event);
+    }
 }
 
 impl DataChannel {
@@ -172,6 +271,19 @@ impl DataChannel {
                 let config = camera.config();
                 DataEvent { kind: "camera".into(), data: Some(frame.payload.into()), metadata: serde_json::json!({"codec":frame.codec.label(),"keyframe":frame.keyframe,"timestampUs":frame.timestamp_us.to_string(),"width":config.width,"height":config.height}).to_string() }
             })));
+        }
+        if self.kind == "snapshot" {
+            let mut slot = self
+                .snapshot
+                .lock()
+                .map_err(|_| Error::from_reason("Channel unavailable"))?;
+            return Ok(match std::mem::replace(&mut *slot, SnapshotState::Idle) {
+                SnapshotState::Ready(event) => Some(event),
+                pending => {
+                    *slot = pending;
+                    None
+                }
+            });
         }
         if self.kind == "audio" {
             let audio = self
@@ -398,6 +510,11 @@ impl DataChannel {
 }
 impl DataChannel {
     fn take_cleanup(&self) -> CloseTask {
+        self.snapshot_cancel
+            .store(true, std::sync::atomic::Ordering::Release);
+        if let Ok(mut slot) = self.snapshot.lock() {
+            *slot = SnapshotState::Idle;
+        }
         let already = self.closed.swap(true, std::sync::atomic::Ordering::AcqRel);
         if !already
             && self.kind == "input"
@@ -529,6 +646,9 @@ pub enum MediaConfig {
         channels: u8,
         voice: bool,
     },
+    /// `access` asks whether a screenshot would be admitted. It does not capture.
+    /// `prompt` asks the host to show its own consent or source dialog.
+    Snapshot { prompt: bool, access: bool },
 }
 pub struct OpenChannelTask {
     core: Arc<VnilinkCore>,
@@ -683,6 +803,34 @@ impl Task for OpenChannelTask {
         } else {
             None
         };
+        let snapshot_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let snapshot = Arc::new(Mutex::new(if self.kind == "snapshot" {
+            SnapshotState::Pending
+        } else {
+            SnapshotState::Idle
+        }));
+        if self.kind == "snapshot" {
+            let core = Arc::clone(&self.core);
+            let cancel = Arc::clone(&snapshot_cancel);
+            let mailbox = Arc::clone(&snapshot);
+            let id = self.id;
+            let generation = self.generation;
+            let (prompt, access) = match &self.media {
+                Some(MediaConfig::Snapshot { prompt, access }) => (*prompt, *access),
+                _ => (false, false),
+            };
+            if std::thread::Builder::new()
+                .name("vnilink-snapshot".into())
+                .spawn(move || {
+                    publish_snapshot(core, id, generation, cancel, mailbox, prompt, access)
+                })
+                .is_err()
+            {
+                if let Ok(mut slot) = snapshot.lock() {
+                    *slot = SnapshotState::Ready(snapshot_failure("failed"));
+                }
+            }
+        }
         Ok(DataChannel {
             core: self.core.clone(),
             session_id: self.id,
@@ -698,6 +846,8 @@ impl Task for OpenChannelTask {
             camera: Mutex::new(camera),
             audio: Mutex::new(audio),
             closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            snapshot_cancel,
+            snapshot,
         })
     }
     fn resolve(&mut self, _: Env, channel: DataChannel) -> Result<DataChannel> {
@@ -718,7 +868,7 @@ impl Engine {
     ) -> Result<AsyncTask<OpenChannelTask>> {
         if !matches!(
             kind.as_str(),
-            "video" | "terminal" | "input" | "files" | "camera" | "audio"
+            "video" | "terminal" | "input" | "files" | "camera" | "audio" | "snapshot"
         ) {
             return Err(Error::from_reason("Invalid channel kind"));
         }
@@ -733,8 +883,9 @@ impl Engine {
             .transpose()?;
         match (&*kind, &config) {
             ("camera", Some(MediaConfig::Camera { .. }))
-            | ("audio", Some(MediaConfig::Audio { .. })) => {}
-            ("camera" | "audio", _) => {
+            | ("audio", Some(MediaConfig::Audio { .. }))
+            | ("snapshot", Some(MediaConfig::Snapshot { .. })) => {}
+            ("camera" | "audio" | "snapshot", _) => {
                 return Err(Error::from_reason("Media configuration required"))
             }
             (_, Some(_)) => return Err(Error::from_reason("Unexpected media configuration")),

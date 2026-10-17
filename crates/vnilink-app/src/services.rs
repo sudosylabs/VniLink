@@ -12,6 +12,7 @@ pub enum FfiServiceKind {
     SystemAudio,
     Microphone,
     System,
+    ScreenSnapshot,
 }
 
 impl From<FfiServiceKind> for vnilink::ServiceKind {
@@ -24,6 +25,7 @@ impl From<FfiServiceKind> for vnilink::ServiceKind {
             FfiServiceKind::SystemAudio => Self::SystemAudio,
             FfiServiceKind::Microphone => Self::Microphone,
             FfiServiceKind::System => Self::System,
+            FfiServiceKind::ScreenSnapshot => Self::ScreenSnapshot,
         }
     }
 }
@@ -38,6 +40,7 @@ impl From<vnilink::ServiceKind> for FfiServiceKind {
             vnilink::ServiceKind::SystemAudio => Self::SystemAudio,
             vnilink::ServiceKind::Microphone => Self::Microphone,
             vnilink::ServiceKind::System => Self::System,
+            vnilink::ServiceKind::ScreenSnapshot => Self::ScreenSnapshot,
         }
     }
 }

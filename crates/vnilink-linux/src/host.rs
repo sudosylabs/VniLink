@@ -25,6 +25,14 @@ impl FrameSource for crate::pipewire::PortalCapture {
     fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
         self.poll_frame(timestamp_us)
     }
+
+    fn attested_at(&self) -> Option<std::time::Instant> {
+        crate::pipewire::PortalCapture::attested_at(self)
+    }
+
+    fn attested_display(&self) -> &str {
+        "portal"
+    }
 }
 
 /// Copy portal frames into `core` until `stop` is set or the hosted session ends.

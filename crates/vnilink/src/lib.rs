@@ -93,6 +93,7 @@ mod hostname;
 mod input;
 mod installation;
 mod invitation;
+pub mod snapshot;
 pub use device_metadata::{DevicePresence, OperatingSystem};
 pub mod job;
 mod keyboard;

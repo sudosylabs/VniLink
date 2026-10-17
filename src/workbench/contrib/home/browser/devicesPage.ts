@@ -4,6 +4,7 @@ import { addDisposableListener } from '../../../../base/browser/domEvent.js';
 import { Icons } from '../../../../base/common/icons.js';
 import { renderIcon } from '../../../../base/browser/ui/icon/icon.js';
 import { IDeviceService } from '../../../services/devices/common/deviceService.js';
+import { IScreenSnapshotService } from '../../../services/screenSnapshot/common/screenSnapshotService.js';
 import type { TabAction } from '../../../services/tabs/common/tabService.js';
 import { createPageHeading, type WorkbenchPage } from '../../../browser/parts/views/page.js';
 import { DeviceList } from './deviceList.js';
@@ -26,11 +27,14 @@ export class DevicesPage extends Disposable implements WorkbenchPage {
 	private readonly pairing: DevicePairing;
 	private selectedId: string | undefined;
 
-	constructor(@IDeviceService private readonly devices: IDeviceService) {
+	constructor(
+		@IDeviceService private readonly devices: IDeviceService,
+		@IScreenSnapshotService snapshots: IScreenSnapshotService,
+	) {
 		super();
 		const id = `device-details-${String(DevicesPage.nextId++)}`;
 		this.list = this._register(new DeviceList(id));
-		this.details = this._register(new DeviceDetails(id, devices));
+		this.details = this._register(new DeviceDetails(id, devices, snapshots));
 		this.pairing = this._register(new DevicePairing(devices));
 		this.element.className = 'devices-page';
 		const heading = createPageHeading(nls.localize('computers.heading', 'Devices'), nls.localize('computers.subheading', 'Your computers, connected.'));

@@ -15,6 +15,8 @@ impl Core {
             ServiceKind::SystemAudio => policy.system_audio = allowed,
             ServiceKind::Microphone => policy.microphone = allowed,
             ServiceKind::System => policy.system_actions = allowed,
+            // A screenshot is screen viewing. It has no separate consent switch.
+            ServiceKind::ScreenSnapshot => policy.view = allowed,
         })
     }
     pub fn set_recording_sharing(&self, allowed: bool) -> Result<(), Error> {

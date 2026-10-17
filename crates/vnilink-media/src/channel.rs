@@ -28,6 +28,8 @@ pub struct FrameChannel {
     generation: AtomicU64,
     returned: AtomicU64,
     failure: Mutex<Option<&'static str>>,
+    /// When `push` last stored a picture. Idle readers do not refresh this.
+    pushed_at: Mutex<Option<Instant>>,
 }
 
 impl FrameChannel {
@@ -37,13 +39,20 @@ impl FrameChannel {
             generation: AtomicU64::new(0),
             returned: AtomicU64::new(0),
             failure: Mutex::new(None),
+            pushed_at: Mutex::new(None),
         }
     }
 
     /// Store `slot` as the latest picture. Overwrites whatever is waiting.
     pub fn push(&self, slot: ChannelSlot) {
         *self.slot.lock().expect("frame channel") = Some(slot);
+        *self.pushed_at.lock().expect("frame channel") = Some(Instant::now());
         self.generation.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Acquisition time of the last `push`. A later read of the same slot does not move it.
+    pub fn pushed_at(&self) -> Option<Instant> {
+        *self.pushed_at.lock().expect("frame channel")
     }
 
     /// Record a permanent capture failure. The first reason wins; later

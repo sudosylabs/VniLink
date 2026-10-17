@@ -282,11 +282,11 @@ class SmokeSuite {
       return { labels, settings: sidebar.querySelector('.sidebar-heading').textContent,
         fullHeight: Math.abs(sidebar.getBoundingClientRect().bottom - innerHeight) < 1,
         selected: sidebar.querySelector('[aria-current="page"]').dataset.sectionId,
-        refresh: document.querySelector('.view-action').getAttribute('aria-label') };
+        refresh: document.querySelector('.view-action')?.getAttribute('aria-label') ?? null };
     })()`);
 		assert.deepEqual(result, {
 			labels: ['Devices', 'Appearance', 'Connection', 'Access & Security', 'Remote Desktop', 'Keyboard & Mouse', 'Terminal', 'Audio & Camera', 'Recording', 'Power'],
-			settings: 'Settings', fullHeight: true, selected: 'devices', refresh: 'Refresh devices',
+			settings: 'Settings', fullHeight: true, selected: 'devices', refresh: null,
 		});
 	}
 
@@ -393,9 +393,9 @@ class SmokeSuite {
         radius: getComputedStyle(tab.querySelector('.tab-fill')).borderTopLeftRadius,
         fill: getComputedStyle(tab.querySelector('.tab-fill')).backgroundColor,
         strip: region('.tabs-scrollable'), container: region('.tabs-container'), tab: region('.tab'),
-        close: tab.querySelector('.tab-close') !== null, action: region('.view-action') };
+        close: tab.querySelector('.tab-close') !== null, action: document.querySelector('.view-action') ? region('.view-action') : null };
     })()`);
-		assert.deepEqual(tabs, { height: 35, topGap: height - 35, bottomGap: 0, radius: '12px', fill: 'rgba(0, 0, 0, 0)', strip: 'drag', container: 'drag', tab: 'no-drag', close: false, action: 'no-drag' });
+		assert.deepEqual(tabs, { height: 35, topGap: height - 35, bottomGap: 0, radius: '12px', fill: 'rgba(0, 0, 0, 0)', strip: 'drag', container: 'drag', tab: 'no-drag', close: false, action: null });
 		const surfaces: unknown = await window.webContents.executeJavaScript(`(() => {
       const color = selector => getComputedStyle(document.querySelector(selector)).backgroundColor;
       return { mode: document.documentElement.dataset.windowMaterial, titlebar: color('.part.titlebar'), sidebar: color('.sidebar'), content: color('.home-content') };

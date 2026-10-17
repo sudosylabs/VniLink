@@ -1,4 +1,4 @@
-import { verifyDevices, DevicePageFixture, type DeviceFixtureState } from './devices.js';
+import { verifyDevices, verifyDeviceScreenshot, DevicePageFixture, type DeviceFixtureState } from './devices.js';
 import { verifyMediaSettings } from './mediaSettings.js';
 /** Independently selectable renderer scenarios; each owns its fixture teardown. */
 import { verifyWorkbenchLifecycle } from './workbench.js';
@@ -38,7 +38,7 @@ export class BrowserScenarios {
 
 	private readonly scenarios = new Map<string, () => unknown>([
 		['workbench', verifyWorkbenchLifecycle], ['access', verifyAccess], ['data-channels', verifyDataChannels], ['files-terminal', verifyFileTerminalSettings],
-		['devices', verifyDevices], ['home', verifyHomeLifecycle], ['icons', verifyIcons], ['input', verifyInputPage],
+		['devices', verifyDevices], ['device-screenshot', verifyDeviceScreenshot], ['home', verifyHomeLifecycle], ['icons', verifyIcons], ['input', verifyInputPage],
 		['media-settings', verifyMediaSettings], ['permissions', verifyMachinePermissions], ['remote-desktop', verifyRemoteDesktop], ['settings', verifySettingsPages], ['tabs', verifyTabs],
 	]);
 

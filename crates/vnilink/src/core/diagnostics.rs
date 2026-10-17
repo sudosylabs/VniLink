@@ -42,6 +42,7 @@ fn service_kind(kind: ServiceKind) -> &'static str {
         ServiceKind::SystemAudio => "system-audio",
         ServiceKind::Microphone => "microphone",
         ServiceKind::System => "system",
+        ServiceKind::ScreenSnapshot => "screen-snapshot",
     }
 }
 
