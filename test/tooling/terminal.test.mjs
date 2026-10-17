@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { fakeEngine } from './fixtures.mjs';
 import { build } from 'esbuild';
 
 const bundle = await build({ stdin: { contents: `export { TerminalSettingsService } from './src/workbench/services/terminal/electron-browser/terminalSettingsService.js'; export { validTerminalPolicy } from './src/workbench/services/terminal/common/terminalSettingsService.js';`, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node', tsconfig: 'tsconfig.json' });
@@ -13,7 +14,7 @@ test('terminal limits enforce engine bounds, capture drafts and reject failed re
 	let written = false;
 	let failRead = false;
 	const calls = [];
-	const service = new TerminalSettingsService({
+	const service = new TerminalSettingsService(fakeEngine({
 		engineCommand: async command => {
 			calls.push(command);
 			if (command.type === 'setTerminalPolicy') {
@@ -26,7 +27,7 @@ test('terminal limits enforce engine bounds, capture drafts and reject failed re
 			}
 			return { type: 'terminalPolicy', policy };
 		}
-	}, true);
+	}, true));
 	for (const invalid of [{ max_sessions: 17 }, { max_sessions_per_peer: 0 }, { history_bytes: 16383 }, { replay_bytes: 1048577 }, { detached_timeout_secs: 86401 }]) {
 		assert(!validTerminalPolicy({ ...initial, ...invalid }));
 		await assert.rejects(service.save({ ...initial, ...invalid }));

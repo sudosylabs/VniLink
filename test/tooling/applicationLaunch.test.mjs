@@ -4,9 +4,9 @@ import { build } from 'esbuild';
 
 async function launchFixture(windows) {
 	const output = await build({
-		entryPoints: ['src/app/electron-main/launch.ts'], bundle: true, write: false, platform: 'node', format: 'esm', plugins: [{
+		entryPoints: ['src/code/electron-main/main.ts'], bundle: true, write: false, platform: 'node', format: 'esm', plugins: [{
 			name: 'launch-fixture', setup(builder) {
-				builder.onResolve({ filter: /^(electron|.*\/application\.js|.*\/platform\.js)$/ }, args => ({ path: args.path, namespace: 'fixture' }));
+				builder.onResolve({ filter: /^(electron|.*\/app\.js|.*\/platform\.js)$/ }, args => ({ path: args.path, namespace: 'fixture' }));
 				builder.onLoad({ filter: /.*/, namespace: 'fixture' }, args => ({ contents: args.path === 'electron' ? `export const app = { setName: value => globalThis.launchEvents.push(['name', value]), setAppUserModelId: value => globalThis.launchEvents.push(['id', value]), setPath: (...values) => globalThis.launchEvents.push(['path', ...values]) };` : args.path.endsWith('/platform.js') ? `export const isWindows = ${windows};` : `export class VniLinkApplication { constructor(options) { globalThis.launchEvents.push(['construct', options]); } async start() { globalThis.launchEvents.push(['start']); } }` }));
 			}
 		}]
@@ -20,17 +20,17 @@ test('launch establishes identity before construction and smoke isolation is exp
 	try {
 		globalThis.launchEvents = [];
 		process.argv = ['vnilink'];
-		const { ApplicationLaunch } = await launchFixture(true);
-		await new ApplicationLaunch().run();
+		const { VniLinkMain } = await launchFixture(true);
+		await new VniLinkMain().main();
 		assert.deepEqual(globalThis.launchEvents, [['name', 'VniLink'], ['id', 'fr.sudosy.vnilink'], ['construct', { temporaryEngine: false }], ['start']]);
 		globalThis.launchEvents = [];
 		process.argv = ['vnilink', '--smoke-test'];
 		delete process.env.VNILINK_TEST_PROFILE;
-		await assert.rejects(new ApplicationLaunch().run(), /requires an isolated/);
+		await assert.rejects(new VniLinkMain().main(), /requires an isolated/);
 		assert(!globalThis.launchEvents.some(event => event[0] === 'construct'));
 		globalThis.launchEvents = [];
 		process.env.VNILINK_TEST_PROFILE = '/temporary/profile';
-		await new ApplicationLaunch().run();
+		await new VniLinkMain().main();
 		assert.deepEqual(globalThis.launchEvents.slice(2), [['path', 'userData', '/temporary/profile'], ['construct', { temporaryEngine: true }], ['start']]);
 	} finally {
 		process.argv = argv;

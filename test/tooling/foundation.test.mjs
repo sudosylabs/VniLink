@@ -59,7 +59,7 @@ test('native titlebar height resolves through platform utilities', async () => {
 	assert.equal(windowUtils.getNativeTitlebarHeight.length, 1);
 	const height = windowUtils.getNativeTitlebarHeight('25.0.0');
 	assert.ok(Number.isInteger(height) && height >= 28 && height <= 35);
-	const roots = ['src/app', 'src/platform/windows', 'src/platform/ipc', 'src/workbench'];
+	const roots = ['src/code', 'src/platform/windows', 'src/platform/ipc', 'src/workbench'];
 	const root = fileURLToPath(new URL('../../', import.meta.url));
 	const offenders = [];
 	const visit = (dir) => {

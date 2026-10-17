@@ -62,11 +62,10 @@ export { SyncDescriptor } from './src/platform/instantiation/common/descriptors.
 	assert.throws(() => container.createInstance(Consumer), /disposed/);
 });
 
-test('native-host proxy uses window context, filters events and releases its transport', async () => {
+test('native-host proxy sends its window as context, forwards window events and releases them', async () => {
 	const bundle = await build({
 		stdin: {
-			contents: `export { MainProcessService } from './src/platform/ipc/electron-browser/mainProcessService.js';
- export { NativeHostService } from './src/platform/native/common/nativeHostService.js';
+			contents: `export { NativeHostService } from './src/platform/native/common/nativeHostService.js';
  export { IMainProcessService } from './src/platform/ipc/common/mainProcessService.js';
  export { INativeHostService, isNativeHostRequest } from './src/platform/native/common/native.js';
  export { InstantiationService } from './src/platform/instantiation/common/instantiationService.js';
@@ -75,39 +74,41 @@ test('native-host proxy uses window context, filters events and releases its tra
 		},
 		bundle: true, write: false, format: 'esm', platform: 'node', target: 'node22', tsconfig: `${root}src/tsconfig.json`,
 	});
-	const { MainProcessService, NativeHostService, IMainProcessService, INativeHostService, InstantiationService, ServiceCollection, SyncDescriptor, isNativeHostRequest } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
+	const { NativeHostService, IMainProcessService, INativeHostService, InstantiationService, ServiceCollection, SyncDescriptor, isNativeHostRequest } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 	let receive;
 	let unsubscribed = 0;
 	const calls = [];
 	const state = { windowId: 7, revision: 1, focused: false, maximized: false, fullscreen: false, alwaysOnTop: false, zoomFactor: 1, backgroundMaterial: 'none' };
-	const api = {
-		onWindowStateChanged(listener) {
-			receive = listener;
-			return () => {
-				unsubscribed++;
-			};
-		}, async nativeHostCommand(method, args) {
+	const channel = {
+		async call(method, args) {
 			calls.push([method, args]);
 			return method === 'getWindowState' ? state : undefined;
-		}
+		},
+		listen(event) {
+			assert.equal(event, 'onDidChangeWindowState');
+			return listener => {
+				receive = listener;
+				return { dispose: () => unsubscribed++ };
+			};
+		},
 	};
-	const container = new InstantiationService(new ServiceCollection([IMainProcessService, new SyncDescriptor(MainProcessService, [api, 7])], [INativeHostService, new SyncDescriptor(NativeHostService, [7])]), true);
+	const mainProcess = { getChannel: name => name === 'nativeHost' ? channel : assert.fail(`Unexpected channel ${name}`) };
+	const container = new InstantiationService(new ServiceCollection([IMainProcessService, mainProcess], [INativeHostService, new SyncDescriptor(NativeHostService, [7])]), true);
 	const host = container.invokeFunction(accessor => accessor.get(INativeHostService));
 	const events = [];
 	const subscription = host.onDidChangeWindowState(value => events.push(value));
 	await host.focusWindow();
 	assert.deepEqual(await host.getWindowState(), state);
-	assert.deepEqual(calls, [['focusWindow', [7]], ['getWindowState', [7]]]);
+	await host.pickFolder('/Pictures');
+	assert.deepEqual(calls, [['focusWindow', [7]], ['getWindowState', [7]], ['pickFolder', [7, '/Pictures']]]);
 	receive({ ...state, revision: 3, focused: true });
-	receive({ ...state, revision: 2 });
-	receive({ ...state, windowId: 8, revision: 4 });
-	receive({ ...state, revision: 4, zoomFactor: NaN });
-	assert.deepEqual(events, [state, { ...state, revision: 3, focused: true }]);
-	const channel = container.invokeFunction(accessor => accessor.get(IMainProcessService)).getChannel('nativeHost');
-	await assert.rejects(channel.call('focusWindow', [8]), /Invalid native host request/);
+	assert.deepEqual(events, [{ ...state, revision: 3, focused: true }]);
+	assert.equal(host.windowId, 7);
 	assert.equal(isNativeHostRequest('setFullScreen', [7, 'yes']), false);
 	assert.equal(isNativeHostRequest('updateWindowControls', [7, { height: Infinity }]), false);
 	assert.equal(isNativeHostRequest('focusWindow', [7, { targetWindowId: 8 }]), false);
+	assert.equal(isNativeHostRequest('openExternal', [7, '']), false);
+	assert.equal(isNativeHostRequest('relaunch', [7, true]), false);
 	assert.equal(isNativeHostRequest('execute', [7]), false);
 	subscription.dispose();
 	container.dispose();

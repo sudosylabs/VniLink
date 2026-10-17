@@ -6,7 +6,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 
 const manifest = JSON.parse(readFileSync(new URL('./vscode-source.json', import.meta.url), 'utf8'));
 
-export const upstreamFiles = manifest.files.filter(file => !file.adapted).map(file => file.path);
+// Adapted copies of `base/` infrastructure keep upstream style; only their declared edits differ.
+export const upstreamFiles = manifest.files.filter(file => !file.adapted || file.path.startsWith('src/base/')).map(file => file.path);
 
 const upstream = new Set(upstreamFiles);
 

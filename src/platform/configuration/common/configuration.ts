@@ -101,6 +101,9 @@ export function isConfigurationSnapshot(value: unknown): value is ConfigurationS
 		&& 'error' in value && (value.error === null || typeof value.error === 'string') && Object.keys(value).length === 3;
 }
 
+/** Main-process IPC channel serving preferences. */
+export const CONFIGURATION_CHANNEL_NAME = 'configuration';
+
 export const IConfigurationService = createDecorator<IConfigurationService>('configurationService');
 
 export interface IConfigurationService {

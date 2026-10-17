@@ -1,26 +1,38 @@
-import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { Emitter } from '../../../../base/common/event.js';
-import type { DesktopApi } from '../../../../platform/ipc/common/desktopApi.js';
-import type { PermissionCommand, PermissionSnapshot } from '../../../../platform/permissions/common/permissions.js';
+import { Disposable } from '../../../../base/common/lifecycle.js';
+import type { IChannel } from '../../../../base/parts/ipc/common/ipc.js';
+import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
+import { INativeHostService } from '../../../../platform/native/common/native.js';
+import { isPermissionSnapshot, PERMISSIONS_CHANNEL_NAME, type PermissionCommand, type PermissionSnapshot } from '../../../../platform/permissions/common/permissions.js';
 import type { IPermissionService } from '../common/permissionService.js';
 
+/** OS consent for this computer; re-read when the window regains focus after a settings visit. */
 export class PermissionService extends Disposable implements IPermissionService {
 	declare public readonly _serviceBrand: undefined;
+	private readonly channel: IChannel;
 	private readonly focused = this._register(new Emitter<void>());
 	public readonly onDidFocusWindow = this.focused.event;
 	private wasFocused = false;
 
-	constructor(private readonly api: Pick<DesktopApi, 'permissionCommand' | 'onWindowStateChanged'>) {
+	constructor(
+		@IMainProcessService mainProcessService: IMainProcessService,
+		@INativeHostService nativeHostService: INativeHostService,
+	) {
 		super();
-		this._register(toDisposable(api.onWindowStateChanged(state => {
+		this.channel = mainProcessService.getChannel(PERMISSIONS_CHANNEL_NAME);
+		this._register(nativeHostService.onDidChangeWindowState(state => {
 			if (state.focused && !this.wasFocused) {
 				this.focused.fire();
 			}
 			this.wasFocused = state.focused;
-		})));
+		}));
 	}
 
-	public execute(command: PermissionCommand): Promise<PermissionSnapshot> {
-		return this.api.permissionCommand(command);
+	public async execute(command: PermissionCommand): Promise<PermissionSnapshot> {
+		const snapshot = await this.channel.call<unknown>('execute', command);
+		if (!isPermissionSnapshot(snapshot)) {
+			throw new Error('Invalid permission snapshot');
+		}
+		return snapshot;
 	}
 }

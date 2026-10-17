@@ -1,9 +1,14 @@
 import { utilityProcess } from 'electron';
-import type { DataChannelRequest } from '../common/dataChannel.js';
 import type { MessagePortMain, UtilityProcess } from 'electron';
 import { join } from 'node:path';
+import { Emitter } from '../../../base/common/event.js';
+import { Disposable } from '../../../base/common/lifecycle.js';
+import { createDecorator } from '../../instantiation/common/instantiation.js';
+import type { DataChannelRequest } from '../common/dataChannel.js';
 import type { EngineCommand, EngineReply } from '../common/engine.js';
 import { isEngineReply, record } from '../common/engine.js';
+
+export const IEngineMainService = createDecorator<EngineMainService>('engineMainService');
 
 interface PendingReply { resolve(value: EngineReply): void; reject(error: Error): void; }
 
@@ -15,7 +20,14 @@ function timeoutFor(command: EngineCommand | { type: 'shutdown' }): number {
 	return command.type === 'connect' || command.type === 'connectFiles' ? 90000 : 10000;
 }
 
-export class EngineService {
+/** Owns the engine utility process, its request lanes and its lifetime. */
+export class EngineMainService extends Disposable {
+	declare public readonly _serviceBrand: undefined;
+	private readonly availabilityChanged = this._register(new Emitter<boolean>());
+	public readonly onDidChangeAvailability = this.availabilityChanged.event;
+	private readonly restartRequiredChanged = this._register(new Emitter<boolean>());
+	public readonly onDidChangeRestartRequired = this.restartRequiredChanged.event;
+	private restartRequired = false;
 	private child: UtilityProcess | undefined;
 	private connected = false;
 	private started = false;
@@ -54,6 +66,7 @@ export class EngineService {
 					clearTimeout(timeout);
 					if (message.ready === true && !this.connected) {
 						this.connected = true;
+						this.availabilityChanged.fire(true);
 						resolve();
 					} else {
 						this.fail(new Error('Engine could not open its secure installation'));
@@ -163,6 +176,24 @@ export class EngineService {
 		});
 	}
 
+	/** Whether saved relay settings differ from the ones the running engine uses. */
+	public async getRestartRequired(): Promise<boolean> {
+		const reply = await this.execute({ type: 'relayRestartRequired' });
+		if (reply.type !== 'restartRequired') {
+			throw new Error('Invalid restart state');
+		}
+		return reply.required;
+	}
+
+	/** Re-reads the restart requirement and announces a change. */
+	public async refreshRestartRequired(): Promise<void> {
+		const required = await this.getRestartRequired();
+		if (required !== this.restartRequired) {
+			this.restartRequired = required;
+			this.restartRequiredChanged.fire(required);
+		}
+	}
+
 	public attachChannel(port: MessagePortMain, request: DataChannelRequest, owner: string): void {
 		if (!this.child || !this.available) {
 			port.close();
@@ -192,6 +223,7 @@ export class EngineService {
 	}
 
 	private fail(error: Error): void {
+		const wasAvailable = this.available;
 		this.connected = false;
 		for (const pending of this.waiting.values()) {
 			pending.reject(error);
@@ -200,5 +232,8 @@ export class EngineService {
 		const child = this.child;
 		this.child = undefined;
 		child?.kill();
+		if (wasAvailable) {
+			this.availabilityChanged.fire(false);
+		}
 	}
 }

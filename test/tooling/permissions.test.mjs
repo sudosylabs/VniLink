@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { build } from 'esbuild';
 
-const result = await build({ stdin: { contents: `export { MachinePermissionService } from './src/platform/permissions/electron-main/permissionService.js'; export { isPermissionCommand, isPermissionSnapshot } from './src/platform/permissions/common/permissions.js';`, loader: 'ts', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node', tsconfig: 'tsconfig.json' });
+const result = await build({ stdin: { contents: `export { MachinePermissions } from './src/platform/permissions/electron-main/machinePermissions.js'; export { isPermissionCommand, isPermissionSnapshot } from './src/platform/permissions/common/permissions.js';`, loader: 'ts', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node', tsconfig: 'tsconfig.json' });
 
-const { MachinePermissionService, isPermissionCommand, isPermissionSnapshot } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+const { MachinePermissions, isPermissionCommand, isPermissionSnapshot } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 
 function fixture(platform = 'darwin') {
 	const states = { screen: 'denied', camera: 'not-determined', microphone: 'granted' };
@@ -28,7 +28,7 @@ function fixture(platform = 'darwin') {
 	return {
 		states, prompts, urls, preferences, trust: () => {
 			trusted = true;
-		}, service: new MachinePermissionService(platform, true, preferences, async url => {
+		}, service: new MachinePermissions(platform, true, preferences, async url => {
 			urls.push(url);
 		})
 	};

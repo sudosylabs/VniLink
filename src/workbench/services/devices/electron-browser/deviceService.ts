@@ -1,7 +1,7 @@
 import { Emitter } from '../../../../base/common/event.js';
 import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
-import type { DesktopApi } from '../../../../platform/ipc/common/desktopApi.js';
+import { IEngineService } from '../../../../platform/engine/common/engineService.js';
 import type { EngineCommand, EngineReply, ControlRequestInfo } from '../../../../platform/engine/common/engine.js';
 import type { DeviceSummary, IDeviceService, PairingFile } from '../common/deviceService.js';
 
@@ -22,11 +22,12 @@ export class DeviceService extends Disposable implements IDeviceService {
 		void this.poll();
 	}, 500));
 
-	constructor(
-		private readonly api: Pick<DesktopApi, 'engineCommand'>,
-		public readonly available: boolean,
-	) {
+	constructor(@IEngineService private readonly engine: IEngineService) {
 		super();
+	}
+
+	public get available(): boolean {
+		return this.engine.available;
 	}
 
 	private started = false;
@@ -57,7 +58,7 @@ export class DeviceService extends Disposable implements IDeviceService {
 		const revision = ++this.revision;
 		let reply: EngineReply;
 		try {
-			reply = await this.api.engineCommand({ type: 'snapshot' });
+			reply = await this.engine.execute({ type: 'snapshot' });
 		} catch (error) {
 			if (!this.isCurrentRequest(revision, signal)) {
 				return;
@@ -121,7 +122,7 @@ export class DeviceService extends Disposable implements IDeviceService {
 		}
 		// Consume every opened handle, including a failed code check. Do not keep
 		// engine previews alive while a file picker or confirmation view is open.
-		const reply = await this.api.engineCommand({ type: 'confirmPairing', previewId: preview.preview.id, digits });
+		const reply = await this.engine.execute({ type: 'confirmPairing', previewId: preview.preview.id, digits });
 		if (reply.type !== 'device') {
 			throw new Error('Invalid pairing confirmation');
 		}
@@ -159,17 +160,17 @@ export class DeviceService extends Disposable implements IDeviceService {
 		if (!this.available || this.isDisposed()) {
 			return Promise.reject(new Error('Device service unavailable'));
 		}
-		return this.api.engineCommand(command);
+		return this.engine.execute(command);
 	}
 
 	private async start(): Promise<void> {
 		try {
-			const reply = await this.api.engineCommand({ type: 'subscribeEvents' });
+			const reply = await this.engine.execute({ type: 'subscribeEvents' });
 			if (reply.type !== 'eventSubscription') {
 				throw new Error('Invalid device event subscription');
 			}
 			if (this.isDisposed()) {
-				await this.api.engineCommand({ type: 'releaseEvents', subscriptionId: reply.subscriptionId });
+				await this.engine.execute({ type: 'releaseEvents', subscriptionId: reply.subscriptionId });
 				return;
 			}
 			this.subscription = reply.subscriptionId;
@@ -196,7 +197,7 @@ export class DeviceService extends Disposable implements IDeviceService {
 			return;
 		}
 		try {
-			const reply = await this.api.engineCommand({ type: 'pollEvents', subscriptionId: this.subscription, maxEvents: 256 });
+			const reply = await this.engine.execute({ type: 'pollEvents', subscriptionId: this.subscription, maxEvents: 256 });
 			if (reply.type !== 'events') {
 				throw new Error('Invalid device event reply');
 			}
@@ -209,7 +210,7 @@ export class DeviceService extends Disposable implements IDeviceService {
 			const subscriptionId = this.subscription;
 			this.subscription = undefined;
 			if (subscriptionId) {
-				await this.api.engineCommand({ type: 'releaseEvents', subscriptionId }).catch(() => undefined);
+				await this.engine.execute({ type: 'releaseEvents', subscriptionId }).catch(() => undefined);
 			}
 			this.markUnknown();
 		} finally {
@@ -246,7 +247,7 @@ export class DeviceService extends Disposable implements IDeviceService {
 		this.subscription = undefined;
 		super.dispose();
 		if (subscriptionId) {
-			void this.api.engineCommand({ type: 'releaseEvents', subscriptionId }).catch(() => undefined);
+			void this.engine.execute({ type: 'releaseEvents', subscriptionId }).catch(() => undefined);
 		}
 	}
 

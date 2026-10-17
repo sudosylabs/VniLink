@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { fakeEngine } from './fixtures.mjs';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
@@ -32,12 +33,12 @@ function device(id, pet_name = null, hostname = null) {
 
 test('device state maps names, publishes empty results and cannot be mutated by consumers', async () => {
 	let reply = snapshot([device('one', 'Personal', 'Host'), device('two', null, 'Host'), device('three')]);
-	const service = new DeviceService({
+	const service = new DeviceService(fakeEngine({
 		async engineCommand(command) {
 			assert.deepEqual(command, { type: 'snapshot' });
 			return reply;
 		}
-	}, true);
+	}, true));
 	const events = [];
 	service.onDidChangeDevices(devices => events.push(devices));
 	try {
@@ -61,11 +62,11 @@ test('an older snapshot cannot overwrite a newer refresh', async () => {
 	const first = deferred();
 	const second = deferred();
 	const requests = [first, second];
-	const service = new DeviceService({
+	const service = new DeviceService(fakeEngine({
 		engineCommand() {
 			return requests.shift().promise;
 		}
-	}, true);
+	}, true));
 	let events = 0;
 	service.onDidChangeDevices(() => events++);
 	try {
@@ -87,11 +88,11 @@ test('cancellation and disposal fence late replies and errors', async () => {
 		for (const outcome of ['resolve', 'reject']) {
 			const request = deferred();
 			const controller = new AbortController();
-			const service = new DeviceService({
+			const service = new DeviceService(fakeEngine({
 				engineCommand() {
 					return request.promise;
 				}
-			}, true);
+			}, true));
 			let events = 0;
 			service.onDidChangeDevices(() => events++);
 			const running = service.refresh(controller.signal);
@@ -115,14 +116,14 @@ test('cancellation and disposal fence late replies and errors', async () => {
 
 test('failed refresh preserves the previous snapshot and surfaces current failures', async () => {
 	let reply = snapshot([device('saved')]);
-	const service = new DeviceService({
+	const service = new DeviceService(fakeEngine({
 		async engineCommand() {
 			if (reply instanceof Error) {
 				throw reply;
 			}
 			return reply;
 		}
-	}, true);
+	}, true));
 	try {
 		await service.refresh(new AbortController().signal);
 		reply = { type: 'ok' };
@@ -137,12 +138,12 @@ test('failed refresh preserves the previous snapshot and surfaces current failur
 
 test('unavailable, cancelled and disposed services never send requests', async () => {
 	let calls = 0;
-	const service = new DeviceService({
+	const service = new DeviceService(fakeEngine({
 		async engineCommand() {
 			calls++;
 			return snapshot([]);
 		}
-	}, false);
+	}, false));
 	await assert.rejects(service.refresh(new AbortController().signal), /unavailable/);
 	const aborted = new AbortController();
 	aborted.abort();
@@ -160,7 +161,7 @@ test('event-driven presence refresh is stable, recovers after failure and releas
 	let events = [];
 	const calls = [];
 	let nextHandle = 0;
-	const service = new DeviceService({
+	const service = new DeviceService(fakeEngine({
 		async engineCommand(command) {
 			calls.push(command);
 			if (command.type === 'subscribeEvents') {
@@ -184,7 +185,7 @@ test('event-driven presence refresh is stable, recovers after failure and releas
 			}
 			throw new Error(command.type);
 		}
-	}, true);
+	}, true));
 	let changes = 0;
 	service.onDidChangeDevices(() => changes++);
 	const settle = async () => {
@@ -223,7 +224,7 @@ test('event-driven presence refresh is stable, recovers after failure and releas
 test('subscription arriving after disposal is released without reading a snapshot', async () => {
 	const pending = deferred();
 	const calls = [];
-	const service = new DeviceService({
+	const service = new DeviceService(fakeEngine({
 		async engineCommand(command) {
 			calls.push(command);
 			if (command.type === 'subscribeEvents') {
@@ -231,7 +232,7 @@ test('subscription arriving after disposal is released without reading a snapsho
 			}
 			return { type: 'done' };
 		}
-	}, true);
+	}, true));
 	const starting = service.initialize();
 	service.dispose();
 	pending.resolve({ type: 'eventSubscription', subscriptionId: '12' });
@@ -242,7 +243,7 @@ test('subscription arriving after disposal is released without reading a snapsho
 test('device commands use neutral connections and consume a fresh pairing preview on every attempt', async () => {
 	const commands = [];
 	let attempt = 0;
-	const service = new DeviceService({
+	const service = new DeviceService(fakeEngine({
 		async engineCommand(command) {
 			commands.push(command);
 			switch (command.type) {
@@ -257,7 +258,7 @@ test('device commands use neutral connections and consume a fresh pairing previe
 				default: return { type: 'done' };
 			}
 		}
-	}, true);
+	}, true));
 	try {
 		await assert.rejects(service.pair(new Uint8Array([1, 2]), '123'), /PairingCheckMismatch/);
 		assert.equal(await service.pair(new Uint8Array([1, 2]), '042'), 'peer');
@@ -275,14 +276,14 @@ test('device commands use neutral connections and consume a fresh pairing previe
 
 test('empty failed reads expose unavailable state and recover without invented devices', async () => {
 	let failed = true;
-	const service = new DeviceService({
+	const service = new DeviceService(fakeEngine({
 		async engineCommand() {
 			if (failed) {
 				throw new Error('Engine unavailable');
 			}
 			return snapshot([]);
 		}
-	}, true);
+	}, true));
 	try {
 		assert.equal(service.state, 'loading');
 		await assert.rejects(service.refresh(new AbortController().signal));

@@ -6,7 +6,7 @@ const macSettings: Record<PermissionKind, string> = {
 	screen: 'Privacy_ScreenCapture', accessibility: 'Privacy_Accessibility', camera: 'Privacy_Camera', microphone: 'Privacy_Microphone',
 };
 /** OS consent is queried live; it is never stored as an application preference. */
-export class MachinePermissionService {
+export class MachinePermissions {
 	private requesting = false;
 
 	constructor(private readonly platform: string, private readonly development: boolean, private readonly preferences: Preferences, private readonly openExternal: (url: string) => Promise<void>) { }

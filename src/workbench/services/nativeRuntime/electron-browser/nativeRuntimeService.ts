@@ -1,5 +1,7 @@
-import { IConfigurationService, defaultConfiguration } from '../../../../platform/configuration/common/configuration.js';
-import type { DesktopApi } from '../../../../platform/ipc/common/desktopApi.js';
+import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { IEngineService } from '../../../../platform/engine/common/engineService.js';
+import { INativeHostService } from '../../../../platform/native/common/native.js';
+import { IRecordingService } from '../../../../platform/recording/common/recording.js';
 import type { NativeDevice, PowerPolicy, PowerStatus, EngineCommand, NativeScreenSource, NativeSharingStatus, RecordingStatus, RecordingRetention } from '../../../../platform/engine/common/engine.js';
 import type { INativeRuntimeService, NativeRuntime } from '../common/nativeRuntimeService.js';
 /** Native backend facts and explicitly requested media operations. Peer grants remain separate. */
@@ -7,13 +9,22 @@ export class NativeRuntimeService implements INativeRuntimeService {
 	declare public readonly _serviceBrand: undefined;
 	private pending: Promise<unknown> = Promise.resolve();
 
-	constructor(private readonly api: Pick<DesktopApi, 'engineCommand' | 'getCaptureDisplays' | 'recordingDirectory'>, public readonly available: boolean, @IConfigurationService private readonly configuration?: IConfigurationService) { }
+	constructor(
+		@IEngineService private readonly engine: IEngineService,
+		@INativeHostService private readonly nativeHostService: INativeHostService,
+		@IRecordingService private readonly recordingService: IRecordingService,
+		@IConfigurationService private readonly configuration: IConfigurationService,
+	) { }
+
+	public get available(): boolean {
+		return this.engine.available;
+	}
 
 	public async load(): Promise<NativeRuntime> {
 		if (!this.available) {
 			throw new Error('Native runtime unavailable');
 		}
-		const reply = await this.api.engineCommand({ type: 'nativeRuntime' });
+		const reply = await this.engine.execute({ type: 'nativeRuntime' });
 		if (reply.type !== 'nativeRuntime') {
 			throw new Error('Invalid native runtime reply');
 		}
@@ -21,7 +32,7 @@ export class NativeRuntimeService implements INativeRuntimeService {
 	}
 
 	public async captureDisplays(): Promise<readonly NativeScreenSource[]> {
-		const displays = await this.api.getCaptureDisplays();
+		const displays = await this.nativeHostService.getCaptureDisplays();
 		return Object.freeze(displays.map(display => Object.freeze({ ...display })));
 	}
 
@@ -36,7 +47,7 @@ export class NativeRuntimeService implements INativeRuntimeService {
 	}
 
 	public async sharingStatus(): Promise<readonly NativeSharingStatus[]> {
-		const reply = await this.api.engineCommand({ type: 'nativeSharingStatus' });
+		const reply = await this.engine.execute({ type: 'nativeSharingStatus' });
 		if (reply.type !== 'nativeSharingStatus') {
 			throw new Error('Invalid screen sharing reply');
 		}
@@ -45,7 +56,7 @@ export class NativeRuntimeService implements INativeRuntimeService {
 
 	public async remoteDevices(target: { readonly id: string; readonly generation: string }, kind: 'camera' | 'microphone' | 'system'): Promise<readonly NativeDevice[]> {
 		const owner = { sessionId: target.id, generation: target.generation };
-		const reply = await this.api.engineCommand(kind === 'camera' ? { type: 'remoteCameraDevices', ...owner } : { type: 'remoteAudioDevices', ...owner, kind: kind === 'microphone' ? 'Microphone' : 'System' });
+		const reply = await this.engine.execute(kind === 'camera' ? { type: 'remoteCameraDevices', ...owner } : { type: 'remoteAudioDevices', ...owner, kind: kind === 'microphone' ? 'Microphone' : 'System' });
 		if (reply.type !== 'nativeDevices') {
 			throw new Error('Invalid remote device reply');
 		}
@@ -53,20 +64,24 @@ export class NativeRuntimeService implements INativeRuntimeService {
 	}
 
 	private async recording(command: EngineCommand): Promise<Readonly<RecordingStatus>> {
-		const reply = await this.api.engineCommand(command);
+		const reply = await this.engine.execute(command);
 		if (reply.type !== 'recordingStatus') {
 			throw new Error('Invalid recording reply');
 		}
 		return Object.freeze({ ...reply.status });
 	}
 
-	public recordingDirectory(action: 'read' | 'choose'): Promise<string | null> {
-		return this.api.recordingDirectory(action);
+	public async recordingDirectory(action: 'read' | 'choose'): Promise<string | null> {
+		const fallback = await this.recordingService.getDefaultDirectory();
+		if (action === 'read') {
+			return fallback;
+		}
+		return this.nativeHostService.pickFolder(this.configuration.snapshot.values['recording.defaults'].directory || fallback);
 	}
 
 	public async startRecording(target: { readonly id: string; readonly generation: string }, options: { readonly destination?: string; readonly maxBytes?: string; readonly maxDurationMs?: string; readonly retention?: RecordingRetention }): Promise<Readonly<RecordingStatus>> {
-		const defaults = (this.configuration?.snapshot.values ?? defaultConfiguration)['recording.defaults'];
-		const destination = options.destination ?? await this.api.recordingDirectory('destination');
+		const defaults = this.configuration.snapshot.values['recording.defaults'];
+		const destination = options.destination ?? await this.recordingService.createDestination();
 		if (!destination) {
 			throw new Error('Recording destination unavailable');
 		}
@@ -82,7 +97,7 @@ export class NativeRuntimeService implements INativeRuntimeService {
 	}
 
 	public async releaseRecording(id: string): Promise<void> {
-		const reply = await this.api.engineCommand({ type: 'releaseRecording', id });
+		const reply = await this.engine.execute({ type: 'releaseRecording', id });
 		if (reply.type !== 'done') {
 			throw new Error('Recording has not finalized');
 		}
@@ -92,7 +107,7 @@ export class NativeRuntimeService implements INativeRuntimeService {
 		if (!this.available) {
 			throw new Error('Native runtime unavailable');
 		}
-		const reply = await this.api.engineCommand({ type: kind === 'camera' ? 'nativeCameraDevices' : kind === 'audio' ? 'nativeAudioDevices' : 'nativeAudioOutputs' });
+		const reply = await this.engine.execute({ type: kind === 'camera' ? 'nativeCameraDevices' : kind === 'audio' ? 'nativeAudioDevices' : 'nativeAudioOutputs' });
 		if (reply.type !== 'nativeDevices') {
 			throw new Error('Invalid native device reply');
 		}
@@ -104,7 +119,7 @@ export class NativeRuntimeService implements INativeRuntimeService {
 			if (!this.available) {
 				throw new Error('Native runtime unavailable');
 			}
-			const reply = await this.api.engineCommand(command);
+			const reply = await this.engine.execute(command);
 			if (reply.type !== 'done') {
 				throw new Error('Native backend update refused');
 			}
@@ -126,7 +141,7 @@ export class NativeRuntimeService implements INativeRuntimeService {
 		if (!this.available) {
 			throw new Error('Native runtime unavailable');
 		}
-		const reply = await this.api.engineCommand({ type: 'powerPolicy' });
+		const reply = await this.engine.execute({ type: 'powerPolicy' });
 		if (reply.type !== 'powerPolicy') {
 			throw new Error('Invalid power policy reply');
 		}
@@ -139,7 +154,7 @@ export class NativeRuntimeService implements INativeRuntimeService {
 			if (!this.available) {
 				throw new Error('Native runtime unavailable');
 			}
-			const reply = await this.api.engineCommand({ type: 'setPowerPolicy', policy: draft });
+			const reply = await this.engine.execute({ type: 'setPowerPolicy', policy: draft });
 			if (reply.type !== 'done') {
 				throw new Error('Power policy update refused');
 			}
@@ -153,7 +168,7 @@ export class NativeRuntimeService implements INativeRuntimeService {
 		if (!this.available) {
 			throw new Error('Native runtime unavailable');
 		}
-		const reply = await this.api.engineCommand({ type: 'powerStatus' });
+		const reply = await this.engine.execute({ type: 'powerStatus' });
 		if (reply.type !== 'powerStatus') {
 			throw new Error('Invalid power status reply');
 		}

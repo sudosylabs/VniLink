@@ -1,4 +1,4 @@
-import type { DesktopApi } from '../../../../platform/ipc/common/desktopApi.js';
+import { IEngineService } from '../../../../platform/engine/common/engineService.js';
 import type { SharingPolicy, SystemPolicy, SystemSupport } from '../../../../platform/engine/common/engine.js';
 import { AccessReadbackError, AccessWriteError, type LocalSecurity, type IAccessService } from '../common/accessService.js';
 
@@ -9,13 +9,17 @@ export class AccessService implements IAccessService {
 	declare public readonly _serviceBrand: undefined;
 	private pending: Promise<unknown> = Promise.resolve();
 
-	constructor(private readonly api: Pick<DesktopApi, 'engineCommand'>, public readonly available: boolean) { }
+	constructor(@IEngineService private readonly engine: IEngineService) { }
+
+	public get available(): boolean {
+		return this.engine.available;
+	}
 
 	public async loadSharing(): Promise<Readonly<SharingPolicy>> {
 		if (!this.available) {
 			throw new Error('Sharing policy unavailable');
 		}
-		const reply = await this.api.engineCommand({ type: 'sharingPolicy' });
+		const reply = await this.engine.execute({ type: 'sharingPolicy' });
 		if (reply.type !== 'sharingPolicy') {
 			throw new Error('Invalid sharing policy reply');
 		}
@@ -28,7 +32,7 @@ export class AccessService implements IAccessService {
 				throw new Error('Sharing policy unavailable');
 			}
 			try {
-				const reply = await this.api.engineCommand({ type: 'setSharingPolicy', policy: changes });
+				const reply = await this.engine.execute({ type: 'setSharingPolicy', policy: changes });
 				if (reply.type !== 'done') {
 					throw new Error('Invalid sharing policy update reply');
 				}
@@ -51,7 +55,7 @@ export class AccessService implements IAccessService {
 		if (!this.available) {
 			throw new Error('Access service unavailable');
 		}
-		const reply = await this.api.engineCommand({ type: 'systemPolicy' });
+		const reply = await this.engine.execute({ type: 'systemPolicy' });
 		if (reply.type !== 'systemPolicy') {
 			throw new Error('Invalid security policy reply');
 		}
@@ -64,7 +68,7 @@ export class AccessService implements IAccessService {
 			if (!current.support[systemCapabilities[key]]) {
 				throw new Error('System action unavailable');
 			}
-			const reply = await this.api.engineCommand({ type: 'setSystemPolicy', policy: { ...current.policy, [key]: allowed } });
+			const reply = await this.engine.execute({ type: 'setSystemPolicy', policy: { ...current.policy, [key]: allowed } });
 			if (reply.type !== 'done') {
 				throw new Error('Invalid policy write reply');
 			}

@@ -115,7 +115,19 @@
     "./workbench/services/host/electron-browser/nativeHostService.ts",
     "./assets.d.ts",
     "./base/browser/window.ts",
-    "./typings/editContext.d.ts"
+    "./typings/editContext.d.ts",
+    "./platform/ipc/electron-browser/services.ts",
+    "./platform/ipc/common/services.ts",
+    "./base/parts/ipc/electron-browser/ipc.electron.ts",
+    "./base/parts/sandbox/electron-browser/globals.ts",
+    "./base/parts/sandbox/electron-browser/electronTypes.ts",
+    "./base/parts/sandbox/common/sandboxTypes.ts",
+    "./base/common/product.ts",
+    "./base/common/policy.ts",
+    "./base/common/defaultAccount.ts",
+    "./base/parts/ipc/common/ipc.electron.ts",
+    "./base/parts/ipc/electron-main/ipc.electron.ts",
+    "./base/parts/ipc/electron-main/ipcMain.ts"
   ],
   "include": [],
   "exclude": []

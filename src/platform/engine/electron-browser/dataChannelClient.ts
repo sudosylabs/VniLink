@@ -1,8 +1,9 @@
 import { isDesktopAudioOperation, isDesktopAudioStatus, isDataPacket, isChannelRequest } from '../common/dataChannel.js';
 import type { DataChannelRequest, DataPacket, FileOperation, DataChannelMetrics, DesktopAudioOperation, DesktopAudioStatus } from '../common/dataChannel.js';
-import type { DesktopApi } from '../../ipc/common/desktopApi.js';
+import { ipcMessagePort } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { record } from '../common/engine.js';
 import type { EngineCommand } from '../common/engine.js';
+import { DATA_CHANNEL_PORT_RESPONSE, type IEngineService } from '../common/engineService.js';
 
 /** Owns the renderer end; payloads arrive outside contextBridge's copied values. */
 export class DataChannelClient {
@@ -41,7 +42,7 @@ export class DataChannelClient {
 	}
 
 	public static async open(
-		api: DesktopApi,
+		engine: IEngineService,
 		request: Omit<DataChannelRequest, 'requestId'>,
 		consume: (packet: DataPacket) => void | Promise<void>,
 		onError: (error: Error) => void,
@@ -60,13 +61,7 @@ export class DataChannelClient {
 				window.removeEventListener('message', receive);
 			};
 			const receive = (event: MessageEvent<unknown>): void => {
-				if (
-					event.source !== window ||
-					event.origin !== location.origin ||
-					!record(event.data) ||
-					event.data.type !== 'vnilink:data-port' ||
-					event.data.requestId !== target.requestId
-				) {
+				if (event.source !== window || event.origin !== location.origin || event.data !== target.requestId) {
 					return;
 				}
 				const port = event.ports.at(0);
@@ -92,7 +87,14 @@ export class DataChannelClient {
 				port.start();
 			};
 			window.addEventListener('message', receive);
-			void api.openDataChannel(target).catch((error: unknown) => {
+			try {
+				ipcMessagePort.acquire(DATA_CHANNEL_PORT_RESPONSE, target.requestId);
+			} catch (error) {
+				cleanup();
+				reject(error instanceof Error ? error : new Error('Channel unavailable'));
+				return;
+			}
+			void engine.openDataChannel(target).catch((error: unknown) => {
 				cleanup();
 				reject(error instanceof Error ? error : new Error('Channel unavailable'));
 			});

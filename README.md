@@ -161,12 +161,12 @@ vnilink/
   rust-toolchain.toml
   src/
     main.ts                    # Electron startup
-    preload.ts                 # Narrow renderer API
+    preload.ts                 # Sandboxed IPC globals (VS Code's preload shape)
     renderer.ts                # Browser startup
-    app/electron-main/         # Lifecycle and windows
+    code/electron-main/        # Main-process composition and IPC channels
     base/browser/ui/           # Reusable DOM controls
-    platform/ipc/common/       # Environment-independent API contracts
-    platform/ipc/electron-main/ # Validated privileged handlers
+    base/parts/ipc/            # VS Code IPC transport (Electron and MessagePort)
+    platform/*/electron-main/  # Main services and their window-facing channels
     platform/engine/common/    # Control commands and value validation
     platform/engine/electron-main/ # Engine ownership and request queue
     platform/engine/electron-utility/ # Rust addon host

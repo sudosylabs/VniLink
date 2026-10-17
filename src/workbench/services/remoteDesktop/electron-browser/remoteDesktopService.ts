@@ -1,4 +1,4 @@
-import type { DesktopApi } from '../../../../platform/ipc/common/desktopApi.js';
+import { IEngineService } from '../../../../platform/engine/common/engineService.js';
 import type { QualityLimits, DisplayInfo } from '../../../../platform/engine/common/engine.js';
 import { DesktopReadbackError, desktopTargetKey, isValidDesktopQuality, type DesktopSession, type DesktopSettings, type DesktopTarget, type IRemoteDesktopService } from '../common/remoteDesktopService.js';
 
@@ -6,14 +6,18 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 	declare public readonly _serviceBrand: undefined;
 	private pending: Promise<unknown> = Promise.resolve();
 
-	constructor(private readonly api: Pick<DesktopApi, 'engineCommand'>, public readonly available: boolean) { }
+	constructor(@IEngineService private readonly engine: IEngineService) { }
+
+	public get available(): boolean {
+		return this.engine.available;
+	}
 
 	public async load(): Promise<DesktopSettings> {
 		if (!this.available) {
 			throw new Error('Desktop engine unavailable');
 		}
 		const [controllers, hosts, snapshot, codecs] = await Promise.all([
-			this.api.engineCommand({ type: 'controllerSessions' }), this.api.engineCommand({ type: 'hostedSessions' }), this.api.engineCommand({ type: 'snapshot' }), this.api.engineCommand({ type: 'videoCodecs' }),
+			this.engine.execute({ type: 'controllerSessions' }), this.engine.execute({ type: 'hostedSessions' }), this.engine.execute({ type: 'snapshot' }), this.engine.execute({ type: 'videoCodecs' }),
 		]);
 		if (controllers.type !== 'sessions' || hosts.type !== 'sessions' || snapshot.type !== 'snapshot' || codecs.type !== 'videoCodecs') {
 			throw new Error('Invalid desktop settings reply');
@@ -39,7 +43,7 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 
 	public async displays(target: DesktopTarget): Promise<readonly DisplayInfo[]> {
 		await this.target(target);
-		const reply = await this.api.engineCommand(target.role === 'Controller' ? { type: 'sessionTopology', sessionId: target.id, generation: target.generation } : { type: 'topology' });
+		const reply = await this.engine.execute(target.role === 'Controller' ? { type: 'sessionTopology', sessionId: target.id, generation: target.generation } : { type: 'topology' });
 		if (reply.type !== 'displays') {
 			throw new Error('Invalid display reply');
 		}
@@ -54,7 +58,7 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 				throw new Error('Invalid stream limits');
 			}
 			await this.target(owner);
-			const reply = await this.api.engineCommand({ type: 'updateSessionQuality', sessionId: owner.id, generation: owner.generation, role: owner.role, quality: draft });
+			const reply = await this.engine.execute({ type: 'updateSessionQuality', sessionId: owner.id, generation: owner.generation, role: owner.role, quality: draft });
 			if (reply.type !== 'done') {
 				throw new Error('Invalid quality update reply');
 			}

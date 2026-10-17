@@ -6,6 +6,60 @@
   "runtimeIntegrated": true,
   "files": [
     {
+      "path": "src/base/browser/browser.ts",
+      "upstreamPath": "src/vs/base/browser/browser.ts",
+      "sha256": "8dbb98957266777088901ebc896da986eecba73f16db3b8a5929d0394342399a",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/canIUse.ts",
+      "upstreamPath": "src/vs/base/browser/canIUse.ts",
+      "sha256": "0d0e1910902339bb7bc37c2fed83e800dc8ef4d020e9aa79f26f14d5b0383886",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/dom.ts",
+      "upstreamPath": "src/vs/base/browser/dom.ts",
+      "sha256": "5963e909ab4c16e4810714f39dac72e5e2253d53ed85129b04ce21b90571af8f",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/iframe.ts",
+      "upstreamPath": "src/vs/base/browser/iframe.ts",
+      "sha256": "4bdd13fb9d4e8cc6e60e9a02ae0d627d790077fb568f46d173746d22deda8c20",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/keyboardEvent.ts",
+      "upstreamPath": "src/vs/base/browser/keyboardEvent.ts",
+      "sha256": "c0080f6875ce679e4140d6faeae4ccb2f8d0b26fa2946d0c5f24ec5c39206aba",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/mouseEvent.ts",
+      "upstreamPath": "src/vs/base/browser/mouseEvent.ts",
+      "sha256": "1294a8d4cba678bbee9ba1e67acf1e8adcc5cfe556800b57637d1748c613c214",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/ui/aria/aria.css",
+      "upstreamPath": "src/vs/base/browser/ui/aria/aria.css",
+      "sha256": "c6cea3b56d90a2754b2ac362e81792e55495ebae36194e65e35cd655f71f9775",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/ui/aria/aria.ts",
+      "upstreamPath": "src/vs/base/browser/ui/aria/aria.ts",
+      "sha256": "61098dabc4f0069ff9d51e4b4262147e1c29ca58713eaa0782ef243d3cd63d27",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/browser/window.ts",
+      "upstreamPath": "src/vs/base/browser/window.ts",
+      "sha256": "8003fc60f1f022d1ae4abfa8773385399ab5a7413dccbffb825f1c0c8bdef13b",
+      "changedImports": 0
+    },
+    {
       "path": "src/base/common/arrays.ts",
       "upstreamPath": "src/vs/base/common/arrays.ts",
       "sha256": "e9a08190d445f28485a24c8b2701b5d91fda0702f3999f96d53f0cfebc032c0a",
@@ -72,6 +126,12 @@
       "changedImports": 0
     },
     {
+      "path": "src/base/common/defaultAccount.ts",
+      "upstreamPath": "src/vs/base/common/defaultAccount.ts",
+      "sha256": "b119ae7ee3b220cfd7d93b0d9dcdd6f6276859e170143a48d6a740245e929e52",
+      "changedImports": 0
+    },
+    {
       "path": "src/base/common/equals.ts",
       "upstreamPath": "src/vs/base/common/equals.ts",
       "sha256": "62a7350742a35570062837d8ef3df1889d4faf48dd66b614162e6418aa36414c",
@@ -102,9 +162,28 @@
       "changedImports": 0
     },
     {
+      "path": "src/base/common/hash.ts",
+      "upstreamPath": "src/vs/base/common/hash.ts",
+      "sha256": "6faa20253ab7162b626f36f73009ebb30c0a22d2277cb9d97926cebb00fbd6bf",
+      "adapted": true,
+      "changedImports": 0
+    },
+    {
       "path": "src/base/common/iterator.ts",
       "upstreamPath": "src/vs/base/common/iterator.ts",
       "sha256": "a787d959a2904785ea351dba98bffdcd37fcb367c0eb97f065277add1ce86aa6",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/keybindings.ts",
+      "upstreamPath": "src/vs/base/common/keybindings.ts",
+      "sha256": "7d45fe47f4371c0c5513dfc0d544b04ccab88789ef08d5bbbf00ca93928faa49",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/keyCodes.ts",
+      "upstreamPath": "src/vs/base/common/keyCodes.ts",
+      "sha256": "7e059bb385cae572916c3aac8770831c86a0f7d4b6da250b9d0d745143bd20f1",
       "changedImports": 0
     },
     {
@@ -147,6 +226,12 @@
       "path": "src/base/common/network.ts",
       "upstreamPath": "src/vs/base/common/network.ts",
       "sha256": "bc7ceb5ac95baa7d0d222861244cacaf4617dfc73d8fa5ce5e7c33242eafee51",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/numbers.ts",
+      "upstreamPath": "src/vs/base/common/numbers.ts",
+      "sha256": "1e197ffa6ca2e60f43eaa25f0930674ad4d348b293ad607a69186d0ddc744ab3",
       "changedImports": 0
     },
     {
@@ -384,9 +469,21 @@
       "changedImports": 0
     },
     {
+      "path": "src/base/common/policy.ts",
+      "upstreamPath": "src/vs/base/common/policy.ts",
+      "sha256": "4662f2fe674bdf93a50bfaa4658226aff54b2d7f97171bde2a4acce7ec7e7f31",
+      "changedImports": 0
+    },
+    {
       "path": "src/base/common/process.ts",
       "upstreamPath": "src/vs/base/common/process.ts",
       "sha256": "c72b499f137a9f52134cd816db076f02712b7ee279f2957b53740639f80d9083",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/common/product.ts",
+      "upstreamPath": "src/vs/base/common/product.ts",
+      "sha256": "7abe057dd2be1f4b6dd2fccc4c5ac58646b708d0261ad8495b37ce9ea0d8c238",
       "changedImports": 0
     },
     {
@@ -444,9 +541,51 @@
       "changedImports": 0
     },
     {
+      "path": "src/base/parts/ipc/common/ipc.electron.ts",
+      "upstreamPath": "src/vs/base/parts/ipc/common/ipc.electron.ts",
+      "sha256": "2b25e501c21520d02bd59034d43c2359e02dbbbc40a8d136d783cc6f9cbf5fe1",
+      "changedImports": 0
+    },
+    {
       "path": "src/base/parts/ipc/common/ipc.ts",
       "upstreamPath": "src/vs/base/parts/ipc/common/ipc.ts",
       "sha256": "300fc458ad994f887fce88757ff5352fd93acc0b0bdc265312c0b3aac75d864b",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/parts/ipc/electron-browser/ipc.electron.ts",
+      "upstreamPath": "src/vs/base/parts/ipc/electron-browser/ipc.electron.ts",
+      "sha256": "ae6f2f69341816e6afb55848f5b3472fbcdccf0f778a222deae205f02c49bdbd",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/parts/ipc/electron-main/ipc.electron.ts",
+      "upstreamPath": "src/vs/base/parts/ipc/electron-main/ipc.electron.ts",
+      "sha256": "441c9d8f60f6f49b57e566b8718b5c09630ae431a3227866bba7313b15a58f39",
+      "adapted": true
+    },
+    {
+      "path": "src/base/parts/ipc/electron-main/ipcMain.ts",
+      "upstreamPath": "src/vs/base/parts/ipc/electron-main/ipcMain.ts",
+      "sha256": "584ce69aaebb9ee8e43d23f4146becd3d3101cb27fc543af185accd1e6025d59",
+      "adapted": true
+    },
+    {
+      "path": "src/base/parts/sandbox/common/sandboxTypes.ts",
+      "upstreamPath": "src/vs/base/parts/sandbox/common/sandboxTypes.ts",
+      "sha256": "e48fdd47794b208e13f127371e18e86dda100d455ce8b200442bb9a098e4d849",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/parts/sandbox/electron-browser/electronTypes.ts",
+      "upstreamPath": "src/vs/base/parts/sandbox/electron-browser/electronTypes.ts",
+      "sha256": "97411961d8cd31ec42b7c1f364eca2effdd82fc4916fc2354e25f0e61274f999",
+      "changedImports": 0
+    },
+    {
+      "path": "src/base/parts/sandbox/electron-browser/globals.ts",
+      "upstreamPath": "src/vs/base/parts/sandbox/electron-browser/globals.ts",
+      "sha256": "9dddf637e9e0758280fce6b53f58f82e50eff426ac94ea7b8f14e200980c94f7",
       "changedImports": 0
     },
     {
@@ -494,20 +633,31 @@
     {
       "path": "src/platform/ipc/common/mainProcessService.ts",
       "upstreamPath": "src/vs/platform/ipc/common/mainProcessService.ts",
-      "adapted": true,
-      "sha256": "9a199d102134767ad0a18136d669c1f720d9b893393f449d28f40cc6f3795390"
+      "sha256": "c71da92aa9f523c3f1be27d12f3aa61362de527363c1f09c8288991124f7d063",
+      "changedImports": 0
+    },
+    {
+      "path": "src/platform/ipc/common/services.ts",
+      "upstreamPath": "src/vs/platform/ipc/common/services.ts",
+      "sha256": "5d34abed83702e5703051493f07fddb62a36a6e5cd20a0270ea598f3a87312a6",
+      "changedImports": 0
     },
     {
       "path": "src/platform/ipc/electron-browser/mainProcessService.ts",
       "upstreamPath": "src/vs/platform/ipc/electron-browser/mainProcessService.ts",
-      "adapted": true,
-      "sha256": "ebd33d3510375ccdd4201b62b4f67041f23e08e8a8dbe401e84430726aea24a4"
+      "sha256": "3dfba329158fa235b5985ea849c3a24c4691e9919d62f54d0f1cb5e3154d8174",
+      "changedImports": 0
+    },
+    {
+      "path": "src/platform/ipc/electron-browser/services.ts",
+      "upstreamPath": "src/vs/platform/ipc/electron-browser/services.ts",
+      "sha256": "f63acc197d330d47ab465c2cef7f4c94e4905a2ee3b2b99c949951ee4f3347af",
+      "changedImports": 0
     },
     {
       "path": "src/platform/native/common/native.ts",
       "upstreamPath": "src/vs/platform/native/common/native.ts",
-      "sha256": "4a660b837ff659d0bb87ef350c86cda7f49fb90edbb4eeb4cddea765b1d6ad7d",
-      "changedImports": 0,
+      "sha256": "425299768d1ee50dc7f0a6eb15d9beaa0c8f4ca571af0df9893f54cdaf2fc5d5",
       "adapted": true
     },
     {
@@ -520,7 +670,7 @@
       "path": "src/platform/native/electron-main/nativeHostMainService.ts",
       "upstreamPath": "src/vs/platform/native/electron-main/nativeHostMainService.ts",
       "adapted": true,
-      "sha256": "9c4baf644b444732efb51239b6addba95b283faa8dad826f51456937989663b4"
+      "sha256": "a86c77a6feec2090a5e2d7a332b5cb6f22baf1bf3c35513b68b2bf6343515210"
     },
     {
       "path": "src/platform/theme/browser/themeService.ts",
@@ -563,6 +713,12 @@
       "adapted": true
     },
     {
+      "path": "src/typings/editContext.d.ts",
+      "upstreamPath": "src/typings/editContext.d.ts",
+      "sha256": "348174814b3a7c4c9ad1ac2a6e467cb3fd700c3d452e065eb8875201bb74672e",
+      "changedImports": 0
+    },
+    {
       "path": "src/typings/thenable.d.ts",
       "upstreamPath": "src/typings/thenable.d.ts",
       "sha256": "6c46bfeba3e7a0183f0d4e979a4d036ba75ed53250d396d1475aea6944e6e2db",
@@ -579,6 +735,13 @@
       "upstreamPath": "src/typings/vscode-globals-product.d.ts",
       "sha256": "f9d9755bc978c0c1964d378a80fa59495fef85307c6d83d2ad5a51a2a8c3f17c",
       "changedImports": 0
+    },
+    {
+      "path": "src/workbench/browser/parts/titlebar/media/modernTabs.css",
+      "upstreamPath": "src/vs/workbench/contrib/modernUI/browser/media/tabs.css",
+      "adapted": true,
+      "sha256": "e93cb8990921c3a0581279fd93681653d3cb04fe252d292c907baeff4c544610",
+      "adaptation": "VniLink transparent titlebar tabs retain a shared label color and rounded selection outline; segmented dividers leave the active tab open, with side strokes ending at the reverse shoulders."
     },
     {
       "path": "src/workbench/browser/parts/titlebar/media/titlebarpart.css",
@@ -598,7 +761,7 @@
       "path": "src/workbench/electron-browser/desktop.main.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/desktop.main.ts",
       "adapted": true,
-      "sha256": "dd2da77c0a366c9d15bc677c3dfa1856795fa159b54cb758315a289993b84a64"
+      "sha256": "a9f2087a1489a13b7d5438004c727d979118858f7bb4fc58e71c95a3e991c494"
     },
     {
       "path": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
@@ -619,105 +782,16 @@
       "upstreamPath": "src/vs/workbench/services/host/electron-browser/nativeHostService.ts",
       "adapted": true,
       "sha256": "cd7f83509e5e83251b269f625c4592467cb2286031a54d18f80e8dc31190703c"
-    },
-    {
-      "path": "src/base/browser/window.ts",
-      "upstreamPath": "src/vs/base/browser/window.ts",
-      "sha256": "8003fc60f1f022d1ae4abfa8773385399ab5a7413dccbffb825f1c0c8bdef13b",
-      "changedImports": 0
-    },
-    {
-      "path": "src/workbench/browser/parts/titlebar/media/modernTabs.css",
-      "upstreamPath": "src/vs/workbench/contrib/modernUI/browser/media/tabs.css",
-      "adapted": true,
-      "sha256": "e93cb8990921c3a0581279fd93681653d3cb04fe252d292c907baeff4c544610",
-      "adaptation": "VniLink transparent titlebar tabs retain a shared label color and rounded selection outline; segmented dividers leave the active tab open, with side strokes ending at the reverse shoulders."
-    },
-    {
-      "path": "src/base/browser/ui/aria/aria.ts",
-      "upstreamPath": "src/vs/base/browser/ui/aria/aria.ts",
-      "sha256": "61098dabc4f0069ff9d51e4b4262147e1c29ca58713eaa0782ef243d3cd63d27",
-      "changedImports": 0
-    },
-    {
-      "path": "src/base/browser/ui/aria/aria.css",
-      "upstreamPath": "src/vs/base/browser/ui/aria/aria.css",
-      "sha256": "c6cea3b56d90a2754b2ac362e81792e55495ebae36194e65e35cd655f71f9775",
-      "changedImports": 0
-    },
-    {
-      "path": "src/base/browser/dom.ts",
-      "upstreamPath": "src/vs/base/browser/dom.ts",
-      "sha256": "5963e909ab4c16e4810714f39dac72e5e2253d53ed85129b04ce21b90571af8f",
-      "changedImports": 0
-    },
-    {
-      "path": "src/base/common/numbers.ts",
-      "upstreamPath": "src/vs/base/common/numbers.ts",
-      "sha256": "1e197ffa6ca2e60f43eaa25f0930674ad4d348b293ad607a69186d0ddc744ab3",
-      "changedImports": 0
-    },
-    {
-      "path": "src/base/common/keyCodes.ts",
-      "upstreamPath": "src/vs/base/common/keyCodes.ts",
-      "sha256": "7e059bb385cae572916c3aac8770831c86a0f7d4b6da250b9d0d745143bd20f1",
-      "changedImports": 0
-    },
-    {
-      "path": "src/base/browser/mouseEvent.ts",
-      "upstreamPath": "src/vs/base/browser/mouseEvent.ts",
-      "sha256": "1294a8d4cba678bbee9ba1e67acf1e8adcc5cfe556800b57637d1748c613c214",
-      "changedImports": 0
-    },
-    {
-      "path": "src/base/browser/iframe.ts",
-      "upstreamPath": "src/vs/base/browser/iframe.ts",
-      "sha256": "4bdd13fb9d4e8cc6e60e9a02ae0d627d790077fb568f46d173746d22deda8c20",
-      "changedImports": 0
-    },
-    {
-      "path": "src/base/browser/browser.ts",
-      "upstreamPath": "src/vs/base/browser/browser.ts",
-      "sha256": "8dbb98957266777088901ebc896da986eecba73f16db3b8a5929d0394342399a",
-      "changedImports": 0
-    },
-    {
-      "path": "src/base/browser/keyboardEvent.ts",
-      "upstreamPath": "src/vs/base/browser/keyboardEvent.ts",
-      "sha256": "c0080f6875ce679e4140d6faeae4ccb2f8d0b26fa2946d0c5f24ec5c39206aba",
-      "changedImports": 0
-    },
-    {
-      "path": "src/base/common/keybindings.ts",
-      "upstreamPath": "src/vs/base/common/keybindings.ts",
-      "sha256": "7d45fe47f4371c0c5513dfc0d544b04ccab88789ef08d5bbbf00ca93928faa49",
-      "changedImports": 0
-    },
-    {
-      "path": "src/base/browser/canIUse.ts",
-      "upstreamPath": "src/vs/base/browser/canIUse.ts",
-      "sha256": "0d0e1910902339bb7bc37c2fed83e800dc8ef4d020e9aa79f26f14d5b0383886",
-      "changedImports": 0
-    },
-    {
-      "path": "src/typings/editContext.d.ts",
-      "upstreamPath": "src/typings/editContext.d.ts",
-      "sha256": "348174814b3a7c4c9ad1ac2a6e467cb3fd700c3d452e065eb8875201bb74672e",
-      "changedImports": 0
-    },
-    {
-      "path": "src/base/common/hash.ts",
-      "upstreamPath": "src/vs/base/common/hash.ts",
-      "sha256": "6faa20253ab7162b626f36f73009ebb30c0a22d2277cb9d97926cebb00fbd6bf",
-      "adapted": true,
-      "changedImports": 0
     }
   ],
   "scope": "Native window controls, titlebar presentation, DI registration and their recursive dependencies",
   "roots": [
     "src/base/browser/ui/aria/aria.ts",
     "src/base/browser/window.ts",
+    "src/base/parts/ipc/electron-browser/ipc.electron.ts",
+    "src/base/parts/ipc/electron-main/ipc.electron.ts",
     "src/platform/instantiation/common/instantiationService.ts",
+    "src/platform/ipc/electron-browser/services.ts",
     "src/platform/native/electron-main/nativeHostMainService.ts",
     "src/platform/windows/electron-main/windows.ts",
     "src/typings/base-common.d.ts",
@@ -734,123 +808,138 @@
   ],
   "dependencyEdges": [
     {
-      "from": "src/platform/windows/electron-main/windows.ts",
-      "to": "src/base/common/platform.ts",
+      "from": "src/platform/ipc/electron-browser/services.ts",
+      "to": "src/base/parts/ipc/common/ipc.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/windows/electron-main/windows.ts",
-      "to": "src/platform/window/common/window.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/windows/electron-main/windows.ts",
-      "to": "src/platform/window/common/titlebar.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/windows/electron-main/windows.ts",
-      "to": "src/platform/window/common/windowMaterial.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/window/common/window.ts",
-      "to": "src/base/common/platform.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/platform.ts",
-      "to": "src/nls.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
-      "to": "src/platform/instantiation/common/instantiation.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
-      "to": "src/platform/native/common/native.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
-      "to": "src/platform/windows/electron-main/windowImpl.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
-      "to": "src/platform/windows/electron-main/windowMaterial.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/windows/electron-main/windowImpl.ts",
-      "to": "src/platform/window/common/windowMaterial.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/windows/electron-main/windowImpl.ts",
-      "to": "src/base/common/platform.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/windows/electron-main/windowImpl.ts",
-      "to": "src/platform/window/common/window.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/windows/electron-main/windowImpl.ts",
-      "to": "src/platform/native/common/native.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/native/common/native.ts",
-      "to": "src/platform/window/common/windowMaterial.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/native/common/native.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/native/common/native.ts",
-      "to": "src/platform/instantiation/common/instantiation.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/instantiation/common/instantiation.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/instantiation/common/instantiation.ts",
+      "from": "src/platform/ipc/electron-browser/services.ts",
       "to": "src/platform/instantiation/common/descriptors.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/instantiation/common/instantiation.ts",
-      "to": "src/platform/instantiation/common/serviceCollection.ts",
+      "from": "src/platform/ipc/electron-browser/services.ts",
+      "to": "src/platform/instantiation/common/extensions.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/instantiation/common/serviceCollection.ts",
+      "from": "src/platform/ipc/electron-browser/services.ts",
       "to": "src/platform/instantiation/common/instantiation.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/instantiation/common/serviceCollection.ts",
-      "to": "src/platform/instantiation/common/descriptors.ts",
+      "from": "src/platform/ipc/electron-browser/services.ts",
+      "to": "src/platform/ipc/common/mainProcessService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/ipc/electron-browser/services.ts",
+      "to": "src/platform/ipc/common/services.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/ipc/common/services.ts",
+      "to": "src/base/parts/ipc/common/ipc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/arrays.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/async.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/buffer.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/decorators.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/functional.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/marshalling.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/strings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/types.ts",
+      "to": "src/base/common/assert.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/assert.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/strings.ts",
+      "to": "src/base/common/cache.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/strings.ts",
+      "to": "src/base/common/charCode.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/strings.ts",
+      "to": "src/base/common/lazy.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/strings.ts",
+      "to": "src/base/common/uint.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/cache.ts",
+      "to": "src/base/common/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/cache.ts",
+      "to": "src/base/common/lifecycle.ts",
       "kind": "import"
     },
     {
@@ -894,16 +983,6 @@
       "kind": "import"
     },
     {
-      "from": "src/base/common/types.ts",
-      "to": "src/base/common/assert.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/assert.ts",
-      "to": "src/base/common/errors.ts",
-      "kind": "import"
-    },
-    {
       "from": "src/base/common/uri.ts",
       "to": "src/base/common/charCode.ts",
       "kind": "import"
@@ -921,6 +1000,11 @@
     {
       "from": "src/base/common/uri.ts",
       "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/platform.ts",
+      "to": "src/nls.ts",
       "kind": "import"
     },
     {
@@ -2094,36 +2178,6 @@
       "kind": "import"
     },
     {
-      "from": "src/base/common/strings.ts",
-      "to": "src/base/common/cache.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/strings.ts",
-      "to": "src/base/common/charCode.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/strings.ts",
-      "to": "src/base/common/lazy.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/strings.ts",
-      "to": "src/base/common/uint.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/cache.ts",
-      "to": "src/base/common/cancellation.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/cache.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
       "from": "src/base/common/network.ts",
       "to": "src/base/common/errors.ts",
       "kind": "import"
@@ -2176,6 +2230,621 @@
     {
       "from": "src/base/common/arraysFind.ts",
       "to": "src/base/common/arrays.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/marshalling.ts",
+      "to": "src/base/common/buffer.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/marshalling.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/marshalling.ts",
+      "to": "src/base/common/marshallingIds.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/buffer.ts",
+      "to": "src/base/common/lazy.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/buffer.ts",
+      "to": "src/base/common/stream.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/stream.ts",
+      "to": "src/base/common/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/stream.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/stream.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/decorators.ts",
+      "to": "src/base/common/decorators/cancelPreviousCalls.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/decorators/cancelPreviousCalls.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/decorators/cancelPreviousCalls.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/decorators/cancelPreviousCalls.ts",
+      "to": "src/base/common/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/ipc/common/mainProcessService.ts",
+      "to": "src/base/parts/ipc/common/ipc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/ipc/common/mainProcessService.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/ipc/common/mainProcessService.ts",
+      "to": "src/platform/ipc/common/services.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiation.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiation.ts",
+      "to": "src/platform/instantiation/common/descriptors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiation.ts",
+      "to": "src/platform/instantiation/common/serviceCollection.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/serviceCollection.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/serviceCollection.ts",
+      "to": "src/platform/instantiation/common/descriptors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/extensions.ts",
+      "to": "src/platform/instantiation/common/descriptors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/extensions.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-browser/ipc.electron.ts",
+      "to": "src/base/common/buffer.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-browser/ipc.electron.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-browser/ipc.electron.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-browser/ipc.electron.ts",
+      "to": "src/base/parts/ipc/common/ipc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-browser/ipc.electron.ts",
+      "to": "src/base/parts/ipc/common/ipc.electron.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-browser/ipc.electron.ts",
+      "to": "src/base/parts/sandbox/electron-browser/globals.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/sandbox/electron-browser/globals.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/sandbox/electron-browser/globals.ts",
+      "to": "src/base/parts/sandbox/common/sandboxTypes.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/sandbox/electron-browser/globals.ts",
+      "to": "src/base/parts/sandbox/electron-browser/electronTypes.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/sandbox/electron-browser/globals.ts",
+      "to": "src/base/parts/sandbox/electron-browser/electronTypes.ts",
+      "kind": "type import"
+    },
+    {
+      "from": "src/base/parts/sandbox/electron-browser/globals.ts",
+      "to": "src/base/parts/sandbox/electron-browser/electronTypes.ts",
+      "kind": "type import"
+    },
+    {
+      "from": "src/base/parts/sandbox/common/sandboxTypes.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/sandbox/common/sandboxTypes.ts",
+      "to": "src/base/common/product.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/product.ts",
+      "to": "src/base/common/collections.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/product.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/product.ts",
+      "to": "src/base/common/policy.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/policy.ts",
+      "to": "src/nls.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/policy.ts",
+      "to": "src/base/common/defaultAccount.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/defaultAccount.ts",
+      "to": "src/base/common/policy.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.electron.ts",
+      "to": "src/base/common/buffer.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.electron.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.electron.ts",
+      "to": "src/base/parts/ipc/common/ipc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
+      "to": "src/base/parts/ipc/electron-main/ipcMain.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
+      "to": "src/base/common/buffer.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
+      "to": "src/base/parts/ipc/common/ipc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
+      "to": "src/base/parts/ipc/common/ipc.electron.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipcMain.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipcMain.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/base/common/async.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/platform/instantiation/common/descriptors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/platform/instantiation/common/graph.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/platform/instantiation/common/serviceCollection.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/instantiationService.ts",
+      "to": "src/base/common/linkedList.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/aria/aria.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/aria/aria.ts",
+      "to": "src/base/browser/ui/aria/aria.css",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/dom.ts",
+      "to": "src/base/browser/browser.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/dom.ts",
+      "to": "src/base/browser/canIUse.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/dom.ts",
+      "to": "src/base/browser/keyboardEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/dom.ts",
+      "to": "src/base/browser/mouseEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/dom.ts",
+      "to": "src/base/common/async.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/dom.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/dom.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/dom.ts",
+      "to": "src/base/common/keyCodes.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/dom.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/dom.ts",
+      "to": "src/base/common/network.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/dom.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/dom.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/dom.ts",
+      "to": "src/base/common/hash.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/dom.ts",
+      "to": "src/base/browser/window.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/dom.ts",
+      "to": "src/base/common/numbers.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/dom.ts",
+      "to": "src/base/common/observable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/numbers.ts",
+      "to": "src/base/common/assert.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/hash.ts",
+      "to": "src/base/common/buffer.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/hash.ts",
+      "to": "src/base/common/assert.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/hash.ts",
+      "to": "src/base/common/strings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/mouseEvent.ts",
+      "to": "src/base/browser/browser.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/mouseEvent.ts",
+      "to": "src/base/browser/iframe.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/mouseEvent.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/browser.ts",
+      "to": "src/base/browser/window.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/browser.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/browser.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/keyboardEvent.ts",
+      "to": "src/base/browser/browser.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/keyboardEvent.ts",
+      "to": "src/base/common/keyCodes.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/keyboardEvent.ts",
+      "to": "src/base/common/keybindings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/keyboardEvent.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/keybindings.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/keybindings.ts",
+      "to": "src/base/common/keyCodes.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/keybindings.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/canIUse.ts",
+      "to": "src/base/browser/browser.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/canIUse.ts",
+      "to": "src/base/browser/window.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/canIUse.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/windows/electron-main/windows.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/windows/electron-main/windows.ts",
+      "to": "src/platform/window/common/window.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/windows/electron-main/windows.ts",
+      "to": "src/platform/window/common/titlebar.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/windows/electron-main/windows.ts",
+      "to": "src/platform/window/common/windowMaterial.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/window/common/window.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/platform/engine/common/engine.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/platform/engine/common/engine.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/platform/native/common/native.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/platform/windows/electron-main/windowsMainService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/platform/windows/electron-main/windowsMainService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/platform/windows/electron-main/windowImpl.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/platform/windows/electron-main/windowMaterial.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/windows/electron-main/windowImpl.ts",
+      "to": "src/platform/window/common/windowMaterial.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/windows/electron-main/windowImpl.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/windows/electron-main/windowImpl.ts",
+      "to": "src/platform/window/common/window.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/windows/electron-main/windowImpl.ts",
+      "to": "src/platform/native/common/native.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/common/native.ts",
+      "to": "src/platform/window/common/windowMaterial.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/common/native.ts",
+      "to": "src/platform/engine/common/engine.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/common/native.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/common/native.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
       "kind": "import"
     },
     {
@@ -2270,77 +2939,27 @@
     },
     {
       "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/nativeRuntime/common/nativeRuntimeService.ts",
+      "to": "src/base/common/lifecycle.ts",
       "kind": "import"
     },
     {
       "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/nativeRuntime/electron-browser/nativeRuntimeService.ts",
+      "to": "src/platform/configuration/common/configuration.ts",
       "kind": "import"
     },
     {
       "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/terminal/common/terminalSettingsService.ts",
+      "to": "src/platform/configuration/electron-browser/configurationService.ts",
       "kind": "import"
     },
     {
       "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/terminal/electron-browser/terminalSettingsService.ts",
+      "to": "src/platform/engine/common/engineService.ts",
       "kind": "import"
     },
     {
       "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/application/common/applicationService.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/application/electron-browser/applicationService.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/remoteDesktop/common/remoteDesktopService.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/remoteDesktop/electron-browser/remoteDesktopService.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/permissions/common/permissionService.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/permissions/electron-browser/permissionService.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/tabs/common/tabServiceImpl.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/platform/theme/browser/themeService.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/host/electron-browser/nativeHostService.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/platform/instantiation/common/instantiationService.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/platform/instantiation/common/serviceCollection.ts",
+      "to": "src/platform/engine/electron-browser/engineService.ts",
       "kind": "import"
     },
     {
@@ -2350,7 +2969,7 @@
     },
     {
       "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/platform/instantiation/common/extensions.ts",
+      "to": "src/platform/instantiation/common/serviceCollection.ts",
       "kind": "import"
     },
     {
@@ -2375,37 +2994,32 @@
     },
     {
       "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/platform/ipc/common/desktopApi.ts",
+      "to": "src/platform/recording/electron-browser/recordingService.ts",
       "kind": "import"
     },
     {
       "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/devices/common/deviceService.ts",
+      "to": "src/platform/window/common/windowConfiguration.ts",
       "kind": "import"
     },
     {
       "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/devices/electron-browser/deviceService.ts",
+      "to": "src/workbench/services/access/common/accessService.ts",
       "kind": "import"
     },
     {
       "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/screenSnapshot/common/screenSnapshotService.ts",
+      "to": "src/workbench/services/access/electron-browser/accessService.ts",
       "kind": "import"
     },
     {
       "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/screenSnapshot/electron-browser/screenSnapshotService.ts",
+      "to": "src/workbench/services/application/common/applicationService.ts",
       "kind": "import"
     },
     {
       "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/platform/configuration/common/configuration.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/platform/configuration/electron-browser/configurationService.ts",
+      "to": "src/workbench/services/application/electron-browser/applicationService.ts",
       "kind": "import"
     },
     {
@@ -2420,247 +3034,107 @@
     },
     {
       "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/access/common/accessService.ts",
+      "to": "src/workbench/services/devices/common/deviceService.ts",
       "kind": "import"
     },
     {
       "from": "src/workbench/electron-browser/desktop.main.ts",
-      "to": "src/workbench/services/access/electron-browser/accessService.ts",
+      "to": "src/workbench/services/devices/electron-browser/deviceService.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/native/common/nativeHostService.ts",
-      "to": "src/base/parts/ipc/common/ipc.ts",
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/host/electron-browser/nativeHostService.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/native/common/nativeHostService.ts",
-      "to": "src/platform/ipc/common/mainProcessService.ts",
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/nativeRuntime/common/nativeRuntimeService.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/native/common/nativeHostService.ts",
-      "to": "src/platform/native/common/native.ts",
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/nativeRuntime/electron-browser/nativeRuntimeService.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/ipc/common/mainProcessService.ts",
-      "to": "src/platform/instantiation/common/instantiation.ts",
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/permissions/common/permissionService.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/ipc/common/mainProcessService.ts",
-      "to": "src/base/parts/ipc/common/ipc.ts",
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/permissions/electron-browser/permissionService.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/parts/ipc/common/ipc.ts",
-      "to": "src/base/common/arrays.ts",
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/remoteDesktop/common/remoteDesktopService.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/parts/ipc/common/ipc.ts",
-      "to": "src/base/common/async.ts",
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/remoteDesktop/electron-browser/remoteDesktopService.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/parts/ipc/common/ipc.ts",
-      "to": "src/base/common/buffer.ts",
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/screenSnapshot/common/screenSnapshotService.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/parts/ipc/common/ipc.ts",
-      "to": "src/base/common/cancellation.ts",
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/screenSnapshot/electron-browser/screenSnapshotService.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/parts/ipc/common/ipc.ts",
-      "to": "src/base/common/decorators.ts",
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/tabs/common/tabServiceImpl.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/parts/ipc/common/ipc.ts",
-      "to": "src/base/common/errors.ts",
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/terminal/common/terminalSettingsService.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/parts/ipc/common/ipc.ts",
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/services/terminal/electron-browser/terminalSettingsService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/platform/theme/browser/themeService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/browser/workbench.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/electron-browser/desktop.main.ts",
+      "to": "src/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/theme/browser/themeService.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/theme/browser/themeService.ts",
       "to": "src/base/common/event.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/parts/ipc/common/ipc.ts",
-      "to": "src/base/common/functional.ts",
+      "from": "src/platform/theme/browser/themeService.ts",
+      "to": "src/platform/theme/common/themeService.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/parts/ipc/common/ipc.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/common/ipc.ts",
-      "to": "src/base/common/marshalling.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/common/ipc.ts",
-      "to": "src/base/common/strings.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/common/ipc.ts",
-      "to": "src/base/common/types.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/marshalling.ts",
-      "to": "src/base/common/buffer.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/marshalling.ts",
-      "to": "src/base/common/uri.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/marshalling.ts",
-      "to": "src/base/common/marshallingIds.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/buffer.ts",
-      "to": "src/base/common/lazy.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/buffer.ts",
-      "to": "src/base/common/stream.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/stream.ts",
-      "to": "src/base/common/cancellation.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/stream.ts",
-      "to": "src/base/common/errors.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/stream.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/decorators.ts",
-      "to": "src/base/common/decorators/cancelPreviousCalls.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/decorators/cancelPreviousCalls.ts",
-      "to": "src/base/common/types.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/decorators/cancelPreviousCalls.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/decorators/cancelPreviousCalls.ts",
-      "to": "src/base/common/cancellation.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
-      "to": "src/base/parts/ipc/common/ipc.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
-      "to": "src/platform/ipc/common/mainProcessService.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
-      "to": "src/platform/ipc/common/desktopApi.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
-      "to": "src/platform/native/common/native.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/instantiation/common/extensions.ts",
-      "to": "src/platform/instantiation/common/descriptors.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/instantiation/common/extensions.ts",
-      "to": "src/platform/instantiation/common/instantiation.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/instantiation/common/instantiationService.ts",
-      "to": "src/base/common/async.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/instantiation/common/instantiationService.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/instantiation/common/instantiationService.ts",
-      "to": "src/base/common/errors.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/instantiation/common/instantiationService.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/instantiation/common/instantiationService.ts",
-      "to": "src/platform/instantiation/common/descriptors.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/instantiation/common/instantiationService.ts",
-      "to": "src/platform/instantiation/common/graph.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/instantiation/common/instantiationService.ts",
-      "to": "src/platform/instantiation/common/instantiation.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/instantiation/common/instantiationService.ts",
-      "to": "src/platform/instantiation/common/serviceCollection.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/instantiation/common/instantiationService.ts",
-      "to": "src/base/common/linkedList.ts",
+      "from": "src/platform/theme/browser/themeService.ts",
+      "to": "src/platform/instantiation/common/extensions.ts",
       "kind": "import"
     },
     {
@@ -2689,23 +3163,38 @@
       "kind": "import"
     },
     {
-      "from": "src/platform/theme/browser/themeService.ts",
+      "from": "src/platform/native/common/nativeHostService.ts",
+      "to": "src/base/parts/ipc/common/ipc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/common/nativeHostService.ts",
+      "to": "src/platform/ipc/common/mainProcessService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/common/nativeHostService.ts",
+      "to": "src/platform/native/common/native.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
       "to": "src/base/common/lifecycle.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/theme/browser/themeService.ts",
-      "to": "src/base/common/event.ts",
+      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
+      "to": "src/base/parts/ipc/common/ipc.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/theme/browser/themeService.ts",
-      "to": "src/platform/theme/common/themeService.ts",
+      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
+      "to": "src/base/parts/ipc/electron-browser/ipc.electron.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/theme/browser/themeService.ts",
-      "to": "src/platform/instantiation/common/extensions.ts",
+      "from": "src/platform/ipc/electron-browser/mainProcessService.ts",
+      "to": "src/platform/ipc/common/mainProcessService.ts",
       "kind": "import"
     }
   ],
@@ -2723,10 +3212,12 @@
     "src/platform/windows/electron-main/windows.ts",
     "src/base/browser/window.ts",
     "src/base/browser/ui/aria/aria.ts",
-    "src/platform/instantiation/common/instantiationService.ts"
+    "src/platform/instantiation/common/instantiationService.ts",
+    "src/base/parts/ipc/electron-main/ipc.electron.ts",
+    "src/base/parts/ipc/electron-browser/ipc.electron.ts",
+    "src/platform/ipc/electron-browser/services.ts"
   ],
   "applicationDependencies": [
-    "src/platform/ipc/common/desktopApi.ts",
     "src/workbench/browser/parts/titlebar/titlebarTabsControl.ts",
     "src/workbench/services/tabs/common/tabServiceImpl.ts",
     "src/platform/window/common/titlebar.ts",
@@ -2752,6 +3243,12 @@
     "src/workbench/services/terminal/electron-browser/terminalSettingsService.ts",
     "src/workbench/services/nativeRuntime/common/nativeRuntimeService.ts",
     "src/workbench/services/nativeRuntime/electron-browser/nativeRuntimeService.ts",
-    "src/workbench/browser/workbench.ts"
+    "src/workbench/browser/workbench.ts",
+    "src/platform/engine/common/engine.ts",
+    "src/platform/windows/electron-main/windowsMainService.ts",
+    "src/platform/engine/common/engineService.ts",
+    "src/platform/engine/electron-browser/engineService.ts",
+    "src/platform/recording/electron-browser/recordingService.ts",
+    "src/platform/window/common/windowConfiguration.ts"
   ]
 }

@@ -1,7 +1,8 @@
 import type { PermissionSnapshot } from '../../permissions/common/permissions.js';
-import type { EngineService } from './engineService.js';
+import type { EngineMainService } from './engineMainService.js';
+
 /** No permission prompts, capture sessions or shell processes are started here. */
-export async function synchronizeNativePermissions(engine: Pick<EngineService, 'available' | 'execute'>, platform: string, snapshot: PermissionSnapshot): Promise<void> {
+export async function synchronizeNativePermissions(engine: Pick<EngineMainService, 'available' | 'execute'>, platform: string, snapshot: PermissionSnapshot): Promise<void> {
 	if (!engine.available) {
 		return;
 	}

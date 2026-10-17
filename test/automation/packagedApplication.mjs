@@ -78,8 +78,8 @@ export class PackagedApplication {
 				}, result);
 				await this.devtools.connect(target.webSocketDebuggerUrl);
 				await this.until(() => this.devtools.evaluate(`document.documentElement?.dataset.workbenchReady === 'true'`), result);
-				const state = await this.devtools.evaluate(`(async () => ({ info: await window.vnilink.getAppInfo(), snapshot: await window.vnilink.engineCommand({type:'snapshot'}), heading: document.querySelector('h1')?.textContent, noticeHidden: document.querySelector('.workbench-notice')?.hidden, nodeExposed: typeof require !== 'undefined' || typeof process !== 'undefined' }))()`);
-				assert.equal(state.info.engineConnected, true);
+				const state = await this.devtools.evaluate(`(async () => ({ info: await window.vscode.context.resolveConfiguration(), snapshot: await window.driver.engine.execute({type:'snapshot'}), heading: document.querySelector('h1')?.textContent, noticeHidden: document.querySelector('.workbench-notice')?.hidden, nodeExposed: typeof require !== 'undefined' || typeof process !== 'undefined' }))()`);
+				assert.equal(state.info.engineAvailable, true);
 				assert.equal(state.info.version, manifest.version);
 				assert.equal(state.info.platform, process.platform);
 				assert.equal(state.snapshot.type, 'snapshot');
@@ -89,7 +89,7 @@ export class PackagedApplication {
 				assert.equal(state.nodeExposed, false);
 				const screenshot = await this.devtools.request('Page.captureScreenshot', { format: 'png' });
 				await writeFile(join(artifacts, 'devices.png'), Buffer.from(screenshot.data, 'base64'));
-				await writeFile(join(artifacts, 'result.json'), JSON.stringify({ platform: process.platform, architecture: process.arch, appId: product.appId, version: manifest.version, engineConnected: state.info.engineConnected, nodeExposed: state.nodeExposed, launchedOutsideCheckout: true }, null, 2) + '\n');
+				await writeFile(join(artifacts, 'result.json'), JSON.stringify({ platform: process.platform, architecture: process.arch, appId: product.appId, version: manifest.version, engineAvailable: state.info.engineAvailable, nodeExposed: state.nodeExposed, launchedOutsideCheckout: true }, null, 2) + '\n');
 			} finally {
 				await writeFile(join(artifacts, 'application.log'), log);
 				try {

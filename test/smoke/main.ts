@@ -10,11 +10,11 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { release } from 'node:os';
 import { isMacintosh } from '../../src/base/common/platform.js';
-import { isAppInfo } from '../../src/platform/ipc/common/desktopApi.js';
+import { isNativeWindowConfiguration } from '../../src/platform/window/common/windowConfiguration.js';
 import { TestApplication } from '../automation/application.js';
 import type { WindowDriver } from '../automation/driver.js';
 import { ScenarioSelection, browserScenarioNames } from '../automation/scenarios.js';
-import { registerDevelopmentWindow } from '../../src/app/electron-main/development.js';
+import { registerDevelopmentWindow } from '../../src/code/electron-main/development.js';
 
 class SmokeSuite {
 	private readonly application = new TestApplication();
@@ -88,9 +88,11 @@ class SmokeSuite {
 	private async verify(window: BrowserWindow, driver: WindowDriver): Promise<void> {
 		await driver.ready();
 		const result: unknown = await window.webContents.executeJavaScript(`(async () => {
-    const info = await window.vnilink.getAppInfo();
-    return { info, nodeExposed: typeof require !== 'undefined' || typeof process !== 'undefined',
-      title: document.querySelector('h1')?.textContent, noticeHidden: document.querySelector('.workbench-notice')?.hidden, api: Object.keys(window.vnilink).sort() };
+    const info = await window.vscode.context.resolveConfiguration();
+    let unprefixedRejected = false;
+    try { await window.vscode.ipcRenderer.invoke('engine:command', { type: 'snapshot' }); } catch { unprefixedRejected = true; }
+    return { info, nodeExposed: typeof require !== 'undefined' || typeof process !== 'undefined', vnilinkExposed: 'vnilink' in window, unprefixedRejected,
+      title: document.querySelector('h1')?.textContent, noticeHidden: document.querySelector('.workbench-notice')?.hidden, api: Object.keys(window.vscode).sort() };
   })()`);
 		if (
 			typeof result !== 'object' ||
@@ -98,18 +100,20 @@ class SmokeSuite {
 			!('nodeExposed' in result) ||
 			result.nodeExposed !== false ||
 			!('info' in result) ||
-			!isAppInfo(result.info) ||
+			!isNativeWindowConfiguration(result.info) ||
+			!('vnilinkExposed' in result) || result.vnilinkExposed !== false ||
+			!('unprefixedRejected' in result) || result.unprefixedRejected !== true ||
 			result.info.version !== app.getVersion() ||
 			!('title' in result) ||
 			result.title !== 'Devices' ||
 			!('noticeHidden' in result) || result.noticeHidden !== true ||
 			!('api' in result) ||
 			JSON.stringify(result.api) !==
-			JSON.stringify(['decryptText', 'encryptText', 'engineCommand', 'getAppInfo', 'getCaptureDisplays', 'getConfiguration', 'getKeyStorageProvider', 'getRestartState', 'isEncryptionAvailable', 'nativeHostCommand', 'onConfigurationChanged', 'onRestartStateChanged', 'onWindowStateChanged', 'openDataChannel', 'openRelayDocumentation', 'permissionCommand', 'recordingDirectory', 'restartApplication', 'updateConfiguration'])
+			JSON.stringify(['context', 'ipcMessagePort', 'ipcRenderer', 'process'])
 		) {
 			throw new Error(`Unexpected renderer state: ${JSON.stringify(result)}`);
 		}
-		const machinePermissions: unknown = await window.webContents.executeJavaScript(`window.vnilink.permissionCommand({ type: 'status' })`);
+		const machinePermissions: unknown = await window.webContents.executeJavaScript(`window.driver.permissions.execute({ type: 'status' })`);
 		if (!isPermissionSnapshot(machinePermissions)) {
 			throw new Error('Invalid live OS permission snapshot');
 		}
@@ -126,15 +130,17 @@ class SmokeSuite {
 			return;
 		}
 		const engine: unknown = await window.webContents.executeJavaScript(`(async () => {
-    const snapshot = await window.vnilink.engineCommand({ type: 'snapshot' });
-    const invitation = await window.vnilink.engineCommand({ type: 'createInvitation', ttlSeconds: 60 });
+    const engine = window.driver.engine;
+    const snapshot = await engine.execute({ type: 'snapshot' });
+    const invitation = await engine.execute({ type: 'createInvitation', ttlSeconds: 60 });
     let invalidRejected = false;
-    try { await window.vnilink.engineCommand({ type: 'shutdown' }); } catch { invalidRejected = true; }
+    try { await engine.execute({ type: 'shutdown' }); } catch { invalidRejected = true; }
     let sessionError = '';
-    try { await window.vnilink.engineCommand({ type: 'disconnect' }); } catch (error) { sessionError = String(error); }
-    const afterError = await window.vnilink.engineCommand({ type: 'snapshot' });
-    const encryptionAvailable = await window.vnilink.isEncryptionAvailable();
-    return { snapshot, invitation, invalidRejected, sessionError, afterError, encryptionAvailable };
+    try { await engine.execute({ type: 'disconnect' }); } catch (error) { sessionError = String(error); }
+    const afterError = await engine.execute({ type: 'snapshot' });
+    let unknownChannelRejected = false;
+    try { await window.driver.mainProcess.getChannel('encryption').call('encrypt', 'secret'); } catch { unknownChannelRejected = true; }
+    return { snapshot, invitation, invalidRejected, sessionError, afterError, unknownChannelRejected };
   })()`);
 		if (
 			!record(engine) ||
@@ -150,13 +156,13 @@ class SmokeSuite {
 			!engine.sessionError.includes('NoSession') ||
 			!isEngineReply(engine.afterError) ||
 			engine.afterError.type !== 'snapshot' ||
-			typeof engine.encryptionAvailable !== 'boolean'
+			engine.unknownChannelRejected !== true
 		) {
 			throw new Error('Native control bridge failed');
 		}
 		let rejected = false;
 		try {
-			await window.webContents.executeJavaScript(`window.vnilink.nativeHostCommand('invalid', [1])`);
+			await window.webContents.executeJavaScript(`window.driver.mainProcess.getChannel('nativeHost').call('invalid', [window.driver.nativeHost.windowId])`);
 		} catch {
 			rejected = true;
 		}
@@ -184,8 +190,7 @@ class SmokeSuite {
 		if (this.selection.includes('reload')) {
 			this.enableDevelopmentReload(window);
 			for (let index = 0; index < 3; index++) {
-				await this.verifyDevelopmentReload(window, engine.snapshot.snapshot.endpoint_id);
-				await driver.ready();
+				await this.verifyDevelopmentReload(window, driver, engine.snapshot.snapshot.endpoint_id);
 			}
 			await driver.screenshot('reload');
 		}
@@ -196,7 +201,7 @@ class SmokeSuite {
 		const size = window.getSize();
 		try {
 			for (const theme of ['light', 'dark']) {
-				await window.webContents.executeJavaScript(`window.vnilink.updateConfiguration({ key: 'appearance.theme', value: ${JSON.stringify(theme)} })`);
+				await window.webContents.executeJavaScript(`window.driver.configuration.updateValue({ key: 'appearance.theme', value: ${JSON.stringify(theme)} })`);
 				for (const width of [1200, 760]) {
 					window.setSize(width, 820);
 					for (const category of ['appearance', 'access', 'desktop', 'input', 'terminal', 'media', 'recording', 'power', 'connection']) {
@@ -243,7 +248,7 @@ class SmokeSuite {
       })`);
 						await driver.screenshot(`settings-${category}-${theme}-${String(width)}`);
 						if (['input', 'media', 'recording', 'power'].includes(category)) {
-							await window.webContents.executeJavaScript(`document.querySelector('.home-content > main button[type="submit"]').closest('.settings-apply-row').scrollIntoView({ block: 'center' })`);
+							await window.webContents.executeJavaScript(`new Promise(resolve => { document.querySelector('.home-content > main button[type="submit"]').closest('.settings-apply-row').scrollIntoView({ block: 'center' }); requestAnimationFrame(() => requestAnimationFrame(resolve)); })`);
 							await driver.screenshot(`settings-footer-${category}-${theme}-${String(width)}`);
 						}
 					}
@@ -251,7 +256,7 @@ class SmokeSuite {
 			}
 		} finally {
 			window.setSize(size[0], size[1]);
-			await window.webContents.executeJavaScript(`window.vnilink.updateConfiguration({ key: 'appearance.theme', value: 'system' })`);
+			await window.webContents.executeJavaScript(`window.driver.configuration.updateValue({ key: 'appearance.theme', value: 'system' })`);
 		}
 	}
 
@@ -293,8 +298,8 @@ class SmokeSuite {
 	private async verifyPreferences(window: BrowserWindow): Promise<void> {
 		await window.webContents.executeJavaScript(`(async () => {
     const material = document.documentElement.dataset.windowMaterial;
-    await window.vnilink.updateConfiguration({ key: 'appearance.theme', value: 'dark' });
-    await window.vnilink.updateConfiguration({ key: 'appearance.nativeBackground', value: false });
+    await window.driver.configuration.updateValue({ key: 'appearance.theme', value: 'dark' });
+    await window.driver.configuration.updateValue({ key: 'appearance.nativeBackground', value: false });
     await new Promise((resolve, reject) => {
       const start = performance.now();
       function check() {
@@ -305,7 +310,7 @@ class SmokeSuite {
       check();
     });
     let rejected = false;
-    try { await window.vnilink.updateConfiguration({ key: 'appearance.theme', value: 'invalid' }); } catch { rejected = true; }
+    try { await window.driver.configuration.updateValue({ key: 'appearance.theme', value: 'invalid' }); } catch { rejected = true; }
     if (!rejected) throw new Error('Invalid preference accepted');
     return true;
   })()`);
@@ -333,8 +338,8 @@ class SmokeSuite {
 			window.setSize(size[0], size[1]);
 		}
 		await window.webContents.executeJavaScript(`(async () => {
-    await window.vnilink.updateConfiguration({ key: 'appearance.theme', value: 'system' });
-    await window.vnilink.updateConfiguration({ key: 'appearance.nativeBackground', value: true });
+    await window.driver.configuration.updateValue({ key: 'appearance.theme', value: 'system' });
+    await window.driver.configuration.updateValue({ key: 'appearance.nativeBackground', value: true });
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     if (!document.querySelector('.workbench-notice').hidden) throw new Error('Native theme update raised an application error');
   })()`);
@@ -354,7 +359,7 @@ class SmokeSuite {
 		}
 	}
 
-	private async verifyDevelopmentReload(window: BrowserWindow, endpointId: string): Promise<void> {
+	private async verifyDevelopmentReload(window: BrowserWindow, driver: WindowDriver, endpointId: string): Promise<void> {
 		const loaded = new Promise<void>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				window.webContents.removeListener('did-finish-load', done);
@@ -374,7 +379,8 @@ class SmokeSuite {
 		}, { type: 'keyDown', key: 'r', meta: isMacintosh, control: !isMacintosh, alt: false, shift: false });
 		await loaded;
 		assert.equal(prevented, true);
-		const snapshot: unknown = await window.webContents.executeJavaScript(`window.vnilink.engineCommand({ type: 'snapshot' })`);
+		await driver.ready();
+		const snapshot: unknown = await window.webContents.executeJavaScript(`window.driver.engine.execute({ type: 'snapshot' })`);
 		assert.ok(isEngineReply(snapshot) && snapshot.type === 'snapshot' && snapshot.snapshot.endpoint_id === endpointId, 'Reload replaced the native engine');
 	}
 
@@ -429,12 +435,12 @@ class SmokeSuite {
 			assert.ok(typeof tabHeight === 'number' && Math.abs(tabHeight - 35 / zoom) < 0.1, 'Titlebar zoom stretched the tabs');
 		}
 		const rejected: unknown = await window.webContents.executeJavaScript(
-			`(async () => { const { windowId } = await window.vnilink.getAppInfo(); let rejected = 0; for (const [method, args] of [['getWindowState', [windowId + 1000]], ['updateWindowControls', [windowId, { height: -1 }]], ['focusWindow', [windowId, { targetWindowId: windowId + 1000 }]], ['updateWindowControls', [windowId, { arbitrary: true }]]]) { try { await window.vnilink.nativeHostCommand(method, args); } catch { rejected++; } } return rejected; })()`,
+			`(async () => { const windowId = window.driver.nativeHost.windowId; const channel = window.driver.mainProcess.getChannel('nativeHost'); let rejected = 0; for (const [method, args] of [['getWindowState', [windowId + 1000]], ['updateWindowControls', [windowId, { height: -1 }]], ['focusWindow', [windowId, { targetWindowId: windowId + 1000 }]], ['updateWindowControls', [windowId, { arbitrary: true }]], ['openExternal', [windowId, 'https://example.com/']]]) { try { await channel.call(method, args); } catch { rejected++; } } return rejected; })()`,
 		);
-		assert.equal(rejected, 4);
+		assert.equal(rejected, 5);
 		// Exercise the event transport and unsubscribe using a real Electron window state change.
 		await window.webContents.executeJavaScript(
-			`globalThis.__smokeWindowState = new Promise((resolve, reject) => { const timeout = setTimeout(() => { stop(); reject(new Error('Window state event not received')); }, 5000); const stop = window.vnilink.onWindowStateChanged(state => { if (state.alwaysOnTop) { clearTimeout(timeout); stop(); resolve(state); } }); }); true`,
+			`globalThis.__smokeWindowState = new Promise((resolve, reject) => { const timeout = setTimeout(() => { stop(); reject(new Error('Window state event not received')); }, 5000); const listener = window.driver.nativeHost.onDidChangeWindowState(state => { if (state.alwaysOnTop) { clearTimeout(timeout); stop(); resolve(state); } }); function stop() { listener.dispose(); } }); true`,
 		);
 		window.setAlwaysOnTop(true);
 		const received: unknown = await window.webContents.executeJavaScript(`globalThis.__smokeWindowState`);
@@ -457,7 +463,7 @@ class SmokeSuite {
 		}
 		const call = async (method: string, args = ''): Promise<unknown> =>
 			await window.webContents.executeJavaScript(
-				`window.vnilink.getAppInfo().then(info => window.vnilink.nativeHostCommand(${JSON.stringify(method)}, [info.windowId${args}]))`,
+				`window.driver.mainProcess.getChannel('nativeHost').call(${JSON.stringify(method)}, [window.driver.nativeHost.windowId${args}])`,
 			);
 		window.show();
 		await call('focusWindow');

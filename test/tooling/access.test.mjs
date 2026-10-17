@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { fakeEngine } from './fixtures.mjs';
 import { build } from 'esbuild';
 
 const result = await build({ stdin: { contents: `export { AccessService } from './src/workbench/services/access/electron-browser/accessService.js'; export { AccessReadbackError } from './src/workbench/services/access/common/accessService.js'; export { isEngineCommand, isEngineReply } from './src/platform/engine/common/engine.js';`, loader: 'ts', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node', tsconfig: 'tsconfig.json' });
@@ -36,7 +37,7 @@ function fixture() {
 
 test('global sharing writes require no device and preserve independent switches', async () => {
 	const { api, calls } = fixture();
-	const service = new AccessService(api, true);
+	const service = new AccessService(fakeEngine(api, true));
 	await Promise.all([service.setSharing({ terminal: true }), service.setSharing({ camera: true })]);
 	const policy = await service.loadSharing();
 	assert.equal(policy.terminal, true);
@@ -47,7 +48,7 @@ test('global sharing writes require no device and preserve independent switches'
 
 test('unavailable engines cannot read or change global sharing', async () => {
 	const { api, calls } = fixture();
-	const service = new AccessService(api, false);
+	const service = new AccessService(fakeEngine(api, false));
 	await assert.rejects(service.loadSharing(), /unavailable/);
 	await assert.rejects(service.setSharing({ terminal: true }), /unavailable/);
 	assert.equal(calls.length, 0);
@@ -55,7 +56,7 @@ test('unavailable engines cannot read or change global sharing', async () => {
 
 test('local policy updates preserve other rules and report actual backend support', async () => {
 	const { api } = fixture();
-	const service = new AccessService(api, true);
+	const service = new AccessService(fakeEngine(api, true));
 	const state = await service.setPolicy('allow_lock', false);
 	assert.deepEqual(state.policy, { allow_lock: false, allow_restart: false, allow_shutdown: false, allow_privacy: false });
 	assert.equal(state.support.restart, false);
@@ -79,12 +80,12 @@ test('read-back failure after a committed permission write is distinguishable', 
 		}
 		return reply;
 	};
-	await assert.rejects(new AccessService(api, true).setSharing({ recording: true }), AccessReadbackError);
+	await assert.rejects(new AccessService(fakeEngine(api, true)).setSharing({ recording: true }), AccessReadbackError);
 });
 
 test('unavailable system actions cannot be enabled through the settings service', async () => {
 	const { api, calls } = fixture();
-	const service = new AccessService(api, true);
+	const service = new AccessService(fakeEngine(api, true));
 	await assert.rejects(service.setPolicy('allow_shutdown', true), /unavailable/);
 	assert(!calls.some(command => command.type === 'setSystemPolicy'));
 });
@@ -99,7 +100,7 @@ test('a failure after native revocation reports saved consent instead of restori
 		}
 		return reply;
 	};
-	const service = new AccessService(api, true);
+	const service = new AccessService(fakeEngine(api, true));
 	await assert.rejects(service.setSharing({ files: true }), error => {
 		assert.equal(error.policy.files, true);
 		assert.match(error.cause.message, /privacy restore failed/);

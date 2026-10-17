@@ -1,10 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: native window controls and window state only.
+ *  Adapted for VniLink: native window controls, window state, folder picking, displays, allowlisted links and relaunch.
  *--------------------------------------------------------------------------------------------*/
 
 import type { WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
+import type { NativeScreenSource } from '../../engine/common/engine.js';
 import type { Event } from '../../../base/common/event.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 
@@ -45,7 +46,15 @@ export interface INativeHostService {
 	closeWindow(options?: ITargetWindowOptions): Promise<void>;
 	setFullScreen(fullscreen: boolean, options?: ITargetWindowOptions): Promise<void>;
 	updateWindowControls(options: IWindowControlsOptions): Promise<void>;
+	pickFolder(defaultPath: string): Promise<string | null>;
+	getCaptureDisplays(): Promise<NativeScreenSource[]>;
+	openExternal(url: string): Promise<void>;
+	/** Restarts the application; main refuses unless the engine requires a restart. */
+	relaunch(): Promise<void>;
 }
+
+/** Main-process IPC channel serving {@link INativeHostService}. */
+export const NATIVE_HOST_CHANNEL_NAME = 'nativeHost';
 
 export type NativeHostMethod =
 	| 'getWindowState'
@@ -55,7 +64,11 @@ export type NativeHostMethod =
 	| 'unmaximizeWindow'
 	| 'closeWindow'
 	| 'setFullScreen'
-	| 'updateWindowControls';
+	| 'updateWindowControls'
+	| 'pickFolder'
+	| 'getCaptureDisplays'
+	| 'openExternal'
+	| 'relaunch';
 
 export function isWindowState(value: unknown): value is IWindowState {
 	if (typeof value !== 'object' || value === null) {
@@ -90,8 +103,11 @@ export function isNativeHostRequest(method: unknown, args: unknown): method is N
 	if (typeof method !== 'string' || !Array.isArray(args) || !Number.isSafeInteger(args[0]) || args[0] <= 0) {
 		return false;
 	}
-	if (method === 'getWindowState') {
+	if (method === 'getWindowState' || method === 'getCaptureDisplays' || method === 'relaunch') {
 		return args.length === 1;
+	}
+	if (method === 'pickFolder' || method === 'openExternal') {
+		return args.length === 2 && typeof args[1] === 'string' && args[1].length > 0 && args[1].length <= 4096 && !args[1].includes('\0');
 	}
 	let options: unknown;
 	if (method === 'setFullScreen') {

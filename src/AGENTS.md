@@ -12,7 +12,7 @@ Preserve VS Code's separation by responsibility and execution environment. `work
 | `src/workbench/browser/parts` | Shared window composition: titlebar, sidebar, view hosting and layout. |
 | `src/workbench/services/<service>` | Workbench service contracts and implementations; remote domain policy stays in Rust. |
 | `src/workbench/contrib/<feature>/{common,browser,electron-browser}` | Target home for product feature contributions, views and registration. |
-| `src/app/electron-main` | Application startup, main-process composition and shutdown. |
+| `src/code/electron-main` | Application startup, main-process service composition and IPC channel registration. |
 | `src/main.ts`, `src/renderer.ts`, `src/preload.ts` | Thin entry points and the isolated renderer bridge. |
 | `src/typings` | Ambient declarations; runtime contracts belong beside their service. |
 

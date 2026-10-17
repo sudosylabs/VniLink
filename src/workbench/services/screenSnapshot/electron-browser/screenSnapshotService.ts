@@ -1,6 +1,6 @@
 import { Disposable } from '../../../../base/common/lifecycle.js';
-import { DataChannelClient } from '../../../../platform/engine/browser/dataChannelClient.js';
-import type { DesktopApi } from '../../../../platform/ipc/common/desktopApi.js';
+import { DataChannelClient } from '../../../../platform/engine/electron-browser/dataChannelClient.js';
+import { IEngineService } from '../../../../platform/engine/common/engineService.js';
 import type { EngineReply, SessionInfo } from '../../../../platform/engine/common/engine.js';
 import { parseScreenAccess, parseScreenSnapshot } from '../common/screenSnapshot.js';
 import type { ScreenAccess, ScreenAccessOutcome, ScreenSnapshotResult } from '../common/screenSnapshot.js';
@@ -15,10 +15,7 @@ interface SnapshotMedia { readonly type: 'snapshot'; readonly prompt: boolean; r
 export class ScreenSnapshotService extends Disposable implements IScreenSnapshotService {
 	declare public readonly _serviceBrand: undefined;
 
-	constructor(
-		private readonly api: DesktopApi,
-		private readonly engineConnected: boolean,
-	) {
+	constructor(@IEngineService private readonly engine: IEngineService) {
 		super();
 	}
 
@@ -71,12 +68,12 @@ export class ScreenSnapshotService extends Disposable implements IScreenSnapshot
 		if (signal.aborted || this.isDisposed()) {
 			return { ok: false, status: 'cancelled' };
 		}
-		if (!this.engineConnected) {
+		if (!this.engine.available) {
 			return { ok: false, status: 'failed' };
 		}
 		let reply: EngineReply;
 		try {
-			reply = await this.api.engineCommand({ type: 'controllerSessions' });
+			reply = await this.engine.execute({ type: 'controllerSessions' });
 		} catch {
 			return { ok: false, status: requestStopped(signal, this.isDisposed()) ? 'cancelled' : 'failed' };
 		}
@@ -114,7 +111,7 @@ export class ScreenSnapshotService extends Disposable implements IScreenSnapshot
 				finish('cancelled');
 				return;
 			}
-			void DataChannelClient.open(this.api, {
+			void DataChannelClient.open(this.engine, {
 				kind: 'snapshot',
 				sessionId: session.id,
 				generation: session.generation,

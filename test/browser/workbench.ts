@@ -28,7 +28,7 @@ export async function verifyWorkbenchLifecycle(): Promise<void> {
 		}
 	}
 	const parent = document.createElement('div');
-	const workbench = new Workbench(parent, { windowId: 1, osRelease: 'test', platform: 'darwin', version: 'test', engineConnected: false }, new ServiceCollection([IConfigurationService, new SyncDescriptor(Configuration)]), () => {
+	const workbench = new Workbench(parent, { windowId: 1, osRelease: 'test', platform: 'darwin', version: 'test', engineAvailable: false, enableSmokeTestDriver: false }, new ServiceCollection([IConfigurationService, new SyncDescriptor(Configuration)]), () => {
 		created++;
 		return {
 			create() {

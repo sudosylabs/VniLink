@@ -1,11 +1,11 @@
 import { app } from 'electron';
 import { isWindows } from '../../base/common/platform.js';
 import { product } from '../../platform/product/common/product.js';
-import { VniLinkApplication } from './application.js';
+import { VniLinkApplication } from './app.js';
 
 /** Establishes process identity and explicit smoke-test isolation before services read paths. */
-export class ApplicationLaunch {
-	public async run(): Promise<void> {
+export class VniLinkMain {
+	public async main(): Promise<void> {
 		app.setName(product.name);
 		if (isWindows) {
 			app.setAppUserModelId(product.appId);

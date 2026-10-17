@@ -1,14 +1,20 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: native window controls and window state only.
+ *  Adapted for VniLink: native window controls, window state, folder picking, displays and allowlisted links.
  *--------------------------------------------------------------------------------------------*/
 
+import { dialog, screen, shell } from 'electron';
 import type { BrowserWindow } from 'electron';
 import { Disposable, DisposableStore } from '../../../base/common/lifecycle.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
+import { isMacintosh } from '../../../base/common/platform.js';
+import type { NativeScreenSource } from '../../engine/common/engine.js';
+import { isNativeScreenSource } from '../../engine/common/engine.js';
 import type { IWindowState, IWindowControlsOptions } from '../common/native.js';
+import { IWindowsMainService } from '../../windows/electron-main/windowsMainService.js';
+import type { WindowsMainService } from '../../windows/electron-main/windowsMainService.js';
 import { CodeWindow } from '../../windows/electron-main/windowImpl.js';
 import { WindowMaterial } from '../../windows/electron-main/windowMaterial.js';
 
@@ -22,11 +28,14 @@ export class NativeHostMainService extends Disposable {
 	private readonly materials = new Map<number, WindowMaterial>();
 	private nativeBackgroundEnabled = true;
 
-	constructor(private readonly getWindow: () => BrowserWindow | null) {
+	constructor(@IWindowsMainService private readonly windowsMainService: WindowsMainService) {
 		super();
+		this._register(windowsMainService.onDidOpenWindow(window => {
+			this.registerWindow(window);
+		}));
 	}
 
-	public registerWindow(window: BrowserWindow): void {
+	private registerWindow(window: BrowserWindow): void {
 		const store = this._register(new DisposableStore());
 		const publish = (): void => {
 			if (!window.isDestroyed()) {
@@ -66,8 +75,8 @@ export class NativeHostMainService extends Disposable {
 	}
 
 	private window(windowId: number): BrowserWindow {
-		const window = this.getWindow();
-		if (!window || window.isDestroyed() || window.id !== windowId) {
+		const window = this.windowsMainService.getWindowById(windowId);
+		if (!window) {
 			throw new Error('Unknown native window');
 		}
 		return window;
@@ -131,4 +140,37 @@ export class NativeHostMainService extends Disposable {
 		new CodeWindow(this.window(windowId), this.materials.get(windowId)?.material ?? 'none').updateWindowControls(options);
 		return Promise.resolve();
 	}
+
+	/** Lets the user choose a folder; resolves `null` when cancelled. */
+	public async pickFolder(windowId: number, defaultPath: string): Promise<string | null> {
+		const result = await dialog.showOpenDialog(this.window(windowId), { defaultPath, properties: ['openDirectory', 'createDirectory'] });
+		return result.canceled ? null : result.filePaths[0] ?? null;
+	}
+
+	/** Displays that native screen sharing can capture; only macOS has a capture backend. */
+	public getCaptureDisplays(windowId: number): Promise<NativeScreenSource[]> {
+		this.window(windowId);
+		if (!isMacintosh) {
+			return Promise.resolve([]);
+		}
+		return Promise.resolve(screen.getAllDisplays().slice(0, 16).map(display => ({
+			displayId: display.id,
+			width: display.bounds.width,
+			height: display.bounds.height,
+			pixelWidth: Math.round(display.bounds.width * display.scaleFactor),
+			pixelHeight: Math.round(display.bounds.height * display.scaleFactor),
+		})).filter(isNativeScreenSource));
+	}
+
+	/** Opens a link from {@link allowedExternalLinks} in the system browser. */
+	public async openExternal(windowId: number, url: string): Promise<void> {
+		this.window(windowId);
+		if (!allowedExternalLinks.includes(url)) {
+			throw new Error('Link is not allowed');
+		}
+		await shell.openExternal(url);
+	}
 }
+
+/** The only pages the workbench may open outside the application. */
+export const allowedExternalLinks: readonly string[] = ['https://docs.iroh.computer/relays/rate-limiting'];

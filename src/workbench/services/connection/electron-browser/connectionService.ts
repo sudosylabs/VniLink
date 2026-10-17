@@ -1,4 +1,4 @@
-import type { DesktopApi } from '../../../../platform/ipc/common/desktopApi.js';
+import { IEngineService } from '../../../../platform/engine/common/engineService.js';
 import { ConnectionReadbackError, type IConnectionService, type ConnectionSettings, type ConnectionUpdate } from '../common/connectionService.js';
 import { validateRelays } from '../common/relayValidation.js';
 
@@ -6,16 +6,20 @@ export class ConnectionService implements IConnectionService {
 	declare public readonly _serviceBrand: undefined;
 	private pending: Promise<unknown> = Promise.resolve();
 
-	constructor(private readonly api: Pick<DesktopApi, 'engineCommand'>, public readonly available: boolean) { }
+	constructor(@IEngineService private readonly engine: IEngineService) { }
+
+	public get available(): boolean {
+		return this.engine.available;
+	}
 
 	public async load(): Promise<ConnectionSettings> {
 		if (!this.available) {
 			throw new Error('Connection service unavailable');
 		}
 		const [saved, active, restart] = await Promise.all([
-			this.api.engineCommand({ type: 'savedRelays' }),
-			this.api.engineCommand({ type: 'snapshot' }),
-			this.api.engineCommand({ type: 'relayRestartRequired' }),
+			this.engine.execute({ type: 'savedRelays' }),
+			this.engine.execute({ type: 'snapshot' }),
+			this.engine.execute({ type: 'relayRestartRequired' }),
 		]);
 		if (saved.type !== 'relays' || active.type !== 'snapshot' || restart.type !== 'restartRequired') {
 			throw new Error('Invalid connection settings reply');
@@ -38,7 +42,7 @@ export class ConnectionService implements IConnectionService {
 					throw new Error(issues[0].message);
 				}
 			}
-			const reply = await this.api.engineCommand(draft.mode === 'public' ? { type: 'setRelayPublic' } : { type: 'saveCustomRelays', relays: [...draft.relays] });
+			const reply = await this.engine.execute(draft.mode === 'public' ? { type: 'setRelayPublic' } : { type: 'saveCustomRelays', relays: [...draft.relays] });
 			if (reply.type !== 'done') {
 				throw new Error('Invalid relay save reply');
 			}

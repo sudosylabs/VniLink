@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { fakeEngine, fakeMainProcess } from './fixtures.mjs';
 import { build } from 'esbuild';
 import { mkdtemp, mkdir, readFile, writeFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -85,16 +86,22 @@ test('renderer configuration rejects stale initialization and releases its subsc
 	let finish;
 	let receive;
 	let unsubscribed = 0;
-	const service = new ConfigurationService({
-		getConfiguration: () => new Promise(resolve => {
-			finish = resolve;
-		}), updateConfiguration: () => Promise.reject(new Error('disk failure')), onConfigurationChanged(listener) {
-			receive = listener;
-			return () => {
-				unsubscribed++;
-			};
-		}
-	});
+	const service = new ConfigurationService(fakeMainProcess({
+		configuration: {
+			call(command) {
+				return command === 'getSnapshot' ? new Promise(resolve => {
+					finish = resolve;
+				}) : Promise.reject(new Error('disk failure'));
+			},
+			listen(event) {
+				assert.equal(event, 'onDidChangeConfiguration');
+				return listener => {
+					receive = listener;
+					return { dispose: () => unsubscribed++ };
+				};
+			},
+		},
+	}));
 	const loading = service.initialize();
 	const incomingQuality = { ...defaultConfiguration['desktop.quality'] };
 	receive({ revision: 2, values: { ...defaultConfiguration, 'appearance.theme': 'dark', 'desktop.quality': incomingQuality }, error: null });
@@ -164,7 +171,7 @@ function connectionFixture() {
 
 test('relay saves read back Rust state and preserve active configuration and saved credentials', async () => {
 	const { api, commands } = connectionFixture();
-	const service = new ConnectionService(api, true);
+	const service = new ConnectionService(fakeEngine(api, true));
 	const saved = await service.save({ mode: 'custom', relays: [relay('https://relay.example/', true, 'opaque-token')] });
 	assert.equal(saved.saved[0].authenticated, true);
 	assert.equal(saved.active.publicRelay, true);
@@ -176,11 +183,11 @@ test('relay saves read back Rust state and preserve active configuration and sav
 
 test('invalid relay drafts never reach a write and unavailable engines never receive a request', async () => {
 	const { api, commands } = connectionFixture();
-	const service = new ConnectionService(api, true);
+	const service = new ConnectionService(fakeEngine(api, true));
 	await assert.rejects(service.save({ mode: 'custom', relays: [relay('http://remote.example/')] }));
 	assert.ok(!commands.some(command => command.type === 'saveCustomRelays'));
 	commands.length = 0;
-	await assert.rejects(new ConnectionService(api, false).load());
+	await assert.rejects(new ConnectionService(fakeEngine(api, false)).load());
 	assert.equal(commands.length, 0);
 });
 
@@ -198,7 +205,7 @@ test('a committed relay save with failed read-back is distinguished from a write
 		}
 		return reply;
 	};
-	await assert.rejects(new ConnectionService(api, true).save({ mode: 'public' }), ConnectionReadbackError);
+	await assert.rejects(new ConnectionService(fakeEngine(api, true)).save({ mode: 'public' }), ConnectionReadbackError);
 });
 
 test('queued relay saves capture their drafts and recover after a write failure', async () => {
@@ -211,7 +218,7 @@ test('queued relay saves capture their drafts and recover after a write failure'
 		}
 		return await original(command);
 	};
-	const service = new ConnectionService(api, true);
+	const service = new ConnectionService(fakeEngine(api, true));
 	const draft = [relay('https://second.example/')];
 	const first = service.save({ mode: 'custom', relays: [relay('https://first.example/')] });
 	const second = service.save({ mode: 'custom', relays: draft });

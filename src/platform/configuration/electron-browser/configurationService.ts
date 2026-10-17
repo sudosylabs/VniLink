@@ -1,19 +1,23 @@
-import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { Emitter } from '../../../base/common/event.js';
-import type { DesktopApi } from '../../ipc/common/desktopApi.js';
-import { freezeConfiguration, defaultConfiguration, type IConfigurationService, type ConfigurationSnapshot, type ConfigurationUpdate } from '../common/configuration.js';
+import { Disposable } from '../../../base/common/lifecycle.js';
+import type { IChannel } from '../../../base/parts/ipc/common/ipc.js';
+import { IMainProcessService } from '../../ipc/common/mainProcessService.js';
+import { CONFIGURATION_CHANNEL_NAME, defaultConfiguration, freezeConfiguration, isConfigurationSnapshot, type ConfigurationSnapshot, type ConfigurationUpdate, type IConfigurationService } from '../common/configuration.js';
 
+/** Window copy of the main-process preferences; newer revisions replace older ones. */
 export class ConfigurationService extends Disposable implements IConfigurationService {
 	declare public readonly _serviceBrand: undefined;
+	private readonly channel: IChannel;
 	private current: ConfigurationSnapshot = { revision: -1, values: defaultConfiguration, error: null };
 	private readonly changed = this._register(new Emitter<ConfigurationSnapshot>());
 	public readonly onDidChangeConfiguration = this.changed.event;
 
-	constructor(private readonly api: Pick<DesktopApi, 'getConfiguration' | 'updateConfiguration' | 'onConfigurationChanged'>) {
+	constructor(@IMainProcessService mainProcessService: IMainProcessService) {
 		super();
-		this._register(toDisposable(api.onConfigurationChanged(snapshot => {
+		this.channel = mainProcessService.getChannel(CONFIGURATION_CHANNEL_NAME);
+		this._register(this.channel.listen<unknown>('onDidChangeConfiguration')(snapshot => {
 			this.accept(snapshot);
-		})));
+		}));
 	}
 
 	public get snapshot(): ConfigurationSnapshot {
@@ -21,14 +25,17 @@ export class ConfigurationService extends Disposable implements IConfigurationSe
 	}
 
 	public async initialize(): Promise<void> {
-		this.accept(await this.api.getConfiguration());
+		this.accept(await this.channel.call<unknown>('getSnapshot'));
 	}
 
 	public async updateValue(change: ConfigurationUpdate): Promise<void> {
-		this.accept(await this.api.updateConfiguration(change));
+		this.accept(await this.channel.call<unknown>('updateValue', change));
 	}
 
-	private accept(snapshot: ConfigurationSnapshot): void {
+	private accept(snapshot: unknown): void {
+		if (!isConfigurationSnapshot(snapshot)) {
+			throw new Error('Invalid configuration snapshot');
+		}
 		if (this._store.isDisposed || snapshot.revision <= this.current.revision) {
 			return;
 		}

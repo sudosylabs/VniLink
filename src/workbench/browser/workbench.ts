@@ -7,9 +7,10 @@ import { IConfigurationService } from '../../platform/configuration/common/confi
 import { getSingletonServiceDescriptors } from '../../platform/instantiation/common/extensions.js';
 import { InstantiationService } from '../../platform/instantiation/common/instantiationService.js';
 import type { ServiceCollection } from '../../platform/instantiation/common/serviceCollection.js';
-import type { AppInfo } from '../../platform/ipc/common/desktopApi.js';
+import type { INativeWindowConfiguration } from '../../platform/window/common/windowConfiguration.js';
 import * as nls from '../../nls.js';
 import { HomeView } from '../contrib/home/browser/home.js';
+import { registerWindowDriver } from '../services/driver/browser/driver.js';
 import { ITabService } from '../services/tabs/common/tabService.js';
 import { ViewHost } from './parts/views/viewHost.js';
 import './styles/workbench.css';
@@ -30,7 +31,7 @@ export class Workbench extends Disposable {
 
 	constructor(
 		private readonly parent: HTMLElement,
-		private readonly info: AppInfo,
+		private readonly info: INativeWindowConfiguration,
 		private readonly serviceCollection: ServiceCollection,
 		private readonly createTitlebar: (services: InstantiationService, onError: (error: unknown) => void) => IWorkbenchTitlebar,
 	) {
@@ -67,6 +68,9 @@ export class Workbench extends Disposable {
 		this.renderWorkbench(services, titlebar);
 		await titlebar.initialize();
 		this.checkAlive();
+		if (this.info.enableSmokeTestDriver) {
+			registerWindowDriver(services);
+		}
 		this.restored = true;
 		document.documentElement.dataset.workbenchReady = 'true';
 	}
@@ -83,7 +87,7 @@ export class Workbench extends Disposable {
 		document.documentElement.dataset.platform = this.info.platform;
 		this.notice.className = 'workbench-notice';
 		this.notice.setAttribute('role', 'alert');
-		this.notice.hidden = this.info.engineConnected;
+		this.notice.hidden = this.info.engineAvailable;
 		this.notice.textContent = nls.localize('workbench.engineUnavailable', 'VniLink could not start its connection service. Restart the app to try again.');
 		this.workspace.className = 'workspace';
 		const viewsContainer = document.createElement('div');
@@ -96,7 +100,7 @@ export class Workbench extends Disposable {
 		titlebar.create(this.header);
 		this.parent.replaceChildren(this.header, this.workspace);
 		viewHost.open(services.createInstance(HomeView));
-		if (this.info.engineConnected) {
+		if (this.info.engineAvailable) {
 			const tabs = services.invokeFunction(accessor => accessor.get(ITabService));
 			void tabs.executeAction('refresh').catch((error: unknown) => {
 				if (!this._store.isDisposed) {

@@ -76,7 +76,7 @@ test('desktop watcher rebuilds TS/CSS, handles atomic resource saves and leaves 
 
 test('Reload Window shortcut is enabled only in unpackaged development launches', async () => {
 	const output = await build({
-		entryPoints: ['src/app/electron-main/development.ts'], bundle: true, write: false, platform: 'node', format: 'esm', plugins: [{
+		entryPoints: ['src/code/electron-main/development.ts'], bundle: true, write: false, platform: 'node', format: 'esm', plugins: [{
 			name: 'electron-fixture', setup(builder) {
 				builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }));
 				builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: 'export const app = { get isPackaged() { return process.env.VNILINK_TEST_PACKAGED === \'1\'; } };', loader: 'js' }));

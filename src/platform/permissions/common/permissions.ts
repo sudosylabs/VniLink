@@ -1,3 +1,6 @@
+/** Main-process IPC channel serving OS permission commands. */
+export const PERMISSIONS_CHANNEL_NAME = 'permissions';
+
 export const permissionKinds = ['screen', 'accessibility', 'camera', 'microphone'] as const;
 
 export type PermissionKind = typeof permissionKinds[number];

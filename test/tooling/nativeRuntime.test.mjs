@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { fakeEngine } from './fixtures.mjs';
 import { build } from 'esbuild';
 
 const bundle = await build({ stdin: { contents: `export { synchronizeNativePermissions } from './src/platform/engine/electron-main/nativeRuntime.js'; export { NativeRuntimeService } from './src/workbench/services/nativeRuntime/electron-browser/nativeRuntimeService.js'; export { isEngineCommand, isEngineReply, nativeCapabilityNames } from './src/platform/engine/common/engine.js';`, loader: 'ts', resolveDir: process.cwd() }, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json' });
 
 const { synchronizeNativePermissions, NativeRuntimeService, isEngineCommand, isEngineReply, nativeCapabilityNames } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
+
+const configuration = { snapshot: { values: { 'recording.defaults': { directory: '', maxBytes: '1048576', maxDurationMs: '1000', maxSegments: 1, maxTotalBytes: '1048576' } } } };
+
+const unusedHost = { getCaptureDisplays: () => assert.fail('Unexpected display read'), pickFolder: () => assert.fail('Unexpected folder picker') };
+
+const unusedRecording = { getDefaultDirectory: () => assert.fail('Unexpected folder read'), createDestination: () => assert.fail('Unexpected destination') };
 
 const runtime = { type: 'nativeRuntime', backends: [{ name: 'terminal', ready: true, error: null }], capabilities: nativeCapabilityNames.map(name => ({ name, available: name === 'terminal', summary: `${name}: available` })) };
 
@@ -43,7 +50,7 @@ test('OS permission synchronization does not install input on a Mac without Acce
 test('device approvals capture queued drafts and immutable runtime readback; failed backend updates do not report success', async () => {
 	const calls = [];
 	let fail = false;
-	const service = new NativeRuntimeService({
+	const service = new NativeRuntimeService(fakeEngine({
 		engineCommand: async command => {
 			calls.push(command);
 			if (command.type === 'nativeRuntime') {
@@ -54,7 +61,7 @@ test('device approvals capture queued drafts and immutable runtime readback; fai
 			}
 			return { type: 'done' };
 		}
-	}, true);
+	}), unusedHost, unusedRecording, configuration);
 	const cameras = ['chosen'];
 	const writing = service.approveCameras(cameras);
 	cameras[0] = 'changed';
@@ -70,12 +77,12 @@ test('recording uses persisted defaults while retaining an explicit session dest
 	const commands = [];
 	const defaults = { maxBytes: '2097152', maxDurationMs: '60000', maxSegments: 2, maxTotalBytes: '4194304' };
 	const status = { id: '4', phase: 'Recording', failure: null, frames: '0', bytes: '0', durationMs: '0', segments: 1 };
-	const service = new NativeRuntimeService({
+	const service = new NativeRuntimeService(fakeEngine({
 		engineCommand: command => {
 			commands.push(command);
 			return Promise.resolve({ type: 'recordingStatus', status });
 		}
-	}, true, { snapshot: { values: { 'recording.defaults': defaults } } });
+	}), unusedHost, unusedRecording, { snapshot: { values: { 'recording.defaults': defaults } } });
 	await service.startRecording({ id: '1', generation: '7' }, { destination: '/chosen/session.mkv' });
 	assert.deepEqual(commands[0], { type: 'startRecording', sessionId: '1', generation: '7', destination: '/chosen/session.mkv', maxBytes: defaults.maxBytes, maxDurationMs: defaults.maxDurationMs, retention: { maxSegments: defaults.maxSegments, maxTotalBytes: defaults.maxTotalBytes } });
 	await service.startRecording({ id: '1', generation: '7' }, { destination: '/another.mkv', maxDurationMs: '120000' });
@@ -85,16 +92,18 @@ test('recording uses persisted defaults while retaining an explicit session dest
 
 test('recording without a session destination resolves the persisted default folder through main-process integration', async () => {
 	const calls = [];
-	const service = new NativeRuntimeService({
-		recordingDirectory: async action => {
-			calls.push(action);
-			return '/Pictures/VniLink/new.mkv';
-		},
+	const service = new NativeRuntimeService(fakeEngine({
 		engineCommand: async command => {
 			calls.push(command);
 			return { type: 'recordingStatus', status: {} };
 		}
-	}, true);
+	}), unusedHost, {
+		getDefaultDirectory: () => assert.fail('Unexpected folder read'),
+		createDestination: async () => {
+			calls.push('destination');
+			return '/Pictures/VniLink/new.mkv';
+		},
+	}, configuration);
 	await service.startRecording({ id: '1', generation: '2' }, {});
 	assert.equal(calls[0], 'destination');
 	assert.equal(calls[1].destination, '/Pictures/VniLink/new.mkv');

@@ -51,7 +51,7 @@ runs in an Electron utility process; streaming remains deferred.
 | `crates/vnilink-windows/` | Windows capture and Media Foundation adapters |
 | `crates/vnilink-linux/` | X11, Wayland portal, PipeWire, and VA-API adapters |
 | `crates/vnilink-app/`, `crates/vnilink-node/` | Shared application adapters and Node-API control bindings |
-| `src/app/`, `src/platform/` | Electron lifecycle, windows, IPC and desktop service boundaries |
+| `src/code/`, `src/platform/` | Electron lifecycle, windows, IPC and desktop service boundaries |
 | `src/workbench/`, `src/base/browser/` | Browser interface and reusable DOM controls |
 | `build/`, `scripts/`, `test/` | Application build, development and smoke verification |
 | `assets/` | Branding and icons |

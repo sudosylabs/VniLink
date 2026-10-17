@@ -1,45 +1,36 @@
-import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { Emitter } from '../../../../base/common/event.js';
-import type { DesktopApi } from '../../../../platform/ipc/common/desktopApi.js';
-import type { RestartState } from '../../../../platform/application/common/application.js';
+import { Disposable } from '../../../../base/common/lifecycle.js';
+import { IEngineService } from '../../../../platform/engine/common/engineService.js';
+import { INativeHostService } from '../../../../platform/native/common/native.js';
 import type { IApplicationService } from '../common/applicationService.js';
+
+/** Relay documentation link shown beside relay settings. */
+const relayDocumentation = 'https://docs.iroh.computer/relays/rate-limiting';
 
 export class ApplicationService extends Disposable implements IApplicationService {
 	declare public readonly _serviceBrand: undefined;
 	private readonly changed = this._register(new Emitter<void>());
 	public readonly onDidChangeRestartRequired = this.changed.event;
-	private current: RestartState = { revision: -1, required: false };
+
+	constructor(
+		@IEngineService private readonly engine: IEngineService,
+		@INativeHostService private readonly nativeHostService: INativeHostService,
+	) {
+		super();
+		this._register(engine.onDidChangeRestartRequired(() => {
+			this.changed.fire();
+		}));
+	}
 
 	public get restartRequired(): boolean {
-		return this.current.required;
-	}
-
-	constructor(private readonly api: Pick<DesktopApi, 'getRestartState' | 'onRestartStateChanged' | 'restartApplication' | 'openRelayDocumentation'>) {
-		super();
-		this._register(toDisposable(api.onRestartStateChanged(state => {
-			this.accept(state);
-		})));
-		void api.getRestartState().then(state => {
-			this.accept(state);
-		}, () => { /* An unavailable engine cannot report restart requirements. */ });
-	}
-
-	private accept(state: RestartState): void {
-		if (this._store.isDisposed || state.revision <= this.current.revision) {
-			return;
-		}
-		const changed = state.required !== this.current.required;
-		this.current = state;
-		if (changed) {
-			this.changed.fire();
-		}
+		return this.engine.restartRequired;
 	}
 
 	public restart(): Promise<void> {
-		return this.api.restartApplication();
+		return this.nativeHostService.relaunch();
 	}
 
 	public openRelayDocumentation(): Promise<void> {
-		return this.api.openRelayDocumentation();
+		return this.nativeHostService.openExternal(relayDocumentation);
 	}
 }

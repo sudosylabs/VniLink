@@ -3,7 +3,7 @@ import { app, session, type BrowserWindow } from 'electron';
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { VniLinkApplication } from '../../src/app/electron-main/application.js';
+import { VniLinkApplication } from '../../src/code/electron-main/app.js';
 import { WindowDriver } from './driver.js';
 
 export class TestApplication {
