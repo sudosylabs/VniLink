@@ -1,8 +1,9 @@
+import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import { INativeHostService } from '../../../platform/native/common/native.js';
-import type { IApplicationService } from './applicationService.js';
+import { IApplicationService } from './applicationService.js';
 
 /** Relay documentation link shown beside relay settings. */
 const relayDocumentation = 'https://docs.iroh.computer/relays/rate-limiting';
@@ -34,3 +35,5 @@ export class ApplicationService extends Disposable implements IApplicationServic
 		return this.nativeHostService.openExternal(relayDocumentation);
 	}
 }
+
+registerSingleton(IApplicationService, ApplicationService, InstantiationType.Delayed);

@@ -6,8 +6,9 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 
 const manifest = JSON.parse(readFileSync(new URL('./vscode-source.json', import.meta.url), 'utf8'));
 
-// Adapted copies of `base/` infrastructure keep upstream style; only their declared edits differ.
-export const upstreamFiles = manifest.files.filter(file => !file.adapted || file.path.startsWith('src/base/')).map(file => file.path);
+// Adapted infrastructure marked `upstreamStyle` keeps VS Code's formatting and lint baseline;
+// only its declared edits differ. Other adaptations are VniLink code held to application rules.
+export const upstreamFiles = manifest.files.filter(file => !file.adapted || file.upstreamStyle === true).map(file => file.path);
 
 const upstream = new Set(upstreamFiles);
 

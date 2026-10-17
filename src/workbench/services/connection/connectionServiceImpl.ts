@@ -1,5 +1,6 @@
+import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
-import { ConnectionReadbackError, type IConnectionService, type ConnectionSettings, type ConnectionUpdate } from './connectionService.js';
+import { ConnectionReadbackError, IConnectionService, type ConnectionSettings, type ConnectionUpdate } from './connectionService.js';
 import { validateRelays } from './relayValidation.js';
 
 export class ConnectionService implements IConnectionService {
@@ -56,3 +57,5 @@ export class ConnectionService implements IConnectionService {
 		return result;
 	}
 }
+
+registerSingleton(IConnectionService, ConnectionService, InstantiationType.Delayed);

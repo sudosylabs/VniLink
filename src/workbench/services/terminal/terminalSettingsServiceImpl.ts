@@ -1,6 +1,7 @@
+import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import type { TerminalPolicy } from '../../../platform/engine/common/engine.js';
-import { validTerminalPolicy, type ITerminalSettingsService } from './terminalSettingsService.js';
+import { validTerminalPolicy, ITerminalSettingsService } from './terminalSettingsService.js';
 
 export class TerminalSettingsService implements ITerminalSettingsService {
 	declare public readonly _serviceBrand: undefined;
@@ -39,3 +40,5 @@ export class TerminalSettingsService implements ITerminalSettingsService {
 		return result;
 	}
 }
+
+registerSingleton(ITerminalSettingsService, TerminalSettingsService, InstantiationType.Delayed);

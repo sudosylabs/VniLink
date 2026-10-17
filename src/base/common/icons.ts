@@ -35,3 +35,10 @@ export const Icons = Object.freeze({
 export type IconId = typeof Icons[keyof typeof Icons];
 
 export type IconVariant = 'outlined' | 'filled';
+
+const iconIds: ReadonlySet<string> = new Set(Object.values(Icons));
+
+/** Whether `value` names a product icon, such as a `ThemeIcon` id given to a menu item. */
+export function isIconId(value: string): value is IconId {
+	return iconIds.has(value);
+}

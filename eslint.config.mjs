@@ -5,6 +5,7 @@ import globals from 'globals';
 import layers from './build/lint/layers.mjs';
 import imports from './build/lint/imports.mjs';
 import synchronousFs from './build/lint/synchronousFs.mjs';
+import workbenchDom from './build/lint/workbenchDom.mjs';
 import { upstreamIgnores } from './build/sourceScope.mjs';
 import mustUseSuperDispose from './build/lint/vscode/code-must-use-super-dispose.ts';
 import declareServiceBrand from './build/lint/vscode/code-declare-service-brand.ts';
@@ -32,7 +33,7 @@ export default [
 	{
 		files: ['**/*.mjs', 'src/**/*.ts', 'test/**/*.ts'],
 		languageOptions: { globals: globals.node },
-		plugins: { '@stylistic': stylistic, vnilink: { rules: { ...layers.rules, ...imports.rules, ...synchronousFs.rules } } },
+		plugins: { '@stylistic': stylistic, vnilink: { rules: { ...layers.rules, ...imports.rules, ...synchronousFs.rules, ...workbenchDom.rules } } },
 		rules: {
 			curly: ['error', 'all'], eqeqeq: ['error', 'always'], 'prefer-const': 'error', 'no-var': 'error',
 			'no-eval': 'error', 'no-new-func': 'error', 'no-duplicate-imports': ['error', { allowSeparateTypeImports: true }],
@@ -52,10 +53,18 @@ export default [
 			'@typescript-eslint/switch-exhaustiveness-check': 'error',
 			'@typescript-eslint/explicit-member-accessibility': ['error', { accessibility: 'explicit', overrides: { constructors: 'no-public' } }],
 			'@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
-			'@typescript-eslint/no-floating-promises': 'error', '@typescript-eslint/no-misused-promises': 'error',
+			'@typescript-eslint/no-floating-promises': 'error',
+			// VS Code actions override `Action2.run(): void` with promise-returning implementations.
+			'@typescript-eslint/no-misused-promises': ['error', { checksVoidReturn: { inheritedMethods: false } }],
 		},
 	},
 	{ files: ['src/**/*.ts'], rules: { 'vnilink/no-sync-fs': 'error' } },
+	{
+		files: ['src/workbench/**/*.ts'],
+		// Devices and settings still build DOM by hand; they leave this list as they move to widgets.
+		ignores: ['src/workbench/contrib/devices/**', 'src/workbench/contrib/settings/**'],
+		rules: { 'vnilink/workbench-dom': 'error' },
+	},
 	{
 		files: ['src/**/*.ts', 'test/**/*.ts'],
 		plugins: { local: { rules: vscodeRules } },

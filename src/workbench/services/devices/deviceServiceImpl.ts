@@ -1,3 +1,4 @@
+import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { IEngineService, type EngineEventBatch } from '../../../platform/engine/common/engineService.js';
@@ -6,7 +7,7 @@ import type { EngineCommand, EngineEvent, EngineReply, ControlRequestInfo } from
 /** Engine events after which the device list may have changed. */
 const deviceEvents: ReadonlySet<EngineEvent['type']> = new Set(['devicePaired', 'deviceAuthorized', 'deviceRevoked', 'deviceUnpaired', 'peerRenamed', 'sessionChanged']);
 
-import type { DeviceSummary, IDeviceService, PairingFile } from './deviceService.js';
+import { type DeviceSummary, IDeviceService, type PairingFile } from './deviceService.js';
 
 export class DeviceService extends Disposable implements IDeviceService {
 	declare public readonly _serviceBrand: undefined;
@@ -226,3 +227,5 @@ export class DeviceService extends Disposable implements IDeviceService {
 	}
 
 }
+
+registerSingleton(IDeviceService, DeviceService, InstantiationType.Delayed);

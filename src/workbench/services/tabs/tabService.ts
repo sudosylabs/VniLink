@@ -3,22 +3,18 @@ import type { IDisposable } from '../../../base/common/lifecycle.js';
 import type { IconId } from '../../../base/common/icons.js';
 import { createDecorator } from '../../../platform/instantiation/common/instantiation.js';
 
-export interface TabAction {
-	readonly id: string;
-	readonly label: string;
-	readonly icon?: IconId;
-	readonly enabled?: boolean;
-	run(signal: AbortSignal): void | Promise<void>;
-}
-/** A tab owns its view/session; selection never disposes it. */
+/**
+ * A tab owns its view or session; selecting another tab never disposes it.
+ * Its toolbar actions are menu items under `ViewActionsMenu`, chosen with the
+ * `activeTab` context key.
+ */
 export interface WorkbenchTab extends IDisposable {
 	readonly id: string;
 	readonly label: string;
 	readonly icon?: IconId;
-	readonly actions: readonly TabAction[];
+	readonly element: HTMLElement;
 	/** Permanent navigation tabs stay first and cannot be closed or reordered. */
 	readonly permanent?: boolean;
-	readonly onDidChangeActions?: Event<void>;
 	canClose?(): boolean | Promise<boolean>;
 }
 
@@ -33,6 +29,4 @@ export interface ITabService {
 	select(id: string): void;
 	move(id: string, index: number): void;
 	close(id: string): Promise<boolean>;
-	isActionEnabled(tab: WorkbenchTab, action: TabAction): boolean;
-	executeAction(id: string): Promise<void>;
 }

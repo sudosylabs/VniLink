@@ -4,13 +4,14 @@
  *  Adapted for VniLink: native window controls, window state and view tabs.
  *--------------------------------------------------------------------------------------------*/
 
+import { addDisposableListener, EventType } from '../../../base/browser/dom.js';
+import { onUnexpectedError } from '../../../base/common/errors.js';
 import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
-import { Event } from '../../../base/common/event.js';
-import { BrowserTitlebarPart } from './titlebarPart.js';
-import { IThemeService } from '../../../platform/theme/common/themeService.js';
-import { IHostService } from '../../services/host/host.js';
 import { INativeHostService, type IWindowState } from '../../../platform/native/common/native.js';
+import { IThemeService } from '../../../platform/theme/common/themeService.js';
 import { getWorkbenchTitlebarHeight } from '../../../platform/window/common/titlebar.js';
+import { IHostService } from '../../services/host/host.js';
+import { BrowserTitlebarPart } from './titlebarPart.js';
 
 export class NativeTitlebarPart extends BrowserTitlebarPart {
 	private state: IWindowState | undefined;
@@ -19,25 +20,23 @@ export class NativeTitlebarPart extends BrowserTitlebarPart {
 
 	constructor(
 		osRelease: string,
-		onError: (error: unknown) => void,
 		@IThemeService themeService: IThemeService,
 		@IHostService hostService: IHostService,
 		@INativeHostService private readonly nativeHostService: INativeHostService,
 		@IInstantiationService instantiationService: IInstantiationService,
 	) {
-		super(onError, themeService, hostService, instantiationService);
+		super(themeService, hostService, instantiationService);
 		this.height = getWorkbenchTitlebarHeight(osRelease);
-		this._register(
-			nativeHostService.onDidChangeWindowState((state) => {
-				this.acceptState(state);
-			}),
-		);
-		this._register(Event.fromDOMEventEmitter<unknown>(window, 'resize')(() => {
-			void this.initialize().catch(this.onError);
+		this._register(nativeHostService.onDidChangeWindowState(state => {
+			this.acceptState(state);
+		}));
+		this._register(addDisposableListener(window, EventType.RESIZE, () => {
+			this.restore().catch(onUnexpectedError);
 		}));
 	}
 
-	public async initialize(): Promise<void> {
+	/** Reads the window state the titlebar lays out from. */
+	public async restore(): Promise<void> {
 		this.acceptState(await this.nativeHostService.getWindowState());
 	}
 
@@ -52,32 +51,33 @@ export class NativeTitlebarPart extends BrowserTitlebarPart {
 
 	protected override updateStyles(): void {
 		super.updateStyles();
-		if (!this.container || !this.state) {
+		const container = this.getContainer();
+		if (!container || !this.state) {
 			return;
 		}
-		document.documentElement.dataset.windowMaterial = this.state.backgroundMaterial;
+		const root = document.documentElement;
+		root.dataset.windowMaterial = this.state.backgroundMaterial;
 		const height = this.height / this.state.zoomFactor;
-		document.documentElement.style.setProperty('--window-zoom', String(this.state.zoomFactor));
-		this.container.hidden = this.state.fullscreen;
-		document.documentElement.style.setProperty('--titlebar-height', this.state.fullscreen ? '0px' : `${String(height)}px`);
-		this.container.style.height = String(height) + 'px';
+		root.style.setProperty('--window-zoom', String(this.state.zoomFactor));
+		container.hidden = this.state.fullscreen;
+		root.style.setProperty('--titlebar-height', this.state.fullscreen ? '0px' : `${String(height)}px`);
+		container.style.height = `${String(height)}px`;
 		const theme = this.themeService.getColorTheme();
-		this.container.style.backgroundColor = this.state.backgroundMaterial === 'none' ? theme.background
+		container.style.backgroundColor = this.state.backgroundMaterial === 'none' ? theme.background
 			: this.state.backgroundMaterial === 'vibrancy' ? 'var(--native-chrome)' : 'transparent';
-		const foreground = this.active ? theme.foreground : theme.inactiveForeground;
-		const key = `${String(this.height)}:${theme.background}:${foreground}:${this.state.backgroundMaterial}`;
-		if (this.controls !== key) {
-			this.controls = key;
-			void this.nativeHostService
-				.updateWindowControls({
-					height: this.height,
-					backgroundColor: theme.background,
-					foregroundColor: foreground,
-				})
-				.catch((error: unknown) => {
-					this.controls = '';
-					this.onError(error);
-				});
+		this.updateWindowControls(theme.background, this.active ? theme.foreground : theme.inactiveForeground);
+	}
+
+	/** Tells the native window controls the titlebar's height and colors when they change. */
+	private updateWindowControls(background: string, foreground: string): void {
+		const key = `${String(this.height)}:${background}:${foreground}:${this.state?.backgroundMaterial ?? ''}`;
+		if (this.controls === key) {
+			return;
 		}
+		this.controls = key;
+		this.nativeHostService.updateWindowControls({ height: this.height, backgroundColor: background, foregroundColor: foreground }).catch((error: unknown) => {
+			this.controls = '';
+			onUnexpectedError(error);
+		});
 	}
 }

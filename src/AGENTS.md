@@ -7,16 +7,18 @@ Preserve VS Code's separation by responsibility and execution environment. `work
 | Home | Responsibility |
 |---|---|
 | `src/base/common`, `src/base/browser` | Reusable primitives and widgets, independent of product services. |
-| `src/platform/<service>/common` | Service interfaces, identifiers and contracts usable across implementations. |
-| `src/platform/<service>/{browser,node,electron-main,electron-utility}` | Implementations in their actual execution environment. |
-| `src/workbench/browser/parts` | Shared window composition: titlebar, sidebar, view hosting and layout. |
-| `src/workbench/services/<service>` | Workbench service contracts and implementations; remote domain policy stays in Rust. |
-| `src/workbench/contrib/<feature>/{common,browser,electron-browser}` | Target home for product feature contributions, views and registration. |
+| `src/platform/<service>/common` | Service interfaces, identifiers and contracts usable across processes. |
+| `src/platform/<service>/{browser,node,electron-main,electron-utility,electron-browser}` | Implementations in their actual execution environment. These folders map to real processes and stay. |
 | `src/code/electron-main` | Application startup, main-process service composition and IPC channel registration. |
+| `src/workbench` | Renderer only, so no environment folders: `workbench.ts`/`layout.ts`/`part.ts` (shell), `desktop.main.ts` (core services), `workbench.desktop.main.ts` (imports every service and contribution). |
+| `src/workbench/parts/<part>` | Workbench regions such as the titlebar and views part, built on `Part`. |
+| `src/workbench/services/<area>` | `<area>Service.ts` holds the contract and decorator; `<area>ServiceImpl.ts` the implementation, which ends with `registerSingleton`. |
+| `src/workbench/contrib/<feature>` | A feature's views and its `<feature>.contribution.ts`, which registers pages, actions and workbench contributions. |
+| `src/workbench/actions` | Workbench-wide `Action2` commands. |
 | `src/main.ts`, `src/renderer.ts`, `src/preload.ts` | Thin entry points and the isolated renderer bridge. |
 | `src/typings` | Ambient declarations; runtime contracts belong beside their service. |
 
-Existing features currently live under `src/workbench/browser/features`. Moving them to `contrib` is a scoped migration, not something every feature edit performs. New areas follow the target layout; changes within existing areas preserve coherent imports until their migration. Do not create duplicate implementations in both homes.
+A feature is wired by registration, never by editing another feature: Home renders pages from `HomePagesRegistry`, toolbar buttons come from `ViewActionsMenu` items with `when` clauses on context keys (`src/workbench/contextkeys.ts`), and startup work is a `registerWorkbenchContribution2` at the right `WorkbenchPhase`. A new service or contribution file is imported from `workbench.desktop.main.ts`.
 
 Dependencies flow from application/workbench toward platform/base. `common` contracts do not depend on browser or privileged implementations. Browser code consumes the preload/service boundary rather than importing Node or Electron. Consult `build/lint/layers.mjs`; exceptions need an architectural reason, not a lint suppression.
 

@@ -1,96 +1,81 @@
-import { PowerPage } from '../settings/powerPage.js';
-import { MediaPage } from '../settings/mediaPage.js';
-import { RecordingPage } from '../settings/recordingPage.js';
-import { FilesPage } from '../settings/filesPage.js';
-import { TerminalPage } from '../settings/terminalPage.js';
-import { InputPage } from '../settings/inputPage.js';
-import { IApplicationService } from '../../services/application/applicationService.js';
 import * as nls from '../../../nls.js';
-import { Disposable } from '../../../base/common/lifecycle.js';
-import { Emitter } from '../../../base/common/event.js';
+import { $, append } from '../../../base/browser/dom.js';
 import { Icons } from '../../../base/common/icons.js';
+import { Disposable, dispose } from '../../../base/common/lifecycle.js';
 import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
-import type { TabAction } from '../../services/tabs/tabService.js';
-import type { WorkbenchView } from '../../parts/views/viewHost.js';
-import { Sidebar } from './sidebar.js';
-import { AppearancePage } from '../settings/appearancePage.js';
-import { AccessPage } from '../settings/accessPage.js';
-import { ConnectionPage } from '../settings/connectionPage.js';
-import { RemoteDesktopPage } from '../settings/remoteDesktopPage.js';
-import { DevicesPage } from '../devices/devicesPage.js';
-import type { WorkbenchPage } from '../../parts/views/page.js';
-import { homeNavigationGroups, isHomeSectionId, type HomeSectionId } from './homeNavigation.js';
+import { Registry } from '../../../platform/registry/common/platform.js';
+import type { WorkbenchTab } from '../../services/tabs/tabService.js';
+import { Extensions, HomePageGroup, type IHomePage, type IHomePagesRegistry } from './homePages.js';
+import { Sidebar, type SidebarGroup } from './sidebar.js';
 
-/** Owns navigation and page lifetimes; each page owns its content and actions. */
-export class HomeView extends Disposable implements WorkbenchView {
-	public readonly id = 'home';
+/**
+ * The permanent Home tab: a sidebar of contributed pages beside the page
+ * being shown. Pages are created on first visit and kept until Home closes.
+ */
+export class HomeView extends Disposable implements WorkbenchTab {
+	public static readonly ID = 'home';
+	public readonly id = HomeView.ID;
 	public readonly permanent = true;
 	public readonly label = nls.localize('home.viewLabel', 'Home');
 	public readonly icon = Icons.home;
-	public readonly element = document.createElement('div');
-	private readonly changed = this._register(new Emitter<void>());
-	public readonly onDidChangeActions = this.changed.event;
-	private readonly content = document.createElement('div');
-	private readonly pages = new Map<HomeSectionId, WorkbenchPage>();
-	private activePage: WorkbenchPage;
+	public readonly element: HTMLElement;
+	private readonly content: HTMLElement;
+	private readonly sidebar: Sidebar;
+	private readonly registry = Registry.as<IHomePagesRegistry>(Extensions.HomePages);
+	private readonly pages = new Map<string, IHomePage>();
+	private activePage: IHomePage | undefined;
 
-	public get actions(): readonly TabAction[] {
-		return this.application.restartRequired ? [{ id: 'home.restart', label: nls.localize('app.restart', 'Restart VniLink'), icon: Icons.restart, run: () => this.application.restart() }, ...this.activePage.actions] : this.activePage.actions;
-	}
-
-	constructor(@IInstantiationService private readonly instantiationService: IInstantiationService, @IApplicationService private readonly application: IApplicationService) {
+	constructor(@IInstantiationService private readonly instantiationService: IInstantiationService) {
 		super();
-		this.element.className = 'home-view';
-		this._register(application.onDidChangeRestartRequired(() => {
-			this.changed.fire();
+		this.element = $('.home-view');
+		this.sidebar = this._register(new Sidebar(nls.localize('home.navigation', 'Home navigation')));
+		this.content = $('.home-content');
+		append(this.element, this.sidebar.element, this.content);
+		this._register(this.sidebar.onDidSelect(id => {
+			this.showPage(id);
 		}));
-		this.content.className = 'home-content';
-		this.activePage = this.getPage('devices');
-		this.content.append(this.activePage.element);
-		const sidebar = this._register(new Sidebar(nls.localize('home.navigation', 'Home navigation'), homeNavigationGroups, 'devices'));
-		this.element.append(sidebar.element, this.content);
-		this._register(sidebar.onDidSelect(id => {
-			if (isHomeSectionId(id)) {
-				this.selectSection(id);
-			}
+		this._register(this.registry.onDidChangePages(() => {
+			this.sidebar.setGroups(this.groups());
 		}));
-	}
-
-	private getPage(id: HomeSectionId): WorkbenchPage {
-		let page = this.pages.get(id);
-		if (!page) {
-			switch (id) {
-				case 'devices': page = this.instantiationService.createInstance(DevicesPage); break;
-				case 'appearance': page = this.instantiationService.createInstance(AppearancePage); break;
-				case 'access': page = this.instantiationService.createInstance(AccessPage); break;
-				case 'desktop': page = this.instantiationService.createInstance(RemoteDesktopPage); break;
-				case 'input': page = this.instantiationService.createInstance(InputPage); break;
-				case 'files': page = this.instantiationService.createInstance(FilesPage); break;
-				case 'terminal': page = this.instantiationService.createInstance(TerminalPage); break;
-				case 'power': page = this.instantiationService.createInstance(PowerPage); break;
-				case 'media': page = this.instantiationService.createInstance(MediaPage); break;
-				case 'recording': page = this.instantiationService.createInstance(RecordingPage); break;
-				case 'connection': page = this.instantiationService.createInstance(ConnectionPage); break;
-				default: throw new Error(`Settings page has no implementation: ${String(id)}`);
-			}
-			this.pages.set(id, this._register(page));
+		this.sidebar.setGroups(this.groups());
+		const first = this.registry.getPages(HomePageGroup.Devices).at(0) ?? this.registry.getPages(HomePageGroup.Settings).at(0);
+		if (first) {
+			this.sidebar.select(first.id);
 		}
-		return page;
 	}
 
-	private selectSection(id: HomeSectionId): void {
+	private groups(): SidebarGroup[] {
+		const items = (group: HomePageGroup) => this.registry.getPages(group).map(page => ({ id: page.id, label: page.title, icon: page.icon }));
+		return [
+			{ items: items(HomePageGroup.Devices) },
+			{ label: nls.localize('home.settings', 'Settings'), items: items(HomePageGroup.Settings) },
+		];
+	}
+
+	private showPage(id: string): void {
 		const page = this.getPage(id);
-		if (page === this.activePage) {
+		if (!page || page === this.activePage) {
 			return;
 		}
 		this.activePage = page;
 		this.content.replaceChildren(page.element);
 		this.content.scrollTop = 0;
-		this.changed.fire();
+	}
+
+	private getPage(id: string): IHomePage | undefined {
+		const existing = this.pages.get(id);
+		const descriptor = this.registry.getPage(id);
+		if (existing || !descriptor) {
+			return existing;
+		}
+		const page = this.instantiationService.createInstance(descriptor.ctorDescriptor);
+		this.pages.set(id, page);
+		return page;
 	}
 
 	public override dispose(): void {
 		super.dispose();
+		dispose(this.pages.values());
 		this.pages.clear();
 		this.element.remove();
 	}

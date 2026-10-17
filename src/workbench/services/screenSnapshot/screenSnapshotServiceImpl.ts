@@ -1,10 +1,11 @@
+import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { DataChannelClient } from '../../../platform/engine/electron-browser/dataChannelClient.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import type { EngineReply, SessionInfo } from '../../../platform/engine/common/engine.js';
 import { parseScreenAccess, parseScreenSnapshot } from './screenSnapshot.js';
 import type { ScreenAccess, ScreenAccessOutcome, ScreenSnapshotResult } from './screenSnapshot.js';
-import type { IScreenSnapshotService } from './screenSnapshotService.js';
+import { IScreenSnapshotService } from './screenSnapshotService.js';
 
 function requestStopped(signal: AbortSignal, disposed: boolean): boolean {
 	return signal.aborted || disposed;
@@ -139,3 +140,5 @@ export class ScreenSnapshotService extends Disposable implements IScreenSnapshot
 		});
 	}
 }
+
+registerSingleton(IScreenSnapshotService, ScreenSnapshotService, InstantiationType.Delayed);

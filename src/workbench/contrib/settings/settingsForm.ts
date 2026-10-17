@@ -1,15 +1,13 @@
 import * as nls from '../../../nls.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { addDisposableListener } from '../../../base/browser/domEvent.js';
-import type { TabAction } from '../../services/tabs/tabService.js';
-import { createPageHeading, type WorkbenchPage } from '../../parts/views/page.js';
+import { createPageHeading, type IHomePage } from '../home/homePages.js';
 import './settingsControls.js';
 import './media/settingsForm.css';
 
 /** Owns one default-settings draft, its save transaction and error recovery. */
-export abstract class SettingsForm<T> extends Disposable implements WorkbenchPage {
+export abstract class SettingsForm<T> extends Disposable implements IHomePage {
 	public readonly element = document.createElement('main');
-	public readonly actions: readonly TabAction[] = [];
 	protected readonly fields = document.createElement('fieldset');
 	protected readonly content = document.createElement('div');
 	protected readonly status = document.createElement('p');

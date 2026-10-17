@@ -5,18 +5,16 @@ import { Icons } from '../../../base/common/icons.js';
 import { renderIcon } from '../../../base/browser/ui/icon/icon.js';
 import { IDeviceService } from '../../services/devices/deviceService.js';
 import { IScreenSnapshotService } from '../../services/screenSnapshot/screenSnapshotService.js';
-import type { TabAction } from '../../services/tabs/tabService.js';
-import { createPageHeading, type WorkbenchPage } from '../../parts/views/page.js';
+import { createPageHeading, type IHomePage } from '../home/homePages.js';
 import { DeviceList } from './deviceList.js';
 import { DeviceDetails } from './deviceDetails.js';
 import { DevicePairing } from './devicePairing.js';
 import './media/devices.css';
 
 /** Composes known-device selection and pairing; service views own their own tabs. */
-export class DevicesPage extends Disposable implements WorkbenchPage {
+export class DevicesPage extends Disposable implements IHomePage {
 	private static nextId = 0;
 	public readonly element = document.createElement('main');
-	public readonly actions: readonly TabAction[] = [];
 	private readonly body = document.createElement('div');
 	private readonly empty = document.createElement('section');
 	private readonly emptyTitle = document.createElement('h2');

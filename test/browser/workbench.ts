@@ -1,13 +1,13 @@
 import { Event } from '../../src/base/common/event.js';
-import { IConfigurationSnapshotService, defaultConfiguration } from '../../src/platform/configuration/common/configurationSnapshot.js';
+import { defaultConfiguration, IConfigurationSnapshotService } from '../../src/platform/configuration/common/configurationSnapshot.js';
 import { SyncDescriptor } from '../../src/platform/instantiation/common/descriptors.js';
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
+import { NullLogService } from '../../src/platform/log/common/log.js';
 import { Workbench } from '../../src/workbench/workbench.js';
 
 export async function verifyWorkbenchLifecycle(): Promise<void> {
 	let resolve: (() => void) | undefined;
 	let disposed = 0;
-	let created = 0;
 	class Configuration {
 		declare public readonly _serviceBrand: undefined;
 		public readonly snapshot = { revision: 0, values: defaultConfiguration, error: null };
@@ -28,14 +28,7 @@ export async function verifyWorkbenchLifecycle(): Promise<void> {
 		}
 	}
 	const parent = document.createElement('div');
-	const workbench = new Workbench(parent, { windowId: 1, osRelease: 'test', platform: 'darwin', version: 'test', engineAvailable: false, enableSmokeTestDriver: false }, new ServiceCollection([IConfigurationSnapshotService, new SyncDescriptor(Configuration)]), () => {
-		created++;
-		return {
-			create() {
-				throw new Error('Disposed startup rendered');
-			}, initialize: () => Promise.resolve(), dispose() { /* No native resources in this fixture. */ }
-		};
-	});
+	const workbench = new Workbench(parent, { windowId: 1, osRelease: 'test', platform: 'darwin', version: 'test', engineAvailable: false, enableSmokeTestDriver: false }, new ServiceCollection([IConfigurationSnapshotService, new SyncDescriptor(Configuration)]), new NullLogService());
 	const start = workbench.startup();
 	workbench.dispose();
 	resolve?.();
@@ -45,8 +38,8 @@ export async function verifyWorkbenchLifecycle(): Promise<void> {
 	} catch {
 		rejected = true;
 	}
-	if (!rejected || created !== 0 || disposed !== 1 || parent.children.length !== 0) {
-		throw new Error('Disposed startup created parts or retained services');
+	if (!rejected || disposed !== 1 || parent.children.length !== 0) {
+		throw new Error('Disposed startup rendered parts or retained services');
 	}
 	if (workbench.startup() !== start) {
 		throw new Error('Startup created multiple lifetimes');

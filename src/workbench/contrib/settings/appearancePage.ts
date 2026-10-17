@@ -2,14 +2,12 @@ import * as nls from '../../../nls.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { addDisposableListener } from '../../../base/browser/domEvent.js';
 import { IConfigurationSnapshotService, type ConfigurationUpdate } from '../../../platform/configuration/common/configurationSnapshot.js';
-import type { TabAction } from '../../services/tabs/tabService.js';
-import { createPageHeading, type WorkbenchPage } from '../../parts/views/page.js';
+import { createPageHeading, type IHomePage } from '../home/homePages.js';
 import { ThemeModePicker } from './themeModePicker.js';
 import './media/appearance.css';
 
-export class AppearancePage extends Disposable implements WorkbenchPage {
+export class AppearancePage extends Disposable implements IHomePage {
 	public readonly element = document.createElement('main');
-	public readonly actions: readonly TabAction[] = [];
 	private readonly theme = this._register(new ThemeModePicker());
 	private readonly status = document.createElement('p');
 	private readonly retry = document.createElement('button');

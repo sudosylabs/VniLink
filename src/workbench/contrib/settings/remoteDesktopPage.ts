@@ -1,16 +1,14 @@
 import * as nls from '../../../nls.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
-import type { TabAction } from '../../services/tabs/tabService.js';
-import { createPageHeading, type WorkbenchPage } from '../../parts/views/page.js';
+import { createPageHeading, type IHomePage } from '../home/homePages.js';
 import { DesktopDefaultsSection } from './desktopDefaultsSection.js';
 import { DesktopCodecSection } from './desktopCodecSection.js';
 import './media/remoteDesktop.css';
 
 /** Global preferences; session controls belong to the remote desktop view. */
-export class RemoteDesktopPage extends Disposable implements WorkbenchPage {
+export class RemoteDesktopPage extends Disposable implements IHomePage {
 	public readonly element = document.createElement('main');
-	public readonly actions: readonly TabAction[] = [];
 
 	constructor(@IInstantiationService instantiation: IInstantiationService) {
 		super();

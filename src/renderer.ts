@@ -1,13 +1,13 @@
 import { context } from './base/parts/sandbox/electron-browser/globals.js';
 import { isNativeWindowConfiguration } from './platform/window/common/windowConfiguration.js';
-import { DesktopMain } from './workbench/desktop.main.js';
+import { main } from './workbench/workbench.desktop.main.js';
 
 void (async () => {
 	const configuration: unknown = await context.resolveConfiguration();
 	if (!isNativeWindowConfiguration(configuration)) {
 		throw new Error('Invalid window configuration');
 	}
-	await new DesktopMain(configuration).open();
+	await main(configuration);
 })().catch((error: unknown) => {
 	console.error(error);
 	const status = document.querySelector('[role="status"]');

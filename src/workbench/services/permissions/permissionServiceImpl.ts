@@ -1,10 +1,11 @@
+import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import type { IChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { IMainProcessService } from '../../../platform/ipc/common/mainProcessService.js';
 import { INativeHostService } from '../../../platform/native/common/native.js';
 import { isPermissionSnapshot, PERMISSIONS_CHANNEL_NAME, type PermissionCommand, type PermissionSnapshot } from '../../../platform/permissions/common/permissions.js';
-import type { IPermissionService } from './permissionService.js';
+import { IPermissionService } from './permissionService.js';
 
 /** OS consent for this computer; re-read when the window regains focus after a settings visit. */
 export class PermissionService extends Disposable implements IPermissionService {
@@ -36,3 +37,5 @@ export class PermissionService extends Disposable implements IPermissionService 
 		return snapshot;
 	}
 }
+
+registerSingleton(IPermissionService, PermissionService, InstantiationType.Delayed);

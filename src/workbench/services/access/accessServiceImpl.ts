@@ -1,6 +1,7 @@
+import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import type { SharingPolicy, SystemPolicy, SystemSupport } from '../../../platform/engine/common/engine.js';
-import { AccessReadbackError, AccessWriteError, type LocalSecurity, type IAccessService } from './accessService.js';
+import { AccessReadbackError, AccessWriteError, type LocalSecurity, IAccessService } from './accessService.js';
 
 const systemCapabilities: Record<keyof SystemPolicy, keyof SystemSupport> = { allow_lock: 'lock', allow_restart: 'restart', allow_shutdown: 'shutdown', allow_privacy: 'privacy' };
 
@@ -86,3 +87,5 @@ export class AccessService implements IAccessService {
 		return result;
 	}
 }
+
+registerSingleton(IAccessService, AccessService, InstantiationType.Delayed);

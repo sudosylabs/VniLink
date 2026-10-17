@@ -10,7 +10,7 @@ const bundle = await build({ stdin: { contents: `export { TabService } from './s
 const { TabService } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 
 function tab(id, options = {}) {
-	return { id, label: id, actions: [], dispose() { }, ...options };
+	return { id, label: id, element: {}, dispose() { }, ...options };
 }
 
 test('tab ownership preserves inactive views, deduplicates inputs and disposes once', async () => {
@@ -48,43 +48,6 @@ test('tab ownership preserves inactive views, deduplicates inputs and disposes o
 	tabs.dispose();
 	assert.equal(firstDisposed, 1);
 	assert.equal(secondDisposed, 1);
-});
-
-test('actions capture their original view and abort when that view closes', async () => {
-	const tabs = new TabService();
-	let finish;
-	let signal;
-	const completed = [];
-	const action = {
-		id: 'run', label: 'Run', async run(input) {
-			signal = input;
-			await new Promise(resolve => {
-				finish = resolve;
-			});
-			completed.push('first');
-		}
-	};
-	const first = tab('first', { actions: [action] });
-	const second = tab('second', {
-		actions: [{
-			id: 'run', label: 'Run', run() {
-				completed.push('second');
-			}
-		}]
-	});
-	tabs.open(first);
-	const running = tabs.executeAction('run');
-	assert.equal(tabs.isActionEnabled(first, action), false);
-	tabs.open(second);
-	await tabs.executeAction('run');
-	assert.deepEqual(completed, ['second']);
-	await tabs.close('first');
-	assert.equal(signal.aborted, true);
-	finish();
-	await running;
-	assert.equal(tabs.activeTab, second);
-	assert.deepEqual(completed, ['second', 'first']);
-	tabs.dispose();
 });
 
 test('concurrent close requests share approval and service disposal fences late approval', async () => {

@@ -3,8 +3,7 @@ import { Disposable } from '../../../base/common/lifecycle.js';
 import { addDisposableListener } from '../../../base/browser/domEvent.js';
 import type { TerminalPolicy } from '../../../platform/engine/common/engine.js';
 import { ITerminalSettingsService, validTerminalPolicy } from '../../services/terminal/terminalSettingsService.js';
-import { createPageHeading, type WorkbenchPage } from '../../parts/views/page.js';
-import type { TabAction } from '../../services/tabs/tabService.js';
+import { createPageHeading, type IHomePage } from '../home/homePages.js';
 import { AccessToggle } from './accessToggle.js';
 import './settingsControls.js';
 import './media/access.css';
@@ -12,9 +11,8 @@ import './media/files.css';
 
 type LimitKey = Exclude<keyof TerminalPolicy, 'allow_persistence'>;
 
-export class TerminalPage extends Disposable implements WorkbenchPage {
+export class TerminalPage extends Disposable implements IHomePage {
 	public readonly element = document.createElement('main');
-	public readonly actions: readonly TabAction[] = [];
 	private readonly fields = document.createElement('fieldset');
 	private readonly refresh = document.createElement('button');
 	private readonly save = document.createElement('button');

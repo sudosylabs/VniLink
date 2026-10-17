@@ -1,53 +1,41 @@
-/** Owns workbench parts, service lifetime and startup; native composition is supplied by DesktopMain. */
-import { setARIAContainer } from '../base/browser/ui/aria/aria.js';
-import { addDisposableListener } from '../base/browser/domEvent.js';
-import { ensureCodeWindow } from '../base/browser/window.js';
-import { Disposable, DisposableStore, type IDisposable, toDisposable } from '../base/common/lifecycle.js';
+import './media/workbench.css';
+import { runWhenWindowIdle } from '../base/browser/dom.js';
+import { ensureCodeWindow, mainWindow } from '../base/browser/window.js';
+import { errorHandler, isCancellationError, setUnexpectedErrorHandler } from '../base/common/errors.js';
 import { IConfigurationSnapshotService } from '../platform/configuration/common/configurationSnapshot.js';
+import { IEngineService } from '../platform/engine/common/engineService.js';
 import { getSingletonServiceDescriptors } from '../platform/instantiation/common/extensions.js';
+import { IInstantiationService, type ServicesAccessor } from '../platform/instantiation/common/instantiation.js';
 import { InstantiationService } from '../platform/instantiation/common/instantiationService.js';
 import type { ServiceCollection } from '../platform/instantiation/common/serviceCollection.js';
+import type { ILogService } from '../platform/log/common/log.js';
 import type { INativeWindowConfiguration } from '../platform/window/common/windowConfiguration.js';
-import * as nls from '../nls.js';
-import { HomeView } from './contrib/home/homeView.js';
+import { WorkbenchContributionsRegistry } from './contributions.js';
+import { Layout } from './layout.js';
+import { NativeTitlebarPart } from './parts/titlebar/nativeTitlebarPart.js';
+import { ViewsPart } from './parts/views/viewsPart.js';
 import { registerWindowDriver } from './services/driver/driver.js';
-import { ITabService } from './services/tabs/tabService.js';
-import { ViewHost } from './parts/views/viewHost.js';
-import './media/workbench.css';
+import { ILifecycleService, LifecyclePhase } from './services/lifecycle/lifecycle.js';
 
-export interface IWorkbenchTitlebar extends IDisposable {
-	create(parent: HTMLElement): void;
-	initialize(): Promise<void>;
-}
-
-export class Workbench extends Disposable {
-	private readonly parts = this._register(new DisposableStore());
-	private readonly notice = document.createElement('div');
-	private readonly header = document.createElement('header');
-	private readonly workspace = document.createElement('div');
-	private services: InstantiationService | undefined;
-	private restored = false;
+/**
+ * The window's workbench, in the shape of VS Code's `Workbench`: it creates
+ * the instantiation service, starts contributions, renders the parts and
+ * moves the lifecycle through Ready, Restored and Eventually.
+ */
+export class Workbench extends Layout {
 	private startupPromise: Promise<void> | undefined;
 
 	constructor(
-		private readonly parent: HTMLElement,
-		private readonly info: INativeWindowConfiguration,
+		parent: HTMLElement,
+		private readonly configuration: INativeWindowConfiguration,
 		private readonly serviceCollection: ServiceCollection,
-		private readonly createTitlebar: (services: InstantiationService, onError: (error: unknown) => void) => IWorkbenchTitlebar,
+		private readonly logService: ILogService,
 	) {
-		super();
-		this._register(addDisposableListener(window, 'pagehide', () => {
-			this.dispose();
-		}));
-		this._register(toDisposable(() => {
-			if (this.restored) {
-				delete document.documentElement.dataset.workbenchReady;
-			}
-			this.header.remove();
-			this.workspace.remove();
-		}));
+		super(parent);
+		this.registerErrorHandler();
 	}
 
+	/** Starts the workbench once; disposing it during startup rejects. */
 	public startup(): Promise<void> {
 		this.startupPromise ??= this.start().catch((error: unknown) => {
 			this.dispose();
@@ -56,69 +44,87 @@ export class Workbench extends Disposable {
 		return this.startupPromise;
 	}
 
+	private registerErrorHandler(): void {
+		const previous = errorHandler.getUnexpectedErrorHandler();
+		this._register({
+			dispose: () => {
+				setUnexpectedErrorHandler(previous);
+			},
+		});
+		setUnexpectedErrorHandler(error => {
+			if (isCancellationError(error) || this._store.isDisposed) {
+				return;
+			}
+			this.logService.error(error instanceof Error ? error : new Error(String(error)));
+			this.setNotice(Layout.unexpectedErrorNotice);
+		});
+	}
+
 	private async start(): Promise<void> {
+		ensureCodeWindow(mainWindow, this.configuration.windowId);
+		const instantiationService = this.initServices();
+		await instantiationService.invokeFunction(accessor => accessor.get(IConfigurationSnapshotService).initialize());
 		this.checkAlive();
-		ensureCodeWindow(window, this.info.windowId);
-		const services = this.initServices();
-		await services.invokeFunction(accessor => accessor.get(IConfigurationSnapshotService)).initialize();
+		const titlebar = instantiationService.invokeFunction(accessor => {
+			this.registerListeners(accessor);
+			WorkbenchContributionsRegistry.INSTANCE.start(accessor);
+			return this.renderWorkbench(accessor);
+		});
+		await titlebar.restore();
 		this.checkAlive();
-		const titlebar = this.parts.add(this.createTitlebar(services, error => {
-			this.showError(error);
-		}));
-		this.renderWorkbench(services, titlebar);
-		await titlebar.initialize();
-		this.checkAlive();
-		if (this.info.enableSmokeTestDriver) {
-			registerWindowDriver(services);
-		}
-		this.restored = true;
-		document.documentElement.dataset.workbenchReady = 'true';
+		this.restore(instantiationService);
 	}
 
 	private initServices(): InstantiationService {
 		for (const [id, descriptor] of getSingletonServiceDescriptors()) {
 			this.serviceCollection.set(id, descriptor);
 		}
-		this.services = this._register(new InstantiationService(this.serviceCollection, true));
-		return this.services;
+		return this._register(new InstantiationService(this.serviceCollection, true));
 	}
 
-	private renderWorkbench(services: InstantiationService, titlebar: IWorkbenchTitlebar): void {
-		document.documentElement.dataset.platform = this.info.platform;
-		this.notice.className = 'workbench-notice';
-		this.notice.setAttribute('role', 'alert');
-		this.notice.hidden = this.info.engineAvailable;
-		this.notice.textContent = nls.localize('workbench.engineUnavailable', 'VniLink could not start its connection service. Restart the app to try again.');
-		this.workspace.className = 'workspace';
-		const viewsContainer = document.createElement('div');
-		const viewHost = this.parts.add(services.createInstance(ViewHost, viewsContainer));
-		const content = document.createElement('div');
-		content.className = 'view-stack';
-		content.append(viewsContainer);
-		this.workspace.append(this.notice, content);
-		setARIAContainer(this.workspace);
-		titlebar.create(this.header);
-		this.parent.replaceChildren(this.header, this.workspace);
-		viewHost.open(services.createInstance(HomeView));
-		if (this.info.engineAvailable) {
-			const tabs = services.invokeFunction(accessor => accessor.get(ITabService));
-			void tabs.executeAction('refresh').catch((error: unknown) => {
-				if (!this._store.isDisposed) {
-					this.showError(error);
-				}
-			});
-		}
+	private registerListeners(accessor: ServicesAccessor): void {
+		const engineService = accessor.get(IEngineService);
+		const lifecycleService = accessor.get(ILifecycleService);
+		const updateEngineNotice = (): void => {
+			this.setNotice(engineService.available ? undefined : Layout.engineUnavailableNotice);
+		};
+		this._register(engineService.onDidChangeAvailability(updateEngineNotice));
+		updateEngineNotice();
+		this._register({
+			dispose: () => {
+				void lifecycleService.shutdown();
+				delete document.documentElement.dataset.workbenchReady;
+			},
+		});
+	}
+
+	private renderWorkbench(accessor: ServicesAccessor): NativeTitlebarPart {
+		const instantiationService = accessor.get(IInstantiationService);
+		document.documentElement.dataset.platform = this.configuration.platform;
+		const titlebar = this._register(instantiationService.createInstance(NativeTitlebarPart, this.configuration.osRelease));
+		const views = this._register(instantiationService.createInstance(ViewsPart));
+		this.createWorkbenchLayout(titlebar, views);
+		accessor.get(ILifecycleService).phase = LifecyclePhase.Ready;
+		return titlebar;
+	}
+
+	private restore(instantiationService: InstantiationService): void {
+		instantiationService.invokeFunction(accessor => {
+			const lifecycleService = accessor.get(ILifecycleService);
+			lifecycleService.phase = LifecyclePhase.Restored;
+			if (this.configuration.enableSmokeTestDriver) {
+				registerWindowDriver(instantiationService);
+			}
+			document.documentElement.dataset.workbenchReady = 'true';
+			this._register(runWhenWindowIdle(mainWindow, () => {
+				lifecycleService.phase = LifecyclePhase.Eventually;
+			}, 2500));
+		});
 	}
 
 	private checkAlive(): void {
 		if (this._store.isDisposed) {
 			throw new Error('Workbench disposed during startup');
 		}
-	}
-
-	private showError(error: unknown): void {
-		console.error(error);
-		this.notice.hidden = false;
-		this.notice.textContent = nls.localize('workbench.actionFailed', 'The action could not be completed. Try again.');
 	}
 }

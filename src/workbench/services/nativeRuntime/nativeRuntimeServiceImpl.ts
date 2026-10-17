@@ -1,9 +1,10 @@
+import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { IConfigurationSnapshotService } from '../../../platform/configuration/common/configurationSnapshot.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import { INativeHostService } from '../../../platform/native/common/native.js';
 import { IRecordingService } from '../../../platform/recording/common/recording.js';
 import type { NativeDevice, PowerPolicy, PowerStatus, EngineCommand, NativeScreenSource, NativeSharingStatus, RecordingStatus, RecordingRetention } from '../../../platform/engine/common/engine.js';
-import type { INativeRuntimeService, NativeRuntime } from './nativeRuntimeService.js';
+import { INativeRuntimeService, type NativeRuntime } from './nativeRuntimeService.js';
 /** Native backend facts and explicitly requested media operations. Peer grants remain separate. */
 export class NativeRuntimeService implements INativeRuntimeService {
 	declare public readonly _serviceBrand: undefined;
@@ -175,3 +176,5 @@ export class NativeRuntimeService implements INativeRuntimeService {
 		return Object.freeze(reply.statuses.map(status => Object.freeze({ ...status })));
 	}
 }
+
+registerSingleton(INativeRuntimeService, NativeRuntimeService, InstantiationType.Delayed);

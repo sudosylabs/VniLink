@@ -1,6 +1,7 @@
+import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import type { QualityLimits, DisplayInfo } from '../../../platform/engine/common/engine.js';
-import { DesktopReadbackError, desktopTargetKey, isValidDesktopQuality, type DesktopSession, type DesktopSettings, type DesktopTarget, type IRemoteDesktopService } from './remoteDesktopService.js';
+import { DesktopReadbackError, desktopTargetKey, isValidDesktopQuality, type DesktopSession, type DesktopSettings, type DesktopTarget, IRemoteDesktopService } from './remoteDesktopService.js';
 
 export class RemoteDesktopService implements IRemoteDesktopService {
 	declare public readonly _serviceBrand: undefined;
@@ -76,3 +77,5 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 		return result;
 	}
 }
+
+registerSingleton(IRemoteDesktopService, RemoteDesktopService, InstantiationType.Delayed);

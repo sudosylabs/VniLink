@@ -3,18 +3,16 @@ import { relayDraftChanged } from '../../services/connection/relayConfiguration.
 import * as nls from '../../../nls.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { addDisposableListener } from '../../../base/browser/domEvent.js';
-import type { TabAction } from '../../services/tabs/tabService.js';
 import { IConnectionService, ConnectionReadbackError, type ConnectionSettings } from '../../services/connection/connectionService.js';
 import { validateRelays } from '../../services/connection/relayValidation.js';
 import type { RelayInfo } from '../../../platform/engine/common/engine.js';
-import { createPageHeading, type WorkbenchPage } from '../../parts/views/page.js';
+import { createPageHeading, type IHomePage } from '../home/homePages.js';
 import { RelayModePicker } from './relayModePicker.js';
 import './media/connection.css';
 import { RelayEditor } from './relayEditor.js';
 
-export class ConnectionPage extends Disposable implements WorkbenchPage {
+export class ConnectionPage extends Disposable implements IHomePage {
 	public readonly element = document.createElement('main');
-	public readonly actions: readonly TabAction[] = [];
 	private readonly form = document.createElement('form');
 	private readonly fields = document.createElement('fieldset');
 	private readonly mode = this._register(new RelayModePicker());

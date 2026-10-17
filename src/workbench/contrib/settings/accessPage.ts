@@ -1,16 +1,14 @@
 import * as nls from '../../../nls.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
-import type { TabAction } from '../../services/tabs/tabService.js';
-import { createPageHeading, type WorkbenchPage } from '../../parts/views/page.js';
+import { createPageHeading, type IHomePage } from '../home/homePages.js';
 import { SharingSection } from './sharingSection.js';
 import { LocalSecuritySection } from './localSecuritySection.js';
 import { MachinePermissionsSection } from './machinePermissionsSection.js';
 import './media/access.css';
 
-export class AccessPage extends Disposable implements WorkbenchPage {
+export class AccessPage extends Disposable implements IHomePage {
 	public readonly element = document.createElement('main');
-	public readonly actions: readonly TabAction[] = [];
 
 	constructor(@IInstantiationService instantiation: IInstantiationService) {
 		super();

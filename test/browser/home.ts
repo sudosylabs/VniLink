@@ -3,6 +3,20 @@ import { IConnectionService } from '../../src/workbench/services/connection/conn
 import { IConfigurationSnapshotService, defaultConfiguration } from '../../src/platform/configuration/common/configurationSnapshot.js';
 import { Event, Emitter } from '../../src/base/common/event.js';
 import { HomeView } from '../../src/workbench/contrib/home/homeView.js';
+import '../../src/workbench/contrib/devices/devices.contribution.js';
+import '../../src/workbench/contrib/settings/settings.contribution.js';
+import '../../src/workbench/actions/applicationActions.js';
+import { IMenuService } from '../../src/platform/actions/common/actions.js';
+import { MenuService } from '../../src/platform/actions/common/menuService.js';
+import { ICommandService } from '../../src/platform/commands/common/commands.js';
+import { IConfigurationService } from '../../src/platform/configuration/common/configuration.js';
+import { ContextKeyService } from '../../src/platform/contextkey/browser/contextKeyService.js';
+import { IContextKeyService } from '../../src/platform/contextkey/common/contextkey.js';
+import { SyncDescriptor } from '../../src/platform/instantiation/common/descriptors.js';
+import { ILogService, NullLogService } from '../../src/platform/log/common/log.js';
+import { ActiveTabContext, RestartRequiredContext } from '../../src/workbench/contextkeys.js';
+import { ViewActionsMenu } from '../../src/workbench/parts/titlebar/viewActionsToolbar.js';
+import { CommandService } from '../../src/workbench/services/commands/commandService.js';
 import { IDeviceService, type DeviceSummary } from '../../src/workbench/services/devices/deviceService.js';
 import { IScreenSnapshotService } from '../../src/workbench/services/screenSnapshot/screenSnapshotService.js';
 import { InstantiationService } from '../../src/platform/instantiation/common/instantiationService.js';
@@ -67,7 +81,12 @@ export async function verifyHomeLifecycle(): Promise<void> {
 			restarts++;
 			return Promise.resolve();
 		}, openRelayDocumentation: () => Promise.resolve()
-	}], [IDeviceService, service], [IScreenSnapshotService, { _serviceBrand: undefined, capture: () => Promise.resolve({ status: 'disconnected' as const }), access: () => Promise.resolve({ status: 'disconnected' as const }) }], [IConnectionService, { _serviceBrand: undefined, available: false, load: () => Promise.reject(new Error('Unavailable')), save: () => Promise.reject(new Error('Unavailable')) }], [IConfigurationSnapshotService, { _serviceBrand: undefined, snapshot: { revision: 0, values: defaultConfiguration, error: null }, onDidChangeConfiguration: Event.None, initialize: () => Promise.resolve(), updateValue: () => Promise.resolve() }]), true);
+	}], [IDeviceService, service], [IScreenSnapshotService, { _serviceBrand: undefined, capture: () => Promise.resolve({ status: 'disconnected' as const }), access: () => Promise.resolve({ status: 'disconnected' as const }) }], [IConnectionService, { _serviceBrand: undefined, available: false, load: () => Promise.reject(new Error('Unavailable')), save: () => Promise.reject(new Error('Unavailable')) }], [IConfigurationSnapshotService, { _serviceBrand: undefined, snapshot: { revision: 0, values: defaultConfiguration, error: null }, onDidChangeConfiguration: Event.None, initialize: () => Promise.resolve(), updateValue: () => Promise.resolve() }],
+		[IConfigurationService, { _serviceBrand: undefined, onDidChangeConfiguration: Event.None, getValue: () => undefined }],
+		[ILogService, new NullLogService()],
+		[IContextKeyService, new SyncDescriptor(ContextKeyService)],
+		[ICommandService, new SyncDescriptor(CommandService)],
+		[IMenuService, new SyncDescriptor(MenuService)]), true);
 	const home = services.createInstance(HomeView);
 	try {
 		assert(!home.element.querySelector('[data-section-id="files"]'), 'Files settings still appear in the sidebar');
@@ -80,15 +99,25 @@ export async function verifyHomeLifecycle(): Promise<void> {
 		}
 		connection.click();
 		const settingsPage = home.element.querySelector('.home-content > main');
-		assert(home.actions.length === 0, 'Settings retained device actions');
+		const contextKeys = services.invokeFunction(accessor => accessor.get(IContextKeyService));
+		const menu = services.invokeFunction(accessor => accessor.get(IMenuService)).createMenu(ViewActionsMenu, contextKeys);
+		const restartActions = () => menu.getActions().flatMap(([, actions]) => actions).filter(action => action.id === 'workbench.action.restart');
+		const activeTab = ActiveTabContext.bindTo(contextKeys);
+		const required = RestartRequiredContext.bindTo(contextKeys);
+		activeTab.set(HomeView.ID);
+		assert(restartActions().length === 0, 'Restart offered while nothing needs it');
 		restartRequired = true;
-		restartChanged.fire();
-		assert(home.actions.some(action => action.id === 'home.restart'), 'Restart action missing on settings page');
-		await home.actions[0].run(new AbortController().signal);
-		assert(restarts === 1, 'Restart action bypassed application service');
+		required.set(true);
+		assert(restartActions().length === 1, 'Restart action missing on Home');
+		await restartActions()[0].run();
+		assert(restarts === 1, 'Restart action bypassed the application service');
+		activeTab.set('remote-session');
+		assert(restartActions().length === 0, 'Restart action shown outside Home');
+		activeTab.set(HomeView.ID);
 		restartRequired = false;
-		restartChanged.fire();
-		assert(home.actions.length === 0, 'Restart action survived reverted configuration');
+		required.set(false);
+		assert(restartActions().length === 0, 'Restart action survived reverted configuration');
+		menu.dispose();
 		await service.refresh(new AbortController().signal);
 		back.click();
 		assert(home.element.querySelector('.home-content > main') === devicesPage, 'Devices page was recreated');

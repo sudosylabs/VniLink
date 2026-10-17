@@ -2,7 +2,8 @@ import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import type { IChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { IMainProcessService } from '../../ipc/common/mainProcessService.js';
-import { CONFIGURATION_CHANNEL_NAME, defaultConfiguration, freezeConfiguration, isConfigurationSnapshot, type ConfigurationSnapshot, type ConfigurationUpdate, type IConfigurationSnapshotService } from '../common/configurationSnapshot.js';
+import { InstantiationType, registerSingleton } from '../../instantiation/common/extensions.js';
+import { CONFIGURATION_CHANNEL_NAME, defaultConfiguration, freezeConfiguration, IConfigurationSnapshotService, isConfigurationSnapshot, type ConfigurationSnapshot, type ConfigurationUpdate } from '../common/configurationSnapshot.js';
 
 /** Window copy of the main-process preferences; newer revisions replace older ones. */
 export class ConfigurationSnapshotService extends Disposable implements IConfigurationSnapshotService {
@@ -43,3 +44,5 @@ export class ConfigurationSnapshotService extends Disposable implements IConfigu
 		this.changed.fire(this.current);
 	}
 }
+
+registerSingleton(IConfigurationSnapshotService, ConfigurationSnapshotService, InstantiationType.Delayed);

@@ -1,17 +1,15 @@
 import * as nls from '../../../nls.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { addDisposableListener } from '../../../base/browser/domEvent.js';
-import { createPageHeading, type WorkbenchPage } from '../../parts/views/page.js';
-import type { TabAction } from '../../services/tabs/tabService.js';
+import { createPageHeading, type IHomePage } from '../home/homePages.js';
 import { IConfigurationSnapshotService, type InputDefaults } from '../../../platform/configuration/common/configurationSnapshot.js';
 import { AccessToggle } from './accessToggle.js';
 import { createSelect, wrapSelect } from './settingsControls.js';
 import './media/access.css';
 import './media/input.css';
 
-export class InputPage extends Disposable implements WorkbenchPage {
+export class InputPage extends Disposable implements IHomePage {
 	public readonly element = document.createElement('main');
-	public readonly actions: readonly TabAction[] = [];
 	private readonly fields = document.createElement('fieldset');
 	private readonly mode = createSelect([['Character', 'Characters'], ['Map', 'Physical keys'], ['Translate', 'Translate to host layout']]);
 	private readonly sensitivity = document.createElement('input');

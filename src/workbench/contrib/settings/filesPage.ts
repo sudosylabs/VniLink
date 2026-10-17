@@ -4,16 +4,14 @@ import { addDisposableListener } from '../../../base/browser/domEvent.js';
 import { renderIcon } from '../../../base/browser/ui/icon/icon.js';
 import { Icons } from '../../../base/common/icons.js';
 import { IConfigurationSnapshotService, isFileRoots } from '../../../platform/configuration/common/configurationSnapshot.js';
-import { createPageHeading, type WorkbenchPage } from '../../parts/views/page.js';
-import type { TabAction } from '../../services/tabs/tabService.js';
+import { createPageHeading, type IHomePage } from '../home/homePages.js';
 import './settingsControls.js';
 import './media/files.css';
 
 interface FolderRow { readonly input: HTMLInputElement; readonly element: HTMLElement; readonly store: DisposableStore; }
 
-export class FilesPage extends Disposable implements WorkbenchPage {
+export class FilesPage extends Disposable implements IHomePage {
 	public readonly element = document.createElement('main');
-	public readonly actions: readonly TabAction[] = [];
 	private readonly fields = document.createElement('fieldset');
 	private readonly list = document.createElement('div');
 	private readonly add = document.createElement('button');
