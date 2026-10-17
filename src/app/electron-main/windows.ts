@@ -1,11 +1,11 @@
 import { defaultBrowserWindowOptions } from '../../platform/windows/electron-main/windows.js';
-import { isMacintosh } from '../../base/common/platform.js';
-import { BrowserWindow } from 'electron';
+import { isMacintosh, isLinux } from '../../base/common/platform.js';
+import { app, BrowserWindow } from 'electron';
 import { join } from 'node:path';
 
 export function createMainWindow(): BrowserWindow {
 	const options = defaultBrowserWindowOptions();
-	const window = new BrowserWindow({ ...options, webPreferences: { ...options.webPreferences, preload: join(__dirname, 'preload.cjs') } });
+	const window = new BrowserWindow({ ...options, ...(isLinux && app.isPackaged ? { icon: join(process.resourcesPath, 'app-icon.png') } : {}), webPreferences: { ...options.webPreferences, preload: join(__dirname, 'preload.cjs') } });
 	if (!isMacintosh) {
 		window.removeMenu();
 	}

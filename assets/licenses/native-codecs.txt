@@ -22,6 +22,11 @@ To replace the decoder:
    Windows: build with --target x86_64-pc-windows-gnu and use
             target/relink/x86_64-pc-windows-gnu/debug/vnilink_node.dll
    Keep the destination filename vnilink.node.
+   In an assembled macOS app, the module is at
+   VniLink.app/Contents/Resources/app.asar.unpacked/native/vnilink.node.
+   On Windows/Linux it is at resources/app.asar.unpacked/native/vnilink.node.
+   The relink/source tree is beside app.asar in the same Resources/resources
+   directory. The source-checkout layout uses native/vnilink.node instead.
 
 Build prerequisites: the Rust version in rust-toolchain.toml, C/C++ compilers,
 CMake and libclang. Windows builds use Rust x86_64-pc-windows-gnu and the

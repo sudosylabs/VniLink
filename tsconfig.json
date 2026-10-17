@@ -4,6 +4,7 @@
     "allowJs": true,
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "resolveJsonModule": true,
     "lib": ["ES2024", "ESNext.Disposable", "DOM", "DOM.Iterable"],
     "types": ["node", "trusted-types"],
     "strict": true,

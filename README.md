@@ -4,6 +4,69 @@ VniLink is a remote desktop application with a shared Electron interface written
 
 The Electron application lives at the repository root. Its sandboxed renderer calls a typed preload API; an Electron utility process hosts the Rust Node addon. Installation state and pairing commands are connected, while the full pairing interface, remaining services and media streaming are pending. The old SwiftUI and GTK application folders and UniFFI generator have been removed; the Rust platform and application adapters remain.
 
+## Packaging preparation
+
+`product.json` is the source of truth for the planned release identity, executable names, invitation association, icon inputs, signing policy and native target matrix. Version remains owned by `package.json`; Rust workspace versions remain in `Cargo.toml`. `npm run check:product` validates the metadata and artwork; it does not package the application or prove OS support.
+
+The agreed application identity is `fr.sudosy.vnilink`, display name **VniLink** and publisher **Sudosy Labs**. The publisher label is not a signing certificate subject or a claim about a registered legal entity. macOS uses executable name `VniLink`; Windows and Linux use `vnilink`. Packaging derives the macOS bundle identifier and Windows application identity from `appId`; Linux uses the corresponding `.desktop` filename. Helper identifiers must derive from this identity when signing is wired.
+
+| Planned platform | Architecture / Rust target | Intended minimum |
+| --- | --- | --- |
+| macOS | arm64 / `aarch64-apple-darwin` | macOS 14 |
+| macOS | x64 / `x86_64-apple-darwin` | macOS 14 |
+| Windows | x64 / `x86_64-pc-windows-gnu` | Windows 10 22H2, build 19045 |
+| Linux | x64 / `x86_64-unknown-linux-gnu` | Ubuntu 24.04 and Debian 13 are intended validation baselines |
+
+The owner confirmed this initial packaging scope. These are planned targets, not verified support claims. macOS 14 follows the native ScreenCaptureKit dependency's enabled APIs; Electron 44 itself requires macOS 13 or later ([Electron release notes](https://www.electronjs.org/blog/electron-44-0)). Linux's current Debian 13 test image does not establish Ubuntu 24.04 binary compatibility: release builds must use an appropriate native-library/sysroot baseline and verify the resulting library dependencies on both distributions. No numeric glibc floor is asserted before that work. PipeWire 1.0 support is required by the current native binding on Wayland. Windows/Linux ARM64, 32-bit builds, universal macOS bundles, store distribution and an update feed are outside the initial matrix.
+
+macOS release signing is planned through Developer ID and notarization using the owner's existing Apple Developer account. Initial Windows and Linux packages are unsigned. Unsigned installer generation is available as described below. Signing credentials, invitation file-open handling, platform manifests, tray integration and publishing remain later steps. The running application name and Windows application identity derive from this metadata. OS registration of `.vnl` remains a later step.
+
+The existing Electron user-data location, Rust installation directory and credential service `com.vnilink.storage` / account `installation-key` remain independent storage contracts. Do not rename or migrate them merely to match the packaging identifier. Upgrades must preserve access to the existing encrypted installation. Future installer identities must remain stable across versions and be set before first distribution.
+
+### Release payload build
+
+Run `npm run build:release` on a host in the approved product matrix. This type-checks the sources, builds `vnilink-node` with Cargo's optimized `release` profile for the explicit host target, and compiles production/minified Electron bundles. macOS builds pass the agreed `MACOSX_DEPLOYMENT_TARGET=14.0`; this is a build setting, not proof that every linked dependency works on macOS 14. A conflicting `CARGO_BUILD_TARGET` is rejected. Windows uses the existing GNU/MSYS2 toolchain; Linux uses its native build environment, whose dependency baseline must still be validated against the intended distributions.
+
+The completed payload is published to `.build/release/<platform>-<architecture>/`:
+
+- `app/`: runtime bundles, renderer resources, minimal application `package.json`, product metadata, staged native addon, tray images, notices and relinking sources.
+- `packaging-resources/`: the platform icon inputs for the later Electron assembly step.
+- `build-manifest.json`: product/version/Electron/native target/profile, an application/build input fingerprint, and relative paths, sizes and SHA-256 hashes for the staged files. The native stamp also records its Rust source fingerprint and explicit build environment.
+
+Release and development share the maintained bundle/resource definitions. Release builds exclude the browser/smoke test entry points, do not copy arbitrary files from `out/`, and leave the development output untouched. Relinking sources intentionally retain Rust source and tests needed to rebuild the native module; generated object files, caches and agent instructions are excluded. No private profiles, keys or mock-device preview files are staged.
+
+Staging uses a private temporary directory and an exclusive per-target build lock. Failed or cancelled work is cleaned up without publishing a partial payload; a previous completed payload is retained if failure occurs before replacement. Source changes during compilation/staging cause failure rather than mixing build inputs. Do not delete an active build lock. An ungracefully terminated runner may require confirming that no build is alive before removing its stale lock.
+
+`npm run verify:release` checks the exact file inventory and opens/shuts down the staged native addon with a temporary engine under Node. It does not use the production installation key or saved devices. It requires native networking permissions for Iroh startup. This establishes staged-addon loading and basic engine lifecycle on the current host; packaged Electron launch, native dependency audits, clean-machine installation, other OS/architecture runtime checks, signing and installer generation remain subsequent steps. These commands do not publish anything or create an Electron application bundle.
+
+### Unpacked application assembly
+
+`npm run package:dir` rebuilds the release payload and assembles an unsigned host-native application in `dist/<platform>-<architecture>/`, using pinned electron-builder 26.15.3 and the installed, pinned Electron runtime. macOS contains `VniLink.app`; Windows/Linux contain `vnilink.exe` / `vnilink`. Application code is archived in ASAR. The utility-process entry and native module remain adjacent under `resources/app.asar.unpacked/` (macOS: `Contents/Resources`). Notices and the native relinking source remain external resources. Signing credential discovery and publishing are disabled for this command.
+
+`npm run verify:package` copies that assembly to a temporary directory outside the checkout, launches its own executable with a temporary engine and isolated profile, checks workbench readiness, engine connectivity and renderer isolation, and saves a screenshot and diagnostic result under `.build/package-tests/`. The explicit `--smoke-test` launch mode requires `VNILINK_TEST_PROFILE`; normal startup uses the persistent installation. The verifier enables localhost-only DevTools on a random port for its own temporary process and removes the temporary application/profile after teardown.
+
+These commands create no installers and perform no Developer ID signing or notarization. They do not establish clean-machine compatibility or validate another architecture/OS. Native Windows/Linux and Intel Mac assembly/runtime checks remain required on their respective hosts. macOS local assembly may require an ad-hoc signature for execution; that is distinct from release signing.
+
+### Unsigned installer generation
+
+`npm run package:installers` builds the host-native release payload, assembles the app and generates its installer formats. `npm run package:installers:staged` only runs the installer stage against an existing completed assembly and release payload. It verifies the complete application inventory first, including framework symlinks, executable flags, Electron resources, native modules and relinking material. Old assemblies without that inventory need rebuilding with `npm run package:dir`.
+
+Outputs live in `dist/installers/<platform>-<architecture>/` with version/OS/architecture in each filename, `SHA256SUMS`, and an `installer-manifest.json` recording checksums and the exact assembled input. Concurrent assembly/installer jobs for the same target are rejected by their shared lock. Failed/cancelled generation does not publish partial installers or remove a previous completed output. Downloads of pinned builder helper tools use electron-builder's cache.
+
+| Host | Configured output | Installation behavior |
+| --- | --- | --- |
+| macOS | `.dmg` | Drag `VniLink.app` to Applications; the volume contains an Applications link. |
+| Windows | NSIS `.exe` | Current-user installation, Start menu shortcut, no desktop shortcut, no automatic app launch; uninstall preserves app data. |
+| Linux | `.deb`, `.rpm` | Native package-manager installation with a desktop entry and icon. |
+
+`npm run verify:installers` verifies the artifact hashes. On macOS it additionally verifies the disk image, mounts it read-only, compares the embedded app against its complete input inventory, then launches an isolated copy through the packaged-app smoke driver. It detaches the image and removes temporary state afterwards. It does not install into `/Applications`, touch the real installation store, or assess Gatekeeper/notarization.
+
+Windows/Linux checksums alone do not establish installation, upgrade, uninstall or runtime behavior. Those checks remain native-host gates. Linux currently uses electron-builder's default Electron dependency lists: these must be audited/extended against the linked Rust addon and tested on the supported distribution baselines before distribution. RPM generation does not imply support for a particular RPM-based distribution. Windows minimum-version enforcement and OS invitation associations remain separate integration work.
+
+All outputs in this step are unsigned development artifacts. macOS Developer ID signing, hardened runtime entitlements, nested native-module signing, notarization and stapling are the next stage. No update feed, upload or publishing is configured. The app's own source has no distribution license declared at the repository root; staged metadata uses `UNLICENSED`, without changing the licenses or notices of bundled third-party components.
+
+The configuration follows the pinned builder's [prepackaged CLI](https://www.electron.build/v26/docs/cli/), [DMG](https://www.electron.build/v26/docs/dmg/), [NSIS](https://www.electron.build/v26/docs/nsis/) and [Linux](https://www.electron.build/v26/docs/linux/) targets. Like VS Code's platform packaging tasks, compilation/assembly and installer generation are separate stages; VniLink uses these builder targets rather than copying VS Code's Inno Setup and bespoke Linux packaging toolchain.
+
 ## Development
 
 Use Node 22.19 or later, npm and the pinned Rust toolchain:

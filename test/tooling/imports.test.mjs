@@ -6,9 +6,9 @@ import { synchronousFsRule } from '../../build/lint/synchronousFs.mjs';
 const tester = new RuleTester({ languageOptions: { parser: tseslint.parser } });
 
 tester.run('import-extensions', importExtensionsRule, {
-	valid: ["import './module.js';", "import './style.css';", "import type { X } from 'electron';", "type X = import('./module.js').X;"],
+	valid: ["import metadata from './product.json' with { type: 'json' };", "import './module.js';", "import './style.css';", "import type { X } from 'electron';", "type X = import('./module.js').X;"],
 	invalid: [
-		"import './module';", "export * from './module.ts';", "export { x } from './module';", "const value = import('./module');", "type X = import('./module').X;",
+		"import metadata from './product.json';", "const data = import('./product.json');", "import './module';", "export * from './module.ts';", "export { x } from './module';", "const value = import('./module');", "type X = import('./module').X;",
 	].map(code => ({ code, errors: [{ messageId: 'extension' }] })),
 });
 

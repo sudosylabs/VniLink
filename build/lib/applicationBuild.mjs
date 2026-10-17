@@ -6,21 +6,22 @@ import { buildOptions, resources } from '../tasks.mjs';
 import { ProcessRunner } from './processes.mjs';
 import { NativeBuild } from './nativeBuild.mjs';
 import { TaskRegistry } from './tasks.mjs';
+import { releaseSourceFilter } from './releaseFiles.mjs';
 
 export class ApplicationBuild {
-	constructor(root) {
+	constructor(root, { production = false, outputDirectory = join(root, 'out'), target, nativeEnvironment = {} } = {}) {
 		this.root = root;
 		this.processes = new ProcessRunner();
-		this.native = new NativeBuild(root, this.processes);
+		this.native = new NativeBuild(root, this.processes, target, production ? 'release' : 'dev', nativeEnvironment);
 		this.tasks = new TaskRegistry()
 			.register('native:compile', [], () => this.native.build())
 			.register('output:prepare', ['native:compile'], async () => {
-				await rm(join(root, 'out'), { recursive: true, force: true });
-				await Promise.all(['renderer', 'native', 'licenses'].map(name => mkdir(join(root, 'out', name), { recursive: true })));
+				await rm(outputDirectory, { recursive: true, force: true });
+				await Promise.all(['renderer', 'native', 'licenses'].map(name => mkdir(join(outputDirectory, name), { recursive: true })));
 			})
-			.register('typescript:bundle', ['output:prepare'], () => Promise.all(buildOptions(root).map(options => build(options))))
-			.register('resources:stage', ['output:prepare'], () => Promise.all(resources(root).map(({ source, output }) => cp(source, output, { recursive: true }))))
-			.register('native:stage', ['output:prepare'], () => this.native.stage())
+			.register('typescript:bundle', ['output:prepare'], () => Promise.all(buildOptions(root, { production, outputDirectory }).map(options => build(options))))
+			.register('resources:stage', ['output:prepare'], () => Promise.all(resources(root, outputDirectory).map(({ source, output }) => cp(source, output, { recursive: true, ...(production ? { filter: releaseSourceFilter } : {}) }))))
+			.register('native:stage', ['output:prepare'], () => this.native.stage(outputDirectory))
 			.register('application:build', ['typescript:bundle', 'resources:stage', 'native:stage'], async () => { });
 	}
 

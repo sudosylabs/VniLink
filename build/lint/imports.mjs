@@ -1,5 +1,5 @@
 export const importExtensionsRule = {
-	meta: { type: 'problem', schema: [], messages: { extension: 'Relative TypeScript imports must end in .js (or .css for stylesheets).' } },
+	meta: { type: 'problem', schema: [], messages: { extension: 'Relative TypeScript imports must end in .js, .css, or .json with a JSON import attribute.' } },
 	create(context) {
 		function check(node, value) {
 			if (typeof value === 'string' && value.startsWith('.') && !/\.(js|css)$/.test(value)) {
@@ -7,7 +7,12 @@ export const importExtensionsRule = {
 			}
 		}
 		return {
-			ImportDeclaration: node => check(node.source, node.source.value),
+			ImportDeclaration: node => {
+				const json = node.source.value.endsWith('.json') && node.attributes?.some(attribute => attribute.key.name === 'type' && attribute.value.value === 'json');
+				if (!json) {
+					check(node.source, node.source.value);
+				}
+			},
 			ExportNamedDeclaration: node => {
 				if (node.source) {
 					check(node.source, node.source.value);

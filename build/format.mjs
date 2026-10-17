@@ -98,7 +98,7 @@ async function run() {
 	const write = process.argv.includes('--write');
 	const roots = ['src', 'build', 'scripts', 'test', '.vscode'];
 	let files = (await Promise.all(roots.map(path => collect(resolve(root, path))))).flat();
-	files.push(...['package.json', 'tsconfig.json', 'tsfmt.json', '.prettierrc.json', 'eslint.config.mjs', 'stylelint.config.mjs', '.lintstagedrc.mjs'].map(path => resolve(root, path)));
+	files.push(...['package.json', 'product.json', 'tsconfig.json', 'tsfmt.json', '.prettierrc.json', 'eslint.config.mjs', 'stylelint.config.mjs', '.lintstagedrc.mjs'].map(path => resolve(root, path)));
 	const selected = process.argv.indexOf('--files');
 	if (selected !== -1) {
 		const allowed = new Set(files);
