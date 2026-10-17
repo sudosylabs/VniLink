@@ -182,6 +182,11 @@ export async function importSources(upstreamDirectory, roots) {
 	return copied;
 }
 
+/** Re-derives entry points and dependency edges after application imports change. */
+export async function syncManifest() {
+	await writeManifest(await readManifest());
+}
+
 /**
  * Records reviewed edits to copied files as declared adaptations. With
  * `upstreamStyle`, the files keep VS Code's formatting and lint baseline.
@@ -222,7 +227,8 @@ export async function resetToUpstream(upstreamDirectory, paths) {
 const usage = `Usage:
   node build/vscodeImport.mjs import <checkout at the pinned commit> <src/vs/...> [...]
   node build/vscodeImport.mjs adapt [--upstream-style] <src/...> [...]
-  node build/vscodeImport.mjs reset <checkout at the pinned commit> <src/...> [...]`;
+  node build/vscodeImport.mjs reset <checkout at the pinned commit> <src/...> [...]
+  node build/vscodeImport.mjs sync`;
 
 if (process.argv[1] === new URL(import.meta.url).pathname) {
 	const [command, ...args] = process.argv.slice(2);
@@ -234,6 +240,9 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
 		const paths = args.filter(arg => arg !== '--upstream-style');
 		await recordAdaptations(paths, { upstreamStyle });
 		console.log(`Recorded ${String(paths.length)} adaptations.`);
+	} else if (command === 'sync' && !args.length) {
+		await syncManifest();
+		console.log('Provenance graph updated.');
 	} else if (command === 'reset' && args.length > 1) {
 		await resetToUpstream(args[0], args.slice(1));
 		console.log(`Reset ${String(args.length - 1)} files to upstream.`);
