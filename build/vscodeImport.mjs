@@ -2,7 +2,7 @@
 import ts from 'typescript';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, posix } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { titlebarDependencies } from './vscodeDependencies.mjs';
@@ -66,10 +66,36 @@ function applicationTarget({ from, specifier }) {
 	return [base.replace(/\.js$/, '.ts'), base].find(candidate => existsSync(new URL(candidate, root)));
 }
 
+/** Copies that application code imports directly; they are the graph's entry points. */
+async function applicationImports(copies) {
+	const imported = new Set();
+	const pending = ['src'];
+	while (pending.length) {
+		const directory = pending.pop();
+		for (const entry of await readdir(new URL(`${directory}/`, root), { withFileTypes: true })) {
+			const path = `${directory}/${entry.name}`;
+			if (entry.isDirectory()) {
+				pending.push(path);
+			} else if (/\.ts$/.test(path) && !copies.has(path)) {
+				for (const specifier of dependencies(path, await readFile(new URL(path, root), 'utf8'))) {
+					const target = applicationTarget({ from: path, specifier });
+					if (target && copies.has(target)) {
+						imported.add(target);
+					}
+				}
+			}
+		}
+	}
+	return imported;
+}
+
 async function writeManifest(manifest) {
 	manifest.files.sort((left, right) => left.path.localeCompare(right.path, 'en'));
 	// A recorded copy is part of the graph, never its application boundary.
 	const copies = new Set(manifest.files.map(file => file.path));
+	const compilerSupport = new Set(manifest.compilerSupport ?? []);
+	manifest.entryPoints = [...await applicationImports(copies)].filter(path => !compilerSupport.has(path)).sort();
+	manifest.roots = [...manifest.entryPoints, ...compilerSupport].sort();
 	manifest.applicationDependencies = manifest.applicationDependencies.filter(path => !copies.has(path));
 	let graph = await titlebarDependencies(manifest);
 	// Adapted copies may import application modules; record those as the graph's boundary.
@@ -144,15 +170,6 @@ export async function importSources(upstreamDirectory, roots) {
 		await writeFile(new URL(target, root), content);
 		manifest.files.push({ path: target, upstreamPath, sha256: sha256(content), changedImports: 0 });
 	}
-	for (const path of roots.map(localPath)) {
-		if (!manifest.entryPoints.includes(path)) {
-			manifest.entryPoints.push(path);
-		}
-		if (!manifest.roots.includes(path)) {
-			manifest.roots.push(path);
-			manifest.roots.sort();
-		}
-	}
 	await writeManifest(manifest);
 	const tsconfig = JSON.parse(await readFile(tsconfigUrl, 'utf8'));
 	for (const path of copied.filter(path => /\.tsx?$/.test(path))) {
@@ -165,8 +182,11 @@ export async function importSources(upstreamDirectory, roots) {
 	return copied;
 }
 
-/** Records reviewed edits to copied files as declared adaptations. */
-export async function recordAdaptations(paths) {
+/**
+ * Records reviewed edits to copied files as declared adaptations. With
+ * `upstreamStyle`, the files keep VS Code's formatting and lint baseline.
+ */
+export async function recordAdaptations(paths, { upstreamStyle = false } = {}) {
 	const manifest = await readManifest();
 	for (const path of paths) {
 		const file = manifest.files.find(candidate => candidate.path === path);
@@ -175,6 +195,9 @@ export async function recordAdaptations(paths) {
 		}
 		file.sha256 = sha256(await readFile(new URL(path, root)));
 		file.adapted = true;
+		if (upstreamStyle) {
+			file.upstreamStyle = true;
+		}
 		delete file.changedImports;
 	}
 	await writeManifest(manifest);
@@ -198,7 +221,7 @@ export async function resetToUpstream(upstreamDirectory, paths) {
 
 const usage = `Usage:
   node build/vscodeImport.mjs import <checkout at the pinned commit> <src/vs/...> [...]
-  node build/vscodeImport.mjs adapt <src/...> [...]
+  node build/vscodeImport.mjs adapt [--upstream-style] <src/...> [...]
   node build/vscodeImport.mjs reset <checkout at the pinned commit> <src/...> [...]`;
 
 if (process.argv[1] === new URL(import.meta.url).pathname) {
@@ -207,8 +230,10 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
 		const copied = await importSources(args[0], args.slice(1));
 		console.log(`Copied ${String(copied.length)} upstream files.`);
 	} else if (command === 'adapt' && args.length) {
-		await recordAdaptations(args);
-		console.log(`Recorded ${String(args.length)} adaptations.`);
+		const upstreamStyle = args.includes('--upstream-style');
+		const paths = args.filter(arg => arg !== '--upstream-style');
+		await recordAdaptations(paths, { upstreamStyle });
+		console.log(`Recorded ${String(paths.length)} adaptations.`);
 	} else if (command === 'reset' && args.length > 1) {
 		await resetToUpstream(args[0], args.slice(1));
 		console.log(`Reset ${String(args.length - 1)} files to upstream.`);
