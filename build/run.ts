@@ -1,0 +1,58 @@
+/**
+ * The one entry point for build, packaging, verification and test tasks:
+ * `node build/run.ts <task> [arguments]`. Interrupting the process aborts the
+ * task, which stops the processes it started and leaves published outputs intact.
+ */
+import { fileURLToPath } from 'node:url';
+import { buildApplication } from './lib/bundles.ts';
+import { DevelopmentSession, startApplication } from './lib/development.ts';
+import { buildInstallers } from './lib/installers.ts';
+import { packageApplication } from './lib/package.ts';
+import { checkProduct } from './lib/product.ts';
+import { buildRelease } from './lib/release.ts';
+import { runUiTests, testRust, validateLinux } from './lib/test.ts';
+import { verifyInstallers, verifyPackage, verifyRelease } from './lib/verify.ts';
+import { formatFiles } from './format.ts';
+import { verifyUpstream } from './vscodeDependencies.ts';
+import { vscodeCommand } from './vscodeImport.ts';
+
+type TaskFunction = (root: string, signal: AbortSignal, args: readonly string[]) => Promise<unknown>;
+
+const tasks: Readonly<Record<string, TaskFunction>> = {
+	'build': (root, signal) => buildApplication(root, signal),
+	'build:release': (root, signal) => buildRelease(root, signal),
+	'package': (root, signal) => packageApplication(root, signal),
+	'package:installers': (root, signal) => buildInstallers(root, signal),
+	'verify:release': root => verifyRelease(root),
+	'verify:package': (root, signal) => verifyPackage(root, signal),
+	'verify:installers': (root, signal) => verifyInstallers(root, signal),
+	'start': (root, signal, args) => startApplication(root, signal, args),
+	'dev': (root, signal, args) => new DevelopmentSession(root, args, signal).run(),
+	'watch': (root, signal, args) => new DevelopmentSession(root, ['--watch-only', ...args], signal).run(),
+	'test:ui': (root, signal, args) => runUiTests(root, signal, args),
+	'test:rust': (root, signal) => testRust(root, signal),
+	'test:linux': (root, signal) => validateLinux(root, signal),
+	'check:product': root => checkProduct(root),
+	'check:upstream': () => verifyUpstream(),
+	'format': (_root, _signal, args) => formatFiles(args),
+	'vscode': (_root, _signal, args) => vscodeCommand(args),
+};
+
+const [name = '', ...args] = process.argv.slice(2);
+
+const task = Object.hasOwn(tasks, name) ? tasks[name] : undefined;
+
+if (!task) {
+	console.error(`Usage: node build/run.ts <task> [arguments]\nTasks: ${Object.keys(tasks).join(', ')}`);
+	process.exit(2);
+}
+
+const controller = new AbortController();
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+	process.once(signal, () => {
+		controller.abort(new Error(`Interrupted by ${signal}`));
+	});
+}
+
+await task(fileURLToPath(new URL('../', import.meta.url)), controller.signal, args);

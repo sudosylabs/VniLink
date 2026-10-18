@@ -1,7 +1,7 @@
 import { RuleTester } from 'eslint';
 import tseslint from 'typescript-eslint';
-import { importExtensionsRule } from '../../build/lint/imports.mjs';
-import { synchronousFsRule } from '../../build/lint/synchronousFs.mjs';
+import { importExtensionsRule } from '../../build/lint/imports.ts';
+import { synchronousFsRule } from '../../build/lint/synchronousFs.ts';
 
 const tester = new RuleTester({ languageOptions: { parser: tseslint.parser } });
 

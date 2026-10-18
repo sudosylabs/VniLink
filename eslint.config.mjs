@@ -2,11 +2,12 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import stylistic from '@stylistic/eslint-plugin';
 import globals from 'globals';
-import layers from './build/lint/layers.mjs';
-import imports from './build/lint/imports.mjs';
-import synchronousFs from './build/lint/synchronousFs.mjs';
-import workbenchDom from './build/lint/workbenchDom.mjs';
-import { upstreamIgnores } from './build/sourceScope.mjs';
+import layers from './build/lint/layers.ts';
+import imports from './build/lint/imports.ts';
+import synchronousFs from './build/lint/synchronousFs.ts';
+import workbenchDom from './build/lint/workbenchDom.ts';
+import buildClasses from './build/lint/buildClasses.ts';
+import { upstreamIgnores } from './build/sourceScope.ts';
 import mustUseSuperDispose from './build/lint/vscode/code-must-use-super-dispose.ts';
 import declareServiceBrand from './build/lint/vscode/code-declare-service-brand.ts';
 import noDangerousTypeAssertions from './build/lint/vscode/code-no-dangerous-type-assertions.ts';
@@ -27,13 +28,13 @@ const vscodeRules = {
 };
 
 export default [
-	{ ignores: ['node_modules/**', 'out/**', 'dist/**', 'target/**', 'vendor/**', 'crates/**', 'docs/**', 'assets/**', ...upstreamIgnores] },
+	{ ignores: ['node_modules/**', 'out/**', 'dist/**', 'target/**', 'vendor/**', 'crates/**', 'docs/**', 'assets/**', 'build/lint/vscode/**', ...upstreamIgnores] },
 	{ ...js.configs.recommended, files: ['**/*.mjs'] },
-	...[...tseslint.configs.strictTypeChecked, ...tseslint.configs.stylisticTypeChecked].map(config => ({ ...config, files: ['src/**/*.ts', 'test/**/*.ts'] })),
+	...[...tseslint.configs.strictTypeChecked, ...tseslint.configs.stylisticTypeChecked].map(config => ({ ...config, files: ['src/**/*.ts', 'test/**/*.ts', 'build/**/*.ts'] })),
 	{
-		files: ['**/*.mjs', 'src/**/*.ts', 'test/**/*.ts'],
+		files: ['**/*.mjs', 'src/**/*.ts', 'test/**/*.ts', 'build/**/*.ts'],
 		languageOptions: { globals: globals.node },
-		plugins: { '@stylistic': stylistic, vnilink: { rules: { ...layers.rules, ...imports.rules, ...synchronousFs.rules, ...workbenchDom.rules } } },
+		plugins: { '@stylistic': stylistic, vnilink: { rules: { ...layers.rules, ...imports.rules, ...synchronousFs.rules, ...workbenchDom.rules, ...buildClasses.rules } } },
 		rules: {
 			curly: ['error', 'all'], eqeqeq: ['error', 'always'], 'prefer-const': 'error', 'no-var': 'error',
 			'no-eval': 'error', 'no-new-func': 'error', 'no-duplicate-imports': ['error', { allowSeparateTypeImports: true }],
@@ -56,6 +57,18 @@ export default [
 			'@typescript-eslint/no-floating-promises': 'error',
 			// VS Code actions override `Action2.run(): void` with promise-returning implementations.
 			'@typescript-eslint/no-misused-promises': ['error', { checksVoidReturn: { inheritedMethods: false } }],
+		},
+	},
+	{
+		// Build code runs under Node's type stripping: relative imports name their `.ts` file.
+		files: ['build/**/*.ts'],
+		languageOptions: { parserOptions: { project: './build/tsconfig.json', tsconfigRootDir: import.meta.dirname } },
+		rules: {
+			'@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
+			'@typescript-eslint/explicit-member-accessibility': ['error', { accessibility: 'explicit', overrides: { constructors: 'no-public' } }],
+			'@typescript-eslint/no-floating-promises': 'error',
+			'@typescript-eslint/switch-exhaustiveness-check': 'error',
+			'vnilink/build-classes': ['error', { allow: ['build/lib/processes.ts', 'build/lib/watch.ts', 'build/lib/development.ts', 'build/lib/devtools.ts'] }],
 		},
 	},
 	{ files: ['src/**/*.ts'], rules: { 'vnilink/no-sync-fs': 'error' } },

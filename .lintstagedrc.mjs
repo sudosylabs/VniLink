@@ -1,4 +1,4 @@
-import { isApplicationFile } from './build/sourceScope.mjs';
+import { isApplicationFile } from './build/sourceScope.ts';
 
 function scoped(commands) {
 	return files => {
@@ -12,10 +12,10 @@ function scoped(commands) {
 }
 
 export default {
-	'{src,test}/**/*.ts': scoped(['eslint --fix --max-warnings 0', 'node build/format.mjs --write --files']),
-	'{build,scripts,test}/**/*.mjs': scoped(['eslint --fix --max-warnings 0', 'node build/format.mjs --write --files']),
-	'{*.config.mjs,.lintstagedrc.mjs}': scoped(['eslint --fix --max-warnings 0', 'node build/format.mjs --write --files']),
-	'src/**/*.css': scoped(['stylelint --fix --max-warnings 0', 'node build/format.mjs --write --files']),
-	'{src,build,scripts,test,.vscode}/**/*.{json,html}': scoped(['node build/format.mjs --write --files']),
-	'{package.json,tsconfig.json,tsfmt.json,.prettierrc.json}': scoped(['node build/format.mjs --write --files']),
+	'{src,test,build}/**/*.ts': scoped(['eslint --fix --max-warnings 0', 'node build/run.ts format --write --files']),
+	'test/**/*.mjs': scoped(['eslint --fix --max-warnings 0', 'node build/run.ts format --write --files']),
+	'{*.config.mjs,.lintstagedrc.mjs}': scoped(['eslint --fix --max-warnings 0', 'node build/run.ts format --write --files']),
+	'src/**/*.css': scoped(['stylelint --fix --max-warnings 0', 'node build/run.ts format --write --files']),
+	'{src,build,scripts,test,.vscode}/**/*.{json,html}': scoped(['node build/run.ts format --write --files']),
+	'{package.json,tsconfig.json,tsfmt.json,.prettierrc.json}': scoped(['node build/run.ts format --write --files']),
 };

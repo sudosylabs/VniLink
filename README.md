@@ -176,8 +176,8 @@ vnilink/
   crates/                      # Shared core and native engines
   assets/                      # Existing branding
   vendor/                      # Patched dependencies
-  build/                       # Build and future packaging tools
-  scripts/                     # Development commands
+  build/                       # Build, packaging and test tasks (node build/run.ts <task>)
+  scripts/                     # Windows validation entry point (test-windows.ps1)
   test/automation/             # Application/window drivers and scenario selection
   test/browser/                # Independent renderer scenarios
   test/smoke/                  # Actual Electron application checks

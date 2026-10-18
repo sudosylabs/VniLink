@@ -4,12 +4,9 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { validateConfiguration } from 'app-builder-lib/out/util/config/config.js';
-import { installerConfiguration, installerExtensions } from '../../build/lib/installerConfiguration.mjs';
-import { packageInventory, PackageVerifier, fileSha256 } from '../../build/lib/packageVerifier.mjs';
-import { packagedLayout } from '../../build/lib/packageConfiguration.mjs';
-import { ApplicationInstallers } from '../../build/lib/applicationInstallers.mjs';
-import { releaseInventory } from '../../build/lib/releaseBuild.mjs';
-import { verifyInstallerFiles } from '../../build/lib/installerVerifier.mjs';
+import { buildInstallers, installerConfiguration, installerExtensions } from '../../build/lib/installers.ts';
+import { packagedLayout } from '../../build/lib/package.ts';
+import { fileSha256, packageInventory, releaseInventory, verifyInstallerFiles, verifyPackageFiles } from '../../build/lib/verify.ts';
 
 const product = JSON.parse(await readFile(new URL('../../product.json', import.meta.url), 'utf8'));
 
@@ -17,16 +14,21 @@ test('native installer targets validate against the pinned builder schema and pr
 	for (const platform of ['darwin', 'win32', 'linux']) {
 		const config = installerConfiguration('/repo', '/stage', '/output', product, { platform, electronVersion: '44.7.0' });
 		await validateConfiguration(config, { isEnabled: false });
-		assert.deepEqual(config.mac.target, ['dmg']);
-		assert.deepEqual(config.win.target, ['nsis']);
-		assert.deepEqual(config.linux.target, ['deb', 'rpm']);
-		assert.equal(config.nsis.perMachine, false);
-		assert.equal(config.nsis.deleteAppDataOnUninstall, false);
-		assert.equal(config.nsis.runAfterFinish, false);
-		assert.equal(config.dmg.sign, false);
-		assert.equal(config.win.signExecutable, false);
 		assert.equal(config.publish, null);
-		assert.equal(config.linux.syncDesktopName, true);
+		assert.equal(config.win.signExecutable, false);
+		if (platform === 'darwin') {
+			assert.deepEqual(config.mac.target, ['dmg']);
+			assert.equal(config.dmg.sign, false);
+		} else if (platform === 'win32') {
+			assert.deepEqual(config.win.target, ['nsis']);
+			assert.equal(config.nsis.perMachine, false);
+			assert.equal(config.nsis.deleteAppDataOnUninstall, false);
+			assert.equal(config.nsis.runAfterFinish, false);
+		} else {
+			assert.deepEqual(config.linux.target, ['deb', 'rpm']);
+			assert.equal(config.linux.syncDesktopName, true);
+		}
+		assert.equal(config.nsis === undefined, platform !== 'win32', 'Installer options leaked into another platform');
 	}
 	assert.throws(() => installerExtensions('unknown'), /Unsupported/);
 });
@@ -52,7 +54,7 @@ async function fixture() {
 test('complete bundle inventory rejects added, modified and omitted resources', async () => {
 	const f = await fixture();
 	try {
-		const verifier = new PackageVerifier(f.application, product);
+		const verifier = { verifyFiles: () => verifyPackageFiles(f.application, product) };
 		await verifier.verifyFiles();
 		const extra = join(f.layout.resources, 'unexpected');
 		await writeFile(extra, 'extra');
@@ -88,21 +90,17 @@ test('installer publication preserves previous output on failure and rejects che
 	try {
 		await mkdir(f.output, { recursive: true });
 		await writeFile(join(f.output, 'previous'), 'completed output');
-		let stopped = false;
-		const failed = new ApplicationInstallers(f.root, {
-			run: async () => {
+		const signal = new AbortController().signal;
+		await assert.rejects(buildInstallers(f.root, signal, {
+			runBuilder: async () => {
 				throw new Error('installer tool failed');
-			}, stop: async () => {
-				stopped = true;
-			}
-		});
-		await assert.rejects(failed.run(), /installer tool failed/);
-		assert(stopped);
+			},
+		}), /installer tool failed/);
 		assert.equal(await readFile(join(f.output, 'previous'), 'utf8'), 'completed output');
 		assert(!(await readdir(join(f.root, 'dist/installers'))).some(name => name.startsWith('.installer-')));
 		await assert.rejects(readFile(`${f.application}.lock`), /ENOENT/);
-		const generated = new ApplicationInstallers(f.root, {
-			run: async (_command, args) => {
+		await buildInstallers(f.root, signal, {
+			runBuilder: async (_processes, args) => {
 				assert(args.includes('--prepackaged'));
 				assert.equal(args.at(-1), 'never');
 				const config = JSON.parse(await readFile(args[args.indexOf('--config') + 1], 'utf8'));
@@ -110,9 +108,8 @@ test('installer publication preserves previous output on failure and rejects che
 				for (const ext of installerExtensions(process.platform)) {
 					await writeFile(join(config.directories.output, `VniLink-test${ext}`), 'installer artifact');
 				}
-			}, stop: async () => { }
+			},
 		});
-		await generated.run();
 		const manifest = await verifyInstallerFiles(f.output, product);
 		await writeFile(join(f.output, manifest.artifacts[0].path), 'corrupt artifact');
 		await assert.rejects(verifyInstallerFiles(f.output, product));
@@ -126,27 +123,26 @@ test('installer generation respects an active assembly lock and cancellation pre
 	try {
 		await mkdir(`${f.application}.lock`);
 		let calls = 0;
-		const blocked = new ApplicationInstallers(f.root, {
-			run: async () => {
+		await assert.rejects(buildInstallers(f.root, new AbortController().signal, {
+			runBuilder: async () => {
 				calls++;
-			}, stop: async () => { }
-		});
-		await assert.rejects(blocked.run(), /EEXIST/);
+			},
+		}), /EEXIST/);
 		assert.equal(calls, 0);
 		await rm(`${f.application}.lock`, { recursive: true });
 		await mkdir(f.output, { recursive: true });
 		await writeFile(join(f.output, 'previous'), 'completed');
-		const cancelled = new ApplicationInstallers(f.root, {
-			run: async (_command, args) => {
+		const controller = new AbortController();
+		await assert.rejects(buildInstallers(f.root, controller.signal, {
+			runBuilder: async (_processes, args) => {
 				const config = JSON.parse(await readFile(args[args.indexOf('--config') + 1], 'utf8'));
 				await mkdir(config.directories.output);
 				for (const ext of installerExtensions(process.platform)) {
 					await writeFile(join(config.directories.output, `cancelled${ext}`), 'not published');
 				}
-				await cancelled.stop();
-			}, stop: async () => { }
-		});
-		await assert.rejects(cancelled.run(), /cancelled/);
+				controller.abort(new Error('Installer generation cancelled'));
+			},
+		}), /cancelled/);
 		assert.equal(await readFile(join(f.output, 'previous'), 'utf8'), 'completed');
 		assert.deepEqual(await readdir(join(f.root, 'dist/installers')), [f.target]);
 	} finally {

@@ -49,4 +49,4 @@ Each recipe names the files to touch and the existing file to imitate. `workbenc
 
 ## Copy code from VS Code
 
-`node build/vscodeImport.mjs import <checkout at the pinned commit> src/vs/<path>` copies it with its closure. Edit only what the product requires, add an `Adapted for VniLink:` header line, then run `node build/vscodeImport.mjs adapt [--upstream-style] <paths>` and `npm run check:upstream`.
+`node build/run.ts vscode import <checkout at the pinned commit> src/vs/<path>` copies it with its closure. Edit only what the product requires, add an `Adapted for VniLink:` header line, then run `node build/run.ts vscode adapt [--upstream-style] <paths>` and `npm run check:upstream`.

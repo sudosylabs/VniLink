@@ -1,6 +1,6 @@
 import { RuleTester } from 'eslint';
 import tseslint from 'typescript-eslint';
-import { layersRule } from '../../build/lint/layers.mjs';
+import { layersRule } from '../../build/lint/layers.ts';
 
 const tester = new RuleTester({ languageOptions: { parser: tseslint.parser } });
 

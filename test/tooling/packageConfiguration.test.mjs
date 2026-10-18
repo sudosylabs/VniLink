@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { assemblyEnvironment, packageConfiguration, packagedLayout } from '../../build/lib/packageConfiguration.mjs';
+import { assemblyEnvironment, packageConfiguration, packagedLayout } from '../../build/lib/package.ts';
 
 const product = JSON.parse(await readFile(new URL('../../product.json', import.meta.url), 'utf8'));
 

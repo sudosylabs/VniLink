@@ -1,0 +1,79 @@
+/** Test runners that own processes: the Electron UI suite, Rust tests and the Linux validation container. */
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { ScenarioSelection, scenarioNames } from '../../test/automation/scenarios.ts';
+import { electronExecutable } from './development.ts';
+import { assertNativeFresh } from './native.ts';
+import { ProcessRunner } from './processes.ts';
+
+/** Runs the selected browser and integration scenarios in Electron with a temporary profile. */
+export async function runUiTests(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
+	const selection = new ScenarioSelection(args);
+	if (selection.list) {
+		console.log(scenarioNames.join('\n'));
+		return;
+	}
+	const processes = new ProcessRunner(signal);
+	const profile = await mkdtemp(join(tmpdir(), 'vnilink-test-'));
+	try {
+		await assertNativeFresh(root);
+		// Docker's default seccomp policy blocks Chromium namespace creation.
+		// This exception applies only to the maintained isolated Linux test image.
+		const containerFlags = process.platform === 'linux' && process.env.VNILINK_TEST_CONTAINER === '1' ? ['--no-sandbox'] : [];
+		await processes.run(electronExecutable(), [join(root, 'out/smoke.cjs'), ...containerFlags, ...args], { env: { ...process.env, VNILINK_TEST_PROFILE: profile } });
+	} finally {
+		await processes.stop();
+		await rm(profile, { recursive: true, force: true });
+	}
+}
+
+/** One Cargo invocation shares native dependency builds across the affected test crates. */
+export async function testRust(root: string, signal: AbortSignal): Promise<void> {
+	const backend = ({ darwin: 'vnilink-macos', win32: 'vnilink-windows', linux: 'vnilink-linux' } as Partial<Record<NodeJS.Platform, string>>)[process.platform];
+	if (!backend) {
+		throw new Error('Unsupported native test platform');
+	}
+	const packages = ['vnilink', 'vnilink-app', 'vnilink-media', 'vnilink-audio', 'vnilink-hevc', 'vnilink-rename', backend, 'vnilink-node'];
+	const processes = new ProcessRunner(signal);
+	try {
+		await processes.run('cargo', ['test', '--no-fail-fast', '--locked', '--target-dir', 'target/electron', ...packages.flatMap(name => ['-p', name])], { cwd: root });
+	} finally {
+		await processes.stop();
+	}
+}
+
+/** Reproducible Linux validation with a read-only checkout and isolated writable volumes. */
+export async function validateLinux(root: string, signal: AbortSignal): Promise<void> {
+	const output = join(root, '.build/linux-validation', String(Date.now()));
+	const container = `vnilink-validation-${String(process.pid)}-${String(Date.now())}`;
+	const processes = new ProcessRunner(signal);
+	let launched = false;
+	await mkdir(output, { recursive: true });
+	try {
+		await processes.run('docker', ['info', '--format', '{{.OSType}} {{.Architecture}}']);
+		await processes.run('docker', ['build', '-f', 'build/containers/Dockerfile.linux', '-t', 'vnilink-linux-validation:local', '.'], { cwd: root });
+		launched = true;
+		await processes.run('docker', [
+			'run', '--name', container, '--shm-size=512m', '--init',
+			'--mount', `type=bind,source=${root},target=/source,readonly`,
+			'--mount', `type=bind,source=${output},target=/evidence`,
+			'--mount', 'type=volume,source=vnilink-linux-cargo-registry,target=/usr/local/cargo/registry',
+			'--mount', 'type=volume,source=vnilink-linux-trixie-rust191-target,target=/work/target',
+			'--mount', 'type=volume,source=vnilink-linux-node-modules,target=/work/node_modules',
+			'vnilink-linux-validation:local',
+		]);
+	} finally {
+		await processes.stop();
+		if (launched) {
+			// Removal uses a separate owner because cancellation closes the work runner.
+			const cleanup = new ProcessRunner();
+			try {
+				await cleanup.run('docker', ['rm', '--force', container]);
+			} finally {
+				await cleanup.stop();
+			}
+		}
+		console.log(`Linux evidence: ${output}`);
+	}
+}

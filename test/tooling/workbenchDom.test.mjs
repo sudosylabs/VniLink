@@ -1,6 +1,6 @@
 import { RuleTester } from 'eslint';
 import tseslint from 'typescript-eslint';
-import { workbenchDomRule } from '../../build/lint/workbenchDom.mjs';
+import { workbenchDomRule } from '../../build/lint/workbenchDom.ts';
 
 const tester = new RuleTester({ languageOptions: { parser: tseslint.parser } });
 

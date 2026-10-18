@@ -1,4 +1,4 @@
-import { upstreamIgnores } from './build/sourceScope.mjs';
+import { upstreamIgnores } from './build/sourceScope.ts';
 
 export default {
 	ignoreFiles: upstreamIgnores,

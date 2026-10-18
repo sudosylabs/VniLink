@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
-import { isApplicationFile } from '../../build/sourceScope.mjs';
+import { isApplicationFile } from '../../build/sourceScope.ts';
 import staged from '../../.lintstagedrc.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -12,13 +12,13 @@ test('staged fixes preserve imported source while checking application files', (
 	const application = `${root}src/workbench/parts/titlebar/titlebarPart.ts`;
 	assert.equal(isApplicationFile(imported), false);
 	assert.equal(isApplicationFile(application), true);
-	const commands = staged['{src,test}/**/*.ts']([imported, application]);
+	const commands = staged['{src,test,build}/**/*.ts']([imported, application]);
 	assert.equal(commands.length, 2);
 	for (const command of commands) {
 		assert.ok(command.includes(JSON.stringify(application)));
 		assert.ok(!command.includes(JSON.stringify(imported)));
 	}
-	assert.deepEqual(staged['{src,test}/**/*.ts']([imported]), []);
+	assert.deepEqual(staged['{src,test,build}/**/*.ts']([imported]), []);
 });
 
 test('copied service container injects, shares and disposes its service instances', async () => {

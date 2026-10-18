@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { flattenSource, localPath } from '../../build/vscodeImport.mjs';
+import { flattenSource, localPath } from '../../build/vscodeImport.ts';
 
 test('upstream paths map into src without the vs segment', () => {
 	assert.equal(localPath('src/vs/base/browser/ui/list/listWidget.ts'), 'src/base/browser/ui/list/listWidget.ts');

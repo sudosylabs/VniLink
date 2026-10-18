@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadProduct, validateProduct } from '../../build/product.mjs';
+import { fileURLToPath } from 'node:url';
+import { loadProduct, validateProduct } from '../../build/lib/product.ts';
 
-const product = await loadProduct();
+const product = await loadProduct(fileURLToPath(new URL('../../', import.meta.url)));
 
 test('product identity has existing artwork and consistent native targets', () => {
 	assert.equal(validateProduct(product), product);

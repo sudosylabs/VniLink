@@ -16,7 +16,7 @@ VS Code is the TypeScript architectural reference. Read the corresponding upstre
 |---|---|
 | `src/` | Electron/TypeScript architecture; `src/AGENTS.md` owns its layers. |
 | `crates/` | Rust core, facade, bridge, media and native backends; `crates/AGENTS.md` owns the dependency map. |
-| `build/`, `scripts/` | Reusable build/tooling definitions and thin executable launchers, separate from runtime code. |
+| `build/`, `scripts/` | Build, packaging and test tasks as TypeScript functions run by `node build/run.ts <task>`; `scripts/` holds only the Windows validation entry point. |
 | `test/` | TypeScript contract, native bridge and UI automation; Rust behavior tests remain with their crates. |
 | `assets/` | Product artwork and shipped notices/resources, accessed through owning helpers. |
 | `vendor/` | Intentional dependency sources/patches with provenance and license obligations. |

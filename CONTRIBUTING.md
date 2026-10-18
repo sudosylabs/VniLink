@@ -53,7 +53,7 @@ runs in an Electron utility process; streaming remains deferred.
 | `crates/vnilink-app/`, `crates/vnilink-node/` | Shared application adapters and Node-API control bindings |
 | `src/code/`, `src/platform/` | Electron lifecycle, windows, IPC and desktop service boundaries |
 | `src/workbench/`, `src/base/browser/` | Browser interface and reusable DOM controls |
-| `build/`, `scripts/`, `test/` | Application build, development and smoke verification |
+| `build/`, `scripts/`, `test/` | Build tasks (`node build/run.ts <task>`), the Windows validation script, and tests |
 | `assets/` | Branding and icons |
 | `docs/validation/` | Reproducible validation methods, results, and remaining cases |
 
@@ -99,7 +99,7 @@ npm run check           # Formatting, ESLint, CSS lint, types and tooling tests
 npm test                # Actual Electron shell smoke test
 ```
 
-The flat ESLint configuration and `build/lint/layers.mjs` enforce dependency
+The flat ESLint configuration and `build/lint/layers.ts` enforce dependency
 boundaries: browser/common code cannot import Node/Electron or privileged
 implementations, base controls cannot depend on features/services, platform
 services cannot depend on the workbench/application, and Electron application

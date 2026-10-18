@@ -20,7 +20,7 @@ Preserve VS Code's separation by responsibility and execution environment. `work
 
 A feature is wired by registration, never by editing another feature: Home renders pages from `HomePagesRegistry`, toolbar buttons come from `ViewActionsMenu` items with `when` clauses on context keys (`src/workbench/contextkeys.ts`), and startup work is a `registerWorkbenchContribution2` at the right `WorkbenchPhase`. A new service or contribution file is imported from `workbench.desktop.main.ts`.
 
-Dependencies flow from application/workbench toward platform/base. `common` contracts do not depend on browser or privileged implementations. Browser code consumes the preload/service boundary rather than importing Node or Electron. Consult `build/lint/layers.mjs`; exceptions need an architectural reason, not a lint suppression.
+Dependencies flow from application/workbench toward platform/base. `common` contracts do not depend on browser or privileged implementations. Browser code consumes the preload/service boundary rather than importing Node or Electron. Consult `build/lint/layers.ts`; exceptions need an architectural reason, not a lint suppression.
 
 ## Coding and interaction
 

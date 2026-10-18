@@ -78,7 +78,7 @@ Never hand-copy. Use the importer:
 
 | Command | What it does |
 |---|---|
-| `node build/vscodeImport.mjs import <checkout> src/vs/...` | Copies the file and its closure |
+| `node build/run.ts vscode import <checkout> src/vs/...` | Copies the file and its closure |
 | `adapt [--upstream-style] <paths>` | Records a reviewed edit |
 | `reset <checkout> <paths>` | Restores upstream text |
 | `sync` | Re-derives entry points after imports change |

@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rename, rm, access } from 'node:fs
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { build } from 'esbuild';
-import { watchApplication } from '../../build/watch.mjs';
+import { watchApplication } from '../../build/lib/watch.ts';
 
 async function until(predicate) {
 	const deadline = Date.now() + 10000;
