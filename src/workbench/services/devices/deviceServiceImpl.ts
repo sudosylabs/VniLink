@@ -116,7 +116,6 @@ export class DeviceService extends Disposable implements IDeviceService {
 	}
 
 	public async exportPairingFile(): Promise<PairingFile> {
-		await this.execute({ type: 'startHosting' });
 		const reply = await this.execute({ type: 'exportPairingFile', ttlSeconds: 900, allowControl: true });
 		if (reply.type !== 'pairingFile') {
 			throw new Error('Invalid pairing file reply');
@@ -135,7 +134,6 @@ export class DeviceService extends Disposable implements IDeviceService {
 		if (reply.type !== 'device') {
 			throw new Error('Invalid pairing confirmation');
 		}
-		await this.execute({ type: 'startHosting' });
 		await this.refresh(this.lifetime.signal);
 		return reply.device.endpoint_id;
 	}
@@ -174,9 +172,7 @@ export class DeviceService extends Disposable implements IDeviceService {
 
 	private async start(): Promise<void> {
 		try {
-			// Accept remembered peers while the app is open. Rust still gates every
-			// service with global consent and unknown peers with owner confirmation.
-			await this.execute({ type: 'startHosting' });
+			// Hosting is owned by the main process (`HostingMainService`).
 			await this.refresh(this.lifetime.signal);
 		} catch {
 			this.markUnknown();

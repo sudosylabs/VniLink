@@ -6,12 +6,13 @@ import { Extensions, type IConfigurationNode, type IConfigurationPropertySchema,
 
 /**
  * Where a setting's value lives. `user` settings are stored in settings.json
- * and pushed to the engine; every other source is a policy object the engine
- * persists, read and written as a whole.
+ * and pushed to the engine; `system` settings are owned by the operating
+ * system; every other source is a policy object the engine persists, read and
+ * written as a whole.
  */
-export type ConfigurationSource = 'user' | 'power' | 'terminal' | 'sharing' | 'security' | 'relays';
+export type ConfigurationSource = 'user' | 'system' | 'power' | 'terminal' | 'sharing' | 'security' | 'relays';
 
-export const configurationSources: readonly ConfigurationSource[] = ['user', 'power', 'terminal', 'sharing', 'security', 'relays'];
+export const configurationSources: readonly ConfigurationSource[] = ['user', 'system', 'power', 'terminal', 'sharing', 'security', 'relays'];
 
 /** A registered setting, with VniLink's presentation and validation additions. */
 export interface ISettingSchema extends IConfigurationPropertySchema {
@@ -19,6 +20,8 @@ export interface ISettingSchema extends IConfigurationPropertySchema {
 	readonly unit?: string;
 	/** Rules the JSON schema cannot express; returns a message when `value` is invalid. */
 	readonly validate?: (value: unknown) => string | undefined;
+	/** Why the setting cannot be changed when the snapshot lists it as restricted; defaults to "Not supported on this computer." */
+	readonly restrictedReason?: string;
 }
 
 const settings = new Map<string, { readonly source: ConfigurationSource; readonly schema: ISettingSchema }>();
@@ -110,6 +113,34 @@ function relayInfos(value: unknown): string | undefined {
 		&& 'authenticated' in relay && typeof relay.authenticated === 'boolean' && ('replacementToken' in relay ? typeof relay.replacementToken === 'string' && Object.keys(relay).length === 3 : Object.keys(relay).length === 2))
 		? undefined : nls.localize('connection.relayCount', 'Enter between one and eight custom relays.');
 }
+
+registerSettings('user', {
+	id: 'application',
+	title: nls.localize('home.general', 'General'),
+	properties: {
+		'application.runInBackground': {
+			type: 'boolean',
+			default: true,
+			title: nls.localize('application.background', 'Keep running when the window is closed'),
+			description: nls.localize('application.backgroundHelp', 'Paired devices can still connect to this computer.'),
+			restrictedReason: nls.localize('application.backgroundUnavailable', 'Available once VniLink shows an icon in the system tray.'),
+		},
+	},
+});
+
+registerSettings('system', {
+	id: 'application.login',
+	title: nls.localize('home.general', 'General'),
+	properties: {
+		'application.openAtLogin': {
+			type: 'boolean',
+			default: false,
+			title: nls.localize('application.login', 'Start when you sign in'),
+			description: nls.localize('application.loginHelp', 'VniLink starts in the background so paired devices can connect.'),
+			restrictedReason: nls.localize('application.loginUnavailable', 'Available in the installed app.'),
+		},
+	},
+});
 
 registerSettings('user', {
 	id: 'appearance',

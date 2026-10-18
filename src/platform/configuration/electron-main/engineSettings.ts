@@ -7,7 +7,7 @@ import { validateRelays } from '../../engine/common/relayValidation.js';
 import type { EngineMainService } from '../../engine/electron-main/engineMainService.js';
 import { settingSource, validateTerminalLimits, type ConfigurationSource } from '../common/configurationSchema.js';
 
-type EngineSource = Exclude<ConfigurationSource, 'user'>;
+type EngineSource = Exclude<ConfigurationSource, 'user' | 'system'>;
 
 interface PolicyState {
 	readonly values: Readonly<Record<string, unknown>>;
@@ -276,7 +276,7 @@ export class EngineSettings extends Disposable {
 
 	public update(key: string, value: unknown): Promise<void> {
 		const source = settingSource(key);
-		if (!source || source === 'user') {
+		if (!source || source === 'user' || source === 'system') {
 			return Promise.reject(new Error(`${key} is not an engine setting`));
 		}
 		const binding = bindings[source];

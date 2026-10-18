@@ -205,7 +205,7 @@ test('device presence follows engine events, resyncs after gaps and follows engi
 		await settle();
 		assert.equal(service.devices[0].presence, 'disconnected');
 		assert.equal(service.state, 'ready');
-		assert.equal(calls.filter(type => type === 'startHosting').length, 2);
+		assert.equal(calls.filter(type => type === 'startHosting').length, 0, 'Hosting is owned by the main process');
 	} finally {
 		service.dispose();
 	}

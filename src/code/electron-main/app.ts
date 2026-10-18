@@ -7,18 +7,19 @@ import { setUnexpectedErrorHandler } from '../../base/common/errors.js';
 import { Event } from '../../base/common/event.js';
 import { Disposable, DisposableStore } from '../../base/common/lifecycle.js';
 import { mark } from '../../base/common/performance.js';
-import { isMacintosh } from '../../base/common/platform.js';
 import { platform } from '../../base/common/process.js';
 import { ProxyChannel } from '../../base/parts/ipc/common/ipc.js';
 import { Server as ElectronIPCServer } from '../../base/parts/ipc/electron-main/ipc.electron.js';
 import { validatedIpcMain } from '../../base/parts/ipc/electron-main/ipcMain.js';
 import { ConfigurationChannel } from '../../platform/configuration/electron-main/configurationChannel.js';
 import { ConfigurationMainService, IConfigurationMainService } from '../../platform/configuration/electron-main/configurationMainService.js';
+import { canRunInBackground, launchedAtLogin } from '../../platform/configuration/electron-main/systemSettings.js';
 import { IEncryptionMainService } from '../../platform/encryption/common/encryption.js';
 import { EncryptionMainService } from '../../platform/encryption/electron-main/encryptionMainService.js';
 import { ENGINE_CHANNEL_NAME } from '../../platform/engine/common/engineService.js';
 import { EngineChannel } from '../../platform/engine/electron-main/engineChannel.js';
 import { EngineMainService, IEngineMainService } from '../../platform/engine/electron-main/engineMainService.js';
+import { HostingMainService, IHostingMainService } from '../../platform/hosting/electron-main/hostingMainService.js';
 import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.js';
 import type { ServicesAccessor } from '../../platform/instantiation/common/instantiation.js';
 import { InstantiationService } from '../../platform/instantiation/common/instantiationService.js';
@@ -58,6 +59,7 @@ export class VniLinkApplication extends Disposable {
 	private readonly instantiationService: InstantiationService;
 	private started: Promise<void> | undefined;
 	private restored = false;
+	private opening: Promise<void> | undefined;
 
 	constructor(private readonly options: ApplicationOptions = {}) {
 		super();
@@ -75,6 +77,7 @@ export class VniLinkApplication extends Disposable {
 			[IWindowsMainService, new SyncDescriptor(WindowsMainService)],
 			[INativeHostMainService, new SyncDescriptor(NativeHostMainService)],
 			[IEngineMainService, new SyncDescriptor(EngineMainService)],
+			[IHostingMainService, new SyncDescriptor(HostingMainService)],
 			[IPermissionsMainService, new SyncDescriptor(PermissionsMainService)],
 			[IConfigurationMainService, new SyncDescriptor(ConfigurationMainService, [join(app.getPath('userData'), 'settings.json')])],
 			[IRecordingMainService, new SyncDescriptor(RecordingMainService)],
@@ -113,6 +116,14 @@ export class VniLinkApplication extends Disposable {
 			mark('vnilink/appReady');
 			await this.startEngine();
 			this.checkRunning();
+			this.instantiationService.invokeFunction(accessor => {
+				accessor.get(IHostingMainService).start();
+			});
+			if (!this.options.temporaryEngine && this.runsInBackground() && launchedAtLogin()) {
+				// Started by the login item: accept paired devices without a window until the user opens one.
+				this.restored = true;
+				return;
+			}
 			const window = await this.openWindow();
 			this.restored = true;
 			mark('vnilink/windowReady');
@@ -149,20 +160,38 @@ export class VniLinkApplication extends Disposable {
 			this.dispose();
 		}));
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'second-instance')(() => {
-			windows.focusMainWindow();
+			this.showWindow(windows, lifecycle);
 		}));
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'activate')(() => {
-			if (this.restored && !lifecycle.quitting && BrowserWindow.getAllWindows().length === 0) {
-				void this.openWindow().catch((error: unknown) => {
-					this.logService.error(error instanceof Error ? error : new Error(String(error)));
-				});
-			}
+			this.showWindow(windows, lifecycle);
 		}));
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'window-all-closed')(() => {
-			if (!isMacintosh) {
+			if (!this.runsInBackground()) {
 				app.quit();
 			}
 		}));
+	}
+
+	/** Whether closing the window leaves the application running; see `application.runInBackground`. */
+	private runsInBackground(): boolean {
+		const configuration = this.instantiationService.invokeFunction(accessor => accessor.get(IConfigurationMainService));
+		return canRunInBackground && configuration.getValue('application.runInBackground') !== false;
+	}
+
+	/** Focuses the window, or opens it when the application runs without one. */
+	private showWindow(windows: WindowsMainService, lifecycle: LifecycleMainService): void {
+		if (!this.restored || lifecycle.quitting) {
+			return;
+		}
+		if (windows.getMainWindow()) {
+			windows.focusMainWindow();
+			return;
+		}
+		this.opening ??= this.openWindow().then(() => undefined, (error: unknown) => {
+			this.logService.error(error instanceof Error ? error : new Error(String(error)));
+		}).finally(() => {
+			this.opening = undefined;
+		});
 	}
 
 	private applyAppearance(accessor: ServicesAccessor): void {

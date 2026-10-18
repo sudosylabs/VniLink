@@ -9,6 +9,7 @@ import { UserSettings } from '../node/userSettings.js';
 import { isFileRoots, settingSource, validateSetting } from '../common/configurationSchema.js';
 import type { ConfigurationSnapshot } from '../common/configurationSnapshot.js';
 import { EngineSettings } from './engineSettings.js';
+import { SystemSettings } from './systemSettings.js';
 
 export const IConfigurationMainService = createDecorator<ConfigurationMainService>('configurationMainService');
 
@@ -73,6 +74,7 @@ export class ConfigurationMainService extends Disposable {
 	declare public readonly _serviceBrand: undefined;
 	private readonly user: UserSettings;
 	private readonly engineSettings: EngineSettings;
+	private readonly systemSettings: SystemSettings;
 	private readonly changed = this._register(new Emitter<ConfigurationSnapshot>());
 	public readonly onDidChangeConfiguration: Event<ConfigurationSnapshot> = this.changed.event;
 	private current: ConfigurationSnapshot | undefined;
@@ -87,7 +89,8 @@ export class ConfigurationMainService extends Disposable {
 		super();
 		this.user = this._register(new UserSettings(path));
 		this.engineSettings = this._register(new EngineSettings(engine));
-		this._register(Event.any(this.user.onDidChange, this.engineSettings.onDidChange)(() => {
+		this.systemSettings = this._register(new SystemSettings());
+		this._register(Event.any(this.user.onDidChange, this.engineSettings.onDidChange, this.systemSettings.onDidChange)(() => {
 			this.current = undefined;
 			this.changed.fire(this.snapshot);
 		}));
@@ -96,9 +99,9 @@ export class ConfigurationMainService extends Disposable {
 	public get snapshot(): ConfigurationSnapshot {
 		this.current ??= {
 			revision: this.revision++,
-			values: { ...this.user.values, ...this.engineSettings.values },
+			values: { ...this.user.values, ...this.engineSettings.values, ...this.systemSettings.values },
 			errors: { ...this.engineSettings.sourceErrors, ...(this.user.error ? { user: this.user.error } : {}) },
-			restricted: this.engineSettings.restricted,
+			restricted: [...this.engineSettings.restricted, ...this.systemSettings.restricted],
 		};
 		return this.current;
 	}
@@ -108,23 +111,29 @@ export class ConfigurationMainService extends Disposable {
 		return this.user.values[key];
 	}
 
-	public initialize(): Promise<void> {
-		return this.user.initialize();
+	public async initialize(): Promise<void> {
+		await Promise.all([this.user.initialize(), this.systemSettings.refresh()]);
 	}
 
 	public flush(): Promise<void> {
 		return this.user.flush();
 	}
 
-	/** Reads the engine's settings again, for changes made outside this app. */
-	public reload(): Promise<void> {
-		return this.engineSettings.refresh();
+	/** Reads the engine's and the operating system's settings again, for changes made outside this app. */
+	public async reload(): Promise<void> {
+		await Promise.all([this.engineSettings.refresh(), this.systemSettings.refresh()]);
 	}
 
 	public updateValue(key: string, value: unknown): Promise<ConfigurationSnapshot> {
 		const invalid = validateSetting(key, value);
 		if (invalid) {
 			return Promise.reject(new Error(invalid));
+		}
+		if (this.systemSettings.restricted.includes(key)) {
+			return Promise.reject(new Error(`${key} cannot be changed on this computer`));
+		}
+		if (settingSource(key) === 'system') {
+			return this.systemSettings.update(key, value).then(() => this.snapshot);
 		}
 		if (settingSource(key) !== 'user') {
 			return this.engineSettings.update(key, value).then(() => this.snapshot);

@@ -43,6 +43,18 @@ const keepAwakeSettings = (scope: 'incoming' | 'outgoing'): string[] => [`power.
 
 const pages: readonly ISettingsPageDescriptor[] = [
 	{
+		id: 'general',
+		title: nls.localize('home.general', 'General'),
+		description: nls.localize('general.description', 'How VniLink starts and stays available.'),
+		icon: Icons.settings,
+		...form,
+		// Start at login is read from the operating system, which can change it too.
+		poll: true,
+		sections: [
+			{ id: 'startup', title: nls.localize('general.startup', 'Startup and background'), description: nls.localize('general.startupHelp', 'Paired devices can connect while VniLink is running, with or without its window.'), settings: ['application.openAtLogin', 'application.runInBackground'] },
+		],
+	},
+	{
 		id: 'appearance',
 		title: nls.localize('home.appearance', 'Appearance'),
 		description: nls.localize('appearance.description', 'Make VniLink feel at home on your device.'),

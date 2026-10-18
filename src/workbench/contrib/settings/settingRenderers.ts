@@ -95,7 +95,8 @@ export class SettingBoolControl extends Disposable implements ISettingControl {
 
 	public setRestricted(restricted: boolean): void {
 		const description = this.schema.description ?? '';
-		this.toggle.setDescription(restricted ? nls.localize('security.unsupported', '{0} Not supported on this computer.', description) : description);
+		const reason = this.schema.restrictedReason ?? nls.localize('settings.unsupported', 'Not supported on this computer.');
+		this.toggle.setDescription(restricted ? `${description} ${reason}` : description);
 	}
 }
 

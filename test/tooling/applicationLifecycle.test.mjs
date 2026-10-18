@@ -31,7 +31,13 @@ const services = {
 		export class ConfigurationMainService { getValue() { return 'system'; } onDidChangeConfiguration = Event.None; async initialize() { } async flush() { } async restoreEngineDefaults() { } }`,
 	windowsMainService: `import { Event } from '${root}/src/base/common/event.js'; import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js'; import { EventEmitter } from 'node:events'; import { state } from 'electron';
 		export const IWindowsMainService = createDecorator('windowsMainService');
-		export class WindowsMainService { onDidOpenWindow = Event.None; focusMainWindow() { } async openMainWindow() { state.windows++; return Object.assign(new EventEmitter(), { webContents: new EventEmitter() }); } }`,
+		export class WindowsMainService { onDidOpenWindow = Event.None; window; focusMainWindow() { state.focused = (state.focused ?? 0) + 1; } getMainWindow() { return state.windowOpen ? this.window : undefined; } async openMainWindow() { state.windows++; state.windowOpen = true; this.window = Object.assign(new EventEmitter(), { webContents: new EventEmitter() }); return this.window; } }`,
+	hostingMainService: `import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js'; import { state } from 'electron';
+		export const IHostingMainService = createDecorator('hostingMainService');
+		export class HostingMainService { start() { state.hosting = (state.hosting ?? 0) + 1; } }`,
+	systemSettings: `import { state } from 'electron';
+		export let canRunInBackground = false; export function setRunInBackground(value) { canRunInBackground = value; }
+		export function launchedAtLogin() { return state.atLogin === true; }`,
 	nativeHostMainService: `import { Event } from '${root}/src/base/common/event.js'; import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js';
 		export const INativeHostMainService = createDecorator('nativeHostMainService');
 		export class NativeHostMainService { onDidChangeWindowState = Event.None; }`,
@@ -53,7 +59,7 @@ async function load(entry, exports, extra = '') {
 		stdin: { contents: `export { ${exports} } from '${entry}'; export { app, state } from 'electron'; ${extra}`, loader: 'ts', resolveDir: root }, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json', plugins: [{
 			name: 'main-process-fixtures', setup(builder) {
 				builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }));
-				builder.onResolve({ filter: /\/(engineMainService|configurationMainService|windowsMainService|nativeHostMainService|permissionsMainService|recordingMainService|encryptionMainService|ipc\.electron|ipcMain|development|menubar)\.js$/ }, ({ path }) => entry.endsWith('lifecycleMainService.ts') ? undefined : ({ path: path.split('/').at(-1).replace(/\.js$/, ''), namespace: 'fixture' }));
+				builder.onResolve({ filter: /\/(engineMainService|configurationMainService|windowsMainService|nativeHostMainService|permissionsMainService|recordingMainService|encryptionMainService|ipc\.electron|ipcMain|development|menubar|hostingMainService|systemSettings)\.js$/ }, ({ path }) => entry.endsWith('lifecycleMainService.ts') ? undefined : ({ path: path.split('/').at(-1).replace(/\.js$/, ''), namespace: 'fixture' }));
 				builder.onLoad({ filter: /.*/, namespace: 'fixture' }, ({ path }) => ({ contents: path === 'electron' ? electron : services[path], loader: 'js', resolveDir: root }));
 			}
 		}]
@@ -109,4 +115,47 @@ test('activation during startup does not open a second window and quitting waits
 	await new Promise(resolve => setImmediate(resolve));
 	assert.equal(state.completed, true);
 	assert.equal(shutdown.stops, 1);
+});
+
+test('relaunching or activating without a window opens exactly one window', async () => {
+	const { VniLinkApplication, app, state } = await load('./src/code/electron-main/app.ts', 'VniLinkApplication');
+	const application = new VniLinkApplication({ temporaryEngine: true, showWindow: false });
+	await application.start();
+	assert.equal(state.windows, 1);
+	app.emit('second-instance');
+	assert.equal(state.focused, 1, 'An open window is focused, not replaced');
+	state.windowOpen = false;
+	app.emit('second-instance');
+	app.emit('activate');
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(state.windows, 2, 'Relaunch and activation together opened more than one window');
+	application.dispose();
+});
+
+test('closing the last window quits unless the application runs in the background', async () => {
+	for (const background of [false, true]) {
+		const { VniLinkApplication, app, state, setRunInBackground, finish } = await load('./src/code/electron-main/app.ts', 'VniLinkApplication', `export { setRunInBackground } from './src/platform/configuration/electron-main/systemSettings.js'; export { finish } from './src/platform/engine/electron-main/engineMainService.js'; export const variant = ${String(background)};`);
+		setRunInBackground(background);
+		const application = new VniLinkApplication({ temporaryEngine: true, showWindow: false });
+		await application.start();
+		state.windowOpen = false;
+		app.emit('window-all-closed');
+		assert.equal(state.attempts, background ? 0 : 1);
+		finish();
+		application.dispose();
+	}
+});
+
+test('a login launch that runs in the background hosts without opening a window', async () => {
+	const { VniLinkApplication, app, state, setRunInBackground } = await load('./src/code/electron-main/app.ts', 'VniLinkApplication', `export { setRunInBackground } from './src/platform/configuration/electron-main/systemSettings.js';`);
+	setRunInBackground(true);
+	state.atLogin = true;
+	const application = new VniLinkApplication({});
+	await application.start();
+	assert.equal(state.windows, 0);
+	assert.equal(state.hosting, 1);
+	app.emit('activate');
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(state.windows, 1, 'Activation after a hidden start did not open the window');
+	application.dispose();
 });

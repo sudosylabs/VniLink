@@ -292,7 +292,7 @@ class SmokeSuite {
         refresh: document.querySelector('.view-action')?.getAttribute('aria-label') ?? null };
     })()`);
 		assert.deepEqual(result, {
-			labels: ['Devices', 'Appearance', 'Connection', 'Access & Security', 'Remote Desktop', 'Keyboard & Mouse', 'Terminal', 'Audio & Camera', 'Recording', 'Power'],
+			labels: ['Devices', 'General', 'Appearance', 'Connection', 'Access & Security', 'Remote Desktop', 'Keyboard & Mouse', 'Terminal', 'Audio & Camera', 'Recording', 'Power'],
 			settings: 'Settings', fullHeight: true, selected: 'devices', refresh: null,
 		});
 	}
