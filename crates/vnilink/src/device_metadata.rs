@@ -43,8 +43,11 @@ impl OperatingSystem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DevicePresence {
+    /// A live link: services can be opened now.
     Connected,
     Connecting,
     Reconnecting,
+    /// Reachable, but its owner stopped accepting connections.
+    NotAccepting,
     Disconnected,
 }

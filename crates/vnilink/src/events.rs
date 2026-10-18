@@ -56,6 +56,17 @@ pub enum CoreEvent {
         endpoint_id: String,
         hostname: Option<String>,
     },
+    /// A paired computer became reachable, unreachable, or stopped accepting
+    /// connections. Only emitted while presence links run.
+    PresenceChanged {
+        endpoint_id: String,
+        presence: crate::DevicePresence,
+    },
+    /// A paired computer sent a new report of what it allows; read it with
+    /// [`crate::Core::peer_availability`].
+    PeerAvailabilityChanged {
+        endpoint_id: String,
+    },
     SessionChanged {
         id: u64,
         generation: u64,

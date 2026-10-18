@@ -59,6 +59,7 @@ mod lifecycle;
 mod link;
 mod pairing;
 mod power;
+mod presence;
 mod service_jobs;
 mod service_permissions;
 pub(crate) mod service_stream;
@@ -250,6 +251,8 @@ struct LiveSession {
     /// Next own-offer revision minus one. Monotonic across clears and
     /// revokes so a revision is never reused within the session.
     published_rev: AtomicU64,
+    /// On a controller's link: the host's latest report of what it allows.
+    remote_availability: Option<Vec<(crate::Capability, crate::RemoteStatus)>>,
 }
 
 /// All mutable controller channels belong to one session, including reconnects.
@@ -380,10 +383,12 @@ impl State {
     fn incoming_live_mut(&mut self) -> Option<&mut LiveSession> {
         self.incoming.values_mut().find(|s| !finished(&s.phase))
     }
+    /// Live hosted sessions other than presence links, which carry no
+    /// service by themselves and are bounded by the paired devices instead.
     fn live_incoming_count(&self) -> usize {
         self.incoming
             .values()
-            .filter(|s| !finished(&s.phase))
+            .filter(|s| !finished(&s.phase) && !s.services_only)
             .count()
     }
     fn incoming_admission_count(&self) -> usize {
@@ -452,6 +457,12 @@ struct State {
     next_control_request: u64,
     /// Last admitted screenshot per peer. Entries expire after a minute.
     snapshot_recent: HashMap<[u8; 32], std::time::Instant>,
+    /// Whether the application asked for presence links (`set_presence_links`).
+    presence_links: bool,
+    /// Reachability per paired computer while presence links run, by display id.
+    presence: HashMap<String, crate::DevicePresence>,
+    /// Paired computers whose last link was refused because they stopped hosting.
+    link_refused: std::collections::HashSet<[u8; 32]>,
 }
 
 struct PairingWindow {
@@ -478,6 +489,8 @@ pub struct ControlRequest {
 }
 
 struct Shared {
+    /// Wakes one paired computer's link supervisor so it dials now.
+    presence_wake: Mutex<HashMap<[u8; 32], Arc<tokio::sync::Notify>>>,
     /// Serializes persisted sharing changes and their native revocation cleanup.
     sharing_serial: Mutex<()>,
     power_factory: Mutex<power::Factory>,

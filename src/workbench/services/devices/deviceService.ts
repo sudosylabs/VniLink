@@ -1,4 +1,4 @@
-import type { OperatingSystem, DevicePresence, ControlRequestInfo } from '../../../platform/engine/common/engine.js';
+import type { OperatingSystem, DevicePresence, ControlRequestInfo, RemoteCapabilityStatus } from '../../../platform/engine/common/engine.js';
 import type { Event } from '../../../base/common/event.js';
 import { createDecorator } from '../../../platform/instantiation/common/instantiation.js';
 
@@ -25,6 +25,10 @@ export interface IDeviceService {
 	readonly onDidChangeState: Event<void>;
 	readonly devices: readonly DeviceSummary[];
 	readonly onDidChangeDevices: Event<readonly DeviceSummary[]>;
+	/** Fires with a device id when what that computer allows may have changed. */
+	readonly onDidChangeAvailability: Event<string>;
+	/** What a paired computer last reported it allows; `null` while it is unreachable or before its first report. */
+	availability(id: string): Promise<readonly RemoteCapabilityStatus[] | null>;
 	initialize(): Promise<void>;
 	refresh(signal: AbortSignal): Promise<void>;
 	connect(id: string): Promise<void>;

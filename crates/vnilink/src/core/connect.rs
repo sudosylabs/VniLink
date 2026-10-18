@@ -152,8 +152,12 @@ impl Core {
     /// and reconnect. This does not open or replace any service owner. A live
     /// legacy connection still returns Busy; no privileged fallback is used.
     pub fn begin_connect_services(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
-        self.start_controller(endpoint_id, true, true, false)
-            .map(|(info, _, _)| info)
+        let info = self
+            .start_controller(endpoint_id, true, true, false)
+            .map(|(info, _, _)| info)?;
+        // A link waiting out its backoff dials now.
+        super::presence::wake_link(&self.shared, &parse_endpoint_id(endpoint_id)?);
+        Ok(info)
     }
 
     fn start_controller(
@@ -170,121 +174,14 @@ impl Core {
         ),
         Error,
     > {
-        let key = parse_endpoint_id(endpoint_id)?;
-        let (stop, stop_rx) = tokio::sync::watch::channel(false);
-        let outbox = Arc::new(InputOutbox::new());
-        // Gate and reserve in one critical section: concurrent connects cannot
-        // overwrite each other or open two control sessions to the same peer.
-        let (pending, peer_key) = {
-            let mut state = self.alive_state()?;
-            let device = state.trust.get(&key).cloned().ok_or(Error::NotPaired)?;
-            if let Some(existing) = state.outgoing_peer(&key) {
-                if services_only
-                    && existing.services_only
-                    && existing.phase != SessionPhase::Stopping
-                {
-                    let info = session_info(existing);
-                    let (ready, result) = std::sync::mpsc::sync_channel(1);
-                    let _ = ready.send(Ok(info.clone()));
-                    return Ok((info, result, existing.stop.clone()));
-                }
-                return Err(Error::Busy);
-            }
-            if legacy && state.outgoing.values().any(|s| !finished(&s.phase)) {
-                return Err(Error::Busy);
-            }
-            if state.live_outgoing_count() >= MAX_LIVE_OUTGOING {
-                return Err(Error::Busy);
-            }
-            if !files_only && !lock(&self.shared.video_caps).can_decode() {
-                return Err(Error::Unsupported("no H.264 decoder is available"));
-            }
-            let id = state.next_session_id;
-            state.next_session_id = id.checked_add(1).ok_or(Error::Busy)?;
-            let inbox = if legacy {
-                video_inbox(&self.shared)
-            } else {
-                Arc::new(crate::video::VideoInbox::new())
-            };
-            let controller = Arc::new(ControllerState::new(
-                inbox,
-                self.shared
-                    .keyboard_mode
-                    .load(std::sync::atomic::Ordering::Relaxed),
-                self.shared
-                    .swap_control_command
-                    .load(std::sync::atomic::Ordering::Relaxed),
-                *lock(&self.shared.pointer_defaults),
-            ));
-            if legacy {
-                *lock(&controller.subscriber) = lock(&self.shared.video_subscriber).clone();
-            }
-            let session = LiveSession {
-                id,
-                generation: 0,
-                wire_stamp: SessionStamp::new(0, 0),
-                controller: Some(controller),
-                role: SessionRole::Controller,
-                phase: SessionPhase::Connecting,
-                peer_id: device.display_id.clone(),
-                peer_key: key,
-                quality: if services_only {
-                    None
-                } else {
-                    Some(state.desktop_quality_default)
-                },
-                codec: crate::protocol::CODEC_H264,
-                separate_cursor: false,
-                files_only,
-                services_only,
-                desktop_stop: tokio::sync::watch::channel(false).0,
-                host_held: Arc::new(Mutex::new(crate::input::HeldInput::default())),
-                incoming_slot: None,
-                cursor_outbox: tokio::sync::watch::channel(None).0,
-                input_epoch: Arc::new(AtomicU64::new(1)),
-                desktop_owner: None,
-                monitor_width: 0,
-                monitor_height: 0,
-                peer_topology: Vec::new(),
-                selected_displays: Vec::new(),
-                display_fault: None,
-                stop: stop.clone(),
-                outbox: Some(outbox.clone()),
-                video: None,
-                link: None,
-                clipboard: None,
-                clipboard_files: None,
-                published_files: None,
-                published_rev: std::sync::atomic::AtomicU64::new(0),
-            };
-            let info = session_info(&session);
-            state.outgoing.insert(id, session);
-            (info, key)
-        };
-        self.emit_session(
-            pending.id,
-            0,
-            SessionRole::Controller,
-            SessionPhase::Connecting,
-            &pending.peer_id,
-        );
-        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
-        let shared = Arc::clone(&self.shared);
-        let id = pending.id;
-        self.runtime.spawn(async move {
-            run_controller(
-                shared,
-                id,
-                peer_key,
-                stop_rx,
-                outbox,
-                ready_tx,
-                files_only,
-                services_only,
-            )
-            .await;
-        });
-        Ok((pending, ready_rx, stop))
+        start_outgoing(
+            &self.shared,
+            self.runtime.handle(),
+            endpoint_id,
+            files_only,
+            services_only,
+            legacy,
+        )
     }
 
     pub fn controller_sessions(&self) -> Result<Vec<SessionInfo>, Error> {
@@ -384,6 +281,163 @@ impl Core {
         link.close(1u8.into(), b"dropped");
         Ok(())
     }
+}
+
+pub(super) fn start_outgoing(
+    shared: &Arc<Shared>,
+    runtime: &tokio::runtime::Handle,
+    endpoint_id: &str,
+    files_only: bool,
+    services_only: bool,
+    legacy: bool,
+) -> Result<
+    (
+        SessionInfo,
+        std::sync::mpsc::Receiver<Result<SessionInfo, Error>>,
+        tokio::sync::watch::Sender<bool>,
+    ),
+    Error,
+> {
+    let key = parse_endpoint_id(endpoint_id)?;
+    let (stop, stop_rx) = tokio::sync::watch::channel(false);
+    let outbox = Arc::new(InputOutbox::new());
+    // Gate and reserve in one critical section: concurrent connects cannot
+    // overwrite each other or open two control sessions to the same peer.
+    let (pending, peer_key) =
+        {
+            let mut state = lock(&shared.state);
+            if state.shut_down {
+                return Err(Error::ShutDown);
+            }
+            let device = state.trust.get(&key).cloned().ok_or(Error::NotPaired)?;
+            // A neutral link and a legacy session to the same peer coexist;
+            // each kind has at most one live record per peer.
+            if let Some(existing) = state.outgoing.values().find(|s| {
+                s.peer_key == key && !finished(&s.phase) && s.services_only == services_only
+            }) {
+                if services_only && existing.phase != SessionPhase::Stopping {
+                    let info = session_info(existing);
+                    let (ready, result) = std::sync::mpsc::sync_channel(1);
+                    let _ = ready.send(Ok(info.clone()));
+                    return Ok((info, result, existing.stop.clone()));
+                }
+                return Err(Error::Busy);
+            }
+            if legacy
+                && state
+                    .outgoing
+                    .values()
+                    .any(|s| !finished(&s.phase) && !s.services_only)
+            {
+                return Err(Error::Busy);
+            }
+            // Links are bounded by the paired devices; other sessions by the live cap.
+            let live = |links: bool| {
+                state
+                    .outgoing
+                    .values()
+                    .filter(|s| !finished(&s.phase) && s.services_only == links)
+                    .count()
+            };
+            if live(services_only)
+                >= if services_only {
+                    crate::trust::MAX_DEVICES
+                } else {
+                    MAX_LIVE_OUTGOING
+                }
+            {
+                return Err(Error::Busy);
+            }
+            if !files_only && !lock(&shared.video_caps).can_decode() {
+                return Err(Error::Unsupported("no H.264 decoder is available"));
+            }
+            let id = state.next_session_id;
+            state.next_session_id = id.checked_add(1).ok_or(Error::Busy)?;
+            let inbox = if legacy {
+                video_inbox(shared)
+            } else {
+                Arc::new(crate::video::VideoInbox::new())
+            };
+            let controller = Arc::new(ControllerState::new(
+                inbox,
+                shared
+                    .keyboard_mode
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                shared
+                    .swap_control_command
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                *lock(&shared.pointer_defaults),
+            ));
+            if legacy {
+                *lock(&controller.subscriber) = lock(&shared.video_subscriber).clone();
+            }
+            let session = LiveSession {
+                id,
+                generation: 0,
+                wire_stamp: SessionStamp::new(0, 0),
+                controller: Some(controller),
+                role: SessionRole::Controller,
+                phase: SessionPhase::Connecting,
+                peer_id: device.display_id.clone(),
+                peer_key: key,
+                quality: if services_only {
+                    None
+                } else {
+                    Some(state.desktop_quality_default)
+                },
+                codec: crate::protocol::CODEC_H264,
+                separate_cursor: false,
+                files_only,
+                services_only,
+                desktop_stop: tokio::sync::watch::channel(false).0,
+                host_held: Arc::new(Mutex::new(crate::input::HeldInput::default())),
+                incoming_slot: None,
+                cursor_outbox: tokio::sync::watch::channel(None).0,
+                input_epoch: Arc::new(AtomicU64::new(1)),
+                desktop_owner: None,
+                monitor_width: 0,
+                monitor_height: 0,
+                peer_topology: Vec::new(),
+                selected_displays: Vec::new(),
+                display_fault: None,
+                stop: stop.clone(),
+                outbox: Some(outbox.clone()),
+                video: None,
+                link: None,
+                clipboard: None,
+                clipboard_files: None,
+                published_files: None,
+                published_rev: std::sync::atomic::AtomicU64::new(0),
+                remote_availability: None,
+            };
+            let info = session_info(&session);
+            state.outgoing.insert(id, session);
+            (info, key)
+        };
+    shared.events.publish(CoreEvent::SessionChanged {
+        id: pending.id,
+        generation: 0,
+        role: SessionRole::Controller,
+        phase: SessionPhase::Connecting,
+        peer_id: pending.peer_id.clone(),
+    });
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+    let shared = Arc::clone(shared);
+    let id = pending.id;
+    runtime.spawn(async move {
+        run_controller(
+            shared,
+            id,
+            peer_key,
+            stop_rx,
+            outbox,
+            ready_tx,
+            files_only,
+            services_only,
+        )
+        .await;
+    });
+    Ok((pending, ready_rx, stop))
 }
 
 pub(super) async fn run_controller(
@@ -847,6 +901,20 @@ pub(super) async fn command_loop(
                             remote_close = true;
                             break;
                         }
+                        Some(Ok(ControlMessage::Availability { entries })) => {
+                            let peer_id = {
+                                let mut state = lock(&shared.state);
+                                state.outgoing.get_mut(&local_id).filter(|s| s.services_only).map(|session| {
+                                    session.remote_availability = Some(entries);
+                                    session.peer_id.clone()
+                                })
+                            };
+                            if let Some(endpoint_id) = peer_id {
+                                shared
+                                    .events
+                                    .publish(CoreEvent::PeerAvailabilityChanged { endpoint_id });
+                            }
+                        }
                         Some(Ok(ControlMessage::Quality {
                             stamp: msg_stamp,
                             quality,
@@ -974,11 +1042,19 @@ pub(super) fn fail_outgoing(shared: &Shared, local_id: u64, error: &Error) {
     };
     let info = session_info(session);
     let peer_key = session.peer_key;
+    let link_session = session.services_only;
     if let Some(link) = session.link.take() {
         link.close(0u8.into(), b"controller failed");
     }
     session.clipboard = None;
     session.phase = SessionPhase::Failed(error.to_string());
+    if link_session {
+        if matches!(error, Error::NotHosting) {
+            state.link_refused.insert(peer_key);
+        } else {
+            state.link_refused.remove(&peer_key);
+        }
+    }
     drop(state);
     settle_outgoing(
         shared,

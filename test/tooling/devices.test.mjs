@@ -268,3 +268,43 @@ test('empty failed reads expose unavailable state and recover without invented d
 		service.dispose();
 	}
 });
+
+test('reachability changes refresh devices and announce what each computer allows', async () => {
+	let presence = 'connected';
+	let report = [{ capability: 'camera', status: 'turnedOff' }];
+	const engine = fakeEngine({
+		async engineCommand(command) {
+			if (command.type === 'snapshot') {
+				return snapshot([{ ...device('peer'), presence }]);
+			}
+			if (command.type === 'peerAvailability') {
+				assert.equal(command.endpointId, 'peer');
+				return { type: 'peerAvailability', report };
+			}
+			throw new Error(command.type);
+		}
+	}, true);
+	const service = new DeviceService(engine);
+	const announced = [];
+	service.onDidChangeAvailability(id => announced.push(id));
+	const settle = async () => {
+		for (let step = 0; step < 20; step++) {
+			await Promise.resolve();
+		}
+	};
+	try {
+		await service.initialize();
+		assert.deepEqual(await service.availability('peer'), [{ capability: 'camera', status: 'turnedOff' }]);
+		presence = 'notAccepting';
+		report = null;
+		engine.fireEvents({ events: [{ type: 'presenceChanged', endpoint_id: 'peer', presence: 'notAccepting' }], resync: false });
+		await settle();
+		assert.equal(service.devices[0].presence, 'notAccepting');
+		assert.equal(await service.availability('peer'), null, 'An unreachable computer reports nothing');
+		engine.fireEvents({ events: [{ type: 'peerAvailabilityChanged', endpoint_id: 'peer' }], resync: false });
+		await settle();
+		assert.deepEqual(announced, ['peer', 'peer']);
+	} finally {
+		service.dispose();
+	}
+});

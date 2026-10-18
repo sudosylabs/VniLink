@@ -145,12 +145,17 @@ export class HostingMainService extends Disposable {
 
 	private async read(): Promise<void> {
 		try {
-			const [snapshot, hosted] = await Promise.all([this.engine.execute({ type: 'snapshot' }), this.engine.execute({ type: 'hostedSessions' })]);
-			if (snapshot.type !== 'snapshot' || hosted.type !== 'sessions') {
+			const [snapshot, hosted, services] = await Promise.all([
+				this.engine.execute({ type: 'snapshot' }), this.engine.execute({ type: 'hostedSessions' }), this.engine.execute({ type: 'hostedServices' }),
+			]);
+			if (snapshot.type !== 'snapshot' || hosted.type !== 'sessions' || services.type !== 'services') {
 				return;
 			}
 			const devices = snapshot.snapshot.devices;
-			const sessions = hosted.sessions.filter(session => session.phase !== 'Stopping').map(session => {
+			// A paired computer keeps an idle link to this one to know it is reachable;
+			// only a session carrying a service means someone is using this computer.
+			const inUse = new Set(services.services.filter(service => typeof service.phase === 'string').map(service => service.connectionId));
+			const sessions = hosted.sessions.filter(session => session.phase !== 'Stopping' && inUse.has(session.id)).map(session => {
 				const device = devices.find(candidate => candidate.endpoint_id === session.peer_id);
 				return { id: session.id, name: device ? deviceName(device) : session.peer_id, phase: session.phase };
 			});

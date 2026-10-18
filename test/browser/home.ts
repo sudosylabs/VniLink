@@ -2,7 +2,7 @@ import { IApplicationService } from '../../src/workbench/services/application/ap
 import { IConnectionService } from '../../src/workbench/services/connection/connectionService.js';
 import { IPermissionService } from '../../src/workbench/services/permissions/permissionService.js';
 import { FakeConfigurationService, FakePermissionService } from './settingsFixture.js';
-import { Emitter } from '../../src/base/common/event.js';
+import { Emitter, Event } from '../../src/base/common/event.js';
 import { HomeView } from '../../src/workbench/contrib/home/homeView.js';
 import '../../src/workbench/contrib/devices/devices.contribution.js';
 import '../../src/workbench/contrib/settings/settings.contribution.js';
@@ -63,6 +63,8 @@ export async function verifyHomeLifecycle(): Promise<void> {
 			return devices;
 		},
 		onDidChangeDevices: changed.event,
+		onDidChangeAvailability: Event.None as Event<string>,
+		availability: () => Promise.resolve(null),
 		initialize: () => Promise.resolve(),
 		connect: () => Promise.resolve(), rename: () => Promise.resolve(), forget: () => Promise.resolve(),
 		exportPairingFile: () => Promise.reject(new Error('Not used')),

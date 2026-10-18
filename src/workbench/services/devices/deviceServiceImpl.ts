@@ -2,10 +2,10 @@ import { InstantiationType, registerSingleton } from '../../../platform/instanti
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { IEngineService, type EngineEventBatch } from '../../../platform/engine/common/engineService.js';
-import { deviceName, type EngineCommand, type EngineEvent, type EngineReply, type ControlRequestInfo } from '../../../platform/engine/common/engine.js';
+import { deviceName, type EngineCommand, type EngineEvent, type EngineReply, type ControlRequestInfo, type RemoteCapabilityStatus } from '../../../platform/engine/common/engine.js';
 
 /** Engine events after which the device list may have changed. */
-const deviceEvents: ReadonlySet<EngineEvent['type']> = new Set(['devicePaired', 'deviceAuthorized', 'deviceRevoked', 'deviceUnpaired', 'peerRenamed', 'sessionChanged']);
+const deviceEvents: ReadonlySet<EngineEvent['type']> = new Set(['devicePaired', 'deviceAuthorized', 'deviceRevoked', 'deviceUnpaired', 'peerRenamed', 'sessionChanged', 'presenceChanged']);
 
 import { type DeviceSummary, IDeviceService, type PairingFile } from './deviceService.js';
 
@@ -13,6 +13,8 @@ export class DeviceService extends Disposable implements IDeviceService {
 	declare public readonly _serviceBrand: undefined;
 	private readonly changed = this._register(new Emitter<readonly DeviceSummary[]>());
 	public readonly onDidChangeDevices = this.changed.event;
+	private readonly availabilityChanged = this._register(new Emitter<string>());
+	public readonly onDidChangeAvailability = this.availabilityChanged.event;
 	private readonly stateChanged = this._register(new Emitter<void>());
 	public readonly onDidChangeState = this.stateChanged.event;
 	private loaded = false;
@@ -179,8 +181,25 @@ export class DeviceService extends Disposable implements IDeviceService {
 		}
 	}
 
+	public async availability(id: string): Promise<readonly RemoteCapabilityStatus[] | null> {
+		const reply = await this.execute({ type: 'peerAvailability', endpointId: id });
+		if (reply.type !== 'peerAvailability') {
+			throw new Error('Invalid availability reply');
+		}
+		return reply.report === null ? null : Object.freeze(reply.report.map(entry => Object.freeze({ ...entry })));
+	}
+
 	private onEvents(batch: EngineEventBatch): void {
-		if (this.isDisposed() || !(batch.resync || batch.events.some(event => deviceEvents.has(event.type)))) {
+		if (this.isDisposed()) {
+			return;
+		}
+		// A report changes with the report itself and whenever reachability does.
+		for (const event of batch.events) {
+			if (event.type === 'peerAvailabilityChanged' || event.type === 'presenceChanged') {
+				this.availabilityChanged.fire(event.endpoint_id);
+			}
+		}
+		if (!(batch.resync || batch.events.some(event => deviceEvents.has(event.type)))) {
 			return;
 		}
 		void this.refresh(this.lifetime.signal).catch(() => {

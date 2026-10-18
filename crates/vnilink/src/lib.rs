@@ -114,7 +114,7 @@ pub mod video_caps;
 
 pub use availability::{
     evaluate, policy_descriptor, Availability, AvailabilityInputs, AvailabilityReason,
-    BackendState, Capability, PolicyChangeScope, PolicyDescriptor, POLICIES,
+    BackendState, Capability, PolicyChangeScope, PolicyDescriptor, RemoteStatus, POLICIES,
 };
 pub use clipboard::{
     ClipboardFileEntry, FileSelection, HostClipboard, HostClipboardFiles, PreparedFile,

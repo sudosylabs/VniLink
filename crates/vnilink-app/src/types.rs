@@ -173,6 +173,31 @@ pub struct FfiSessionInfo {
     pub monitor_height: u16,
 }
 
+/// One capability a paired computer reported, by stable name and coarse status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiCapabilityStatus {
+    pub capability: String,
+    pub status: String,
+}
+
+pub(crate) fn capability_name(capability: vnilink::Capability) -> &'static str {
+    match capability {
+        vnilink::Capability::DesktopView => "desktopView",
+        vnilink::Capability::DesktopControl => "desktopControl",
+        vnilink::Capability::Clipboard => "clipboard",
+        vnilink::Capability::Files => "files",
+        vnilink::Capability::Terminal => "terminal",
+        vnilink::Capability::Camera => "camera",
+        vnilink::Capability::SystemAudio => "systemAudio",
+        vnilink::Capability::Microphone => "microphone",
+        vnilink::Capability::SystemLock => "systemLock",
+        vnilink::Capability::SystemRestart => "systemRestart",
+        vnilink::Capability::SystemShutdown => "systemShutdown",
+        vnilink::Capability::SystemPrivacy => "systemPrivacy",
+        vnilink::Capability::Recording => "recording",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct FfiDeviceInfo {
     pub os: Option<String>,
@@ -382,6 +407,13 @@ pub enum FfiEvent {
         endpoint_id: String,
         hostname: Option<String>,
     },
+    PresenceChanged {
+        endpoint_id: String,
+        presence: String,
+    },
+    PeerAvailabilityChanged {
+        endpoint_id: String,
+    },
     SessionChanged {
         id: u64,
         generation: u64,
@@ -527,13 +559,7 @@ pub(crate) fn device_info(info: vnilink::DeviceInfo) -> FfiDeviceInfo {
             }
             .to_string()
         }),
-        presence: match info.presence {
-            vnilink::DevicePresence::Connected => "connected",
-            vnilink::DevicePresence::Connecting => "connecting",
-            vnilink::DevicePresence::Reconnecting => "reconnecting",
-            vnilink::DevicePresence::Disconnected => "disconnected",
-        }
-        .to_string(),
+        presence: presence_label(info.presence).to_string(),
         endpoint_id: info.endpoint_id,
         hostname: info.hostname,
         pet_name: info.pet_name,
@@ -606,8 +632,28 @@ pub(crate) fn to_keyboard_mode(mode: FfiKeyboardMode) -> vnilink::KeyboardMode {
     }
 }
 
+pub(crate) fn presence_label(presence: vnilink::DevicePresence) -> &'static str {
+    match presence {
+        vnilink::DevicePresence::Connected => "connected",
+        vnilink::DevicePresence::Connecting => "connecting",
+        vnilink::DevicePresence::Reconnecting => "reconnecting",
+        vnilink::DevicePresence::NotAccepting => "notAccepting",
+        vnilink::DevicePresence::Disconnected => "disconnected",
+    }
+}
+
 pub(crate) fn event(event: vnilink::CoreEvent) -> FfiEvent {
     match event {
+        vnilink::CoreEvent::PresenceChanged {
+            endpoint_id,
+            presence,
+        } => FfiEvent::PresenceChanged {
+            endpoint_id,
+            presence: presence_label(presence).to_string(),
+        },
+        vnilink::CoreEvent::PeerAvailabilityChanged { endpoint_id } => {
+            FfiEvent::PeerAvailabilityChanged { endpoint_id }
+        }
         vnilink::CoreEvent::HostingChanged { hosting } => FfiEvent::HostingChanged { hosting },
         vnilink::CoreEvent::DevicePaired { endpoint_id } => FfiEvent::DevicePaired { endpoint_id },
         vnilink::CoreEvent::DeviceAuthorized { endpoint_id } => {

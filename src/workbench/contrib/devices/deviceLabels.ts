@@ -10,7 +10,8 @@ export function devicePresence(device: DeviceSummary): string {
 		connected: nls.localize('devices.connected', 'Connected'),
 		connecting: nls.localize('devices.connecting', 'Connecting'),
 		reconnecting: nls.localize('devices.reconnecting', 'Reconnecting'),
-		disconnected: nls.localize('devices.disconnected', 'Disconnected'),
+		notAccepting: nls.localize('devices.notAccepting', 'Not accepting connections'),
+		disconnected: nls.localize('devices.offline', 'Offline'),
 		unknown: nls.localize('devices.unknown', 'Status unavailable'),
 	};
 	return labels[device.presence];

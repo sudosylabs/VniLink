@@ -1,4 +1,4 @@
-import { Emitter } from '../../src/base/common/event.js';
+import { Emitter, Event as BaseEvent } from '../../src/base/common/event.js';
 import { Disposable } from '../../src/base/common/lifecycle.js';
 import type { ControlRequestInfo } from '../../src/platform/engine/common/engine.js';
 import type { DeviceSummary, IDeviceService, PairingFile } from '../../src/workbench/services/devices/deviceService.js';
@@ -33,6 +33,7 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 	public readonly onDidChangeDevices = this.changed.event;
 	private readonly stateChanged = this._register(new Emitter<void>());
 	public readonly onDidChangeState = this.stateChanged.event;
+	public readonly onDidChangeAvailability = BaseEvent.None;
 	public devices: readonly DeviceSummary[] = [];
 	public readonly page: DevicesPage;
 	private readonly host = document.createElement('div');
@@ -115,6 +116,10 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 	public rejectPairing(): Promise<void> {
 		this.incoming = null;
 		return Promise.resolve();
+	}
+
+	public availability(): Promise<null> {
+		return Promise.resolve(null);
 	}
 
 	public update(devices: readonly DeviceSummary[]): void {

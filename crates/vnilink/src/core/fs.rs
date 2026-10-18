@@ -847,6 +847,7 @@ mod listing_tests {
             clipboard_files: None,
             published_files: None,
             published_rev: AtomicU64::new(0),
+            remote_availability: None,
         };
         let mut state = lock(&host.shared.state);
         state.trust.sharing.files = true;

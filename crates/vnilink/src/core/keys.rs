@@ -423,6 +423,9 @@ fn check_input_allowed(state: &State, stamp: SessionStamp) -> Result<(), Error> 
     session::check_input(active, stamp)
 }
 
+/// How often a host re-evaluates what it reports to a linked peer.
+const AVAILABILITY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
 pub(super) async fn host_input_loop(
     shared: &Arc<Shared>,
     session_id: u64,
@@ -459,6 +462,16 @@ pub(super) async fn host_input_loop(
             return false;
         }
     }
+    // A presence link tells the peer what this computer allows, now and
+    // whenever that changes. Policy and backend setters publish no event,
+    // so the report is re-evaluated on a short interval and sent on change.
+    let link = lock(&shared.state)
+        .incoming
+        .get(&session_id)
+        .is_some_and(|session| session.services_only);
+    let mut reported = Vec::new();
+    let mut availability_tick = tokio::time::interval(AVAILABILITY_INTERVAL);
+    availability_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let local_stop = loop {
         if *stop_rx.borrow() || lock(&shared.state).shut_down {
             break true;
@@ -473,6 +486,18 @@ pub(super) async fn host_input_loop(
             changed = stop_rx.changed() => {
                 if changed.is_err() || *stop_rx.borrow() {
                     break true;
+                }
+            }
+            _ = availability_tick.tick(), if link => {
+                let report = super::availability::remote_report(shared, peer.as_bytes());
+                if report != reported {
+                    if write_frame(send, &ControlMessage::Availability { entries: report.clone() })
+                        .await
+                        .is_err()
+                    {
+                        break false;
+                    }
+                    reported = report;
                 }
             }
             changed = topology_rx.changed() => {

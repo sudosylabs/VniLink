@@ -254,6 +254,14 @@ impl Core {
 /// Multiple services and directions may share a peer. A live connection wins
 /// over an older finished record; no relay or cached-address guess is involved.
 pub(super) fn presence(state: &State, peer: &str) -> crate::DevicePresence {
+    // While links are supervised, presence is reachability, not use.
+    if state.presence_links {
+        return state
+            .presence
+            .get(peer)
+            .copied()
+            .unwrap_or(crate::DevicePresence::Disconnected);
+    }
     let phases: Vec<_> = state
         .incoming
         .values()

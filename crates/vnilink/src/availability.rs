@@ -31,6 +31,32 @@ pub enum Capability {
 }
 
 impl Capability {
+    /// Every capability, in wire order.
+    pub const ALL: [Self; 13] = [
+        Self::DesktopView,
+        Self::DesktopControl,
+        Self::Clipboard,
+        Self::Files,
+        Self::Terminal,
+        Self::Camera,
+        Self::SystemAudio,
+        Self::Microphone,
+        Self::SystemLock,
+        Self::SystemRestart,
+        Self::SystemShutdown,
+        Self::SystemPrivacy,
+        Self::Recording,
+    ];
+
+    /// Stable one-byte id in the `Availability` control message.
+    pub fn wire_id(self) -> u8 {
+        Self::ALL.iter().position(|c| *c == self).expect("listed") as u8 + 1
+    }
+
+    pub fn from_wire_id(id: u8) -> Option<Self> {
+        Self::ALL.get(usize::from(id).checked_sub(1)?).copied()
+    }
+
     /// Short stable label for logs and diagnostics. No user data.
     pub fn label(self) -> &'static str {
         match self {
@@ -85,6 +111,55 @@ impl AvailabilityReason {
     }
 }
 
+/// What a paired computer tells a controller about one of its capabilities.
+/// Coarse on purpose: no failure text, device names or counts cross the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RemoteStatus {
+    Available,
+    /// Its owner's policy, or the grant this peer holds, does not allow it.
+    TurnedOff,
+    /// The operating system has not given VniLink the consent it needs.
+    NeedsPermission,
+    /// That computer has no implementation of it.
+    Unsupported,
+    /// A device is missing, busy or failing right now.
+    Unavailable,
+}
+
+impl RemoteStatus {
+    pub fn wire_id(self) -> u8 {
+        match self {
+            Self::Available => 0,
+            Self::TurnedOff => 1,
+            Self::NeedsPermission => 2,
+            Self::Unsupported => 3,
+            Self::Unavailable => 4,
+        }
+    }
+
+    pub fn from_wire_id(id: u8) -> Option<Self> {
+        Some(match id {
+            0 => Self::Available,
+            1 => Self::TurnedOff,
+            2 => Self::NeedsPermission,
+            3 => Self::Unsupported,
+            4 => Self::Unavailable,
+            _ => return None,
+        })
+    }
+
+    /// Short stable label for the bridge.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::TurnedOff => "turnedOff",
+            Self::NeedsPermission => "needsPermission",
+            Self::Unsupported => "unsupported",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
 /// Facts about one capability at one moment. Every field must be something
 /// the caller actually knows; unknown OS/device state stays `false` and the
 /// operation itself reports the failure.
@@ -127,6 +202,27 @@ pub struct Availability {
 }
 
 impl Availability {
+    /// The coarse status a peer may see, named after the most fundamental
+    /// reason, which `evaluate` lists first.
+    pub fn remote_status(&self) -> RemoteStatus {
+        if self.available {
+            return RemoteStatus::Available;
+        }
+        match self.reasons.first() {
+            Some(AvailabilityReason::MissingImplementation) => RemoteStatus::Unsupported,
+            Some(AvailabilityReason::DeniedOsPermission) => RemoteStatus::NeedsPermission,
+            Some(AvailabilityReason::DisabledLocalPolicy | AvailabilityReason::DeniedPeerGrant) => {
+                RemoteStatus::TurnedOff
+            }
+            Some(
+                AvailabilityReason::UnavailableDevice
+                | AvailabilityReason::BusyResource { .. }
+                | AvailabilityReason::BackendFailed { .. },
+            )
+            | None => RemoteStatus::Unavailable,
+        }
+    }
+
     /// One-line human summary without secrets: `files: unavailable
     /// (denied-peer-grant)`.
     pub fn summarize(&self) -> String {

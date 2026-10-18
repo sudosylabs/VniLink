@@ -2,7 +2,32 @@ export interface Grants { view: boolean; control: boolean; clipboard: boolean; t
 
 export type OperatingSystem = 'macos' | 'windows' | 'linux' | 'other';
 
-export type DevicePresence = 'connected' | 'connecting' | 'reconnecting' | 'disconnected';
+/** Whether this computer can reach a paired one now; `notAccepting` means reachable but paused by its owner. */
+export type DevicePresence = 'connected' | 'connecting' | 'reconnecting' | 'notAccepting' | 'disconnected';
+
+const devicePresences: readonly DevicePresence[] = ['connected', 'connecting', 'reconnecting', 'notAccepting', 'disconnected'];
+
+/** A capability a paired computer reports on, by its stable name. */
+export type RemoteCapability = 'desktopView' | 'desktopControl' | 'clipboard' | 'files' | 'terminal' | 'camera' | 'systemAudio' | 'microphone' | 'systemLock' | 'systemRestart' | 'systemShutdown' | 'systemPrivacy' | 'recording';
+
+/** What a paired computer allows: available, or why not, in the coarse terms it shares. */
+export type RemoteStatus = 'available' | 'turnedOff' | 'needsPermission' | 'unsupported' | 'unavailable';
+
+export interface RemoteCapabilityStatus { capability: RemoteCapability; status: RemoteStatus; }
+
+const remoteCapabilities: readonly RemoteCapability[] = ['desktopView', 'desktopControl', 'clipboard', 'files', 'terminal', 'camera', 'systemAudio', 'microphone', 'systemLock', 'systemRestart', 'systemShutdown', 'systemPrivacy', 'recording'];
+
+const remoteStatuses: readonly RemoteStatus[] = ['available', 'turnedOff', 'needsPermission', 'unsupported', 'unavailable'];
+
+function remoteReport(value: unknown): boolean {
+	if (!Array.isArray(value) || value.length > remoteCapabilities.length) {
+		return false;
+	}
+	const seen = new Set<unknown>();
+	return value.every((entry: unknown) => record(entry) && Object.keys(entry).length === 2
+		&& remoteCapabilities.some(name => name === entry.capability) && remoteStatuses.some(name => name === entry.status)
+		&& !seen.has(entry.capability) && seen.add(entry.capability).size > 0);
+}
 
 export interface SharingPolicy {
 	view: boolean;
@@ -99,6 +124,8 @@ export type EngineEvent =
 	| { type: 'controlRequested'; endpoint_id: string; check: string }
 	| { type: 'addressesUpdated'; endpoint_id: string }
 	| { type: 'peerRenamed'; endpoint_id: string; hostname: string | null }
+	| { type: 'presenceChanged'; endpoint_id: string; presence: DevicePresence }
+	| { type: 'peerAvailabilityChanged'; endpoint_id: string }
 	| { type: 'sessionChanged'; id: string; generation: string; role: 'Controller' | 'Host'; phase: SessionPhase; peer_id: string }
 	| { type: 'serviceChanged' | 'hostedServiceChanged' | 'desktopClipboardReceived'; service: ServiceSummary }
 	| { type: 'qualityUpdated'; id: string; quality: QualityLimits }
@@ -206,7 +233,8 @@ export type EngineCommand =
 	| { type: 'savedRelays' | 'relayRestartRequired' }
 	| { type: 'controlCheck' | 'controlRequest' | 'rejectControlRequest' }
 	| { type: 'confirmControlRequest'; digits: string }
-	| { type: 'controllerSessions' | 'hostedSessions' }
+	| { type: 'controllerSessions' | 'hostedSessions' | 'hostedServices' }
+	| { type: 'peerAvailability'; endpointId: string }
 	| { type: 'controllerSession'; sessionId: string }
 	| { type: 'forgetControllerSession'; sessionId: string }
 	| { type: 'sessionPaths'; sessionId: string }
@@ -232,6 +260,8 @@ export type EngineReply =
 	| { type: 'device'; device: Device }
 	| { type: 'session'; session: SessionInfo }
 	| { type: 'sessions'; sessions: SessionInfo[] }
+	| { type: 'services'; services: ServiceSummary[] }
+	| { type: 'peerAvailability'; report: RemoteCapabilityStatus[] | null }
 	| { type: 'text'; text: string | null }
 	| { type: 'check'; check: string }
 	| { type: 'controlRequest'; request: ControlRequestInfo | null }
@@ -464,6 +494,8 @@ export function isEngineEvent(value: unknown): value is EngineEvent {
 		case 'controlRequested': return text(value.endpoint_id) && text(value.check) && Object.keys(value).length === 3;
 		case 'addressesUpdated': return text(value.endpoint_id) && Object.keys(value).length === 2;
 		case 'peerRenamed': return text(value.endpoint_id) && (value.hostname === null || text(value.hostname)) && Object.keys(value).length === 3;
+		case 'presenceChanged': return text(value.endpoint_id) && devicePresences.some(presence => presence === value.presence) && Object.keys(value).length === 3;
+		case 'peerAvailabilityChanged': return text(value.endpoint_id) && Object.keys(value).length === 2;
 		case 'sessionChanged':
 			return decimal(value.id) && decimal(value.generation) && sessionRole(value.role) && sessionPhase(value.phase)
 				&& text(value.peer_id) && Object.keys(value).length === 6;
@@ -506,7 +538,7 @@ function grants(value: Record<string, unknown>): boolean {
 }
 
 function device(value: unknown): value is Device {
-	return record(value) && (value.os === null || typeof value.os === 'string' && ['macos', 'windows', 'linux', 'other'].includes(value.os)) && typeof value.presence === 'string' && ['connected', 'connecting', 'reconnecting', 'disconnected'].includes(value.presence) && Object.keys(value).length === 8 && text(value.endpoint_id) && (value.hostname === null || text(value.hostname)) && (value.pet_name === null || text(value.pet_name)) && strings(value.relays) && strings(value.direct) && record(value.grants) && grants(value.grants);
+	return record(value) && (value.os === null || typeof value.os === 'string' && ['macos', 'windows', 'linux', 'other'].includes(value.os)) && devicePresences.some(presence => presence === value.presence) && Object.keys(value).length === 8 && text(value.endpoint_id) && (value.hostname === null || text(value.hostname)) && (value.pet_name === null || text(value.pet_name)) && strings(value.relays) && strings(value.direct) && record(value.grants) && grants(value.grants);
 }
 
 function capabilities(value: unknown): value is Capabilities {
@@ -584,7 +616,8 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'relayRestartRequired': case 'savedRelays': keys = []; valid = true; break;
 		case 'controlCheck': case 'controlRequest': case 'rejectControlRequest': keys = []; valid = true; break;
 		case 'confirmControlRequest': keys = ['digits']; valid = typeof value.digits === 'string' && /^[0-9]{3}$/.test(value.digits); break;
-		case 'controllerSessions': case 'hostedSessions': keys = []; valid = true; break;
+		case 'controllerSessions': case 'hostedSessions': case 'hostedServices': keys = []; valid = true; break;
+		case 'peerAvailability': keys = ['endpointId']; valid = text(value.endpointId); break;
 		case 'controllerSession': keys = ['sessionId']; valid = decimal(value.sessionId); break;
 		case 'forgetControllerSession': keys = ['sessionId']; valid = decimal(value.sessionId); break;
 		case 'sessionPaths': case 'controllerSessionPaths': keys = ['sessionId']; valid = decimal(value.sessionId); break;
@@ -632,6 +665,8 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'device': return device(value.device);
 		case 'session': return value.session !== null && session(value.session);
 		case 'sessions': return Array.isArray(value.sessions) && sessions(value.sessions) && Object.keys(value).length === 2;
+		case 'services': return Array.isArray(value.services) && value.services.every((service: unknown) => serviceInfo(service)) && Object.keys(value).length === 2;
+		case 'peerAvailability': return (value.report === null || remoteReport(value.report)) && Object.keys(value).length === 2;
 		case 'text': return (value.text === null || longText(value.text)) && Object.keys(value).length === 2;
 		case 'check': return text(value.check) && Object.keys(value).length === 2;
 		case 'controlRequest': return controlRequest(value.request) && Object.keys(value).length === 2;

@@ -156,6 +156,12 @@
 	background: var(--status-disconnected);
 }
 
+/* Reachable but paused by its owner: neither available nor gone. */
+.device-presence[data-presence='notAccepting']::before {
+	background: transparent;
+	box-shadow: inset 0 0 0 1.5px var(--muted);
+}
+
 .device-row > .vnilink-icon:last-child {
 	color: var(--muted);
 	width: 14px;

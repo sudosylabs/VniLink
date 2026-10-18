@@ -320,6 +320,15 @@ impl EventTransfer {
             } => {
                 serde_json::json!({ "type": "peerRenamed", "endpoint_id": endpoint_id, "hostname": hostname })
             }
+            vnilink_app::FfiEvent::PresenceChanged {
+                endpoint_id,
+                presence,
+            } => {
+                serde_json::json!({ "type": "presenceChanged", "endpoint_id": endpoint_id, "presence": presence })
+            }
+            vnilink_app::FfiEvent::PeerAvailabilityChanged { endpoint_id } => {
+                serde_json::json!({ "type": "peerAvailabilityChanged", "endpoint_id": endpoint_id })
+            }
             vnilink_app::FfiEvent::SessionChanged {
                 id,
                 generation,
@@ -819,6 +828,11 @@ enum Command {
     RejectControlRequest,
     ControllerSessions,
     HostedSessions,
+    HostedServices,
+    PeerAvailability {
+        #[serde(rename = "endpointId")]
+        endpoint_id: String,
+    },
     ControllerSession {
         #[serde(rename = "sessionId")]
         session_id: String,
@@ -928,6 +942,13 @@ enum Reply {
     },
     Sessions {
         sessions: Vec<vnilink_app::FfiSessionInfo>,
+    },
+    Services {
+        services: Vec<serde_json::Value>,
+    },
+    PeerAvailability {
+        /// `null` until the paired computer's link has delivered a report.
+        report: Option<Vec<serde_json::Value>>,
     },
     Text {
         text: Option<String>,
@@ -1083,6 +1104,8 @@ impl Task for OpenTask {
                 .collect()
         };
         core.start_file_job_driver();
+        // Paired computers show as connected only while they are reachable.
+        core.set_presence_links(true).map_err(core_error)?;
         Ok(OpenedEngine { core, backends })
     }
     fn resolve(&mut self, _: Env, opened: Self::Output) -> Result<Engine> {
@@ -1681,6 +1704,27 @@ impl EngineBridge {
             Command::HostedSessions => Reply::Sessions {
                 sessions: core.hosted_sessions().map_err(core_error)?,
             },
+            Command::HostedServices => Reply::Services {
+                services: core
+                    .hosted_services()
+                    .map_err(core_error)?
+                    .iter()
+                    .map(EventTransfer::service)
+                    .collect(),
+            },
+            Command::PeerAvailability { endpoint_id } => Reply::PeerAvailability {
+                report: core
+                    .peer_availability(endpoint_id.clone())
+                    .map_err(core_error)?
+                    .map(|entries| {
+                        entries
+                            .iter()
+                            .map(|entry| {
+                                serde_json::json!({ "capability": entry.capability, "status": entry.status })
+                            })
+                            .collect()
+                    }),
+            },
             Command::ControllerSession { session_id } => Reply::Session {
                 session: core
                     .controller_session(parse_id(session_id, "Invalid session ID")?)
@@ -2140,6 +2184,8 @@ impl EngineBridge {
             | Command::Disconnect
             | Command::DisconnectSession { .. }
             | Command::ControllerSessions
+            | Command::HostedServices
+            | Command::PeerAvailability { .. }
             | Command::HostedSessions
             | Command::ControllerSession { .. }
             | Command::ForgetControllerSession { .. }
@@ -2339,6 +2385,7 @@ impl CommandShape {
                 &["type", "endpointId"]
             }
             "disconnectSession" | "stopHostedPeer" => &["type", "sessionId"],
+            "peerAvailability" => &["type", "endpointId"],
             "submitKey" => &["type", "sessionId", "generation", "usage", "down"],
             "submitPointer" => &[
                 "type",
@@ -2428,6 +2475,7 @@ impl CommandShape {
             | "rejectControlRequest"
             | "controllerSessions"
             | "hostedSessions"
+            | "hostedServices"
             | "topology"
             | "captureDisplays" => &["type"],
             "setInputDefaults" => &["type", "mode", "swap", "pointer"],

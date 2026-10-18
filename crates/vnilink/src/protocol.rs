@@ -242,6 +242,11 @@ pub(crate) enum ControlMessage {
         displays: Vec<DisplayInfo>,
     },
     /// The one display this desktop stream will show and control.
+    /// The host's coarse availability of every capability for this peer,
+    /// sent on a neutral link after Accept and again whenever it changes.
+    Availability {
+        entries: Vec<(crate::Capability, crate::RemoteStatus)>,
+    },
     SelectDisplays {
         stamp: SessionStamp,
         displays: Vec<u64>,
@@ -359,6 +364,16 @@ impl ControlMessage {
                 bytes.push(u8::try_from(displays.len()).unwrap_or(u8::MAX));
                 for display in displays {
                     write_display(&mut bytes, display);
+                }
+                bytes
+            }
+            Self::Availability { entries } => {
+                let mut bytes = Vec::with_capacity(2 + entries.len() * 2);
+                bytes.push(13);
+                bytes.push(entries.len() as u8);
+                for (capability, status) in entries {
+                    bytes.push(capability.wire_id());
+                    bytes.push(status.wire_id());
                 }
                 bytes
             }
@@ -488,9 +503,28 @@ impl ControlMessage {
             }
             11 => decode_topology(bytes),
             12 => decode_selection(bytes),
+            13 => decode_availability(bytes),
             _ => Err(Error::Malformed),
         }
     }
+}
+
+/// Strict: each capability at most once, every id and status known.
+fn decode_availability(bytes: &[u8]) -> Result<ControlMessage, Error> {
+    let count = usize::from(*bytes.get(1).ok_or(Error::Malformed)?);
+    if count > crate::Capability::ALL.len() || bytes.len() != 2 + count * 2 {
+        return Err(Error::Malformed);
+    }
+    let mut entries = Vec::with_capacity(count);
+    for pair in bytes[2..].chunks_exact(2) {
+        let capability = crate::Capability::from_wire_id(pair[0]).ok_or(Error::Malformed)?;
+        let status = crate::RemoteStatus::from_wire_id(pair[1]).ok_or(Error::Malformed)?;
+        if entries.iter().any(|(seen, _)| *seen == capability) {
+            return Err(Error::Malformed);
+        }
+        entries.push((capability, status));
+    }
+    Ok(ControlMessage::Availability { entries })
 }
 
 const DISPLAY_BYTES: usize = 32;

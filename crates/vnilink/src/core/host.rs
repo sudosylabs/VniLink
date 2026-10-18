@@ -240,9 +240,15 @@ fn admission(
     peer_decode_unsupported: bool,
 ) -> Result<(), Error> {
     if services_only {
+        // One link per paired peer; a newer one replaces the older.
+        let other_links = state
+            .incoming
+            .values()
+            .filter(|s| !finished(&s.phase) && s.services_only && s.peer_key != *peer.as_bytes())
+            .count();
         return session::admit_services(
             state.hosting,
-            state.incoming_admission_count() >= MAX_LIVE_INCOMING,
+            other_links >= crate::trust::MAX_DEVICES,
             state.trust.get(peer.as_bytes()).is_some(),
             version,
         );
@@ -565,7 +571,16 @@ pub(super) fn register_incoming(
     // Finished records are retained for status reads; drop them here so the
     // map holds only live sessions plus the latest finished one per id.
     state.incoming.retain(|_, s| !finished(&s.phase));
-    if state.incoming_admission_count() >= MAX_LIVE_INCOMING {
+    if services_only {
+        // A peer that dials again has lost its old link; end it.
+        for old in state
+            .incoming
+            .values()
+            .filter(|s| s.services_only && s.peer_key == *peer.as_bytes())
+        {
+            old.stop.send_replace(true);
+        }
+    } else if state.incoming_admission_count() >= MAX_LIVE_INCOMING {
         return Err(Error::Busy);
     }
     state.generation = state.generation.saturating_add(1);
@@ -584,12 +599,15 @@ pub(super) fn register_incoming(
         monitor_width,
         monitor_height,
     };
-    state
-        .incoming_slots
-        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-    let incoming_slot = Arc::new(super::input_cleanup::AdmissionSlot(
-        state.incoming_slots.clone(),
-    ));
+    // Links hold no admission slot: they are outside the live-session cap.
+    let incoming_slot = (!services_only).then(|| {
+        state
+            .incoming_slots
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Arc::new(super::input_cleanup::AdmissionSlot(
+            state.incoming_slots.clone(),
+        ))
+    });
     state.incoming.insert(
         id,
         LiveSession {
@@ -608,7 +626,7 @@ pub(super) fn register_incoming(
             services_only,
             desktop_stop: tokio::sync::watch::channel(false).0,
             host_held: Arc::new(Mutex::new(crate::input::HeldInput::default())),
-            incoming_slot: Some(incoming_slot),
+            incoming_slot,
             cursor_outbox: tokio::sync::watch::channel(None).0,
             input_epoch: Arc::new(AtomicU64::new(1)),
             desktop_owner: None,
@@ -629,12 +647,17 @@ pub(super) fn register_incoming(
             clipboard_files: None,
             published_files: None,
             published_rev: std::sync::atomic::AtomicU64::new(0),
+            remote_availability: None,
         },
     );
     // Admission selects the new session for host clipboard sync.
     state.clipboard_owner = Some(id);
     drop(state);
     session::announce_progression(&shared.events, id, generation, SessionRole::Host, &peer_id);
+    if services_only {
+        // The peer just proved it is reachable; our own link to it dials now.
+        super::presence::wake_link(shared, peer.as_bytes());
+    }
     Ok(info)
 }
 

@@ -88,11 +88,11 @@ pub use files::{
     FfiFileRetentionPolicy, FfiFileRoot, FfiFsEntry, FfiJobDirection, FfiJobSnapshot, FfiJobState,
 };
 pub use types::{
-    new_quality, FfiCapabilities, FfiCodecPreference, FfiCodecSupport, FfiControlRequest,
-    FfiDeviceInfo, FfiDisplay, FfiEncodedFrame, FfiEvent, FfiGrants, FfiKeyboardMode,
-    FfiPairingFile, FfiPairingPreview, FfiPointerButton, FfiPointerSettings, FfiQuality,
-    FfiSessionInfo, FfiSessionPath, FfiSessionPhase, FfiSessionRole, FfiSnapshot, FfiVideoCodec,
-    FfiVideoCodecCaps,
+    new_quality, FfiCapabilities, FfiCapabilityStatus, FfiCodecPreference, FfiCodecSupport,
+    FfiControlRequest, FfiDeviceInfo, FfiDisplay, FfiEncodedFrame, FfiEvent, FfiGrants,
+    FfiKeyboardMode, FfiPairingFile, FfiPairingPreview, FfiPointerButton, FfiPointerSettings,
+    FfiQuality, FfiSessionInfo, FfiSessionPath, FfiSessionPhase, FfiSessionRole, FfiSnapshot,
+    FfiVideoCodec, FfiVideoCodecCaps,
 };
 
 use std::collections::HashMap;
@@ -311,6 +311,32 @@ impl VnilinkCore {
 
     pub fn stop_hosted_session(&self) -> Result<(), FfiError> {
         self.inner.stop_hosted_session().map_err(map_error)
+    }
+
+    /// Keeps a link to every paired computer so presence means reachability.
+    pub fn set_presence_links(&self, enabled: bool) -> Result<(), FfiError> {
+        self.inner.set_presence_links(enabled).map_err(map_error)
+    }
+
+    /// What a paired computer last reported it allows; `None` before its
+    /// link has delivered a report.
+    pub fn peer_availability(
+        &self,
+        endpoint_id: String,
+    ) -> Result<Option<Vec<FfiCapabilityStatus>>, FfiError> {
+        Ok(self
+            .inner
+            .peer_availability(&endpoint_id)
+            .map_err(map_error)?
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|(capability, status)| FfiCapabilityStatus {
+                        capability: types::capability_name(capability).to_string(),
+                        status: status.label().to_string(),
+                    })
+                    .collect()
+            }))
     }
 
     /// Ends one hosted peer; other peers and hosting itself stay up.

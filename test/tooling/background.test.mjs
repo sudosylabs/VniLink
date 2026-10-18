@@ -73,8 +73,9 @@ function hostingEngine(state, fail = () => false) {
 		switch (command.type) {
 			case 'startHosting': state.hosting = true; return { type: 'done' };
 			case 'stopHosting': state.hosting = false; state.sessions = []; return { type: 'done' };
-			case 'stopHostedPeer': state.sessions = state.sessions.filter(session => session.id !== command.sessionId); return { type: 'done' };
+			case 'stopHostedPeer': state.sessions = state.sessions.filter(session => session.id !== command.sessionId); state.services = (state.services ?? []).filter(service => service.connectionId !== command.sessionId); return { type: 'done' };
 			case 'hostedSessions': return { type: 'sessions', sessions: state.sessions };
+			case 'hostedServices': return { type: 'services', services: state.services ?? [] };
 			case 'snapshot': return { type: 'snapshot', snapshot: { hosting: state.hosting, devices: state.devices } };
 		}
 		throw new Error(command.type);
@@ -95,10 +96,16 @@ test('hosting follows the saved accept choice, names connected devices and disco
 	await settle();
 	assert.deepEqual(fake.calls.filter(type => type.endsWith('Hosting')), ['startHosting']);
 	assert.deepEqual(service.status, { available: true, accepting: true, hosting: true, sessions: [] });
-	state.sessions = [session('1', 'a'), session('2', 'b', 'Negotiating'), session('3', 'c', 'Stopping')];
-	fake.events.fire({ events: [{ type: 'sessionChanged', id: '1', generation: '1', role: 'Host', phase: 'Active', peer_id: 'a' }], resync: false });
+	// Idle presence links from paired computers are not someone connected.
+	state.sessions = [session('1', 'a'), session('2', 'b', 'Negotiating'), session('3', 'c', 'Stopping'), session('4', 'd')];
+	fake.events.fire({ events: [{ type: 'sessionChanged', id: '4', generation: '1', role: 'Host', phase: 'Active', peer_id: 'd' }], resync: false });
 	await settle();
-	assert.deepEqual(service.status.sessions, [{ id: '1', name: 'Work laptop', phase: 'Active' }, { id: '2', name: 'host-b', phase: 'Negotiating' }], 'Stopping sessions are already leaving');
+	assert.deepEqual(service.status.sessions, [], 'Idle links must not count as connected');
+	const running = (connectionId, phase = 'Active') => ({ id: `s${connectionId}`, connectionId, generation: '1', peer_id: 'x', kind: 'Desktop', phase });
+	state.services = [running('1'), running('2', 'Waiting'), running('3'), running('4', { Closed: { cause: 'Local' } })];
+	fake.events.fire({ events: [{ type: 'hostedServiceChanged', service: running('1') }], resync: false });
+	await settle();
+	assert.deepEqual(service.status.sessions, [{ id: '1', name: 'Work laptop', phase: 'Active' }, { id: '2', name: 'host-b', phase: 'Negotiating' }], 'Only sessions carrying a live service count; stopping ones are already leaving');
 	const reads = fake.calls.filter(type => type === 'snapshot').length;
 	fake.events.fire({ events: [{ type: 'keyframeRequested', id: '1' }], resync: false });
 	await settle();

@@ -154,3 +154,20 @@ test('global sharing policy rejects missing fields, extras and peer-scoped write
 	assert.equal(isEngineCommand({ type: 'setSharingPolicy', policy, endpointId: 'peer' }), false);
 	assert.equal(isEngineCommand({ type: 'setSharingPolicy', policy: { ...policy, extra: true } }), false);
 });
+
+test('presence, peer availability and hosted services cross the bridge exactly', () => {
+	assert.equal(isEngineEvent({ type: 'presenceChanged', endpoint_id: 'peer', presence: 'notAccepting' }), true);
+	assert.equal(isEngineEvent({ type: 'presenceChanged', endpoint_id: 'peer', presence: 'asleep' }), false);
+	assert.equal(isEngineEvent({ type: 'peerAvailabilityChanged', endpoint_id: 'peer' }), true);
+	assert.equal(isEngineEvent({ type: 'peerAvailabilityChanged', endpoint_id: 'peer', extra: 1 }), false);
+	assert.equal(isEngineCommand({ type: 'peerAvailability', endpointId: 'peer' }), true);
+	assert.equal(isEngineCommand({ type: 'peerAvailability' }), false);
+	assert.equal(isEngineCommand({ type: 'hostedServices' }), true);
+	assert.equal(isEngineReply({ type: 'peerAvailability', report: null }), true);
+	assert.equal(isEngineReply({ type: 'peerAvailability', report: [{ capability: 'camera', status: 'turnedOff' }, { capability: 'files', status: 'available' }] }), true);
+	assert.equal(isEngineReply({ type: 'peerAvailability', report: [{ capability: 'camera', status: 'off' }] }), false, 'Unknown status');
+	assert.equal(isEngineReply({ type: 'peerAvailability', report: [{ capability: 'webcam', status: 'available' }] }), false, 'Unknown capability');
+	assert.equal(isEngineReply({ type: 'peerAvailability', report: [{ capability: 'camera', status: 'available' }, { capability: 'camera', status: 'turnedOff' }] }), false, 'Repeated capability');
+	assert.equal(isEngineReply({ type: 'services', services: [] }), true);
+	assert.equal(isEngineReply({ type: 'services', services: [{ id: '1' }] }), false);
+});

@@ -6,6 +6,14 @@ const addon = createRequire(import.meta.url)('../../out/native/vnilink.node');
 
 const execute = async (engine, command) => JSON.parse(await engine.execute(JSON.stringify(command)));
 
+async function waitFor(condition, name) {
+	const deadline = Date.now() + 20000;
+	while (!await condition()) {
+		assert(Date.now() < deadline, `${name} timed out`);
+		await new Promise(resolve => setTimeout(resolve, 50));
+	}
+}
+
 test('two Rust engines pair through a signed file, retain grants, and reject commands after shutdown', { timeout: 30000 }, async () => {
 	const first = await addon.openTemporaryEngine();
 	let second;
@@ -86,6 +94,16 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 		}
 		assert.equal(device.os, process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux');
 		assert.equal(device.presence, 'disconnected');
+		// Presence follows reachability without any connect call. The paired computer is
+		// reachable but not hosting; once it hosts, it still refuses this side, which only it
+		// has not approved yet (the control request does that), so this side shows it offline.
+		const presence = async () => (await execute(second, { type: 'snapshot' })).snapshot.devices[0].presence;
+		await waitFor(async () => await presence() === 'notAccepting', 'not accepting');
+		assert.equal((await execute(second, { type: 'peerAvailability', endpointId: a.endpoint_id })).report, null);
+		await execute(first, { type: 'startHosting' });
+		await execute(second, { type: 'beginConnectServices', endpointId: a.endpoint_id }).catch(() => undefined);
+		await waitFor(async () => await presence() === 'disconnected', 'refused while unapproved');
+		assert.equal((await execute(first, { type: 'hostedServices' })).services.length, 0);
 		assert.deepEqual((await execute(second, { type: 'snapshot' })).snapshot.devices[0].grants, { view: true, control: false, clipboard: false, transfer: false });
 		await execute(second, { type: 'unpair', endpointId: a.endpoint_id });
 		assert.equal((await execute(second, { type: 'snapshot' })).snapshot.devices.length, 0);

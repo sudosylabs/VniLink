@@ -100,6 +100,8 @@ mod snapshot_tests;
 
 #[path = "tests/power.rs"]
 mod power_tests;
+#[path = "tests/presence.rs"]
+mod presence_tests;
 
 #[path = "tests/sharing.rs"]
 mod sharing_tests;

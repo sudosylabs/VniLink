@@ -282,6 +282,9 @@ impl Core {
                 control_request: None,
                 next_control_request: 1,
                 snapshot_recent: HashMap::new(),
+                presence_links: false,
+                presence: HashMap::new(),
+                link_refused: std::collections::HashSet::new(),
             }),
             desktop: Arc::new(Mutex::new(None)),
             desktop_info: Mutex::new(None),
@@ -337,6 +340,7 @@ impl Core {
             job_driving: Mutex::new(std::collections::HashSet::new()),
             file_resources: Arc::new(Mutex::new(file_resources::Resources::default())),
             backend_state: Mutex::new(std::collections::HashMap::new()),
+            presence_wake: Mutex::new(HashMap::new()),
         });
         let accept = Arc::clone(&shared);
         runtime.spawn(async move { accept_loop(accept).await });
