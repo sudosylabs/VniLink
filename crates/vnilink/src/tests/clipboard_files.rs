@@ -776,7 +776,15 @@ fn paste_needs_the_transfer_grant_on_both_sides() {
         Err(Error::TransferDenied)
     ));
     controller.set_desktop_sharing(transfer_grants()).unwrap();
-    let prepared = host.prepare_incoming_paste(hosted.id, 1).unwrap();
+    // Grants are what this checks, not latency: on a starved CI runner the
+    // stream's 10-second send acknowledgement can lapse, so only that retries.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let prepared = loop {
+        match host.prepare_incoming_paste(hosted.id, 1) {
+            Err(Error::Timeout) if std::time::Instant::now() < deadline => {}
+            result => break result.unwrap(),
+        }
+    };
     assert_eq!(prepared.files.len(), 1);
 }
 
