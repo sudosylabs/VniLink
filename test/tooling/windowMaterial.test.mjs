@@ -83,7 +83,8 @@ test('macOS 26 attaches Liquid Glass, re-attaches after accessibility changes an
 	});
 	try {
 		assert.equal(material.material, 'glass');
-		assert.deepEqual(glass.calls, [['add', true, undefined]]);
+		// The light theme tints glass so its text stays readable over a dark desktop.
+		assert.deepEqual(glass.calls, [['add', true, { tintColor: '#F8F8FA94' }]]);
 		assert.deepEqual(window.calls.slice(-2), [['vibrancy', null], ['background', '#00000000']]);
 		// Reduce Transparency removes system glass; the window goes opaque.
 		nativeTheme.prefersReducedTransparency = true;
@@ -95,11 +96,16 @@ test('macOS 26 attaches Liquid Glass, re-attaches after accessibility changes an
 		nativeTheme.prefersReducedTransparency = false;
 		nativeTheme.emit('updated');
 		assert.equal(material.material, 'glass');
-		assert.deepEqual(glass.calls.at(-1), ['add', true, undefined]);
+		assert.deepEqual(glass.calls.at(-1), ['add', true, { tintColor: '#F8F8FA94' }]);
+		// The dark theme takes the system glass untinted.
+		nativeTheme.shouldUseDarkColors = true;
+		nativeTheme.emit('updated');
+		assert.deepEqual(glass.calls.at(-1), ['add', true, {}]);
 		assert.equal(created, 1, 'A window made a second owner; the first would remove its glass when collected');
 	} finally {
 		material.dispose();
 		nativeTheme.prefersReducedTransparency = false;
+		nativeTheme.shouldUseDarkColors = false;
 	}
 	assert.deepEqual(glass.calls.at(-1), ['dispose']);
 });

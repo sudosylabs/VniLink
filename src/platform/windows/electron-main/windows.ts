@@ -36,6 +36,12 @@ export function defaultBrowserWindowOptions(): BrowserWindowConstructorOptions {
 	};
 	if (isMacintosh) {
 		options.acceptFirstMouse = true;
+		// Liquid Glass shows through only in a non-opaque window; an opaque one draws its own
+		// background behind the glass. Decided by OS support, not the current accessibility
+		// settings, so turning Reduce Transparency off later can restore glass in this window.
+		if (resolveWindowMaterial(windowPlatform, release(), false, false) === 'glass') {
+			options.transparent = true;
+		}
 		if (material === 'vibrancy') {
 			options.vibrancy = 'sidebar';
 			options.visualEffectState = 'followWindow';

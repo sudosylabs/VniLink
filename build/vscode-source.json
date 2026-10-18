@@ -1354,7 +1354,7 @@
       "path": "src/platform/windows/electron-main/windows.ts",
       "upstreamPath": "src/vs/platform/windows/electron-main/windows.ts",
       "adapted": true,
-      "sha256": "6309e76e7f70d0b3398ca24802e335d50df9c6cd5ddb2b960f8753457fabb854"
+      "sha256": "4c84f88bedd18722f8c7a5a51fc8f5250af6e06f26569e61fb5bdd8c60d57d77"
     },
     {
       "path": "src/platform/workspace/common/workspace.ts",

@@ -4,7 +4,16 @@ import { release } from 'node:os';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { resolveWindowMaterial, windowPlatform, type WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
-import { createLiquidGlass, type LiquidGlassOwner } from './liquidGlass.js';
+import { createLiquidGlass, type GlassOptions, type LiquidGlassOwner } from './liquidGlass.js';
+
+/**
+ * Light text needs a light surface: glass takes on whatever is behind the window,
+ * so in the light theme it carries the same near-white tint vibrancy used
+ * (`--native-chrome`), keeping labels readable over a dark desktop.
+ */
+function glassOptions(): GlassOptions {
+	return nativeTheme.shouldUseDarkColors ? {} : { tintColor: '#F8F8FA94' };
+}
 
 type MaterialWindow = Pick<BrowserWindow, 'isDestroyed' | 'setVibrancy' | 'setBackgroundMaterial' | 'setBackgroundColor' | 'getNativeWindowHandle'>;
 
@@ -82,7 +91,7 @@ export class WindowMaterial extends Disposable {
 		if (!this.glass?.isGlassSupported()) {
 			return false;
 		}
-		this.glassView = this.glass.addView(this.window.getNativeWindowHandle());
+		this.glassView = this.glass.addView(this.window.getNativeWindowHandle(), glassOptions());
 		return this.glassView >= 0;
 	}
 
