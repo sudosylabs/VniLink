@@ -315,7 +315,10 @@ pub fn delete_tree_checked(path: &Path, expected: (u64, u64)) -> io::Result<()> 
 fn pin_delete_entry(path: &Path, delete: bool) -> io::Result<std::fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
     std::fs::OpenOptions::new()
-        .access_mode(0x80 | if delete { 0x0001_0000 } else { 0 }) // FILE_READ_ATTRIBUTES | DELETE
+        // FILE_READ_ATTRIBUTES plus DELETE for a node, or FILE_LIST_DIRECTORY for an
+        // ancestor pin. NTFS skips share checks for opens holding only attribute
+        // access, so without one of those rights the share mode below denies nothing.
+        .access_mode(0x80 | if delete { 0x0001_0000 } else { 0x1 })
         .share_mode(1 | 2) // deny renaming/deleting this component until its handle closes
         .custom_flags(0x0200_0000 | 0x0020_0000) // backup semantics, open reparse point itself
         .open(path)
