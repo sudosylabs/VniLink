@@ -1,0 +1,9 @@
+# Text is checked out with LF on every OS: formatting expects LF, and
+# upstream provenance checks hash files as committed, which a CRLF
+# checkout (Git for Windows defaults to core.autocrlf=true) breaks.
+* text=auto eol=lf
+
+# Third-party sources and notices stay byte-identical to their upstream copies.
+vendor/** -text
+LICENSE.vscode.txt -text
+ThirdPartyNotices.vscode.txt -text
