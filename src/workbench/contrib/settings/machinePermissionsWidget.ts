@@ -17,7 +17,7 @@ const descriptions: Record<PermissionKind, string> = {
 };
 
 const statuses: Record<PermissionStatus, string> = {
-	granted: nls.localize('permissions.granted', 'Allowed'), denied: nls.localize('permissions.denied', 'Not allowed'), restricted: nls.localize('permissions.restricted', 'Restricted'), 'not-determined': nls.localize('permissions.notDetermined', 'Not requested'), unknown: nls.localize('permissions.unknown', 'Status unavailable'), unsupported: nls.localize('permissions.unsupported', 'Not exposed by this platform'),
+	granted: nls.localize('permissions.granted', 'Allowed'), denied: nls.localize('permissions.denied', 'Not allowed'), restricted: nls.localize('permissions.restricted', 'Restricted'), 'not-determined': nls.localize('permissions.notDetermined', 'Not requested'), unknown: nls.localize('permissions.unknown', 'Status unavailable'), unsupported: nls.localize('permissions.unsupported', 'Not exposed by this platform'), 'not-required': nls.localize('permissions.notRequired', 'No permission needed'),
 };
 
 interface PermissionRow { readonly status: HTMLElement; readonly button: HTMLButtonElement; }

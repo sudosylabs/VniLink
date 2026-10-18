@@ -17,7 +17,8 @@ export class MachinePermissions {
 	) { }
 
 	private permission(kind: PermissionKind): MachinePermission {
-		let status: PermissionStatus = 'unsupported';
+		// Windows lets every desktop app capture the screen and send input; there is no consent to read or ask for.
+		let status: PermissionStatus = this.platform === 'win32' && (kind === 'screen' || kind === 'accessibility') ? 'not-required' : 'unsupported';
 		if (this.platform === 'darwin' || (this.platform === 'win32' && (kind === 'camera' || kind === 'microphone'))) {
 			try {
 				status = kind === 'accessibility' ? (this.preferences.isTrustedAccessibilityClient(false) ? 'granted' : 'denied') : this.preferences.getMediaAccessStatus(kind);

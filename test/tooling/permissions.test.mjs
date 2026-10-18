@@ -71,8 +71,10 @@ test('Accessibility requests do not assume a prompt grants access', async () => 
 test('platform limitations never become fake grants or invoke unsupported APIs', async () => {
 	const win = fixture('win32');
 	const snapshot = win.service.snapshot();
-	assert.equal(snapshot.permissions[0].status, 'unsupported');
-	assert.equal(snapshot.permissions[1].status, 'unsupported');
+	// Windows has no screen or input consent: the app may already do both.
+	assert.equal(snapshot.permissions[0].status, 'not-required');
+	assert.equal(snapshot.permissions[1].status, 'not-required');
+	assert.equal(snapshot.permissions[0].canRequest || snapshot.permissions[0].canOpenSettings, false);
 	assert.equal(snapshot.permissions[2].canRequest, false);
 	await win.service.execute({ type: 'openSettings', kind: 'camera' });
 	assert.deepEqual(win.urls, ['ms-settings:privacy-webcam']);
