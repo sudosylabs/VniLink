@@ -800,6 +800,10 @@ enum Command {
     StartHosting,
     StopHosting,
     StopHostedSession,
+    StopHostedPeer {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
     ResetIdentity,
     SetRelayPublic,
     SetRelayCustom {
@@ -1333,6 +1337,11 @@ impl EngineBridge {
             }
             Command::StopHostedSession => {
                 core.stop_hosted_session().map_err(core_error)?;
+                Reply::Done
+            }
+            Command::StopHostedPeer { session_id } => {
+                let id = parse_id(session_id, "Invalid session ID")?;
+                core.stop_hosted_peer(id).map_err(core_error)?;
                 Reply::Done
             }
             Command::ResetIdentity => {
@@ -2172,6 +2181,7 @@ impl EngineBridge {
             | Command::StartHosting
             | Command::StopHosting
             | Command::StopHostedSession
+            | Command::StopHostedPeer { .. }
             | Command::ResetIdentity
             | Command::SetRelayPublic
             | Command::SetRelayCustom { .. }
@@ -2328,7 +2338,7 @@ impl CommandShape {
             "connect" | "beginConnect" | "connectFiles" | "beginConnectFiles" => {
                 &["type", "endpointId"]
             }
-            "disconnectSession" => &["type", "sessionId"],
+            "disconnectSession" | "stopHostedPeer" => &["type", "sessionId"],
             "submitKey" => &["type", "sessionId", "generation", "usage", "down"],
             "submitPointer" => &[
                 "type",

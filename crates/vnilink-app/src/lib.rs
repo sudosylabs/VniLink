@@ -313,6 +313,11 @@ impl VnilinkCore {
         self.inner.stop_hosted_session().map_err(map_error)
     }
 
+    /// Ends one hosted peer; other peers and hosting itself stay up.
+    pub fn stop_hosted_peer(&self, session_id: u64) -> Result<(), FfiError> {
+        self.inner.stop_hosted_peer(session_id).map_err(map_error)
+    }
+
     pub fn reset_identity(&self) -> Result<(), FfiError> {
         self.inner.reset_identity().map_err(map_error)
     }

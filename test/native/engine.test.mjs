@@ -30,6 +30,9 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 		await assert.rejects(execute(first, { type: 'setInputDefaults', ...input, pointer: { ...input.pointer, sensitivity_percent: 0 } }));
 		assert.equal((await execute(first, { type: 'setFileRoots', paths: [] })).type, 'done');
 		await assert.rejects(execute(first, { type: 'setFileRoots', paths: ['/does-not-exist/vnilink-test'] }));
+		await assert.rejects(execute(first, { type: 'stopHostedPeer', sessionId: 'not-a-number' }), /Invalid session ID/);
+		await assert.rejects(execute(first, { type: 'stopHostedPeer', sessionId: '1', extra: true }));
+		await assert.rejects(execute(first, { type: 'stopHostedPeer', sessionId: '1' }), /NoSession/);
 		const runtime = await execute(first, { type: 'nativeRuntime' });
 		assert.equal(runtime.type, 'nativeRuntime');
 		assert.equal(runtime.capabilities.length, 13);

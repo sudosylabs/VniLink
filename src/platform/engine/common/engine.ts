@@ -164,6 +164,7 @@ export type EngineCommand =
 	| { type: 'connect' | 'beginConnect'; endpointId: string }
 	| { type: 'disconnect' }
 	| { type: 'disconnectSession'; sessionId: string }
+	| { type: 'stopHostedPeer'; sessionId: string }
 	| { type: 'submitKey'; sessionId: string; generation: string; usage: number; down: boolean }
 	| { type: 'submitPointer'; sessionId: string; generation: string; x: number; y: number; display: string; revision: string }
 	| { type: 'submitButton'; sessionId: string; generation: string; button: 'Left' | 'Right' | 'Middle' | 'Back' | 'Forward'; down: boolean }
@@ -538,7 +539,7 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'setPeerName': keys = ['endpointId', 'name']; valid = text(value.endpointId) && text(value.name) && value.name.length <= 256; break;
 		case 'connect': case 'beginConnect': case 'connectFiles': case 'beginConnectFiles': keys = ['endpointId']; valid = text(value.endpointId); break;
 		case 'disconnect': keys = []; valid = true; break;
-		case 'disconnectSession': keys = ['sessionId']; valid = decimal(value.sessionId); break;
+		case 'disconnectSession': case 'stopHostedPeer': keys = ['sessionId']; valid = decimal(value.sessionId); break;
 		case 'submitKey': keys = ['sessionId', 'generation', 'usage', 'down']; valid = decimal(value.sessionId) && decimal(value.generation) && uint(value.usage, 65535) && typeof value.down === 'boolean'; break;
 		case 'submitPointer': keys = ['sessionId', 'generation', 'x', 'y', 'display', 'revision']; valid = decimal(value.sessionId) && decimal(value.generation) && int(value.x, -2147483648, 2147483647) && int(value.y, -2147483648, 2147483647) && decimal(value.display) && decimal(value.revision); break;
 		case 'submitButton': keys = ['sessionId', 'generation', 'button', 'down']; valid = decimal(value.sessionId) && decimal(value.generation) && pointerButton(value.button) && typeof value.down === 'boolean'; break;
