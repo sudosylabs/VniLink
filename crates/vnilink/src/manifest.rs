@@ -685,6 +685,31 @@ pub(crate) fn publish_file(
     staged: &Path,
     policy: PublishPolicy,
 ) -> Result<String, Error> {
+    publish_file_with(dest_dir, file_name, staged, policy, &Commits::native())
+}
+
+/// How a staged file is moved into place; tests replace the renames.
+pub(crate) struct Commits<'a> {
+    pub(crate) replace: &'a dyn Fn(&Path, &Path) -> std::io::Result<()>,
+    pub(crate) no_replace: &'a dyn Fn(&Path, &Path) -> std::io::Result<()>,
+}
+
+impl Commits<'static> {
+    fn native() -> Self {
+        Self {
+            replace: &|from, to| std::fs::rename(from, to),
+            no_replace: &|from, to| vnilink_rename::rename_noreplace(from, to),
+        }
+    }
+}
+
+pub(crate) fn publish_file_with(
+    dest_dir: &Path,
+    file_name: &str,
+    staged: &Path,
+    policy: PublishPolicy,
+    commits: &Commits<'_>,
+) -> Result<String, Error> {
     match policy {
         PublishPolicy::Replace => {
             let dest = dest_dir.join(file_name);
@@ -692,7 +717,7 @@ pub(crate) fn publish_file(
             // ready: the staged file is complete, so commit directly with
             // overwrite-capable rename. A concurrent reader may see old or
             // new, never partial.
-            match std::fs::rename(staged, &dest) {
+            match commit_across_volumes(staged, &dest, commits.replace) {
                 Ok(()) => Ok(file_name.to_owned()),
                 Err(_) => Err(Error::InvalidSetting("the file could not be published")),
             }
@@ -707,7 +732,7 @@ pub(crate) fn publish_file(
             if free == file_name {
                 // Raced or vanished: no-replace commit decides atomically.
                 let dest = dest_dir.join(file_name);
-                match vnilink_rename::rename_noreplace(staged, &dest) {
+                match commit_across_volumes(staged, &dest, commits.no_replace) {
                     Ok(()) => Ok(file_name.to_owned()),
                     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                         Err(Error::FileExists)
@@ -716,11 +741,50 @@ pub(crate) fn publish_file(
                 }
             } else {
                 let dest = dest_dir.join(&free);
-                std::fs::rename(staged, &dest)
+                commit_across_volumes(staged, &dest, commits.replace)
                     .map_err(|_| Error::InvalidSetting("the file could not be published"))?;
                 Ok(free)
             }
         }
+    }
+}
+
+/// Moves `staged` to `dest` with `rename`. A rename cannot cross volumes (the
+/// staging area and a destination root may sit on different drives), so the
+/// bytes are first copied to a hidden sibling of `dest` and synced; the final
+/// step is still a same-volume rename, and readers never see a partial file.
+/// Unix publication pre-stages in the same way with anchored handles.
+fn commit_across_volumes(
+    staged: &Path,
+    dest: &Path,
+    rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    match rename(staged, dest) {
+        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let parent = dest.parent().ok_or(error)?;
+            let sibling = parent.join(format!(
+                ".vnlpub.{}.{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let landed = std::fs::copy(staged, &sibling)
+                // Windows flushes only through a handle with write access.
+                .and_then(|_| {
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(&sibling)?
+                        .sync_all()
+                })
+                .and_then(|()| rename(&sibling, dest));
+            if landed.is_ok() {
+                let _ = std::fs::remove_file(staged);
+            } else {
+                let _ = std::fs::remove_file(&sibling);
+            }
+            landed
+        }
+        other => other,
     }
 }
 

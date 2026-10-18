@@ -199,6 +199,75 @@ fn receiver_id(peer: &Core, sender_id: u64) -> u64 {
     jobs[0].id
 }
 
+/// A destination on another volume (a root on a second drive): the rename
+/// fails with CrossesDevices, so the bytes go through a synced sibling and a
+/// same-volume rename. Windows publishes this way; renames cannot cross drives.
+#[test]
+fn publication_across_volumes_copies_through_a_sibling() {
+    use crate::manifest::{publish_file_with, Commits, PublishPolicy};
+    use std::path::Path;
+    let scratch = Scratch::tagged("cross-volume");
+    let dest = scratch.join("dest");
+    std::fs::create_dir_all(&dest).unwrap();
+    let staged = scratch.join("staged.bin");
+    let leftovers = || {
+        std::fs::read_dir(&dest)
+            .unwrap()
+            .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+            .filter(|name| name.starts_with(".vnlpub."))
+            .count()
+    };
+    let crossing = |rename: fn(&Path, &Path) -> std::io::Result<()>| {
+        let staged = staged.clone();
+        move |from: &Path, to: &Path| {
+            if from == staged {
+                Err(std::io::Error::from(std::io::ErrorKind::CrossesDevices))
+            } else {
+                rename(from, to)
+            }
+        }
+    };
+    let replace = crossing(|from, to| std::fs::rename(from, to));
+    let no_replace = crossing(|from, to| vnilink_rename::rename_noreplace(from, to));
+    let commits = Commits {
+        replace: &replace,
+        no_replace: &no_replace,
+    };
+
+    std::fs::write(&staged, b"first").unwrap();
+    let landed =
+        publish_file_with(&dest, "a.bin", &staged, PublishPolicy::Replace, &commits).unwrap();
+    assert_eq!(landed, "a.bin");
+    assert_eq!(std::fs::read(dest.join("a.bin")).unwrap(), b"first");
+    assert!(!staged.exists(), "the staged copy outlived publication");
+
+    std::fs::write(&staged, b"second").unwrap();
+    let kept =
+        publish_file_with(&dest, "a.bin", &staged, PublishPolicy::KeepBoth, &commits).unwrap();
+    assert_ne!(kept, "a.bin");
+    assert_eq!(std::fs::read(dest.join(&kept)).unwrap(), b"second");
+    assert_eq!(std::fs::read(dest.join("a.bin")).unwrap(), b"first");
+    assert_eq!(leftovers(), 0, "a sibling was left behind");
+
+    // A failed final rename removes the sibling and keeps the staged bytes.
+    std::fs::write(&staged, b"third").unwrap();
+    let failing = |from: &Path, _: &Path| -> std::io::Result<()> {
+        Err(std::io::Error::from(if from == staged.as_path() {
+            std::io::ErrorKind::CrossesDevices
+        } else {
+            std::io::ErrorKind::PermissionDenied
+        }))
+    };
+    let broken = Commits {
+        replace: &failing,
+        no_replace: &failing,
+    };
+    assert!(publish_file_with(&dest, "a.bin", &staged, PublishPolicy::Replace, &broken).is_err());
+    assert_eq!(std::fs::read(&staged).unwrap(), b"third");
+    assert_eq!(leftovers(), 0, "a failed sibling was left behind");
+    assert_eq!(std::fs::read(dest.join("a.bin")).unwrap(), b"first");
+}
+
 #[test]
 fn manifest_validation_rejects_bad_shapes() {
     use crate::manifest::{Manifest, ManifestEntry};
