@@ -67,6 +67,7 @@ export class HomeView extends Disposable implements WorkbenchTab {
 		}
 		this.activePage = page;
 		this.pageContext.set(id);
+		this.content.classList.toggle('page-scrolls-itself', page.scrollsItself === true);
 		this.content.replaceChildren(page.element);
 		this.content.scrollTop = 0;
 	}

@@ -207,6 +207,19 @@ h2 {
 	min-width: 0;
 }
 
+/* A page that scrolls its own regions gets the whole area at a fixed height. */
+.home-content.page-scrolls-itself {
+	overflow: hidden;
+}
+
+.home-content.page-scrolls-itself > main {
+	max-width: none;
+	height: 100%;
+	min-height: 0;
+	margin: 0;
+	padding-bottom: 0;
+}
+
 /* Reveal the OS backdrop only through chrome; view content stays opaque. */
 :root[data-window-material='vibrancy'] {
 	--sidebar: var(--native-chrome);

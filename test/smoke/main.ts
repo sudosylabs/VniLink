@@ -34,6 +34,26 @@ class SmokeSuite {
 				await window.webContents.executeJavaScript(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
 				await driver.screenshot(`devices-selected-${mode}`);
 			}
+			// The inspector is a full-height sheet: it scrolls on its own, and the page does not.
+			// A short window makes its content taller than the sheet.
+			window.setSize(1400, 600);
+			await window.webContents.executeJavaScript(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+			const sheet: unknown = await window.webContents.executeJavaScript(`(() => {
+				const host = document.querySelector('.device-fixture');
+				const panel = host.querySelector('.device-panel');
+				const list = host.querySelector('.device-list');
+				const before = list.getBoundingClientRect().top;
+				panel.scrollTop = panel.scrollHeight;
+				const scrolled = panel.scrollTop > 0;
+				const listStayed = list.getBoundingClientRect().top === before;
+				panel.scrollTop = 0;
+				const hostBox = host.getBoundingClientRect();
+				const box = panel.getBoundingClientRect();
+				return { scrolled, listStayed, pageScrolls: host.scrollHeight > host.clientHeight,
+					fullHeight: Math.abs(box.top - hostBox.top) < 1 && Math.abs(box.bottom - hostBox.bottom) < 1,
+					atRightEdge: Math.abs(box.right - hostBox.right) < 1 };
+			})()`);
+			assert.deepEqual(sheet, { scrolled: true, listStayed: true, pageScrolls: false, fullHeight: true, atRightEdge: true }, 'The inspector is not a full-height sheet with its own scroll');
 			window.setSize(800, 800);
 			await window.webContents.executeJavaScript(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
 			const overflow: unknown = await window.webContents.executeJavaScript(`(() => {
@@ -41,6 +61,14 @@ class SmokeSuite {
 				return page.scrollWidth > page.clientWidth;
 			})()`);
 			assert.equal(overflow, false, 'Device panel overflows a narrow window');
+			// Narrow: the list keeps the full width and the sheet covers its right side.
+			const covering: unknown = await window.webContents.executeJavaScript(`(() => {
+				const host = document.querySelector('.device-fixture');
+				const list = host.querySelector('.device-list').getBoundingClientRect();
+				const panel = host.querySelector('.device-panel').getBoundingClientRect();
+				return { overList: panel.left < list.right, atRightEdge: Math.abs(panel.right - host.getBoundingClientRect().right) < 1 };
+			})()`);
+			assert.deepEqual(covering, { overList: true, atRightEdge: true }, 'A narrow window split the page instead of showing the inspector as a sheet');
 			await driver.screenshot('devices-selected-narrow');
 			for (const state of ['empty', 'unavailable']) {
 				await window.webContents.executeJavaScript(`browserTests.browserScenarios.showDeviceFixture(${JSON.stringify(state)})`);

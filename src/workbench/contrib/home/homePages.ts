@@ -8,6 +8,11 @@ import { Registry } from '../../../platform/registry/common/platform.js';
 /** A page shown in Home beside its sidebar. Pages are created when first shown and live as long as Home. */
 export interface IHomePage extends IDisposable {
 	readonly element: HTMLElement;
+	/**
+	 * The page fills Home's content area and scrolls its own regions, such as
+	 * a list beside a full-height inspector. Otherwise Home scrolls the page.
+	 */
+	readonly scrollsItself?: boolean;
 }
 
 /** Sidebar sections; pages appear under their group in group order. */

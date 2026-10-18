@@ -17,7 +17,9 @@ import { DeviceList } from './deviceList.js';
 export class DevicesPage extends Disposable implements IHomePage {
 	private static nextId = 0;
 	public readonly element: HTMLElement;
-	private readonly body: HTMLElement;
+	/** The list and the inspector scroll on their own, so the inspector stays a full-height sheet. */
+	public readonly scrollsItself = true;
+	private readonly main: HTMLElement;
 	private readonly empty: HTMLElement;
 	private readonly emptyTitle: HTMLElement;
 	private readonly emptyHelp: HTMLElement;
@@ -34,24 +36,27 @@ export class DevicesPage extends Disposable implements IHomePage {
 		const detailsId = `device-details-${String(DevicesPage.nextId++)}`;
 		this.list = this._register(new DeviceList(detailsId));
 		this.details = this._register(instantiationService.createInstance(DeviceDetails, detailsId));
+		// The page is the size container; the grid inside it can then change with the width.
 		const page = h('main.devices-page', { tabindex: '-1' }, [
-			h('p.device-feedback@feedback', { role: 'status' }),
-			h('div.devices-body@body', [
-				h('div.devices-list-column@column', [
-					h('section.device-empty@empty', { role: 'status' }, [h('h2@emptyTitle'), h('p@emptyHelp')]),
+			h('div.devices-layout@layout', [
+				h('div.devices-main@main', [
+					h('p.device-feedback@feedback', { role: 'status' }),
+					h('div.devices-list-column@column', [
+						h('section.device-empty@empty', { role: 'status' }, [h('h2@emptyTitle'), h('p@emptyHelp')]),
+					]),
 				]),
 			]),
 		]);
 		this.element = page.root;
-		this.body = page.body;
+		this.main = page.main;
 		this.empty = page.empty;
 		this.emptyTitle = page.emptyTitle;
 		this.emptyHelp = page.emptyHelp;
 		this.feedback = page.feedback;
 		this.empty.prepend(renderIcon(Icons.devices));
 		page.column.prepend(this.list.element);
-		append(this.body, this.details.element);
-		this.element.prepend(createPageHeading(nls.localize('computers.heading', 'Devices'), nls.localize('computers.subheading', 'Your computers, connected.')));
+		append(page.layout, this.details.element);
+		this.main.prepend(createPageHeading(nls.localize('computers.heading', 'Devices'), nls.localize('computers.subheading', 'Your computers, connected.')));
 		this.registerListeners();
 		this.render();
 		this.devices.initialize().catch(() => {
@@ -103,7 +108,7 @@ export class DevicesPage extends Disposable implements IHomePage {
 		this.selectedId = selected?.id;
 		this.list.update(known, this.selectedId);
 		this.details.update(selected);
-		this.body.classList.toggle('has-selection', !!selected);
+		this.element.classList.toggle('has-selection', !!selected);
 		this.empty.hidden = known.length > 0;
 		this.list.element.hidden = !known.length;
 		if (lostFocus) {

@@ -87,6 +87,8 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 		}
 		document.body.append(this.anchors);
 		this.host.className = 'home-content device-fixture';
+		// Mounted the way Home mounts a page that scrolls its own regions.
+		this.host.classList.toggle('page-scrolls-itself', this.page.scrollsItself);
 		this.host.style.cssText = 'position:fixed;top:var(--titlebar-height);left:190px;right:0;bottom:0;z-index:10;';
 		this.host.append(this.page.element);
 		document.body.append(this.host);
