@@ -15,10 +15,10 @@
 	display: inline-flex;
 	width: auto;
 	gap: 8px;
-	padding: 9px 14px;
-	border-radius: 6px;
+	padding: 4px 12px;
+	border-radius: 5px;
 	font: inherit;
-	line-height: normal;
+	line-height: 1.4;
 	white-space: nowrap;
 	cursor: default;
 }
@@ -27,39 +27,61 @@
 	opacity: 0.5 !important;
 }
 
+/* Icon-only commands: close, refresh, copy. Named by aria-label and title. */
+.device-icon-button {
+	display: grid;
+	place-items: center;
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--muted);
+}
+
+.device-icon-button:disabled {
+	opacity: 0.45;
+}
+
+.device-icon-button:hover:not(:disabled) {
+	background: var(--surface-hover);
+	color: var(--text);
+}
+
+.device-icon-button > .vnilink-icon {
+	width: 16px;
+	height: 16px;
+}
+
 .devices-body {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr);
-	gap: 40px;
+	gap: 32px;
 	align-items: start;
-	margin-top: 44px;
+	margin-top: 24px;
 }
 
 .devices-body.has-selection {
-	grid-template-columns: minmax(230px, 1fr) minmax(260px, 330px);
+	grid-template-columns: minmax(220px, 1fr) 320px;
 }
 
 .devices-list-column {
 	min-width: 0;
 }
 
-.device-list .monaco-list-row {
-	padding-block: 6px;
-	border-bottom: 1px solid var(--line);
-}
+/* Device list: plain rows, a glyph and two lines of text. */
 
 .device-row {
 	display: grid;
-	grid-template-columns: 44px minmax(0, 1fr) 16px;
-	width: 100%;
+	grid-template-columns: 22px minmax(0, 1fr);
 	align-items: center;
-	gap: 20px;
-	min-height: 88px;
-	padding: 18px 20px;
-	background: transparent;
+	column-gap: 12px;
+	width: 100%;
+	height: 100%;
+	padding: 0 10px;
+	border-radius: 6px;
 	text-align: start;
-	border: 1px solid transparent;
-	border-radius: 8px;
 }
 
 .device-row:hover {
@@ -68,7 +90,6 @@
 
 .device-list .monaco-list-row.selected .device-row {
 	background: var(--selection-surface);
-	border-color: var(--line);
 }
 
 .device-list .monaco-list:focus-visible .monaco-list-row.focused .device-row {
@@ -76,96 +97,95 @@
 	outline-offset: -2px;
 }
 
-.device-empty > .vnilink-icon {
-	width: 44px;
-	height: 44px;
+.device-glyph {
+	display: grid;
 	color: var(--muted);
-	margin-bottom: 16px;
 }
 
-.device-emblem {
-	display: grid;
-	place-items: center;
-	width: 44px;
-	height: 44px;
-	border-radius: 10px;
-	background: var(--surface-hover);
+.device-glyph > .vnilink-icon {
+	grid-area: 1 / 1;
+	width: 20px;
+	height: 20px;
+}
+
+.device-glyph > .vnilink-icon[data-variant='filled'],
+.device-list .monaco-list-row.selected .device-glyph > .vnilink-icon[data-variant='outlined'] {
+	visibility: hidden;
+}
+
+.device-list .monaco-list-row.selected .device-glyph {
 	color: var(--text);
 }
 
-.device-emblem > .vnilink-icon {
-	width: 25px;
-	height: 25px;
-}
-
-.device-panel header > .vnilink-icon {
-	width: 32px;
-	height: 32px;
-	color: var(--muted);
+.device-list .monaco-list-row.selected .device-glyph > .vnilink-icon[data-variant='filled'] {
+	visibility: visible;
 }
 
 .device-caption {
 	display: flex;
-	flex: 1;
 	min-width: 0;
 	flex-direction: column;
-	gap: 6px;
+	gap: 2px;
 }
 
 .device-name {
-	font-size: 15px;
-	font-weight: 500;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
 .device-presence,
-.device-help,
 .device-panel-state {
-	color: var(--muted);
-	font-size: 12px;
-	line-height: 1.6;
-}
-
-.device-presence {
 	display: flex;
 	align-items: center;
-	gap: 7px;
+	gap: 6px;
+	color: var(--muted);
+	font-size: 12px;
 }
 
-.device-presence::before {
+/* Presence dots, shared by the list and the inspector. */
+
+.device-presence::before,
+.device-panel-state::before {
 	content: '';
-	width: 7px;
-	height: 7px;
+	width: 6px;
+	height: 6px;
 	background: var(--muted);
 	border-radius: 50%;
 	flex-shrink: 0;
 }
 
-.device-presence[data-presence='connected']::before {
+.device-presence[data-presence='connected']::before,
+.device-panel-state[data-presence='connected']::before {
 	background: var(--status-connected);
 }
 
 .device-presence[data-presence='connecting']::before,
-.device-presence[data-presence='reconnecting']::before {
+.device-presence[data-presence='reconnecting']::before,
+.device-panel-state[data-presence='connecting']::before,
+.device-panel-state[data-presence='reconnecting']::before {
 	background: var(--status-pending);
 }
 
-.device-presence[data-presence='disconnected']::before {
+.device-presence[data-presence='disconnected']::before,
+.device-panel-state[data-presence='disconnected']::before {
 	background: var(--status-disconnected);
 }
 
 /* Reachable but paused by its owner: neither available nor gone. */
-.device-presence[data-presence='notAccepting']::before {
+.device-presence[data-presence='notAccepting']::before,
+.device-panel-state[data-presence='notAccepting']::before {
 	background: transparent;
 	box-shadow: inset 0 0 0 1.5px var(--muted);
 }
 
-.device-row > .vnilink-icon:last-child {
+/* Empty state. */
+
+.device-empty > .vnilink-icon {
+	width: 44px;
+	height: 44px;
 	color: var(--muted);
-	width: 14px;
-	height: 14px;
+	margin-bottom: 16px;
 }
 
 .device-empty {
@@ -186,51 +206,79 @@
 	color: var(--muted);
 }
 
+/* Inspector: a property list; the screen preview is its only rounded object. */
+
 .device-panel {
-	padding: 4px 0 12px 28px;
-	border-left: 1px solid var(--line);
 	min-width: 0;
+	padding-bottom: 24px;
+	border-left: 1px solid var(--line);
 }
 
-.device-panel header {
+.device-panel-top {
 	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	margin-bottom: 20px;
+	justify-content: flex-end;
+	padding: 0 10px 4px;
 }
 
-.device-close {
-	padding: 6px;
-	border-radius: 4px;
-	background: transparent;
+.device-panel-screen,
+.device-panel-identity {
+	padding-inline: 16px;
 }
 
-.device-close:hover {
-	background: var(--surface-hover);
+.device-panel-identity {
+	margin-top: 14px;
 }
 
 .device-panel h2 {
-	margin: 0 0 6px;
-	font-size: 20px;
-	font-weight: 500;
+	margin: 0;
+	font-size: 15px;
+	font-weight: 600;
 	overflow-wrap: anywhere;
 }
 
 .device-panel-state {
-	margin: 0 0 16px;
+	margin: 2px 0 0;
 }
 
+.device-rename {
+	display: flex;
+	gap: 6px;
+	align-items: center;
+}
+
+.device-rename .monaco-inputbox {
+	flex: 1;
+	min-width: 0;
+	border-radius: 4px;
+}
+
+.devices-page .device-rename .monaco-inputbox > .ibwrapper > .input {
+	padding: 2px 6px;
+	font: inherit;
+	font-size: 15px;
+	font-weight: 600;
+	border-radius: 4px;
+}
+
+.device-section {
+	margin: 12px 0 0;
+	padding-top: 12px;
+	border-top: 1px solid var(--line);
+}
+
+/* Screen preview. */
+
 .device-screen {
-	margin: 0 0 24px;
+	margin: 0;
 }
 
 .device-screen-frame {
-	aspect-ratio: 16 / 9;
+	position: relative;
+	aspect-ratio: 16 / 10;
 	display: grid;
 	place-items: center;
 	overflow: hidden;
-	background: var(--canvas);
-	border: 1px solid var(--line);
+	background: var(--surface-hover);
 	border-radius: 6px;
 }
 
@@ -238,13 +286,126 @@
 	width: 100%;
 	height: 100%;
 	object-fit: contain;
-	filter: none;
+}
+
+.device-screen-placeholder {
+	display: grid;
+	place-items: center;
+	position: absolute;
+	inset: 0;
+	color: var(--muted);
+}
+
+.device-screen-frame[data-state='image'] .device-screen-placeholder {
+	display: none;
+}
+
+.device-screen-glyph {
+	display: grid;
+	opacity: 0.7;
+}
+
+.device-screen-glyph > .vnilink-icon {
+	width: 30px;
+	height: 30px;
+}
+
+.device-screen-sleep,
+.device-screen-progress {
+	display: none;
+}
+
+.device-screen-frame[data-state='offline'] .device-screen-placeholder {
+	animation: device-asleep 2.6s ease-in-out infinite;
+}
+
+.device-screen-frame[data-state='offline'] .device-screen-sleep {
+	display: block;
+	position: absolute;
+	left: calc(50% + 17px);
+	bottom: calc(50% + 10px);
+	width: 30px;
+	height: 34px;
+}
+
+.device-screen-sleep > span {
+	position: absolute;
+	font-weight: 700;
+	opacity: 0;
+	animation: device-sleep-rise 3s ease-out infinite;
+}
+
+.device-screen-sleep > span:nth-child(1) {
+	left: 0;
+	bottom: 0;
+	font-size: 9px;
+}
+
+.device-screen-sleep > span:nth-child(2) {
+	left: 8px;
+	bottom: 10px;
+	font-size: 11px;
+	animation-delay: 0.6s;
+}
+
+.device-screen-sleep > span:nth-child(3) {
+	left: 17px;
+	bottom: 21px;
+	font-size: 13px;
+	animation-delay: 1.2s;
+}
+
+.device-screen-frame[data-state='connecting'] .device-screen-progress,
+.device-screen-frame[data-state='loading'] .device-screen-progress {
+	display: block;
+	position: absolute;
+	inset: auto 0 0;
+	height: 2px;
+	background: linear-gradient(90deg, transparent, var(--accent), transparent);
+	animation: device-progress 1.4s linear infinite;
+}
+
+@keyframes device-asleep {
+	50% {
+		opacity: 0.72;
+	}
+}
+
+@keyframes device-sleep-rise {
+	0% {
+		opacity: 0;
+		transform: translate(-3px, 4px);
+	}
+
+	25%,
+	70% {
+		opacity: 0.9;
+	}
+
+	100% {
+		opacity: 0;
+		transform: translate(3px, -4px);
+	}
+}
+
+@keyframes device-progress {
+	from {
+		transform: translateX(-100%);
+	}
+
+	to {
+		transform: translateX(100%);
+	}
 }
 
 .device-screen figcaption {
-	margin-top: 8px;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 8px;
+	min-height: 24px;
+	margin-top: 6px;
 	font-size: 12px;
-	line-height: 1.5;
 	color: var(--muted);
 }
 
@@ -257,59 +418,124 @@
 	display: flex;
 	flex-wrap: wrap;
 	gap: 8px;
-	margin-top: 8px;
 }
 
-.device-screen-actions .monaco-button {
-	margin-top: 0;
+.device-screen-actions:has(> :not([hidden])) {
+	margin-top: 6px;
 }
 
-.device-identity {
-	display: block;
-	font-size: 10px;
+/* Services: read-only rows saying what the computer allows. */
+
+.device-services {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.device-service {
+	display: grid;
+	grid-template-columns: 16px minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 10px;
+	min-height: 28px;
+	padding: 0 16px;
+}
+
+.device-service > .vnilink-icon {
+	width: 16px;
+	height: 16px;
 	color: var(--muted);
+}
+
+.device-service[aria-disabled='true'] {
+	color: var(--muted);
+}
+
+.device-service[aria-disabled='true'] > .vnilink-icon {
+	opacity: 0.6;
+}
+
+.device-service-status {
+	font-size: 12px;
+	color: var(--muted);
+	text-align: end;
+}
+
+/* Details. */
+
+.device-facts {
+	margin: 0;
+}
+
+.device-facts > div {
+	display: grid;
+	grid-template-columns: 96px minmax(0, 1fr);
+	gap: 10px;
+	align-items: baseline;
+	padding: 3px 16px;
+}
+
+.device-facts dt {
+	color: var(--muted);
+}
+
+.device-facts dd {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+	margin: 0;
 	overflow-wrap: anywhere;
-	line-height: 1.6;
-	margin-bottom: 24px;
+}
+
+.device-id {
+	font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+	font-size: 12px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 	user-select: text;
 }
 
-.device-panel .device-help {
-	margin: 12px 0 32px;
-}
-
-.device-rename label,
-.device-pairing label {
-	display: flex;
-	flex-direction: column;
-	gap: 10px;
+.device-access-note {
+	margin-bottom: 0;
+	padding-inline: 16px;
 	font-size: 12px;
+	color: var(--muted);
 }
 
-.device-rename .monaco-inputbox,
-.device-pairing .monaco-inputbox {
-	border-radius: 5px;
-	min-width: 0;
+/* Manage. */
+
+.device-text-button {
+	display: flex;
+	align-items: center;
 	width: 100%;
+	min-height: 28px;
+	padding: 0 16px;
+	border: 0;
+	background: transparent;
+	text-align: start;
 }
 
-.devices-page .device-rename .monaco-inputbox > .ibwrapper > .input,
-.devices-page .device-pairing .monaco-inputbox > .ibwrapper > .input {
-	padding: 9px 10px;
-	font: inherit;
-	border-radius: 5px;
+.device-text-button:disabled {
+	color: var(--muted);
 }
 
-.device-rename > .monaco-button {
-	margin-top: 12px;
+.device-text-button:hover:not(:disabled) {
+	background: var(--surface-hover);
 }
 
 .device-forget {
-	margin-top: 32px;
+	color: var(--status-disconnected);
+}
+
+.device-forget-confirm {
+	padding: 6px 16px 2px;
 }
 
 .device-forget-confirm p {
-	line-height: 1.7;
+	margin: 0 0 8px;
+	line-height: 1.5;
 }
 
 .device-forget-confirm > .monaco-button + .monaco-button {
@@ -317,9 +543,10 @@
 }
 
 .device-feedback {
+	margin: 12px 16px 0;
 	font-size: 12px;
 	color: var(--muted);
-	line-height: 1.7;
+	line-height: 1.6;
 	overflow-wrap: anywhere;
 }
 
@@ -327,102 +554,49 @@
 	display: none;
 }
 
-.device-pairing {
-	border-block: 1px solid var(--line);
-	padding: 24px 0;
-	margin-bottom: 32px;
-}
-
-.device-pairing h2 {
-	font-size: 17px;
-	font-weight: 500;
-	margin: 0 0 12px;
-}
-
-.device-pairing-form {
-	display: flex;
-	gap: 12px;
-	align-items: end;
-	margin: 20px 0;
-}
-
-.device-pairing .monaco-inputbox {
-	max-width: 120px;
-}
-
-.devices-page .device-pairing .monaco-inputbox > .ibwrapper > .input {
-	letter-spacing: 0.3em;
-	font-size: 20px;
-}
-
-.device-pairing-code {
-	display: block;
-	font-size: 32px;
-	letter-spacing: 0.25em;
-	margin-block: 20px;
-	user-select: text;
-}
-
-.device-pairing-code:empty {
-	display: none;
-}
-
 .devices-page .device-rename .monaco-inputbox > .ibwrapper > .input:focus-visible,
-.devices-page .device-pairing .monaco-inputbox > .ibwrapper > .input:focus-visible,
 .devices-page button:focus-visible,
 .devices-page .monaco-button:focus-visible {
 	outline: 2px solid var(--accent);
-	outline-offset: 2px;
+	outline-offset: -2px;
 }
 
 .devices-page [hidden] {
 	display: none;
 }
 
+@media (prefers-reduced-motion: reduce) {
+	.device-screen-frame[data-state] .device-screen-placeholder,
+	.device-screen-frame[data-state] .device-screen-progress {
+		animation: none;
+	}
+
+	.device-screen-sleep > span {
+		animation: none;
+		opacity: 0.8;
+	}
+}
+
 @container (width <= 720px) {
-	.device-row {
-		grid-template-columns: 40px minmax(0, 1fr) 16px;
-		gap: 4px 16px;
-		padding: 16px 12px;
-	}
-
-	.device-emblem {
-		width: 40px;
-		height: 40px;
-	}
-
-	.device-row > .vnilink-icon:last-child {
-		grid-column: 3;
-	}
-
 	.devices-body.has-selection {
 		grid-template-columns: minmax(0, 1fr);
 	}
 
 	.device-panel {
-		padding: 28px 0 0;
+		padding-top: 12px;
 		border-left: 0;
 		border-top: 1px solid var(--line);
+	}
+
+	/* Stacked under the list, the preview keeps the inspector's size rather than the page's. */
+	.device-panel-screen {
+		max-width: 360px;
 	}
 }
 
 @media (width <= 760px) {
 	.home-content > .devices-page {
 		padding-inline: 24px;
-	}
-
-	.devices-body.has-selection {
-		grid-template-columns: minmax(0, 1fr);
-	}
-
-	.device-panel {
-		padding: 28px 0 0;
-		border-left: 0;
-		border-top: 1px solid var(--line);
-	}
-
-	.device-pairing-form {
-		flex-wrap: wrap;
 	}
 }
 
@@ -433,10 +607,14 @@
 
 	.device-screen-frame {
 		background: Canvas;
-		border-color: CanvasText;
+		border: 1px solid CanvasText;
 	}
 
 	.device-screen-frame img {
 		forced-color-adjust: none;
+	}
+
+	.device-forget {
+		color: LinkText;
 	}
 }

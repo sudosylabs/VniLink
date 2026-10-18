@@ -1,0 +1,110 @@
+/* Pairing popover under the Devices titlebar actions. It renders in the window body, outside the page. */
+
+.device-pairing-popover {
+	display: grid;
+	gap: 10px;
+	width: 280px;
+	max-width: calc(100vw - 24px);
+	margin-top: 4px;
+	padding: 12px 14px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--surface-raised);
+	color: var(--text);
+	box-shadow: 0 12px 32px rgb(0 0 0 / 16%);
+	font-size: 13px;
+	line-height: 1.4;
+}
+
+.device-pairing-popover h2 {
+	margin: 0;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.device-pairing-popover p {
+	margin: 0;
+}
+
+.device-pairing-help,
+.device-pairing-file {
+	color: var(--muted);
+	overflow-wrap: anywhere;
+}
+
+.device-pairing-code {
+	font:
+		600 24px/1 ui-monospace,
+		'SF Mono',
+		Menlo,
+		Consolas,
+		monospace;
+	letter-spacing: 0.3em;
+	font-variant-numeric: tabular-nums;
+	user-select: text;
+}
+
+.device-pairing-field {
+	display: grid;
+	gap: 6px;
+}
+
+.device-pairing-field .monaco-inputbox {
+	width: 7.5ch;
+	border-radius: 4px;
+}
+
+.device-pairing-field .monaco-inputbox > .ibwrapper > .input {
+	padding: 4px 6px;
+	font:
+		600 20px/1 ui-monospace,
+		'SF Mono',
+		Menlo,
+		Consolas,
+		monospace;
+	letter-spacing: 0.4em;
+	border-radius: 4px;
+}
+
+.device-pairing-foot {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	font-size: 12px;
+	color: var(--muted);
+}
+
+.device-pairing-foot > .monaco-button.primary {
+	margin-left: auto;
+}
+
+.device-pairing-foot > .monaco-button.device-button {
+	font-size: 13px;
+}
+
+.device-pairing-popover .device-feedback {
+	margin: 0;
+	font-size: 12px;
+	color: var(--muted);
+	overflow-wrap: anywhere;
+}
+
+.device-pairing-popover .device-feedback:empty,
+.device-pairing-popover [hidden],
+.device-pairing-foot > .monaco-button[hidden] {
+	display: none;
+}
+
+.device-pairing-popover button:focus-visible,
+.device-pairing-popover .monaco-button:focus-visible,
+.device-pairing-field .monaco-inputbox > .ibwrapper > .input:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+@media (forced-colors: active) {
+	.device-pairing-popover {
+		border-color: CanvasText;
+	}
+}

@@ -14,6 +14,15 @@ import { ITabService } from '../../services/tabs/tabService.js';
 /** Actions for the active tab, shown at the end of the tab strip. Items choose a tab with `activeTab`. */
 export const ViewActionsMenu = new MenuId('ViewActions');
 
+/** What a view action receives when run from the toolbar: the button, so it can anchor a popover. */
+export interface ViewActionContext {
+	readonly anchor: HTMLElement;
+}
+
+export function isViewActionContext(value: unknown): value is ViewActionContext {
+	return typeof value === 'object' && value !== null && 'anchor' in value && value.anchor instanceof HTMLElement;
+}
+
 /**
  * Renders a menu item as VniLink's icon button. The button stays disabled
  * while its command runs, so a slow action cannot be started twice.
@@ -49,7 +58,8 @@ class ViewActionViewItem extends BaseActionViewItem {
 		event.preventDefault();
 		this.running = true;
 		this.updateEnabled();
-		void Promise.resolve(this.actionRunner.run(this.action, this._context)).finally(() => {
+		const context: ViewActionContext | undefined = this.button && { anchor: this.button };
+		void Promise.resolve(this.actionRunner.run(this.action, context)).finally(() => {
 			this.running = false;
 			this.updateEnabled();
 		});
@@ -93,7 +103,9 @@ export class ViewActionsToolbar extends Disposable {
 		const menu = this._register(menuService.createMenu(ViewActionsMenu, contextKeyService));
 		const update = (): void => {
 			this.actionBar.clear();
-			this.actionBar.push(menu.getActions().flatMap(([, actions]) => actions satisfies IAction[]), { icon: true, label: false });
+			// Forwarded so each action receives the `ViewActionContext` of the button that ran it.
+			const actions = menu.getActions({ shouldForwardArgs: true }).flatMap(([, group]) => group satisfies IAction[]);
+			this.actionBar.push(actions, { icon: true, label: false });
 			this.updateAriaLabel();
 		};
 		this._register(menu.onDidChange(update));

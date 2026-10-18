@@ -17,6 +17,7 @@ import { SyncDescriptor } from '../../src/platform/instantiation/common/descript
 import { ILogService, NullLogService } from '../../src/platform/log/common/log.js';
 import { ActiveTabContext, RestartRequiredContext } from '../../src/workbench/contextkeys.js';
 import { ViewActionsMenu } from '../../src/workbench/parts/titlebar/viewActionsToolbar.js';
+import { IDevicePairingPopover } from '../../src/workbench/contrib/devices/devicePairingPopover.js';
 import { CommandService } from '../../src/workbench/services/commands/commandService.js';
 import { IDeviceService, type DeviceSummary } from '../../src/workbench/services/devices/deviceService.js';
 import { IScreenSnapshotService } from '../../src/workbench/services/screenSnapshot/screenSnapshotService.js';
@@ -72,10 +73,20 @@ export async function verifyHomeLifecycle(): Promise<void> {
 		pairingCheck: () => Promise.resolve('123'), incomingPairing: () => Promise.resolve(null),
 		approvePairing: () => Promise.resolve(), rejectPairing: () => Promise.resolve(),
 		refresh() {
-			devices = [{ id: 'peer', name: '<b>Remote computer</b>', os: 'linux', presence: 'connected' }];
+			devices = [{ id: 'peer', name: '<b>Remote computer</b>', os: 'linux', presence: 'connected', hostname: null, direct: 0, relays: 0 }];
 			changed.fire(devices);
 			return Promise.resolve();
 		},
+	};
+	const popovers: string[] = [];
+	const popoverAnchors: HTMLElement[] = [];
+	const popover: IDevicePairingPopover = {
+		_serviceBrand: undefined,
+		toggle: (anchor, kind) => {
+			popoverAnchors.push(anchor);
+			popovers.push(kind);
+		},
+		hide: () => undefined,
 	};
 	const configuration = new FakeConfigurationService();
 	configuration.setError('relays', 'Unavailable');
@@ -91,7 +102,7 @@ export async function verifyHomeLifecycle(): Promise<void> {
 		[ILogService, new NullLogService()],
 		[IContextKeyService, new SyncDescriptor(ContextKeyService)],
 		[ICommandService, new SyncDescriptor(CommandService)],
-		[IMenuService, new SyncDescriptor(MenuService)]), true);
+		[IMenuService, new SyncDescriptor(MenuService)], [IDevicePairingPopover, popover]), true);
 	const home = services.createInstance(HomeView);
 	try {
 		assert(!home.element.querySelector('[data-section-id="files"]'), 'Files settings still appear in the sidebar');
@@ -122,6 +133,20 @@ export async function verifyHomeLifecycle(): Promise<void> {
 		restartRequired = false;
 		required.set(false);
 		assert(restartActions().length === 0, 'Restart action survived reverted configuration');
+		const deviceActions = () => menu.getActions().flatMap(([, actions]) => actions).map(action => action.id).filter(id => id.startsWith('vnilink.devices.'));
+		assert(deviceActions().length === 0, 'Pairing actions shown on a Settings page');
+		back.click();
+		assert(deviceActions().join() === 'vnilink.devices.importInvitation,vnilink.devices.createInvitation', `Pairing actions missing on Devices: ${deviceActions().join()}`);
+		const anchor = document.createElement('button');
+		const pairingActions = menu.getActions({ shouldForwardArgs: true }).flatMap(([, actions]) => actions).filter(action => action.id.startsWith('vnilink.devices.'));
+		for (const action of pairingActions) {
+			await action.run({ anchor });
+		}
+		assert(popovers.join() === 'import,create' && popoverAnchors.every(each => each === anchor), `Pairing actions did not open their popover at the button: ${JSON.stringify(popovers)}`);
+		activeTab.set('remote-session');
+		assert(deviceActions().length === 0, 'Pairing actions shown outside Home');
+		activeTab.set(HomeView.ID);
+		connection.click();
 		menu.dispose();
 		await service.refresh(new AbortController().signal);
 		back.click();

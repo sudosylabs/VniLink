@@ -1,13 +1,14 @@
 import * as nls from '../../../nls.js';
-import { $, addDisposableListener, append, EventType, h } from '../../../base/browser/dom.js';
+import { addDisposableListener, append, EventType, h } from '../../../base/browser/dom.js';
+import { StandardKeyboardEvent } from '../../../base/browser/keyboardEvent.js';
 import { Button } from '../../../base/browser/ui/button/button.js';
 import { renderIcon } from '../../../base/browser/ui/icon/icon.js';
 import { InputBox } from '../../../base/browser/ui/inputbox/inputBox.js';
 import { Emitter } from '../../../base/common/event.js';
-import { Icons } from '../../../base/common/icons.js';
+import { Icons, type IconId } from '../../../base/common/icons.js';
 import { KeyCode } from '../../../base/common/keyCodes.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
-import { StandardKeyboardEvent } from '../../../base/browser/keyboardEvent.js';
+import type { RemoteCapability, RemoteCapabilityStatus, RemoteStatus } from '../../../platform/engine/common/engine.js';
 import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
 import { defaultButtonStyles, defaultInputBoxStyles } from '../../../platform/theme/browser/defaultStyles.js';
 import { IDeviceService, type DeviceSummary } from '../../services/devices/deviceService.js';
@@ -16,6 +17,44 @@ import { DeviceScreenSnapshot } from './deviceScreenSnapshot.js';
 
 /** Longest display name the engine accepts. */
 const maxNameLength = 128;
+
+/** A service row: what it offers, and the capabilities the remote computer reports for it. */
+interface ServiceRow {
+	readonly label: string;
+	readonly icon: IconId;
+	readonly capabilities: readonly RemoteCapability[];
+}
+
+const serviceRows: readonly ServiceRow[] = [
+	{ label: nls.localize('devices.serviceDesktop', 'Remote desktop'), icon: Icons.remoteDesktop, capabilities: ['desktopControl'] },
+	{ label: nls.localize('devices.serviceView', 'View screen only'), icon: Icons.view, capabilities: ['desktopView'] },
+	{ label: nls.localize('devices.serviceTerminal', 'Terminal'), icon: Icons.terminal, capabilities: ['terminal'] },
+	{ label: nls.localize('devices.serviceFiles', 'Files'), icon: Icons.files, capabilities: ['files'] },
+	{ label: nls.localize('devices.serviceCamera', 'Camera'), icon: Icons.camera, capabilities: ['camera'] },
+	{ label: nls.localize('devices.serviceLock', 'Lock screen'), icon: Icons.lock, capabilities: ['systemLock'] },
+	{ label: nls.localize('devices.servicePower', 'Restart or shut down'), icon: Icons.power, capabilities: ['systemRestart', 'systemShutdown'] },
+];
+
+function remoteStatusLabel(status: RemoteStatus): string {
+	switch (status) {
+		case 'available': return nls.localize('devices.statusAvailable', 'Available');
+		case 'turnedOff': return nls.localize('devices.statusTurnedOff', 'Turned off by its owner');
+		case 'needsPermission': return nls.localize('devices.statusPermission', 'Needs permission on that computer');
+		case 'unsupported': return nls.localize('devices.statusUnsupported', 'Not supported there');
+		case 'unavailable': return nls.localize('devices.statusUnavailable', 'Unavailable right now');
+	}
+}
+
+/** A row is available when any of its capabilities is; otherwise it reports its first capability's reason. */
+function rowStatus(row: ServiceRow, report: readonly RemoteCapabilityStatus[]): RemoteStatus {
+	const statuses = row.capabilities.map(capability => report.find(entry => entry.capability === capability)?.status ?? 'unsupported');
+	return statuses.includes('available') ? 'available' : statuses[0];
+}
+
+/** Shows the start and end of a long id; the full id stays in the title. */
+function shortId(id: string): string {
+	return id.length > 16 ? `${id.slice(0, 8)}…${id.slice(-6)}` : id;
+}
 
 /**
  * Details and commands for one selected computer. A command's late failure
@@ -27,17 +66,26 @@ export class DeviceDetails extends Disposable {
 	public readonly onDidClose = this.closed.event;
 	private readonly title: HTMLElement;
 	private readonly state: HTMLElement;
-	private readonly identity: HTMLElement;
-	private readonly status: HTMLElement;
-	private readonly confirm: HTMLElement;
-	private readonly connect: Button;
+	private readonly renameForm: HTMLElement;
 	private readonly name: InputBox;
-	private readonly rename: Button;
-	private readonly forget: Button;
+	private readonly save: Button;
+	private readonly services: { readonly row: ServiceRow; readonly element: HTMLElement; readonly status: HTMLElement }[] = [];
+	private readonly idValue: HTMLElement;
+	private readonly copyId: HTMLButtonElement;
+	private readonly hostname: HTMLElement;
+	private readonly system: HTMLElement;
+	private readonly addresses: HTMLElement;
+	private readonly renameButton: HTMLButtonElement;
+	private readonly forget: HTMLButtonElement;
+	private readonly confirm: HTMLElement;
 	private readonly keep: Button;
 	private readonly confirmForget: Button;
+	private readonly status: HTMLElement;
 	private readonly screen: DeviceScreenSnapshot;
 	private device: DeviceSummary | undefined;
+	private report: readonly RemoteCapabilityStatus[] | null = null;
+	/** Bumped per availability request, so only the newest answer for the selection lands. */
+	private reportRevision = 0;
 	private readonly pending = new Set<string>();
 
 	constructor(
@@ -46,11 +94,47 @@ export class DeviceDetails extends Disposable {
 		@IInstantiationService instantiationService: IInstantiationService,
 	) {
 		super();
+		const closeLabel = nls.localize('devices.close', 'Close device details');
+		const copyLabel = nls.localize('devices.copyId', 'Copy device ID');
 		const panel = h('aside.device-panel', [
-			h('header@header'),
-			h('h2@title'),
-			h('p.device-panel-state@state', { role: 'status' }),
+			h('div.device-panel-top', [h('button.device-icon-button.device-close@close', { type: 'button', title: closeLabel, 'aria-label': closeLabel })]),
+			h('div.device-panel-screen@screen'),
+			h('header.device-panel-identity', [
+				h('h2@title'),
+				h('div.device-rename@renameForm'),
+				h('p.device-panel-state@state', { role: 'status' }),
+			]),
+			h('section.device-section@servicesSection', [
+				h('ul.device-services@services', { role: 'list' }),
+			]),
+			h('section.device-section@factsSection', [
+				h('dl.device-facts', [
+					h('div', [h('dt@idLabel'), h('dd', [h('code.device-id@idValue'), h('button.device-icon-button.device-copy@copyId', { type: 'button', title: copyLabel, 'aria-label': copyLabel })])]),
+					h('div', [h('dt@hostnameLabel'), h('dd@hostname')]),
+					h('div', [h('dt@systemLabel'), h('dd@system')]),
+					h('div', [h('dt@addressesLabel'), h('dd@addresses')]),
+				]),
+			]),
+			h('p.device-section.device-access-note@accessNote'),
+			h('section.device-section@manageSection', [
+				h('button.device-text-button@renameButton', { type: 'button' }),
+				h('button.device-text-button.device-forget@forget', { type: 'button' }),
+				h('div.device-forget-confirm@confirm', [h('p@forgetWarning')]),
+			]),
+			h('p.device-feedback@status', { role: 'status' }),
 		]);
+		// Hairlines separate the groups, as in a native inspector; the names are for assistive technology.
+		panel.servicesSection.setAttribute('aria-label', nls.localize('devices.services', 'Services'));
+		panel.factsSection.setAttribute('aria-label', nls.localize('devices.details', 'Details'));
+		panel.manageSection.setAttribute('aria-label', nls.localize('devices.manage', 'Manage'));
+		panel.idLabel.textContent = nls.localize('devices.id', 'Device ID');
+		panel.hostnameLabel.textContent = nls.localize('devices.hostname', 'Computer');
+		panel.systemLabel.textContent = nls.localize('devices.system', 'System');
+		panel.addressesLabel.textContent = nls.localize('devices.addresses', 'Addresses');
+		panel.accessNote.textContent = nls.localize('devices.accessNote', 'What paired computers may use on this computer is set in Access & Security.');
+		panel.renameButton.textContent = nls.localize('devices.renameAction', 'Rename…');
+		panel.forget.textContent = nls.localize('devices.forget', 'Forget device…');
+		panel.forgetWarning.textContent = nls.localize('devices.forgetWarning', 'Forget this computer and end its connections? You will need a new invitation to pair again.');
 		this.element = panel.root;
 		this.element.id = id;
 		this.element.hidden = true;
@@ -58,28 +142,46 @@ export class DeviceDetails extends Disposable {
 		this.title.id = `${id}-title`;
 		this.element.setAttribute('aria-labelledby', this.title.id);
 		this.state = panel.state;
-		panel.header.append(renderIcon(Icons.remoteDesktop, { variant: 'filled' }));
-		const close = append(panel.header, $<HTMLButtonElement>('button.device-close', { type: 'button', 'aria-label': nls.localize('devices.close', 'Close device details') }));
-		close.append(renderIcon(Icons.close));
+		panel.close.append(renderIcon(Icons.close));
 		this.screen = this._register(instantiationService.createInstance(DeviceScreenSnapshot));
-		this.element.append(this.screen.element);
-		this.identity = append(this.element, $('code.device-identity'));
-		this.connect = this.createButton(this.element, nls.localize('devices.connect', 'Connect'), { primary: true });
-		append(this.element, $('p.device-help')).textContent = nls.localize('devices.connectionHelp', 'Connect to this computer without starting a remote service. Access is controlled by its owner’s sharing settings.');
-		const rename = append(this.element, $('.device-rename'));
-		const label = append(rename, $('label'));
-		label.append(nls.localize('devices.name', 'Display name'));
-		this.name = this._register(new InputBox(label, undefined, { inputBoxStyles: defaultInputBoxStyles }));
+		panel.screen.append(this.screen.element);
+		this.renameForm = panel.renameForm;
+		this.renameForm.hidden = true;
+		this.name = this._register(new InputBox(this.renameForm, undefined, { inputBoxStyles: defaultInputBoxStyles, ariaLabel: nls.localize('devices.name', 'Display name') }));
 		this.name.inputElement.maxLength = maxNameLength;
 		this.name.inputElement.autocomplete = 'off';
-		this.rename = this.createButton(rename, nls.localize('devices.rename', 'Rename'));
-		this.forget = this.createButton(this.element, nls.localize('devices.forget', 'Forget device…'), { className: 'device-forget' });
-		this.confirm = append(this.element, $('.device-forget-confirm'));
+		this.save = this.createButton(this.renameForm, nls.localize('devices.saveName', 'Save'), true);
+		for (const row of serviceRows) {
+			const item = h('li.device-service', [h('span.device-service-label@label'), h('span.device-service-status@status')]);
+			item.root.prepend(renderIcon(row.icon));
+			item.label.textContent = row.label;
+			append(panel.services, item.root);
+			this.services.push({ row, element: item.root, status: item.status });
+		}
+		this.idValue = panel.idValue;
+		this.copyId = panel.copyId;
+		this.copyId.append(renderIcon(Icons.copy));
+		this.hostname = panel.hostname;
+		this.system = panel.system;
+		this.addresses = panel.addresses;
+		this.renameButton = panel.renameButton;
+		this.forget = panel.forget;
+		this.confirm = panel.confirm;
 		this.confirm.hidden = true;
-		append(this.confirm, $('p')).textContent = nls.localize('devices.forgetWarning', 'Forget this computer and end its connections? You will need a new invitation to pair again.');
 		this.keep = this.createButton(this.confirm, nls.localize('devices.keep', 'Keep device'));
 		this.confirmForget = this.createButton(this.confirm, nls.localize('devices.confirmForget', 'Forget'));
-		this.status = append(this.element, $('p.device-feedback', { role: 'status' }));
+		this.status = panel.status;
+		this.registerListeners(panel.close);
+	}
+
+	private createButton(container: HTMLElement, label: string, primary = false): Button {
+		const button = this._register(new Button(container, { ...defaultButtonStyles, secondary: !primary, title: false }));
+		button.label = label;
+		button.element.classList.add('device-button', ...(primary ? ['primary'] : []));
+		return button;
+	}
+
+	private registerListeners(close: HTMLElement): void {
 		this._register(addDisposableListener(close, EventType.CLICK, () => {
 			this.closed.fire();
 		}));
@@ -89,22 +191,36 @@ export class DeviceDetails extends Disposable {
 				this.closed.fire();
 			}
 		}));
-		this._register(this.connect.onDidClick(() => {
-			this.run(target => this.devices.connect(target));
+		this._register(this.devices.onDidChangeAvailability(id => {
+			if (id === this.device?.id) {
+				void this.loadAvailability(id);
+			}
+		}));
+		this._register(addDisposableListener(this.copyId, EventType.CLICK, () => {
+			void this.copyDeviceId();
+		}));
+		this._register(addDisposableListener(this.renameButton, EventType.CLICK, () => {
+			this.setRenaming(true);
 		}));
 		this._register(this.name.onDidChange(() => {
 			this.updateControls();
 		}));
 		this._register(addDisposableListener(this.name.inputElement, EventType.KEY_DOWN, event => {
-			if (new StandardKeyboardEvent(event).equals(KeyCode.Enter)) {
+			const key = new StandardKeyboardEvent(event);
+			if (key.equals(KeyCode.Enter)) {
 				event.preventDefault();
 				this.submitName();
+			} else if (key.equals(KeyCode.Escape)) {
+				// Escape leaves the field, not the panel.
+				event.preventDefault();
+				event.stopPropagation();
+				this.setRenaming(false);
 			}
 		}));
-		this._register(this.rename.onDidClick(() => {
+		this._register(this.save.onDidClick(() => {
 			this.submitName();
 		}));
-		this._register(this.forget.onDidClick(() => {
+		this._register(addDisposableListener(this.forget, EventType.CLICK, () => {
 			this.confirm.hidden = false;
 			this.keep.focus();
 		}));
@@ -117,40 +233,110 @@ export class DeviceDetails extends Disposable {
 		}));
 	}
 
-	private createButton(container: HTMLElement, label: string, options: { primary?: boolean; className?: string } = {}): Button {
-		const button = this._register(new Button(container, { ...defaultButtonStyles, secondary: !options.primary, title: false }));
-		button.label = label;
-		button.element.classList.add('device-button', ...(options.primary ? ['primary'] : []), ...(options.className ? [options.className] : []));
-		return button;
-	}
-
-	/** Shows `device`, keeping an unsaved name edit while the same computer stays selected. */
+	/** Shows `device`, keeping an open rename while the same computer stays selected. */
 	public update(device: DeviceSummary | undefined): void {
-		const changed = device?.id !== this.device?.id;
-		const clean = this.name.value === this.device?.name;
+		const previous = this.device;
+		const changed = device?.id !== previous?.id;
 		this.device = device;
 		this.screen.show(device);
 		this.element.hidden = !device;
 		if (!device) {
+			this.reportRevision++;
+			this.report = null;
 			return;
-		}
-		if (changed || clean) {
-			this.name.value = device.name;
 		}
 		if (changed) {
 			this.status.textContent = '';
 			this.confirm.hidden = true;
+			this.setRenaming(false);
+			this.report = null;
+		}
+		if (changed || previous?.presence !== device.presence) {
+			void this.loadAvailability(device.id);
 		}
 		this.title.textContent = device.name;
-		this.identity.textContent = device.id;
-		this.state.textContent = `${devicePlatform(device)} · ${devicePresence(device)}`;
+		this.state.textContent = nls.localize('devices.panelState', '{0} · {1}', devicePresence(device), devicePlatform(device));
+		this.state.dataset.presence = device.presence;
+		this.idValue.textContent = shortId(device.id);
+		this.idValue.title = device.id;
+		this.hostname.textContent = device.hostname ?? nls.localize('devices.hostnameUnknown', 'Not reported');
+		this.system.textContent = devicePlatform(device);
+		this.addresses.textContent = nls.localize('devices.addressCounts', '{0} direct, {1} relay', device.direct, device.relays);
+		this.renderServices();
+		this.updateControls();
+	}
+
+	private async loadAvailability(id: string): Promise<void> {
+		const revision = ++this.reportRevision;
+		let report: readonly RemoteCapabilityStatus[] | null;
+		try {
+			report = await this.devices.availability(id);
+		} catch {
+			report = null;
+		}
+		// The selection may have moved on while the engine answered.
+		if (this.isDisposed() || revision !== this.reportRevision || this.device?.id !== id) {
+			return;
+		}
+		this.report = report;
+		this.renderServices();
+	}
+
+	private renderServices(): void {
+		const device = this.device;
+		if (!device) {
+			return;
+		}
+		const connected = device.presence === 'connected';
+		for (const { row, element, status } of this.services) {
+			// Away from the computer, every row says why instead of a stale report.
+			const value = !connected ? undefined : this.report ? rowStatus(row, this.report) : null;
+			status.textContent = value === undefined ? devicePresence(device)
+				: value === null ? nls.localize('devices.statusChecking', 'Checking…')
+					: remoteStatusLabel(value);
+			element.dataset.status = value ?? 'none';
+			element.setAttribute('aria-disabled', String(value !== 'available'));
+		}
+	}
+
+	private async copyDeviceId(): Promise<void> {
+		const id = this.device?.id;
+		if (!id) {
+			return;
+		}
+		try {
+			await navigator.clipboard.writeText(id);
+			if (!this.isDisposed() && this.device?.id === id) {
+				this.status.textContent = nls.localize('devices.idCopied', 'Device ID copied.');
+			}
+		} catch {
+			if (!this.isDisposed() && this.device?.id === id) {
+				this.status.textContent = nls.localize('devices.copyFailed', 'Unable to copy the device ID.');
+			}
+		}
+	}
+
+	private setRenaming(renaming: boolean): void {
+		const wasRenaming = !this.renameForm.hidden;
+		this.renameForm.hidden = !renaming;
+		this.title.hidden = renaming;
+		this.renameButton.hidden = renaming;
+		if (renaming) {
+			this.name.value = this.device?.name ?? '';
+			this.name.focus();
+			this.name.select();
+		} else if (wasRenaming && this.renameForm.contains(document.activeElement)) {
+			this.renameButton.focus();
+		}
 		this.updateControls();
 	}
 
 	private submitName(): void {
-		if (this.rename.enabled) {
+		if (this.save.enabled) {
 			const name = this.name.value.trim();
-			this.run(target => this.devices.rename(target, name));
+			this.run(target => this.devices.rename(target, name), () => {
+				this.setRenaming(false);
+			});
 		}
 	}
 
@@ -159,24 +345,21 @@ export class DeviceDetails extends Disposable {
 		const busy = !!device && this.pending.has(device.id);
 		const enabled = !!device && this.devices.available && !busy;
 		const name = this.name.value.trim();
-		this.connect.enabled = enabled && device.presence === 'disconnected';
-		this.connect.label = device?.presence === 'connected' ? nls.localize('devices.connected', 'Connected')
-			: device?.presence === 'connecting' || device?.presence === 'reconnecting' ? nls.localize('devices.connecting', 'Connecting…')
-				: nls.localize('devices.connect', 'Connect');
 		if (enabled) {
 			this.name.enable();
 		} else {
 			this.name.disable();
 		}
-		this.rename.enabled = enabled && name.length > 0 && name !== device.name;
-		this.forget.enabled = enabled;
+		this.save.enabled = enabled && name.length > 0 && name !== device.name;
+		this.renameButton.disabled = !enabled;
+		this.forget.disabled = !enabled;
 		this.keep.enabled = enabled;
 		this.confirmForget.enabled = enabled;
 		this.element.setAttribute('aria-busy', String(busy));
 	}
 
-	/** Runs a command for the selected computer; its failure is shown only while it stays selected. */
-	private run(command: (id: string) => Promise<void>): void {
+	/** Runs a command for the selected computer; its outcome is shown only while it stays selected. */
+	private run(command: (id: string) => Promise<void>, onSuccess?: () => void): void {
 		const id = this.device?.id;
 		if (!id || this.pending.has(id)) {
 			return;
@@ -184,15 +367,24 @@ export class DeviceDetails extends Disposable {
 		this.pending.add(id);
 		this.status.textContent = '';
 		this.updateControls();
-		command(id).catch((error: unknown) => {
-			if (!this._store.isDisposed && this.device?.id === id) {
+		command(id).then(() => {
+			if (!this.isDisposed() && this.device?.id === id) {
+				onSuccess?.();
+			}
+		}, (error: unknown) => {
+			if (!this.isDisposed() && this.device?.id === id) {
 				this.status.textContent = error instanceof Error ? error.message : nls.localize('devices.actionFailed', 'The device action failed. Try again.');
 			}
 		}).finally(() => {
 			this.pending.delete(id);
-			if (!this._store.isDisposed) {
+			if (!this.isDisposed()) {
 				this.updateControls();
 			}
 		});
+	}
+
+	/** Re-read after every await: the page can close while a command is in flight. */
+	private isDisposed(): boolean {
+		return this._store.isDisposed;
 	}
 }

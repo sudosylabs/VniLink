@@ -7,6 +7,12 @@ export interface DeviceSummary {
 	readonly name: string;
 	readonly os: OperatingSystem | null;
 	readonly presence: DevicePresence | 'unknown';
+	/** The name the computer reports for itself, which a pet name may hide. */
+	readonly hostname: string | null;
+	/** Known direct addresses. */
+	readonly direct: number;
+	/** Known relays. */
+	readonly relays: number;
 }
 
 export interface PairingFile {

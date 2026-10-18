@@ -4,11 +4,10 @@ import { renderIcon } from '../../../base/browser/ui/icon/icon.js';
 import type { IListRenderer, IListVirtualDelegate } from '../../../base/browser/ui/list/list.js';
 import { List, type IStyleController } from '../../../base/browser/ui/list/listWidget.js';
 import { Event } from '../../../base/common/event.js';
-import { Icons, type IconId } from '../../../base/common/icons.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { defaultListStyles } from '../../../platform/theme/browser/defaultStyles.js';
 import type { DeviceSummary } from '../../services/devices/deviceService.js';
-import { devicePlatform, devicePresence } from './deviceLabels.js';
+import { devicePlatform, devicePresence, platformIcon } from './deviceLabels.js';
 
 /**
  * Rows are styled by the feature's stylesheet, so the list needs no generated
@@ -20,8 +19,8 @@ const cssStyleController: IStyleController = {
 	},
 };
 
-/** Every row has the same height: an 88px card with 6px of spacing on each side and a divider. */
-const ROW_HEIGHT = 101;
+/** Every row has the same height: two lines of text, padding and a hairline divider. */
+const ROW_HEIGHT = 52;
 
 class DeviceListDelegate implements IListVirtualDelegate<DeviceSummary> {
 	public getHeight(): number {
@@ -34,7 +33,7 @@ class DeviceListDelegate implements IListVirtualDelegate<DeviceSummary> {
 }
 
 interface DeviceTemplate {
-	readonly emblem: HTMLElement;
+	readonly glyph: HTMLElement;
 	readonly name: HTMLElement;
 	readonly presence: HTMLElement;
 	os: DeviceSummary['os'] | undefined;
@@ -46,12 +45,11 @@ class DeviceRenderer implements IListRenderer<DeviceSummary, DeviceTemplate> {
 
 	public renderTemplate(container: HTMLElement): DeviceTemplate {
 		const row = h('.device-row', [
-			h('span.device-emblem@emblem'),
+			h('span.device-glyph@glyph'),
 			h('span.device-caption', [h('span.device-name@name'), h('span.device-presence@presence')]),
 		]);
-		row.root.append(renderIcon(Icons.chevronRight));
 		append(container, row.root);
-		return { emblem: row.emblem, name: row.name, presence: row.presence, os: undefined };
+		return { glyph: row.glyph, name: row.name, presence: row.presence, os: undefined };
 	}
 
 	public renderElement(device: DeviceSummary, _index: number, template: DeviceTemplate): void {
@@ -59,25 +57,16 @@ class DeviceRenderer implements IListRenderer<DeviceSummary, DeviceTemplate> {
 		template.name.title = device.name;
 		if (template.os !== device.os) {
 			template.os = device.os;
-			template.emblem.replaceChildren(renderIcon(platformIcon(device), { variant: 'filled', label: devicePlatform(device) }));
+			// The selected row shows the filled glyph; the row's label names the platform.
+			const icon = platformIcon(device);
+			template.glyph.replaceChildren(renderIcon(icon), renderIcon(icon, { variant: 'filled' }));
 		}
-		template.presence.textContent = devicePresence(device);
+		template.presence.textContent = nls.localize('devices.rowStatus', '{0} · {1}', devicePresence(device), devicePlatform(device));
 		template.presence.dataset.presence = device.presence;
 	}
 
 	public disposeTemplate(): void {
 		// Templates own only their DOM, which the list removes.
-	}
-}
-
-function platformIcon(device: DeviceSummary): IconId {
-	switch (device.os) {
-		case 'macos': return Icons.apple;
-		case 'windows': return Icons.windows;
-		case 'linux': return Icons.linux;
-		case 'other':
-		case null:
-			return Icons.remoteDesktop;
 	}
 }
 
@@ -102,7 +91,7 @@ export class DeviceList extends Disposable {
 			identityProvider: { getId: device => device.id },
 			multipleSelectionSupport: false,
 			accessibilityProvider: {
-				getAriaLabel: device => nls.localize('devices.row', '{0}, {1}', device.name, devicePresence(device)),
+				getAriaLabel: device => nls.localize('devices.row', '{0}, {1}, {2}', device.name, devicePresence(device), devicePlatform(device)),
 				getWidgetAriaLabel: () => nls.localize('devices.list', 'Remembered computers'),
 			},
 		}));

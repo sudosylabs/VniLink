@@ -1,12 +1,15 @@
 import * as nls from '../../../nls.js';
-import { h } from '../../../base/browser/dom.js';
+import { addDisposableListener, EventType, h } from '../../../base/browser/dom.js';
 import { Button } from '../../../base/browser/ui/button/button.js';
+import { renderIcon } from '../../../base/browser/ui/icon/icon.js';
 import { IntervalTimer } from '../../../base/common/async.js';
+import { Icons } from '../../../base/common/icons.js';
 import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { defaultButtonStyles } from '../../../platform/theme/browser/defaultStyles.js';
 import type { DeviceSummary } from '../../services/devices/deviceService.js';
 import type { ScreenSnapshotResult } from '../../services/screenSnapshot/screenSnapshot.js';
 import { IScreenSnapshotService } from '../../services/screenSnapshot/screenSnapshotService.js';
+import { platformIcon } from './deviceLabels.js';
 
 /** How often the "captured … ago" caption is refreshed. */
 const ageRefreshInterval = 15_000;
@@ -14,17 +17,22 @@ const ageRefreshInterval = 15_000;
 /** How often a shown screenshot rechecks that the remote still allows viewing it. */
 const accessCheckInterval = 5_000;
 
-/** Still screenshot for the selected device. One request at a time; the image is not an input surface. */
+/**
+ * Still screenshot for the selected device, or a placeholder saying why there
+ * is none. One request at a time; the image is not an input surface.
+ */
 export class DeviceScreenSnapshot extends Disposable {
 	public readonly element: HTMLElement;
 	private readonly frame: HTMLElement;
 	private readonly image: HTMLImageElement;
+	private readonly glyph: HTMLElement;
 	private readonly status: HTMLElement;
 	private readonly age: HTMLElement;
-	private readonly refresh: Button;
+	private readonly refresh: HTMLButtonElement;
 	private readonly consent: Button;
 	private endpointId: string | undefined;
 	private deviceName = '';
+	private os: DeviceSummary['os'] | undefined;
 	private presence: DeviceSummary['presence'] | 'unknown' | undefined;
 	private epoch = 0;
 	private url: string | undefined;
@@ -37,18 +45,32 @@ export class DeviceScreenSnapshot extends Disposable {
 
 	constructor(@IScreenSnapshotService private readonly snapshots: IScreenSnapshotService) {
 		super();
+		const refreshLabel = nls.localize('devices.refreshScreen', 'Refresh screen');
 		const figure = h('figure.device-screen', [
-			h('div.device-screen-frame@frame', [h('img@image', { alt: '' })]),
-			h('figcaption', [h('span.device-screen-status@status', { role: 'status' }), h('span.device-screen-age@age')]),
+			h('div.device-screen-frame@frame', [
+				h('img@image', { alt: '' }),
+				// Decorative: the caption says the same in words.
+				h('div.device-screen-placeholder', { 'aria-hidden': 'true' }, [
+					h('span.device-screen-glyph@glyph'),
+					h('span.device-screen-sleep', [h('span', ['z']), h('span', ['z']), h('span', ['z'])]),
+					h('span.device-screen-progress'),
+				]),
+			]),
+			h('figcaption', [
+				h('span.device-screen-caption', [h('span.device-screen-status@status', { role: 'status' }), h('span.device-screen-age@age')]),
+				h('button.device-icon-button.device-screen-refresh@refresh', { type: 'button', title: refreshLabel, 'aria-label': refreshLabel }),
+			]),
 			h('div.device-screen-actions@actions'),
 		]);
 		this.element = figure.root;
 		this.frame = figure.frame;
 		this.image = figure.image;
 		this.image.hidden = true;
+		this.glyph = figure.glyph;
 		this.status = figure.status;
 		this.age = figure.age;
-		this.refresh = this.createButton(figure.actions, nls.localize('devices.refreshScreen', 'Refresh screen'));
+		this.refresh = figure.refresh;
+		this.refresh.append(renderIcon(Icons.refresh));
 		this.consent = this.createButton(figure.actions, '');
 		this.consent.element.hidden = true;
 		this._register(toDisposable(() => {
@@ -67,7 +89,7 @@ export class DeviceScreenSnapshot extends Disposable {
 				this.checkAccess();
 			}
 		}, accessCheckInterval);
-		this._register(this.refresh.onDidClick(() => {
+		this._register(addDisposableListener(this.refresh, EventType.CLICK, () => {
 			if (this.state !== 'loading') {
 				this.begin(false);
 			}
@@ -103,6 +125,10 @@ export class DeviceScreenSnapshot extends Disposable {
 		const same = device.id === this.endpointId;
 		const wasConnected = this.presence === 'connected';
 		this.deviceName = device.name;
+		if (device.os !== this.os || !same) {
+			this.os = device.os;
+			this.glyph.replaceChildren(renderIcon(platformIcon(device)));
+		}
 		this.presence = device.presence;
 		if (!same) {
 			this.endpointId = device.id;
@@ -239,7 +265,14 @@ export class DeviceScreenSnapshot extends Disposable {
 
 	private render(): void {
 		const connected = this.presence === 'connected';
-		this.refresh.enabled = this.state !== 'loading' && connected;
+		this.refresh.disabled = this.state === 'loading' || !connected;
+		this.refresh.hidden = !connected;
+		// The placeholder's look follows the link: asleep, dialing, refused, or connected without an image.
+		this.frame.dataset.state = this.state === 'ready' ? 'image'
+			: this.presence === 'disconnected' ? 'offline'
+				: this.presence === 'connecting' || this.presence === 'reconnecting' ? 'connecting'
+					: this.presence === 'notAccepting' ? 'notAccepting'
+						: this.state === 'loading' ? 'loading' : 'empty';
 		this.consent.enabled = this.state !== 'loading' && connected;
 		this.frame.setAttribute('aria-busy', String(this.state === 'loading'));
 		const asking = this.state === 'needsPermission' || this.state === 'needsSourceSelection';
@@ -268,7 +301,7 @@ export class DeviceScreenSnapshot extends Disposable {
 				return nls.localize('devices.screenLoading', 'Loading screen…');
 			case 'disconnected':
 			case 'idle':
-				return nls.localize('devices.screenDisconnected', 'Connect to see this computer’s screen.');
+				return this.presenceMessage();
 			case 'sharingDisabled':
 				return nls.localize('devices.screenSharingDisabled', 'Screen viewing is turned off on that computer.');
 			case 'needsPermission':
@@ -292,6 +325,24 @@ export class DeviceScreenSnapshot extends Disposable {
 				return nls.localize('devices.screenFailed', 'The screen could not be captured.');
 			case 'ready':
 				return '';
+		}
+	}
+
+	/** Why there is no screen while the computer is not connected; the engine dials again by itself. */
+	private presenceMessage(): string {
+		switch (this.presence) {
+			case 'disconnected':
+				return nls.localize('devices.screenOffline', 'Offline. It may be asleep, off, or not running VniLink.');
+			case 'connecting':
+				return nls.localize('devices.screenConnecting', 'Connecting…');
+			case 'reconnecting':
+				return nls.localize('devices.screenReconnecting', 'Reconnecting…');
+			case 'notAccepting':
+				return nls.localize('devices.screenNotAccepting', 'Its owner stopped accepting connections.');
+			case 'connected':
+			case 'unknown':
+			case undefined:
+				return nls.localize('devices.screenNoStatus', 'Status unavailable.');
 		}
 	}
 }

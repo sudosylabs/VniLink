@@ -91,6 +91,9 @@ export class DeviceService extends Disposable implements IDeviceService {
 			name: deviceName(device),
 			os: device.os,
 			presence: device.presence,
+			hostname: device.hostname,
+			direct: device.direct.length,
+			relays: device.relays.length,
 		})));
 		if (JSON.stringify(next) !== JSON.stringify(this.current)) {
 			this.current = next;

@@ -27,12 +27,12 @@ function deferred() {
 	return { promise, resolve, reject };
 }
 
-function device(id, pet_name = null, hostname = null) {
-	return { endpoint_id: id, pet_name, hostname, os: 'linux', presence: 'connected' };
+function device(id, pet_name = null, hostname = null, direct = [], relays = []) {
+	return { endpoint_id: id, pet_name, hostname, os: 'linux', presence: 'connected', direct, relays };
 }
 
 test('device state maps names, publishes empty results and cannot be mutated by consumers', async () => {
-	let reply = snapshot([device('one', 'Personal', 'Host'), device('two', null, 'Host'), device('three')]);
+	let reply = snapshot([device('one', 'Personal', 'Host', ['192.0.2.1:7000', '[2001:db8::1]:7000'], ['https://relay.example']), device('two', null, 'Host'), device('three')]);
 	const service = new DeviceService(fakeEngine({
 		async engineCommand(command) {
 			assert.deepEqual(command, { type: 'snapshot' });
@@ -43,7 +43,11 @@ test('device state maps names, publishes empty results and cannot be mutated by 
 	service.onDidChangeDevices(devices => events.push(devices));
 	try {
 		await service.refresh(new AbortController().signal);
-		assert.deepEqual(service.devices, [{ id: 'one', name: 'Personal', os: 'linux', presence: 'connected' }, { id: 'two', name: 'Host', os: 'linux', presence: 'connected' }, { id: 'three', name: 'three', os: 'linux', presence: 'connected' }]);
+		assert.deepEqual(service.devices, [
+			{ id: 'one', name: 'Personal', os: 'linux', presence: 'connected', hostname: 'Host', direct: 2, relays: 1 },
+			{ id: 'two', name: 'Host', os: 'linux', presence: 'connected', hostname: 'Host', direct: 0, relays: 0 },
+			{ id: 'three', name: 'three', os: 'linux', presence: 'connected', hostname: null, direct: 0, relays: 0 },
+		]);
 		assert.throws(() => service.devices.push({ id: 'bad', name: 'bad', os: 'linux', presence: 'connected' }), TypeError);
 		assert.throws(() => {
 			service.devices[0].name = 'bad';
@@ -76,7 +80,7 @@ test('an older snapshot cannot overwrite a newer refresh', async () => {
 		await fresh;
 		first.resolve(snapshot([device('old')]));
 		await old;
-		assert.deepEqual(service.devices, [{ id: 'new', name: 'new', os: 'linux', presence: 'connected' }]);
+		assert.deepEqual(service.devices, [{ id: 'new', name: 'new', os: 'linux', presence: 'connected', hostname: null, direct: 0, relays: 0 }]);
 		assert.equal(events, 1);
 	} finally {
 		service.dispose();
@@ -130,7 +134,7 @@ test('failed refresh preserves the previous snapshot and surfaces current failur
 		await assert.rejects(service.refresh(new AbortController().signal), /Expected engine snapshot/);
 		reply = new Error('Transport unavailable');
 		await assert.rejects(service.refresh(new AbortController().signal), /Transport unavailable/);
-		assert.deepEqual(service.devices, [{ id: 'saved', name: 'saved', os: 'linux', presence: 'connected' }]);
+		assert.deepEqual(service.devices, [{ id: 'saved', name: 'saved', os: 'linux', presence: 'connected', hostname: null, direct: 0, relays: 0 }]);
 	} finally {
 		service.dispose();
 	}

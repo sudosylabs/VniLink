@@ -9,11 +9,10 @@ import { IDeviceService } from '../../services/devices/deviceService.js';
 import { createPageHeading, type IHomePage } from '../home/homePages.js';
 import { DeviceDetails } from './deviceDetails.js';
 import { DeviceList } from './deviceList.js';
-import { DevicePairing } from './devicePairing.js';
 
 /**
  * Home's Devices page: remembered computers beside the selected one's
- * details, with invitation pairing above them.
+ * details. Pairing lives in the titlebar actions this page shows.
  */
 export class DevicesPage extends Disposable implements IHomePage {
 	private static nextId = 0;
@@ -25,7 +24,6 @@ export class DevicesPage extends Disposable implements IHomePage {
 	private readonly feedback: HTMLElement;
 	private readonly list: DeviceList;
 	private readonly details: DeviceDetails;
-	private readonly pairing: DevicePairing;
 	private selectedId: string | undefined;
 
 	constructor(
@@ -36,7 +34,6 @@ export class DevicesPage extends Disposable implements IHomePage {
 		const detailsId = `device-details-${String(DevicesPage.nextId++)}`;
 		this.list = this._register(new DeviceList(detailsId));
 		this.details = this._register(instantiationService.createInstance(DeviceDetails, detailsId));
-		this.pairing = this._register(instantiationService.createInstance(DevicePairing));
 		const page = h('main.devices-page', { tabindex: '-1' }, [
 			h('p.device-feedback@feedback', { role: 'status' }),
 			h('div.devices-body@body', [
@@ -54,7 +51,7 @@ export class DevicesPage extends Disposable implements IHomePage {
 		this.empty.prepend(renderIcon(Icons.devices));
 		page.column.prepend(this.list.element);
 		append(this.body, this.details.element);
-		this.element.prepend(createPageHeading(nls.localize('computers.heading', 'Devices'), nls.localize('computers.subheading', 'Your computers, connected.')), this.pairing.element);
+		this.element.prepend(createPageHeading(nls.localize('computers.heading', 'Devices'), nls.localize('computers.subheading', 'Your computers, connected.')));
 		this.registerListeners();
 		this.render();
 		this.devices.initialize().catch(() => {
@@ -83,16 +80,6 @@ export class DevicesPage extends Disposable implements IHomePage {
 				this.closeDetails();
 			}
 		}));
-	}
-
-	/** Opens an invitation from another computer; without `file`, asks the user to choose one. */
-	public importInvitation(file?: File): void {
-		this.pairing.importInvitation(file);
-	}
-
-	/** Creates an invitation for this computer and downloads it. */
-	public shareInvitation(): void {
-		this.pairing.shareInvitation();
 	}
 
 	private closeDetails(): void {

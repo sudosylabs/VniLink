@@ -4,6 +4,9 @@ import { RawContextKey } from '../platform/contextkey/common/contextkey.js';
 /** The id of the tab whose view is showing. */
 export const ActiveTabContext = new RawContextKey<string>('activeTab', '', nls.localize('activeTab', 'The identifier of the active tab'));
 
+/** The id of the Home page being shown, such as `devices`; empty before Home shows one. */
+export const HomePageContext = new RawContextKey<string>('vnilink.homePage', '', nls.localize('homePage', 'The identifier of the Home page being shown'));
+
 /** Whether saved relay settings differ from the running engine's, so a restart applies them. */
 export const RestartRequiredContext = new RawContextKey<boolean>('vnilink.restartRequired', false, nls.localize('restartRequired', 'Whether VniLink must restart to apply saved settings'));
 

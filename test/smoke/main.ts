@@ -60,20 +60,31 @@ class SmokeSuite {
 				};
 				window.webContents.session.once('will-download', listener);
 			});
-			await window.webContents.executeJavaScript(`browserTests.browserScenarios.showDeviceFixture('empty'); browserTests.browserScenarios.shareFixtureInvitation()`);
-			assert.equal(await download, 'VniLink.vnl');
-			const code: unknown = await window.webContents.executeJavaScript(`document.querySelector('.device-fixture output').textContent`);
-			assert.equal(code, '042');
-			await window.webContents.executeJavaScript(`(async () => {
-				browserTests.browserScenarios.requestFixturePairing();
-				const page = document.querySelector('.device-fixture');
+			const code: unknown = await window.webContents.executeJavaScript(`(async () => {
+				browserTests.browserScenarios.showDeviceFixture('empty');
+				browserTests.browserScenarios.shareFixtureInvitation();
 				const deadline = Date.now() + 3000;
-				while (page.querySelector('.device-pairing-form').hidden) {
-					if (Date.now() > deadline) { throw new Error('Incoming pairing form did not appear'); }
+				const code = () => document.querySelector('.device-pairing-popover .device-pairing-code:not([hidden])')?.textContent;
+				while (!code()) {
+					if (Date.now() > deadline) { throw new Error('The invitation popover did not show its code'); }
 					await new Promise(resolve => requestAnimationFrame(resolve));
 				}
-				if (page.querySelector('output').textContent) { throw new Error('Incoming confirmation disclosed the expected code'); }
-				const input = page.querySelector('.device-pairing input[type="text"]');
+				document.querySelector('.device-pairing-popover .monaco-button.primary').click();
+				return code();
+			})()`);
+			assert.equal(code, '042');
+			assert.equal(await download, 'VniLink.vnl');
+			await driver.screenshot('devices-pairing-popover');
+			await window.webContents.executeJavaScript(`(async () => {
+				browserTests.browserScenarios.requestFixturePairing();
+				const popover = document.querySelector('.device-pairing-popover');
+				const deadline = Date.now() + 3000;
+				while (!popover.querySelector('.device-pairing-field:not([hidden]) input')) {
+					if (Date.now() > deadline) { throw new Error('Incoming pairing field did not appear'); }
+					await new Promise(resolve => requestAnimationFrame(resolve));
+				}
+				if (popover.querySelector('.device-pairing-code:not([hidden])')) { throw new Error('Incoming confirmation disclosed the expected code'); }
+				const input = popover.querySelector('.device-pairing-field input');
 				input.value = '731';
 				input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
 			})()`);
@@ -268,7 +279,16 @@ class SmokeSuite {
 	}
 
 	private async verifyHomeNavigation(window: BrowserWindow): Promise<void> {
-		const result: unknown = await window.webContents.executeJavaScript(`(() => {
+		const result: unknown = await window.webContents.executeJavaScript(`(async () => {
+      // Menus follow context keys after a short debounce.
+      const settled = async (condition, message) => {
+        const deadline = Date.now() + 2000;
+        while (!condition()) {
+          if (Date.now() > deadline) throw new Error(message);
+          await new Promise(resolve => setTimeout(resolve, 16));
+        }
+      };
+      const deviceActions = () => document.querySelectorAll('.view-action[data-action-id^="vnilink.devices."]').length;
       const sidebar = document.querySelector('.sidebar');
       const labels = [...sidebar.querySelectorAll('.nav-item')].map(button => button.textContent.trim());
       if (document.querySelector('.status, .brand, footer')) throw new Error('Old branding or status bar remains');
@@ -280,7 +300,7 @@ class SmokeSuite {
         if (sidebar.querySelectorAll('[aria-current="page"]').length !== 1) throw new Error('Selection is ambiguous');
         if (button.querySelector('.vnilink-icon').dataset.variant !== 'filled') throw new Error('Selected sidebar icon is not filled');
         if ([...sidebar.querySelectorAll('.nav-item:not([aria-current]) .vnilink-icon')].some(icon => icon.dataset.variant !== 'outlined')) throw new Error('Unselected icons are not outlined');
-        if (document.querySelector('.view-action')) throw new Error('Device actions remained on Settings');
+        await settled(() => deviceActions() === 0, 'Device actions remained on Settings');
         pages.set(button.dataset.sectionId, document.querySelector('.home-content > main'));
       }
       for (const button of sidebar.querySelectorAll('.nav-item:not([data-section-id="devices"])')) {
@@ -289,16 +309,17 @@ class SmokeSuite {
       }
       sidebar.querySelector('[data-section-id="devices"]').click();
       if (document.querySelector('.home-content > main') !== devices) throw new Error('Devices view was discarded');
+      await settled(() => deviceActions() === 2, 'Device actions did not return on Devices');
       if (sidebar.querySelector('[data-section-id="devices"] .vnilink-icon').dataset.icon !== 'devices') throw new Error('Wrong Devices artwork');
       if (sidebar.querySelector('[data-section-id="desktop"] .vnilink-icon').dataset.icon !== 'remoteDesktop') throw new Error('Wrong Remote Desktop artwork');
       return { labels, settings: sidebar.querySelector('.sidebar-heading').textContent,
         fullHeight: Math.abs(sidebar.getBoundingClientRect().bottom - innerHeight) < 1,
         selected: sidebar.querySelector('[aria-current="page"]').dataset.sectionId,
-        refresh: document.querySelector('.view-action')?.getAttribute('aria-label') ?? null };
+        actions: [...document.querySelectorAll('.view-action')].map(action => action.getAttribute('aria-label')) };
     })()`);
 		assert.deepEqual(result, {
 			labels: ['Devices', 'General', 'Appearance', 'Connection', 'Access & Security', 'Remote Desktop', 'Keyboard & Mouse', 'Terminal', 'Audio & Camera', 'Recording', 'Power'],
-			settings: 'Settings', fullHeight: true, selected: 'devices', refresh: null,
+			settings: 'Settings', fullHeight: true, selected: 'devices', actions: ['Open an invitation', 'Invite another computer'],
 		});
 	}
 
@@ -406,7 +427,7 @@ class SmokeSuite {
         strip: region('.tabs-scrollable'), container: region('.tabs-container'), tab: region('.tab'),
         close: tab.querySelector('.tab-close') !== null, action: document.querySelector('.view-action') ? region('.view-action') : null };
     })()`);
-		assert.deepEqual(tabs, { height: 35, topGap: height - 35, bottomGap: 0, radius: '12px', fill: 'rgba(0, 0, 0, 0)', strip: 'drag', container: 'drag', tab: 'no-drag', close: false, action: null });
+		assert.deepEqual(tabs, { height: 35, topGap: height - 35, bottomGap: 0, radius: '12px', fill: 'rgba(0, 0, 0, 0)', strip: 'drag', container: 'drag', tab: 'no-drag', close: false, action: 'no-drag' });
 		const surfaces: unknown = await window.webContents.executeJavaScript(`(() => {
       const color = selector => getComputedStyle(document.querySelector(selector)).backgroundColor;
       return { mode: document.documentElement.dataset.windowMaterial, titlebar: color('.part.titlebar'), sidebar: color('.sidebar'), content: color('.home-content') };

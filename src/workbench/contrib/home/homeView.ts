@@ -2,8 +2,10 @@ import * as nls from '../../../nls.js';
 import { $, append } from '../../../base/browser/dom.js';
 import { Icons } from '../../../base/common/icons.js';
 import { Disposable, dispose } from '../../../base/common/lifecycle.js';
+import { IContextKeyService, type IContextKey } from '../../../platform/contextkey/common/contextkey.js';
 import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
 import { Registry } from '../../../platform/registry/common/platform.js';
+import { HomePageContext } from '../../contextkeys.js';
 import type { WorkbenchTab } from '../../services/tabs/tabService.js';
 import { Extensions, HomePageGroup, type IHomePage, type IHomePagesRegistry } from './homePages.js';
 import { Sidebar, type SidebarGroup } from './sidebar.js';
@@ -24,9 +26,15 @@ export class HomeView extends Disposable implements WorkbenchTab {
 	private readonly registry = Registry.as<IHomePagesRegistry>(Extensions.HomePages);
 	private readonly pages = new Map<string, IHomePage>();
 	private activePage: IHomePage | undefined;
+	private readonly pageContext: IContextKey<string>;
 
-	constructor(@IInstantiationService private readonly instantiationService: IInstantiationService) {
+	constructor(
+		@IInstantiationService private readonly instantiationService: IInstantiationService,
+		@IContextKeyService contextKeyService: IContextKeyService,
+	) {
 		super();
+		// Pages contribute titlebar actions with `when` clauses on the page shown.
+		this.pageContext = HomePageContext.bindTo(contextKeyService);
 		this.element = $('.home-view');
 		this.sidebar = this._register(new Sidebar(nls.localize('home.navigation', 'Home navigation')));
 		this.content = $('.home-content');
@@ -58,6 +66,7 @@ export class HomeView extends Disposable implements WorkbenchTab {
 			return;
 		}
 		this.activePage = page;
+		this.pageContext.set(id);
 		this.content.replaceChildren(page.element);
 		this.content.scrollTop = 0;
 	}
@@ -74,6 +83,7 @@ export class HomeView extends Disposable implements WorkbenchTab {
 	}
 
 	public override dispose(): void {
+		this.pageContext.reset();
 		super.dispose();
 		dispose(this.pages.values());
 		this.pages.clear();

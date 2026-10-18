@@ -55,6 +55,16 @@ import windowsOutlined from '@phosphor-icons/core/assets/regular/windows-logo.sv
 import windowsFilled from '@phosphor-icons/core/assets/fill/windows-logo-fill.svg';
 import linuxOutlined from '@phosphor-icons/core/assets/regular/linux-logo.svg';
 import linuxFilled from '@phosphor-icons/core/assets/fill/linux-logo-fill.svg';
+import importInvitationOutlined from '@phosphor-icons/core/assets/regular/download-simple.svg';
+import importInvitationFilled from '@phosphor-icons/core/assets/fill/download-simple-fill.svg';
+import createInvitationOutlined from '@phosphor-icons/core/assets/regular/export.svg';
+import createInvitationFilled from '@phosphor-icons/core/assets/fill/export-fill.svg';
+import viewOutlined from '@phosphor-icons/core/assets/regular/eye.svg';
+import viewFilled from '@phosphor-icons/core/assets/fill/eye-fill.svg';
+import cameraOutlined from '@phosphor-icons/core/assets/regular/camera.svg';
+import cameraFilled from '@phosphor-icons/core/assets/fill/camera-fill.svg';
+import lockOutlined from '@phosphor-icons/core/assets/regular/lock-simple.svg';
+import lockFilled from '@phosphor-icons/core/assets/fill/lock-simple-fill.svg';
 
 // The only place that knows the icon provider and its filenames.
 const assets: Record<IconId, Record<IconVariant, string>> = {
@@ -70,6 +80,12 @@ const assets: Record<IconId, Record<IconVariant, string>> = {
 	audio: { outlined: audioOutlined, filled: audioFilled },
 	recording: { outlined: recordingOutlined, filled: recordingFilled },
 	power: { outlined: powerOutlined, filled: powerFilled },
+	importInvitation: { outlined: importInvitationOutlined, filled: importInvitationFilled },
+	createInvitation: { outlined: createInvitationOutlined, filled: createInvitationFilled },
+	view: { outlined: viewOutlined, filled: viewFilled },
+	camera: { outlined: cameraOutlined, filled: cameraFilled },
+	lock: { outlined: lockOutlined, filled: lockFilled },
+	copy: { outlined: restoreOutlined, filled: restoreFilled },
 	devices: { outlined: devicesOutlined, filled: devicesFilled },
 	remoteDesktop: { outlined: remoteDesktopOutlined, filled: remoteDesktopFilled },
 	refresh: { outlined: refreshOutlined, filled: refreshFilled },

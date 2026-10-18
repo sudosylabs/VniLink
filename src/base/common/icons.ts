@@ -25,6 +25,12 @@ export const Icons = Object.freeze({
 	audio: 'audio',
 	recording: 'recording',
 	power: 'power',
+	importInvitation: 'importInvitation',
+	createInvitation: 'createInvitation',
+	view: 'view',
+	camera: 'camera',
+	lock: 'lock',
+	copy: 'copy',
 
 	close: 'close',
 	minimize: 'minimize',

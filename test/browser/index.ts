@@ -1,4 +1,4 @@
-import { verifyDevices, verifyDeviceScreenshot, DevicePageFixture, type DeviceFixtureState } from './devices.js';
+import { verifyDevices, verifyDeviceScreenshot, verifyPairingPopover, DevicePageFixture, type DeviceFixtureState } from './devices.js';
 import { verifyMediaSettings } from './mediaSettings.js';
 /** Independently selectable renderer scenarios; each owns its fixture teardown. */
 import { verifyWorkbenchLifecycle } from './workbench.js';
@@ -19,8 +19,9 @@ export class BrowserScenarios {
 		this.deviceFixture = new DevicePageFixture(state);
 	}
 
+	/** Opens the fixture's create-invitation popover, as the titlebar action does. */
 	public shareFixtureInvitation(): void {
-		this.deviceFixture?.page.shareInvitation();
+		this.deviceFixture?.anchor('create').click();
 	}
 
 	public requestFixturePairing(): void {
@@ -36,7 +37,7 @@ export class BrowserScenarios {
 
 	private readonly scenarios = new Map<string, () => unknown>([
 		['workbench', verifyWorkbenchLifecycle], ['access', verifyAccess], ['connection', verifyConnection], ['data-channels', verifyDataChannels],
-		['devices', verifyDevices], ['device-screenshot', verifyDeviceScreenshot], ['home', verifyHomeLifecycle], ['icons', verifyIcons],
+		['devices', verifyDevices], ['device-pairing', verifyPairingPopover], ['device-screenshot', verifyDeviceScreenshot], ['home', verifyHomeLifecycle], ['icons', verifyIcons],
 		['media-settings', verifyMediaSettings], ['remote-desktop', verifyRemoteDesktop], ['settings', verifySettingsPages], ['tabs', verifyTabs],
 	]);
 
