@@ -3,6 +3,10 @@ use crate::Error;
 
 pub const TERMINAL_CHUNK: usize = 16 * 1024;
 pub const TERMINAL_QUEUE: usize = 32;
+/// How long a busy shell's output may gather into one chunk; typing echoes
+/// arrive this much later at most.
+#[cfg(unix)]
+const OUTPUT_GATHER: std::time::Duration = std::time::Duration::from_millis(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TerminalSize {
@@ -205,9 +209,12 @@ mod native {
                 let mut exit = None;
                 let mut eof = false;
                 while !ended.load(Ordering::Acquire) {
+                    // The worker sleeps only when a pass did nothing, so a busy
+                    // shell runs at the consumer's pace and an idle one costs little.
+                    let mut progressed = false;
                     if let Some(value) = event.take() {
                         match output.try_send(value) {
-                            Ok(()) => {}
+                            Ok(()) => progressed = true,
                             Err(tokio::sync::mpsc::error::TrySendError::Full(value)) => {
                                 event = Some(value)
                             }
@@ -217,6 +224,7 @@ mod native {
                     if pending.is_empty() {
                         match rx.try_recv() {
                             Ok(TerminalCommand::Input(bytes)) => {
+                                progressed = true;
                                 if bytes.is_empty() || bytes.len() > TERMINAL_CHUNK {
                                     event = Some(TerminalEvent::Failed(
                                         "terminal input chunk is out of range".into(),
@@ -227,6 +235,7 @@ mod native {
                                 offset = 0;
                             }
                             Ok(TerminalCommand::Resize(value)) => {
+                                progressed = true;
                                 if value.validate().is_err()
                                     || process.master.resize(size(value)).is_err()
                                 {
@@ -237,6 +246,7 @@ mod native {
                                 }
                             }
                             Ok(TerminalCommand::Redraw(value)) => {
+                                progressed = true;
                                 let temporary = TerminalSize {
                                     rows: if value.rows == 1 { 2 } else { value.rows - 1 },
                                     columns: value.columns,
@@ -259,6 +269,7 @@ mod native {
                         match writer.write(&pending[offset..]) {
                             Ok(0) => break,
                             Ok(n) => {
+                                progressed = true;
                                 offset += n;
                                 if offset == pending.len() {
                                     pending.clear();
@@ -274,24 +285,48 @@ mod native {
                         }
                     }
                     if event.is_none() && !eof {
+                        // Drain what the PTY holds into one chunk: a read returns
+                        // only what the shell wrote since the last one, often a
+                        // line. Output that is still arriving gets one short wait
+                        // to fill the chunk, since each chunk crosses the network
+                        // and the viewer's acknowledgement on its own.
                         let mut bytes = vec![0; TERMINAL_CHUNK];
-                        match reader.read(&mut bytes) {
-                            Ok(0) => eof = true,
-                            Ok(n) => {
-                                bytes.truncate(n);
-                                event = Some(TerminalEvent::Output(bytes));
+                        let mut filled = 0;
+                        let mut failed = false;
+                        let mut gathered = false;
+                        while filled < TERMINAL_CHUNK {
+                            match reader.read(&mut bytes[filled..]) {
+                                Ok(0) => {
+                                    eof = true;
+                                    break;
+                                }
+                                Ok(n) => filled += n,
+                                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                    if filled == 0 || gathered {
+                                        break;
+                                    }
+                                    gathered = true;
+                                    std::thread::sleep(OUTPUT_GATHER);
+                                }
+                                Err(e) if e.raw_os_error() == Some(nix::libc::EIO) => {
+                                    eof = true;
+                                    break;
+                                }
+                                Err(_) => {
+                                    failed = true;
+                                    break;
+                                }
                             }
-                            Err(e)
-                                if matches!(
-                                    e.kind(),
-                                    std::io::ErrorKind::WouldBlock
-                                        | std::io::ErrorKind::Interrupted
-                                ) => {}
-                            Err(e) if e.raw_os_error() == Some(nix::libc::EIO) => eof = true,
-                            Err(_) => {
-                                event = Some(TerminalEvent::Failed("terminal read failed".into()));
-                                break;
-                            }
+                        }
+                        if failed {
+                            event = Some(TerminalEvent::Failed("terminal read failed".into()));
+                            break;
+                        }
+                        if filled > 0 {
+                            bytes.truncate(filled);
+                            event = Some(TerminalEvent::Output(bytes));
+                            progressed = true;
                         }
                     }
                     if exit.is_none() {
@@ -307,7 +342,9 @@ mod native {
                             break;
                         }
                     }
-                    std::thread::sleep(Duration::from_millis(5));
+                    if !progressed {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
                 }
                 if let Some(value) = event {
                     // Preserve final output/status under backpressure, while close
