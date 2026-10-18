@@ -75,7 +75,8 @@ pub use system::{
     FfiSystemOperation, FfiSystemPolicy, FfiSystemSupport, SystemServiceHandle,
 };
 pub use terminal::{
-    FfiTerminalEvent, FfiTerminalPolicy, FfiTerminalSessionInfo, FfiTerminalSize, TerminalService,
+    FfiShell, FfiTerminalEvent, FfiTerminalPolicy, FfiTerminalSessionInfo, FfiTerminalShells,
+    FfiTerminalSize, TerminalService,
 };
 mod storage;
 mod types;

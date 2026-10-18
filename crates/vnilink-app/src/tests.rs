@@ -550,3 +550,37 @@ fn sharing_updates_cross_the_facade_without_widening_or_resetting_consent() {
         assert!(serde_json::from_str::<crate::FfiSharingPolicyUpdate>(invalid).is_err());
     }
 }
+
+#[test]
+fn the_offered_shell_is_a_detected_one_chosen_by_id() {
+    let core = open_core();
+    core.enable_default_native_terminal().unwrap();
+    let shells = core.terminal_shells().unwrap();
+    assert!(shells
+        .shells
+        .iter()
+        .any(|shell| shell.id == shells.automatic));
+    assert_eq!(shells.current.as_deref(), Some(shells.automatic.as_str()));
+    // Only a detected shell can be chosen; a path is not a shell id unless listed.
+    assert!(matches!(
+        core.set_terminal_shell(Some("/tmp/not-a-shell".into())),
+        Err(FfiError::InvalidSetting { .. })
+    ));
+    assert_eq!(core.terminal_shells().unwrap().current, shells.current);
+    if let Some(other) = shells
+        .shells
+        .iter()
+        .find(|shell| shell.id != shells.automatic)
+    {
+        core.set_terminal_shell(Some(other.id.clone())).unwrap();
+        assert_eq!(
+            core.terminal_shells().unwrap().current.as_deref(),
+            Some(other.id.as_str())
+        );
+    }
+    core.set_terminal_shell(None).unwrap();
+    assert_eq!(
+        core.terminal_shells().unwrap().current,
+        Some(shells.automatic)
+    );
+}

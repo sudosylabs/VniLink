@@ -17,8 +17,8 @@ use std::{
     time::Duration,
 };
 use vnilink::terminal::{
-    HostTerminalFactory, TerminalBackend, TerminalCommand, TerminalEvent, TerminalSize,
-    TERMINAL_CHUNK, TERMINAL_QUEUE,
+    HostTerminalFactory, ShellChoice, TerminalBackend, TerminalCommand, TerminalEvent,
+    TerminalSize, TERMINAL_CHUNK, TERMINAL_QUEUE,
 };
 use vnilink::{BackendStartup, Error};
 use windows::{
@@ -44,6 +44,8 @@ use windows::{
 pub struct WindowsTerminalFactory {
     program: PathBuf,
     directory: PathBuf,
+    args: Vec<String>,
+    id: Option<String>,
 }
 impl WindowsTerminalFactory {
     pub fn new(program: PathBuf, directory: PathBuf) -> Result<Self, Error> {
@@ -58,21 +60,57 @@ impl WindowsTerminalFactory {
                 "choose an absolute shell path and an existing working directory",
             ));
         }
-        Ok(Self { program, directory })
+        Ok(Self {
+            program,
+            directory,
+            args: Vec::new(),
+            id: None,
+        })
     }
+    /// The automatic shell, as VS Code's default: PowerShell when installed,
+    /// then Windows PowerShell, then Command Prompt.
     pub fn for_current_user() -> Result<Self, Error> {
+        Self::for_shell(&automatic_shell()?)
+    }
+    /// A shell the local user chose, in their profile directory.
+    pub fn for_shell(shell: &ShellChoice) -> Result<Self, Error> {
+        vnilink::terminal::validate_shell_args(&shell.args)?;
+        let args = shell
+            .args
+            .iter()
+            .map(|arg| arg.to_str().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()
+            .ok_or(Error::InvalidSetting("shell arguments are out of range"))?;
         let directory = std::env::var_os("USERPROFILE")
             .map(PathBuf::from)
             .ok_or(Error::Unsupported("host home directory"))?;
-        let program = std::env::var_os("ComSpec")
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("SystemRoot")
-                    .map(|p| PathBuf::from(p).join("System32").join("cmd.exe"))
-            })
-            .ok_or(Error::Unsupported("host shell"))?;
-        Self::new(program, directory)
+        let mut factory = Self::new(shell.program.clone(), directory)?;
+        if factory.program.to_str().is_none() {
+            return Err(Error::InvalidSetting(
+                "choose an absolute shell path and an existing working directory",
+            ));
+        }
+        factory.args = args;
+        factory.id = Some(shell.id.clone());
+        Ok(factory)
     }
+}
+
+/// The shells this computer can offer, found as VS Code finds terminal profiles.
+pub fn available_shells() -> Vec<ShellChoice> {
+    crate::shells::detect(&crate::shells::SystemShellHost)
+}
+
+/// What "automatic" offers on this computer.
+pub fn automatic_shell() -> Result<ShellChoice, Error> {
+    automatic_of(&available_shells())
+        .cloned()
+        .ok_or(Error::Unsupported("host shell"))
+}
+
+/// What "automatic" offers among `shells`.
+pub fn automatic_of(shells: &[ShellChoice]) -> Option<&ShellChoice> {
+    crate::shells::automatic(shells)
 }
 fn native_error(_: windows::core::Error) -> Error {
     Error::Unsupported("Windows terminal native operation")
@@ -231,6 +269,9 @@ fn send(
     }
 }
 impl HostTerminalFactory for WindowsTerminalFactory {
+    fn shell_id(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
     fn open(&self, size: TerminalSize, startup: BackendStartup) -> Result<TerminalBackend, Error> {
         startup.check()?;
         size.validate()?;
@@ -293,11 +334,12 @@ impl HostTerminalFactory for WindowsTerminalFactory {
         info.lpAttributeList = attributes.list;
         let program = wide(self.program.as_os_str());
         let directory = wide(self.directory.as_os_str());
-        let mut command: Vec<u16> = Some(34)
-            .into_iter()
-            .chain(self.program.as_os_str().encode_wide())
-            .chain([34, 0])
-            .collect();
+        let args: Vec<&str> = self.args.iter().map(String::as_str).collect();
+        let mut command: Vec<u16> =
+            crate::shells::command_line(&self.program.to_string_lossy(), &args)
+                .encode_utf16()
+                .chain(Some(0))
+                .collect();
         let mut process = PROCESS_INFORMATION::default();
         unsafe {
             CreateProcessW(

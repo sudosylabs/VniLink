@@ -143,6 +143,80 @@ fn terminal_revoke_and_backend_disable_cancel_only_terminal() {
             .terminal
     );
 }
+/// The local user's choice of shell is refused while a shell runs, unlike the
+/// factory swap that disabling Terminal uses, and the next shell is the new one.
+#[test]
+fn changing_the_offered_shell_waits_for_running_shells() {
+    let controller = start_direct();
+    let host = start_direct();
+    pair_for_control(&host, &controller);
+    let first = crate::terminal::ShellChoice {
+        id: "/bin/sh".into(),
+        label: "sh".into(),
+        program: "/bin/sh".into(),
+        args: vec![],
+    };
+    host.replace_terminal_factory(Arc::new(NativeTerminalFactory::for_shell(&first).unwrap()))
+        .unwrap();
+    assert_eq!(
+        host.terminal_shell_id().unwrap().as_deref(),
+        Some("/bin/sh")
+    );
+    host.set_service_sharing(ServiceKind::Terminal, true)
+        .unwrap();
+    let connection = connect(&controller, &host);
+    let owner = controller
+        .attach_controller_service(connection.id, connection.generation, ServiceKind::Terminal)
+        .unwrap();
+    let terminal = controller
+        .open_terminal_service(owner.id, owner.generation, SIZE)
+        .unwrap();
+    wait(|| !host.hosted_terminal_sessions().unwrap().is_empty());
+    // Arguments reach the shell exactly: with -c, the next two become $0 and $1.
+    let second = crate::terminal::ShellChoice {
+        id: "custom".into(),
+        label: "custom".into(),
+        program: "/bin/sh".into(),
+        args: ["-c", "echo VNI_ARGS:$0:$1; exit 3", "zero", "one"]
+            .map(std::ffi::OsString::from)
+            .to_vec(),
+    };
+    let replacement = Arc::new(NativeTerminalFactory::for_shell(&second).unwrap());
+    assert!(matches!(
+        host.replace_terminal_factory(replacement.clone()),
+        Err(Error::Busy)
+    ));
+    assert!(
+        !terminal.is_cancelled(),
+        "a refused change ended the running shell"
+    );
+    terminal.input(b"exit\n").unwrap();
+    wait(|| host.hosted_terminal_sessions().unwrap().is_empty());
+    host.replace_terminal_factory(replacement).unwrap();
+    assert_eq!(host.terminal_shell_id().unwrap().as_deref(), Some("custom"));
+    let owner = controller
+        .attach_controller_service(connection.id, connection.generation, ServiceKind::Terminal)
+        .unwrap();
+    let terminal = controller
+        .open_terminal_service(owner.id, owner.generation, SIZE)
+        .unwrap();
+    let mut output = Vec::new();
+    let mut exit = None;
+    wait(|| {
+        while let Some(event) = terminal.poll() {
+            match event {
+                TerminalEvent::Output(bytes) => output.extend(bytes),
+                TerminalEvent::Exited(code) => exit = Some(code),
+                other => panic!("unexpected terminal event {other:?}"),
+            }
+        }
+        exit.is_some()
+    });
+    assert_eq!(exit, Some(3));
+    let text = String::from_utf8_lossy(&output);
+    assert!(text.contains("VNI_ARGS:zero:one"), "{text}");
+}
+
 #[test]
 fn terminal_validates_before_starting_and_close_reaps_shell() {
     assert!(SIZE.validate().is_ok());

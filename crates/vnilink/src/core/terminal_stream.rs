@@ -168,6 +168,28 @@ impl Core {
         }
         Ok(())
     }
+    /// The local user's change of shell. Unlike [`Core::set_terminal_factory`],
+    /// which ends every shell, this refuses with Busy while any shell is alive
+    /// or starting, as a policy change does.
+    pub fn replace_terminal_factory(
+        &self,
+        factory: Arc<dyn crate::terminal::HostTerminalFactory>,
+    ) -> Result<(), Error> {
+        let state = self.alive_state()?;
+        if !state.terminal_pending.is_empty() || !lock(&self.shared.terminal_sessions).is_empty() {
+            return Err(Error::Busy);
+        }
+        // Lock order is always state, then factory.
+        *lock(&self.shared.terminal_factory) = Some(factory);
+        Ok(())
+    }
+    /// The shell the installed factory runs, when it came from a choice.
+    pub fn terminal_shell_id(&self) -> Result<Option<String>, Error> {
+        self.ensure_alive()?;
+        Ok(lock(&self.shared.terminal_factory)
+            .as_ref()
+            .and_then(|factory| factory.shell_id().map(str::to_owned)))
+    }
     /// Host-side retained shell records, including detached persistent sessions.
     pub fn hosted_terminal_sessions(&self) -> Result<Vec<TerminalSessionInfo>, Error> {
         self.ensure_alive()?;

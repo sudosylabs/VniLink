@@ -46,6 +46,59 @@ pub trait HostTerminalFactory: Send + Sync {
         size: TerminalSize,
         startup: crate::BackendStartup,
     ) -> Result<TerminalBackend, Error>;
+    /// The [`ShellChoice::id`] this factory runs, when it came from one.
+    fn shell_id(&self) -> Option<&str> {
+        None
+    }
+}
+
+/// A shell this computer can offer to paired computers. Its own user picks one
+/// on the host; a peer never names a program, its arguments or a directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellChoice {
+    /// Stable on this computer: the shell's path on Unix, a name on Windows.
+    pub id: String,
+    pub label: String,
+    pub program: std::path::PathBuf,
+    pub args: Vec<std::ffi::OsString>,
+}
+
+/// Bounds on host-defined shell arguments.
+pub const MAX_SHELL_ARGS: usize = 8;
+pub const MAX_SHELL_ARG_LEN: usize = 256;
+
+/// Rejects arguments no detected shell needs: too many, too long, or with NUL.
+pub fn validate_shell_args(args: &[std::ffi::OsString]) -> Result<(), Error> {
+    if args.len() > MAX_SHELL_ARGS
+        || args
+            .iter()
+            .any(|arg| arg.len() > MAX_SHELL_ARG_LEN || arg.to_string_lossy().contains('\0'))
+    {
+        return Err(Error::InvalidSetting("shell arguments are out of range"));
+    }
+    Ok(())
+}
+
+/// Labels shells by file name, numbering repeats as VS Code does (`bash (2)`).
+pub fn label_shells(programs: Vec<std::path::PathBuf>) -> Vec<(std::path::PathBuf, String)> {
+    let mut seen = std::collections::HashMap::<String, usize>::new();
+    programs
+        .into_iter()
+        .map(|program| {
+            let name = program
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| program.to_string_lossy().into_owned());
+            let count = seen.entry(name.clone()).or_default();
+            *count += 1;
+            let label = if *count == 1 {
+                name
+            } else {
+                format!("{name} ({count})")
+            };
+            (program, label)
+        })
+        .collect()
 }
 /// A bounded backend bridge. Dropping it cancels the native terminal worker.
 pub struct TerminalBackend {
@@ -97,23 +150,92 @@ mod native {
             let _ = self.child.wait();
         }
     }
+    fn account() -> Result<nix::unistd::User, Error> {
+        nix::unistd::User::from_uid(nix::unistd::Uid::effective())
+            .map_err(|_| Error::Unsupported("host account lookup"))?
+            .ok_or(Error::Unsupported("host account"))
+    }
+    fn is_executable(path: &std::path::Path) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    }
+    /// Every shell runs as a login shell, as the account's own login would.
+    fn login_args() -> Vec<std::ffi::OsString> {
+        vec!["-l".into()]
+    }
+    /// The shells `/etc/shells` lists that exist here, each once by its real
+    /// path. `canonical` resolves a listed path, or rejects a missing one.
+    pub fn parse_shells(
+        text: &str,
+        canonical: impl Fn(&std::path::Path) -> Option<std::path::PathBuf>,
+    ) -> Vec<std::path::PathBuf> {
+        let mut seen = std::collections::HashSet::new();
+        text.lines()
+            .map(|line| line.split('#').next().unwrap_or_default().trim())
+            .filter(|line| line.starts_with('/'))
+            .map(std::path::PathBuf::from)
+            .filter(|path| canonical(path).is_some_and(|real| seen.insert(real)))
+            .collect()
+    }
+    /// The account's login shell, which is what "automatic" offers.
+    pub fn automatic_shell() -> Result<ShellChoice, Error> {
+        let program = account()?.shell;
+        let label = label_shells(vec![program.clone()]).remove(0).1;
+        Ok(ShellChoice {
+            id: program.to_string_lossy().into_owned(),
+            label,
+            program,
+            args: login_args(),
+        })
+    }
+    /// Installed shells from `/etc/shells`, with the login shell first if it is
+    /// not listed there.
+    pub fn available_shells() -> Vec<ShellChoice> {
+        let text = std::fs::read_to_string("/etc/shells").unwrap_or_default();
+        let mut programs = parse_shells(&text, |path| {
+            is_executable(path)
+                .then(|| std::fs::canonicalize(path).ok())
+                .flatten()
+        });
+        if let Ok(login) = account().map(|account| account.shell) {
+            let login_real = std::fs::canonicalize(&login).ok();
+            let listed = programs
+                .iter()
+                .any(|path| path == &login || std::fs::canonicalize(path).ok() == login_real);
+            if !listed && is_executable(&login) {
+                programs.insert(0, login);
+            }
+        }
+        label_shells(programs)
+            .into_iter()
+            .map(|(program, label)| ShellChoice {
+                id: program.to_string_lossy().into_owned(),
+                label,
+                program,
+                args: login_args(),
+            })
+            .collect()
+    }
     /// Host-selected shell, run as the account running VniLink, without privilege elevation.
     pub struct NativeTerminalFactory {
         program: std::path::PathBuf,
         directory: std::path::PathBuf,
-        login: bool,
+        args: Vec<std::ffi::OsString>,
+        id: Option<String>,
     }
     impl NativeTerminalFactory {
         /// Account login shell and home directory. Nothing in
         /// a remote request can override this executable or home directory.
         pub fn for_current_user() -> Result<Self, Error> {
-            let account = nix::unistd::User::from_uid(nix::unistd::Uid::effective())
-                .map_err(|_| Error::Unsupported("host account lookup"))?
-                .ok_or(Error::Unsupported("host account"))?;
-            let directory = account.dir;
-            let program = account.shell;
-            let mut factory = Self::new(program, directory)?;
-            factory.login = true;
+            Self::for_shell(&automatic_shell()?)
+        }
+        /// A shell the local user chose, in the account's home directory.
+        pub fn for_shell(shell: &ShellChoice) -> Result<Self, Error> {
+            validate_shell_args(&shell.args)?;
+            let mut factory = Self::new(shell.program.clone(), account()?.dir)?;
+            factory.args = shell.args.clone();
+            factory.id = Some(shell.id.clone());
             Ok(factory)
         }
         pub fn new(
@@ -132,7 +254,8 @@ mod native {
             Ok(Self {
                 program,
                 directory,
-                login: false,
+                args: Vec::new(),
+                id: None,
             })
         }
     }
@@ -145,6 +268,9 @@ mod native {
         }
     }
     impl HostTerminalFactory for NativeTerminalFactory {
+        fn shell_id(&self) -> Option<&str> {
+            self.id.as_deref()
+        }
         fn open(
             &self,
             dimensions: TerminalSize,
@@ -180,8 +306,8 @@ mod native {
                 .map_err(|_| Error::Unsupported("terminal writer"))?;
             startup.check()?;
             let mut command = CommandBuilder::new(&self.program);
-            if self.login {
-                command.arg("-l");
+            for arg in &self.args {
+                command.arg(arg);
             }
             command.cwd(&self.directory);
             command.env("TERM", "xterm-256color");
@@ -392,17 +518,51 @@ mod native {
             let factory = NativeTerminalFactory::for_current_user().unwrap();
             assert_eq!(factory.program, account.shell);
             assert_eq!(factory.directory, account.dir);
-            assert!(factory.login);
-            assert!(
-                !NativeTerminalFactory::new(factory.program, factory.directory)
-                    .unwrap()
-                    .login
+            assert_eq!(factory.args, vec![std::ffi::OsString::from("-l")]);
+            assert_eq!(factory.shell_id(), Some(account.shell.to_str().unwrap()));
+            let plain = NativeTerminalFactory::new(factory.program, factory.directory).unwrap();
+            assert!(plain.args.is_empty() && plain.shell_id().is_none());
+        }
+
+        #[test]
+        fn etc_shells_lists_existing_shells_once_with_numbered_labels() {
+            let text = "# List of acceptable shells\n/bin/bash\n\n/bin/zsh # default\n/usr/bin/bash\nrelative/sh\n/missing/fish\n/bin/sh\n/usr/local/bin/bash\n";
+            // /usr/bin/bash is the same file as /bin/bash; /missing/fish does not exist.
+            let shells = parse_shells(text, |path| match path.to_str().unwrap() {
+                "/bin/bash" | "/usr/bin/bash" => Some("/usr/bin/bash".into()),
+                "/missing/fish" => None,
+                other => Some(other.into()),
+            });
+            assert_eq!(
+                shells,
+                ["/bin/bash", "/bin/zsh", "/bin/sh", "/usr/local/bin/bash"]
+                    .map(std::path::PathBuf::from)
             );
+            let labels: Vec<_> = label_shells(shells)
+                .into_iter()
+                .map(|(_, label)| label)
+                .collect();
+            assert_eq!(labels, ["bash", "zsh", "sh", "bash (2)"]);
+        }
+
+        #[test]
+        fn available_shells_include_the_login_shell_as_automatic() {
+            let automatic = automatic_shell().unwrap();
+            let shells = available_shells();
+            assert!(
+                shells.iter().any(|shell| shell.id == automatic.id),
+                "{shells:?}"
+            );
+            assert!(shells
+                .iter()
+                .all(|shell| shell.args == [std::ffi::OsString::from("-l")]));
+            let ids: std::collections::HashSet<_> = shells.iter().map(|shell| &shell.id).collect();
+            assert_eq!(ids.len(), shells.len(), "a shell is listed twice");
         }
     }
 }
 #[cfg(unix)]
-pub use native::NativeTerminalFactory;
+pub use native::{automatic_shell, available_shells, parse_shells, NativeTerminalFactory};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TerminalOptions {

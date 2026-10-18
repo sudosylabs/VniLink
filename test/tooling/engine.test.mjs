@@ -111,9 +111,23 @@ test('service commands validate kinds, policies, sessions and jobs exactly', () 
 	};
 	assert.equal(isEngineCommand({ type: 'setTerminalPolicy', policy }), true);
 	assert.equal(isEngineCommand({ type: 'setTerminalPolicy', policy: { ...policy, max_sessions: 65536 } }), false);
-	assert.equal(isEngineCommand({ type: 'enableNativeTerminal', program: '/bin/zsh', directory: '/tmp' }), true);
-	assert.equal(isEngineCommand({ type: 'enableDefaultNativeTerminal' }), true);
-	assert.equal(isEngineCommand({ type: 'disableTerminal' }), true);
+	// A window names a detected shell by id; it can no longer install a program as the host shell.
+	assert.equal(isEngineCommand({ type: 'terminalShells' }), true);
+	assert.equal(isEngineCommand({ type: 'setTerminalShell', shell: 'pwsh' }), true);
+	assert.equal(isEngineCommand({ type: 'setTerminalShell', shell: null }), true);
+	for (const shell of ['', 'x'.repeat(1025), 'a\0b', 7, undefined]) {
+		assert.equal(isEngineCommand({ type: 'setTerminalShell', shell }), false);
+	}
+	assert.equal(isEngineCommand({ type: 'setTerminalShell', shell: 'pwsh', program: 'C:\\evil.exe' }), false);
+	for (const type of ['enableNativeTerminal', 'enableDefaultNativeTerminal', 'disableTerminal']) {
+		assert.equal(isEngineCommand({ type, program: '/bin/zsh', directory: '/tmp' }), false);
+		assert.equal(isEngineCommand({ type }), false);
+	}
+	const shells = { type: 'terminalShells', shells: [{ id: '/bin/zsh', label: 'zsh' }, { id: '/bin/bash', label: 'bash' }], automatic: '/bin/zsh', current: null };
+	assert.equal(isEngineReply(shells), true);
+	assert.equal(isEngineReply({ ...shells, current: '/bin/bash' }), true);
+	assert.equal(isEngineReply({ ...shells, shells: [{ id: '/bin/zsh', label: 'zsh', program: '/bin/zsh' }] }), false);
+	assert.equal(isEngineReply({ ...shells, automatic: '' }), false);
 	assert.equal(isEngineCommand({ type: 'remoteTerminalSessions', connectionId: '1', generation: '2' }), true);
 	assert.equal(isEngineCommand({ type: 'closeRemoteTerminalSession', connectionId: '1', generation: '2', id: 'abc' }), true);
 	assert.equal(isEngineCommand({ type: 'hostedTerminalSessions' }), true);

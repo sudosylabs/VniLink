@@ -24,7 +24,7 @@ const privateCommands: ReadonlySet<EngineCommand['type']> = new Set([
 	// Hosting follows `application.acceptConnections`, owned by `HostingMainService`.
 	'startHosting', 'stopHosting', 'stopHostedSession',
 	'saveCustomRelays', 'setRelayPublic', 'setRelayCustom',
-	'setSharingPolicy', 'setSystemPolicy', 'setTerminalPolicy', 'setPowerPolicy',
+	'setSharingPolicy', 'setSystemPolicy', 'setTerminalPolicy', 'setTerminalShell', 'setPowerPolicy',
 	'setDesktopCodecDefault', 'setDesktopQualityDefaults', 'setInputDefaults',
 	'setNativeCameraSources', 'setNativeAudioSources', 'setFileRoots', 'enableFilesystemAccess',
 ]);

@@ -9,7 +9,7 @@ export const handlers = new Map();
 export const opened = [];
 export const windows = new Map();
 export const ipcMain = { handle: (name, callback) => handlers.set(name, callback), removeHandler: name => handlers.delete(name), on() { }, once() { }, removeListener() { } };
-export const app = { isPackaged: false, getVersion: () => 'test', getPath: () => '/Pictures' };
+export const app = { isPackaged: false, getVersion: () => 'test', getPath: () => '/Pictures', getLoginItemSettings: () => ({ openAtLogin: false }) };
 export const shell = { openExternal: async url => opened.push(url) };
 export const clipboard = { text: '', readText: async () => clipboard.text, writeText: async text => { clipboard.text = text; } };
 export const dialog = { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) };
@@ -146,7 +146,7 @@ test('windows change settings only through the configuration channel', async () 
 	await assert.rejects(channel.call('window:1', 'execute', { type: 'shutdown' }), /Invalid/);
 	const privateCommands = [
 		{ type: 'subscribeEvents' }, { type: 'pollEvents', subscriptionId: '1', maxEvents: 1 }, { type: 'releaseEvents', subscriptionId: '1' },
-		{ type: 'setRelayPublic' }, { type: 'setSharingPolicy', policy: { view: true } }, { type: 'setDesktopCodecDefault', codec: 'auto' }, { type: 'setFileRoots', paths: [] },
+		{ type: 'setRelayPublic' }, { type: 'setSharingPolicy', policy: { view: true } }, { type: 'setDesktopCodecDefault', codec: 'auto' }, { type: 'setFileRoots', paths: [] }, { type: 'setTerminalShell', shell: null },
 	];
 	for (const command of privateCommands) {
 		await assert.rejects(channel.call('window:1', 'execute', command), /Invalid/, `${command.type} must stay private to main`);
@@ -247,6 +247,51 @@ test('media defaults roll back partial runtime writes without publishing a false
 	assert.deepEqual(commands.map(command => command.type), ['setNativeAudioSources', 'setNativeAudioSources']);
 	assert.deepEqual(commands[1], { type: 'setNativeAudioSources', microphones: ['vnilink:default-microphone'], system: ['vnilink:default-system-audio'] });
 	configuration.dispose();
+});
+
+test('the offered shell is chosen by id, refused while shells run, and a missing saved shell stays saved', async () => {
+	const commands = [];
+	let refusal;
+	const engine = settingsEngine(async command => {
+		commands.push(command);
+		if (command.type === 'setTerminalShell' && refusal) {
+			throw new Error(refusal);
+		}
+		return { type: 'done' };
+	});
+	const warnings = [];
+	const log = { error() { }, trace() { }, warn: (...args) => warnings.push(args) };
+	disk.file = {};
+	const configuration = new ConfigurationMainService('/settings.json', engine, log);
+	await configuration.updateValue('terminal.shell', '/bin/zsh');
+	assert.deepEqual(commands.at(-1), { type: 'setTerminalShell', shell: '/bin/zsh' });
+	assert.equal(configuration.snapshot.values['terminal.shell'], '/bin/zsh');
+	// Busy: hosted shells keep running, nothing is saved, and the message says what to do.
+	refusal = 'Busy: the host already has a controlling session';
+	await assert.rejects(configuration.updateValue('terminal.shell', 'git-bash'), /Close hosted terminals before changing the shell/);
+	assert.equal(configuration.snapshot.values['terminal.shell'], '/bin/zsh');
+	refusal = 'InvalidSetting: that shell is not installed on this computer';
+	await assert.rejects(configuration.updateValue('terminal.shell', 'gone'), /not installed/);
+	refusal = undefined;
+	await configuration.updateValue('terminal.shell', '');
+	assert.deepEqual(commands.at(-1), { type: 'setTerminalShell', shell: null }, 'Automatic was not sent as null');
+	await assert.rejects(configuration.updateValue('terminal.shell', 'a\0b'), /installed on this computer/);
+	configuration.dispose();
+
+	// At startup a saved shell is offered again; one no longer installed leaves
+	// the automatic shell in place but stays saved for when it returns.
+	disk.file = { 'terminal.shell': 'fish' };
+	commands.length = 0;
+	refusal = 'InvalidSetting: that shell is not installed on this computer';
+	const restored = new ConfigurationMainService('/settings.json', engine, log);
+	await restored.restoreEngineDefaults(false);
+	assert.deepEqual(commands.filter(command => command.type === 'setTerminalShell'), [{ type: 'setTerminalShell', shell: 'fish' }]);
+	assert.equal(warnings.length, 1);
+	assert.equal(restored.snapshot.values['terminal.shell'], 'fish');
+	commands.length = 0;
+	await restored.restoreEngineDefaults(true);
+	assert(!commands.some(command => command.type === 'setTerminalShell'), 'A temporary engine was given a host shell');
+	restored.dispose();
 });
 
 test('the default recording folder stays independent of a saved custom folder', async () => {

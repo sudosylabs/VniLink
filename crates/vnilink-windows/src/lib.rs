@@ -20,12 +20,14 @@ mod plan;
 
 #[cfg(windows)]
 mod capture;
+#[cfg(any(windows, test))]
+mod shells;
 #[cfg(windows)]
 mod terminal;
 #[cfg(any(windows, test))]
 mod terminal_io;
 #[cfg(windows)]
-pub use terminal::WindowsTerminalFactory;
+pub use terminal::{automatic_of, automatic_shell, available_shells, WindowsTerminalFactory};
 
 pub use codecs::probe_video_codecs;
 pub use decode::WindowsDecoder;

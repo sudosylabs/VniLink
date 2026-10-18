@@ -2,7 +2,7 @@ import { Emitter } from '../../src/base/common/event.js';
 import { Disposable } from '../../src/base/common/lifecycle.js';
 import { ConfigurationTarget, type IConfigurationChangeEvent, type IConfigurationData, type IConfigurationValue } from '../../src/platform/configuration/common/configuration.js';
 import { settingDefaults, settingKeys, settingSource, type ConfigurationSource } from '../../src/platform/configuration/common/configurationSchema.js';
-import type { NativeDevice } from '../../src/platform/engine/common/engine.js';
+import type { NativeDevice, TerminalShells } from '../../src/platform/engine/common/engine.js';
 import { InstantiationService } from '../../src/platform/instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
 import { permissionKinds, type PermissionCommand, type PermissionSnapshot } from '../../src/platform/permissions/common/permissions.js';
@@ -15,6 +15,7 @@ import { IWorkbenchConfigurationService } from '../../src/workbench/services/con
 import { INativeRuntimeService } from '../../src/workbench/services/nativeRuntime/nativeRuntimeService.js';
 import { IPermissionService } from '../../src/workbench/services/permissions/permissionService.js';
 import { IRemoteDesktopService, type DesktopSettings } from '../../src/workbench/services/remoteDesktop/remoteDesktopService.js';
+import { ITerminalHostService } from '../../src/workbench/services/terminal/terminalHostService.js';
 
 export function assert(value: unknown, message: string): asserts value {
 	if (!value) {
@@ -186,6 +187,8 @@ export class SettingsFixture extends Disposable {
 	public chosenFolder: string | null = '/Recordings';
 	public openedDocumentation = 0;
 	public running: RunningRelays = { publicRelay: true, urls: [] };
+	/** What this computer's engine reports it can offer; changing it models installing a shell. */
+	public shells: TerminalShells = { shells: [{ id: '/bin/zsh', label: 'zsh' }, { id: '/bin/bash', label: 'bash' }], automatic: '/bin/zsh', current: '/bin/zsh' };
 	private readonly instantiationService: InstantiationService;
 	private readonly host = document.createElement('div');
 
@@ -215,6 +218,7 @@ export class SettingsFixture extends Disposable {
 				}
 			}],
 			[IConnectionService, { _serviceBrand: undefined, getRunningRelays: () => Promise.resolve(this.running) }],
+			[ITerminalHostService, { _serviceBrand: undefined, shells: () => Promise.resolve(this.shells) }],
 		);
 		this.instantiationService = this._register(new InstantiationService(services, true));
 		this.host.className = 'home-content';

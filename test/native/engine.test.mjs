@@ -41,6 +41,16 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 		await assert.rejects(execute(first, { type: 'stopHostedPeer', sessionId: 'not-a-number' }), /Invalid session ID/);
 		await assert.rejects(execute(first, { type: 'stopHostedPeer', sessionId: '1', extra: true }));
 		await assert.rejects(execute(first, { type: 'stopHostedPeer', sessionId: '1' }), /NoSession/);
+		// The host's own user chooses among detected shells; no command takes a program path.
+		const shells = await execute(first, { type: 'terminalShells' });
+		assert.equal(shells.type, 'terminalShells');
+		assert(shells.shells.some(shell => shell.id === shells.automatic), 'Automatic is not a detected shell');
+		assert.equal(shells.current, null, 'A temporary engine offered a shell before one was chosen');
+		await assert.rejects(execute(first, { type: 'setTerminalShell', shell: '/tmp/not-a-shell' }), /InvalidSetting/);
+		await assert.rejects(execute(first, { type: 'setTerminalShell', shell: shells.automatic, program: '/bin/sh' }));
+		await assert.rejects(execute(first, { type: 'enableNativeTerminal', program: '/bin/sh', directory: '/tmp' }));
+		await execute(first, { type: 'setTerminalShell', shell: null });
+		assert.equal((await execute(first, { type: 'terminalShells' })).current, shells.automatic);
 		const runtime = await execute(first, { type: 'nativeRuntime' });
 		assert.equal(runtime.type, 'nativeRuntime');
 		assert.equal(runtime.capabilities.length, 13);

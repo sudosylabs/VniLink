@@ -138,6 +138,42 @@ async function verifyCustomControls(): Promise<void> {
 	}
 }
 
+/** The Terminal page offers this computer's shells; a choice applies, a refusal is explained, a missing one stays visible. */
+async function verifyTerminalShell(): Promise<void> {
+	const fixture = new SettingsFixture();
+	try {
+		const page = fixture.open('terminal');
+		await settle();
+		const select = page.element.querySelector<HTMLSelectElement>('select[data-setting="terminal.shell"]');
+		assert(select, 'Shell choice missing');
+		const options = (): string => Array.from(select.options).map(option => `${option.value}=${option.textContent}`).join();
+		assert(options() === '=Automatic (zsh),/bin/zsh=zsh,/bin/bash=bash', `Shell options are wrong: ${options()}`);
+		assert(current(select).value === '' && !current(select).disabled, 'Automatic is not the default choice');
+		assert(page.element.querySelector('section[data-section]')?.getAttribute('data-section') === 'shell', 'Shell is not the first section');
+		edit(select, '/bin/bash');
+		await settle();
+		assert(fixture.configuration.getValue<unknown>('terminal.shell') === '/bin/bash', 'The chosen shell did not apply');
+		fixture.configuration.failure = new Error('Close hosted terminals before changing the shell.');
+		edit(select, '/bin/zsh');
+		await settle();
+		assert(page.element.textContent.includes('Close hosted terminals before changing the shell.'), 'A refused change is not explained');
+		assert(fixture.configuration.getValue<unknown>('terminal.shell') === '/bin/bash', 'A refused change was kept');
+		fixture.configuration.failure = undefined;
+		// A saved shell that was uninstalled stays chosen and is called out.
+		fixture.configuration.set('terminal.shell', '/opt/homebrew/bin/fish');
+		await settle();
+		assert(current(select).value === '/opt/homebrew/bin/fish' && options().includes('/opt/homebrew/bin/fish=/opt/homebrew/bin/fish (not installed)'), 'A missing saved shell is hidden');
+		assert(page.element.textContent.includes('paired computers get the automatic shell'), 'A missing saved shell is not explained');
+		// Installing it makes it an ordinary choice the next time the list is read.
+		fixture.shells = { ...fixture.shells, shells: [...fixture.shells.shells, { id: '/opt/homebrew/bin/fish', label: 'fish' }] };
+		fixture.permissions.focused.fire();
+		await settle();
+		assert(options().endsWith('/opt/homebrew/bin/fish=fish') && !page.element.textContent.includes('(not installed)'), 'A newly installed shell did not appear');
+	} finally {
+		fixture.dispose();
+	}
+}
+
 /** A disposed page applies nothing. */
 async function verifyDisposal(): Promise<void> {
 	const fixture = new SettingsFixture();
@@ -161,5 +197,6 @@ export async function verifySettingsPages(): Promise<void> {
 	await verifyNumbers();
 	await verifyUnavailable();
 	await verifyCustomControls();
+	await verifyTerminalShell();
 	await verifyDisposal();
 }

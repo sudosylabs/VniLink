@@ -1,8 +1,9 @@
+import * as nls from '../../../nls.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 import { ILogService } from '../../log/common/log.js';
-import { isCodecPreference, isQualityLimits, type EngineCommand } from '../../engine/common/engine.js';
+import { engineErrorCategory, isCodecPreference, isQualityLimits, type EngineCommand } from '../../engine/common/engine.js';
 import { IEngineMainService } from '../../engine/electron-main/engineMainService.js';
 import type { EngineMainService } from '../../engine/electron-main/engineMainService.js';
 import { UserSettings } from '../node/userSettings.js';
@@ -41,6 +42,11 @@ function engineCommands(group: string, values: Values): EngineCommand[] {
 			const paths = fileRoots(values);
 			return [paths.length ? { type: 'setFileRoots', paths } : { type: 'enableFilesystemAccess' }];
 		}
+		case 'terminal.shell': {
+			// The empty id offers the automatic shell.
+			const shell = values['terminal.shell'];
+			return [{ type: 'setTerminalShell', shell: typeof shell === 'string' && shell ? shell : null }];
+		}
 	}
 	return [];
 }
@@ -52,7 +58,7 @@ function fileRoots(values: Values): string[] {
 
 /** The engine group a user setting belongs to; settings without one stay in this process. */
 function engineGroup(key: string): string | undefined {
-	if (key === 'desktop.quality' || key === 'desktop.codec' || key === 'files.roots' || key === 'media.camera') {
+	if (key === 'desktop.quality' || key === 'desktop.codec' || key === 'files.roots' || key === 'media.camera' || key === 'terminal.shell') {
 		return key;
 	}
 	if (key === 'media.microphone' || key === 'media.systemAudio') {
@@ -153,8 +159,10 @@ export class ConfigurationMainService extends Disposable {
 			try {
 				await this.apply(group, { ...previous, [key]: value });
 			} catch (error) {
-				await this.apply(group, previous);
-				throw error;
+				await this.apply(group, previous).catch(() => { /* The engine refused the change too, so it still runs the previous value. */ });
+				throw group === 'terminal.shell' && engineErrorCategory(error) === 'Busy'
+					? new Error(nls.localize('terminal.shellBusy', 'Close hosted terminals before changing the shell.'))
+					: error;
 			}
 		}
 		try {
@@ -195,6 +203,13 @@ export class ConfigurationMainService extends Disposable {
 		if (values['media.microphone'] || values['media.systemAudio']) {
 			await this.apply('media.audio', values).catch((error: unknown) => {
 				this.logService.error('Saved audio sources could not be opened.', error);
+			});
+		}
+		// The engine starts with the automatic shell; a saved choice that is no
+		// longer installed keeps that, and stays saved for when it returns.
+		if (values['terminal.shell'] && !temporaryEngine) {
+			await this.apply('terminal.shell', values).catch((error: unknown) => {
+				this.logService.warn('The saved terminal shell is not available; paired computers get the automatic shell.', error);
 			});
 		}
 		try {

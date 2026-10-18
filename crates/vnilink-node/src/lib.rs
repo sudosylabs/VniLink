@@ -95,6 +95,16 @@ struct TransferSystemSupport {
     privacy: bool,
 }
 
+/// A shell this computer can offer, as the window lists it.
+#[derive(Serialize)]
+struct TransferShell {
+    id: String,
+    label: String,
+}
+
+/// Longest shell id: a path on Unix, a name on Windows.
+const MAX_SHELL_ID: usize = 1024;
+
 #[derive(Deserialize, Serialize, Clone)]
 struct TransferTerminalPolicy {
     allow_persistence: bool,
@@ -532,12 +542,11 @@ enum Command {
     SetTerminalPolicy {
         policy: TransferTerminalPolicy,
     },
-    EnableNativeTerminal {
-        program: String,
-        directory: String,
+    TerminalShells,
+    /// `null` offers the automatic shell; otherwise a detected shell's id.
+    SetTerminalShell {
+        shell: Option<String>,
     },
-    EnableDefaultNativeTerminal,
-    DisableTerminal,
     RemoteTerminalSessions {
         #[serde(rename = "connectionId")]
         connection_id: String,
@@ -1023,6 +1032,11 @@ enum Reply {
     },
     TerminalSessions {
         sessions: Vec<TransferTerminalSession>,
+    },
+    TerminalShells {
+        shells: Vec<TransferShell>,
+        automatic: String,
+        current: Option<String>,
     },
     Jobs {
         jobs: Vec<TransferJob>,
@@ -1932,22 +1946,32 @@ impl EngineBridge {
                         .map_err(core_error)?;
                     Reply::Done
                 }
-                Command::EnableNativeTerminal { program, directory } => {
+                Command::TerminalShells => {
+                    let shells = state.core.terminal_shells().map_err(core_error)?;
+                    Reply::TerminalShells {
+                        shells: shells
+                            .shells
+                            .into_iter()
+                            .map(|shell| TransferShell {
+                                id: shell.id,
+                                label: shell.label,
+                            })
+                            .collect(),
+                        automatic: shells.automatic,
+                        current: shells.current,
+                    }
+                }
+                Command::SetTerminalShell { shell } => {
+                    if shell
+                        .as_ref()
+                        .is_some_and(|id| id.is_empty() || id.len() > MAX_SHELL_ID)
+                    {
+                        return Err(Error::from_reason("Invalid shell"));
+                    }
                     state
                         .core
-                        .enable_native_terminal(program.clone(), directory.clone())
+                        .set_terminal_shell(shell.clone())
                         .map_err(core_error)?;
-                    Reply::Done
-                }
-                Command::EnableDefaultNativeTerminal => {
-                    state
-                        .core
-                        .enable_default_native_terminal()
-                        .map_err(core_error)?;
-                    Reply::Done
-                }
-                Command::DisableTerminal => {
-                    state.core.disable_terminal().map_err(core_error)?;
                     Reply::Done
                 }
                 Command::RemoteTerminalSessions {
@@ -2278,9 +2302,8 @@ impl EngineBridge {
             | Command::SetSystemPolicy { .. }
             | Command::TerminalPolicy
             | Command::SetTerminalPolicy { .. }
-            | Command::EnableNativeTerminal { .. }
-            | Command::EnableDefaultNativeTerminal
-            | Command::DisableTerminal
+            | Command::TerminalShells
+            | Command::SetTerminalShell { .. }
             | Command::RemoteTerminalSessions { .. }
             | Command::CloseRemoteTerminalSession { .. }
             | Command::HostedTerminalSessions
@@ -2498,10 +2521,8 @@ impl CommandShape {
             "setSystemPolicy" => &["type", "policy"],
             "terminalPolicy" => &["type"],
             "setTerminalPolicy" => &["type", "policy"],
-            "enableNativeTerminal" => &["type", "program", "directory"],
-            "enableDefaultNativeTerminal" | "disableTerminal" | "hostedTerminalSessions" => {
-                &["type"]
-            }
+            "terminalShells" | "hostedTerminalSessions" => &["type"],
+            "setTerminalShell" => &["type", "shell"],
             "remoteTerminalSessions" => &["type", "connectionId", "generation"],
             "closeRemoteTerminalSession" => &["type", "connectionId", "generation", "id"],
             "closeTerminalSession" => &["type", "id"],

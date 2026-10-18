@@ -1,7 +1,7 @@
 import * as nls from '../../../nls.js';
 import type { IStringDictionary } from '../../../base/common/collections.js';
 import { Registry } from '../../registry/common/platform.js';
-import { isCodecPreference, isQualityLimits } from '../../engine/common/engine.js';
+import { isCodecPreference, isQualityLimits, shellId } from '../../engine/common/engine.js';
 import { Extensions, type IConfigurationNode, type IConfigurationPropertySchema, type IConfigurationRegistry } from './configurationRegistry.js';
 
 /**
@@ -106,6 +106,11 @@ export function isFileRoots(value: unknown): value is readonly string[] {
 /** A media source id; the empty id turns the source off. */
 function mediaSource(value: unknown): string | undefined {
 	return typeof value === 'string' && value.length <= 2048 && !value.includes('\0') ? undefined : nls.localize('settings.mediaSource', 'Choose an available source.');
+}
+
+/** A detected shell's id; the empty id offers the automatic shell. */
+function shellChoice(value: unknown): string | undefined {
+	return value === '' || shellId(value) ? undefined : nls.localize('terminal.shellChoice', 'Choose a shell installed on this computer.');
 }
 
 function relayInfos(value: unknown): string | undefined {
@@ -350,6 +355,20 @@ registerSettings('power', {
 			default: false,
 			title: nls.localize('power.lock', 'Lock this computer'),
 			description: nls.localize('power.lockHelp', 'Ask the operating system to lock when remote control ends.'),
+		},
+	},
+});
+
+registerSettings('user', {
+	id: 'terminalShell',
+	title: nls.localize('home.terminal', 'Terminal'),
+	properties: {
+		'terminal.shell': {
+			type: 'string',
+			default: '',
+			title: nls.localize('terminal.shell', 'Shell'),
+			description: nls.localize('terminal.shellHelp', 'Close hosted terminals before changing it.'),
+			validate: shellChoice,
 		},
 	},
 });

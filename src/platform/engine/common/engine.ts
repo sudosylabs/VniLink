@@ -105,6 +105,12 @@ export interface TerminalPolicy {
 	history_bytes: number; replay_bytes: number; detached_timeout_secs: number;
 }
 
+/** A shell this computer can offer to paired computers, by the id its user picks it with. */
+export interface TerminalShell { id: string; label: string }
+
+/** The shells this computer can offer, what automatic resolves to, and the one offered now. */
+export interface TerminalShells { shells: TerminalShell[]; automatic: string; current: string | null }
+
 export interface TerminalSession {
 	id: string; process_id: number; shell: string; rows: number; columns: number;
 	persistent: boolean; attached: boolean;
@@ -177,8 +183,9 @@ export type EngineCommand =
 	| { type: 'setSystemPolicy'; policy: SystemPolicy }
 	| { type: 'terminalPolicy' }
 	| { type: 'setTerminalPolicy'; policy: TerminalPolicy }
-	| { type: 'enableNativeTerminal'; program: string; directory: string }
-	| { type: 'enableDefaultNativeTerminal' | 'disableTerminal' | 'hostedTerminalSessions' }
+	| { type: 'terminalShells' | 'hostedTerminalSessions' }
+	/** `null` offers the automatic shell. */
+	| { type: 'setTerminalShell'; shell: string | null }
 	| { type: 'remoteTerminalSessions'; connectionId: string; generation: string }
 	| { type: 'closeRemoteTerminalSession'; connectionId: string; generation: string; id: string }
 	| { type: 'closeTerminalSession'; id: string }
@@ -291,6 +298,7 @@ export type EngineReply =
 	| { type: 'systemPolicy'; policy: SystemPolicy; support: SystemSupport }
 	| { type: 'terminalPolicy'; policy: TerminalPolicy }
 	| { type: 'terminalSessions'; sessions: TerminalSession[] }
+	| ({ type: 'terminalShells' } & TerminalShells)
 	| { type: 'jobs'; jobs: FileJob[] }
 	| { type: 'job'; job: FileJob }
 	| { type: 'fileJobsSubscription'; subscriptionId: string }
@@ -420,6 +428,26 @@ function terminalPolicy(value: unknown): value is TerminalPolicy {
 		&& uint(value.max_sessions_per_peer, 65535) && uint(value.history_bytes, 4294967295)
 		&& uint(value.replay_bytes, 4294967295) && uint(value.detached_timeout_secs, 4294967295)
 		&& Object.keys(value).length === 6;
+}
+
+/**
+ * The category of an engine failure. The addon formats every error as
+ * `<Category>: <message>` (`core_error` in crates/vnilink-node), so the
+ * category is stable where the message is not.
+ */
+export function engineErrorCategory(error: unknown): string | undefined {
+	return error instanceof Error ? /^([A-Z][A-Za-z]+): /.exec(error.message)?.[1] : undefined;
+}
+
+/** A shell id: a path on Unix, a name on Windows. */
+export function shellId(value: unknown): value is string {
+	return typeof value === 'string' && value.length > 0 && value.length <= 1024 && !value.includes('\0');
+}
+
+function terminalShells(value: Record<string, unknown>): boolean {
+	return Array.isArray(value.shells) && value.shells.length <= 64
+		&& value.shells.every((shell: unknown) => record(shell) && shellId(shell.id) && text(shell.label) && Object.keys(shell).length === 2)
+		&& shellId(value.automatic) && (value.current === null || shellId(value.current)) && Object.keys(value).length === 4;
 }
 
 function terminalSession(value: unknown): value is TerminalSession {
@@ -629,8 +657,8 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'setSystemPolicy': keys = ['policy']; valid = systemPolicy(value.policy); break;
 		case 'terminalPolicy': keys = []; valid = true; break;
 		case 'setTerminalPolicy': keys = ['policy']; valid = terminalPolicy(value.policy); break;
-		case 'enableNativeTerminal': keys = ['program', 'directory']; valid = text(value.program) && text(value.directory); break;
-		case 'enableDefaultNativeTerminal': case 'disableTerminal': case 'hostedTerminalSessions': keys = []; valid = true; break;
+		case 'terminalShells': case 'hostedTerminalSessions': keys = []; valid = true; break;
+		case 'setTerminalShell': keys = ['shell']; valid = value.shell === null || shellId(value.shell); break;
 		case 'remoteTerminalSessions': keys = ['connectionId', 'generation']; valid = decimal(value.connectionId) && decimal(value.generation); break;
 		case 'closeRemoteTerminalSession': keys = ['connectionId', 'generation', 'id']; valid = decimal(value.connectionId) && decimal(value.generation) && text(value.id); break;
 		case 'closeTerminalSession': keys = ['id']; valid = text(value.id); break;
@@ -697,6 +725,7 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'systemPolicy': return systemPolicy(value.policy) && systemSupport(value.support) && Object.keys(value).length === 3;
 		case 'terminalPolicy': return terminalPolicy(value.policy) && Object.keys(value).length === 2;
 		case 'terminalSessions': return terminalSessions(value.sessions) && Object.keys(value).length === 2;
+		case 'terminalShells': return terminalShells(value);
 		case 'jobs': return fileJobs(value.jobs) && Object.keys(value).length === 2;
 		case 'job': return fileJob(value.job) && Object.keys(value).length === 2;
 		case 'fileJobsSubscription': return decimal(value.subscriptionId) && Object.keys(value).length === 2;

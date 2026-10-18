@@ -16,6 +16,7 @@ import { RunningRelaysWidget } from './runningRelaysWidget.js';
 import { Extensions as SettingExtensions, type ISettingControlsRegistry } from './settingRenderers.js';
 import { SettingsPageStyle, type ISettingsPageDescriptor } from './settingsLayout.js';
 import { SettingsPage } from './settingsPage.js';
+import { TerminalShellControl } from './terminalShellControl.js';
 import { ThemeSettingControl } from './themeSettingControl.js';
 
 const controls = Registry.as<ISettingControlsRegistry>(SettingExtensions.SettingControls);
@@ -31,6 +32,8 @@ controls.registerControl('desktop.codec', CodecSettingControl);
 controls.registerControl('input.pointerSensitivity', PointerSensitivityControl);
 
 controls.registerControl('recording.directory', RecordingFolderControl);
+
+controls.registerControl('terminal.shell', TerminalShellControl);
 
 for (const key of ['media.camera', 'media.microphone', 'media.systemAudio']) {
 	controls.registerControl(key, MediaSourceControl);
@@ -135,10 +138,18 @@ const pages: readonly ISettingsPageDescriptor[] = [
 	{
 		id: 'terminal',
 		title: nls.localize('home.terminal', 'Terminal'),
-		description: nls.localize('terminal.description', 'Limits for remote terminals hosted on this computer.'),
+		description: nls.localize('terminal.description', 'The shell and limits for remote terminals hosted on this computer.'),
 		icon: Icons.terminal,
 		...form,
+		// The shell list is read again on return, so a shell installed meanwhile appears.
+		poll: true,
 		sections: [
+			{
+				id: 'shell',
+				title: nls.localize('terminal.shellSection', 'Shell'),
+				description: nls.localize('terminal.shellSectionHelp', 'Paired computers with Terminal permission get this shell and cannot choose another.'),
+				settings: ['terminal.shell'],
+			},
 			{
 				id: 'sessions',
 				title: nls.localize('terminal.sessions', 'Session limits'),
