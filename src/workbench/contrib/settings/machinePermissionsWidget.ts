@@ -1,6 +1,7 @@
 import * as nls from '../../../nls.js';
 import { $, addDisposableListener, append, EventType } from '../../../base/browser/dom.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
+import { isMacintosh } from '../../../base/common/platform.js';
 import { permissionKinds, type MachinePermission, type PermissionCommand, type PermissionKind, type PermissionSnapshot, type PermissionStatus } from '../../../platform/permissions/common/permissions.js';
 import { IPermissionService } from '../../services/permissions/permissionService.js';
 import type { ISettingsWidget } from './settingsLayout.js';
@@ -10,11 +11,16 @@ const titles: Record<PermissionKind, string> = {
 };
 
 const descriptions: Record<PermissionKind, string> = {
-	screen: nls.localize('permissions.screenHelp', 'Capture this computer’s screen. Changes in System Settings may require restarting the app.'),
+	screen: nls.localize('permissions.screenHelp', 'Capture this computer’s screen.'),
 	accessibility: nls.localize('permissions.accessibilityHelp', 'Send keyboard and mouse input to this computer.'),
 	camera: nls.localize('permissions.cameraHelp', 'Access cameras connected to this computer.'),
-	microphone: nls.localize('permissions.microphoneHelp', 'Capture microphone input. Changes in System Settings may require restarting the app.'),
+	microphone: nls.localize('permissions.microphoneHelp', 'Capture microphone input.'),
 };
+
+/** macOS applies some consent changes only after a restart; other systems have no such step. */
+const restartNote = nls.localize('permissions.restartNote', 'Changes in System Settings may require restarting the app.');
+
+const restartNoted: ReadonlySet<PermissionKind> = new Set<PermissionKind>(isMacintosh ? ['screen', 'microphone'] : []);
 
 const statuses: Record<PermissionStatus, string> = {
 	granted: nls.localize('permissions.granted', 'Allowed'), denied: nls.localize('permissions.denied', 'Not allowed'), restricted: nls.localize('permissions.restricted', 'Restricted'), 'not-determined': nls.localize('permissions.notDetermined', 'Not requested'), unknown: nls.localize('permissions.unknown', 'Status unavailable'), unsupported: nls.localize('permissions.unsupported', 'Not exposed by this platform'), 'not-required': nls.localize('permissions.notRequired', 'No permission needed'),
@@ -43,7 +49,7 @@ export class MachinePermissionsWidget extends Disposable implements ISettingsWid
 			const row = append(body, $('.access-toggle-row', { 'data-permission-kind': kind }));
 			const text = append(row, $('div'));
 			append(text, $('span.access-toggle-title')).textContent = titles[kind];
-			append(text, $('span.access-description')).textContent = descriptions[kind];
+			append(text, $('span.access-description')).textContent = restartNoted.has(kind) ? `${descriptions[kind]} ${restartNote}` : descriptions[kind];
 			const controls = append(row, $('.machine-permission-controls'));
 			const status = append(controls, $('span.machine-permission-status'));
 			status.textContent = nls.localize('permissions.checking', 'Checking…');
