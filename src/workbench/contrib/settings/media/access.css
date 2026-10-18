@@ -54,37 +54,6 @@
 	color: var(--text);
 }
 
-.access-device-selector {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 20px;
-	font-size: 12px;
-}
-
-.access-device-selector select {
-	font: inherit;
-	color: var(--text);
-	background: var(--canvas);
-	border: 1px solid var(--line);
-	border-radius: 4px;
-	padding: 8px 36px 8px 10px;
-	width: 100%;
-	min-width: 0;
-}
-
-.access-identity {
-	display: block;
-	font-size: 10px;
-	color: var(--muted);
-	overflow-wrap: anywhere;
-	margin: 12px 0 18px;
-}
-
-.access-identity:empty {
-	display: none;
-}
-
 .access-toggle-row {
 	display: flex;
 	align-items: center;
@@ -134,19 +103,10 @@
 }
 
 .access-switch:focus-visible,
-.access-device-selector select:focus-visible {
-	outline: 2px solid var(--accent);
-	outline-offset: 3px;
-}
-
 .access-switch:disabled,
 .access-text-button:disabled {
 	opacity: 0.5;
 	cursor: default;
-}
-
-.access-permissions > .access-description {
-	margin-top: 16px;
 }
 
 .access-status {

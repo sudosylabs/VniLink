@@ -14,11 +14,18 @@ import { isEngineCommand, type EngineCommand, type EngineReply } from '../common
 import { DATA_CHANNEL_PORT_RESPONSE } from '../common/engineService.js';
 import type { EngineMainService } from './engineMainService.js';
 
-/** Commands that change relay settings and so may change whether a restart is required. */
-const relayCommands: ReadonlySet<EngineCommand['type']> = new Set(['saveCustomRelays', 'setRelayPublic', 'setRelayCustom']);
-
-/** Engine commands only the main process may send; windows receive events through `onDidReceiveEvents`. */
-const privateCommands: ReadonlySet<EngineCommand['type']> = new Set(['subscribeEvents', 'pollEvents', 'releaseEvents']);
+/**
+ * Engine commands only the main process may send. Windows receive events
+ * through `onDidReceiveEvents`, and change settings through the configuration
+ * channel, which owns their persistence, validation and read-back.
+ */
+const privateCommands: ReadonlySet<EngineCommand['type']> = new Set([
+	'subscribeEvents', 'pollEvents', 'releaseEvents',
+	'saveCustomRelays', 'setRelayPublic', 'setRelayCustom',
+	'setSharingPolicy', 'setSystemPolicy', 'setTerminalPolicy', 'setPowerPolicy',
+	'setDesktopCodecDefault', 'setDesktopQualityDefaults', 'setInputDefaults',
+	'setNativeCameraSources', 'setNativeAudioSources', 'setFileRoots', 'enableFilesystemAccess',
+]);
 
 /**
  * Serves engine commands and data channels to windows. Commands are validated
@@ -71,11 +78,7 @@ export class EngineChannel extends Disposable implements IServerChannel {
 		if (command.type === 'startNativeScreenSharing') {
 			await this.checkScreenSharing(command);
 		}
-		const reply = await this.engine.execute(command);
-		if (reply.type === 'done' && relayCommands.has(command.type)) {
-			await this.engine.refreshRestartRequired().catch(() => { /* The committed command succeeds even if state readback fails. */ });
-		}
-		return reply;
+		return this.engine.execute(command);
 	}
 
 	private async checkScreenSharing(command: Extract<EngineCommand, { type: 'startNativeScreenSharing' }>): Promise<void> {

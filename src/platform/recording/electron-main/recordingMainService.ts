@@ -20,11 +20,8 @@ export class RecordingMainService implements Omit<IRecordingService, '_serviceBr
 	}
 
 	public async createDestination(): Promise<string> {
-		const snapshot = this.configuration.snapshot;
-		if (snapshot.error) {
-			throw new Error(snapshot.error);
-		}
-		const directory = snapshot.values['recording.defaults'].directory || await this.getDefaultDirectory();
+		const saved = this.configuration.getValue('recording.directory');
+		const directory = typeof saved === 'string' && saved ? saved : await this.getDefaultDirectory();
 		await mkdir(directory, { recursive: true });
 		return join(directory, `VniLink-${randomUUID()}.mkv`);
 	}

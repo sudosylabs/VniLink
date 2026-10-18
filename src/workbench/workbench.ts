@@ -2,7 +2,7 @@ import './media/workbench.css';
 import { runWhenWindowIdle } from '../base/browser/dom.js';
 import { ensureCodeWindow, mainWindow } from '../base/browser/window.js';
 import { errorHandler, isCancellationError, setUnexpectedErrorHandler } from '../base/common/errors.js';
-import { IConfigurationSnapshotService } from '../platform/configuration/common/configurationSnapshot.js';
+import { IWorkbenchConfigurationService } from './services/configuration/configurationService.js';
 import { IEngineService } from '../platform/engine/common/engineService.js';
 import { getSingletonServiceDescriptors } from '../platform/instantiation/common/extensions.js';
 import { IInstantiationService, type ServicesAccessor } from '../platform/instantiation/common/instantiation.js';
@@ -63,7 +63,7 @@ export class Workbench extends Layout {
 	private async start(): Promise<void> {
 		ensureCodeWindow(mainWindow, this.configuration.windowId);
 		const instantiationService = this.initServices();
-		await instantiationService.invokeFunction(accessor => accessor.get(IConfigurationSnapshotService).initialize());
+		await instantiationService.invokeFunction(accessor => accessor.get(IWorkbenchConfigurationService).initialize());
 		this.checkAlive();
 		const titlebar = instantiationService.invokeFunction(accessor => {
 			this.registerListeners(accessor);

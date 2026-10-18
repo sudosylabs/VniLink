@@ -1,5 +1,5 @@
 import { createDecorator } from '../../../platform/instantiation/common/instantiation.js';
-import type { NativeBackend, NativeCapability, NativeDevice, PowerPolicy, PowerStatus, NativeScreenSource, NativeSharingStatus, RecordingStatus, RecordingRetention } from '../../../platform/engine/common/engine.js';
+import type { NativeBackend, NativeCapability, NativeDevice, PowerStatus, NativeScreenSource, NativeSharingStatus, RecordingStatus, RecordingRetention } from '../../../platform/engine/common/engine.js';
 
 export interface NativeRuntime { readonly backends: readonly NativeBackend[]; readonly capabilities: readonly NativeCapability[]; }
 
@@ -20,9 +20,5 @@ export interface INativeRuntimeService {
 	releaseRecording(id: string): Promise<void>;
 	remoteDevices(target: { readonly id: string; readonly generation: string }, kind: 'camera' | 'microphone' | 'system'): Promise<readonly NativeDevice[]>;
 	devices(kind: 'camera' | 'audio' | 'output'): Promise<readonly NativeDevice[]>;
-	approveCameras(ids: readonly string[]): Promise<NativeRuntime>;
-	approveAudio(microphones: readonly string[], system: readonly string[]): Promise<NativeRuntime>;
-	powerPolicy(): Promise<Readonly<PowerPolicy>>;
-	savePowerPolicy(policy: PowerPolicy): Promise<Readonly<PowerPolicy>>;
 	powerStatus(): Promise<readonly PowerStatus[]>;
 }

@@ -1,9 +1,9 @@
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
-import { IConfigurationSnapshotService } from '../../../platform/configuration/common/configurationSnapshot.js';
+import { IConfigurationService } from '../../../platform/configuration/common/configuration.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import { INativeHostService } from '../../../platform/native/common/native.js';
 import { IRecordingService } from '../../../platform/recording/common/recording.js';
-import type { NativeDevice, PowerPolicy, PowerStatus, EngineCommand, NativeScreenSource, NativeSharingStatus, RecordingStatus, RecordingRetention } from '../../../platform/engine/common/engine.js';
+import type { NativeDevice, PowerStatus, EngineCommand, NativeScreenSource, NativeSharingStatus, RecordingStatus, RecordingRetention } from '../../../platform/engine/common/engine.js';
 import { INativeRuntimeService, type NativeRuntime } from './nativeRuntimeService.js';
 /** Native backend facts and explicitly requested media operations. Peer grants remain separate. */
 export class NativeRuntimeService implements INativeRuntimeService {
@@ -14,7 +14,7 @@ export class NativeRuntimeService implements INativeRuntimeService {
 		@IEngineService private readonly engine: IEngineService,
 		@INativeHostService private readonly nativeHostService: INativeHostService,
 		@IRecordingService private readonly recordingService: IRecordingService,
-		@IConfigurationSnapshotService private readonly configuration: IConfigurationSnapshotService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
 	) { }
 
 	public get available(): boolean {
@@ -77,16 +77,16 @@ export class NativeRuntimeService implements INativeRuntimeService {
 		if (action === 'read') {
 			return fallback;
 		}
-		return this.nativeHostService.pickFolder(this.configuration.snapshot.values['recording.defaults'].directory || fallback);
+		return this.nativeHostService.pickFolder(this.configurationService.getValue<string>('recording.directory') || fallback);
 	}
 
 	public async startRecording(target: { readonly id: string; readonly generation: string }, options: { readonly destination?: string; readonly maxBytes?: string; readonly maxDurationMs?: string; readonly retention?: RecordingRetention }): Promise<Readonly<RecordingStatus>> {
-		const defaults = this.configuration.snapshot.values['recording.defaults'];
+		const mebibytes = (key: string): string => String(this.configurationService.getValue<number>(key) * 1048576);
 		const destination = options.destination ?? await this.recordingService.createDestination();
 		if (!destination) {
 			throw new Error('Recording destination unavailable');
 		}
-		return this.recording({ type: 'startRecording', sessionId: target.id, generation: target.generation, destination, maxBytes: options.maxBytes ?? defaults.maxBytes, maxDurationMs: options.maxDurationMs ?? defaults.maxDurationMs, retention: options.retention ?? { maxSegments: defaults.maxSegments, maxTotalBytes: defaults.maxTotalBytes } });
+		return this.recording({ type: 'startRecording', sessionId: target.id, generation: target.generation, destination, maxBytes: options.maxBytes ?? mebibytes('recording.maxSegmentSize'), maxDurationMs: options.maxDurationMs ?? String(this.configurationService.getValue<number>('recording.maxSegmentDuration') * 60000), retention: options.retention ?? { maxSegments: this.configurationService.getValue<number>('recording.maxSegments'), maxTotalBytes: mebibytes('recording.maxTotalSize') } });
 	}
 
 	public recordingStatus(id: string): Promise<Readonly<RecordingStatus>> {
@@ -125,41 +125,6 @@ export class NativeRuntimeService implements INativeRuntimeService {
 				throw new Error('Native backend update refused');
 			}
 			return this.load();
-		});
-		this.pending = result.catch(() => undefined);
-		return result;
-	}
-
-	public approveCameras(ids: readonly string[]): Promise<NativeRuntime> {
-		return this.update({ type: 'setNativeCameraSources', ids: [...ids] });
-	}
-
-	public approveAudio(microphones: readonly string[], system: readonly string[]): Promise<NativeRuntime> {
-		return this.update({ type: 'setNativeAudioSources', microphones: [...microphones], system: [...system] });
-	}
-
-	public async powerPolicy(): Promise<Readonly<PowerPolicy>> {
-		if (!this.available) {
-			throw new Error('Native runtime unavailable');
-		}
-		const reply = await this.engine.execute({ type: 'powerPolicy' });
-		if (reply.type !== 'powerPolicy') {
-			throw new Error('Invalid power policy reply');
-		}
-		return Object.freeze({ ...reply.policy });
-	}
-
-	public savePowerPolicy(policy: PowerPolicy): Promise<Readonly<PowerPolicy>> {
-		const draft = { ...policy };
-		const result = this.pending.then(async () => {
-			if (!this.available) {
-				throw new Error('Native runtime unavailable');
-			}
-			const reply = await this.engine.execute({ type: 'setPowerPolicy', policy: draft });
-			if (reply.type !== 'done') {
-				throw new Error('Power policy update refused');
-			}
-			return this.powerPolicy();
 		});
 		this.pending = result.catch(() => undefined);
 		return result;

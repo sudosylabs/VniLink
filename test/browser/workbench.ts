@@ -1,5 +1,5 @@
 import { Event } from '../../src/base/common/event.js';
-import { defaultConfiguration, IConfigurationSnapshotService } from '../../src/platform/configuration/common/configurationSnapshot.js';
+import { IWorkbenchConfigurationService } from '../../src/workbench/services/configuration/configurationService.js';
 import { SyncDescriptor } from '../../src/platform/instantiation/common/descriptors.js';
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
 import { NullLogService } from '../../src/platform/log/common/log.js';
@@ -10,7 +10,6 @@ export async function verifyWorkbenchLifecycle(): Promise<void> {
 	let disposed = 0;
 	class Configuration {
 		declare public readonly _serviceBrand: undefined;
-		public readonly snapshot = { revision: 0, values: defaultConfiguration, error: null };
 		public readonly onDidChangeConfiguration = Event.None;
 
 		public initialize(): Promise<void> {
@@ -19,16 +18,12 @@ export async function verifyWorkbenchLifecycle(): Promise<void> {
 			});
 		}
 
-		public updateValue(): Promise<void> {
-			return Promise.resolve();
-		}
-
 		public dispose(): void {
 			disposed++;
 		}
 	}
 	const parent = document.createElement('div');
-	const workbench = new Workbench(parent, { windowId: 1, osRelease: 'test', platform: 'darwin', version: 'test', engineAvailable: false, enableSmokeTestDriver: false }, new ServiceCollection([IConfigurationSnapshotService, new SyncDescriptor(Configuration)]), new NullLogService());
+	const workbench = new Workbench(parent, { windowId: 1, osRelease: 'test', platform: 'darwin', version: 'test', engineAvailable: false, enableSmokeTestDriver: false }, new ServiceCollection([IWorkbenchConfigurationService, new SyncDescriptor(Configuration)]), new NullLogService());
 	const start = workbench.startup();
 	workbench.dispose();
 	resolve?.();

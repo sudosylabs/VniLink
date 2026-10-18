@@ -26,15 +26,15 @@ const services = {
 		export const IEngineMainService = createDecorator('engineMainService');
 		export const shutdown = { stops: 0 }; let release; export const stopped = new Promise(resolve => { release = resolve; }); export function finish() { release(); }
 		export class EngineMainService { available = true; onDidChangeAvailability = Event.None; onDidChangeRestartRequired = Event.None; async start() { app.emit('activate'); } async refreshRestartRequired() { } async execute(command) { return command.type === 'nativeRuntime' ? { type: 'nativeRuntime', backends: [] } : { type: 'done' }; } stop() { shutdown.stops++; return stopped; } }`,
-	configurationMainService: `import { Event } from '${root}/src/base/common/event.js'; import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js'; import { defaultConfiguration } from '${root}/src/platform/configuration/common/configurationSnapshot.js';
+	configurationMainService: `import { Event } from '${root}/src/base/common/event.js'; import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js';
 		export const IConfigurationMainService = createDecorator('configurationMainService');
-		export class ConfigurationMainService { snapshot = { values: defaultConfiguration }; onDidChangeConfiguration = Event.None; async initialize() { } async flush() { } async restoreEngineDefaults() { } }`,
+		export class ConfigurationMainService { getValue() { return 'system'; } onDidChangeConfiguration = Event.None; async initialize() { } async flush() { } async restoreEngineDefaults() { } }`,
 	windowsMainService: `import { Event } from '${root}/src/base/common/event.js'; import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js'; import { EventEmitter } from 'node:events'; import { state } from 'electron';
 		export const IWindowsMainService = createDecorator('windowsMainService');
 		export class WindowsMainService { onDidOpenWindow = Event.None; focusMainWindow() { } async openMainWindow() { state.windows++; return Object.assign(new EventEmitter(), { webContents: new EventEmitter() }); } }`,
 	nativeHostMainService: `import { Event } from '${root}/src/base/common/event.js'; import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js';
 		export const INativeHostMainService = createDecorator('nativeHostMainService');
-		export class NativeHostMainService { onDidChangeWindowState = Event.None; setNativeBackgroundEnabled() { } }`,
+		export class NativeHostMainService { onDidChangeWindowState = Event.None; }`,
 	permissionsMainService: `import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js';
 		export const IPermissionsMainService = createDecorator('permissionsMainService');
 		export class PermissionsMainService { async synchronize() { } }`,

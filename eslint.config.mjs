@@ -61,8 +61,6 @@ export default [
 	{ files: ['src/**/*.ts'], rules: { 'vnilink/no-sync-fs': 'error' } },
 	{
 		files: ['src/workbench/**/*.ts'],
-		// Settings still build DOM by hand; they leave this list when they move to widgets.
-		ignores: ['src/workbench/contrib/settings/**'],
 		rules: { 'vnilink/workbench-dom': 'error' },
 	},
 	{

@@ -8,13 +8,11 @@ import { IContextKeyService } from '../platform/contextkey/common/contextkey.js'
 import { ContextKeyService } from '../platform/contextkey/browser/contextKeyService.js';
 import { IMenuService } from '../platform/actions/common/actions.js';
 import { MenuService } from '../platform/actions/common/menuService.js';
-import '../platform/configuration/electron-browser/configurationService.js';
-import '../platform/configuration/electron-browser/configurationSnapshotService.js';
 import '../platform/recording/electron-browser/recordingService.js';
 import '../platform/theme/browser/themeService.js';
-import './services/access/accessServiceImpl.js';
 import './services/application/applicationServiceImpl.js';
 import './services/commands/commandService.js';
+import './services/configuration/configurationServiceImpl.js';
 import './services/connection/connectionServiceImpl.js';
 import './services/devices/deviceServiceImpl.js';
 import './services/host/nativeHostService.js';
@@ -24,7 +22,6 @@ import './services/permissions/permissionServiceImpl.js';
 import './services/remoteDesktop/remoteDesktopServiceImpl.js';
 import './services/screenSnapshot/screenSnapshotServiceImpl.js';
 import './services/tabs/tabServiceImpl.js';
-import './services/terminal/terminalSettingsServiceImpl.js';
 
 registerSingleton(IContextKeyService, ContextKeyService, InstantiationType.Delayed);
 

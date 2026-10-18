@@ -1,7 +1,8 @@
 import { IApplicationService } from '../../src/workbench/services/application/applicationService.js';
 import { IConnectionService } from '../../src/workbench/services/connection/connectionService.js';
-import { IConfigurationSnapshotService, defaultConfiguration } from '../../src/platform/configuration/common/configurationSnapshot.js';
-import { Event, Emitter } from '../../src/base/common/event.js';
+import { IPermissionService } from '../../src/workbench/services/permissions/permissionService.js';
+import { FakeConfigurationService, FakePermissionService } from './settingsFixture.js';
+import { Emitter } from '../../src/base/common/event.js';
 import { HomeView } from '../../src/workbench/contrib/home/homeView.js';
 import '../../src/workbench/contrib/devices/devices.contribution.js';
 import '../../src/workbench/contrib/settings/settings.contribution.js';
@@ -74,6 +75,8 @@ export async function verifyHomeLifecycle(): Promise<void> {
 			return Promise.resolve();
 		},
 	};
+	const configuration = new FakeConfigurationService();
+	configuration.setError('relays', 'Unavailable');
 	const services = new InstantiationService(new ServiceCollection([IApplicationService, {
 		_serviceBrand: undefined, get restartRequired() {
 			return restartRequired;
@@ -81,8 +84,8 @@ export async function verifyHomeLifecycle(): Promise<void> {
 			restarts++;
 			return Promise.resolve();
 		}, openRelayDocumentation: () => Promise.resolve()
-	}], [IDeviceService, service], [IScreenSnapshotService, { _serviceBrand: undefined, capture: () => Promise.resolve({ status: 'disconnected' as const }), access: () => Promise.resolve({ status: 'disconnected' as const }) }], [IConnectionService, { _serviceBrand: undefined, available: false, load: () => Promise.reject(new Error('Unavailable')), save: () => Promise.reject(new Error('Unavailable')) }], [IConfigurationSnapshotService, { _serviceBrand: undefined, snapshot: { revision: 0, values: defaultConfiguration, error: null }, onDidChangeConfiguration: Event.None, initialize: () => Promise.resolve(), updateValue: () => Promise.resolve() }],
-		[IConfigurationService, { _serviceBrand: undefined, onDidChangeConfiguration: Event.None, getValue: () => undefined }],
+	}], [IDeviceService, service], [IScreenSnapshotService, { _serviceBrand: undefined, capture: () => Promise.resolve({ status: 'disconnected' as const }), access: () => Promise.resolve({ status: 'disconnected' as const }) }], [IConnectionService, { _serviceBrand: undefined, getRunningRelays: () => Promise.reject(new Error('Unavailable')) }],
+		[IConfigurationService, configuration], [IPermissionService, new FakePermissionService()],
 		[ILogService, new NullLogService()],
 		[IContextKeyService, new SyncDescriptor(ContextKeyService)],
 		[ICommandService, new SyncDescriptor(CommandService)],

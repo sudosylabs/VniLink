@@ -165,10 +165,9 @@ export class VniLinkApplication extends Disposable {
 
 	private applyAppearance(accessor: ServicesAccessor): void {
 		const configuration = accessor.get(IConfigurationMainService);
-		const nativeHost = accessor.get(INativeHostMainService);
 		const apply = (): void => {
-			nativeTheme.themeSource = configuration.snapshot.values['appearance.theme'];
-			nativeHost.setNativeBackgroundEnabled(true);
+			const theme = configuration.getValue('appearance.theme');
+			nativeTheme.themeSource = theme === 'light' || theme === 'dark' ? theme : 'system';
 		};
 		apply();
 		this._register(configuration.onDidChangeConfiguration(apply));

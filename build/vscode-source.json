@@ -1186,6 +1186,13 @@
       "changedImports": 0
     },
     {
+      "path": "src/platform/configuration/common/configurationRegistry.ts",
+      "upstreamPath": "src/vs/platform/configuration/common/configurationRegistry.ts",
+      "adapted": true,
+      "upstreamStyle": true,
+      "sha256": "52d7ee7b444f88da62ba3f7b2714dc64ba95d0681352f499d73c5241499fcca4"
+    },
+    {
       "path": "src/platform/contextkey/browser/contextKeyService.ts",
       "upstreamPath": "src/vs/platform/contextkey/browser/contextKeyService.ts",
       "sha256": "8cbb8a4af22e671d4543852f20e217d18bd2e1956fb85cbfc50022fa6b9139a8",
@@ -1282,6 +1289,12 @@
       "changedImports": 0
     },
     {
+      "path": "src/platform/jsonschemas/common/jsonContributionRegistry.ts",
+      "upstreamPath": "src/vs/platform/jsonschemas/common/jsonContributionRegistry.ts",
+      "sha256": "3a497efbc8ffbffc275e8bf3ff4bdd918a3a5bf83e3c9279c0df205aab20c926",
+      "changedImports": 0
+    },
+    {
       "path": "src/platform/keybinding/common/keybindingsRegistry.ts",
       "upstreamPath": "src/vs/platform/keybinding/common/keybindingsRegistry.ts",
       "sha256": "925154911545a52dcdcef30df728b48df912cbb22ff7c83e9dde1a40142e8e99",
@@ -1303,7 +1316,7 @@
       "path": "src/platform/native/electron-main/nativeHostMainService.ts",
       "upstreamPath": "src/vs/platform/native/electron-main/nativeHostMainService.ts",
       "adapted": true,
-      "sha256": "a86c77a6feec2090a5e2d7a332b5cb6f22baf1bf3c35513b68b2bf6343515210"
+      "sha256": "36aed324ae6033000d005620af219c5172b38f476a214340e3c029ee39b1988b"
     },
     {
       "path": "src/platform/registry/common/platform.ts",
@@ -1455,6 +1468,7 @@
     "src/base/common/arrays.ts",
     "src/base/common/async.ts",
     "src/base/common/cancellation.ts",
+    "src/base/common/collections.ts",
     "src/base/common/errors.ts",
     "src/base/common/event.ts",
     "src/base/common/hash.ts",
@@ -1480,6 +1494,7 @@
     "src/platform/actions/common/menuService.ts",
     "src/platform/commands/common/commands.ts",
     "src/platform/configuration/common/configuration.ts",
+    "src/platform/configuration/common/configurationRegistry.ts",
     "src/platform/contextkey/browser/contextKeyService.ts",
     "src/platform/contextkey/common/contextkey.ts",
     "src/platform/instantiation/common/descriptors.ts",
@@ -4205,6 +4220,81 @@
       "kind": "import"
     },
     {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/base/common/arrays.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/base/common/collections.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/base/common/jsonSchema.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/nls.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/platform/configuration/common/configuration.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/platform/jsonschemas/common/jsonContributionRegistry.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/platform/registry/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/base/common/policy.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/jsonschemas/common/jsonContributionRegistry.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/jsonschemas/common/jsonContributionRegistry.ts",
+      "to": "src/base/common/jsonSchema.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/jsonschemas/common/jsonContributionRegistry.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/jsonschemas/common/jsonContributionRegistry.ts",
+      "to": "src/platform/registry/common/platform.ts",
+      "kind": "import"
+    },
+    {
       "from": "src/platform/actions/common/menuService.ts",
       "to": "src/base/common/async.ts",
       "kind": "import"
@@ -6527,6 +6617,7 @@
     "src/base/common/arrays.ts",
     "src/base/common/async.ts",
     "src/base/common/cancellation.ts",
+    "src/base/common/collections.ts",
     "src/base/common/errors.ts",
     "src/base/common/event.ts",
     "src/base/common/hash.ts",
@@ -6552,6 +6643,7 @@
     "src/platform/actions/common/menuService.ts",
     "src/platform/commands/common/commands.ts",
     "src/platform/configuration/common/configuration.ts",
+    "src/platform/configuration/common/configurationRegistry.ts",
     "src/platform/contextkey/browser/contextKeyService.ts",
     "src/platform/contextkey/common/contextkey.ts",
     "src/platform/instantiation/common/descriptors.ts",

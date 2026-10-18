@@ -10,7 +10,6 @@ export class WindowMaterial extends Disposable {
 	private readonly changed = this._register(new Emitter<void>());
 	public readonly onDidChange = this.changed.event;
 	public material: WindowBackgroundMaterial = 'none';
-	private enabled = true;
 
 	constructor(private readonly window: BrowserWindow, private readonly platform: string = windowPlatform, private readonly osRelease = release()) {
 		super();
@@ -25,7 +24,7 @@ export class WindowMaterial extends Disposable {
 		if (this.window.isDestroyed()) {
 			return;
 		}
-		const material = this.enabled ? resolveWindowMaterial(this.platform, this.osRelease, nativeTheme.prefersReducedTransparency, nativeTheme.shouldUseHighContrastColors) : 'none';
+		const material = resolveWindowMaterial(this.platform, this.osRelease, nativeTheme.prefersReducedTransparency, nativeTheme.shouldUseHighContrastColors);
 		const fallback = nativeTheme.shouldUseDarkColors ? '#202124' : '#fafafa';
 		try {
 			if (this.platform === 'darwin') {
@@ -40,14 +39,5 @@ export class WindowMaterial extends Disposable {
 			this.material = 'none';
 			this.window.setBackgroundColor(fallback);
 		}
-	}
-
-	public setEnabled(enabled: boolean): void {
-		if (this.enabled === enabled || this._store.isDisposed) {
-			return;
-		}
-		this.enabled = enabled;
-		this.update();
-		this.changed.fire();
 	}
 }

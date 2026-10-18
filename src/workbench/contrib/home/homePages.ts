@@ -2,7 +2,7 @@ import { $, append } from '../../../base/browser/dom.js';
 import { Emitter, type Event } from '../../../base/common/event.js';
 import type { IconId } from '../../../base/common/icons.js';
 import { toDisposable, type IDisposable } from '../../../base/common/lifecycle.js';
-import type { SyncDescriptor0 } from '../../../platform/instantiation/common/descriptors.js';
+import type { SyncDescriptor } from '../../../platform/instantiation/common/descriptors.js';
 import { Registry } from '../../../platform/registry/common/platform.js';
 
 /** A page shown in Home beside its sidebar. Pages are created when first shown and live as long as Home. */
@@ -23,7 +23,7 @@ export interface IHomePageDescriptor {
 	readonly order: number;
 	readonly title: string;
 	readonly icon: IconId;
-	readonly ctorDescriptor: SyncDescriptor0<IHomePage>;
+	readonly ctorDescriptor: SyncDescriptor<IHomePage>;
 }
 
 export const Extensions = {

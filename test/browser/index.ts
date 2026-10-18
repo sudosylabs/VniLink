@@ -3,12 +3,10 @@ import { verifyMediaSettings } from './mediaSettings.js';
 /** Independently selectable renderer scenarios; each owns its fixture teardown. */
 import { verifyWorkbenchLifecycle } from './workbench.js';
 import { verifyAccess } from './access.js';
+import { verifyConnection } from './connection.js';
 import { verifyDataChannels } from './dataChannels.js';
-import { verifyFileTerminalSettings } from './fileTerminalSettings.js';
 import { verifyHomeLifecycle } from './home.js';
 import { verifyIcons } from './icons.js';
-import { verifyInputPage } from './input.js';
-import { verifyMachinePermissions } from './permissions.js';
 import { verifyRemoteDesktop } from './remoteDesktop.js';
 import { verifySettingsPages } from './settings.js';
 import { verifyTabs } from './tabs.js';
@@ -37,9 +35,9 @@ export class BrowserScenarios {
 	}
 
 	private readonly scenarios = new Map<string, () => unknown>([
-		['workbench', verifyWorkbenchLifecycle], ['access', verifyAccess], ['data-channels', verifyDataChannels], ['files-terminal', verifyFileTerminalSettings],
-		['devices', verifyDevices], ['device-screenshot', verifyDeviceScreenshot], ['home', verifyHomeLifecycle], ['icons', verifyIcons], ['input', verifyInputPage],
-		['media-settings', verifyMediaSettings], ['permissions', verifyMachinePermissions], ['remote-desktop', verifyRemoteDesktop], ['settings', verifySettingsPages], ['tabs', verifyTabs],
+		['workbench', verifyWorkbenchLifecycle], ['access', verifyAccess], ['connection', verifyConnection], ['data-channels', verifyDataChannels],
+		['devices', verifyDevices], ['device-screenshot', verifyDeviceScreenshot], ['home', verifyHomeLifecycle], ['icons', verifyIcons],
+		['media-settings', verifyMediaSettings], ['remote-desktop', verifyRemoteDesktop], ['settings', verifySettingsPages], ['tabs', verifyTabs],
 	]);
 
 	public async run(name: string): Promise<boolean> {

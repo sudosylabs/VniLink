@@ -65,17 +65,3 @@ test('macOS uses sidebar vibrancy and a failed native backdrop stays opaque', ()
 	assert.deepEqual(window.calls.at(-1), ['background', '#fafafa']);
 	fallback.dispose();
 });
-
-test('saved native-background preference disables and restores the platform material', () => {
-	const window = windowFixture();
-	const material = new WindowMaterial(window, 'darwin', '25.0.0');
-	try {
-		material.setEnabled(false);
-		assert.equal(material.material, 'none');
-		assert.deepEqual(window.calls.slice(-2), [['vibrancy', null], ['background', '#fafafa']]);
-		material.setEnabled(true);
-		assert.equal(material.material, 'vibrancy');
-	} finally {
-		material.dispose();
-	}
-});

@@ -68,7 +68,7 @@ export class HomeView extends Disposable implements WorkbenchTab {
 		if (existing || !descriptor) {
 			return existing;
 		}
-		const page = this.instantiationService.createInstance(descriptor.ctorDescriptor);
+		const page = this.instantiationService.createInstance<IHomePage>(descriptor.ctorDescriptor);
 		this.pages.set(id, page);
 		return page;
 	}

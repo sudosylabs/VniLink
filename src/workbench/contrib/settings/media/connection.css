@@ -226,8 +226,7 @@
 	padding: 24px 0;
 }
 
-.connection-save-row .connection-description,
-.connection-save-row .settings-button.primary {
+.connection-save-row .connection-description {
 	margin: 0;
 }
 
@@ -261,12 +260,6 @@
 
 .connection-current > .connection-description {
 	margin-top: 12px;
-}
-
-.connection-save-row button:disabled {
-	background: color-mix(in srgb, var(--text) 6%, transparent);
-	color: var(--muted);
-	cursor: default;
 }
 
 .connection-form > .settings-status {

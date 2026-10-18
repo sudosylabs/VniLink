@@ -59,33 +59,23 @@
 	color: var(--text);
 }
 
+/* Actions offered above a page's settings, such as system access requests. */
 .settings-apply-row {
-	display: flex;
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
 	align-items: center;
-	gap: 16px;
+	column-gap: 18px;
 	margin-top: 20px;
 }
 
-.settings-apply-row > .settings-button.primary {
-	margin-top: 0;
-}
-
-.settings-apply-row button:disabled {
-	background: color-mix(in srgb, var(--text) 6%, transparent);
-	color: var(--muted);
-	cursor: default;
+.settings-apply-row:empty {
+	display: none;
 }
 
 @media (width <= 800px) {
 	.settings-control-row {
 		flex-wrap: wrap;
 		gap: 12px;
-	}
-
-	.settings-apply-row {
-		align-items: flex-start;
-		flex-direction: column;
-		gap: 8px;
 	}
 }
 
@@ -95,25 +85,6 @@
 	border-bottom: 0;
 }
 
-:is(.input-page, .terminal-page, .power-page, .recording-page, .media-page) .settings-apply-row > button {
-	white-space: nowrap;
-	flex-shrink: 0;
-}
-
-:is(.input-page, .terminal-page, .power-page, .recording-page, .media-page) .settings-apply-row > .settings-help {
-	margin: 0;
-}
-
-:is(.input-page, .terminal-page, .remote-desktop-page, .power-page, .recording-page, .media-page)
-	.settings-apply-row
-	> .settings-help {
-	align-self: center;
-	line-height: 1.5;
-}
-
-:is(.input-page, .terminal-page, .remote-desktop-page, .power-page, .recording-page, .media-page) .settings-apply-row {
-	display: grid;
-	grid-template-columns: max-content minmax(0, 1fr);
-	align-items: center;
-	column-gap: 18px;
+.settings-page-note {
+	margin-top: 20px;
 }

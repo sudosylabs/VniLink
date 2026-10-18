@@ -7,7 +7,11 @@ const bundle = await build({ stdin: { contents: `export { synchronizeNativePermi
 
 const { synchronizeNativePermissions, NativeRuntimeService, isEngineCommand, isEngineReply, nativeCapabilityNames } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 
-const configuration = { snapshot: { values: { 'recording.defaults': { directory: '', maxBytes: '1048576', maxDurationMs: '1000', maxSegments: 1, maxTotalBytes: '1048576' } } } };
+/** Recording settings as the configuration service holds them: sizes in MiB, durations in minutes. */
+function configuration(values = {}) {
+	const settings = { 'recording.directory': '', 'recording.maxSegmentSize': 1, 'recording.maxSegmentDuration': 1, 'recording.maxSegments': 1, 'recording.maxTotalSize': 1, ...values };
+	return { getValue: key => settings[key] };
+}
 
 const unusedHost = { getCaptureDisplays: () => assert.fail('Unexpected display read'), pickFolder: () => assert.fail('Unexpected folder picker') };
 
@@ -47,42 +51,17 @@ test('OS permission synchronization does not install input on a Mac without Acce
 	assert.equal(calls.length, 0);
 });
 
-test('device approvals capture queued drafts and immutable runtime readback; failed backend updates do not report success', async () => {
-	const calls = [];
-	let fail = false;
-	const service = new NativeRuntimeService(fakeEngine({
-		engineCommand: async command => {
-			calls.push(command);
-			if (command.type === 'nativeRuntime') {
-				return runtime;
-			}
-			if (fail) {
-				throw new Error('Source unavailable');
-			}
-			return { type: 'done' };
-		}
-	}), unusedHost, unusedRecording, configuration);
-	const cameras = ['chosen'];
-	const writing = service.approveCameras(cameras);
-	cameras[0] = 'changed';
-	const result = await writing;
-	assert.equal(calls[0].ids[0], 'chosen');
-	assert(Object.isFrozen(result.capabilities[0]));
-	assert(Object.isFrozen(result.backends));
-	fail = true;
-	await assert.rejects(service.approveAudio(['mic'], []));
-});
-
 test('recording uses persisted defaults while retaining an explicit session destination and overrides', async () => {
 	const commands = [];
 	const defaults = { maxBytes: '2097152', maxDurationMs: '60000', maxSegments: 2, maxTotalBytes: '4194304' };
+	const settings = configuration({ 'recording.maxSegmentSize': 2, 'recording.maxSegmentDuration': 1, 'recording.maxSegments': 2, 'recording.maxTotalSize': 4 });
 	const status = { id: '4', phase: 'Recording', failure: null, frames: '0', bytes: '0', durationMs: '0', segments: 1 };
 	const service = new NativeRuntimeService(fakeEngine({
 		engineCommand: command => {
 			commands.push(command);
 			return Promise.resolve({ type: 'recordingStatus', status });
 		}
-	}), unusedHost, unusedRecording, { snapshot: { values: { 'recording.defaults': defaults } } });
+	}), unusedHost, unusedRecording, settings);
 	await service.startRecording({ id: '1', generation: '7' }, { destination: '/chosen/session.mkv' });
 	assert.deepEqual(commands[0], { type: 'startRecording', sessionId: '1', generation: '7', destination: '/chosen/session.mkv', maxBytes: defaults.maxBytes, maxDurationMs: defaults.maxDurationMs, retention: { maxSegments: defaults.maxSegments, maxTotalBytes: defaults.maxTotalBytes } });
 	await service.startRecording({ id: '1', generation: '7' }, { destination: '/another.mkv', maxDurationMs: '120000' });
@@ -103,7 +82,7 @@ test('recording without a session destination resolves the persisted default fol
 			calls.push('destination');
 			return '/Pictures/VniLink/new.mkv';
 		},
-	}, configuration);
+	}, configuration());
 	await service.startRecording({ id: '1', generation: '2' }, {});
 	assert.equal(calls[0], 'destination');
 	assert.equal(calls[1].destination, '/Pictures/VniLink/new.mkv');

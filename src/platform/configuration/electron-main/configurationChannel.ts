@@ -4,7 +4,7 @@ import { windowIdFromContext } from '../../ipc/electron-main/windowContext.js';
 import { isConfigurationUpdate } from '../common/configurationSnapshot.js';
 import type { ConfigurationMainService } from './configurationMainService.js';
 
-/** Serves preference snapshots and validated preference changes to windows. */
+/** Serves setting snapshots and validated setting changes to windows. */
 export class ConfigurationChannel implements IServerChannel {
 
 	constructor(private readonly configuration: ConfigurationMainService) { }
@@ -21,11 +21,14 @@ export class ConfigurationChannel implements IServerChannel {
 		switch (command) {
 			case 'getSnapshot':
 				return this.configuration.snapshot as T;
+			case 'reload':
+				await this.configuration.reload();
+				return this.configuration.snapshot as T;
 			case 'updateValue':
 				if (!isConfigurationUpdate(arg)) {
 					throw new Error('Invalid configuration update');
 				}
-				return await this.configuration.updateValue(arg) as T;
+				return await this.configuration.updateValue(arg.key, arg.value) as T;
 		}
 		throw new Error(`Unknown configuration command: ${command}`);
 	}

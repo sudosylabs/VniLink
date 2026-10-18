@@ -1,13 +1,20 @@
-import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
+import { addDisposableListener } from '../../../base/browser/dom.js';
 import { RunOnceScheduler } from '../../../base/common/async.js';
 import type { Event } from '../../../base/common/event.js';
+import { Disposable } from '../../../base/common/lifecycle.js';
 
-/** OS state has no universal change event. Query visible pages serially and
- * recheck on focus; cached, hidden pages do no background backend work. */
+/** How often a visible page reads state that has no change event. */
+const pollInterval = 2000;
+
+/**
+ * Operating-system and engine state has no universal change event. Visible
+ * pages query it serially and again when the window gains focus; hidden pages
+ * do no background work.
+ */
 export class SettingsStateObserver extends Disposable {
 	private readonly scheduler = this._register(new RunOnceScheduler(() => {
 		void this.check();
-	}, 2000));
+	}, pollInterval));
 	private pending = false;
 
 	constructor(private readonly element: HTMLElement, focused: Event<void>, private readonly refresh: () => Promise<void>) {
@@ -15,35 +22,31 @@ export class SettingsStateObserver extends Disposable {
 		this._register(focused(() => {
 			void this.check();
 		}));
-		const visible = () => {
+		this._register(addDisposableListener(element.ownerDocument, 'visibilitychange', () => {
 			void this.check();
-		};
-		document.addEventListener('visibilitychange', visible);
-		this._register(toDisposable(() => {
-			document.removeEventListener('visibilitychange', visible);
 		}));
 		this.scheduler.schedule();
 	}
 
-	protected disposed(): boolean {
-		return this._store.isDisposed;
-	}
-
 	private async check(): Promise<void> {
-		if (this.disposed() || this.pending) {
+		if (this.isDisposed() || this.pending) {
 			return;
 		}
 		this.scheduler.cancel();
 		this.pending = true;
 		try {
-			if (this.element.isConnected && this.element.getClientRects().length > 0 && document.visibilityState !== 'hidden') {
+			if (this.element.isConnected && this.element.getClientRects().length > 0 && this.element.ownerDocument.visibilityState !== 'hidden') {
 				await this.refresh();
 			}
 		} finally {
 			this.pending = false;
-			if (!this.disposed()) {
+			if (!this.isDisposed()) {
 				this.scheduler.schedule();
 			}
 		}
+	}
+
+	private isDisposed(): boolean {
+		return this._store.isDisposed;
 	}
 }

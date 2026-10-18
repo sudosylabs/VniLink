@@ -20,15 +20,17 @@ export const BrowserWindow = { fromWebContents: contents => windows.get(contents
 export class MessageChannelMain { constructor() { this.port1 = { close() { } }; this.port2 = { close() { } }; } }
 export default { ipcMain, BrowserWindow };`;
 
-/** Replaces the settings file store so commits can be refused on demand. */
+/** Replaces settings.json so commits can be refused on demand. */
 const store = `
 import { Emitter } from '${process.cwd()}/src/base/common/event.js';
-import { defaultConfiguration } from '${process.cwd()}/src/platform/configuration/common/configurationSnapshot.js';
-export const disk = { fail: false, commits: 0, values: defaultConfiguration };
-export class ConfigurationStore {
-	onDidChangeConfiguration = new Emitter().event;
-	get snapshot() { return { revision: disk.commits, values: disk.values, error: null }; }
-	async updateValue(change) { disk.commits++; if (disk.fail) { throw new Error('Disk refused'); } disk.values = { ...disk.values, [change.key]: change.value }; return this.snapshot; }
+import { settingDefaults } from '${process.cwd()}/src/platform/configuration/common/configurationSchema.js';
+export const disk = { fail: false, commits: 0, file: {} };
+const changed = new Emitter();
+export class UserSettings {
+	onDidChange = changed.event;
+	error = undefined;
+	get values() { return { ...settingDefaults('user'), ...disk.file }; }
+	async update(key, value) { disk.commits++; if (disk.fail) { throw new Error('Disk refused'); } disk.file = { ...disk.file, [key]: value }; changed.fire(); }
 	dispose() { }
 }`;
 
@@ -43,7 +45,6 @@ const output = await build({
 			export { RecordingMainService } from './src/platform/recording/electron-main/recordingMainService.js';
 			export { windowIdFromContext } from './src/platform/ipc/electron-main/windowContext.js';
 			export { setUnexpectedErrorHandler } from './src/base/common/errors.js';
-			export { defaultConfiguration } from './src/platform/configuration/common/configurationSnapshot.js';
 			export { Event } from './src/base/common/event.js';
 			export { handlers, opened, windows } from 'electron';
 			export { disk } from 'fixture:store';`,
@@ -51,7 +52,7 @@ const output = await build({
 	}, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json', plugins: [{
 		name: 'main-fixtures', setup(builder) {
 			builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }));
-			builder.onResolve({ filter: /^fixture:store$|\/configurationStore\.js$/ }, () => ({ path: 'store', namespace: 'fixture' }));
+			builder.onResolve({ filter: /^fixture:store$|\/userSettings\.js$/ }, () => ({ path: 'store', namespace: 'fixture' }));
 			builder.onLoad({ filter: /.*/, namespace: 'fixture' }, ({ path }) => ({ contents: path === 'electron' ? electron : store, loader: 'js', resolveDir: process.cwd() }));
 		}
 	}]
@@ -59,7 +60,7 @@ const output = await build({
 
 const {
 	validatedIpcMain, WORKBENCH_URL, NativeHostChannel, NativeHostMainService, EngineChannel, ConfigurationMainService, RecordingMainService,
-	windowIdFromContext, setUnexpectedErrorHandler, defaultConfiguration, Event, handlers, opened, windows, disk,
+	windowIdFromContext, setUnexpectedErrorHandler, Event, handlers, opened, windows, disk,
 } = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
 
 const logService = { error() { }, trace() { } };
@@ -119,29 +120,25 @@ test('native host requests must name their own window and links are allowlisted'
 	assert.deepEqual(opened, ['https://docs.iroh.computer/relays/rate-limiting']);
 });
 
-test('relay commands refresh restart state, and a failed readback still reports the committed command', async () => {
-	let refreshes = 0;
-	let refreshFails = false;
+test('windows change settings only through the configuration channel', async () => {
+	const executed = [];
 	const engine = {
-		onDidChangeAvailability: Event.None, onDidChangeRestartRequired: Event.None, execute: async () => ({ type: 'done' }),
-		refreshRestartRequired: async () => {
-			refreshes++;
-			if (refreshFails) {
-				throw new Error('Engine stopped after commit');
-			}
-		},
+		onDidChangeAvailability: Event.None, onDidChangeRestartRequired: Event.None, execute: async command => {
+			executed.push(command);
+			return { type: 'done' };
+		}
 	};
 	const channel = new EngineChannel(engine, {}, {}, {});
 	await assert.rejects(channel.call('window:1', 'execute', { type: 'shutdown' }), /Invalid/);
-	for (const command of [{ type: 'subscribeEvents' }, { type: 'pollEvents', subscriptionId: '1', maxEvents: 1 }, { type: 'releaseEvents', subscriptionId: '1' }]) {
+	const privateCommands = [
+		{ type: 'subscribeEvents' }, { type: 'pollEvents', subscriptionId: '1', maxEvents: 1 }, { type: 'releaseEvents', subscriptionId: '1' },
+		{ type: 'setRelayPublic' }, { type: 'setSharingPolicy', policy: { view: true } }, { type: 'setDesktopCodecDefault', codec: 'auto' }, { type: 'setFileRoots', paths: [] },
+	];
+	for (const command of privateCommands) {
 		await assert.rejects(channel.call('window:1', 'execute', command), /Invalid/, `${command.type} must stay private to main`);
 	}
-	await channel.call('window:1', 'execute', { type: 'setRelayPublic' });
-	assert.equal(refreshes, 1);
-	refreshFails = true;
-	assert.deepEqual(await channel.call('window:1', 'execute', { type: 'setRelayPublic' }), { type: 'done' });
-	await channel.call('window:1', 'execute', { type: 'snapshot' });
-	assert.equal(refreshes, 2);
+	assert.deepEqual(await channel.call('window:1', 'execute', { type: 'snapshot' }), { type: 'done' });
+	assert.deepEqual(executed, [{ type: 'snapshot' }]);
 	channel.dispose();
 });
 
@@ -177,70 +174,67 @@ test('destroyed windows release channel owners once without touching native list
 	channel.dispose();
 });
 
+function settingsEngine(execute) {
+	return { available: true, onDidChangeAvailability: Event.None, execute, refreshRestartRequired: async () => { } };
+}
+
 test('defaults reach the engine before commit, refused changes do not save, and failed commits restore the engine', async () => {
 	const calls = [];
 	let refuse = false;
-	const engine = {
-		available: true, execute: async command => {
-			calls.push(command);
-			if (refuse) {
-				throw new Error('Held keys');
-			}
-			return { type: 'done' };
+	const engine = settingsEngine(async command => {
+		calls.push(command);
+		if (refuse) {
+			throw new Error('Held keys');
 		}
-	};
-	disk.values = defaultConfiguration;
+		return { type: 'done' };
+	});
+	disk.file = {};
 	disk.commits = 0;
 	const configuration = new ConfigurationMainService('/settings.json', engine, logService);
-	const change = { key: 'input.defaults', value: { ...defaultConfiguration['input.defaults'], mode: 'Map' } };
 	refuse = true;
-	await assert.rejects(configuration.updateValue(change));
+	await assert.rejects(configuration.updateValue('input.keyboardMode', 'Map'));
 	assert.equal(disk.commits, 0);
 	refuse = false;
 	disk.fail = true;
-	await assert.rejects(configuration.updateValue(change));
+	await assert.rejects(configuration.updateValue('input.keyboardMode', 'Map'));
 	assert.equal(calls.at(-1).mode, 'Character');
-	assert.equal(configuration.snapshot.values['input.defaults'].mode, 'Character');
+	assert.equal(configuration.snapshot.values['input.keyboardMode'], 'Character');
 	disk.fail = false;
-	await configuration.updateValue(change);
-	assert.equal(configuration.snapshot.values['input.defaults'].mode, 'Map');
-	assert.equal(calls.at(-1).mode, 'Map');
-	const codec = { key: 'desktop.codec', value: 'av1' };
+	await configuration.updateValue('input.keyboardMode', 'Map');
+	assert.equal(configuration.snapshot.values['input.keyboardMode'], 'Map');
+	assert.deepEqual(calls.at(-1), { type: 'setInputDefaults', mode: 'Map', swap: false, pointer: { sensitivity_percent: 100, reverse_wheel: false, swap_buttons: false } });
 	disk.fail = true;
-	await assert.rejects(configuration.updateValue(codec));
+	await assert.rejects(configuration.updateValue('desktop.codec', 'av1'));
 	assert.deepEqual(calls.at(-1), { type: 'setDesktopCodecDefault', codec: 'auto' });
 	disk.fail = false;
-	await configuration.updateValue(codec);
+	await configuration.updateValue('desktop.codec', 'av1');
 	assert.deepEqual(calls.at(-1), { type: 'setDesktopCodecDefault', codec: 'av1' });
+	await assert.rejects(configuration.updateValue('desktop.codec', 'bogus'), /available options/);
+	await assert.rejects(configuration.updateValue('unknown.setting', true), /Unknown setting/);
 	configuration.dispose();
 });
 
 test('media defaults roll back partial runtime writes without publishing a false saved preference', async () => {
 	const commands = [];
 	let refused = false;
-	const engine = {
-		available: true, execute: command => {
-			commands.push(command);
-			if (command.type === 'setNativeAudioSources' && command.microphones.length && !refused) {
-				refused = true;
-				return Promise.reject(new Error('Audio source unavailable'));
-			}
-			return Promise.resolve({ type: 'done' });
+	const engine = settingsEngine(command => {
+		commands.push(command);
+		if (command.type === 'setNativeAudioSources' && command.microphones.includes('mic') && !refused) {
+			refused = true;
+			return Promise.reject(new Error('Audio source unavailable'));
 		}
-	};
-	disk.values = defaultConfiguration;
+		return Promise.resolve({ type: 'done' });
+	});
+	disk.file = {};
 	const configuration = new ConfigurationMainService('/settings.json', engine, logService);
-	await assert.rejects(configuration.updateValue({ key: 'media.sources', value: { cameras: ['camera'], microphones: ['mic'], system: [] } }), /Audio source unavailable/);
-	assert.deepEqual(configuration.snapshot.values['media.sources'], defaultConfiguration['media.sources']);
-	assert.deepEqual(commands.map(command => command.type), ['setNativeCameraSources', 'setNativeAudioSources', 'setNativeCameraSources', 'setNativeAudioSources']);
-	assert.deepEqual(commands[2].ids, defaultConfiguration['media.sources'].cameras);
+	await assert.rejects(configuration.updateValue('media.microphone', 'mic'), /Audio source unavailable/);
+	assert.equal(configuration.snapshot.values['media.microphone'], 'vnilink:default-microphone');
+	assert.deepEqual(commands.map(command => command.type), ['setNativeAudioSources', 'setNativeAudioSources']);
+	assert.deepEqual(commands[1], { type: 'setNativeAudioSources', microphones: ['vnilink:default-microphone'], system: ['vnilink:default-system-audio'] });
 	configuration.dispose();
 });
 
 test('the default recording folder stays independent of a saved custom folder', async () => {
-	const custom = { ...defaultConfiguration, 'recording.defaults': { ...defaultConfiguration['recording.defaults'], directory: '/custom-recordings' } };
-	const recording = new RecordingMainService({ snapshot: { values: custom, error: null } });
+	const recording = new RecordingMainService({ getValue: () => '/custom-recordings' });
 	assert.equal(await recording.getDefaultDirectory(), join('/Pictures', 'VniLink'));
-	const broken = new RecordingMainService({ snapshot: { values: custom, error: 'Settings could not be loaded.' } });
-	await assert.rejects(broken.createDestination(), /could not be loaded/);
 });

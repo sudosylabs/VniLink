@@ -1,4 +1,3 @@
-import { defaultConfiguration } from '../../src/platform/configuration/common/configurationSnapshot.js';
 import { isPermissionSnapshot } from '../../src/platform/permissions/common/permissions.js';
 import assert from 'node:assert/strict';
 import { getMacOSWindowControlsPosition } from '../../src/platform/window/common/window.js';
@@ -215,7 +214,7 @@ class SmokeSuite {
 		const size = window.getSize();
 		try {
 			for (const theme of ['light', 'dark']) {
-				await window.webContents.executeJavaScript(`window.driver.configuration.updateValue({ key: 'appearance.theme', value: ${JSON.stringify(theme)} })`);
+				await window.webContents.executeJavaScript(`window.driver.configuration.updateValue('appearance.theme', ${JSON.stringify(theme)})`);
 				for (const width of [1200, 760]) {
 					window.setSize(width, 820);
 					for (const category of ['appearance', 'access', 'desktop', 'input', 'terminal', 'media', 'recording', 'power', 'connection']) {
@@ -225,20 +224,13 @@ class SmokeSuite {
         const content = document.querySelector('.home-content');
         const page = content.querySelector('main');
         const buttons = [...page.querySelectorAll('button')];
-        const footers = [...page.querySelectorAll('.settings-apply-row')].flatMap(row => {
-         const button = row.querySelector('button');
-         const help = row.querySelector('.settings-help');
-         if (!button || !help || !help.textContent.trim()) return [];
-         const buttonBounds = button.getBoundingClientRect();
-         const helpBounds = help.getBoundingClientRect();
-         return [Math.abs(buttonBounds.top + buttonBounds.height / 2 - helpBounds.top - helpBounds.height / 2)];
-        });
-        resolve({ footers, overflow: content.scrollWidth > content.clientWidth, heading: page.querySelector('h1').textContent, refresh: buttons.some(button => button.textContent === 'Refresh'), session: page.textContent.includes('Session overrides'), device: page.textContent.includes('Device access'), container: getComputedStyle(page.querySelector('.appearance-section') ?? page).borderTopWidth });
+        resolve({ note: page.querySelector('.settings-page-note')?.textContent.trim() ?? '', submit: !!page.querySelector('button[type="submit"]'), overflow: content.scrollWidth > content.clientWidth, heading: page.querySelector('h1').textContent, refresh: buttons.some(button => button.textContent === 'Refresh'), session: page.textContent.includes('Session overrides'), device: page.textContent.includes('Device access'), container: getComputedStyle(page.querySelector('.appearance-section') ?? page).borderTopWidth });
        }));
       })`);
 						assert(record(layout) && layout.overflow === false, `${category} overflowed at ${String(width)}px`);
+						assert.equal(layout.submit, false, `${category} still saves through a button`);
 						if (['input', 'media', 'recording', 'power'].includes(category)) {
-							assert(Array.isArray(layout.footers) && layout.footers.length > 0 && layout.footers.every((offset: unknown) => typeof offset === 'number' && offset <= 1), `${category} footer text was not centered with its button at ${String(width)}px: ${JSON.stringify(layout.footers)}`);
+							assert(typeof layout.note === 'string' && layout.note.length > 0, `${category} lost its note on when changes apply`);
 						}
 						if (category === 'appearance') {
 							assert.equal(layout.container, '0px');
@@ -261,16 +253,12 @@ class SmokeSuite {
        check();
       })`);
 						await driver.screenshot(`settings-${category}-${theme}-${String(width)}`);
-						if (['input', 'media', 'recording', 'power'].includes(category)) {
-							await window.webContents.executeJavaScript(`new Promise(resolve => { document.querySelector('.home-content > main button[type="submit"]').closest('.settings-apply-row').scrollIntoView({ block: 'center' }); requestAnimationFrame(() => requestAnimationFrame(resolve)); })`);
-							await driver.screenshot(`settings-footer-${category}-${theme}-${String(width)}`);
-						}
 					}
 				}
 			}
 		} finally {
 			window.setSize(size[0], size[1]);
-			await window.webContents.executeJavaScript(`window.driver.configuration.updateValue({ key: 'appearance.theme', value: 'system' })`);
+			await window.webContents.executeJavaScript(`window.driver.configuration.updateValue('appearance.theme', 'system')`);
 		}
 	}
 
@@ -312,8 +300,7 @@ class SmokeSuite {
 	private async verifyPreferences(window: BrowserWindow): Promise<void> {
 		await window.webContents.executeJavaScript(`(async () => {
     const material = document.documentElement.dataset.windowMaterial;
-    await window.driver.configuration.updateValue({ key: 'appearance.theme', value: 'dark' });
-    await window.driver.configuration.updateValue({ key: 'appearance.nativeBackground', value: false });
+    await window.driver.configuration.updateValue('appearance.theme', 'dark');
     await new Promise((resolve, reject) => {
       const start = performance.now();
       function check() {
@@ -324,11 +311,11 @@ class SmokeSuite {
       check();
     });
     let rejected = false;
-    try { await window.driver.configuration.updateValue({ key: 'appearance.theme', value: 'invalid' }); } catch { rejected = true; }
+    try { await window.driver.configuration.updateValue('appearance.theme', 'invalid'); } catch { rejected = true; }
     if (!rejected) throw new Error('Invalid preference accepted');
     return true;
   })()`);
-		assert.deepEqual(JSON.parse(readFileSync(join(this.application.profile, 'settings.json'), 'utf8')), { ...defaultConfiguration, 'appearance.theme': 'dark', 'appearance.nativeBackground': false });
+		assert.deepEqual(JSON.parse(readFileSync(join(this.application.profile, 'settings.json'), 'utf8')), { 'appearance.theme': 'dark' });
 		assert.equal(nativeTheme.themeSource, 'dark');
 		const size = window.getSize();
 		try {
@@ -352,8 +339,7 @@ class SmokeSuite {
 			window.setSize(size[0], size[1]);
 		}
 		await window.webContents.executeJavaScript(`(async () => {
-    await window.driver.configuration.updateValue({ key: 'appearance.theme', value: 'system' });
-    await window.driver.configuration.updateValue({ key: 'appearance.nativeBackground', value: true });
+    await window.driver.configuration.updateValue('appearance.theme', 'system');
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     if (!document.querySelector('.workbench-notice').hidden) throw new Error('Native theme update raised an application error');
   })()`);

@@ -1,27 +1,24 @@
+import { $, addDisposableListener, append, EventType, h } from '../../../base/browser/dom.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
-import { addDisposableListener } from '../../../base/browser/domEvent.js';
+import './media/access.css';
 
+/** A switch row: title and description beside a `role="switch"` checkbox that starts disabled. */
 export class AccessToggle extends Disposable {
-	public readonly element = document.createElement('label');
-	public readonly input = document.createElement('input');
-	private readonly description = document.createElement('span');
+	public readonly element: HTMLElement;
+	public readonly input: HTMLInputElement;
+	private readonly description: HTMLElement;
 
 	constructor(title: string, description: string, change: (allowed: boolean) => void) {
 		super();
-		this.element.className = 'access-toggle-row';
-		const text = document.createElement('span');
-		const label = document.createElement('span');
-		label.className = 'access-toggle-title';
-		label.textContent = title;
-		this.description.className = 'access-description';
+		const row = h('label.access-toggle-row', [
+			h('span', [h('span.access-toggle-title@title'), h('span.access-description@description')]),
+		]);
+		this.element = row.root;
+		this.input = append(this.element, $<HTMLInputElement>('input.access-switch', { type: 'checkbox', role: 'switch', disabled: true }));
+		this.description = row.description;
+		row.title.textContent = title;
 		this.description.textContent = description;
-		text.append(label, this.description);
-		this.input.type = 'checkbox';
-		this.input.setAttribute('role', 'switch');
-		this.input.className = 'access-switch';
-		this.input.disabled = true;
-		this.element.append(text, this.input);
-		this._register(addDisposableListener(this.input, 'change', () => {
+		this._register(addDisposableListener(this.input, EventType.CHANGE, () => {
 			if (!this.input.disabled) {
 				change(this.input.checked);
 			}

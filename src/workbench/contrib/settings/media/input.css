@@ -1,28 +1,4 @@
-.input-content {
-	max-width: 720px;
-	margin: 28px 40px 40px;
-}
-
-.input-content h2 {
-	font-size: 14px;
-	font-weight: 500;
-	margin: 0;
-}
-
-.input-fields {
-	border: 0;
-	padding: 0;
-	margin: 0;
-	min-width: 0;
-}
-
-.input-fields section + section {
-	margin-top: 24px;
-	padding-top: 28px;
-	border-top: 1px solid var(--line);
-}
-
-.input-mode-help {
+.setting-enum-help {
 	margin-bottom: 16px;
 }
 
@@ -46,14 +22,4 @@
 	text-align: right;
 	font-variant-numeric: tabular-nums;
 	color: var(--muted);
-}
-
-.input-fields:disabled {
-	opacity: 0.5;
-}
-
-@media (width <= 800px) {
-	.input-content {
-		margin-inline: 28px;
-	}
 }

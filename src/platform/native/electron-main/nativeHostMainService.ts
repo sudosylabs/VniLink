@@ -26,7 +26,6 @@ export class NativeHostMainService extends Disposable {
 	public readonly onDidChangeWindowState = this.stateChanged.event;
 	private readonly revisions = new Map<number, number>();
 	private readonly materials = new Map<number, WindowMaterial>();
-	private nativeBackgroundEnabled = true;
 
 	constructor(@IWindowsMainService private readonly windowsMainService: WindowsMainService) {
 		super();
@@ -43,7 +42,6 @@ export class NativeHostMainService extends Disposable {
 			}
 		};
 		const material = store.add(new WindowMaterial(window));
-		material.setEnabled(this.nativeBackgroundEnabled);
 		this.materials.set(window.id, material);
 		store.add(material.onDidChange(publish));
 		const events = [
@@ -65,13 +63,6 @@ export class NativeHostMainService extends Disposable {
 			this.revisions.delete(window.id);
 			this.materials.delete(window.id);
 		}));
-	}
-
-	public setNativeBackgroundEnabled(enabled: boolean): void {
-		this.nativeBackgroundEnabled = enabled;
-		for (const material of this.materials.values()) {
-			material.setEnabled(enabled);
-		}
 	}
 
 	private window(windowId: number): BrowserWindow {

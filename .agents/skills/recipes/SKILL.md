@@ -1,6 +1,6 @@
 ---
 name: recipes
-description: "Step lists for common VniLink changes: a Home page, a workbench service, a main-process capability, a toolbar action, a startup contribution, copying VS Code code. Use when adding one of these."
+description: "Step lists for common VniLink changes: a Home page, a setting, a workbench service, a main-process capability, a toolbar action, a startup contribution, copying VS Code code. Use when adding one of these."
 ---
 
 # Recipes
@@ -14,6 +14,14 @@ Each recipe names the files to touch and the existing file to imitate. `workbenc
 3. Import the contribution from `src/workbench/workbench.desktop.main.ts`.
 4. Add a scenario in `test/browser/` that builds the page through an `InstantiationService` with fake services. Imitate `test/browser/devices.ts`.
 
+## Add a setting
+
+1. Register it in `src/platform/configuration/common/configurationSchema.ts` under the right source: `user` (settings.json) or the engine policy that persists it. Give it a flat key, `title`, `description`, `default` and JSON-schema bounds (`minimum`, `maximum`, `enum` with `enumItemLabels`); add `unit` for a number and `validate` only for rules the schema cannot express. Values are in the units the user sees; the source converts (`engineSettings.ts`).
+2. If the engine must apply it: a `user` setting joins a group in `engineCommands` in `platform/configuration/electron-main/configurationMainService.ts`; an engine setting maps to its policy field in `engineSettings.ts`.
+3. Show it by adding the key to a section of a page in `contrib/settings/settings.contribution.ts`. Booleans, numbers and enums render themselves (`settingRenderers.ts`). A control the generic renderers cannot express implements `ISettingControl` and is registered with `registerControl(key, Ctor)`; imitate `codecSettingControl.ts`. Content that is not a setting is an `ISettingsWidget` (`powerStatusWidget.ts`).
+4. Read it anywhere with `IConfigurationService.getValue(key)`; never add a page-level Save. Settings apply when valid.
+5. Tests: schema and source behaviour in `test/tooling/settings.test.mjs`; the page through `SettingsFixture` in `test/browser/settings.ts`.
+
 ## Add a workbench service
 
 1. Contract: `src/workbench/services/<area>/<area>Service.ts` with `export const IAreaService = createDecorator<IAreaService>('areaService')` and the interface.
@@ -26,7 +34,7 @@ Each recipe names the files to touch and the existing file to imitate. `workbenc
 1. Contract and guard in `src/platform/<area>/common/<area>.ts`, with a `<AREA>_CHANNEL_NAME` constant.
 2. Main service in `platform/<area>/electron-main/<area>MainService.ts`, registered in `VniLinkApplication.createServices`.
 3. Channel facade in `platform/<area>/electron-main/<area>Channel.ts`. It validates every argument and reads the window from `windowIdFromContext(context)`. Imitate `platform/permissions/electron-main/permissionsChannel.ts`. Register it in `initChannels`.
-4. Renderer side: `registerMainProcessRemoteService` for plain proxies, or a small service over `IMainProcessService.getChannel` when results need validation (`platform/configuration/electron-browser/configurationSnapshotService.ts`).
+4. Renderer side: `registerMainProcessRemoteService` for plain proxies, or a small service over `IMainProcessService.getChannel` when results need validation (`workbench/services/configuration/configurationServiceImpl.ts`).
 5. Channel-level tests in `test/tooling/applicationIpc.test.mjs`, including refused input.
 
 ## Add a toolbar action
