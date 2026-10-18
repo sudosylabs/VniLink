@@ -435,7 +435,7 @@
 	margin-top: 6px;
 }
 
-/* Services: read-only rows saying what the computer allows. */
+/* Services: rows saying what the computer allows; a row that opens something is a button. */
 
 .device-services {
 	margin: 0;
@@ -464,6 +464,20 @@
 
 .device-service[aria-disabled='true'] > .vnilink-icon {
 	opacity: 0.6;
+}
+
+/* The hover fill is inset; the padding keeps the content aligned with report-only rows. */
+button.device-service {
+	width: calc(100% - 16px);
+	margin-inline: 8px;
+	padding-inline: 8px;
+	border-radius: 5px;
+	background: transparent;
+	text-align: start;
+}
+
+button.device-service:hover:not(:disabled) {
+	background: var(--surface-hover);
 }
 
 .device-service-status {

@@ -11,6 +11,7 @@ import { MenuService } from '../platform/actions/common/menuService.js';
 import '../platform/recording/electron-browser/recordingService.js';
 import '../platform/theme/browser/themeService.js';
 import './services/application/applicationServiceImpl.js';
+import './services/clipboard/clipboardService.js';
 import './services/commands/commandService.js';
 import './services/configuration/configurationServiceImpl.js';
 import './services/connection/connectionServiceImpl.js';
@@ -23,6 +24,7 @@ import './services/permissions/permissionServiceImpl.js';
 import './services/remoteDesktop/remoteDesktopServiceImpl.js';
 import './services/screenSnapshot/screenSnapshotServiceImpl.js';
 import './services/tabs/tabServiceImpl.js';
+import './services/terminal/terminalServiceImpl.js';
 
 registerSingleton(IContextKeyService, ContextKeyService, InstantiationType.Delayed);
 
@@ -37,6 +39,7 @@ import { WorkbenchContextKeysHandler } from './contextkeysHandler.js';
 import './actions/applicationActions.js';
 import './contrib/devices/devices.contribution.js';
 import './contrib/settings/settings.contribution.js';
+import './contrib/terminal/terminal.contribution.js';
 import './contrib/home/home.contribution.js';
 
 registerWorkbenchContribution2(WorkbenchContextKeysHandler.ID, WorkbenchContextKeysHandler, WorkbenchPhase.BlockStartup);

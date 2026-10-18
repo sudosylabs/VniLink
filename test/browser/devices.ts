@@ -1,4 +1,4 @@
-import { Emitter } from '../../src/base/common/event.js';
+import { Emitter, Event as BaseEvent } from '../../src/base/common/event.js';
 import { Disposable } from '../../src/base/common/lifecycle.js';
 import type { ControlRequestInfo, RemoteCapabilityStatus } from '../../src/platform/engine/common/engine.js';
 import type { DeviceSummary, IDeviceService, PairingFile } from '../../src/workbench/services/devices/deviceService.js';
@@ -6,6 +6,7 @@ import type { ScreenAccess, ScreenSnapshotResult } from '../../src/workbench/ser
 import type { IScreenSnapshotService } from '../../src/workbench/services/screenSnapshot/screenSnapshotService.js';
 import { DevicesPage } from '../../src/workbench/contrib/devices/devicesPage.js';
 import { DevicePairingPopover, IDevicePairingPopover, type PairingPopoverKind } from '../../src/workbench/contrib/devices/devicePairingPopover.js';
+import { ICommandService, type ICommandEvent } from '../../src/platform/commands/common/commands.js';
 import { SyncDescriptor } from '../../src/platform/instantiation/common/descriptors.js';
 import { IDevicePairingService } from '../../src/workbench/services/devices/devicePairingService.js';
 import { DevicePairingService } from '../../src/workbench/services/devices/devicePairingServiceImpl.js';
@@ -49,6 +50,8 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 	/** Stand-ins for the titlebar buttons the popover hangs from. */
 	private readonly anchors = document.createElement('div');
 	public connects: string[] = [];
+	/** Commands the inspector ran, with their arguments. */
+	public readonly commands: unknown[][] = [];
 	public confirmation = '';
 	public renameResult: Promise<void> | undefined;
 	public incoming: ControlRequestInfo | null = null;
@@ -66,7 +69,16 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 			this.state = 'unavailable';
 		}
 		this.snapshots = snapshots ?? new FixtureSnapshots();
-		const collection = new ServiceCollection([IDeviceServiceId, this], [IScreenSnapshotServiceId, this.snapshots],
+		const commands: ICommandService = {
+			_serviceBrand: undefined,
+			onWillExecuteCommand: BaseEvent.None as BaseEvent<ICommandEvent>,
+			onDidExecuteCommand: BaseEvent.None as BaseEvent<ICommandEvent>,
+			executeCommand: <R>(id: string, ...args: unknown[]): Promise<R | undefined> => {
+				this.commands.push([id, ...args]);
+				return Promise.resolve(undefined);
+			},
+		};
+		const collection = new ServiceCollection([IDeviceServiceId, this], [IScreenSnapshotServiceId, this.snapshots], [ICommandService, commands],
 			[IDevicePairingService, new SyncDescriptor(DevicePairingService)], [IDevicePairingPopover, new SyncDescriptor(DevicePairingPopover)]);
 		const services = this._register(new InstantiationService(collection, true));
 		this.page = this._register(services.createInstance(DevicesPage));
@@ -324,11 +336,17 @@ async function verifyInspector(fixture: DevicePageFixture, rows: () => HTMLEleme
 		'Camera': 'Unavailable right now', 'Lock screen': 'Not supported there', 'Restart or shut down': 'Available',
 	};
 	assert(JSON.stringify(services()) === JSON.stringify(expected), `Service rows misreport availability: ${JSON.stringify(services())}`);
-	assert(page.querySelector('.device-services')?.getAttribute('role') === 'list' && !page.querySelector('.device-service button, .device-service[tabindex]'), 'Service rows became interactive before their tabs exist');
+	// Only Terminal opens something yet; it is a button, disabled while the computer refuses it.
+	const terminal = (): HTMLButtonElement | null => page.querySelector<HTMLButtonElement>('button.device-service');
+	assert(page.querySelector('.device-services')?.getAttribute('role') === 'list' && page.querySelectorAll('button.device-service, .device-service[tabindex]').length === 1, 'A service row without a tab became interactive');
+	assert(terminal()?.textContent.startsWith('Terminal') === true && terminal()?.disabled === true && terminal()?.parentElement?.tagName === 'LI', 'Terminal is not a disabled button in its list item while it needs permission');
 	assert(page.querySelector('.device-service[data-status="turnedOff"]')?.getAttribute('aria-disabled') === 'true', 'An unavailable service is not marked disabled');
-	fixture.report(STUDIO, [{ capability: 'files', status: 'available' }]);
+	fixture.report(STUDIO, [{ capability: 'files', status: 'available' }, { capability: 'terminal', status: 'available' }]);
 	await settle();
 	assert(services().Files === 'Available' && services()['Remote desktop'] === 'Not supported there', 'An availability change did not refresh the rows');
+	assert(terminal()?.disabled === false && terminal()?.getAttribute('aria-disabled') === 'false', 'An available Terminal row cannot be pressed');
+	terminal()?.click();
+	assert(JSON.stringify(fixture.commands) === JSON.stringify([['vnilink.terminal.open', STUDIO]]), `Terminal did not open for the selected computer: ${JSON.stringify(fixture.commands)}`);
 	const facts = Object.fromEntries([...page.querySelectorAll('.device-facts > div')].map(row => [row.querySelector('dt')?.textContent ?? '', row.querySelector('dd')?.textContent ?? '']));
 	assert(facts['Device ID'] === 'aaaaaaaa…aaaaaa' && facts.Computer === 'studio.local' && facts.System === 'macOS' && facts.Addresses === '2 direct, 1 relay', `Details are wrong: ${JSON.stringify(facts)}`);
 	assert(page.querySelector('.device-id')?.getAttribute('title') === STUDIO && page.querySelector('.device-copy')?.getAttribute('aria-label') === 'Copy device ID', 'The full device ID is not reachable');

@@ -1,5 +1,5 @@
 import * as nls from '../../../nls.js';
-import { addDisposableListener, append, EventType, h } from '../../../base/browser/dom.js';
+import { $, addDisposableListener, append, EventType, h } from '../../../base/browser/dom.js';
 import { StandardKeyboardEvent } from '../../../base/browser/keyboardEvent.js';
 import { Button } from '../../../base/browser/ui/button/button.js';
 import { renderIcon } from '../../../base/browser/ui/icon/icon.js';
@@ -9,6 +9,7 @@ import { Icons, type IconId } from '../../../base/common/icons.js';
 import { KeyCode } from '../../../base/common/keyCodes.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import type { RemoteCapability, RemoteCapabilityStatus, RemoteStatus } from '../../../platform/engine/common/engine.js';
+import { ICommandService } from '../../../platform/commands/common/commands.js';
 import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
 import { defaultButtonStyles, defaultInputBoxStyles } from '../../../platform/theme/browser/defaultStyles.js';
 import { IDeviceService, type DeviceSummary } from '../../services/devices/deviceService.js';
@@ -18,17 +19,19 @@ import { DeviceScreenSnapshot } from './deviceScreenSnapshot.js';
 /** Longest display name the engine accepts. */
 const maxNameLength = 128;
 
-/** A service row: what it offers, and the capabilities the remote computer reports for it. */
+/** A service row: what it offers, the capabilities the remote computer reports for it, and the command that opens it. */
 interface ServiceRow {
 	readonly label: string;
 	readonly icon: IconId;
 	readonly capabilities: readonly RemoteCapability[];
+	/** Run with the device id while the row is available; rows without one only report. */
+	readonly command?: string;
 }
 
 const serviceRows: readonly ServiceRow[] = [
 	{ label: nls.localize('devices.serviceDesktop', 'Remote desktop'), icon: Icons.remoteDesktop, capabilities: ['desktopControl'] },
 	{ label: nls.localize('devices.serviceView', 'View screen only'), icon: Icons.view, capabilities: ['desktopView'] },
-	{ label: nls.localize('devices.serviceTerminal', 'Terminal'), icon: Icons.terminal, capabilities: ['terminal'] },
+	{ label: nls.localize('devices.serviceTerminal', 'Terminal'), icon: Icons.terminal, capabilities: ['terminal'], command: 'vnilink.terminal.open' },
 	{ label: nls.localize('devices.serviceFiles', 'Files'), icon: Icons.files, capabilities: ['files'] },
 	{ label: nls.localize('devices.serviceCamera', 'Camera'), icon: Icons.camera, capabilities: ['camera'] },
 	{ label: nls.localize('devices.serviceLock', 'Lock screen'), icon: Icons.lock, capabilities: ['systemLock'] },
@@ -69,7 +72,12 @@ export class DeviceDetails extends Disposable {
 	private readonly renameForm: HTMLElement;
 	private readonly name: InputBox;
 	private readonly save: Button;
-	private readonly services: { readonly row: ServiceRow; readonly element: HTMLElement; readonly status: HTMLElement }[] = [];
+	private readonly services: {
+		readonly row: ServiceRow;
+		readonly element: HTMLElement;
+		readonly status: HTMLElement;
+		readonly open?: HTMLButtonElement;
+	}[] = [];
 	private readonly idValue: HTMLElement;
 	private readonly copyId: HTMLButtonElement;
 	private readonly hostname: HTMLElement;
@@ -92,6 +100,7 @@ export class DeviceDetails extends Disposable {
 		id: string,
 		@IDeviceService private readonly devices: IDeviceService,
 		@IInstantiationService instantiationService: IInstantiationService,
+		@ICommandService private readonly commandService: ICommandService,
 	) {
 		super();
 		const closeLabel = nls.localize('devices.close', 'Close device details');
@@ -152,11 +161,24 @@ export class DeviceDetails extends Disposable {
 		this.name.inputElement.autocomplete = 'off';
 		this.save = this.createButton(this.renameForm, nls.localize('devices.saveName', 'Save'), true);
 		for (const row of serviceRows) {
-			const item = h('li.device-service', [h('span.device-service-label@label'), h('span.device-service-status@status')]);
-			item.root.prepend(renderIcon(row.icon));
-			item.label.textContent = row.label;
-			append(panel.services, item.root);
-			this.services.push({ row, element: item.root, status: item.status });
+			const label = $('span.device-service-label');
+			const status = $('span.device-service-status');
+			label.textContent = row.label;
+			// A row that opens something is a button inside its list item; the others only report.
+			const command = row.command;
+			const open = command ? $<HTMLButtonElement>('button.device-service', { type: 'button' }) : undefined;
+			const element = open ?? $('li.device-service');
+			append(element, renderIcon(row.icon), label, status);
+			append(open ? append(panel.services, $('li.device-service-item')) : panel.services, element);
+			if (open && command) {
+				this._register(addDisposableListener(open, EventType.CLICK, () => {
+					const deviceId = this.device?.id;
+					if (deviceId) {
+						void this.commandService.executeCommand(command, deviceId);
+					}
+				}));
+			}
+			this.services.push({ row, element, status, open });
 		}
 		this.idValue = panel.idValue;
 		this.copyId = panel.copyId;
@@ -288,7 +310,7 @@ export class DeviceDetails extends Disposable {
 			return;
 		}
 		const connected = device.presence === 'connected';
-		for (const { row, element, status } of this.services) {
+		for (const { row, element, status, open } of this.services) {
 			// Away from the computer, every row says why instead of a stale report.
 			const value = !connected ? undefined : this.report ? rowStatus(row, this.report) : null;
 			status.textContent = value === undefined ? devicePresence(device)
@@ -296,6 +318,9 @@ export class DeviceDetails extends Disposable {
 					: remoteStatusLabel(value);
 			element.dataset.status = value ?? 'none';
 			element.setAttribute('aria-disabled', String(value !== 'available'));
+			if (open) {
+				open.disabled = value !== 'available';
+			}
 		}
 	}
 

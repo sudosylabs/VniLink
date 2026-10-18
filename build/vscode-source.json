@@ -1173,6 +1173,12 @@
       "sha256": "2cb04588cee35783a4e54df25e15812d02473b896a1e05ce54e24ce5472e0446"
     },
     {
+      "path": "src/platform/clipboard/common/clipboardService.ts",
+      "upstreamPath": "src/vs/platform/clipboard/common/clipboardService.ts",
+      "sha256": "83d38b8e3f09f243d9ffc7e0bb32bd3c56b6335414aeb14d4e9fc8dcb8c71dfd",
+      "adapted": true
+    },
+    {
       "path": "src/platform/commands/common/commands.ts",
       "upstreamPath": "src/vs/platform/commands/common/commands.ts",
       "sha256": "d574605719503256980bb457258f3fe14054f3e84f1cfc32e9b748b885206c36",
@@ -1302,7 +1308,7 @@
     {
       "path": "src/platform/native/common/native.ts",
       "upstreamPath": "src/vs/platform/native/common/native.ts",
-      "sha256": "601badc8d984c037bfcd04f182952bd325dc7f3b57c00d7b7d1003edab77c12e",
+      "sha256": "8ce62e3efd47a6197504e3c79c56cfdf4ced99cf0f425663afd5b0601d1a6d53",
       "adapted": true
     },
     {
@@ -1315,12 +1321,18 @@
       "path": "src/platform/native/electron-main/nativeHostMainService.ts",
       "upstreamPath": "src/vs/platform/native/electron-main/nativeHostMainService.ts",
       "adapted": true,
-      "sha256": "36aed324ae6033000d005620af219c5172b38f476a214340e3c029ee39b1988b"
+      "sha256": "702847fcae3b84c97819ca6f14a07a111dd3fb641567be7e0fb66c008c8de9a1"
     },
     {
       "path": "src/platform/registry/common/platform.ts",
       "upstreamPath": "src/vs/platform/registry/common/platform.ts",
       "sha256": "5a1fceef6c96ced1a5b1da20af0bb89b73f035dc42f23f162a583d6b89dbb523",
+      "changedImports": 0
+    },
+    {
+      "path": "src/platform/terminal/common/terminalStrings.ts",
+      "upstreamPath": "src/vs/platform/terminal/common/terminalStrings.ts",
+      "sha256": "7f1d3e3561e9a17410cfd18e6f9da754a29f3bcce9062804ff4ed2ff3224a3ef",
       "changedImports": 0
     },
     {
@@ -1492,6 +1504,7 @@
     "src/nls.ts",
     "src/platform/actions/common/actions.ts",
     "src/platform/actions/common/menuService.ts",
+    "src/platform/clipboard/common/clipboardService.ts",
     "src/platform/commands/common/commands.ts",
     "src/platform/configuration/common/configuration.ts",
     "src/platform/configuration/common/configurationRegistry.ts",
@@ -1507,6 +1520,7 @@
     "src/platform/native/common/native.ts",
     "src/platform/native/electron-main/nativeHostMainService.ts",
     "src/platform/registry/common/platform.ts",
+    "src/platform/terminal/common/terminalStrings.ts",
     "src/platform/theme/browser/themeService.ts",
     "src/platform/theme/common/themeService.ts",
     "src/platform/window/common/window.ts",
@@ -4295,6 +4309,11 @@
       "kind": "import"
     },
     {
+      "from": "src/platform/clipboard/common/clipboardService.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
       "from": "src/platform/actions/common/menuService.ts",
       "to": "src/base/common/async.ts",
       "kind": "import"
@@ -6643,6 +6662,7 @@
     "src/nls.ts",
     "src/platform/actions/common/actions.ts",
     "src/platform/actions/common/menuService.ts",
+    "src/platform/clipboard/common/clipboardService.ts",
     "src/platform/commands/common/commands.ts",
     "src/platform/configuration/common/configuration.ts",
     "src/platform/configuration/common/configurationRegistry.ts",
@@ -6658,6 +6678,7 @@
     "src/platform/native/common/native.ts",
     "src/platform/native/electron-main/nativeHostMainService.ts",
     "src/platform/registry/common/platform.ts",
+    "src/platform/terminal/common/terminalStrings.ts",
     "src/platform/theme/browser/themeService.ts",
     "src/platform/theme/common/themeService.ts",
     "src/platform/window/common/window.ts",

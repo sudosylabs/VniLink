@@ -11,6 +11,7 @@ export const windows = new Map();
 export const ipcMain = { handle: (name, callback) => handlers.set(name, callback), removeHandler: name => handlers.delete(name), on() { }, once() { }, removeListener() { } };
 export const app = { isPackaged: false, getVersion: () => 'test', getPath: () => '/Pictures' };
 export const shell = { openExternal: async url => opened.push(url) };
+export const clipboard = { text: '', readText: async () => clipboard.text, writeText: async text => { clipboard.text = text; } };
 export const dialog = { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) };
 export const systemPreferences = {};
 export const screen = { getAllDisplays: () => [] };
@@ -121,6 +122,16 @@ test('native host requests must name their own window and links are allowlisted'
 	await assert.rejects(channel.call('window:7', 'openExternal', [7, 'https://arbitrary.example/']), /not allowed/);
 	await channel.call('window:7', 'openExternal', [7, 'https://docs.iroh.computer/relays/rate-limiting']);
 	assert.deepEqual(opened, ['https://docs.iroh.computer/relays/rate-limiting']);
+	// Plain text only, for the window that asks, within a bound.
+	await channel.call('window:7', 'writeClipboardText', [7, 'copied ✓']);
+	assert.equal(await channel.call('window:7', 'readClipboardText', [7]), 'copied ✓');
+	assert.equal(await channel.call('window:7', 'readClipboardText', [7, 'selection']), 'copied ✓', 'The selection clipboard did not fall back off Linux');
+	for (const args of [[8, 'other window'], [7, 42], [7, 'x'.repeat(16 * 1024 * 1024 + 1)], [7, 'text', 'find'], [7, 'text', 'clipboard', 'extra']]) {
+		await assert.rejects(channel.call('window:7', 'writeClipboardText', args), /Invalid/);
+	}
+	await assert.rejects(channel.call('window:7', 'readClipboardText', [7, 'files']), /Invalid/);
+	await assert.rejects(channel.call('window:7', 'readClipboardText', [8]), /Invalid/);
+	assert.equal(await channel.call('window:7', 'readClipboardText', [7]), 'copied ✓', 'A refused write reached the clipboard');
 });
 
 test('windows change settings only through the configuration channel', async () => {

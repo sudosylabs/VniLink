@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: native window controls, window state, folder picking, displays, allowlisted links and relaunch.
+ *  Adapted for VniLink: native window controls, window state, folder picking, displays, allowlisted links, plain-text clipboard and relaunch.
  *--------------------------------------------------------------------------------------------*/
 
 import type { WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
@@ -49,6 +49,11 @@ export interface INativeHostService {
 	pickFolder(defaultPath: string): Promise<string | null>;
 	getCaptureDisplays(): Promise<NativeScreenSource[]>;
 	openExternal(url: string): Promise<void>;
+
+	// Clipboard
+	readClipboardText(type?: 'selection' | 'clipboard'): Promise<string>;
+	writeClipboardText(text: string, type?: 'selection' | 'clipboard'): Promise<void>;
+
 	/** Restarts the application; main refuses unless the engine requires a restart. */
 	relaunch(): Promise<void>;
 }
@@ -68,7 +73,16 @@ export type NativeHostMethod =
 	| 'pickFolder'
 	| 'getCaptureDisplays'
 	| 'openExternal'
+	| 'readClipboardText'
+	| 'writeClipboardText'
 	| 'relaunch';
+
+/** Longest text a window may place on the clipboard. */
+const MAX_CLIPBOARD_TEXT = 16 * 1024 * 1024;
+
+function isClipboardType(value: unknown): boolean {
+	return value === undefined || value === 'selection' || value === 'clipboard';
+}
 
 export function isWindowState(value: unknown): value is IWindowState {
 	if (typeof value !== 'object' || value === null) {
@@ -105,6 +119,12 @@ export function isNativeHostRequest(method: unknown, args: unknown): method is N
 	}
 	if (method === 'getWindowState' || method === 'getCaptureDisplays' || method === 'relaunch') {
 		return args.length === 1;
+	}
+	if (method === 'readClipboardText') {
+		return args.length <= 2 && isClipboardType(args[1]);
+	}
+	if (method === 'writeClipboardText') {
+		return args.length >= 2 && args.length <= 3 && typeof args[1] === 'string' && args[1].length <= MAX_CLIPBOARD_TEXT && isClipboardType(args[2]);
 	}
 	if (method === 'pickFolder' || method === 'openExternal') {
 		return args.length === 2 && typeof args[1] === 'string' && args[1].length > 0 && args[1].length <= 4096 && !args[1].includes('\0');

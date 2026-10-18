@@ -10,6 +10,7 @@ import { verifyIcons } from './icons.js';
 import { verifyRemoteDesktop } from './remoteDesktop.js';
 import { verifySettingsPages } from './settings.js';
 import { verifyTabs } from './tabs.js';
+import { verifyTerminal } from './terminal.js';
 
 export class BrowserScenarios {
 	private deviceFixture: DevicePageFixture | undefined;
@@ -38,7 +39,7 @@ export class BrowserScenarios {
 	private readonly scenarios = new Map<string, () => unknown>([
 		['workbench', verifyWorkbenchLifecycle], ['access', verifyAccess], ['connection', verifyConnection], ['data-channels', verifyDataChannels],
 		['devices', verifyDevices], ['device-pairing', verifyPairingPopover], ['device-screenshot', verifyDeviceScreenshot], ['home', verifyHomeLifecycle], ['icons', verifyIcons],
-		['media-settings', verifyMediaSettings], ['remote-desktop', verifyRemoteDesktop], ['settings', verifySettingsPages], ['tabs', verifyTabs],
+		['media-settings', verifyMediaSettings], ['remote-desktop', verifyRemoteDesktop], ['settings', verifySettingsPages], ['tabs', verifyTabs], ['terminal', verifyTerminal],
 	]);
 
 	public async run(name: string): Promise<boolean> {

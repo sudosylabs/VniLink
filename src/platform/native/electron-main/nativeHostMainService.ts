@@ -1,10 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: native window controls, window state, folder picking, displays and allowlisted links.
+ *  Adapted for VniLink: native window controls, window state, folder picking, displays, allowlisted links and plain-text clipboard.
  *--------------------------------------------------------------------------------------------*/
 
-import { dialog, screen, shell } from 'electron';
+import { clipboard, dialog, screen, shell } from 'electron';
 import type { BrowserWindow } from 'electron';
 import { Disposable, DisposableStore } from '../../../base/common/lifecycle.js';
 import { Emitter, Event } from '../../../base/common/event.js';
@@ -161,6 +161,22 @@ export class NativeHostMainService extends Disposable {
 		}
 		await shell.openExternal(url);
 	}
+
+	public async readClipboardText(windowId: number, type?: 'selection' | 'clipboard'): Promise<string> {
+		this.window(windowId);
+		return clipboardFor(type).readText();
+	}
+
+	public async writeClipboardText(windowId: number, text: string, type?: 'selection' | 'clipboard'): Promise<void> {
+		this.window(windowId);
+		return clipboardFor(type).writeText(text);
+	}
+}
+
+/** Electron exposes the selection clipboard as its own object, on Linux only. */
+function clipboardFor(type?: 'selection' | 'clipboard'): Electron.Clipboard {
+	// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- undefined off Linux.
+	return type === 'selection' ? clipboard.selection ?? clipboard : clipboard;
 }
 
 /** The only pages the workbench may open outside the application. */

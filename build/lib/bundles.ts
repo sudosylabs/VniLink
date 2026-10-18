@@ -37,6 +37,10 @@ export function resources(root: string, outputDirectory = join(root, 'out')): Re
 		// Tray icons, loaded by the main process next to its bundle.
 		['assets/tray', 'assets/tray'],
 		['node_modules/@phosphor-icons/core/LICENSE', 'licenses/phosphor-icons.txt'],
+		// xterm.js and its addons are bundled into the renderer; each package carries its own notice.
+		['node_modules/@xterm/xterm/LICENSE', 'licenses/xterm.txt'],
+		['node_modules/@xterm/addon-webgl/LICENSE', 'licenses/xterm-addon-webgl.txt'],
+		['node_modules/@xterm/addon-unicode11/LICENSE', 'licenses/xterm-addon-unicode11.txt'],
 		['LICENSE.vscode.txt', 'licenses/vscode.txt'],
 		['ThirdPartyNotices.vscode.txt', 'licenses/vscode-third-party.txt'],
 		['assets/licenses', 'licenses/native-codecs'],

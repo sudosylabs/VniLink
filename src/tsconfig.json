@@ -216,7 +216,9 @@
     "./base/browser/ui/dropdown/dropdown.ts",
     "./base/browser/ui/menu/menu.ts",
     "./base/browser/contextmenu.ts",
-    "./platform/jsonschemas/common/jsonContributionRegistry.ts"
+    "./platform/jsonschemas/common/jsonContributionRegistry.ts",
+    "./platform/terminal/common/terminalStrings.ts",
+    "./platform/clipboard/common/clipboardService.ts"
   ],
   "include": [],
   "exclude": []
