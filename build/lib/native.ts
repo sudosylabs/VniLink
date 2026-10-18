@@ -8,8 +8,8 @@ export interface NativeOptions {
 	/** Rust target triple; the host default when omitted. */
 	readonly target?: string;
 	readonly profile: 'dev' | 'release';
-	/** Extra build environment, recorded in the identity. */
-	readonly environment?: Readonly<Record<string, string>>;
+	/** The oldest macOS the addon supports; requires an explicit Apple `target`. */
+	readonly minimumSystemVersion?: string;
 }
 
 export interface NativeIdentity {
@@ -18,7 +18,7 @@ export interface NativeIdentity {
 	readonly profile: 'dev' | 'release';
 	readonly platform: NodeJS.Platform;
 	readonly architecture: string;
-	readonly environment?: Readonly<Record<string, string>>;
+	readonly minimumSystemVersion?: string;
 }
 
 /** The host's default addon target: Windows builds with the GNU toolchain. */
@@ -56,8 +56,8 @@ export async function nativeIdentity(root: string, options: NativeOptions): Prom
 		hash.update(await readFile(path));
 		hash.update('\0');
 	}
-	const environment = options.environment && Object.keys(options.environment).length ? { environment: options.environment } : {};
-	return { source: hash.digest('hex'), target: options.target ?? null, profile: options.profile, platform: process.platform, architecture: process.arch, ...environment };
+	const minimum = options.minimumSystemVersion ? { minimumSystemVersion: options.minimumSystemVersion } : {};
+	return { source: hash.digest('hex'), target: options.target ?? null, profile: options.profile, platform: process.platform, architecture: process.arch, ...minimum };
 }
 
 function assertHostTarget(target: string | undefined): void {
@@ -71,13 +71,44 @@ function assertHostTarget(target: string | undefined): void {
 	}
 }
 
+/**
+ * Cargo's environment for `options`. A macOS minimum applies only to the target
+ * triple: `MACOSX_DEPLOYMENT_TARGET` would also reach host build scripts and
+ * proc macros, which macOS 27's loader then refuses to open, so the addon's link
+ * and its C/C++ objects get the minimum through target-scoped variables instead.
+ */
+export function nativeEnvironment(options: NativeOptions, environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	const result: NodeJS.ProcessEnv = { ...environment };
+	const minimum = options.minimumSystemVersion;
+	if (!minimum) {
+		return result;
+	}
+	const target = options.target;
+	if (!target?.endsWith('-apple-darwin')) {
+		throw new Error('A macOS minimum version requires an explicit Apple target, so host build tools keep their own');
+	}
+	if (environment.RUSTFLAGS || environment.CARGO_ENCODED_RUSTFLAGS) {
+		throw new Error('RUSTFLAGS would replace the target-scoped macOS minimum; unset it for release builds');
+	}
+	delete result.MACOSX_DEPLOYMENT_TARGET;
+	const flag = `-mmacosx-version-min=${minimum}`;
+	const triple = target.replace(/-/g, '_');
+	const rustflags = `CARGO_TARGET_${triple.toUpperCase()}_RUSTFLAGS`;
+	result[rustflags] = [environment[rustflags], `-C link-arg=${flag}`].filter(Boolean).join(' ');
+	for (const name of [`CFLAGS_${triple}`, `CXXFLAGS_${triple}`]) {
+		result[name] = [environment[name], flag].filter(Boolean).join(' ');
+	}
+	return result;
+}
+
 /** Builds the addon and returns the source identity it was built from. */
 export async function compileNative(root: string, processes: Pick<ProcessRunner, 'run'>, options: NativeOptions): Promise<NativeIdentity> {
 	assertHostTarget(options.target);
 	const before = await nativeIdentity(root, options);
 	const target = options.target ? ['--target', options.target] : [];
 	const release = options.profile === 'release' ? ['--release'] : [];
-	await processes.run('cargo', ['build', '--locked', '--target-dir', 'target/electron', ...target, ...release, '-p', 'vnilink-node'], { cwd: root, env: { ...process.env, ...options.environment } });
+	const env = nativeEnvironment(options);
+	await processes.run('cargo', ['build', '--locked', '--target-dir', 'target/electron', ...target, ...release, '-p', 'vnilink-node'], { cwd: root, env });
 	return before;
 }
 

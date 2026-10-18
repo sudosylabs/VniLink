@@ -47,7 +47,8 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 ## Build and dev contracts
 
 - One-shot, release and watch builds share `bundleOptions` and `resources`.
-- Native artifacts are identified by sources, target triple, profile and environment (`nativeIdentity`); existence in `out/native` proves nothing. Rust changes need `npm run build` and a restart; Rust is never watched.
+- Native artifacts are identified by sources, target triple, profile and macOS minimum (`nativeIdentity`); existence in `out/native` proves nothing. Rust changes need `npm run build` and a restart; Rust is never watched.
+- Settings for the shipped addon reach only its target triple (`nativeEnvironment`): never export `MACOSX_DEPLOYMENT_TARGET` or global `RUSTFLAGS` to Cargo, because they also reach host build scripts and proc macros, which macOS 27 then refuses to load.
 - Renderer reload keeps the engine; main, preload and utility changes need a restart (`development.ts` relaunches on exit code 42).
 - Process owners handle spawn errors, exit and signals, and tear down descendants with bounded waits on every OS.
 - Release staging keeps native sources and licences for relinking (`releaseSourceFilter`).

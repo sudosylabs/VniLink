@@ -54,7 +54,8 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 		work = stage;
 		const app = join(stage, 'app');
 		const source = await sourceFingerprint(root);
-		const native: NativeOptions = { profile: 'release', target: target.rustTarget, environment: process.platform === 'darwin' ? { MACOSX_DEPLOYMENT_TARGET: product.platforms.darwin.minimumSystemVersion } : {} };
+		const minimum = process.platform === 'darwin' ? { minimumSystemVersion: product.platforms.darwin.minimumSystemVersion } : {};
+		const native: NativeOptions = { profile: 'release', target: target.rustTarget, ...minimum };
 		await (options.buildApplication ?? buildApplication)(root, signal, { production: true, outputDirectory: app, native });
 		signal.throwIfAborted();
 		const packageJson = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as PackageJson;

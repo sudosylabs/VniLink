@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import { bundleOptions, releaseSourceFilter } from '../../build/lib/bundles.ts';
-import { assertNativeFresh, compileNative, stageNative } from '../../build/lib/native.ts';
+import { assertNativeFresh, compileNative, nativeEnvironment, nativeIdentity, stageNative } from '../../build/lib/native.ts';
 import { loadProduct } from '../../build/lib/product.ts';
 import { buildRelease } from '../../build/lib/release.ts';
 import { verifyReleaseFiles } from '../../build/lib/verify.ts';
@@ -38,7 +38,7 @@ test('release entry points exclude tests and compile with production configurati
 	}
 });
 
-test('release native profile and deployment baseline are passed to Cargo and isolated from dev staging', async () => {
+test('release native profile is passed to Cargo and isolated from dev staging', async () => {
 	const root = await mkdtemp(join(tmpdir(), 'vnilink-release-native-'));
 	try {
 		for (const directory of ['crates', 'vendor', '.cargo', 'target/electron/release', 'release/native']) {
@@ -50,7 +50,7 @@ test('release native profile and deployment baseline are passed to Cargo and iso
 		await put(root, 'out/native/vnilink.node', 'dev-sentinel');
 		let invoked;
 		const library = process.platform === 'win32' ? 'vnilink_node.dll' : process.platform === 'darwin' ? 'libvnilink_node.dylib' : 'libvnilink_node.so';
-		const options = { profile: 'release', environment: { MACOSX_DEPLOYMENT_TARGET: '14.0' } };
+		const options = { profile: 'release' };
 		const built = await compileNative(root, {
 			run: async (command, args, runOptions) => {
 				invoked = { command, args, options: runOptions };
@@ -60,7 +60,6 @@ test('release native profile and deployment baseline are passed to Cargo and iso
 		await stageNative(root, join(root, 'release'), options, built);
 		await assertNativeFresh(root, join(root, 'release'), options);
 		assert(invoked.args.includes('--release'));
-		assert.equal(invoked.options.env.MACOSX_DEPLOYMENT_TARGET, '14.0');
 		assert.equal(await readFile(join(root, 'out/native/vnilink.node'), 'utf8'), 'dev-sentinel');
 		await put(root, 'release/native/vnilink.node', 'tampered');
 		await assert.rejects(assertNativeFresh(root, join(root, 'release'), options), /stale/);
@@ -69,9 +68,40 @@ test('release native profile and deployment baseline are passed to Cargo and iso
 	}
 });
 
-test('release publication inventories only complete payloads, cleans failures and preserves the previous release', async () => {
+test('a macOS minimum reaches only the target triple, never host build tools', async () => {
+	const options = { profile: 'release', target: 'aarch64-apple-darwin', minimumSystemVersion: '14.0' };
+	const environment = nativeEnvironment(options, { PATH: '/bin', MACOSX_DEPLOYMENT_TARGET: '11.0', CFLAGS_aarch64_apple_darwin: '-O2' });
+	assert.equal(environment.MACOSX_DEPLOYMENT_TARGET, undefined, 'A global deployment target would reach host proc macros');
+	assert.equal(environment.CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS, '-C link-arg=-mmacosx-version-min=14.0');
+	assert.equal(environment.CFLAGS_aarch64_apple_darwin, '-O2 -mmacosx-version-min=14.0');
+	assert.equal(environment.CXXFLAGS_aarch64_apple_darwin, '-mmacosx-version-min=14.0');
+	assert.equal(environment.PATH, '/bin');
+	assert.throws(() => nativeEnvironment({ profile: 'release', minimumSystemVersion: '14.0' }, {}), /explicit Apple target/);
+	assert.throws(() => nativeEnvironment({ ...options, target: 'x86_64-unknown-linux-gnu' }, {}), /explicit Apple target/);
+	assert.throws(() => nativeEnvironment(options, { RUSTFLAGS: '-C opt-level=1' }), /RUSTFLAGS/);
+	assert.deepEqual(nativeEnvironment({ profile: 'release', target: 'x86_64-unknown-linux-gnu' }, { PATH: '/bin' }), { PATH: '/bin' });
+	const root = await mkdtemp(join(tmpdir(), 'vnilink-native-minimum-'));
+	try {
+		for (const name of ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml']) {
+			await put(root, name);
+		}
+		for (const directory of ['crates', 'vendor', '.cargo']) {
+			await mkdir(join(root, directory), { recursive: true });
+		}
+		const identity = await nativeIdentity(root, options);
+		assert.equal(identity.minimumSystemVersion, '14.0');
+		assert.notDeepEqual(identity, await nativeIdentity(root, { ...options, minimumSystemVersion: '15.0' }), 'Builds for different minimums share an identity');
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+const product = await loadProduct(repository);
+
+const hostTarget = product.platforms[process.platform]?.targets.some(target => target.architecture === process.arch);
+
+test('release publication inventories only complete payloads, cleans failures and preserves the previous release', { skip: !hostTarget && `product.json approves no ${process.platform}-${process.arch} release target` }, async () => {
 	const root = await mkdtemp(join(tmpdir(), 'vnilink-release-stage-'));
-	const product = await loadProduct(repository);
 	let fail = false;
 	let mutate = false;
 	try {
