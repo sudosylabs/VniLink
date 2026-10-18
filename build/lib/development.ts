@@ -1,5 +1,6 @@
 /** Supervises development watchers, typecheck workers and Electron restarts as one lifetime. */
 import { createRequire } from 'node:module';
+import { electronExecutable } from './electron.ts';
 import { assertNativeFresh } from './native.ts';
 import { ProcessRunner } from './processes.ts';
 import { ApplicationWatcher } from './watch.ts';
@@ -9,15 +10,12 @@ const require = createRequire(import.meta.url);
 /** Electron exits with this code to ask for a relaunch; see `lifecycleMainService.ts`. */
 const DEVELOPMENT_RELAUNCH_EXIT_CODE = 42;
 
-/** The Electron executable; the `electron` package's main export is its path. */
-export function electronExecutable(): string {
-	return require('electron') as string;
-}
-
 export class DevelopmentSession {
 	readonly #root: string;
 	readonly #args: readonly string[];
 	readonly #processes = new ProcessRunner();
+	readonly #signal: AbortSignal;
+	#executable: string | undefined;
 	readonly #watcher: ApplicationWatcher;
 	#stopping: Promise<void> | undefined;
 	#closed = false;
@@ -26,6 +24,7 @@ export class DevelopmentSession {
 	constructor(root: string, args: readonly string[], signal: AbortSignal) {
 		this.#root = root;
 		this.#args = args;
+		this.#signal = signal;
 		this.#watcher = new ApplicationWatcher(root, error => {
 			console.error(error);
 			void this.stop(1);
@@ -41,6 +40,7 @@ export class DevelopmentSession {
 			const watchOnly = this.#args.includes('--watch-only');
 			if (!watchOnly) {
 				await assertNativeFresh(this.#root);
+				this.#executable = await electronExecutable(this.#root, this.#signal);
 			}
 			await this.#watcher.start();
 			if (this.#closed) {
@@ -71,10 +71,10 @@ export class DevelopmentSession {
 	}
 
 	#electron(): void {
-		if (this.#closed) {
+		if (this.#closed || !this.#executable) {
 			return;
 		}
-		const launched = this.#processes.start(electronExecutable(), [this.#root, ...this.#args], { cwd: this.#root, env: { ...process.env, VNILINK_DEV: '1' } });
+		const launched = this.#processes.start(this.#executable, [this.#root, ...this.#args], { cwd: this.#root, env: { ...process.env, VNILINK_DEV: '1' } });
 		launched.child.once('exit', code => {
 			if (this.#closed) {
 				return;
@@ -109,7 +109,7 @@ export async function startApplication(root: string, signal: AbortSignal, args: 
 	const processes = new ProcessRunner(signal);
 	try {
 		await assertNativeFresh(root);
-		await processes.run(electronExecutable(), [root, ...args], { cwd: root });
+		await processes.run(await electronExecutable(root, signal), [root, ...args], { cwd: root });
 	} finally {
 		await processes.stop();
 	}

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ScenarioSelection, scenarioNames } from '../../test/automation/scenarios.ts';
-import { electronExecutable } from './development.ts';
+import { electronExecutable } from './electron.ts';
 import { assertNativeFresh } from './native.ts';
 import { ProcessRunner } from './processes.ts';
 
@@ -21,7 +21,7 @@ export async function runUiTests(root: string, signal: AbortSignal, args: readon
 		// Docker's default seccomp policy blocks Chromium namespace creation.
 		// This exception applies only to the maintained isolated Linux test image.
 		const containerFlags = process.platform === 'linux' && process.env.VNILINK_TEST_CONTAINER === '1' ? ['--no-sandbox'] : [];
-		await processes.run(electronExecutable(), [join(root, 'out/smoke.cjs'), ...containerFlags, ...args], { env: { ...process.env, VNILINK_TEST_PROFILE: profile } });
+		await processes.run(await electronExecutable(root, signal), [join(root, 'out/smoke.cjs'), ...containerFlags, ...args], { env: { ...process.env, VNILINK_TEST_PROFILE: profile } });
 	} finally {
 		await processes.stop();
 		await rm(profile, { recursive: true, force: true });

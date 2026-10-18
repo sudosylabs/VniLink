@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron';
+import { BrowserWindow } from 'electron';
 import { join } from 'node:path';
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
@@ -64,7 +64,8 @@ export class WindowsMainService extends Disposable {
 
 	private createWindow(): BrowserWindow {
 		const options = defaultBrowserWindowOptions();
-		const icon = isLinux && app.isPackaged ? { icon: join(process.resourcesPath, 'app-icon.png') } : {};
+		// Packaged builds and the development Electron (`build/lib/electron.ts`) both ship this resource.
+		const icon = isLinux ? { icon: join(process.resourcesPath, 'app-icon.png') } : {};
 		const window = new BrowserWindow({ ...options, ...icon, webPreferences: { ...options.webPreferences, preload: join(__dirname, 'preload.cjs') } });
 		if (!isMacintosh) {
 			window.removeMenu();
