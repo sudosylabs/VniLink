@@ -142,13 +142,12 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                         false,
                     )
                     .map_err(core_error)?;
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-                while !host.is_started() {
-                    if host.error().is_some() || std::time::Instant::now() >= deadline {
-                        host.stop();
-                        return Err(Error::from_reason("Screen capture could not start"));
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(10));
+                // The host idles until a viewer connects; capture starts for
+                // that viewer, so there is nothing to wait for here. Waiting
+                // blocked the engine for 15 seconds whenever no one watched.
+                if let Some(error) = host.error() {
+                    host.stop();
+                    return Err(Error::from_reason(error));
                 }
                 state.native.screen_hosts.insert(*display_id, host);
                 Ok(Reply::Done)
@@ -518,7 +517,8 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                     .native
                     .screen_hosts
                     .values()
-                    .any(|host| host.is_started() && host.error().is_none());
+                    // An idle host has not started capture yet; only an error is a failure.
+                    .any(|host| host.error().is_none());
                 state
                     .core
                     .report_backend_failure(
