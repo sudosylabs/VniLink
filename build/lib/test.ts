@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ScenarioSelection, scenarioNames } from '../../test/automation/scenarios.ts';
 import { electronExecutable } from './electron.ts';
-import { assertNativeFresh } from './native.ts';
+import { assertNativeFresh, defaultNativeOptions, nativeEnvironment } from './native.ts';
 import { ProcessRunner } from './processes.ts';
 
 /** Runs the selected browser and integration scenarios in Electron with a temporary profile. */
@@ -37,7 +37,10 @@ export async function testRust(root: string, signal: AbortSignal): Promise<void>
 	const packages = ['vnilink', 'vnilink-app', 'vnilink-media', 'vnilink-audio', 'vnilink-hevc', 'vnilink-rename', backend, 'vnilink-node'];
 	const processes = new ProcessRunner(signal);
 	try {
-		await processes.run('cargo', ['test', '--no-fail-fast', '--locked', '--target-dir', 'target/electron', ...packages.flatMap(name => ['-p', name])], { cwd: root });
+		// The addon's target and toolchain: on Windows, the GNU target with MSYS2's MinGW tools.
+		const native = defaultNativeOptions();
+		const target = native.target ? ['--target', native.target] : [];
+		await processes.run('cargo', ['test', '--no-fail-fast', '--locked', '--target-dir', 'target/electron', ...target, ...packages.flatMap(name => ['-p', name])], { cwd: root, env: nativeEnvironment(native) });
 	} finally {
 		await processes.stop();
 	}

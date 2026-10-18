@@ -68,6 +68,34 @@ test('release native profile is passed to Cargo and isolated from dev staging', 
 	}
 });
 
+test('the GNU Windows target finds its MinGW tools without shell setup', () => {
+	const options = { profile: 'dev', target: 'x86_64-pc-windows-gnu' };
+	const files = (...paths) => path => paths.includes(path);
+
+	// A runner or custom install already on PATH is used as it is, wherever it lives.
+	const runner = 'D:\\a\\_temp\\msys64\\mingw64\\bin';
+	const onPath = nativeEnvironment(options, { Path: `C:\\Windows;${runner}` }, files(`${runner}\\dlltool.exe`, `${runner}\\libclang.dll`));
+	assert.equal(onPath.Path, `C:\\Windows;${runner}`, 'A toolchain on PATH was replaced or moved');
+	assert.equal(onPath.LIBCLANG_PATH, runner);
+	assert.equal(onPath.CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER, 'gcc');
+	assert.equal(onPath.CMAKE_GENERATOR, 'MinGW Makefiles');
+
+	// A plain MSYS2 install needs no shell setup.
+	const bin = 'C:\\msys64\\mingw64\\bin';
+	const plain = nativeEnvironment(options, { Path: 'C:\\Windows;C:\\Users\\me\\.cargo\\bin' }, files(`${bin}\\dlltool.exe`));
+	assert.equal(plain.Path, `${bin};C:\\Windows;C:\\Users\\me\\.cargo\\bin`);
+	assert.equal(plain.PATH, undefined, 'A second PATH key leaves the winner to the spawn');
+	assert.equal(plain.LIBCLANG_PATH, undefined, 'LIBCLANG_PATH named a folder without libclang');
+
+	// Another root is named explicitly, and caller choices are kept.
+	const custom = 'D:\\tools\\msys64\\mingw64\\bin';
+	const named = nativeEnvironment(options, { VNILINK_MSYS_ROOT: 'D:\\tools\\msys64', CMAKE_GENERATOR: 'Ninja' }, files(`${custom}\\dlltool.exe`, `C:\\msys64\\mingw64\\bin\\dlltool.exe`));
+	assert.equal(named.PATH, custom, 'VNILINK_MSYS_ROOT lost to the default root');
+	assert.equal(named.CMAKE_GENERATOR, 'Ninja', 'A caller choice was overridden');
+	assert.throws(() => nativeEnvironment(options, { Path: 'C:\\Windows' }, () => false), /found none on PATH or in C:\\msys64\\mingw64\\bin.*VNILINK_MSYS_ROOT/);
+	assert.deepEqual(nativeEnvironment({ profile: 'dev', target: 'x86_64-pc-windows-msvc' }, { Path: 'C:\\Windows' }, () => false), { Path: 'C:\\Windows' });
+});
+
 test('a macOS minimum reaches only the target triple, never host build tools', async () => {
 	const options = { profile: 'release', target: 'aarch64-apple-darwin', minimumSystemVersion: '14.0' };
 	const environment = nativeEnvironment(options, { PATH: '/bin', MACOSX_DEPLOYMENT_TARGET: '11.0', CFLAGS_aarch64_apple_darwin: '-O2' });

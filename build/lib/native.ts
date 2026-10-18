@@ -1,7 +1,8 @@
 /** Build identity couples source inputs, target/profile and the staged napi binary. */
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { cp, readdir, readFile, writeFile } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { join, relative, win32 } from 'node:path';
 import type { ProcessRunner } from './processes.ts';
 
 export interface NativeOptions {
@@ -71,14 +72,55 @@ function assertHostTarget(target: string | undefined): void {
 	}
 }
 
+/** MSYS2's default install location; runners and custom installs put MinGW on PATH or name their root. */
+const defaultMsysRoot = 'C:\\msys64';
+
 /**
- * Cargo's environment for `options`. A macOS minimum applies only to the target
- * triple: `MACOSX_DEPLOYMENT_TARGET` would also reach host build scripts and
- * proc macros, which macOS 27's loader then refuses to open, so the addon's link
- * and its C/C++ objects get the minimum through target-scoped variables instead.
+ * MinGW tools for the GNU Windows target: Rust links with them and calls
+ * `dlltool`, and the native libraries build their C with them. A toolchain
+ * already on PATH is used as it is (CI, a custom install, a prepared shell);
+ * otherwise `VNILINK_MSYS_ROOT`, else MSYS2's default root, is added. Variables
+ * the caller already set are kept.
  */
-export function nativeEnvironment(options: NativeOptions, environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function windowsGnuEnvironment(environment: NodeJS.ProcessEnv, exists: (path: string) => boolean = existsSync): NodeJS.ProcessEnv {
 	const result: NodeJS.ProcessEnv = { ...environment };
+	// Windows names it Path; a second PATH key would leave which one wins to the spawn.
+	const pathKey = Object.keys(result).find(key => key.toUpperCase() === 'PATH') ?? 'PATH';
+	const entries = (result[pathKey] ?? '').split(';').filter(Boolean);
+	const hasTools = (directory: string): boolean => exists(win32.join(directory, 'dlltool.exe'));
+	let bin = entries.find(hasTools);
+	if (!bin) {
+		const root = environment.VNILINK_MSYS_ROOT ?? defaultMsysRoot;
+		const candidate = win32.join(root, 'mingw64', 'bin');
+		if (!hasTools(candidate)) {
+			throw new Error(`The Windows build needs MinGW (dlltool, gcc) and found none on PATH or in ${candidate}. `
+				+ 'Install MSYS2 with mingw-w64-x86_64-gcc, -clang, -nasm and -make, then put its mingw64\\bin on PATH or set VNILINK_MSYS_ROOT to its root.');
+		}
+		bin = candidate;
+		result[pathKey] = [bin, ...entries].join(';');
+	}
+	result.CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER ??= 'gcc';
+	result.CMAKE_GENERATOR ??= 'MinGW Makefiles';
+	if (exists(win32.join(bin, 'libclang.dll'))) {
+		result.LIBCLANG_PATH ??= bin;
+	}
+	return result;
+}
+
+/**
+ * Cargo's environment for `options`. The GNU Windows target gets its MinGW
+ * tools. A macOS minimum applies only to the target triple:
+ * `MACOSX_DEPLOYMENT_TARGET` would also reach host build scripts and proc
+ * macros, which macOS 27's loader then refuses to open, so the addon's link and
+ * its C/C++ objects get the minimum through target-scoped variables instead.
+ */
+export function nativeEnvironment(
+	options: NativeOptions,
+	environment: NodeJS.ProcessEnv = process.env,
+	exists: (path: string) => boolean = existsSync,
+): NodeJS.ProcessEnv {
+	const windowsGnu = options.target?.endsWith('-windows-gnu') === true;
+	const result: NodeJS.ProcessEnv = windowsGnu ? windowsGnuEnvironment(environment, exists) : { ...environment };
 	const minimum = options.minimumSystemVersion;
 	if (!minimum) {
 		return result;
