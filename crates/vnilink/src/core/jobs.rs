@@ -23,11 +23,8 @@ use crate::fs;
 use crate::job::{self, ConflictChoice, JobDirection, JobSnapshot, JobState};
 use crate::manifest::{self, Manifest, ManifestEntry};
 use crate::session::Grant;
-#[cfg(unix)]
 use iroh_blobs::api::blobs::AddPathOptions;
-#[cfg(unix)]
 use iroh_blobs::api::proto::ImportMode;
-#[cfg(unix)]
 use iroh_blobs::BlobFormat;
 
 const JOBS_FILE: &str = "jobs.json";
@@ -1390,7 +1387,7 @@ impl Core {
 
     /// Test probe for in-flight serve opens; see [`SERVE_SOURCE_PROBE`].
     /// Production leaves it unset.
-    #[cfg(unix)]
+    #[cfg(test)]
     pub(crate) fn set_serve_source_probe(probe: Option<fn([u8; 32])>) {
         *lock(&SERVE_SOURCE_PROBE) = probe;
     }
@@ -2099,25 +2096,19 @@ impl Core {
                     return self.mark_failed(id, reason);
                 }
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
             {
-                // Fallback pathname check; residual race documented.
-                let (parent_rel, name) = match root_rel.rfind('/') {
-                    Some(slash) => (
-                        root_rel[..slash].to_owned(),
-                        root_rel[slash + 1..].to_owned(),
-                    ),
-                    None => (String::new(), root_rel.clone()),
+                // The same verified open as serving: a regular file, not a
+                // reparse point, whose size still matches the manifest.
+                let (parent_rel, name) = root_rel.rsplit_once('/').unwrap_or(("", &root_rel));
+                let source = {
+                    let roots = lock(&self.shared.file_roots);
+                    roots.verify_pin(&local_pin)?;
+                    super::blob::open_verified_source(&roots, local_root, parent_rel, name)
+                        .map_err(|_| Error::InvalidSetting(SOURCE_CHANGED))?
+                        .0
                 };
-                let roots = lock(&self.shared.file_roots);
-                roots.verify_pin(&local_pin)?;
-                let (_parent, full) = roots
-                    .resolve_parent(local_root, &parent_rel, &name)
-                    .map_err(|_| Error::InvalidSetting(SOURCE_CHANGED))?;
-                drop(roots);
-                let meta =
-                    std::fs::metadata(&full).map_err(|_| Error::InvalidSetting(SOURCE_CHANGED))?;
-                if meta.len() != entry.size {
+                if source.size() != entry.size {
                     return self.mark_failed(id, SOURCE_CHANGED);
                 }
             }
@@ -2467,7 +2458,6 @@ pub(super) fn is_active_serve(shared: &Shared, peer: &[u8; 32], hash: &[u8; 32])
 /// hash after the source fd opens, before the bytes are authorized.
 /// Production leaves it unset. The probe must return promptly for
 /// hashes it does not recognize: suites run in parallel.
-#[cfg(unix)]
 pub(crate) static SERVE_SOURCE_PROBE: std::sync::Mutex<Option<fn([u8; 32])>> =
     std::sync::Mutex::new(None);
 
@@ -2479,12 +2469,11 @@ pub(crate) static SERVE_SOURCE_PROBE: std::sync::Mutex<Option<fn([u8; 32])>> =
 /// never disclose outside bytes. The leg's pin is re-verified under the
 /// same roots hold: a rebound source fails the fetch instead of serving
 /// moved bytes, while an already-open fd (in-flight) still completes.
-#[cfg(unix)]
 pub(super) async fn verify_serve_source(
     shared: &Shared,
     peer: &[u8; 32],
     hash: &[u8; 32],
-) -> Result<std::os::unix::io::OwnedFd, Error> {
+) -> Result<ServeSource, Error> {
     let (job_id, local_root, local_rel, entry_size, entry_path, mut pin) = {
         let jobs = lock(&shared.jobs);
         let mut found = None;
@@ -2570,13 +2559,78 @@ pub(super) async fn verify_serve_source(
         if !granted || !is_active_serve(shared, peer, hash) {
             return Err(Error::TransferDenied);
         }
-        Ok(fd)
+        Ok(ServeSource::new(fd))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        let _ = (parent_rel, name, entry_size);
-        // Fallback pathname check; residual race documented with rename fallback.
-        Ok(())
+        // The verified source pins its ancestors and shares the file for
+        // reading only, so the absolute path the serve store references
+        // names this object until the request ends.
+        let adopted = pin.is_none();
+        let (source, absolute) = {
+            let roots = lock(&shared.file_roots);
+            verify_leg_pin(&roots, local_root, &mut pin).map_err(|_| Error::TransferDenied)?;
+            super::blob::open_verified_source(&roots, local_root, parent_rel, name)
+                .map_err(|_| Error::TransferDenied)?
+        };
+        if source.size() != entry_size {
+            return Err(Error::TransferDenied);
+        }
+        if adopted {
+            if let Some(record) = lock(&shared.jobs).get_mut(&job_id) {
+                record.local_pin = pin.clone();
+            }
+        }
+        if let Some(probe) = *lock(&SERVE_SOURCE_PROBE) {
+            probe(*hash);
+        }
+        let duplicate = source
+            .file()
+            .try_clone()
+            .map_err(|_| Error::TransferDenied)?;
+        if Core::hash_fd_async(duplicate, super::blob::HashHooks::none()).await? != *hash {
+            return Err(Error::TransferDenied);
+        }
+        let granted = lock(&shared.state).trust.granted(peer, Grant::Transfer);
+        if !granted || !is_active_serve(shared, peer, hash) {
+            return Err(Error::TransferDenied);
+        }
+        Ok(ServeSource {
+            _source: source,
+            path: absolute,
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (job_id, local_root, parent_rel, name, entry_size, pin, peer);
+        Err(Error::TransferDenied)
+    }
+}
+
+/// A job source verified at serve time and held for the whole request. The
+/// serve store references `path`, which names the held object: the open fd
+/// on Unix, or on Windows the absolute path the held handle pins in place.
+pub(super) struct ServeSource {
+    #[cfg(unix)]
+    _fd: std::os::unix::io::OwnedFd,
+    #[cfg(windows)]
+    _source: vnilink_rename::windows::VerifiedSource,
+    path: std::path::PathBuf,
+}
+
+impl ServeSource {
+    #[cfg(unix)]
+    fn new(fd: std::os::unix::io::OwnedFd) -> Self {
+        use std::os::fd::AsRawFd;
+        #[cfg(target_os = "linux")]
+        let path = std::path::PathBuf::from(format!("/proc/self/fd/{}", fd.as_raw_fd()));
+        #[cfg(not(target_os = "linux"))]
+        let path = std::path::PathBuf::from(format!("/dev/fd/{}", fd.as_raw_fd()));
+        Self { _fd: fd, path }
+    }
+
+    pub(super) fn path(&self) -> &std::path::Path {
+        &self.path
     }
 }
 
@@ -3496,9 +3550,9 @@ async fn handle_resume(
                     lock(&shared.blob_job_offers).insert((*peer, entry.hash));
                 }
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
             {
-                let _ = (&parent_rel, name);
+                // Re-verify per entry, as on Unix: the loop awaits below.
                 let rebound = {
                     let roots = lock(&shared.file_roots);
                     roots.verify_pin(&pin).is_err()
@@ -3521,11 +3575,24 @@ async fn handle_resume(
                     reply(send, job::encode(&err).map_err(|_| ())?).await?;
                     return Ok(());
                 }
-                let hash = iroh_blobs::Hash::from_bytes(entry.hash);
-                let present = store.has(hash).await.map_err(|_| ())?;
-                if present {
-                    lock(&shared.blob_job_offers).insert((*peer, entry.hash));
-                } else {
+                // The verified source keeps the absolute path naming this object
+                // through any re-import below; it is dropped before replying.
+                let source = {
+                    let roots = lock(&shared.file_roots);
+                    super::blob::open_verified_source(&roots, local_root, parent_rel, name).ok()
+                };
+                let Some((source, abs_path)) =
+                    source.filter(|(source, _)| source.size() == entry.size)
+                else {
+                    // Source changed: fail the job rather than serving new bytes.
+                    {
+                        let mut jobs = lock(&shared.jobs);
+                        if let Some(record) = wire_job_mut(&mut jobs, peer, resume.job_id) {
+                            record.state = JobState::Failed;
+                            record.error = Some(SOURCE_CHANGED.to_owned());
+                        }
+                    }
+                    let _ = save_jobs(shared);
                     let err = job::JobReply {
                         v: job::JOB_VERSION,
                         id: resume.id,
@@ -3534,6 +3601,42 @@ async fn handle_resume(
                     };
                     reply(send, job::encode(&err).map_err(|_| ())?).await?;
                     return Ok(());
+                };
+                let hash = iroh_blobs::Hash::from_bytes(entry.hash);
+                // Present blobs re-offered directly; missing ones re-referenced
+                // from the held source, as on Unix.
+                let present = store.has(hash).await.map_err(|_| ())?;
+                if present {
+                    lock(&shared.blob_job_offers).insert((*peer, entry.hash));
+                } else {
+                    let tag = store
+                        .add_path_with_opts(AddPathOptions {
+                            path: abs_path,
+                            format: BlobFormat::Raw,
+                            mode: ImportMode::TryReference,
+                        })
+                        .await
+                        .map_err(|_| ())?;
+                    drop(source);
+                    if tag.hash != hash {
+                        {
+                            let mut jobs = lock(&shared.jobs);
+                            if let Some(record) = wire_job_mut(&mut jobs, peer, resume.job_id) {
+                                record.state = JobState::Failed;
+                                record.error = Some(SOURCE_CHANGED.to_owned());
+                            }
+                        }
+                        let _ = save_jobs(shared);
+                        let err = job::JobReply {
+                            v: job::JOB_VERSION,
+                            id: resume.id,
+                            status: job::STATUS_ERROR,
+                            job_id: resume.job_id,
+                        };
+                        reply(send, job::encode(&err).map_err(|_| ())?).await?;
+                        return Ok(());
+                    }
+                    lock(&shared.blob_job_offers).insert((*peer, entry.hash));
                 }
             }
         }
@@ -3895,21 +3998,46 @@ async fn prepare_host_manifest(
             .await
             .map_err(|_| job::STATUS_ERROR)??
         };
-        // Windows has no serve-time verified handle, so a path reference
-        // would keep serving whatever later replaces the source. Copy the
-        // bytes that were scanned.
-        #[cfg(not(unix))]
-        let abs_path = file.absolute.clone();
-        #[cfg(not(unix))]
-        let _ = (parent_rel, name);
+        // Windows holds the scanned object instead of an fd: the verified
+        // source pins the absolute path to it through import, and the same
+        // identity, size and mtime checks refuse a replacement since the scan.
+        #[cfg(windows)]
+        let (abs_path, file_fd, held) = {
+            let snapshot = lock(&shared.file_roots).clone();
+            let parent_rel = parent_rel.to_owned();
+            let name = name.to_owned();
+            let expected = (file.size, file.dev, file.ino, file.mtime_ms);
+            tokio::task::spawn_blocking(
+                move || -> Result<
+                    (
+                        std::path::PathBuf,
+                        std::fs::File,
+                        vnilink_rename::windows::VerifiedSource,
+                    ),
+                    u8,
+                > {
+                    let (source, absolute) =
+                        super::blob::open_verified_source(&snapshot, src_root, &parent_rel, &name)
+                            .map_err(|_| job::STATUS_ERROR)?;
+                    if source.size() != expected.0
+                        || source.identity() != (expected.1, expected.2)
+                        || source.mtime_ms() != expected.3
+                    {
+                        return Err(job::STATUS_ERROR);
+                    }
+                    let file_fd = source.file().try_clone().map_err(|_| job::STATUS_ERROR)?;
+                    Ok((absolute, file_fd, source))
+                },
+            )
+            .await
+            .map_err(|_| job::STATUS_ERROR)??
+        };
         // No roots lock is held here: the digest lands on a blocking worker
         // and the activation below rechecks grant, epoch, generation and
         // owner before installing the offer.
-        #[cfg(unix)]
         let expected_hash = Core::hash_fd_async(file_fd, super::blob::HashHooks::none())
             .await
             .map_err(|_| job::STATUS_ERROR)?;
-        #[cfg(unix)]
         let tag = store
             .add_path_with_opts(AddPathOptions {
                 path: abs_path,
@@ -3919,13 +4047,8 @@ async fn prepare_host_manifest(
             .temp_tag()
             .await
             .map_err(|_| job::STATUS_ERROR)?;
-        #[cfg(not(unix))]
-        let tag = store
-            .add_path(abs_path)
-            .temp_tag()
-            .await
-            .map_err(|_| job::STATUS_ERROR)?;
-        #[cfg(unix)]
+        #[cfg(windows)]
+        drop(held);
         if tag.hash().as_bytes() != &expected_hash {
             return Err(job::STATUS_ERROR);
         }

@@ -1554,35 +1554,152 @@ fn sender_store_retention_matches_platform_import_mode() {
     assert_eq!(down_receiver.state, JobState::Complete);
     assert_eq!(down_sender.state, JobState::Complete);
 
-    #[cfg(unix)]
+    // Every platform references sender sources (TryReference) and serves the
+    // held, verified object, so no sender keeps a payload copy.
     assert!(
         !payload_path(&controller_blobs, up_hash).exists(),
         "upload sender must reference its source, not retain a payload copy"
     );
-    #[cfg(unix)]
     assert!(
         !payload_path(&host_blobs, down_hash).exists(),
         "download sender must reference its source, not retain a payload copy"
     );
-    // Windows currently serves owned copies, because the Unix verified-FD
-    // provider path has no Windows equivalent. Assert that real fallback
-    // explicitly rather than requiring unsupported external references.
-    #[cfg(windows)]
-    {
-        assert_eq!(
-            std::fs::read(payload_path(&controller_blobs, up_hash)).unwrap(),
-            payload(2 * 1024 * 1024, 101)
-        );
-        assert_eq!(
-            std::fs::read(payload_path(&host_blobs, down_hash)).unwrap(),
-            payload(2 * 1024 * 1024, 202)
-        );
-    }
     // Each peer received the other, distinct hash. Verified receiver payloads
     // are allowed for publication/resume; they must not be mistaken for copies
     // of that peer's own outgoing source.
     assert!(payload_path(&host_blobs, up_hash).exists());
     assert!(payload_path(&controller_blobs, down_hash).exists());
+}
+
+/// Every file under `dir` whose bytes equal `bytes`.
+fn files_with_bytes(dir: &Path, bytes: &[u8]) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        for entry in std::fs::read_dir(&path).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if std::fs::read(&path).is_ok_and(|content| content == bytes) {
+                found.push(path);
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn serve_refuses_a_source_replaced_after_its_offer() {
+    // The sender references its source by path. A file renamed over that
+    // path after the offer, with the same size and different bytes, must
+    // fail serve-time verification rather than reach the receiver.
+    let (host, controller, host_scratch, controller_scratch) = setup("replaced-after-offer");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
+    let source = controller_scratch.join("root/source.bin");
+    std::fs::write(&source, payload(64 * 1024, 1701)).unwrap();
+    controller.connect(&host.endpoint_id()).unwrap();
+    let job = controller
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("source.bin"),
+            host_files.root,
+            &host_files.path("arrived"),
+        )
+        .unwrap();
+    let decoy = payload(64 * 1024, 1702);
+    let staged = controller_scratch.join("root/staged.bin");
+    std::fs::write(&staged, &decoy).unwrap();
+    std::fs::rename(&staged, &source).unwrap();
+
+    let rx = receiver_id(&host, job);
+    let (_sender, receiver) = drive_to_end(&controller, job, &host, rx);
+    assert_ne!(receiver.state, JobState::Complete);
+    assert!(
+        files_with_bytes(&host_scratch.join("root"), &decoy).is_empty(),
+        "replacement bytes reached the receiver"
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn windows_serve_holds_its_source_against_replacement() {
+    // While a serve holds its verified source, Windows refuses to rename the
+    // file, rename its folder or open it for writing, so the referenced path
+    // keeps naming the verified bytes for the whole request.
+    let (host, controller, host_scratch, controller_scratch) = setup("held-source");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
+    let folder = controller_scratch.join("root/folder");
+    std::fs::create_dir_all(&folder).unwrap();
+    let original = payload(64 * 1024, 1711);
+    let source = folder.join("held.bin");
+    std::fs::write(&source, &original).unwrap();
+    let hash = *blake3::hash(&original).as_bytes();
+
+    controller.connect(&host.endpoint_id()).unwrap();
+    let job = controller
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("folder/held.bin"),
+            host_files.root,
+            &host_files.path("arrived"),
+        )
+        .unwrap();
+    let rx = receiver_id(&host, job);
+
+    *REBIND_TARGET.lock().unwrap() = Some(hash);
+    *REBIND_HIT.0.lock().unwrap() = false;
+    *REBIND_RELEASE.0.lock().unwrap() = false;
+    Core::set_serve_source_probe(Some(rebind_serve_probe));
+    let _guard = RebindProbeGuard;
+    std::thread::scope(|scope| {
+        let poll = scope.spawn(|| drive_to_end(&controller, job, &host, rx));
+        let guard = REBIND_HIT.0.lock().unwrap();
+        let (guard, _) = REBIND_HIT
+            .1
+            .wait_timeout_while(guard, Duration::from_secs(30), |hit| !*hit)
+            .unwrap();
+        assert!(*guard, "the serve never parked on its held source");
+        drop(guard);
+        assert!(
+            std::fs::rename(&source, folder.join("moved.bin")).is_err(),
+            "the held source was renamed"
+        );
+        assert!(
+            std::fs::rename(&folder, controller_scratch.join("root/moved")).is_err(),
+            "the held source's folder was renamed"
+        );
+        assert!(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&source)
+                .is_err(),
+            "the held source was opened for writing"
+        );
+        *REBIND_RELEASE.0.lock().unwrap() = true;
+        REBIND_RELEASE.1.notify_one();
+        let (sender, receiver) = poll.join().unwrap();
+        assert_eq!(sender.state, JobState::Complete);
+        assert_eq!(receiver.state, JobState::Complete);
+    });
+    drop(_guard);
+    assert_eq!(
+        files_with_bytes(&host_scratch.join("root"), &original).len(),
+        1
+    );
+    // Released with the request: the source can move again.
+    std::fs::rename(&source, folder.join("moved.bin")).unwrap();
 }
 
 #[test]
@@ -3599,16 +3716,12 @@ fn resume_after_source_rebind_fails_with_rebound_cause() {
 /// Target hash plus hit/release barriers for the in-flight serve probe.
 /// The probe parks only the armed hash; every other serve passes
 /// straight through, so parallel suites are unaffected.
-#[cfg(unix)]
 static REBIND_TARGET: std::sync::Mutex<Option<[u8; 32]>> = std::sync::Mutex::new(None);
-#[cfg(unix)]
 static REBIND_HIT: (std::sync::Mutex<bool>, std::sync::Condvar) =
     (std::sync::Mutex::new(false), std::sync::Condvar::new());
-#[cfg(unix)]
 static REBIND_RELEASE: (std::sync::Mutex<bool>, std::sync::Condvar) =
     (std::sync::Mutex::new(false), std::sync::Condvar::new());
 
-#[cfg(unix)]
 fn rebind_serve_probe(hash: [u8; 32]) {
     if *REBIND_TARGET.lock().unwrap() != Some(hash) {
         return;
@@ -3625,10 +3738,8 @@ fn rebind_serve_probe(hash: [u8; 32]) {
 /// Disarms the serve probe even when the test panics. Payload seeds
 /// below are unique to this test, so a leaked arm could never match
 /// another test's content hash anyway.
-#[cfg(unix)]
 struct RebindProbeGuard;
 
-#[cfg(unix)]
 impl Drop for RebindProbeGuard {
     fn drop(&mut self) {
         Core::set_serve_source_probe(None);

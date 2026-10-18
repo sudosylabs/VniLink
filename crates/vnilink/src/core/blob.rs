@@ -55,7 +55,6 @@ pub enum FetchResult {
 /// Per-chunk test probes for detached hashing. Passed by the caller (unit
 /// tests) rather than installed globally, so concurrent suites never
 /// observe them. Production passes [`HashHooks::none`].
-#[cfg(unix)]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct HashHooks {
     /// Called before every 64 KiB chunk with the chunk index. A probe that
@@ -66,7 +65,6 @@ pub(crate) struct HashHooks {
     pub(crate) finish_probe: Option<fn(bool)>,
 }
 
-#[cfg(unix)]
 impl HashHooks {
     pub(crate) fn none() -> Self {
         Self::default()
@@ -75,10 +73,8 @@ impl HashHooks {
 
 /// Dropping the hashing future cancels its detached blocking worker
 /// between chunks; never rely on dropping the JoinHandle alone.
-#[cfg(unix)]
 struct HashGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
 
-#[cfg(unix)]
 impl Drop for HashGuard {
     fn drop(&mut self) {
         self.0.store(true, std::sync::atomic::Ordering::Release);
@@ -88,9 +84,8 @@ impl Drop for HashGuard {
 /// Streaming BLAKE3 over an open handle with cooperative cancellation.
 /// Sync; runs on a blocking worker (async callers) or the caller's own
 /// worker thread (sync offer APIs outside the runtime).
-#[cfg(unix)]
 fn hash_fd_cancelled(
-    fd: std::os::unix::io::OwnedFd,
+    mut file: std::fs::File,
     cancelled: &std::sync::atomic::AtomicBool,
     hooks: HashHooks,
 ) -> Result<[u8; 32], Error> {
@@ -102,7 +97,6 @@ fn hash_fd_cancelled(
         }
         Err(Error::NoSession)
     };
-    let mut file = std::fs::File::from(fd);
     let mut hasher = blake3::Hasher::new();
     let mut buf = vec![0u8; 64 * 1024];
     let mut chunk: u64 = 0;
@@ -130,6 +124,26 @@ fn hash_fd_cancelled(
         finish(false);
     }
     Ok(*hasher.finalize().as_bytes())
+}
+
+/// Windows counterpart of the Unix verified open: resolves `parent_rel/name`
+/// under `root` and holds the file so its absolute path keeps naming this
+/// object (ancestors pinned, file shared for reading only) while the result
+/// lives. Callers hold the roots lock, as Unix holds it across its opens.
+#[cfg(windows)]
+pub(super) fn open_verified_source(
+    roots: &crate::fs::RootSet,
+    root: u64,
+    parent_rel: &str,
+    name: &str,
+) -> Result<(vnilink_rename::windows::VerifiedSource, std::path::PathBuf), Error> {
+    let absolute = roots
+        .resolve_parent(root, parent_rel, name)
+        .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?
+        .1;
+    let source = vnilink_rename::windows::open_source_verified(&absolute)
+        .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
+    Ok((source, absolute))
 }
 
 impl Core {
@@ -320,32 +334,69 @@ impl Core {
                 Ok((hash, size))
             })
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
-            let roots = lock(&self.shared.file_roots);
-            roots.verify_pin(pin)?;
-            let parent = roots
-                .resolve_dir(root, {
-                    match root_rel.rfind('/') {
-                        Some(slash) => &root_rel[..slash],
-                        None => "",
-                    }
-                })
+            let (parent_rel, name) = root_rel.rsplit_once('/').unwrap_or(("", root_rel));
+            crate::fs::check_name(name)
                 .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
-            drop(roots);
-            let name = match root_rel.rfind('/') {
-                Some(slash) => &root_rel[slash + 1..],
-                None => root_rel,
+            let (source, absolute) = {
+                let roots = lock(&self.shared.file_roots);
+                roots.verify_pin(pin)?;
+                open_verified_source(&roots, root, parent_rel, name)?
             };
-            let full = parent.join(name);
-            drop(parent);
-            // Non-Unix job fallback: pathname import (residual race documented),
-            // but accounted as a job offer (active-job gated), not legacy.
-            let (hash, size) = self.blob_offer_file(peer_endpoint_id, &full, max_bytes)?;
-            // `blob_offer_file` inserted into legacy offers; move to job offers.
-            lock(&self.shared.blob_offers).remove(&(peer, *hash.as_bytes()));
-            lock(&self.shared.blob_job_offers).insert((peer, *hash.as_bytes()));
-            Ok((hash, size))
+            if source.size() > max_bytes {
+                return Err(Error::InvalidSetting("the source file is too large"));
+            }
+            // The scanned object (volume and file index), size and mtime, as on
+            // Unix: a rename, replacement or edit since the scan fails here.
+            if source.identity() != (file.dev, file.ino)
+                || source.size() != file.size
+                || source.mtime_ms() != file.mtime_ms
+            {
+                return Err(Error::InvalidSetting(
+                    "the source changed since preparation",
+                ));
+            }
+            // Hash the held object, then reference its absolute path. While
+            // `source` lives the path cannot be re-pointed, and the import hash
+            // must still equal the handle hash.
+            let handle_hash = Self::hash_fd(
+                source
+                    .file()
+                    .try_clone()
+                    .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?,
+            )
+            .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
+            let size = source.size();
+            let offered = self.runtime.block_on(async {
+                let store = open_store(&self.shared).await?;
+                let tag = store
+                    .add_path_with_opts(AddPathOptions {
+                        path: absolute,
+                        format: BlobFormat::Raw,
+                        mode: ImportMode::TryReference,
+                    })
+                    .temp_tag()
+                    .await
+                    .map_err(|error| Error::network(error.to_string()))?;
+                if tag.hash().as_bytes() != &handle_hash {
+                    return Err(Error::InvalidSetting(
+                        "the source changed since preparation",
+                    ));
+                }
+                lock(&self.shared.blob_job_offers).insert((peer, *tag.hash().as_bytes()));
+                let hash = tag.hash();
+                lock(&self.shared.blob_import_pins)
+                    .insert(*hash.as_bytes(), (std::time::Instant::now(), tag));
+                Ok((hash, size))
+            });
+            drop(source);
+            offered
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (peer, root, file, max_bytes, pin);
+            Err(Error::InvalidSetting("the source file cannot be read"))
         }
     }
 
@@ -357,10 +408,9 @@ impl Core {
     /// Sync; only for callers outside the runtime (sync offer APIs). Async
     /// callers use [`hash_fd_async`](Self::hash_fd_async) so whole-file
     /// reads never occupy a Tokio worker.
-    #[cfg(unix)]
-    pub(crate) fn hash_fd(fd: std::os::unix::io::OwnedFd) -> Result<[u8; 32], Error> {
+    pub(crate) fn hash_fd(source: impl Into<std::fs::File>) -> Result<[u8; 32], Error> {
         let never = std::sync::atomic::AtomicBool::new(false);
-        hash_fd_cancelled(fd, &never, HashHooks::none())
+        hash_fd_cancelled(source.into(), &never, HashHooks::none())
     }
 
     /// Hashes an already-open verified handle on a bounded blocking worker
@@ -369,15 +419,15 @@ impl Core {
     /// aborts the detached worker promptly instead of orphaning it.
     /// Callers must hold no locks across the await and must recheck
     /// owner/grant/liveness before using the digest.
-    #[cfg(unix)]
     pub(crate) async fn hash_fd_async(
-        fd: std::os::unix::io::OwnedFd,
+        source: impl Into<std::fs::File>,
         hooks: HashHooks,
     ) -> Result<[u8; 32], Error> {
+        let file = source.into();
         let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let _guard = HashGuard(cancelled.clone());
         let worker_cancelled = cancelled.clone();
-        tokio::task::spawn_blocking(move || hash_fd_cancelled(fd, &worker_cancelled, hooks))
+        tokio::task::spawn_blocking(move || hash_fd_cancelled(file, &worker_cancelled, hooks))
             .await
             .map_err(|_| Error::NoSession)?
     }
@@ -484,38 +534,40 @@ impl Core {
             let (parent_rel, name) = root_rel.rsplit_once('/').unwrap_or(("", root_rel));
             crate::fs::check_name(name)
                 .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
-            let absolute = {
+            let (source, absolute) = {
                 let roots = lock(&self.shared.file_roots);
                 roots.verify_pin(pin)?;
-                roots.resolve_parent(root, parent_rel, name)?.1
+                open_verified_source(&roots, root, parent_rel, name)?
             };
-            let meta = std::fs::symlink_metadata(&absolute)
-                .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
-            let mtime = meta
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|age| age.as_millis().try_into().unwrap_or(u64::MAX))
-                .unwrap_or(0);
-            if !meta.is_file()
-                || meta.file_type().is_symlink()
-                || meta.len() != old_size
-                || mtime != old_mtime_ms
-            {
+            if source.size() != old_size || source.mtime_ms() != old_mtime_ms {
                 return Err(Error::InvalidSetting(
                     "the source changed since preparation",
                 ));
             }
-            self.runtime.block_on(async {
+            let handle_hash = Self::hash_fd(
+                source
+                    .file()
+                    .try_clone()
+                    .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?,
+            )
+            .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
+            if handle_hash != old_hash {
+                return Err(Error::InvalidSetting(
+                    "the source changed since preparation",
+                ));
+            }
+            let offered = self.runtime.block_on(async {
                 let store = open_store(&self.shared).await?;
-                // Keep Windows' owned-copy fallback. External references need
-                // verified serve-time handles before they can safely replace it.
                 let tag = store
-                    .add_path(absolute)
+                    .add_path_with_opts(AddPathOptions {
+                        path: absolute,
+                        format: BlobFormat::Raw,
+                        mode: ImportMode::TryReference,
+                    })
                     .temp_tag()
                     .await
                     .map_err(|error| Error::network(error.to_string()))?;
-                if tag.hash().as_bytes() != &old_hash {
+                if tag.hash().as_bytes() != &handle_hash {
                     return Err(Error::InvalidSetting(
                         "the source changed since preparation",
                     ));
@@ -528,7 +580,9 @@ impl Core {
                 lock(&self.shared.blob_import_pins)
                     .insert(*hash.as_bytes(), (std::time::Instant::now(), tag));
                 Ok((hash, old_size))
-            })
+            });
+            drop(source);
+            offered
         }
         #[cfg(not(any(unix, windows)))]
         {
@@ -1028,7 +1082,7 @@ async fn handle_blob_stream(
             }
         }
     };
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let mut source = None;
     match allowed {
         Allow::Deny => {
@@ -1051,7 +1105,7 @@ async fn handle_blob_stream(
             // or replaced file denies here, so TryReference absolute paths can
             // never disclose outside bytes even when the reference was taken
             // while honest.
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             {
                 source = Some(
                     super::jobs::verify_serve_source(shared, &peer, get.hash.as_bytes())
@@ -1061,12 +1115,11 @@ async fn handle_blob_stream(
             }
         }
     }
-    #[cfg(unix)]
-    if let Some(fd) = source {
+    #[cfg(any(unix, windows))]
+    if let Some(source) = source {
         // Provider reads the verified open object for the entire request,
-        // never the mutable pathname. The private store references this FD
-        // only while it is alive, then removes all metadata.
-        use std::os::fd::AsRawFd;
+        // never a re-pointable pathname. The private store references the
+        // held source only while it is alive, then removes all metadata.
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let base = lock(&shared.blob_dir).clone().ok_or(())?;
         let dir = base.join(format!(
@@ -1079,10 +1132,7 @@ async fn handle_blob_stream(
         let transient = FsStore::load_with_opts(dir.join("blobs.db"), options)
             .await
             .map_err(|_| ())?;
-        #[cfg(target_os = "linux")]
-        let path = std::path::PathBuf::from(format!("/proc/self/fd/{}", fd.as_raw_fd()));
-        #[cfg(not(target_os = "linux"))]
-        let path = std::path::PathBuf::from(format!("/dev/fd/{}", fd.as_raw_fd()));
+        let path = source.path().to_owned();
         let result = async {
             let pin = transient
                 .add_path_with_opts(AddPathOptions {
@@ -1111,7 +1161,7 @@ async fn handle_blob_stream(
         }
         .await;
         let _ = transient.shutdown().await;
-        drop(fd);
+        drop(source);
         let _ = std::fs::remove_dir_all(dir);
         return result;
     }

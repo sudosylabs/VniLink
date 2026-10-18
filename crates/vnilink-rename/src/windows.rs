@@ -219,6 +219,91 @@ pub fn file_identity(file: &std::fs::File) -> io::Result<(u64, u64)> {
         (u64::from(info.index_high) << 32) | u64::from(info.index_low),
     ))
 }
+/// A source file held so that its absolute path resolves to this object for
+/// as long as the value lives: every ancestor directory is pinned against
+/// rename, and the file is open with read sharing only, so it cannot be
+/// written, renamed or deleted, through any of its links, until dropped.
+pub struct VerifiedSource {
+    file: std::fs::File,
+    identity: (u64, u64),
+    size: u64,
+    mtime_ms: u64,
+    _ancestors: Vec<std::fs::File>,
+}
+
+impl VerifiedSource {
+    /// The open source, for reading. Clones share the same file object.
+    pub fn file(&self) -> &std::fs::File {
+        &self.file
+    }
+
+    /// Volume serial and file index, as recorded by [`entry_identity`].
+    pub fn identity(&self) -> (u64, u64) {
+        self.identity
+    }
+
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    /// Last write time in milliseconds since the Unix epoch, truncated as
+    /// `std::fs::Metadata::modified` reports it.
+    pub fn mtime_ms(&self) -> u64 {
+        self.mtime_ms
+    }
+}
+
+/// Opens a regular file for reading as a [`VerifiedSource`]. A final reparse
+/// point is opened as itself and refused, as is a directory. Files with more
+/// than one hard link are accepted: sharing applies to the file object, so
+/// another link cannot write it either while the source is held.
+pub fn open_source_verified(path: &Path) -> io::Result<VerifiedSource> {
+    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+    if !path.is_absolute() {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let ancestors: Vec<_> = path.ancestors().skip(1).collect();
+    if ancestors.len() > 64 {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let mut pins = Vec::with_capacity(ancestors.len());
+    for ancestor in ancestors.into_iter().rev() {
+        let pin = pin_delete_entry(ancestor, false)?;
+        directory_identity(&pin)?;
+        pins.push(pin);
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1) // FILE_SHARE_READ: refuse writers, renames and deletes
+        .custom_flags(0x0020_0000) // FILE_FLAG_OPEN_REPARSE_POINT
+        .open(path)?;
+    let mut info = HandleInformation::default();
+    // SAFETY: the owned File keeps the handle live, and the correctly laid
+    // out information structure remains writable throughout the syscall.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if info.attributes & (0x400 | 0x10) != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "expected a regular file",
+        ));
+    }
+    // FILETIME counts 100 ns intervals since 1601-01-01.
+    const UNIX_EPOCH_MS: u64 = 11_644_473_600_000;
+    let written = (u64::from(info.written[1]) << 32) | u64::from(info.written[0]);
+    Ok(VerifiedSource {
+        file,
+        identity: (
+            u64::from(info.volume),
+            (u64::from(info.index_high) << 32) | u64::from(info.index_low),
+        ),
+        size: (u64::from(info.size_high) << 32) | u64::from(info.size_low),
+        mtime_ms: (written / 10_000).saturating_sub(UNIX_EPOCH_MS),
+        _ancestors: pins,
+    })
+}
+
 pub fn open_recorded_candidate(path: &Path) -> io::Result<std::fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
     let file = std::fs::OpenOptions::new()

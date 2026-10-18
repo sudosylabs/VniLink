@@ -318,6 +318,22 @@ fn scan_anchored(
     })
 }
 
+/// The scanned object's identity, so preparation can refuse a file replaced
+/// after the scan: volume serial and file index on Windows, matching what
+/// `vnilink_rename::windows::open_source_verified` reports for the same file.
+#[cfg(not(unix))]
+fn scan_identity(path: &Path, unreadable: &'static str) -> Result<(u64, u64), Error> {
+    #[cfg(windows)]
+    {
+        vnilink_rename::windows::entry_identity(path).map_err(|_| Error::InvalidSetting(unreadable))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (path, unreadable);
+        Ok((0, 0))
+    }
+}
+
 #[cfg(not(unix))]
 fn scan_pathname(
     roots: &RootSet,
@@ -395,6 +411,8 @@ fn scan_pathname(
                 if size > MAX_MANIFEST_FILE_BYTES {
                     return Err(Error::InvalidSetting(MANIFEST_LIMIT));
                 }
+                #[cfg(not(unix))]
+                let (dev, ino) = scan_identity(&full, "the source folder cannot be read")?;
                 files.push(ScannedFile {
                     rel: manifest_rel,
                     absolute: full,
@@ -412,9 +430,9 @@ fn scan_pathname(
                         meta.ino()
                     },
                     #[cfg(not(unix))]
-                    dev: 0,
+                    dev,
                     #[cfg(not(unix))]
-                    ino: 0,
+                    ino,
                 });
             }
         }
@@ -503,6 +521,7 @@ fn scan_single_file(roots: &RootSet, id: u64, rel: &str) -> Result<Scan, Error> 
         if size > MAX_MANIFEST_FILE_BYTES {
             return Err(Error::InvalidSetting(MANIFEST_LIMIT));
         }
+        let (dev, ino) = scan_identity(&full, NOT_A_SCAN_DIR)?;
         Ok(Scan {
             files: vec![ScannedFile {
                 rel: name.to_owned(),
@@ -510,8 +529,8 @@ fn scan_single_file(roots: &RootSet, id: u64, rel: &str) -> Result<Scan, Error> 
                 root_rel: rel.to_owned(),
                 size,
                 mtime_ms: mtime_ms(&meta),
-                dev: 0,
-                ino: 0,
+                dev,
+                ino,
             }],
             dirs: Vec::new(),
             skipped_symlinks: 0,
