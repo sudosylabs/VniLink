@@ -14,16 +14,38 @@ const output = await build({
 const { WindowMaterial, resolveWindowMaterial, nativeTheme } = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
 
 test('native backdrop policy gates OS versions and accessibility preferences', () => {
-	for (const [platform, release, expected] of [['darwin', '25.0.0', 'vibrancy'], ['win32', '10.0.22621', 'mica'], ['win32', '10.0.22000', 'none'], ['win32', '10.0.19045', 'none'], ['linux', '6.8.0', 'none'], ['darwin', 'invalid', 'none']]) {
+	for (const [platform, release, expected] of [['darwin', '27.0.0', 'glass'], ['darwin', '25.0.0', 'glass'], ['darwin', '24.6.0', 'vibrancy'], ['darwin', '23.0.0', 'vibrancy'], ['win32', '10.0.22621', 'mica'], ['win32', '10.0.22000', 'none'], ['win32', '10.0.19045', 'none'], ['linux', '6.8.0', 'none'], ['darwin', 'invalid', 'none']]) {
 		assert.equal(resolveWindowMaterial(platform, release, false, false), expected);
 		assert.equal(resolveWindowMaterial(platform, release, true, false), 'none');
 		assert.equal(resolveWindowMaterial(platform, release, false, true), 'none');
 	}
 });
 
+const handle = Buffer.alloc(8, 1);
+
 function windowFixture() {
 	const calls = [];
-	return { calls, isDestroyed: () => false, setBackgroundMaterial: value => calls.push(['material', value]), setVibrancy: value => calls.push(['vibrancy', value]), setBackgroundColor: value => calls.push(['background', value]) };
+	return { calls, isDestroyed: () => false, getNativeWindowHandle: () => handle, setBackgroundMaterial: value => calls.push(['material', value]), setVibrancy: value => calls.push(['vibrancy', value]), setBackgroundColor: value => calls.push(['background', value]) };
+}
+
+/** Stands in for @vnilink/elg's owner, recording what the window asks of it. */
+function glassFixture({ supported = true, id = 4 } = {}) {
+	const calls = [];
+	return {
+		calls,
+		owner: {
+			isGlassSupported: () => supported,
+			addView: (view, options) => {
+				calls.push(['add', view === handle, options]);
+				return id;
+			},
+			removeView: view => {
+				calls.push(['remove', view]);
+				return true;
+			},
+			dispose: () => calls.push(['dispose']),
+		},
+	};
 }
 
 test('Mica follows transparency and theme changes and disposes its listener', () => {
@@ -51,16 +73,57 @@ test('Mica follows transparency and theme changes and disposes its listener', ()
 	assert.equal(nativeTheme.listenerCount('updated'), 0);
 });
 
+test('macOS 26 attaches Liquid Glass, re-attaches after accessibility changes and releases it', () => {
+	const window = windowFixture();
+	const glass = glassFixture();
+	let created = 0;
+	const material = new WindowMaterial(window, 'darwin', '25.0.0', () => {
+		created++;
+		return glass.owner;
+	});
+	try {
+		assert.equal(material.material, 'glass');
+		assert.deepEqual(glass.calls, [['add', true, undefined]]);
+		assert.deepEqual(window.calls.slice(-2), [['vibrancy', null], ['background', '#00000000']]);
+		// Reduce Transparency removes system glass; the window goes opaque.
+		nativeTheme.prefersReducedTransparency = true;
+		nativeTheme.emit('updated');
+		assert.equal(material.material, 'none');
+		assert.deepEqual(glass.calls.at(-1), ['remove', 4]);
+		assert.deepEqual(window.calls.at(-1), ['background', '#fafafa']);
+		// Turning it off does not restore glass by itself, so the window attaches again.
+		nativeTheme.prefersReducedTransparency = false;
+		nativeTheme.emit('updated');
+		assert.equal(material.material, 'glass');
+		assert.deepEqual(glass.calls.at(-1), ['add', true, undefined]);
+		assert.equal(created, 1, 'A window made a second owner; the first would remove its glass when collected');
+	} finally {
+		material.dispose();
+		nativeTheme.prefersReducedTransparency = false;
+	}
+	assert.deepEqual(glass.calls.at(-1), ['dispose']);
+});
+
+test('macOS falls back to vibrancy when Liquid Glass is missing or refused', () => {
+	for (const factory of [() => undefined, () => glassFixture({ supported: false }).owner, () => glassFixture({ id: -1 }).owner]) {
+		const window = windowFixture();
+		const material = new WindowMaterial(window, 'darwin', '25.0.0', factory);
+		assert.equal(material.material, 'vibrancy');
+		assert.deepEqual(window.calls.slice(-2), [['vibrancy', 'sidebar'], ['background', '#00000000']]);
+		material.dispose();
+	}
+});
+
 test('macOS uses sidebar vibrancy and a failed native backdrop stays opaque', () => {
 	const window = windowFixture();
-	const material = new WindowMaterial(window, 'darwin', '25.0.0');
+	const material = new WindowMaterial(window, 'darwin', '24.6.0');
 	assert.equal(material.material, 'vibrancy');
 	assert.deepEqual(window.calls.slice(-2), [['vibrancy', 'sidebar'], ['background', '#00000000']]);
 	material.dispose();
 	window.setVibrancy = () => {
 		throw new Error('Native composition unavailable');
 	};
-	const fallback = new WindowMaterial(window, 'darwin', '25.0.0');
+	const fallback = new WindowMaterial(window, 'darwin', '24.6.0');
 	assert.equal(fallback.material, 'none');
 	assert.deepEqual(window.calls.at(-1), ['background', '#fafafa']);
 	fallback.dispose();

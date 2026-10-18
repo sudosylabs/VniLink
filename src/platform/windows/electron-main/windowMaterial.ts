@@ -4,15 +4,37 @@ import { release } from 'node:os';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { resolveWindowMaterial, windowPlatform, type WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
+import { createLiquidGlass, type LiquidGlassOwner } from './liquidGlass.js';
 
-/** Owns the native backdrop and its theme/accessibility subscription for one window. */
+type MaterialWindow = Pick<BrowserWindow, 'isDestroyed' | 'setVibrancy' | 'setBackgroundMaterial' | 'setBackgroundColor' | 'getNativeWindowHandle'>;
+
+/**
+ * Owns the native backdrop and its theme/accessibility subscription for one
+ * window. On macOS 26 and later that is Liquid Glass behind the web content,
+ * falling back to sidebar vibrancy when glass cannot attach.
+ */
 export class WindowMaterial extends Disposable {
 	private readonly changed = this._register(new Emitter<void>());
 	public readonly onDidChange = this.changed.event;
 	public material: WindowBackgroundMaterial = 'none';
+	/** One owner per window, kept for the window's life: a collected owner removes its glass. */
+	private glass: LiquidGlassOwner | undefined;
+	private glassView = -1;
+	private glassCreated = false;
 
-	constructor(private readonly window: BrowserWindow, private readonly platform: string = windowPlatform, private readonly osRelease = release()) {
+	constructor(
+		private readonly window: MaterialWindow,
+		private readonly platform: string = windowPlatform,
+		private readonly osRelease = release(),
+		private readonly createGlass: () => LiquidGlassOwner | undefined = createLiquidGlass,
+	) {
 		super();
+		this._register({
+			dispose: () => {
+				this.glass?.dispose();
+				this.glass = undefined;
+			},
+		});
 		this.update();
 		this._register(Event.fromNodeEventEmitter<unknown>(nativeTheme, 'updated')(() => {
 			this.update();
@@ -24,9 +46,14 @@ export class WindowMaterial extends Disposable {
 		if (this.window.isDestroyed()) {
 			return;
 		}
-		const material = resolveWindowMaterial(this.platform, this.osRelease, nativeTheme.prefersReducedTransparency, nativeTheme.shouldUseHighContrastColors);
+		let material = resolveWindowMaterial(this.platform, this.osRelease, nativeTheme.prefersReducedTransparency, nativeTheme.shouldUseHighContrastColors);
 		const fallback = nativeTheme.shouldUseDarkColors ? '#202124' : '#fafafa';
 		try {
+			if (material === 'glass' && !this.attachGlass()) {
+				material = 'vibrancy';
+			} else if (material !== 'glass') {
+				this.detachGlass();
+			}
 			if (this.platform === 'darwin') {
 				this.window.setVibrancy(material === 'vibrancy' ? 'sidebar' : null);
 			} else if (resolveWindowMaterial(this.platform, this.osRelease, false, false) === 'mica') {
@@ -36,8 +63,33 @@ export class WindowMaterial extends Disposable {
 			this.material = material;
 		} catch {
 			// A supported OS can still refuse composition. Keep the renderer opaque.
+			this.detachGlass();
 			this.material = 'none';
 			this.window.setBackgroundColor(fallback);
+		}
+	}
+
+	/**
+	 * Attaches glass, or updates the attachment. The system removes glass when
+	 * Reduce Transparency or Increase Contrast turns on and does not restore
+	 * it, so every theme update attaches again.
+	 */
+	private attachGlass(): boolean {
+		if (!this.glassCreated) {
+			this.glassCreated = true;
+			this.glass = this.createGlass();
+		}
+		if (!this.glass?.isGlassSupported()) {
+			return false;
+		}
+		this.glassView = this.glass.addView(this.window.getNativeWindowHandle());
+		return this.glassView >= 0;
+	}
+
+	private detachGlass(): void {
+		if (this.glassView >= 0) {
+			this.glass?.removeView(this.glassView);
+			this.glassView = -1;
 		}
 	}
 }

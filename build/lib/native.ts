@@ -1,7 +1,7 @@
 /** Build identity couples source inputs, target/profile and the staged napi binary. */
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { cp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative, win32 } from 'node:path';
 import type { ProcessRunner } from './processes.ts';
 
@@ -180,4 +180,39 @@ export async function assertNativeFresh(root: string, outputDirectory = join(roo
 	} catch (error) {
 		throw new Error('Native addon missing or stale. Run npm run build. Rust is not watched.', { cause: error });
 	}
+}
+
+/** Where the main process loads macOS Liquid Glass from, inside the output directory. */
+export const GLASS_DIRECTORY = 'native/elg';
+
+/**
+ * Stages @vnilink/elg on macOS the way the engine addon is staged: its owner
+ * module and this architecture's prebuild under `native/elg`, loaded by path
+ * (the packaged app ships no node_modules), and its licence with the others.
+ * Other platforms stage nothing; the package does not install there.
+ */
+export async function stageGlass(
+	root: string,
+	outputDirectory: string,
+	platform: NodeJS.Platform = process.platform,
+	architecture: string = process.arch,
+): Promise<boolean> {
+	if (platform !== 'darwin') {
+		return false;
+	}
+	const source = join(root, 'node_modules/@vnilink/elg');
+	const prebuild = join(source, 'prebuilds', `darwin-${architecture}`, 'node.napi.node');
+	try {
+		await readFile(prebuild);
+	} catch {
+		throw new Error(`Liquid Glass is missing for darwin-${architecture}: run npm ci so the optional @vnilink/elg dependency installs`);
+	}
+	const target = join(outputDirectory, GLASS_DIRECTORY);
+	await mkdir(target, { recursive: true });
+	await Promise.all([
+		cp(join(source, 'dist/index.cjs'), join(target, 'index.cjs')),
+		cp(prebuild, join(target, 'elg.node')),
+		cp(join(source, 'LICENSE'), join(outputDirectory, 'licenses/elg.txt')),
+	]);
+	return true;
 }

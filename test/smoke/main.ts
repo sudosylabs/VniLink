@@ -2,6 +2,7 @@ import { isPermissionSnapshot } from '../../src/platform/permissions/common/perm
 import assert from 'node:assert/strict';
 import { getMacOSWindowControlsPosition } from '../../src/platform/window/common/window.js';
 import { getWorkbenchTitlebarHeight } from '../../src/platform/window/common/titlebar.js';
+import { resolveWindowMaterial } from '../../src/platform/window/common/windowMaterial.js';
 import { isEngineReply, record } from '../../src/platform/engine/common/engine.js';
 import type { BrowserWindow } from 'electron';
 import { app, net, nativeTheme } from 'electron';
@@ -460,7 +461,11 @@ class SmokeSuite {
       const color = selector => getComputedStyle(document.querySelector(selector)).backgroundColor;
       return { mode: document.documentElement.dataset.windowMaterial, titlebar: color('.part.titlebar'), sidebar: color('.sidebar'), content: color('.home-content') };
     })()`);
-		assert.ok(record(surfaces) && (surfaces.mode === 'none' || surfaces.mode === 'vibrancy' || surfaces.mode === 'mica'));
+		// The material this OS should get: Liquid Glass on macOS 26 and later, so a silent
+		// fallback to vibrancy (elg not staged or refusing) fails here.
+		const material = resolveWindowMaterial(process.platform, release(), nativeTheme.prefersReducedTransparency, nativeTheme.shouldUseHighContrastColors);
+		assert.ok(record(surfaces));
+		assert.equal(surfaces.mode, material, 'The window did not get its native material');
 		assert.notEqual(surfaces.content, 'rgba(0, 0, 0, 0)', 'View content became transparent');
 		if (surfaces.mode !== 'none') {
 			const expected = surfaces.mode === 'vibrancy'

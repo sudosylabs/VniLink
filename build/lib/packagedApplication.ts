@@ -1,7 +1,7 @@
 /** Launches an unmodified assembled application outside the source tree, with isolated state. */
 import assert from 'node:assert/strict';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { release, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DevToolsConnection } from './devtools.ts';
 import { assemblyEnvironment, packagedLayout } from './package.ts';
@@ -15,6 +15,7 @@ interface ApplicationState {
 	readonly heading: string | undefined;
 	readonly noticeHidden: boolean | undefined;
 	readonly nodeExposed: boolean;
+	readonly material: string | undefined;
 }
 
 /** Polls `check` until it returns a value, failing if the application exits first or 90 s pass. */
@@ -79,7 +80,7 @@ export async function runPackagedApplication(root: string, directory: string, si
 		}, () => exited);
 		await devtools.connect(target.webSocketDebuggerUrl);
 		await until(() => devtools.evaluate<boolean>(`document.documentElement?.dataset.workbenchReady === 'true'`), () => exited);
-		const state = await devtools.evaluate<ApplicationState>(`(async () => ({ info: await window.vscode.context.resolveConfiguration(), snapshot: await window.driver.engine.execute({type:'snapshot'}), heading: document.querySelector('h1')?.textContent, noticeHidden: document.querySelector('.workbench-notice')?.hidden, nodeExposed: typeof require !== 'undefined' || typeof process !== 'undefined' }))()`);
+		const state = await devtools.evaluate<ApplicationState>(`(async () => ({ info: await window.vscode.context.resolveConfiguration(), snapshot: await window.driver.engine.execute({type:'snapshot'}), heading: document.querySelector('h1')?.textContent, noticeHidden: document.querySelector('.workbench-notice')?.hidden, nodeExposed: typeof require !== 'undefined' || typeof process !== 'undefined', material: document.documentElement.dataset.windowMaterial }))()`);
 		assert.equal(state.info.engineAvailable, true);
 		assert.equal(state.info.version, manifest.version);
 		assert.equal(state.info.platform, process.platform);
@@ -88,9 +89,14 @@ export async function runPackagedApplication(root: string, directory: string, si
 		assert.equal(state.heading, 'Devices');
 		assert.equal(state.noticeHidden, true);
 		assert.equal(state.nodeExposed, false);
+		// macOS 26 (Darwin 25) and later ship Liquid Glass; vibrancy there means elg did not load
+		// from the package. Reduce Transparency may still turn the material off.
+		if (process.platform === 'darwin' && Number(release().split('.')[0]) >= 25) {
+			assert.ok(state.material === 'glass' || state.material === 'none', `The packaged window has ${String(state.material)} instead of Liquid Glass`);
+		}
 		const screenshot = await devtools.request<{ data: string }>('Page.captureScreenshot', { format: 'png' });
 		await writeFile(join(artifacts, 'devices.png'), Buffer.from(screenshot.data, 'base64'));
-		await writeFile(join(artifacts, 'result.json'), JSON.stringify({ platform: process.platform, architecture: process.arch, appId: product.appId, version: manifest.version, engineAvailable: state.info.engineAvailable, nodeExposed: state.nodeExposed, launchedOutsideCheckout: true }, null, 2) + '\n');
+		await writeFile(join(artifacts, 'result.json'), JSON.stringify({ platform: process.platform, architecture: process.arch, appId: product.appId, version: manifest.version, engineAvailable: state.info.engineAvailable, nodeExposed: state.nodeExposed, material: state.material, launchedOutsideCheckout: true }, null, 2) + '\n');
 		console.log(`Packaged application passed isolated launch checks; evidence: ${artifacts}`);
 	} finally {
 		await writeFile(join(artifacts, 'application.log'), log);

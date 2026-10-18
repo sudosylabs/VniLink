@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import { bundleOptions, releaseSourceFilter } from '../../build/lib/bundles.ts';
-import { assertNativeFresh, compileNative, nativeEnvironment, nativeIdentity, stageNative } from '../../build/lib/native.ts';
+import { assertNativeFresh, compileNative, nativeEnvironment, nativeIdentity, stageGlass, stageNative } from '../../build/lib/native.ts';
 import { loadProduct } from '../../build/lib/product.ts';
 import { buildRelease } from '../../build/lib/release.ts';
 import { verifyReleaseFiles } from '../../build/lib/verify.ts';
@@ -63,6 +63,28 @@ test('release native profile is passed to Cargo and isolated from dev staging', 
 		assert.equal(await readFile(join(root, 'out/native/vnilink.node'), 'utf8'), 'dev-sentinel');
 		await put(root, 'release/native/vnilink.node', 'tampered');
 		await assert.rejects(assertNativeFresh(root, join(root, 'release'), options), /stale/);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test('Liquid Glass is staged from the optional package on macOS only', async () => {
+	const root = await mkdtemp(join(tmpdir(), 'vnilink-glass-'));
+	try {
+		const output = join(root, 'out');
+		await mkdir(join(output, 'licenses'), { recursive: true });
+		assert.equal(await stageGlass(root, output, 'win32', 'x64'), false);
+		assert.equal(await stageGlass(root, output, 'linux', 'x64'), false);
+		await assert.rejects(stageGlass(root, output, 'darwin', 'arm64'), /Liquid Glass is missing for darwin-arm64: run npm ci/);
+		const pkg = join(root, 'node_modules/@vnilink/elg');
+		await put(pkg, 'dist/index.cjs', 'owner');
+		await put(pkg, 'prebuilds/darwin-arm64/node.napi.node', 'arm64-addon');
+		await put(pkg, 'prebuilds/darwin-x64/node.napi.node', 'x64-addon');
+		await put(pkg, 'LICENSE', 'MIT');
+		assert.equal(await stageGlass(root, output, 'darwin', 'arm64'), true);
+		assert.equal(await readFile(join(output, 'native/elg/index.cjs'), 'utf8'), 'owner');
+		assert.equal(await readFile(join(output, 'native/elg/elg.node'), 'utf8'), 'arm64-addon', 'Staged the wrong architecture');
+		assert.equal(await readFile(join(output, 'licenses/elg.txt'), 'utf8'), 'MIT');
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
@@ -151,7 +173,8 @@ test('release publication inventories only complete payloads, cleans failures an
 			buildApplication: async (_root, _signal, options) => {
 				assert.equal(options.production, true);
 				assert.equal(options.native.profile, 'release');
-				const names = ['main.cjs', 'engine.cjs', 'preload.cjs', 'renderer/renderer.js', 'renderer/renderer.css', 'renderer/index.html', 'assets/tray/idleTemplate.png', 'native/vnilink.node', 'native/build.json', 'licenses/native-codecs/native-codecs.txt', 'relink/source/Cargo.lock'];
+				const glass = process.platform === 'darwin' ? ['native/elg/index.cjs', 'native/elg/elg.node', 'licenses/elg.txt'] : [];
+				const names = ['main.cjs', 'engine.cjs', 'preload.cjs', 'renderer/renderer.js', 'renderer/renderer.css', 'renderer/index.html', 'assets/tray/idleTemplate.png', 'native/vnilink.node', 'native/build.json', 'licenses/native-codecs/native-codecs.txt', 'relink/source/Cargo.lock', ...glass];
 				for (const name of names) {
 					await put(options.outputDirectory, name);
 				}

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { buildApplication, bundleOptions, type ApplicationBuildOptions } from './bundles.ts';
-import { assertNativeFresh, type NativeOptions } from './native.ts';
+import { assertNativeFresh, GLASS_DIRECTORY, type NativeOptions } from './native.ts';
 import { loadProduct } from './product.ts';
 import { releaseInventory, type ReleaseFile } from './verify.ts';
 
@@ -74,7 +74,9 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 		const files = await releaseInventory(stage);
 		const paths = new Set(files.map(file => file.path));
 		const bundles = bundleOptions(root, { production: true, outputDirectory: app }).map(option => relative(stage, option.outfile ?? '').split('\\').join('/'));
-		for (const name of [...bundles, 'app/renderer/renderer.css', 'app/renderer/index.html', 'app/assets/tray/idleTemplate.png', 'app/native/vnilink.node', 'app/native/build.json', 'app/licenses/native-codecs/native-codecs.txt', 'app/relink/source/Cargo.lock']) {
+		// macOS ships Liquid Glass with its licence; a missing file would silently fall back to vibrancy.
+		const glass = process.platform === 'darwin' ? [`app/${GLASS_DIRECTORY}/index.cjs`, `app/${GLASS_DIRECTORY}/elg.node`, 'app/licenses/elg.txt'] : [];
+		for (const name of [...bundles, ...glass, 'app/renderer/renderer.css', 'app/renderer/index.html', 'app/assets/tray/idleTemplate.png', 'app/native/vnilink.node', 'app/native/build.json', 'app/licenses/native-codecs/native-codecs.txt', 'app/relink/source/Cargo.lock']) {
 			if (!paths.has(name)) {
 				throw new Error(`Missing release input: ${name}`);
 			}

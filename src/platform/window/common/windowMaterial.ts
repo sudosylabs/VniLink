@@ -2,7 +2,8 @@ import { isMacintosh, isWindows } from '../../../base/common/platform.js';
 
 export const windowPlatform = isMacintosh ? 'darwin' : isWindows ? 'win32' : 'linux';
 
-export type WindowBackgroundMaterial = 'none' | 'vibrancy' | 'mica';
+/** `glass` is macOS Liquid Glass (macOS 26 and later); `vibrancy` is its fallback. */
+export type WindowBackgroundMaterial = 'none' | 'vibrancy' | 'glass' | 'mica';
 
 /** Native backdrops are optional; accessibility preferences take precedence. */
 export function resolveWindowMaterial(platform: string, osRelease: string, reducedTransparency: boolean, highContrast: boolean): WindowBackgroundMaterial {
@@ -14,6 +15,10 @@ export function resolveWindowMaterial(platform: string, osRelease: string, reduc
 		return 'none';
 	}
 	const major = Number(version[1]);
+	// Darwin 25 is macOS 26, the first with Liquid Glass.
+	if (platform === 'darwin' && major >= 25) {
+		return 'glass';
+	}
 	if (platform === 'darwin' && major >= 18) {
 		return 'vibrancy';
 	}

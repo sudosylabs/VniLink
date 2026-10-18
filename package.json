@@ -58,5 +58,8 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.71.1"
   },
-  "type": "module"
+  "type": "module",
+  "optionalDependencies": {
+    "@vnilink/elg": "0.1.0-rc"
+  }
 }

@@ -38,7 +38,9 @@ export function packageConfiguration(root: string, stage: string, output: string
 		electronVersion: manifest.electronVersion,
 		electronDist: join(root, 'node_modules/electron/dist'),
 		directories: { app: join(stage, 'app'), output, buildResources: join(stage, 'packaging-resources') },
-		files: ['**/*', '!licenses/**', '!relink/**'],
+		// Bundles and staged native files are the whole app. Without this, the packager falls back to the
+		// repository's dependencies and ships a second copy of macOS-only packages such as @vnilink/elg.
+		files: ['**/*', '!licenses/**', '!relink/**', '!node_modules/**'],
 		asar: true,
 		asarUnpack: ['native/**', 'engine.cjs'],
 		extraResources: resources,

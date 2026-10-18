@@ -95,7 +95,7 @@ export function isWindowState(value: unknown): value is IWindowState {
 		value.zoomFactor >= 0.25 &&
 		value.zoomFactor <= 5 &&
 		'backgroundMaterial' in value &&
-		(value.backgroundMaterial === 'none' || value.backgroundMaterial === 'vibrancy' || value.backgroundMaterial === 'mica')
+		(value.backgroundMaterial === 'none' || value.backgroundMaterial === 'vibrancy' || value.backgroundMaterial === 'glass' || value.backgroundMaterial === 'mica')
 	);
 }
 

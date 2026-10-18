@@ -2,7 +2,7 @@
 import { build, type BuildOptions } from 'esbuild';
 import { cp, mkdir, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { compileNative, defaultNativeOptions, stageNative, type NativeIdentity, type NativeOptions } from './native.ts';
+import { compileNative, defaultNativeOptions, stageGlass, stageNative, type NativeIdentity, type NativeOptions } from './native.ts';
 import { ProcessRunner } from './processes.ts';
 import { define, execute, parallel, series } from './task.ts';
 
@@ -89,6 +89,9 @@ export async function buildApplication(root: string, signal: AbortSignal, option
 					throw new Error('The native addon was not compiled');
 				}
 				await stageNative(root, outputDirectory, native, compiled);
+			}),
+			define('glass:stage', async () => {
+				await stageGlass(root, outputDirectory);
 			}),
 		),
 	);
