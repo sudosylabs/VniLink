@@ -154,9 +154,7 @@ pub use manifest::{
 };
 pub use os_input::{linux_evdev_keycode, OsInput};
 pub use pairing::{PairingFile, PairingPreview, PAIRING_FILE_EXTENSION};
-pub use protocol::{
-    Capabilities, Quality, CODEC_H264, CODEC_H264_HIGH, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION,
-};
+pub use protocol::{Capabilities, Quality, CODEC_H264, CODEC_H264_HIGH, PROTOCOL_VERSION};
 pub use relay::{CustomRelay, RelaySettings};
 pub use service::{
     CloseCause, ServiceInfo, ServiceKind, ServiceLease, ServicePermissions, ServicePhase,

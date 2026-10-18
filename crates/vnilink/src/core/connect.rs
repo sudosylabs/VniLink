@@ -496,78 +496,19 @@ pub(super) async fn establish(
     let addr = device_addr(&device)?;
     let offer = lock(&shared.state).desktop_quality_default;
     let codec_preference = lock(&shared.state).desktop_codec_default;
-    // Neither non-desktop mode needs a decoder. Legacy Files uses v4;
-    // neutral service admission requires v5, with no legacy fallback.
-    let (decode, files_only_flag, hellos_vec) = if files_only {
-        (
-            false,
-            true,
-            vec![(
-                if services_only {
-                    crate::protocol::PROTOCOL_VERSION
-                } else {
-                    4
-                },
-                crate::protocol::CODEC_H264,
-            )],
-        )
+    // Neither non-desktop mode needs a decoder; desktop offers the decoder
+    // mask, or only the codec the owner selected.
+    let (decode, codec) = if files_only {
+        (false, 0x40 | crate::VideoCodec::H264.offer_bit())
     } else {
-        let decode = lock(&shared.video_caps).can_decode();
-        // Offer High on the current protocol first for sharper video at the same
-        // bitrate; fall back to a version-1 Baseline hello on a FRESH connection
-        // so older hosts still connect. A fresh dial is required because a host
-        // that rejects never reads a second hello on the same streams.
-        let mut hellos = vec![
-            (2, crate::protocol::CODEC_H264_HIGH),
-            (
-                crate::protocol::MIN_PROTOCOL_VERSION,
-                crate::protocol::CODEC_H264,
-            ),
-        ];
-        if shared
-            .cursor_receiver
-            .load(std::sync::atomic::Ordering::Acquire)
-        {
-            hellos.insert(0, (4, crate::protocol::CODEC_H264_HIGH));
-            hellos.insert(
-                0,
-                (
-                    crate::protocol::PROTOCOL_VERSION,
-                    crate::protocol::CODEC_H264_HIGH,
-                ),
-            );
-        }
-        if !lock(&shared.video_caps).additional.is_empty() {
-            hellos.insert(
-                0,
-                (
-                    crate::protocol::PROTOCOL_VERSION,
-                    lock(&shared.video_caps).decoder_offer(),
-                ),
-            );
-        }
-        if let Some(codec) = codec_preference {
-            let caps = lock(&shared.video_caps).clone();
-            let preferred = caps.preferred_offer(Some(codec))?;
-            if codec == crate::VideoCodec::H264 {
-                hellos.retain(|(_, id)| {
-                    *id == crate::protocol::CODEC_H264 && caps.decode_baseline
-                        || *id == crate::protocol::CODEC_H264_HIGH && caps.decode_high
-                });
-                hellos.insert(0, (crate::protocol::PROTOCOL_VERSION, preferred));
-            } else {
-                hellos = vec![(crate::protocol::PROTOCOL_VERSION, preferred)];
-            }
-        }
-        (decode, false, hellos)
+        let caps = lock(&shared.video_caps).clone();
+        (caps.can_decode(), caps.preferred_offer(codec_preference)?)
     };
-    let mut hellos_vec = hellos_vec;
-    if services_only {
-        hellos_vec.push((5, crate::protocol::CODEC_H264));
-    }
-    let mut hellos = hellos_vec.iter();
-    let (connection, mut send, recv, info) = loop {
-        let &(version, codec) = hellos.next().ok_or(Error::IncompatibleVersion)?;
+    let cursor_receiver = !files_only
+        && shared
+            .cursor_receiver
+            .load(std::sync::atomic::Ordering::Acquire);
+    let (connection, mut send, recv, info) = {
         let connect = shared.endpoint.connect(addr.clone(), ALPN);
         let connection = tokio::time::timeout(Duration::from_secs(10), connect)
             .await
@@ -586,12 +527,13 @@ pub(super) async fn establish(
         write_frame(
             &mut send,
             &ControlMessage::Hello {
-                version,
+                version: crate::protocol::PROTOCOL_VERSION,
                 codec,
                 quality: offer,
                 decode,
-                files_only: files_only_flag,
+                files_only,
                 services_only,
+                separate_cursor: cursor_receiver,
                 hostname: crate::hostname::local_hostname(),
                 os: crate::OperatingSystem::local(),
             },
@@ -607,26 +549,20 @@ pub(super) async fn establish(
                 hostname: accept_hostname,
                 os: accept_os,
             } => {
-                let separate_cursor =
-                    version >= 3 && agreed & crate::protocol::SEPARATE_CURSOR != 0;
-                let agreed = if version >= 3 {
-                    agreed & !crate::protocol::SEPARATE_CURSOR
-                } else {
-                    agreed
-                };
-                if !files_only_flag
+                let separate_cursor = agreed & crate::protocol::SEPARATE_CURSOR != 0;
+                let agreed = agreed & !crate::protocol::SEPARATE_CURSOR;
+                let common = Error::Unsupported("no video codec both computers support");
+                if !files_only
                     && codec_preference
                         .is_some_and(|c| crate::VideoCodec::from_wire_id(agreed) != Some(c))
                 {
-                    return Err(Error::IncompatibleVersion);
+                    return Err(common);
                 }
-                if !files_only_flag
-                    && !lock(&shared.video_caps).supports_decode(
-                        crate::VideoCodec::from_wire_id(agreed)
-                            .ok_or(Error::IncompatibleVersion)?,
-                    )
+                if !files_only
+                    && !lock(&shared.video_caps)
+                        .supports_decode(crate::VideoCodec::from_wire_id(agreed).ok_or(common)?)
                 {
-                    return Err(Error::IncompatibleVersion);
+                    return Err(Error::Unsupported("no video codec both computers support"));
                 }
                 let peer_id = device.display_id.clone();
                 // The host admitted us: keep its display name for this
@@ -675,7 +611,7 @@ pub(super) async fn establish(
                         session.separate_cursor = separate_cursor;
                     }
                 }
-                break (
+                (
                     connection,
                     send,
                     recv,
@@ -693,16 +629,9 @@ pub(super) async fn establish(
                         monitor_width,
                         monitor_height,
                     },
-                );
+                )
             }
-            ControlMessage::Reject(code) => {
-                let error = code.to_error();
-                if matches!(error, Error::IncompatibleVersion) {
-                    connection.close(0u8.into(), b"version fallback");
-                    continue;
-                }
-                return Err(error);
-            }
+            ControlMessage::Reject(code) => return Err(code.to_error()),
             _ => return Err(Error::Malformed),
         }
     };

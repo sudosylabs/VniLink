@@ -76,9 +76,7 @@ pub(crate) fn admit(
     if !hosting {
         return Err(Error::NotHosting);
     }
-    if !(crate::protocol::MIN_PROTOCOL_VERSION..=crate::protocol::PROTOCOL_VERSION)
-        .contains(&version)
-    {
+    if version != crate::protocol::PROTOCOL_VERSION {
         return Err(Error::IncompatibleVersion);
     }
     if session_open {
@@ -86,7 +84,7 @@ pub(crate) fn admit(
     }
     if files_only {
         // Files-only: Transfer grant suffices, no Control, video, input or
-        // screen sharing required. Old hosts without v4 reject as incompatible.
+        // screen sharing required.
         if !transfer_granted {
             return Err(Error::Unauthorized);
         }
@@ -99,7 +97,7 @@ pub(crate) fn admit(
         return Err(Error::Unsupported("no H.264 encoder is available"));
     }
     if !codec_supported {
-        return Err(Error::IncompatibleVersion);
+        return Err(Error::Unsupported("no video codec both computers support"));
     }
     if peer_decode_unsupported {
         return Err(Error::Unsupported("the controller cannot decode video"));
@@ -118,7 +116,7 @@ pub(crate) fn admit_services(
     if !hosting {
         return Err(Error::NotHosting);
     }
-    if !(5..=crate::protocol::PROTOCOL_VERSION).contains(&version) {
+    if version != crate::protocol::PROTOCOL_VERSION {
         return Err(Error::IncompatibleVersion);
     }
     if !paired {

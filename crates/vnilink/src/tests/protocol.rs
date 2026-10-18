@@ -17,6 +17,8 @@ fn control_messages_round_trip() {
             decode: true,
             files_only: false,
             services_only: false,
+
+            separate_cursor: true,
             hostname: Some("mac-mini".to_string()),
             os: crate::OperatingSystem::local(),
         },
@@ -27,6 +29,8 @@ fn control_messages_round_trip() {
             decode: false,
             files_only: false,
             services_only: false,
+
+            separate_cursor: false,
             hostname: None,
             os: crate::OperatingSystem::local(),
         },
@@ -37,6 +41,8 @@ fn control_messages_round_trip() {
             decode: true,
             files_only: false,
             services_only: false,
+
+            separate_cursor: false,
             hostname: Some("mac-mini".to_string()),
             os: crate::OperatingSystem::local(),
         },
@@ -111,6 +117,8 @@ fn hello_accept_and_quality_shapes_are_validated() {
         decode: true,
         files_only: false,
         services_only: false,
+
+        separate_cursor: false,
         hostname: None,
         os: crate::OperatingSystem::local(),
     }
@@ -128,6 +136,8 @@ fn hello_accept_and_quality_shapes_are_validated() {
         decode: true,
         files_only: false,
         services_only: false,
+
+        separate_cursor: false,
         hostname: None,
         os: crate::OperatingSystem::local(),
     }
@@ -163,35 +173,19 @@ fn hostname_shapes_are_validated() {
         decode: true,
         files_only: false,
         services_only: false,
+
+        separate_cursor: false,
         hostname,
         os: crate::OperatingSystem::local(),
     };
-    // v5 carries both mode flags (17 bytes base); v4 has one (16), v1-v3 none (15).
+    // The head is 17 bytes: tag, version, codec, quality, then the decode,
+    // files-only, services-only and cursor flags. An absent name is one
+    // length byte, and the OS byte ends the frame.
     // An invalid name encodes as absent; it never breaks the session.
     let encoded = hello(Some("  ".to_string())).encode();
-    assert_eq!(encoded.len(), 18);
+    assert_eq!(encoded.len(), 19);
     assert_eq!(ControlMessage::decode(&encoded).unwrap(), hello(None));
-    // A v3 desktop Hello omits the flag and still round-trips as files_only=false.
-    let mut v3hello = hello(Some("mac-mini".to_string()));
-    if let ControlMessage::Hello {
-        ref mut version, ..
-    } = v3hello
-    {
-        *version = 3;
-    }
-    let v3encoded = v3hello.encode();
-    assert_eq!(v3encoded.len(), 14 + 2 + "mac-mini".len());
-    let back = ControlMessage::decode(&v3encoded).unwrap();
-    assert!(matches!(
-        back,
-        ControlMessage::Hello {
-            version: 3,
-            files_only: false,
-            services_only: false,
-            ..
-        }
-    ));
-    // Files-only v4 round-trips the flag.
+    // Files-only round-trips its flag.
     let mut files_hello = hello(Some("mac-mini".to_string()));
     if let ControlMessage::Hello {
         ref mut files_only, ..
@@ -446,49 +440,40 @@ fn unmapped_errors_become_a_malformed_reject() {
 }
 
 #[test]
-fn neutral_hello_has_a_strict_version_five_mode_flag() {
+fn hello_mode_and_cursor_flags_are_strict() {
     let hello = ControlMessage::Hello {
-        version: 5,
-        codec: crate::CODEC_H264,
+        version: PROTOCOL_VERSION,
+        codec: 0x40 | 1,
         quality: Quality::new(2000, 30, 1920, 1080).unwrap(),
         decode: false,
         files_only: true,
         services_only: true,
+        separate_cursor: true,
         hostname: Some("service-host".into()),
         os: crate::OperatingSystem::local(),
     };
     let bytes = hello.encode();
-    assert_eq!((bytes[14], bytes[15]), (1, 1));
+    assert_eq!((bytes[14], bytes[15], bytes[16]), (1, 1, 1));
     assert_eq!(ControlMessage::decode(&bytes).unwrap(), hello);
-    let mut malformed = bytes.clone();
-    malformed[15] = 2;
-    assert!(matches!(
-        ControlMessage::decode(&malformed),
-        Err(Error::Malformed)
-    ));
-    malformed = bytes.clone();
-    malformed[14] = 0;
-    assert!(matches!(
-        ControlMessage::decode(&malformed),
-        Err(Error::Malformed)
-    ));
-    assert!(matches!(
-        ControlMessage::decode(&bytes[..15]),
-        Err(Error::Malformed)
-    ));
-    for version in [1, 2, 3, 4] {
-        let old = ControlMessage::Hello {
-            version,
-            codec: crate::CODEC_H264,
-            quality: Quality::new(2000, 30, 1920, 1080).unwrap(),
-            decode: false,
-            files_only: version >= 4,
-            services_only: false,
-            hostname: Some("old-host".into()),
-            os: crate::OperatingSystem::local(),
-        };
-        assert_eq!(ControlMessage::decode(&old.encode()).unwrap(), old);
+    for flag in [13, 14, 15, 16] {
+        let mut malformed = bytes.clone();
+        malformed[flag] = 2;
+        assert!(matches!(
+            ControlMessage::decode(&malformed),
+            Err(Error::Malformed)
+        ));
     }
+    // A service-only connection must also be files-only.
+    let mut desktop_services = bytes.clone();
+    desktop_services[14] = 0;
+    assert!(matches!(
+        ControlMessage::decode(&desktop_services),
+        Err(Error::Malformed)
+    ));
+    assert!(matches!(
+        ControlMessage::decode(&bytes[..18]),
+        Err(Error::Malformed)
+    ));
 }
 
 fn display(id: u64, origin_x: i32, width: u16, height: u16, rotation: u16) -> DisplayInfo {
@@ -610,6 +595,8 @@ fn handshake_os_is_bounded_and_every_truncation_is_rejected_without_panicking() 
                 decode: true,
                 files_only: true,
                 services_only: true,
+
+                separate_cursor: false,
                 hostname: Some("workstation".into()),
                 os,
             },

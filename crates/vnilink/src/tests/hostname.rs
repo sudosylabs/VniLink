@@ -94,7 +94,7 @@ fn names_survive_a_restart_in_the_current_record() {
         })
         .unwrap();
     let record_trust = current_trust;
-    // And the current encoder writes version 4, which round-trips names.
+    // The encoder writes format version 1, which round-trips names.
     let bytes = installation::encode(
         &secret.to_bytes(),
         &RelaySettings::public_n0(),
@@ -107,9 +107,18 @@ fn names_survive_a_restart_in_the_current_record() {
         &crate::system::SystemPolicy::default(),
     )
     .unwrap();
-    assert_eq!(bytes[4], 4);
+    assert_eq!(bytes[4], 1);
     let again = installation::decode(&bytes).unwrap();
     assert!(again.trust.get(&peer_id).is_some());
+    // Any other format version is refused, even with a valid checksum.
+    let mut other = bytes[..bytes.len() - 4].to_vec();
+    other[4] = 4;
+    let checksum = installation::checksum(&other);
+    other.extend_from_slice(&checksum.to_be_bytes());
+    assert!(matches!(
+        installation::decode(&other),
+        Err(crate::error::Error::CorruptRecord)
+    ));
 }
 
 #[test]

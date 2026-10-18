@@ -15,33 +15,27 @@ impl HostCapture for SizeCapture {
 }
 
 #[test]
-fn negotiation_prefers_high_and_falls_back_to_baseline() {
+fn negotiation_takes_the_best_h264_profile_from_a_decoder_mask_and_refuses_plain_ids() {
+    const MASK: u8 = 0x40;
     let full = VideoCodecCaps::h264_full(4096, 4096, "test");
-    let agreed = negotiate(CODEC_H264, &full, false).unwrap();
+    let agreed = negotiate(MASK | 1, &full).unwrap();
     assert_eq!(agreed.codec, CODEC_H264);
-    let agreed = negotiate(CODEC_H264_HIGH, &full, true).unwrap();
+    let agreed = negotiate(MASK | 1 | 2, &full).unwrap();
     assert_eq!(agreed.codec, CODEC_H264_HIGH);
     assert_eq!((agreed.max_width, agreed.max_height), (4096, 4096));
-    // Silent safe downgrade: every High decoder also decodes Baseline.
-    let agreed = negotiate(CODEC_H264_HIGH, &full, false).unwrap();
-    assert_eq!(agreed.codec, CODEC_H264);
     let baseline = VideoCodecCaps::h264_baseline(1920, 1080, "test");
-    let agreed = negotiate(CODEC_H264_HIGH, &baseline, true).unwrap();
+    let agreed = negotiate(MASK | 1 | 2, &baseline).unwrap();
     assert_eq!(agreed.codec, CODEC_H264);
     assert_eq!((agreed.max_width, agreed.max_height), (1920, 1080));
-    assert_eq!(negotiate(9, &full, true), None);
+    // A codec id without the mask bit is not an offer.
+    for plain in [CODEC_H264, CODEC_H264_HIGH, 9] {
+        assert_eq!(negotiate(plain, &full), None);
+    }
+    // Cleared probe bits (no-GPU Linux) agree on nothing for either
+    // profile, so admission refuses explicitly.
+    assert_eq!(negotiate(MASK | 1 | 2, &VideoCodecCaps::default()), None);
     assert_eq!(
-        negotiate(CODEC_H264, &VideoCodecCaps::default(), true),
-        None
-    );
-    // SPEC06 boundary: cleared probe bits (no-GPU Linux) agree on
-    // nothing for either profile, so admission refuses explicitly.
-    assert_eq!(
-        negotiate(CODEC_H264_HIGH, &VideoCodecCaps::default(), true),
-        None
-    );
-    assert_eq!(
-        negotiate(CODEC_H264_HIGH, &VideoCodecCaps::decode_only("test"), true),
+        negotiate(MASK | 1 | 2, &VideoCodecCaps::decode_only("test")),
         None
     );
 }
@@ -235,9 +229,7 @@ fn auto_negotiates_only_common_probed_codecs_and_prefers_hardware() {
     ];
     let mut viewer = host.clone();
     assert_eq!(
-        negotiate(viewer.decoder_offer(), &host, true)
-            .unwrap()
-            .codec,
+        negotiate(viewer.decoder_offer(), &host).unwrap().codec,
         C::H265.wire_id()
     );
     viewer
@@ -247,23 +239,19 @@ fn auto_negotiates_only_common_probed_codecs_and_prefers_hardware() {
         .unwrap()
         .decode = false;
     assert_eq!(
-        negotiate(viewer.decoder_offer(), &host, true)
-            .unwrap()
-            .codec,
+        negotiate(viewer.decoder_offer(), &host).unwrap().codec,
         CODEC_H264_HIGH
     );
     host.encode_baseline = false;
     host.encode_high = false;
     host.additional[0].encode = false;
     assert_eq!(
-        negotiate(viewer.decoder_offer(), &host, true)
-            .unwrap()
-            .codec,
+        negotiate(viewer.decoder_offer(), &host).unwrap().codec,
         C::Vp9.wire_id()
     );
     viewer.additional.iter_mut().for_each(|c| c.decode = false);
-    assert!(negotiate(viewer.decoder_offer(), &host, true).is_none());
-    assert!(negotiate(255, &host, true).is_none());
+    assert!(negotiate(viewer.decoder_offer(), &host).is_none());
+    assert!(negotiate(255, &host).is_none());
     host.additional.push(host.additional[0].clone());
     assert!(host.validate().is_err());
 }
@@ -390,7 +378,7 @@ fn explicit_codec_offer_never_negotiates_another_codec() {
     for codec in VideoCodec::ALL {
         let offer = viewer.preferred_offer(Some(codec)).unwrap();
         assert_eq!(
-            VideoCodec::from_wire_id(negotiate(offer, &host, true).unwrap().codec),
+            VideoCodec::from_wire_id(negotiate(offer, &host).unwrap().codec),
             Some(codec)
         );
         let mut missing = host.clone();
@@ -400,14 +388,13 @@ fn explicit_codec_offer_never_negotiates_another_codec() {
         } else {
             missing.additional.retain(|c| c.codec != codec);
         }
-        assert!(negotiate(offer, &missing, true).is_none());
+        assert!(negotiate(offer, &missing).is_none());
     }
     viewer.decode_baseline = false;
     assert_eq!(
         negotiate(
             viewer.preferred_offer(Some(VideoCodec::H264)).unwrap(),
-            &host,
-            true
+            &host
         )
         .unwrap()
         .codec,
@@ -416,8 +403,7 @@ fn explicit_codec_offer_never_negotiates_another_codec() {
     host.encode_high = false;
     assert!(negotiate(
         viewer.preferred_offer(Some(VideoCodec::H264)).unwrap(),
-        &host,
-        true
+        &host
     )
     .is_none());
     assert!(VideoCodecCaps::default()

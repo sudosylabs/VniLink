@@ -289,13 +289,14 @@ pub(super) async fn handle_host_request(
             decode,
             files_only,
             services_only,
+            separate_cursor: cursor_receiver,
             hostname: hello_hostname,
             os: hello_os,
         } => {
             // Hello carries a decode bit, not a profile bit; every decoder we
             // ship handles both profiles, so High is a host-encoder decision.
             let caps = lock(&shared.video_caps).clone();
-            let agreed_codec = crate::video_caps::negotiate(codec, &caps, true);
+            let agreed_codec = crate::video_caps::negotiate(codec, &caps);
             let codec_supported = agreed_codec.is_some();
             // The controller names its decoder in Hello. A peer that cannot
             // decode gets an explicit reject, not a session with no
@@ -370,7 +371,7 @@ pub(super) async fn handle_host_request(
                         .map(|agreed| agreed.codec)
                         .unwrap_or(crate::protocol::CODEC_H264);
                     let separate_cursor = !files_only
-                        && version >= 3
+                        && cursor_receiver
                         && lock(&shared.capture)
                             .as_ref()
                             .is_some_and(|capture| capture.separate_cursor());

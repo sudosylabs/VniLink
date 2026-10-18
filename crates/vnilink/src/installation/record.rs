@@ -12,7 +12,7 @@ use crate::trust::{Device, Trust, MAX_DEVICES};
 
 const MAGIC: &[u8; 4] = b"VNLK";
 /// Installation record layout.
-const VERSION: u8 = 4;
+const VERSION: u8 = 1;
 const MAX_RECORD_BYTES: usize = 1024 * 1024;
 const MAX_TEXT: usize = 512;
 

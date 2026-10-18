@@ -17,32 +17,17 @@ impl fmt::Debug for KeyText {
     }
 }
 
-/// Application protocol version carried in the control hello.
-/// Version 2 adds H.264 High profile negotiation (`CODEC_H264_HIGH`).
-/// Version 3 negotiates an independent cursor stream in the Accept codec byte.
-/// Version 4 adds files-only sessions (`files_only` in Hello): Transfer-grant
-/// admission without video, input or screen sharing. Version 5 adds a neutral
-/// service-only connection; service permissions are checked on Open. Hosts admit
-/// 1 through 6;
-/// newer controllers fall back to a version-1 Baseline hello when an older
-/// host rejects it as incompatible (files-only needs v4 on both sides).
-/// Version 6 carries a probe-validated decoder mask for automatic codec selection.
-pub const PROTOCOL_VERSION: u16 = 6;
+/// Application protocol version carried in the control hello. Peers speak
+/// exactly this version; any other is refused with `IncompatibleVersion`.
+pub const PROTOCOL_VERSION: u16 = 1;
 
-/// Version-3 Accept codec bit: independent cursor stream is available.
+/// Accept codec flag: the host sends the cursor as its own stream.
 pub(crate) const SEPARATE_CURSOR: u8 = 0x80;
 
-/// Oldest hello a version-2 host still admits. Version-1 sessions are
-/// Baseline-only.
-pub const MIN_PROTOCOL_VERSION: u16 = 1;
-
-/// H.264 video codec identifier carried in Hello/Accept negotiation.
-/// Baseline decodes everywhere; every decoder we ship also decodes High.
+/// Agreed H.264 Baseline codec, carried in Accept. Baseline decodes everywhere.
 pub const CODEC_H264: u8 = 1;
 
-/// H.264 High profile. Offered by version-2 controllers whose decoder
-/// handles it; the host replies with the lower of offered and locally
-/// encodable, so a Baseline-only host answers `CODEC_H264`.
+/// Agreed H.264 High profile, carried in Accept when both sides handle it.
 pub const CODEC_H264_HIGH: u8 = 2;
 
 /// QUIC ALPN for the VniLink control channel. Bytes, not a string type, so the
@@ -192,9 +177,12 @@ pub(crate) enum ControlMessage {
         /// Files-only session for roots/listings/transfers: Transfer-grant
         /// admission, no video/input/portal. Desktop sessions set false.
         files_only: bool,
-        /// Neutral transport admission (v5), without granting any feature.
+        /// Neutral transport admission, without granting any feature.
         /// Must also set files_only so no desktop transport is started.
         services_only: bool,
+        /// Whether the controller draws a cursor sent as its own stream. The
+        /// host separates the cursor only when both sides support it.
+        separate_cursor: bool,
         /// The controller's display name, if it has one. Stored on the peer
         /// record so the host's device list can name it. Display-only.
         hostname: Option<String>,
@@ -285,10 +273,11 @@ impl ControlMessage {
                 decode,
                 files_only,
                 services_only,
+                separate_cursor,
                 hostname,
                 os,
             } => {
-                let mut bytes = Vec::with_capacity(16);
+                let mut bytes = Vec::with_capacity(19);
                 bytes.push(1);
                 bytes.extend_from_slice(&version.to_be_bytes());
                 bytes.push(*codec);
@@ -297,12 +286,9 @@ impl ControlMessage {
                 bytes.push(quality.max_frame_rate);
                 bytes.extend_from_slice(&quality.max_bitrate_kbps.to_be_bytes());
                 bytes.push(u8::from(*decode));
-                if *version >= 4 {
-                    bytes.push(u8::from(*files_only));
-                }
-                if *version >= 5 {
-                    bytes.push(u8::from(*services_only));
-                }
+                bytes.push(u8::from(*files_only));
+                bytes.push(u8::from(*services_only));
+                bytes.push(u8::from(*separate_cursor));
                 write_hostname(&mut bytes, hostname);
                 bytes.push(os.encode());
                 bytes
@@ -402,7 +388,7 @@ impl ControlMessage {
             return Err(Error::Malformed);
         }
         match bytes[0] {
-            1 if bytes.len() >= 15 => {
+            1 if bytes.len() >= 19 => {
                 let quality = Quality::new(
                     u32::from_be_bytes([bytes[9], bytes[10], bytes[11], bytes[12]]),
                     bytes[8],
@@ -411,39 +397,20 @@ impl ControlMessage {
                 )
                 .map_err(|_| Error::Malformed)?;
                 let version = u16::from_be_bytes([bytes[1], bytes[2]]);
-                let decode = match bytes[13] {
-                    0 => false,
-                    1 => true,
-                    _ => return Err(Error::Malformed),
+                let flag = |byte: u8| match byte {
+                    0 => Ok(false),
+                    1 => Ok(true),
+                    _ => Err(Error::Malformed),
                 };
-                // Version 4+: files-only flag follows decode; v1-v3 omit it.
-                let (files_only, hostname_start) = if version >= 4 {
-                    if bytes.len() < 16 {
-                        return Err(Error::Malformed);
-                    }
-                    let files_only = match bytes[14] {
-                        0 => false,
-                        1 => true,
-                        _ => return Err(Error::Malformed),
-                    };
-                    (files_only, 15)
-                } else {
-                    (false, 14)
-                };
-                let (services_only, hostname_start) = if version >= 5 {
-                    let flag = *bytes.get(hostname_start).ok_or(Error::Malformed)?;
-                    let neutral = match flag {
-                        0 => false,
-                        1 => true,
-                        _ => return Err(Error::Malformed),
-                    };
-                    if neutral && !files_only {
-                        return Err(Error::Malformed);
-                    }
-                    (neutral, hostname_start + 1)
-                } else {
-                    (false, hostname_start)
-                };
+                let decode = flag(bytes[13])?;
+                let files_only = flag(bytes[14])?;
+                let services_only = flag(bytes[15])?;
+                let separate_cursor = flag(bytes[16])?;
+                // A service-only connection never starts desktop transport.
+                if services_only && !files_only {
+                    return Err(Error::Malformed);
+                }
+                let hostname_start = 17;
                 Ok(Self::Hello {
                     version,
                     codec: bytes[3],
@@ -451,6 +418,7 @@ impl ControlMessage {
                     decode,
                     files_only,
                     services_only,
+                    separate_cursor,
                     hostname: read_hostname(
                         bytes
                             .get(hostname_start..bytes.len() - 1)

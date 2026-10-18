@@ -964,12 +964,12 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                             decode: true,
                             files_only: false,
                             services_only: false,
+                            separate_cursor: cursor,
                             hostname: None,
                             os: crate::OperatingSystem::local(),
                         }
                         .encode(),
                     );
-                    let mut legacy = false;
                     loop {
                         let (mut send, mut recv) =
                             link.open_bi().await.map_err(Error::network_debug)?;
@@ -982,33 +982,6 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                             0 => {}
                             4 => {
                                 tokio::time::sleep(Duration::from_millis(20)).await;
-                                continue;
-                            }
-                            5 if !legacy
-                                && (codec_preference.is_none()
-                                    || codec_preference == Some(crate::VideoCodec::H264))
-                                && (decoder_caps.decode_high || decoder_caps.decode_baseline) =>
-                            {
-                                legacy = true;
-                                request.truncate(27);
-                                request.extend_from_slice(
-                                    &ControlMessage::Hello {
-                                        version: 5,
-                                        codec: if decoder_caps.decode_high {
-                                            crate::protocol::CODEC_H264_HIGH
-                                        } else {
-                                            crate::protocol::CODEC_H264
-                                        },
-                                        quality: offer,
-                                        decode: decoder_caps.decode_high
-                                            || decoder_caps.decode_baseline,
-                                        files_only: false,
-                                        services_only: false,
-                                        hostname: None,
-                                        os: crate::OperatingSystem::local(),
-                                    }
-                                    .encode(),
-                                );
                                 continue;
                             }
                             6 => return Err(Error::Unauthorized),
@@ -1503,7 +1476,7 @@ pub(super) async fn serve(
     else {
         return Err(Error::Malformed);
     };
-    if remote_id == 0 || !(5..=crate::protocol::PROTOCOL_VERSION).contains(&version) {
+    if remote_id == 0 || version != crate::protocol::PROTOCOL_VERSION {
         write(&mut send, &[VERSION, 5]).await?;
         return Ok(());
     }
@@ -1542,7 +1515,7 @@ pub(super) async fn serve(
             let caps = lock(&shared.video_caps).clone();
             if monitor.0 == 0 || monitor.1 == 0 {
                 Err(1)
-            } else if let Some(agreed) = crate::video_caps::negotiate(codec, &caps, true) {
+            } else if let Some(agreed) = crate::video_caps::negotiate(codec, &caps) {
                 let codec = agreed.codec;
                 let peer_id = session.peer_id.clone();
                 let id = state.next_service_id;

@@ -8,7 +8,7 @@
 //! availability, not every advertised pixel count.
 
 use crate::error::Error;
-use crate::protocol::{Quality, CODEC_H264, CODEC_H264_HIGH};
+use crate::protocol::{Quality, CODEC_H264_HIGH};
 
 /// H.264 encode/decode abilities of this installation. All `false` and zero
 /// sizes means no usable video path; admission then reports unsupported
@@ -102,7 +102,7 @@ impl VideoCodecCaps {
             Some(crate::VideoCodec::H264) if self.supports_decode(crate::VideoCodec::H264) => {
                 Ok(0x40 | u8::from(self.decode_baseline) | if self.decode_high { 2 } else { 0 })
             }
-            Some(codec) if self.supports_decode(codec) => Ok(codec.wire_id()),
+            Some(codec) if self.supports_decode(codec) => Ok(0x40 | codec.offer_bit()),
             _ => Err(Error::Unsupported("selected video decoder")),
         }
     }
@@ -169,18 +169,15 @@ pub struct AgreedCodec {
     pub max_height: u16,
 }
 
-/// Intersects the offered codec with host and controller abilities. High
-/// profile needs it on both ends; anything else falls back to Baseline.
-/// Sizes clamp to the host encoder limits. `None` means no common codec.
-pub fn negotiate(
-    offered: u8,
-    host: &VideoCodecCaps,
-    controller_decodes_high: bool,
-) -> Option<AgreedCodec> {
-    if offered & 0x80 != 0 {
+/// Intersects the controller's decoder mask (`0x40` plus one bit per codec,
+/// with bit 2 for H.264 High) with what the host encodes. High profile needs
+/// it on both ends. Sizes clamp to the host encoder limits. `None` means the
+/// offer is not a mask or there is no common codec.
+pub fn negotiate(offered: u8, host: &VideoCodecCaps) -> Option<AgreedCodec> {
+    if offered & 0x80 != 0 || offered & 0x40 == 0 {
         return None;
     }
-    let codec = if offered & 0x40 != 0 {
+    let codec = {
         let mut candidates = crate::video::VideoCodec::ALL.to_vec();
         // Prefer validated native hardware; avoid expensive software AV1 when
         // a realtime VP9 fallback is available. Choice is per Desktop owner.
@@ -215,19 +212,6 @@ pub fn negotiate(
         } else {
             selected.wire_id()
         }
-    } else {
-        match offered {
-            CODEC_H264 if host.encode_baseline => Some(CODEC_H264),
-            CODEC_H264_HIGH if host.encode_high && controller_decodes_high => Some(CODEC_H264_HIGH),
-            CODEC_H264_HIGH if host.encode_baseline => Some(CODEC_H264),
-            id if id >= 3
-                && crate::video::VideoCodec::from_wire_id(id)
-                    .is_some_and(|c| host.supports_encode(c)) =>
-            {
-                Some(id)
-            }
-            _ => None,
-        }?
     };
     Some(AgreedCodec {
         codec,
