@@ -99,3 +99,13 @@ test('commands are shape-checked, shutdown stops new work and data channels resp
 	host.handledClientConnection({ data: { type: 'attachDataChannel', owner: 'window', request: { requestId: 'late', kind: 'video', sessionId: '1', generation: '1' } }, ports: [port('late')] });
 	assert.deepEqual(closed, ['invalid', 'late']);
 });
+
+test('a failed open tells the main process why before exiting', async () => {
+	const posted = [];
+	const exits = [];
+	const addon = () => ({ openEngine: () => Promise.reject(new Error('CorruptRecord')), openTemporaryEngine: () => Promise.reject(new Error('unused')) });
+	const host = new EngineHost({ postMessage: message => posted.push(message) }, addon, code => exits.push(code));
+	await host.open();
+	assert.deepEqual(posted, [{ ready: false, error: 'CorruptRecord' }]);
+	assert.deepEqual(exits, [1]);
+});

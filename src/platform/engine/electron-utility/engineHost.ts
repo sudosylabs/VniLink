@@ -54,6 +54,7 @@ export class EngineHost implements IClientConnectionFilter {
 	constructor(
 		private readonly port: Pick<Electron.ParentPort, 'postMessage'>,
 		private readonly loadAddon: () => unknown = () => createRequire(__filename)(join(__dirname, 'native', 'vnilink.node')),
+		private readonly exit: (code: number) => void = code => process.exit(code),
 	) { }
 
 	public async open(): Promise<void> {
@@ -64,9 +65,11 @@ export class EngineHost implements IClientConnectionFilter {
 			}
 			this.engine = await (process.argv.includes('--temporary') ? addon.openTemporaryEngine() : addon.openEngine());
 			this.port.postMessage({ ready: true });
-		} catch {
-			this.port.postMessage({ ready: false });
-			process.exit(1);
+		} catch (error) {
+			// Native error strings name the reason only, never secrets, so the main process can log it.
+			const reason = error instanceof Error && error.message.length > 0 ? error.message : 'Engine could not open';
+			this.port.postMessage({ ready: false, error: reason });
+			this.exit(1);
 		}
 	}
 

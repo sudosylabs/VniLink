@@ -82,8 +82,10 @@ export class EngineMainService extends Disposable {
 						this.availabilityChanged.fire(true);
 						resolve();
 					} else {
-						this.fail(new Error('Engine could not open its secure installation'));
-						reject(new Error('Engine could not open its secure installation'));
+						const reason = typeof message.error === 'string' ? `: ${message.error}` : '';
+						const error = new Error(`Engine could not open its secure installation${reason}`);
+						this.fail(error);
+						reject(error);
 					}
 				}
 			});
