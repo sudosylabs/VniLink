@@ -1,6 +1,6 @@
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
-import type { QualityLimits, DisplayInfo } from '../../../platform/engine/common/engine.js';
+import { deviceName, type QualityLimits, type DisplayInfo } from '../../../platform/engine/common/engine.js';
 import { DesktopReadbackError, desktopTargetKey, isValidDesktopQuality, type DesktopSession, type DesktopSettings, type DesktopTarget, IRemoteDesktopService } from './remoteDesktopService.js';
 
 export class RemoteDesktopService implements IRemoteDesktopService {
@@ -29,7 +29,7 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 				continue;
 			}
 			const peer = snapshot.snapshot.devices.find(device => device.endpoint_id === session.peer_id);
-			const name = peer?.pet_name ?? peer?.hostname ?? session.peer_id;
+			const name = peer ? deviceName(peer) : session.peer_id;
 			const quality = Object.freeze({ ...session.quality });
 			sessions.push(Object.freeze({ id: session.id, generation: session.generation, role: session.role, name, quality }));
 		}

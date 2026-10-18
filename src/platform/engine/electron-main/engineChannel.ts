@@ -21,6 +21,8 @@ import type { EngineMainService } from './engineMainService.js';
  */
 const privateCommands: ReadonlySet<EngineCommand['type']> = new Set([
 	'subscribeEvents', 'pollEvents', 'releaseEvents',
+	// Hosting follows `application.acceptConnections`, owned by `HostingMainService`.
+	'startHosting', 'stopHosting', 'stopHostedSession',
 	'saveCustomRelays', 'setRelayPublic', 'setRelayCustom',
 	'setSharingPolicy', 'setSystemPolicy', 'setTerminalPolicy', 'setPowerPolicy',
 	'setDesktopCodecDefault', 'setDesktopQualityDefaults', 'setInputDefaults',

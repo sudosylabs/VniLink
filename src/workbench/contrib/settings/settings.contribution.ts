@@ -51,6 +51,7 @@ const pages: readonly ISettingsPageDescriptor[] = [
 		// Start at login is read from the operating system, which can change it too.
 		poll: true,
 		sections: [
+			{ id: 'sharing', title: nls.localize('general.sharing', 'Sharing'), description: nls.localize('general.sharingHelp', 'Whether paired devices can reach this computer. The VniLink icon in the menu bar or system tray shows the same choice.'), settings: ['application.acceptConnections'] },
 			{ id: 'startup', title: nls.localize('general.startup', 'Startup and background'), description: nls.localize('general.startupHelp', 'Paired devices can connect while VniLink is running, with or without its window.'), settings: ['application.openAtLogin', 'application.runInBackground'] },
 		],
 	},

@@ -49,52 +49,96 @@ function engine(reply) {
 
 const log = { error() { } };
 
-test('hosting starts with the engine, follows status events and survives an engine that becomes available again', async () => {
-	let hosting = true;
-	let incoming = null;
-	const fake = engine(command => command.type === 'snapshot' ? { type: 'snapshot', snapshot: { hosting, incoming } } : { type: 'done' });
-	const service = new HostingMainService(fake, log);
+/** The accept setting as `ConfigurationMainService` presents it. */
+function configuration(accepting = true) {
+	const changes = new Emitter();
+	const values = { 'application.acceptConnections': accepting };
+	return {
+		changes,
+		onDidChangeConfiguration: changes.event,
+		getValue: key => values[key],
+		async updateValue(key, value) {
+			values[key] = value;
+			changes.fire({});
+		},
+	};
+}
+
+/** An engine whose hosting, sessions and devices the test changes. */
+function hostingEngine(state, fail = () => false) {
+	return engine(command => {
+		if (fail(command)) {
+			throw new Error('Engine busy');
+		}
+		switch (command.type) {
+			case 'startHosting': state.hosting = true; return { type: 'done' };
+			case 'stopHosting': state.hosting = false; state.sessions = []; return { type: 'done' };
+			case 'stopHostedPeer': state.sessions = state.sessions.filter(session => session.id !== command.sessionId); return { type: 'done' };
+			case 'hostedSessions': return { type: 'sessions', sessions: state.sessions };
+			case 'snapshot': return { type: 'snapshot', snapshot: { hosting: state.hosting, devices: state.devices } };
+		}
+		throw new Error(command.type);
+	});
+}
+
+const session = (id, peer, phase = 'Active') => ({ id, generation: '1', role: 'Host', phase, peer_id: peer });
+
+test('hosting follows the saved accept choice, names connected devices and disconnects one at a time', async () => {
+	const state = { hosting: false, sessions: [], devices: [{ endpoint_id: 'a', pet_name: 'Work laptop', hostname: 'host-a' }, { endpoint_id: 'b', pet_name: null, hostname: 'host-b' }] };
+	const fake = hostingEngine(state);
+	const settings = configuration();
+	const service = new HostingMainService(fake, settings, log);
 	const statuses = [];
 	service.onDidChangeStatus(status => statuses.push(status));
 	service.start();
 	service.start();
 	await settle();
-	assert.deepEqual(fake.calls, ['startHosting', 'snapshot']);
-	assert.deepEqual(service.status, { hosting: true, incoming: null });
-	fake.events.fire({ events: [{ type: 'peerRenamed', endpoint_id: 'peer', hostname: null }], resync: false });
+	assert.deepEqual(fake.calls.filter(type => type.endsWith('Hosting')), ['startHosting']);
+	assert.deepEqual(service.status, { available: true, accepting: true, hosting: true, sessions: [] });
+	state.sessions = [session('1', 'a'), session('2', 'b', 'Negotiating'), session('3', 'c', 'Stopping')];
+	fake.events.fire({ events: [{ type: 'sessionChanged', id: '1', generation: '1', role: 'Host', phase: 'Active', peer_id: 'a' }], resync: false });
 	await settle();
-	assert.equal(fake.calls.filter(type => type === 'snapshot').length, 1, 'Unrelated events must not re-read the snapshot');
-	incoming = { id: '1', generation: '1', role: 'Host', phase: 'Active', peer_id: 'peer' };
-	fake.events.fire({ events: [{ type: 'sessionChanged', id: '1', generation: '1', role: 'Host', phase: 'Active', peer_id: 'peer' }], resync: false });
+	assert.deepEqual(service.status.sessions, [{ id: '1', name: 'Work laptop', phase: 'Active' }, { id: '2', name: 'host-b', phase: 'Negotiating' }], 'Stopping sessions are already leaving');
+	const reads = fake.calls.filter(type => type === 'snapshot').length;
+	fake.events.fire({ events: [{ type: 'keyframeRequested', id: '1' }], resync: false });
 	await settle();
-	assert.equal(service.status.incoming.peer_id, 'peer');
-	hosting = false;
-	fake.events.fire({ events: [{ type: 'hostingChanged', hosting: false }], resync: false });
+	assert.equal(fake.calls.filter(type => type === 'snapshot').length, reads, 'Unrelated events must not re-read the engine');
+	await service.disconnect('1');
+	assert.deepEqual(service.status.sessions.map(peer => peer.id), ['2']);
+	assert.equal(state.hosting, true, 'Disconnecting one device must leave hosting on');
+	await service.setAccepting(false);
 	await settle();
-	assert.equal(service.status.hosting, false);
-	assert.equal(fake.calls.filter(type => type === 'startHosting').length, 1, 'A deliberate stop must not be undone');
+	assert.equal(state.hosting, false);
+	assert.deepEqual(service.status, { available: true, accepting: false, hosting: false, sessions: [] });
+	fake.events.fire({ events: [], resync: true });
+	await settle();
+	assert.equal(state.hosting, false, 'A resync must not undo a pause');
 	fake.availability.fire(false);
-	assert.deepEqual(service.status, { hosting: false, incoming: null });
-	hosting = true;
-	incoming = null;
+	assert.equal(service.status.available, false);
 	fake.availability.fire(true);
 	await settle();
-	assert.equal(fake.calls.filter(type => type === 'startHosting').length, 2);
-	assert.equal(service.status.hosting, true);
-	assert.equal(statuses.length, 5, 'Status fires only when it changes');
+	assert.equal(state.hosting, false, 'An engine that comes back stays paused');
+	await service.setAccepting(true);
+	await settle();
+	assert.equal(state.hosting, true);
+	assert(statuses.every((status, index) => index === 0 || JSON.stringify(status) !== JSON.stringify(statuses[index - 1])), 'Status fires only when it changes');
 	service.dispose();
 	assert.equal(fake.events.hasListeners(), false, 'Disposed service kept the engine event stream open');
+	assert.equal(settings.changes.hasListeners(), false, 'Disposed service kept listening to settings');
 });
 
-test('a failed start is retried on the next resync, not on every event', async () => {
+test('a paused computer starts without hosting, and a failed change is retried on the next resync', async () => {
+	const paused = { hosting: true, sessions: [], devices: [] };
+	const stopped = hostingEngine(paused);
+	const first = new HostingMainService(stopped, configuration(false), log);
+	first.start();
+	await settle();
+	assert.deepEqual(stopped.calls.filter(type => type.endsWith('Hosting')), ['stopHosting'], 'A saved pause must hold from the first start');
+	first.dispose();
 	let fail = true;
-	const fake = engine(command => {
-		if (command.type === 'startHosting' && fail) {
-			throw new Error('Engine busy');
-		}
-		return command.type === 'snapshot' ? { type: 'snapshot', snapshot: { hosting: !fail, incoming: null } } : { type: 'done' };
-	});
-	const service = new HostingMainService(fake, log);
+	const state = { hosting: false, sessions: [], devices: [] };
+	const fake = hostingEngine(state, command => fail && command.type === 'startHosting');
+	const service = new HostingMainService(fake, configuration(), log);
 	service.start();
 	await settle();
 	assert.equal(service.status.hosting, false);
@@ -131,10 +175,11 @@ test('start at login shows the operating system state and is restricted where th
 	await settings.refresh();
 	assert.deepEqual(settings.values, { 'application.openAtLogin': true });
 	assert.equal(settings.restricted.includes('application.openAtLogin'), false);
+	const before = changes;
 	await settings.update('application.openAtLogin', false);
 	assert.deepEqual(item.writes, [false]);
 	assert.deepEqual(settings.values, { 'application.openAtLogin': false });
-	assert.equal(changes, 2);
+	assert.equal(changes, before + 1);
 	await assert.rejects(settings.update('application.runInBackground', true));
 	settings.dispose();
 	const development = new SystemSettings(loginItem(false, true));

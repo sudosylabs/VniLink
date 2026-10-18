@@ -144,14 +144,18 @@ class SmokeSuite {
         if (event) { clearTimeout(timer); listener.dispose(); resolve(event); }
       });
     });
-    await engine.execute({ type: 'stopHosting' });
+    // Pausing sharing is a saved setting; main turns hosting off and the event reaches this window.
+    const configuration = window.driver.mainProcess.getChannel('configuration');
+    await configuration.call('updateValue', { key: 'application.acceptConnections', value: false });
     const firstBatch = await hostingEvent;
-    await engine.execute({ type: 'startHosting' });
+    await configuration.call('updateValue', { key: 'application.acceptConnections', value: true });
     let privateRejected = false;
     try { await engine.execute({ type: 'subscribeEvents' }); } catch { privateRejected = true; }
+    let hostingRejected = false;
+    try { await engine.execute({ type: 'stopHosting' }); } catch { hostingRejected = true; }
     let unknownChannelRejected = false;
     try { await window.driver.mainProcess.getChannel('encryption').call('encrypt', 'secret'); } catch { unknownChannelRejected = true; }
-    return { snapshot, invitation, invalidRejected, sessionError, afterError, unknownChannelRejected, firstBatch, privateRejected };
+    return { snapshot, invitation, invalidRejected, sessionError, afterError, unknownChannelRejected, firstBatch, privateRejected, hostingRejected };
   })()`);
 		if (
 			!record(engine) ||
@@ -169,7 +173,8 @@ class SmokeSuite {
 			engine.afterError.type !== 'snapshot' ||
 			engine.unknownChannelRejected !== true ||
 			!record(engine.firstBatch) || engine.firstBatch.type !== 'hostingChanged' ||
-			engine.privateRejected !== true
+			engine.privateRejected !== true ||
+			engine.hostingRejected !== true
 		) {
 			throw new Error('Native control bridge failed');
 		}

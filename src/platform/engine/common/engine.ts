@@ -28,6 +28,11 @@ export interface Device {
 	grants: Grants;
 }
 
+/** How a paired device is named for people: its pet name, else its hostname, else its endpoint. */
+export function deviceName(device: Pick<Device, 'pet_name' | 'hostname' | 'endpoint_id'>): string {
+	return device.pet_name ?? device.hostname ?? device.endpoint_id;
+}
+
 export interface Capabilities {
 	desktop_capture: boolean; keyboard: boolean; pointer: boolean; clipboard: boolean; file_transfer: boolean;
 	audio: boolean; monitors: number; h264_encode: boolean; h264_decode: boolean;

@@ -2,7 +2,7 @@ import { InstantiationType, registerSingleton } from '../../../platform/instanti
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { IEngineService, type EngineEventBatch } from '../../../platform/engine/common/engineService.js';
-import type { EngineCommand, EngineEvent, EngineReply, ControlRequestInfo } from '../../../platform/engine/common/engine.js';
+import { deviceName, type EngineCommand, type EngineEvent, type EngineReply, type ControlRequestInfo } from '../../../platform/engine/common/engine.js';
 
 /** Engine events after which the device list may have changed. */
 const deviceEvents: ReadonlySet<EngineEvent['type']> = new Set(['devicePaired', 'deviceAuthorized', 'deviceRevoked', 'deviceUnpaired', 'peerRenamed', 'sessionChanged']);
@@ -86,7 +86,7 @@ export class DeviceService extends Disposable implements IDeviceService {
 		this.setState(false);
 		const next = Object.freeze(reply.snapshot.devices.map(device => Object.freeze({
 			id: device.endpoint_id,
-			name: device.pet_name ?? device.hostname ?? device.endpoint_id,
+			name: deviceName(device),
 			os: device.os,
 			presence: device.presence,
 		})));

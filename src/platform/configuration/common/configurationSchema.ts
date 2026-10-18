@@ -118,6 +118,12 @@ registerSettings('user', {
 	id: 'application',
 	title: nls.localize('home.general', 'General'),
 	properties: {
+		'application.acceptConnections': {
+			type: 'boolean',
+			default: true,
+			title: nls.localize('application.accept', 'Accept connections from paired devices'),
+			description: nls.localize('application.acceptHelp', 'When off, paired devices cannot connect and anyone connected is disconnected, until you turn it back on.'),
+		},
 		'application.runInBackground': {
 			type: 'boolean',
 			default: true,
