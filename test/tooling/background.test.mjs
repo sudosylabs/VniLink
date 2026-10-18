@@ -169,7 +169,7 @@ function loginItem(supported, enabled = false) {
 
 test('start at login shows the operating system state and is restricted where this launch cannot register', async () => {
 	const item = loginItem(true, true);
-	const settings = new SystemSettings(item);
+	const settings = new SystemSettings(item, async () => true);
 	let changes = 0;
 	settings.onDidChange(() => changes++);
 	await settings.refresh();
@@ -182,12 +182,26 @@ test('start at login shows the operating system state and is restricted where th
 	assert.equal(changes, before + 1);
 	await assert.rejects(settings.update('application.runInBackground', true));
 	settings.dispose();
-	const development = new SystemSettings(loginItem(false, true));
+	const development = new SystemSettings(loginItem(false, true), async () => true);
 	await development.refresh();
 	assert.deepEqual(development.values, { 'application.openAtLogin': false }, 'An unsupported login item must not report a value it cannot change');
 	assert(development.restricted.includes('application.openAtLogin'));
 	await assert.rejects(development.update('application.openAtLogin', true));
 	development.dispose();
+});
+
+test('running in the background is offered only while a tray icon can show', async () => {
+	let shown = false;
+	const settings = new SystemSettings(loginItem(true), async () => shown);
+	await settings.refresh();
+	assert(settings.restricted.includes('application.runInBackground'));
+	let changes = 0;
+	settings.onDidChange(() => changes++);
+	shown = true;
+	await settings.refresh();
+	assert.equal(settings.restricted.includes('application.runInBackground'), false);
+	assert.equal(changes, 1, 'A tray host appearing must republish the settings');
+	settings.dispose();
 });
 
 test('the Linux autostart entry quotes the executable and is removed when disabled', async () => {

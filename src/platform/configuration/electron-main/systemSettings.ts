@@ -7,12 +7,10 @@ import { Disposable } from '../../../base/common/lifecycle.js';
 import { isLinux, isMacintosh } from '../../../base/common/platform.js';
 import { isBuilt } from '../../environment/electron-main/environment.js';
 import { product } from '../../product/common/product.js';
+import { traySupported } from '../../tray/electron-main/traySupport.js';
 
 /** Passed by login items on Windows and Linux; macOS reports a login launch itself. */
 export const HIDDEN_ARGUMENT = '--hidden';
-
-/** Whether this platform can keep VniLink running without a window. Windows and Linux need a tray icon to quit from. */
-export const canRunInBackground = isMacintosh;
 
 /** The operating system's record of whether VniLink starts when the user signs in. */
 export interface LoginItem {
@@ -99,8 +97,13 @@ export class SystemSettings extends Disposable {
 	private readonly changed = this._register(new Emitter<void>());
 	public readonly onDidChange = this.changed.event;
 	private openAtLogin = false;
+	/** A windowless VniLink is reopened and quit from its tray icon, so it runs in the background only where one shows. */
+	private backgroundSupported = isMacintosh;
 
-	constructor(private readonly loginItem: LoginItem = platformLoginItem()) {
+	constructor(
+		private readonly loginItem: LoginItem = platformLoginItem(),
+		private readonly probeBackground: () => Promise<boolean> = traySupported,
+	) {
 		super();
 	}
 
@@ -110,13 +113,15 @@ export class SystemSettings extends Disposable {
 
 	/** Settings this launch cannot change. `application.runInBackground` is stored in settings.json but listed here with the other application behavior. */
 	public get restricted(): readonly string[] {
-		return [...(canRunInBackground ? [] : ['application.runInBackground']), ...(this.loginItem.supported ? [] : ['application.openAtLogin'])];
+		return [...(this.backgroundSupported ? [] : ['application.runInBackground']), ...(this.loginItem.supported ? [] : ['application.openAtLogin'])];
 	}
 
+	/** Reads the login item and whether a tray icon can show, both of which can change outside VniLink. */
 	public async refresh(): Promise<void> {
-		const openAtLogin = this.loginItem.supported && await this.loginItem.read();
-		if (openAtLogin !== this.openAtLogin && !this._store.isDisposed) {
+		const [openAtLogin, backgroundSupported] = await Promise.all([this.loginItem.supported && this.loginItem.read(), this.probeBackground()]);
+		if ((openAtLogin !== this.openAtLogin || backgroundSupported !== this.backgroundSupported) && !this._store.isDisposed) {
 			this.openAtLogin = openAtLogin;
+			this.backgroundSupported = backgroundSupported;
 			this.changed.fire();
 		}
 	}

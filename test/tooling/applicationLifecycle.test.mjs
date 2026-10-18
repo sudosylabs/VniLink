@@ -26,9 +26,9 @@ const services = {
 		export const IEngineMainService = createDecorator('engineMainService');
 		export const shutdown = { stops: 0 }; let release; export const stopped = new Promise(resolve => { release = resolve; }); export function finish() { release(); }
 		export class EngineMainService { available = true; onDidChangeAvailability = Event.None; onDidChangeRestartRequired = Event.None; async start() { app.emit('activate'); } async refreshRestartRequired() { } async execute(command) { return command.type === 'nativeRuntime' ? { type: 'nativeRuntime', backends: [] } : { type: 'done' }; } stop() { shutdown.stops++; return stopped; } }`,
-	configurationMainService: `import { Event } from '${root}/src/base/common/event.js'; import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js';
+	configurationMainService: `import { Event } from '${root}/src/base/common/event.js'; import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js'; import { state } from 'electron';
 		export const IConfigurationMainService = createDecorator('configurationMainService');
-		export class ConfigurationMainService { getValue() { return 'system'; } onDidChangeConfiguration = Event.None; async initialize() { } async flush() { } async restoreEngineDefaults() { } }`,
+		export class ConfigurationMainService { get snapshot() { return { restricted: state.background ? [] : ['application.runInBackground'] }; } getValue() { return 'system'; } onDidChangeConfiguration = Event.None; async initialize() { } async flush() { } async restoreEngineDefaults() { } }`,
 	windowsMainService: `import { Event } from '${root}/src/base/common/event.js'; import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js'; import { EventEmitter } from 'node:events'; import { state } from 'electron';
 		export const IWindowsMainService = createDecorator('windowsMainService');
 		export class WindowsMainService { onDidOpenWindow = Event.None; window; focusMainWindow() { state.focused = (state.focused ?? 0) + 1; } getMainWindow() { return state.windowOpen ? this.window : undefined; } async openMainWindow() { state.windows++; state.windowOpen = true; this.window = Object.assign(new EventEmitter(), { webContents: new EventEmitter() }); return this.window; } }`,
@@ -36,8 +36,12 @@ const services = {
 		export const IHostingMainService = createDecorator('hostingMainService');
 		export class HostingMainService { start() { state.hosting = (state.hosting ?? 0) + 1; } }`,
 	systemSettings: `import { state } from 'electron';
-		export let canRunInBackground = false; export function setRunInBackground(value) { canRunInBackground = value; }
+		export function setRunInBackground(value) { state.background = value; }
 		export function launchedAtLogin() { return state.atLogin === true; }`,
+	trayMainService: `import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js'; import { state } from 'electron';
+		export const ITrayMainService = createDecorator('trayMainService');
+		export class TrayMainService { onDidRequestWindow = listener => { state.requestWindow = listener; return { dispose() { } }; }; create() { state.trays = (state.trays ?? 0) + 1; } }`,
+	traySupport: `import { state } from 'electron'; export async function traySupported() { return state.traySupported !== false; }`,
 	nativeHostMainService: `import { Event } from '${root}/src/base/common/event.js'; import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js';
 		export const INativeHostMainService = createDecorator('nativeHostMainService');
 		export class NativeHostMainService { onDidChangeWindowState = Event.None; }`,
@@ -59,7 +63,7 @@ async function load(entry, exports, extra = '') {
 		stdin: { contents: `export { ${exports} } from '${entry}'; export { app, state } from 'electron'; ${extra}`, loader: 'ts', resolveDir: root }, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json', plugins: [{
 			name: 'main-process-fixtures', setup(builder) {
 				builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }));
-				builder.onResolve({ filter: /\/(engineMainService|configurationMainService|windowsMainService|nativeHostMainService|permissionsMainService|recordingMainService|encryptionMainService|ipc\.electron|ipcMain|development|menubar|hostingMainService|systemSettings)\.js$/ }, ({ path }) => entry.endsWith('lifecycleMainService.ts') ? undefined : ({ path: path.split('/').at(-1).replace(/\.js$/, ''), namespace: 'fixture' }));
+				builder.onResolve({ filter: /\/(engineMainService|configurationMainService|windowsMainService|nativeHostMainService|permissionsMainService|recordingMainService|encryptionMainService|ipc\.electron|ipcMain|development|menubar|hostingMainService|systemSettings|trayMainService|traySupport)\.js$/ }, ({ path }) => entry.endsWith('lifecycleMainService.ts') ? undefined : ({ path: path.split('/').at(-1).replace(/\.js$/, ''), namespace: 'fixture' }));
 				builder.onLoad({ filter: /.*/, namespace: 'fixture' }, ({ path }) => ({ contents: path === 'electron' ? electron : services[path], loader: 'js', resolveDir: root }));
 			}
 		}]
@@ -129,6 +133,11 @@ test('relaunching or activating without a window opens exactly one window', asyn
 	app.emit('activate');
 	await new Promise(resolve => setImmediate(resolve));
 	assert.equal(state.windows, 2, 'Relaunch and activation together opened more than one window');
+	assert.equal(state.trays, 1, 'The tray was not created where it is supported');
+	state.windowOpen = false;
+	state.requestWindow();
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(state.windows, 3, "The tray's Open did not reopen the window");
 	application.dispose();
 });
 

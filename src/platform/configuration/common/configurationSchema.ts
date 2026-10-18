@@ -129,7 +129,7 @@ registerSettings('user', {
 			default: true,
 			title: nls.localize('application.background', 'Keep running when the window is closed'),
 			description: nls.localize('application.backgroundHelp', 'Paired devices can still connect to this computer.'),
-			restrictedReason: nls.localize('application.backgroundUnavailable', 'Available once VniLink shows an icon in the system tray.'),
+			restrictedReason: nls.localize('application.backgroundUnavailable', 'Needs a panel that shows tray icons. On GNOME, install the AppIndicator extension.'),
 		},
 	},
 });

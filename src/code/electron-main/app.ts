@@ -13,13 +13,15 @@ import { Server as ElectronIPCServer } from '../../base/parts/ipc/electron-main/
 import { validatedIpcMain } from '../../base/parts/ipc/electron-main/ipcMain.js';
 import { ConfigurationChannel } from '../../platform/configuration/electron-main/configurationChannel.js';
 import { ConfigurationMainService, IConfigurationMainService } from '../../platform/configuration/electron-main/configurationMainService.js';
-import { canRunInBackground, launchedAtLogin } from '../../platform/configuration/electron-main/systemSettings.js';
+import { launchedAtLogin } from '../../platform/configuration/electron-main/systemSettings.js';
 import { IEncryptionMainService } from '../../platform/encryption/common/encryption.js';
 import { EncryptionMainService } from '../../platform/encryption/electron-main/encryptionMainService.js';
 import { ENGINE_CHANNEL_NAME } from '../../platform/engine/common/engineService.js';
 import { EngineChannel } from '../../platform/engine/electron-main/engineChannel.js';
 import { EngineMainService, IEngineMainService } from '../../platform/engine/electron-main/engineMainService.js';
 import { HostingMainService, IHostingMainService } from '../../platform/hosting/electron-main/hostingMainService.js';
+import { ITrayMainService, TrayMainService } from '../../platform/tray/electron-main/trayMainService.js';
+import { traySupported } from '../../platform/tray/electron-main/traySupport.js';
 import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.js';
 import type { ServicesAccessor } from '../../platform/instantiation/common/instantiation.js';
 import { InstantiationService } from '../../platform/instantiation/common/instantiationService.js';
@@ -78,6 +80,7 @@ export class VniLinkApplication extends Disposable {
 			[INativeHostMainService, new SyncDescriptor(NativeHostMainService)],
 			[IEngineMainService, new SyncDescriptor(EngineMainService)],
 			[IHostingMainService, new SyncDescriptor(HostingMainService)],
+			[ITrayMainService, new SyncDescriptor(TrayMainService)],
 			[IPermissionsMainService, new SyncDescriptor(PermissionsMainService)],
 			[IConfigurationMainService, new SyncDescriptor(ConfigurationMainService, [join(app.getPath('userData'), 'settings.json')])],
 			[IRecordingMainService, new SyncDescriptor(RecordingMainService)],
@@ -119,6 +122,12 @@ export class VniLinkApplication extends Disposable {
 			this.instantiationService.invokeFunction(accessor => {
 				accessor.get(IHostingMainService).start();
 			});
+			if (await traySupported()) {
+				this.checkRunning();
+				this.instantiationService.invokeFunction(accessor => {
+					this.createTray(accessor);
+				});
+			}
 			if (!this.options.temporaryEngine && this.runsInBackground() && launchedAtLogin()) {
 				// Started by the login item: accept paired devices without a window until the user opens one.
 				this.restored = true;
@@ -172,10 +181,20 @@ export class VniLinkApplication extends Disposable {
 		}));
 	}
 
-	/** Whether closing the window leaves the application running; see `application.runInBackground`. */
+	/** Whether closing the window leaves the application running; see `application.runInBackground`, restricted where no tray icon shows. */
 	private runsInBackground(): boolean {
 		const configuration = this.instantiationService.invokeFunction(accessor => accessor.get(IConfigurationMainService));
-		return canRunInBackground && configuration.getValue('application.runInBackground') !== false;
+		return !configuration.snapshot.restricted.includes('application.runInBackground') && configuration.getValue('application.runInBackground') !== false;
+	}
+
+	private createTray(accessor: ServicesAccessor): void {
+		const tray = accessor.get(ITrayMainService);
+		const windows = accessor.get(IWindowsMainService);
+		const lifecycle = accessor.get(ILifecycleMainService);
+		this._register(tray.onDidRequestWindow(() => {
+			this.showWindow(windows, lifecycle);
+		}));
+		tray.create();
 	}
 
 	/** Focuses the window, or opens it when the application runs without one. */
