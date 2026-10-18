@@ -214,9 +214,17 @@ impl WindowsCapture {
         }
         // ReleaseFrame still runs if shape extraction fails. Cache only the
         // desktop base; each presentation composites the newest pointer once.
-        let frame = self
-            .update_pointer(&info)
-            .and_then(|_| self.copy_resource(resource.as_ref(), timestamp_us));
+        // A frame with no LastPresentTime only moved the pointer: its surface
+        // is not a desktop image (the first one after DuplicateOutput is
+        // black), so it updates the pointer and keeps the cached picture.
+        let presented = info.LastPresentTime != 0;
+        let frame = self.update_pointer(&info).and_then(|_| {
+            if presented {
+                self.copy_resource(resource.as_ref(), timestamp_us)
+            } else {
+                Ok(None)
+            }
+        });
         if let Err(err) = self.duplication.ReleaseFrame() {
             return Err(map_error(err));
         }
