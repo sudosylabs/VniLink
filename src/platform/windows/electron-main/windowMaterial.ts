@@ -7,12 +7,14 @@ import { resolveWindowMaterial, windowPlatform, type WindowBackgroundMaterial } 
 import { createLiquidGlass, type GlassOptions, type LiquidGlassOwner } from './liquidGlass.js';
 
 /**
- * Light text needs a light surface: glass takes on whatever is behind the window,
- * so in the light theme it carries the same near-white tint vibrancy used
- * (`--native-chrome`), keeping labels readable over a dark desktop.
+ * Glass sits on the system's window-coloured backing rather than the desktop,
+ * so the chrome looks the same over every wallpaper, and carries the theme's
+ * sidebar colour (`--sidebar` in colors.css) so it matches the pages beside it.
+ * Over the desktop itself, glass took on the wallpaper's colour, and no tint
+ * could lighten it over a dark one.
  */
 function glassOptions(): GlassOptions {
-	return nativeTheme.shouldUseDarkColors ? {} : { tintColor: '#F8F8FA94' };
+	return { opaque: true, tintColor: nativeTheme.shouldUseDarkColors ? '#26272BB8' : '#F1F1F3CC' };
 }
 
 type MaterialWindow = Pick<BrowserWindow, 'isDestroyed' | 'setVibrancy' | 'setBackgroundMaterial' | 'setBackgroundColor' | 'getNativeWindowHandle'>;

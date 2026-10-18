@@ -94,5 +94,5 @@
 }
 
 .view-action:hover:not(:disabled) {
-	background: var(--line);
+	background: var(--chrome-hover);
 }

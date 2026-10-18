@@ -46,7 +46,7 @@ button:focus-visible {
 	display: flex;
 	flex-direction: column;
 	background: var(--sidebar);
-	border-right: 1px solid var(--line);
+	border-right: 1px solid var(--chrome-line);
 	padding: 16px 12px;
 	overflow-y: auto;
 }
@@ -59,7 +59,7 @@ button:focus-visible {
 	margin: 0 10px 8px;
 	font-size: 11px;
 	font-weight: 600;
-	color: var(--muted);
+	color: var(--chrome-muted);
 }
 
 .nav-item {
@@ -71,7 +71,7 @@ button:focus-visible {
 	border-radius: 5px;
 	background: transparent;
 	font-weight: 400;
-	color: var(--muted);
+	color: var(--chrome-muted);
 }
 
 .nav-item + .nav-item {
@@ -79,12 +79,12 @@ button:focus-visible {
 }
 
 .nav-item:hover {
-	background: color-mix(in srgb, var(--text) 5%, transparent);
+	background: var(--chrome-hover);
 	color: var(--text);
 }
 
 .nav-item.selected {
-	background: var(--selected);
+	background: var(--chrome-selected);
 	color: var(--text);
 	font-weight: 500;
 }
@@ -220,7 +220,16 @@ h2 {
 	padding-bottom: 0;
 }
 
-/* Reveal the OS backdrop only through chrome; view content stays opaque. */
+/* Reveal the OS backdrop only through chrome; view content stays opaque.
+ * Chrome lines and states are tints of the text colour rather than opaque
+ * greys, so they take on the backdrop the way the system's own separators
+ * and sidebar selections do. */
+:root:is([data-window-material='vibrancy'], [data-window-material='mica'], [data-window-material='glass']) {
+	--chrome-muted: color-mix(in srgb, var(--text) 62%, transparent);
+	--chrome-line: color-mix(in srgb, var(--text) 14%, transparent);
+	--chrome-selected: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
 :root[data-window-material='vibrancy'] {
 	--sidebar: var(--native-chrome);
 	--chrome: var(--native-chrome);
