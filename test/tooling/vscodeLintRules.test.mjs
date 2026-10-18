@@ -4,7 +4,12 @@ import { fileURLToPath } from 'node:url';
 import { ESLint } from 'eslint';
 
 // Proves the ported VS Code rules are wired into the repository configuration, not just present on disk.
-const eslint = new ESLint({ cwd: fileURLToPath(new URL('../../', import.meta.url)) });
+// The sample is linted under a real file's path. With CI=true typescript-eslint infers a single run and
+// builds its program from the file on disk instead of this text, so that inference is turned off here.
+const eslint = new ESLint({
+	cwd: fileURLToPath(new URL('../../', import.meta.url)),
+	overrideConfig: [{ files: ['**/*.ts'], languageOptions: { parserOptions: { disallowAutomaticSingleRunInference: true } } }],
+});
 
 async function rulesFor(code) {
 	const [result] = await eslint.lintText(code, { filePath: 'src/workbench/workbench.ts' });
