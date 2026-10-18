@@ -1480,9 +1480,10 @@ fn anchored_import_refuses_swapped_parent() {
 
 #[test]
 fn sender_store_retention_matches_platform_import_mode() {
-    // Test sender references separately from legitimate receiver cache data
-    // and database allocation. The pinned FsStore keeps external data out of
-    // its hash.data payload files when TryReference and no inlining are used.
+    // Senders reference their sources (TryReference) on every platform, so a
+    // sender's store holds the entry's outboard but no payload copy. Checked
+    // while each serve is parked: a terminal job releases its blobs to garbage
+    // collection, after which a copy would be gone too and prove nothing.
     let (host, controller, host_scratch, controller_scratch) = setup("no-copy");
     let host_files =
         FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
@@ -1491,27 +1492,35 @@ fn sender_store_retention_matches_platform_import_mode() {
         &controller_scratch.join("root"),
     );
     // Distinct 2 MiB files (incompressible xorshift, different seeds).
-    std::fs::write(
-        controller_scratch.join("root/up.bin"),
-        payload(2 * 1024 * 1024, 101),
-    )
-    .unwrap();
-    std::fs::write(
-        host_scratch.join("root/down.bin"),
-        payload(2 * 1024 * 1024, 202),
-    )
-    .unwrap();
-
-    let controller_blobs = controller_scratch.join("blobs");
-    let host_blobs = host_scratch.join("blobs");
-    let up_hash = iroh_blobs::Hash::new(payload(2 * 1024 * 1024, 101));
-    let down_hash = iroh_blobs::Hash::new(payload(2 * 1024 * 1024, 202));
-    let payload_path = |root: &std::path::Path, hash: iroh_blobs::Hash| {
-        root.join("data").join(format!("{}.data", hash.to_hex()))
+    let up_bytes = payload(2 * 1024 * 1024, 101);
+    let down_bytes = payload(2 * 1024 * 1024, 202);
+    std::fs::write(controller_scratch.join("root/up.bin"), &up_bytes).unwrap();
+    std::fs::write(host_scratch.join("root/down.bin"), &down_bytes).unwrap();
+    // (the store has the entry, a payload copy exists) for one hash. A
+    // referenced entry keeps only metadata and its outboard, inline in
+    // blobs.db; an owned copy would be data/<hash>.data, as receivers keep.
+    let store_files = |core: &Core, blobs: &Path, bytes: &[u8]| {
+        let hash = iroh_blobs::Hash::new(bytes);
+        (
+            core.blob_has(hash).unwrap(),
+            blobs
+                .join("data")
+                .join(format!("{}.data", hash.to_hex()))
+                .exists(),
+        )
+    };
+    // Observed while the serve is parked; the serve is released before any
+    // assertion, so a failure reports instead of leaving the transfer parked.
+    let assert_referenced = |(entry, copy): (bool, bool), leg: &str| {
+        assert!(entry, "{leg} sender has no store entry for its source");
+        assert!(
+            !copy,
+            "{leg} sender must reference its source, not keep a payload copy"
+        );
     };
 
     controller.connect(&host.endpoint_id()).unwrap();
-    // Controller-upload (controller sender, host receiver).
+    // Controller upload: the controller sends, the host receives.
     let up = controller
         .job_submit_upload(
             &host.endpoint_id(),
@@ -1522,10 +1531,21 @@ fn sender_store_retention_matches_platform_import_mode() {
         )
         .unwrap();
     let up_rx = receiver_id(&host, up);
-    let (up_sender, up_receiver) = drive_to_end(&controller, up, &host, up_rx);
+    let probe = arm_serve_probe(*blake3::hash(&up_bytes).as_bytes());
+    let (up_files, (up_sender, up_receiver)) = std::thread::scope(|scope| {
+        let drive = scope.spawn(|| drive_to_end(&controller, up, &host, up_rx));
+        let parked = probe.parked();
+        let files = store_files(&controller, &controller_scratch.join("blobs"), &up_bytes);
+        probe.release();
+        assert!(parked, "the upload serve never parked");
+        (files, drive.join().unwrap())
+    });
+    drop(probe);
+    assert_referenced(up_files, "upload");
     assert_eq!(up_sender.state, JobState::Complete);
     assert_eq!(up_receiver.state, JobState::Complete);
-    // Host-download (host sender, controller receiver) with distinct file.
+
+    // Host download: the host sends, the controller receives.
     controller
         .create_dir(
             controller_files.root,
@@ -1550,25 +1570,29 @@ fn sender_store_retention_matches_platform_import_mode() {
         .find(|j| j.id != up_rx && j.sender)
         .expect("host download sender")
         .id;
-    let (down_receiver, down_sender) = drive_to_end(&controller, down, &host, host_down);
+    let probe = arm_serve_probe(*blake3::hash(&down_bytes).as_bytes());
+    let (down_files, (down_receiver, down_sender)) = std::thread::scope(|scope| {
+        let drive = scope.spawn(|| drive_to_end(&controller, down, &host, host_down));
+        let parked = probe.parked();
+        let files = store_files(&host, &host_scratch.join("blobs"), &down_bytes);
+        probe.release();
+        assert!(parked, "the download serve never parked");
+        (files, drive.join().unwrap())
+    });
+    drop(probe);
+    assert_referenced(down_files, "download");
     assert_eq!(down_receiver.state, JobState::Complete);
     assert_eq!(down_sender.state, JobState::Complete);
 
-    // Every platform references sender sources (TryReference) and serves the
-    // held, verified object, so no sender keeps a payload copy.
-    assert!(
-        !payload_path(&controller_blobs, up_hash).exists(),
-        "upload sender must reference its source, not retain a payload copy"
+    // Each receiver published the other peer's bytes, exactly once.
+    assert_eq!(
+        files_with_bytes(&host_scratch.join("root"), &up_bytes).len(),
+        1
     );
-    assert!(
-        !payload_path(&host_blobs, down_hash).exists(),
-        "download sender must reference its source, not retain a payload copy"
+    assert_eq!(
+        files_with_bytes(&controller_scratch.join("root"), &down_bytes).len(),
+        1
     );
-    // Each peer received the other, distinct hash. Verified receiver payloads
-    // are allowed for publication/resume; they must not be mistaken for copies
-    // of that peer's own outgoing source.
-    assert!(payload_path(&host_blobs, up_hash).exists());
-    assert!(payload_path(&controller_blobs, down_hash).exists());
 }
 
 /// Every file under `dir` whose bytes equal `bytes`.
@@ -1658,20 +1682,10 @@ fn windows_serve_holds_its_source_against_replacement() {
         .unwrap();
     let rx = receiver_id(&host, job);
 
-    *REBIND_TARGET.lock().unwrap() = Some(hash);
-    *REBIND_HIT.0.lock().unwrap() = false;
-    *REBIND_RELEASE.0.lock().unwrap() = false;
-    Core::set_serve_source_probe(Some(rebind_serve_probe));
-    let _guard = RebindProbeGuard;
+    let probe = arm_serve_probe(hash);
     std::thread::scope(|scope| {
         let poll = scope.spawn(|| drive_to_end(&controller, job, &host, rx));
-        let guard = REBIND_HIT.0.lock().unwrap();
-        let (guard, _) = REBIND_HIT
-            .1
-            .wait_timeout_while(guard, Duration::from_secs(30), |hit| !*hit)
-            .unwrap();
-        assert!(*guard, "the serve never parked on its held source");
-        drop(guard);
+        probe.wait_until_parked();
         assert!(
             std::fs::rename(&source, folder.join("moved.bin")).is_err(),
             "the held source was renamed"
@@ -1687,13 +1701,12 @@ fn windows_serve_holds_its_source_against_replacement() {
                 .is_err(),
             "the held source was opened for writing"
         );
-        *REBIND_RELEASE.0.lock().unwrap() = true;
-        REBIND_RELEASE.1.notify_one();
+        probe.release();
         let (sender, receiver) = poll.join().unwrap();
         assert_eq!(sender.state, JobState::Complete);
         assert_eq!(receiver.state, JobState::Complete);
     });
-    drop(_guard);
+    drop(probe);
     assert_eq!(
         files_with_bytes(&host_scratch.join("root"), &original).len(),
         1
@@ -3735,10 +3748,52 @@ fn rebind_serve_probe(hash: [u8; 32]) {
         .unwrap();
 }
 
-/// Disarms the serve probe even when the test panics. Payload seeds
-/// below are unique to this test, so a leaked arm could never match
-/// another test's content hash anyway.
-struct RebindProbeGuard;
+/// The serve probe is process-wide; tests that park a serve take turns.
+static SERVE_PROBE_OWNER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Parks serves of one hash until released, and disarms the probe even when
+/// the test panics. Payload seeds are unique per test, so a leaked arm could
+/// never match another test's content hash anyway.
+struct RebindProbeGuard {
+    _owner: std::sync::MutexGuard<'static, ()>,
+}
+
+fn arm_serve_probe(hash: [u8; 32]) -> RebindProbeGuard {
+    let owner = SERVE_PROBE_OWNER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *REBIND_TARGET.lock().unwrap() = Some(hash);
+    *REBIND_HIT.0.lock().unwrap() = false;
+    *REBIND_RELEASE.0.lock().unwrap() = false;
+    Core::set_serve_source_probe(Some(rebind_serve_probe));
+    RebindProbeGuard { _owner: owner }
+}
+
+impl RebindProbeGuard {
+    /// Waits up to 30 s for the armed hash's serve to open its verified
+    /// source, and reports whether it did. Callers release before asserting.
+    fn parked(&self) -> bool {
+        let guard = REBIND_HIT.0.lock().unwrap();
+        let (guard, _) = REBIND_HIT
+            .1
+            .wait_timeout_while(guard, Duration::from_secs(30), |hit| !*hit)
+            .unwrap();
+        *guard
+    }
+
+    /// Waits for the armed serve to park, releasing it if it never does.
+    fn wait_until_parked(&self) {
+        if !self.parked() {
+            self.release();
+            panic!("the armed serve never parked");
+        }
+    }
+
+    fn release(&self) {
+        *REBIND_RELEASE.0.lock().unwrap() = true;
+        REBIND_RELEASE.1.notify_all();
+    }
+}
 
 impl Drop for RebindProbeGuard {
     fn drop(&mut self) {
@@ -3777,28 +3832,17 @@ fn open_handle_completes_across_source_rebind() {
     std::fs::write(rebound.join("one.txt"), &one).unwrap();
     std::fs::write(rebound.join("two.txt"), payload(512, 1609)).unwrap();
 
-    *REBIND_TARGET.lock().unwrap() = Some(two_hash);
-    *REBIND_HIT.0.lock().unwrap() = false;
-    *REBIND_RELEASE.0.lock().unwrap() = false;
-    Core::set_serve_source_probe(Some(rebind_serve_probe));
-    let _guard = RebindProbeGuard;
+    let probe = arm_serve_probe(two_hash);
     std::thread::scope(|scope| {
         let poll = scope.spawn(|| host.job_poll(rx));
         // Wait for file-2's serve to open its handle, then rebind under it.
-        let guard = REBIND_HIT.0.lock().unwrap();
-        let (guard, _) = REBIND_HIT
-            .1
-            .wait_timeout_while(guard, Duration::from_secs(30), |hit| !*hit)
-            .unwrap();
-        assert!(*guard, "file-2 serve never parked");
-        drop(guard);
+        probe.wait_until_parked();
         controller.set_file_roots(vec![rebound]).unwrap();
-        *REBIND_RELEASE.0.lock().unwrap() = true;
-        REBIND_RELEASE.1.notify_one();
+        probe.release();
         let snap = poll.join().unwrap().unwrap();
         assert_eq!(snap.files_done, 2);
     });
-    drop(_guard);
+    drop(probe);
 
     // The in-flight handle served the original bytes, not the decoy.
     let arrived = host_scratch.join("root/arrived");

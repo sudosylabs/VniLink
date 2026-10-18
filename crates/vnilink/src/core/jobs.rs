@@ -2545,7 +2545,10 @@ pub(super) async fn verify_serve_source(
                 record.local_pin = pin.clone();
             }
         }
-        if let Some(probe) = *lock(&SERVE_SOURCE_PROBE) {
+        // Copy the probe out: a parked probe must not hold the lock that
+        // disarming it takes.
+        let probe = *lock(&SERVE_SOURCE_PROBE);
+        if let Some(probe) = probe {
             probe(*hash);
         }
         let duplicate = fd.try_clone().map_err(|_| Error::TransferDenied)?;
@@ -2581,7 +2584,10 @@ pub(super) async fn verify_serve_source(
                 record.local_pin = pin.clone();
             }
         }
-        if let Some(probe) = *lock(&SERVE_SOURCE_PROBE) {
+        // Copy the probe out: a parked probe must not hold the lock that
+        // disarming it takes.
+        let probe = *lock(&SERVE_SOURCE_PROBE);
+        if let Some(probe) = probe {
             probe(*hash);
         }
         let duplicate = source
