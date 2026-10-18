@@ -19,8 +19,14 @@ export interface ISettingsSectionDescriptor {
 	/** Renders the settings or widget directly in the page, without a section of its own. */
 	readonly bare?: boolean;
 	readonly className?: string;
-	/** Offers a Refresh button beside the title that reads the engine's settings again. */
-	readonly refreshable?: boolean;
+}
+
+/** When a page reads its settings and widgets again, for changes made outside this window. */
+export const enum SettingsRefresh {
+	/** When the page is shown or the window gains focus. */
+	Focus = 'focus',
+	/** Also every few seconds, for operating-system state with no change event. */
+	Interval = 'interval',
 }
 
 export const enum SettingsPageStyle {
@@ -50,8 +56,8 @@ export interface ISettingsPageDescriptor {
 	readonly statusClass?: string;
 	/** A closing remark about when the page's settings take effect. */
 	readonly note?: string;
-	/** Reads settings and widgets again while the page is visible, for changes made outside this window. */
-	readonly poll?: boolean;
+	/** Reads settings and widgets again while the page is visible; omitted, only once when created. */
+	readonly refresh?: SettingsRefresh;
 	readonly header?: readonly ISettingsSectionDescriptor[];
 	readonly sections: readonly ISettingsSectionDescriptor[];
 	/** Shown after the status line. */

@@ -121,8 +121,8 @@ const terminal: PolicyBinding = {
 	messages: {
 		unavailable: engineUnavailable,
 		readFailed: nls.localize('terminal.loadFailed', 'Could not load terminal settings. Refresh to try again.'),
-		writeFailed: nls.localize('terminal.saveFailed', 'Could not confirm the change. Close hosted terminals, then refresh before editing again.'),
-		readbackFailed: nls.localize('terminal.saveFailed', 'Could not confirm the change. Close hosted terminals, then refresh before editing again.'),
+		writeFailed: nls.localize('terminal.saveFailed', 'Could not confirm the change. Close hosted terminals and try again.'),
+		readbackFailed: nls.localize('terminal.saveFailed', 'Could not confirm the change. Close hosted terminals and try again.'),
 	},
 };
 

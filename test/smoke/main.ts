@@ -274,6 +274,7 @@ class SmokeSuite {
       })`);
 						assert(record(layout) && layout.overflow === false, `${category} overflowed at ${String(width)}px`);
 						assert.equal(layout.submit, false, `${category} still saves through a button`);
+						assert.equal(layout.refresh, false, `${category} offers a Refresh button`);
 						if (['input', 'media', 'recording', 'power'].includes(category)) {
 							assert(typeof layout.note === 'string' && layout.note.length > 0, `${category} lost its note on when changes apply`);
 						}
@@ -281,7 +282,6 @@ class SmokeSuite {
 							assert.equal(layout.container, '0px');
 						}
 						if (category === 'access') {
-							assert.equal(layout.refresh, false);
 							assert.equal(layout.device, false);
 						}
 						if (category === 'desktop') {

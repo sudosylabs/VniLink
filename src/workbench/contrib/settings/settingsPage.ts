@@ -1,5 +1,5 @@
 import * as nls from '../../../nls.js';
-import { $, addDisposableListener, append, EventType } from '../../../base/browser/dom.js';
+import { $, append } from '../../../base/browser/dom.js';
 import { Delayer } from '../../../base/common/async.js';
 import { isCancellationError } from '../../../base/common/errors.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
@@ -42,7 +42,6 @@ export class SettingsPage extends Disposable implements IHomePage {
 	private readonly rows: SettingRow[] = [];
 	private readonly widgets: ISettingsWidget[] = [];
 	private readonly statuses: HTMLElement[] = [];
-	private readonly refreshButtons: HTMLButtonElement[] = [];
 	private refreshing = false;
 
 	constructor(
@@ -106,20 +105,7 @@ export class SettingsPage extends Disposable implements IHomePage {
 
 	private renderTitle(container: HTMLElement, section: ISettingsSectionDescriptor): void {
 		if (section.title !== undefined) {
-			const heading = $('h2');
-			heading.textContent = section.title;
-			if (section.refreshable) {
-				const header = append(container, $('.settings-section-header'));
-				header.append(heading);
-				const refresh = append(header, $<HTMLButtonElement>('button.settings-text-button', { type: 'button' }));
-				refresh.textContent = nls.localize('terminal.refresh', 'Refresh');
-				this.refreshButtons.push(refresh);
-				this._register(addDisposableListener(refresh, EventType.CLICK, () => {
-					void this.refresh();
-				}));
-			} else {
-				container.append(heading);
-			}
+			append(container, $('h2')).textContent = section.title;
 		}
 		if (section.description) {
 			append(container, $(`p.${this.descriptor.descriptionClass}.settings-section-description`)).textContent = section.description;
@@ -177,8 +163,8 @@ export class SettingsPage extends Disposable implements IHomePage {
 				this.update();
 			}
 		}));
-		if (this.descriptor.poll) {
-			this._register(new SettingsStateObserver(this.element, this.permissionService.onDidFocusWindow, () => this.refresh()));
+		if (this.descriptor.refresh) {
+			this._register(new SettingsStateObserver(this.element, this.descriptor.refresh, this.permissionService.onDidFocusWindow, () => this.refresh()));
 		}
 	}
 
@@ -262,9 +248,6 @@ export class SettingsPage extends Disposable implements IHomePage {
 			if (status.textContent !== message) {
 				status.textContent = message;
 			}
-		}
-		for (const button of this.refreshButtons) {
-			button.disabled = this.refreshing;
 		}
 		this.element.setAttribute('aria-busy', String(this.refreshing || this.rows.some(row => row.busy)));
 	}

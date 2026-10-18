@@ -1,47 +1,69 @@
 import { addDisposableListener } from '../../../base/browser/dom.js';
 import { RunOnceScheduler } from '../../../base/common/async.js';
 import type { Event } from '../../../base/common/event.js';
-import { Disposable } from '../../../base/common/lifecycle.js';
+import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
+import { SettingsRefresh } from './settingsLayout.js';
 
 /** How often a visible page reads state that has no change event. */
 const pollInterval = 2000;
 
 /**
- * Operating-system and engine state has no universal change event. Visible
- * pages query it serially and again when the window gains focus; hidden pages
+ * Operating-system and engine state has no universal change event. A visible
+ * page reads it again when it is shown and when the window gains focus; with
+ * `SettingsRefresh.Interval` it also reads it every few seconds. Hidden pages
  * do no background work.
  */
 export class SettingsStateObserver extends Disposable {
-	private readonly scheduler = this._register(new RunOnceScheduler(() => {
-		void this.check();
-	}, pollInterval));
+	private readonly scheduler: RunOnceScheduler | undefined;
 	private pending = false;
+	private shown = false;
 
-	constructor(private readonly element: HTMLElement, focused: Event<void>, private readonly refresh: () => Promise<void>) {
+	constructor(private readonly element: HTMLElement, mode: SettingsRefresh, focused: Event<void>, private readonly refresh: () => Promise<void>) {
 		super();
+		if (mode === SettingsRefresh.Interval) {
+			this.scheduler = this._register(new RunOnceScheduler(() => {
+				void this.check();
+			}, pollInterval));
+			this.scheduler.schedule();
+		}
 		this._register(focused(() => {
 			void this.check();
 		}));
 		this._register(addDisposableListener(element.ownerDocument, 'visibilitychange', () => {
 			void this.check();
 		}));
-		this.scheduler.schedule();
+		// Home attaches a page's element when it is shown; it then gains a size.
+		const resize = new ResizeObserver(() => {
+			const shown = this.isShown();
+			if (shown && !this.shown) {
+				void this.check();
+			}
+			this.shown = shown;
+		});
+		resize.observe(element);
+		this._register(toDisposable(() => {
+			resize.disconnect();
+		}));
+	}
+
+	private isShown(): boolean {
+		return this.element.isConnected && this.element.getClientRects().length > 0 && this.element.ownerDocument.visibilityState !== 'hidden';
 	}
 
 	private async check(): Promise<void> {
 		if (this.isDisposed() || this.pending) {
 			return;
 		}
-		this.scheduler.cancel();
+		this.scheduler?.cancel();
 		this.pending = true;
 		try {
-			if (this.element.isConnected && this.element.getClientRects().length > 0 && this.element.ownerDocument.visibilityState !== 'hidden') {
+			if (this.isShown()) {
 				await this.refresh();
 			}
 		} finally {
 			this.pending = false;
 			if (!this.isDisposed()) {
-				this.scheduler.schedule();
+				this.scheduler?.schedule();
 			}
 		}
 	}

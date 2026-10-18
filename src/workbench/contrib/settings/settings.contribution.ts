@@ -14,7 +14,7 @@ import { RecordingFolderControl } from './recordingFolderControl.js';
 import { RelaysSettingControl } from './relaysSettingControl.js';
 import { RunningRelaysWidget } from './runningRelaysWidget.js';
 import { Extensions as SettingExtensions, type ISettingControlsRegistry } from './settingRenderers.js';
-import { SettingsPageStyle, type ISettingsPageDescriptor } from './settingsLayout.js';
+import { SettingsPageStyle, SettingsRefresh, type ISettingsPageDescriptor } from './settingsLayout.js';
 import { SettingsPage } from './settingsPage.js';
 import { TerminalShellControl } from './terminalShellControl.js';
 import { ThemeSettingControl } from './themeSettingControl.js';
@@ -52,7 +52,7 @@ const pages: readonly ISettingsPageDescriptor[] = [
 		icon: Icons.settings,
 		...form,
 		// Start at login is read from the operating system, which can change it too.
-		poll: true,
+		refresh: SettingsRefresh.Interval,
 		sections: [
 			{ id: 'sharing', title: nls.localize('general.sharing', 'Sharing'), description: nls.localize('general.sharingHelp', 'Whether paired devices can reach this computer. The VniLink icon in the menu bar or system tray shows the same choice.'), settings: ['application.acceptConnections'] },
 			{ id: 'startup', title: nls.localize('general.startup', 'Startup and background'), description: nls.localize('general.startupHelp', 'Paired devices can connect while VniLink is running, with or without its window.'), settings: ['application.openAtLogin', 'application.runInBackground'] },
@@ -90,7 +90,7 @@ const pages: readonly ISettingsPageDescriptor[] = [
 		style: SettingsPageStyle.Access,
 		contentClass: 'access-content',
 		descriptionClass: 'access-description',
-		poll: true,
+		refresh: SettingsRefresh.Interval,
 		sections: [
 			{
 				id: 'sharing',
@@ -142,7 +142,7 @@ const pages: readonly ISettingsPageDescriptor[] = [
 		icon: Icons.terminal,
 		...form,
 		// The shell list is read again on return, so a shell installed meanwhile appears.
-		poll: true,
+		refresh: SettingsRefresh.Focus,
 		sections: [
 			{
 				id: 'shell',
@@ -154,7 +154,6 @@ const pages: readonly ISettingsPageDescriptor[] = [
 				id: 'sessions',
 				title: nls.localize('terminal.sessions', 'Session limits'),
 				description: nls.localize('terminal.limitsHelp', 'A device needs Terminal permission and an available shell backend. Changing these limits does not launch a shell. Close hosted terminals before changing them.'),
-				refreshable: true,
 				settings: ['terminal.maxSessions', 'terminal.maxSessionsPerDevice'],
 			},
 			{ id: 'reconnect', title: nls.localize('terminal.reconnect', 'Disconnect & reconnect'), settings: ['terminal.persistence', 'terminal.detachedTimeout'] },
@@ -168,7 +167,7 @@ const pages: readonly ISettingsPageDescriptor[] = [
 		icon: Icons.audio,
 		...form,
 		note: nls.localize('media.note', 'Devices still need Camera, Microphone or System audio permission to use these sources.'),
-		poll: true,
+		refresh: SettingsRefresh.Interval,
 		header: [{ id: 'permissions', bare: true, widget: new SyncDescriptor(MediaPermissionsWidget) }],
 		sections: [
 			{ id: 'cameras', title: nls.localize('media.cameras', 'Cameras'), description: nls.localize('media.camerasHelp', 'Choose the camera this computer shares with permitted devices.'), settings: ['media.camera'] },
@@ -201,7 +200,7 @@ const pages: readonly ISettingsPageDescriptor[] = [
 		icon: Icons.power,
 		...form,
 		note: nls.localize('power.note', 'Applies to this computer, including sessions already running.'),
-		poll: true,
+		refresh: SettingsRefresh.Interval,
 		sections: [
 			{ id: 'incoming', title: nls.localize('power.incoming', 'While sharing this computer'), description: nls.localize('power.incomingHelp', 'Sleep behavior while another device is connected. Set the idle timeout to 0 to keep desktop sessions open.'), settings: keepAwakeSettings('incoming') },
 			{ id: 'outgoing', title: nls.localize('power.outgoing', 'While controlling a remote computer'), description: nls.localize('power.outgoingHelp', 'Sleep behavior while you use another device. Set the idle timeout to 0 to keep desktop sessions open.'), settings: keepAwakeSettings('outgoing') },

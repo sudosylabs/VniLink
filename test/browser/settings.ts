@@ -72,7 +72,7 @@ async function verifyNumbers(): Promise<void> {
 	}
 }
 
-/** Engine settings are disabled with the reason while their source cannot be read. */
+/** Engine settings are disabled with the reason while their source cannot be read, and read again on focus. */
 async function verifyUnavailable(): Promise<void> {
 	const fixture = new SettingsFixture();
 	try {
@@ -82,12 +82,12 @@ async function verifyUnavailable(): Promise<void> {
 		const total = page.element.querySelector<HTMLInputElement>('[data-setting="terminal.maxSessions"]');
 		assert(total?.disabled, 'Unavailable terminal limit stayed editable');
 		assert(page.element.querySelector('.settings-status')?.textContent.includes('unavailable'), 'Unavailable reason missing');
-		const refresh = page.element.querySelector<HTMLButtonElement>('.settings-section-header .settings-text-button');
-		assert(refresh && !refresh.disabled && refresh.closest('fieldset') === null, 'Refresh is not offered beside the section title');
+		// No Refresh button: the page reads the engine again when the window gains focus.
+		assert(![...page.element.querySelectorAll('button')].some(button => button.textContent === 'Refresh'), 'A Refresh button is offered');
 		const reloads = fixture.configuration.reloads;
-		refresh.click();
+		fixture.permissions.focused.fire();
 		await settle();
-		assert(fixture.configuration.reloads === reloads + 1, 'Refresh did not read the engine settings again');
+		assert(fixture.configuration.reloads === reloads + 1, 'Gaining focus did not read the engine settings again');
 		fixture.configuration.setError('terminal', undefined);
 		assert(!current(total).disabled && page.element.querySelector('.settings-status')?.textContent === '', 'Readable terminal limit stayed disabled');
 	} finally {
@@ -149,6 +149,11 @@ async function verifyTerminalShell(): Promise<void> {
 		const options = (): string => Array.from(select.options).map(option => `${option.value}=${option.textContent}`).join();
 		assert(options() === '=Automatic (zsh),/bin/zsh=zsh,/bin/bash=bash', `Shell options are wrong: ${options()}`);
 		assert(current(select).value === '' && !current(select).disabled, 'Automatic is not the default choice');
+		// Reading the list again must not rebuild it: that closes an open list, which looked like blinking.
+		const first = select.options[0];
+		fixture.permissions.focused.fire();
+		await settle();
+		assert(select.options[0] === first, 'Rereading unchanged shells rebuilt the list');
 		assert(page.element.querySelector('section[data-section]')?.getAttribute('data-section') === 'shell', 'Shell is not the first section');
 		edit(select, '/bin/bash');
 		await settle();

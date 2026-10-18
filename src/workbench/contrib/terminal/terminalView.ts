@@ -44,7 +44,7 @@ function launchMessage(name: string, failure: TerminalLaunchFailure): string {
 
 /**
  * A tab with a shell on one paired computer. When the shell ends, its output
- * stays readable and Enter or Restart starts a new one in the same tab.
+ * stays readable and Enter starts a new one in the same tab.
  */
 export class TerminalView extends Disposable implements WorkbenchTab {
 	public static readonly PREFIX = 'terminal:';
@@ -93,13 +93,6 @@ export class TerminalView extends Disposable implements WorkbenchTab {
 			},
 		));
 		this.registerListeners();
-	}
-
-	/** Ends the current shell, if any, and starts a new one. */
-	public restart(): void {
-		if (this.attached && !this.host.hidden) {
-			this.start();
-		}
 	}
 
 	private registerListeners(): void {

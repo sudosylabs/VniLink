@@ -1,9 +1,3 @@
-.settings-section-header {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-}
-
 .settings-help {
 	display: block;
 	color: var(--muted);

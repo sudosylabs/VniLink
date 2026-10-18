@@ -21,6 +21,7 @@ export class TerminalShellControl extends Disposable implements ISettingControl 
 	private value: unknown = '';
 	private enabled = false;
 	private loading: Promise<void> | undefined;
+	private renderedOptions = '';
 
 	constructor(
 		private readonly key: string,
@@ -85,8 +86,15 @@ export class TerminalShellControl extends Disposable implements ISettingControl 
 		if (missing) {
 			options.push([saved, nls.localize('terminal.shellMissing', '{0} (not installed)', saved)]);
 		}
-		this.select.replaceChildren(...Array.from(createSelect(options).options));
-		this.select.value = saved;
+		// Rebuilding the options closes an open list, so only a different list is rebuilt.
+		const signature = JSON.stringify(options);
+		if (signature !== this.renderedOptions) {
+			this.renderedOptions = signature;
+			this.select.replaceChildren(...Array.from(createSelect(options).options));
+		}
+		if (this.select.value !== saved) {
+			this.select.value = saved;
+		}
 		this.message.textContent = missing
 			? nls.localize('terminal.shellMissingHelp', 'Not installed on this computer; paired computers get the automatic shell.')
 			: '';

@@ -194,21 +194,27 @@ export async function verifyTerminal(): Promise<boolean> {
 		xtermOf(view).input('\r', true);
 		await until(() => ptys.length === 2 && ptys[1].started === 1, 'Enter did not start a new shell');
 		for (const [exit, message] of [[{ code: 0 }, 'The shell on Studio Mac ended.'], [{ reason: 'failed' }, 'The shell on Studio Mac stopped unexpectedly.'], [{ reason: 'lost' }, 'Lost the connection to Studio Mac.']] as const) {
+			const ended = ptys.length;
 			ptys.at(-1)?.end(exit);
 			await until(() => screenText(view).includes(message), `Missing: ${message}`);
-			view.restart();
+			xtermOf(view).input('\r', true);
+			await until(() => ptys.length === ended + 1, `Enter did not start a new shell after: ${message}`);
 		}
+		// Each refusal is explained, and Enter tries again.
+		const running = ptys.at(-1);
+		running?.end({ code: 0 });
+		await until(() => running?.shutdowns === 1, 'The ended shell was not released');
 		for (const [code, message] of [
 			['disconnected', 'Studio Mac isn\'t connected.'], ['notAllowed', 'Studio Mac doesn\'t allow Terminal for this computer.'], ['unsupported', 'Studio Mac can\'t open a terminal.'],
 			['unavailable', 'Studio Mac can\'t open another shell right now.'], ['failed', 'The shell couldn\'t start on Studio Mac.'],
 		] as const) {
 			launchErrors.push({ code });
-			view.restart();
+			xtermOf(view).input('\r', true);
 			await until(() => screenText(view).includes(message), `Missing launch message: ${message}`);
 		}
 		const restarted = ptys.length;
-		view.restart();
-		await until(() => ptys.length === restarted + 1, 'Restart did not start a new shell');
+		xtermOf(view).input('\r', true);
+		await until(() => ptys.length === restarted + 1, 'Enter did not start a new shell after a refusal');
 		assert(ptys.slice(0, -1).every(pty => pty.shutdowns >= 1), 'A replaced shell was left running');
 
 		// The theme comes from the palette tokens and follows a theme change.
