@@ -130,7 +130,8 @@ export class SettingsPage extends Disposable implements IHomePage {
 		for (const key of section.settings ?? []) {
 			const control = this.createControl(key);
 			control.render(container);
-			const row: SettingRow = { key, control, status, delayer: this._register(new Delayer<void>(continuousEditDelay)), dirty: false, busy: false, edit: 0, error: undefined };
+			const delayer = this._register(new Delayer<void>(continuousEditDelay));
+			const row: SettingRow = { key, control, status, delayer, dirty: false, busy: false, edit: 0, error: undefined };
 			this.rows.push(row);
 			this._register(control.onDidChange(value => {
 				this.onDidEdit(row, value);

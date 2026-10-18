@@ -38,7 +38,8 @@ function hasRelayToken(value: unknown): boolean {
 export function isConfigurationSnapshot(value: unknown): value is ConfigurationSnapshot {
 	return record(value) && Object.keys(value).length === 4
 		&& typeof value.revision === 'number' && Number.isSafeInteger(value.revision) && value.revision >= 0
-		&& record(value.values) && Object.entries(value.values).every(([key, setting]) => validateSetting(key, setting) === undefined && !hasRelayToken(setting))
+		&& record(value.values)
+		&& Object.entries(value.values).every(([key, setting]) => validateSetting(key, setting) === undefined && !hasRelayToken(setting))
 		&& record(value.errors) && Object.entries(value.errors).every(([source, message]) => configurationSources.some(known => known === source) && typeof message === 'string')
 		&& Array.isArray(value.restricted) && value.restricted.every((key: unknown) => typeof key === 'string' && settingSchema(key) !== undefined);
 }

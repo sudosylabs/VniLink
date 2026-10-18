@@ -10,7 +10,10 @@ import type { EngineEventBatch } from '../common/engineService.js';
 import { DataChannelHost } from './dataChannelHost.js';
 import type { NativeDataChannel } from './dataChannelHost.js';
 
-interface NativeEngine { execute(command: string): Promise<string>; openDataChannel(kind: string, sessionId: string, generation: string, rows: number, columns: number, media?: string): Promise<NativeDataChannel>; }
+interface NativeEngine {
+	execute(command: string): Promise<string>;
+	openDataChannel(kind: string, sessionId: string, generation: string, rows: number, columns: number, media?: string): Promise<NativeDataChannel>;
+}
 
 interface Addon { openEngine(): Promise<NativeEngine>; openTemporaryEngine(): Promise<NativeEngine>; }
 
@@ -139,7 +142,8 @@ export class EngineHost implements IClientConnectionFilter {
 			}
 		});
 		channels.add(channel);
-		void this.engine.openDataChannel(request.kind, request.sessionId, request.generation, request.rows ?? 24, request.columns ?? 80, request.media ? JSON.stringify(request.media) : undefined).then(native => {
+		const media = request.media ? JSON.stringify(request.media) : undefined;
+		void this.engine.openDataChannel(request.kind, request.sessionId, request.generation, request.rows ?? 24, request.columns ?? 80, media).then(native => {
 			channel.start(native);
 		}, () => {
 			channel.fail();

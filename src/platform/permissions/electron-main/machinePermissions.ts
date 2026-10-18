@@ -9,7 +9,12 @@ const macSettings: Record<PermissionKind, string> = {
 export class MachinePermissions {
 	private requesting = false;
 
-	constructor(private readonly platform: string, private readonly development: boolean, private readonly preferences: Preferences, private readonly openExternal: (url: string) => Promise<void>) { }
+	constructor(
+		private readonly platform: string,
+		private readonly development: boolean,
+		private readonly preferences: Preferences,
+		private readonly openExternal: (url: string) => Promise<void>,
+	) { }
 
 	private permission(kind: PermissionKind): MachinePermission {
 		let status: PermissionStatus = 'unsupported';

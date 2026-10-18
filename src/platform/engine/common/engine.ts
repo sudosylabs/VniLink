@@ -4,19 +4,49 @@ export type OperatingSystem = 'macos' | 'windows' | 'linux' | 'other';
 
 export type DevicePresence = 'connected' | 'connecting' | 'reconnecting' | 'disconnected';
 
-export interface SharingPolicy { view: boolean; control: boolean; clipboard: boolean; files: boolean; terminal: boolean; camera: boolean; system_audio: boolean; microphone: boolean; recording: boolean; system_actions: boolean; }
+export interface SharingPolicy {
+	view: boolean;
+	control: boolean;
+	clipboard: boolean;
+	files: boolean;
+	terminal: boolean;
+	camera: boolean;
+	system_audio: boolean;
+	microphone: boolean;
+	recording: boolean;
+	system_actions: boolean;
+}
 
-export interface Device { os: OperatingSystem | null; presence: DevicePresence; endpoint_id: string; hostname: string | null; pet_name: string | null; relays: string[]; direct: string[]; grants: Grants; }
+export interface Device {
+	os: OperatingSystem | null;
+	presence: DevicePresence;
+	endpoint_id: string;
+	hostname: string | null;
+	pet_name: string | null;
+	relays: string[];
+	direct: string[];
+	grants: Grants;
+}
 
 export interface Capabilities {
-	desktop_capture: boolean; keyboard: boolean; pointer: boolean; clipboard: boolean; file_transfer: boolean; audio: boolean; monitors: number; h264_encode: boolean; h264_decode: boolean;
+	desktop_capture: boolean; keyboard: boolean; pointer: boolean; clipboard: boolean; file_transfer: boolean;
+	audio: boolean; monitors: number; h264_encode: boolean; h264_decode: boolean;
 }
 
 export interface SessionInfo { id: string; generation: string; role: 'Controller' | 'Host'; phase: string | { Failed: { message: string } }; peer_id: string; quality?: QualityLimits | null; monitor_width?: number; monitor_height?: number; }
 
 export interface PointerSettings { sensitivity_percent: number; reverse_wheel: boolean; swap_buttons: boolean; }
 
-export interface DisplayInfo { id: string; origin_x: number; origin_y: number; width: number; height: number; rotation_deg: number; scale_percent: number; revision: string; }
+export interface DisplayInfo {
+	id: string;
+	origin_x: number;
+	origin_y: number;
+	width: number;
+	height: number;
+	rotation_deg: number;
+	scale_percent: number;
+	revision: string;
+}
 
 export interface QualityLimits { max_bitrate_kbps: number; max_frame_rate: number; max_width: number; max_height: number; }
 
@@ -84,7 +114,16 @@ export interface RelayInfo { url: string; authenticated: boolean; }
 
 export interface ControlRequestInfo { endpoint_id: string; check: string; }
 
-export interface EngineSnapshot { endpoint_id: string; hosting: boolean; public_relay: boolean; relay_urls: string[]; devices: Device[]; capabilities: Capabilities; incoming: SessionInfo | null; outgoing: SessionInfo | null; }
+export interface EngineSnapshot {
+	endpoint_id: string;
+	hosting: boolean;
+	public_relay: boolean;
+	relay_urls: string[];
+	devices: Device[];
+	capabilities: Capabilities;
+	incoming: SessionInfo | null;
+	outgoing: SessionInfo | null;
+}
 
 export type EngineCommand =
 	| { type: 'beginConnectServices'; endpointId: string }
@@ -283,7 +322,8 @@ function pointerSettings(value: unknown): value is PointerSettings {
 
 function display(value: unknown): value is DisplayInfo {
 	return record(value) && decimal(value.id) && int(value.origin_x, -32768, 32767) && int(value.origin_y, -32768, 32767)
-		&& uint(value.width, 65535) && uint(value.height, 65535) && uint(value.rotation_deg, 360) && uint(value.scale_percent, 800) && decimal(value.revision) && Object.keys(value).length === 8;
+		&& uint(value.width, 65535) && uint(value.height, 65535) && uint(value.rotation_deg, 360) && uint(value.scale_percent, 800)
+		&& decimal(value.revision) && Object.keys(value).length === 8;
 }
 
 function displays(value: unknown): value is DisplayInfo[] {
@@ -640,7 +680,15 @@ function nativeRuntime(value: Record<string, unknown>): boolean {
 
 export interface NativeDevice { readonly id: string; readonly name: string; readonly kind: 'camera' | 'microphone' | 'system' | 'output'; }
 
-export interface PowerPolicy { incoming_display: boolean; incoming_system: boolean; outgoing_display: boolean; outgoing_system: boolean; incoming_idle_secs: number; outgoing_idle_secs: number; lock_after_control: boolean; }
+export interface PowerPolicy {
+	incoming_display: boolean;
+	incoming_system: boolean;
+	outgoing_display: boolean;
+	outgoing_system: boolean;
+	incoming_idle_secs: number;
+	outgoing_idle_secs: number;
+	lock_after_control: boolean;
+}
 
 export interface PowerStatus { readonly kind: 'Display' | 'System'; readonly owners: number; readonly phase: 'Idle' | 'Unavailable' | 'Starting' | 'Active' | 'Failed'; readonly error: string | null; }
 
@@ -678,7 +726,13 @@ function sharingStatus(value: unknown): value is NativeSharingStatus {
 	return record(value) && uint(value.displayId, 4294967295) && ['Starting', 'Sharing', 'Failed'].some(phase => phase === value.phase) && (value.error === null || typeof value.error === 'string' && value.error.length <= 512) && Object.keys(value).length === 3;
 }
 
-export interface NativeScreenSource { readonly displayId: number; readonly width: number; readonly height: number; readonly pixelWidth: number; readonly pixelHeight: number; }
+export interface NativeScreenSource {
+	readonly displayId: number;
+	readonly width: number;
+	readonly height: number;
+	readonly pixelWidth: number;
+	readonly pixelHeight: number;
+}
 
 export function isNativeScreenSource(value: unknown): value is NativeScreenSource {
 	return record(value) && typeof value.displayId === 'number' && uint(value.displayId, 4294967295) && value.displayId > 0 && [value.width, value.height, value.pixelWidth, value.pixelHeight].every(size => typeof size === 'number' && uint(size, 65535) && size >= 2) && Object.keys(value).length === 5;

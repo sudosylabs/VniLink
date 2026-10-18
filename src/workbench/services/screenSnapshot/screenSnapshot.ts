@@ -72,7 +72,8 @@ function parseReady(parsed: Record<string, unknown>, data: Uint8Array | undefine
 	if (Object.keys(parsed).length !== 9 || parsed.mime !== 'image/jpeg' || typeof parsed.displayId !== 'string' || parsed.displayId.length === 0 || parsed.displayId.length > 64) {
 		return undefined;
 	}
-	if (!integer(parsed.width, MAX_SNAPSHOT_WIDTH) || !integer(parsed.height, MAX_SNAPSHOT_HEIGHT) || !endpoint(parsed.endpointId) || !id(parsed.sessionId) || !id(parsed.generation)) {
+	if (!integer(parsed.width, MAX_SNAPSHOT_WIDTH) || !integer(parsed.height, MAX_SNAPSHOT_HEIGHT)
+		|| !endpoint(parsed.endpointId) || !id(parsed.sessionId) || !id(parsed.generation)) {
 		return undefined;
 	}
 	const capturedUnixMs = unixMilliseconds(parsed.capturedUnixMs);

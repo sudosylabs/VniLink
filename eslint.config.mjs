@@ -42,6 +42,8 @@ export default [
 			'vnilink/layers': 'error',
 			'no-new-wrappers': 'error',
 			'@stylistic/brace-style': ['error', '1tbs'],
+			// Long strings, URLs and patterns stay whole; code wraps before 160 columns.
+			'@stylistic/max-len': ['error', { code: 160, tabWidth: 4, ignoreStrings: true, ignoreUrls: true, ignoreTemplateLiterals: true, ignoreRegExpLiterals: true }],
 		},
 	},
 	{

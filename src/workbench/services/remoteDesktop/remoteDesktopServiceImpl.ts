@@ -29,7 +29,9 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 				continue;
 			}
 			const peer = snapshot.snapshot.devices.find(device => device.endpoint_id === session.peer_id);
-			sessions.push(Object.freeze({ id: session.id, generation: session.generation, role: session.role, name: peer?.pet_name ?? peer?.hostname ?? session.peer_id, quality: Object.freeze({ ...session.quality }) }));
+			const name = peer?.pet_name ?? peer?.hostname ?? session.peer_id;
+			const quality = Object.freeze({ ...session.quality });
+			sessions.push(Object.freeze({ id: session.id, generation: session.generation, role: session.role, name, quality }));
 		}
 		return { sessions: Object.freeze(sessions), codecs: Object.freeze({ ...codecs.codecs }) };
 	}

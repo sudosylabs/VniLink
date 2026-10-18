@@ -34,7 +34,8 @@ function nativeEngine() {
 
 async function openHost(native) {
 	const posted = [];
-	const host = new EngineHost({ postMessage: message => posted.push(message) }, () => ({ openEngine: async () => native, openTemporaryEngine: async () => native }));
+	const addon = () => ({ openEngine: async () => native, openTemporaryEngine: async () => native });
+	const host = new EngineHost({ postMessage: message => posted.push(message) }, addon);
 	await host.open();
 	assert.deepEqual(posted, [{ ready: true }]);
 	return host;

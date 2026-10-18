@@ -54,7 +54,8 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 			this.state = 'unavailable';
 		}
 		this.snapshots = snapshots ?? new FixtureSnapshots();
-		const services = this._register(new InstantiationService(new ServiceCollection([IDeviceServiceId, this], [IScreenSnapshotServiceId, this.snapshots]), true));
+		const collection = new ServiceCollection([IDeviceServiceId, this], [IScreenSnapshotServiceId, this.snapshots]);
+		const services = this._register(new InstantiationService(collection, true));
 		this.page = this._register(services.createInstance(DevicesPage));
 		this.host.className = 'home-content device-fixture';
 		this.host.style.cssText = 'position:fixed;top:var(--titlebar-height);left:190px;right:0;bottom:0;z-index:10;';

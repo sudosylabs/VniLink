@@ -88,7 +88,8 @@ export class EngineChannel extends Disposable implements IServerChannel {
 		const window = this.windows.getMainWindow();
 		const displays = window ? await this.nativeHost.getCaptureDisplays(window.id) : [];
 		const display = displays.find(candidate => candidate.displayId === command.displayId);
-		if (display?.width !== command.width || display.height !== command.height || display.pixelWidth !== command.pixelWidth || display.pixelHeight !== command.pixelHeight) {
+		if (display?.width !== command.width || display.height !== command.height
+			|| display.pixelWidth !== command.pixelWidth || display.pixelHeight !== command.pixelHeight) {
 			throw new Error('Display geometry changed. Reload display selection before sharing.');
 		}
 		await this.permissions.synchronize();

@@ -59,4 +59,10 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 - Tooling tests (`test/tooling/*.test.mjs`) import build and source modules directly; polling has a condition, a bound and a useful timeout message.
 - Temporary profiles and work directories are removed on success, failure and interruption.
 
+## Fixtures
+
+- A fixture builds the real view through `ServiceCollection` with fake services, never a global mock or a procedural page factory; production code never imports fixture data.
+- It exposes the states worth testing (loading, empty, populated, unavailable, error, recovery) and controls async completion and failure explicitly.
+- Shared mounting, services and cleanup live in one fixture per area (`test/browser/settingsFixture.ts`, `DevicePageFixture`); screenshots are taken after explicit settlement with a controlled viewport and theme.
+
 Validate infrastructure changes with the tooling tests, one representative build (`npm run build`) and one UI scenario. `unit-tests` owns check selection; `cross-platform-validation` owns platform prerequisites.

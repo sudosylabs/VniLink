@@ -93,7 +93,8 @@ test('native-host proxy sends its window as context, forwards window events and 
 		},
 	};
 	const mainProcess = { getChannel: name => name === 'nativeHost' ? channel : assert.fail(`Unexpected channel ${name}`) };
-	const container = new InstantiationService(new ServiceCollection([IMainProcessService, mainProcess], [INativeHostService, new SyncDescriptor(NativeHostService, [7])]), true);
+	const services = new ServiceCollection([IMainProcessService, mainProcess], [INativeHostService, new SyncDescriptor(NativeHostService, [7])]);
+	const container = new InstantiationService(services, true);
 	const host = container.invokeFunction(accessor => accessor.get(INativeHostService));
 	const events = [];
 	const subscription = host.onDidChangeWindowState(value => events.push(value));

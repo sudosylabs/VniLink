@@ -109,7 +109,8 @@ export class DeviceList extends Disposable {
 		this.list.getHTMLElement().setAttribute('aria-controls', panelId);
 		// Only the user's selection opens details; `update` restores selection without a browser event.
 		const userSelection = Event.filter(this.list.onDidChangeSelection, event => event.browserEvent !== undefined);
-		this.onDidSelect = Event.filter<DeviceSummary, undefined>(Event.map(userSelection, event => event.elements.at(0)), (device): device is DeviceSummary => device !== undefined);
+		const selected = Event.map(userSelection, event => event.elements.at(0));
+		this.onDidSelect = Event.filter<DeviceSummary, undefined>(selected, (device): device is DeviceSummary => device !== undefined);
 	}
 
 	public update(devices: readonly DeviceSummary[], selectedId: string | undefined): void {

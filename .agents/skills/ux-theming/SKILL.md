@@ -21,4 +21,4 @@ Check light and dark foreground readability, focused/unfocused window states and
 
 Hover, active, selected, disabled and keyboard focus have consistent semantic styling. Keep a visible focus indicator and sufficient contrast. Do not encode meaningful state by color alone; use labels/icons/shapes and appropriate ARIA state. Honor forced-colors and reduced-motion preferences. OS forced-colors testing and a product high-contrast theme are distinct evidence.
 
-Use `accessibility` and `validate-ui-scenario` for relevant inspections. Report missing theme foundations or untested native materials accurately.
+Use `accessibility` and `smoke-tests` for relevant inspections. Report missing theme foundations or untested native materials accurately.

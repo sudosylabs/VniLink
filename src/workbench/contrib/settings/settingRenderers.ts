@@ -40,7 +40,8 @@ export const Extensions = {
 export interface ISettingControlsRegistry {
 	// Services is inferred from the constructor, as in VS Code's registerEditorContribution.
 	// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-	registerControl<Services extends BrandedService[]>(key: string, ctor: new (key: string, schema: ISettingSchema, ...services: Services) => ISettingControl): void;
+	registerControl<Services extends BrandedService[]>(key: string, ctor: new (key: string, schema: ISettingSchema, ...services: Services) => ISettingControl)
+		: void;
 	getControl(key: string): SettingControlCtor | undefined;
 }
 
@@ -48,7 +49,10 @@ class SettingControlsRegistry implements ISettingControlsRegistry {
 	private readonly controls = new Map<string, SettingControlCtor>();
 
 	// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-	public registerControl<Services extends BrandedService[]>(key: string, ctor: new (key: string, schema: ISettingSchema, ...services: Services) => ISettingControl): void {
+	public registerControl<Services extends BrandedService[]>(
+		key: string,
+		ctor: new (key: string, schema: ISettingSchema, ...services: Services) => ISettingControl,
+	): void {
 		if (this.controls.has(key)) {
 			throw new Error(`Setting control for '${key}' is already registered`);
 		}

@@ -28,7 +28,10 @@ export interface Product {
 	readonly platforms: {
 		readonly darwin: PlatformMetadata & { readonly minimumSystemVersion: string; readonly fallbackIconSource: string };
 		readonly win32: PlatformMetadata & { readonly minimumSystemVersion: string };
-		readonly linux: PlatformMetadata & { readonly desktopFileName: string; readonly intendedDistributions: readonly { readonly id: string; readonly minimumVersion: string }[] };
+		readonly linux: PlatformMetadata & {
+			readonly desktopFileName: string;
+			readonly intendedDistributions: readonly { readonly id: string; readonly minimumVersion: string }[];
+		};
 	};
 }
 

@@ -104,7 +104,9 @@ export function isMediaChannelConfig(value: unknown): value is MediaChannelConfi
 		return false;
 	}
 	if (value.type === 'camera') {
-		return dimension(value.width) && value.width <= 4096 && value.width % 2 === 0 && dimension(value.height) && value.height <= 4096 && value.height % 2 === 0 && dimension(value.fps) && value.fps <= 60;
+		return dimension(value.width) && value.width <= 4096 && value.width % 2 === 0
+			&& dimension(value.height) && value.height <= 4096 && value.height % 2 === 0
+			&& dimension(value.fps) && value.fps <= 60;
 	}
 	return value.type === 'audio' && (value.sourceKind === 'Microphone' || value.sourceKind === 'System') && (value.channels === 1 || value.channels === 2) && typeof value.voice === 'boolean';
 }

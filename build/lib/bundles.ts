@@ -79,7 +79,8 @@ export async function buildApplication(root: string, signal: AbortSignal, option
 				await Promise.all(bundleOptions(root, { production, outputDirectory }).map(value => build(value)));
 			}),
 			define('resources:stage', async () => {
-				await Promise.all(resources(root, outputDirectory).map(({ source, output }) => cp(source, output, { recursive: true, ...(production ? { filter: releaseSourceFilter } : {}) })));
+				const filter = production ? { filter: releaseSourceFilter } : {};
+				await Promise.all(resources(root, outputDirectory).map(({ source, output }) => cp(source, output, { recursive: true, ...filter })));
 			}),
 			define('native:stage', async () => {
 				if (!compiled) {

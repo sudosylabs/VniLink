@@ -75,7 +75,8 @@ export class NativeTitlebarPart extends BrowserTitlebarPart {
 			return;
 		}
 		this.controls = key;
-		this.nativeHostService.updateWindowControls({ height: this.height, backgroundColor: background, foregroundColor: foreground }).catch((error: unknown) => {
+		const controls = { height: this.height, backgroundColor: background, foregroundColor: foreground };
+		this.nativeHostService.updateWindowControls(controls).catch((error: unknown) => {
 			this.controls = '';
 			onUnexpectedError(error);
 		});

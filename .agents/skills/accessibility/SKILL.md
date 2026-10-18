@@ -32,4 +32,4 @@ These foundations are not all integrated in VniLink. Explicitly include required
 
 ## Verification
 
-Exercise keyboard navigation, focus restoration, labels and dynamic announcements in representative states. Browser tests can verify semantics/behavior, but they do not prove what VoiceOver/NVDA or Linux assistive technology announces. For changes affecting screen-reader behavior, obtain native evidence where available and name manual/unverified checks. Validation follows `validate-ui-scenario` and `cross-platform-validation`.
+Exercise keyboard navigation, focus restoration, labels and dynamic announcements in representative states. Browser tests can verify semantics/behavior, but they do not prove what VoiceOver/NVDA or Linux assistive technology announces. For changes affecting screen-reader behavior, obtain native evidence where available and name manual/unverified checks. Validation follows `smoke-tests` and `cross-platform-validation`.

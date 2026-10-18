@@ -163,7 +163,8 @@ test('destroyed windows release channel owners once without touching native list
 	const contents = new Contents();
 	const window = { id: 4, webContents: contents };
 	const closed = [];
-	const channel = new EngineChannel({ attachChannel() { }, closeChannels: owner => closed.push(owner) }, { getWindowById: id => id === 4 ? window : undefined }, {}, {});
+	const engine = { attachChannel() { }, closeChannels: owner => closed.push(owner) };
+	const channel = new EngineChannel(engine, { getWindowById: id => id === 4 ? window : undefined }, {}, {});
 	await channel.call('window:4', 'openDataChannel', { requestId: 'probe', kind: 'video', sessionId: '1', generation: '1' });
 	contents.destroyed = true;
 	assert.doesNotThrow(() => contents.emit('destroyed'));

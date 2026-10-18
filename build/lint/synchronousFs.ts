@@ -23,7 +23,9 @@ export const synchronousFsRule: TSESLint.RuleModule<'synchronous'> = {
 									continue;
 								}
 								const property = member.property;
-								const name = property.type === AST_NODE_TYPES.Literal ? property.value : property.type === AST_NODE_TYPES.Identifier && !member.computed ? property.name : undefined;
+								const name = property.type === AST_NODE_TYPES.Literal ? property.value
+									: property.type === AST_NODE_TYPES.Identifier && !member.computed ? property.name
+										: undefined;
 								if (typeof name === 'string' && name.endsWith('Sync')) {
 									context.report({ node: member, messageId: 'synchronous' });
 								}

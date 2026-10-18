@@ -193,7 +193,8 @@ export class SettingsFixture extends Disposable {
 		super();
 		const unused = (): Promise<never> => Promise.reject(new Error('Not exercised'));
 		const runtime: INativeRuntimeService = {
-			_serviceBrand: undefined, available: true, load: unused, captureDisplays: unused, startSharing: unused, stopSharing: unused, sharingStatus: unused, startRecording: unused, recordingStatus: unused, stopRecording: unused, releaseRecording: unused, remoteDevices: unused,
+			_serviceBrand: undefined, available: true, load: unused, captureDisplays: unused, startSharing: unused, stopSharing: unused, sharingStatus: unused,
+			startRecording: unused, recordingStatus: unused, stopRecording: unused, releaseRecording: unused, remoteDevices: unused,
 			recordingDirectory: action => Promise.resolve(action === 'read' ? '/Pictures/VniLink' : this.chosenFolder),
 			devices: kind => Promise.resolve(devices.filter(device => kind === 'camera' ? device.kind === 'camera' : device.kind !== 'camera')),
 			powerStatus: () => Promise.resolve([]),
@@ -203,9 +204,12 @@ export class SettingsFixture extends Disposable {
 			[IWorkbenchConfigurationService, this.configuration],
 			[IPermissionService, this.permissions],
 			[INativeRuntimeService, runtime],
-			[IRemoteDesktopService, { _serviceBrand: undefined, available: true, load: () => Promise.resolve(desktopSettings), displays: () => Promise.resolve([]), apply: unused }],
+			[IRemoteDesktopService, {
+				_serviceBrand: undefined, available: true, load: () => Promise.resolve(desktopSettings), displays: () => Promise.resolve([]), apply: unused,
+			}],
 			[IApplicationService, {
-				_serviceBrand: undefined, restartRequired: false, onDidChangeRestartRequired: restart.event, restart: () => Promise.resolve(), openRelayDocumentation: () => {
+				_serviceBrand: undefined, restartRequired: false, onDidChangeRestartRequired: restart.event, restart: () => Promise.resolve(),
+				openRelayDocumentation: () => {
 					this.openedDocumentation++;
 					return Promise.resolve();
 				}

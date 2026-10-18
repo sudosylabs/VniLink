@@ -226,7 +226,14 @@ export class VniLinkApplication extends Disposable {
 		if (!window || (platform !== 'darwin' && platform !== 'win32' && platform !== 'linux')) {
 			throw new Error('Unsupported window');
 		}
-		return { windowId: window.id, osRelease: release(), platform, version: app.getVersion(), engineAvailable, enableSmokeTestDriver: this.options.temporaryEngine === true };
+		return {
+			windowId: window.id,
+			osRelease: release(),
+			platform,
+			version: app.getVersion(),
+			engineAvailable,
+			enableSmokeTestDriver: this.options.temporaryEngine === true,
+		};
 	}
 
 	private async startEngine(): Promise<void> {

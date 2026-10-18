@@ -306,7 +306,9 @@ export class StringSHA1 {
 			bigBlock32.setUint32(j, data.getUint32(j, false), false);
 		}
 		for (let j = 64; j < 320 /* 80*4 */; j += 4) {
-			bigBlock32.setUint32(j, leftRotate((bigBlock32.getUint32(j - 12, false) ^ bigBlock32.getUint32(j - 32, false) ^ bigBlock32.getUint32(j - 56, false) ^ bigBlock32.getUint32(j - 64, false)), 1), false);
+			const mixed = bigBlock32.getUint32(j - 12, false) ^ bigBlock32.getUint32(j - 32, false)
+				^ bigBlock32.getUint32(j - 56, false) ^ bigBlock32.getUint32(j - 64, false);
+			bigBlock32.setUint32(j, leftRotate(mixed, 1), false);
 		}
 		let a = this._h0;
 		let b = this._h1;

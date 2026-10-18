@@ -17,7 +17,12 @@ export class DataChannelClient {
 	public metrics: DataChannelMetrics = { sent: 0, acknowledged: 0, pending: 0, lastAckMs: 0 };
 	private readonly pendingWrites = new Map<number, { resolve(): void; reject(error: Error): void }>();
 	private nextWrite = 0;
-	private audioPending: { id: number; resolve(value: DesktopAudioStatus): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> } | undefined;
+	private audioPending: {
+		id: number;
+		resolve(value: DesktopAudioStatus): void;
+		reject(error: Error): void;
+		timer: ReturnType<typeof setTimeout>;
+	} | undefined;
 	private readonly filePending = new Map<number, { cancel: boolean; resolve(value: string): void; reject(error: Error): void }>();
 
 	constructor(

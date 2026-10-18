@@ -3,8 +3,8 @@ import { IConfigurationService } from '../../../platform/configuration/common/co
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import { INativeHostService } from '../../../platform/native/common/native.js';
 import { IRecordingService } from '../../../platform/recording/common/recording.js';
-import type { NativeDevice, PowerStatus, EngineCommand, NativeScreenSource, NativeSharingStatus, RecordingStatus, RecordingRetention } from '../../../platform/engine/common/engine.js';
-import { INativeRuntimeService, type NativeRuntime } from './nativeRuntimeService.js';
+import type { NativeDevice, PowerStatus, EngineCommand, NativeScreenSource, NativeSharingStatus, RecordingStatus } from '../../../platform/engine/common/engine.js';
+import { INativeRuntimeService, type NativeRuntime, type RecordingOptions, type RecordingTarget } from './nativeRuntimeService.js';
 /** Native backend facts and explicitly requested media operations. Peer grants remain separate. */
 export class NativeRuntimeService implements INativeRuntimeService {
 	declare public readonly _serviceBrand: undefined;
@@ -29,7 +29,10 @@ export class NativeRuntimeService implements INativeRuntimeService {
 		if (reply.type !== 'nativeRuntime') {
 			throw new Error('Invalid native runtime reply');
 		}
-		return Object.freeze({ backends: Object.freeze(reply.backends.map(backend => Object.freeze({ ...backend }))), capabilities: Object.freeze(reply.capabilities.map(capability => Object.freeze({ ...capability }))) });
+		return Object.freeze({
+			backends: Object.freeze(reply.backends.map(backend => Object.freeze({ ...backend }))),
+			capabilities: Object.freeze(reply.capabilities.map(capability => Object.freeze({ ...capability }))),
+		});
 	}
 
 	public async captureDisplays(): Promise<readonly NativeScreenSource[]> {
@@ -80,7 +83,7 @@ export class NativeRuntimeService implements INativeRuntimeService {
 		return this.nativeHostService.pickFolder(this.configurationService.getValue<string>('recording.directory') || fallback);
 	}
 
-	public async startRecording(target: { readonly id: string; readonly generation: string }, options: { readonly destination?: string; readonly maxBytes?: string; readonly maxDurationMs?: string; readonly retention?: RecordingRetention }): Promise<Readonly<RecordingStatus>> {
+	public async startRecording(target: RecordingTarget, options: RecordingOptions): Promise<Readonly<RecordingStatus>> {
 		const mebibytes = (key: string): string => String(this.configurationService.getValue<number>(key) * 1048576);
 		const destination = options.destination ?? await this.recordingService.createDestination();
 		if (!destination) {

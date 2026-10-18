@@ -166,7 +166,12 @@ export async function verifyPackage(root: string, signal: AbortSignal): Promise<
 }
 
 /** Checks installer checksums against their manifest and `SHA256SUMS`. */
-export async function verifyInstallerFiles(directory: string, product: Product, platform: NodeJS.Platform = process.platform, architecture: string = process.arch): Promise<InstallerManifest> {
+export async function verifyInstallerFiles(
+	directory: string,
+	product: Product,
+	platform: NodeJS.Platform = process.platform,
+	architecture: string = process.arch,
+): Promise<InstallerManifest> {
 	const manifest = JSON.parse(await readFile(join(directory, 'installer-manifest.json'), 'utf8')) as InstallerManifest;
 	assert.equal(manifest.application.appId, product.appId);
 	assert.equal(manifest.application.platform, platform);
@@ -206,7 +211,9 @@ export async function verifyInstallers(root: string, signal: AbortSignal): Promi
 		mounted = true;
 		const name = `${product.nameLong}.app`;
 		const prefix = `${name}/`;
-		const expected = manifest.application.files.filter(file => file.path.startsWith(prefix)).map(file => ({ ...file, path: file.path.slice(prefix.length) }));
+		const expected = manifest.application.files
+			.filter(file => file.path.startsWith(prefix))
+			.map(file => ({ ...file, path: file.path.slice(prefix.length) }));
 		assert(expected.length > 0, 'Installer manifest has no application payload');
 		assert.deepEqual(await packageInventory(join(mount, name)), expected, 'DMG application differs from the assembled input');
 		const copy = join(work, 'application');

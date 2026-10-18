@@ -106,7 +106,9 @@ test('service commands validate kinds, policies, sessions and jobs exactly', () 
 	assert.equal(isEngineCommand({ type: 'authorizeService', endpointId: 'peer', kind: 'Hologram', allowed: true }), false);
 	assert.equal(isEngineCommand({ type: 'authorizeRecording', endpointId: 'peer', allowed: false }), false);
 	assert.equal(isEngineCommand({ type: 'terminalPolicy' }), true);
-	const policy = { allow_persistence: true, max_sessions: 4, max_sessions_per_peer: 2, history_bytes: 65536, replay_bytes: 16384, detached_timeout_secs: 300 };
+	const policy = {
+		allow_persistence: true, max_sessions: 4, max_sessions_per_peer: 2, history_bytes: 65536, replay_bytes: 16384, detached_timeout_secs: 300,
+	};
 	assert.equal(isEngineCommand({ type: 'setTerminalPolicy', policy }), true);
 	assert.equal(isEngineCommand({ type: 'setTerminalPolicy', policy: { ...policy, max_sessions: 65536 } }), false);
 	assert.equal(isEngineCommand({ type: 'enableNativeTerminal', program: '/bin/zsh', directory: '/tmp' }), true);
@@ -141,7 +143,10 @@ test('pairing handles cross the bridge as lossless decimal strings', () => {
 });
 
 test('global sharing policy rejects missing fields, extras and peer-scoped writes', () => {
-	const policy = { view: false, control: false, clipboard: false, files: false, terminal: false, camera: false, system_audio: false, microphone: false, recording: false, system_actions: false };
+	const policy = {
+		view: false, control: false, clipboard: false, files: false, terminal: false,
+		camera: false, system_audio: false, microphone: false, recording: false, system_actions: false,
+	};
 	assert.equal(isEngineCommand({ type: 'sharingPolicy' }), true);
 	assert.equal(isEngineCommand({ type: 'setSharingPolicy', policy }), true);
 	assert.equal(isEngineReply({ type: 'sharingPolicy', policy }), true);

@@ -152,9 +152,17 @@ test('relay validation follows count, HTTPS, loopback, duplicate and credential 
 /** An engine holding each policy, with switches to refuse writes or reads. */
 function policyEngine() {
 	const state = {
-		power: { incoming_display: false, incoming_system: true, outgoing_display: false, outgoing_system: false, incoming_idle_secs: 90, outgoing_idle_secs: 0, lock_after_control: false },
-		terminal: { allow_persistence: true, max_sessions: 16, max_sessions_per_peer: 16, history_bytes: 1048576, replay_bytes: 8192, detached_timeout_secs: 300 },
-		sharing: { view: false, control: false, clipboard: true, files: false, terminal: false, camera: false, system_audio: false, microphone: false, recording: false, system_actions: false },
+		power: {
+			incoming_display: false, incoming_system: true, outgoing_display: false, outgoing_system: false,
+			incoming_idle_secs: 90, outgoing_idle_secs: 0, lock_after_control: false,
+		},
+		terminal: {
+			allow_persistence: true, max_sessions: 16, max_sessions_per_peer: 16, history_bytes: 1048576, replay_bytes: 8192, detached_timeout_secs: 300,
+		},
+		sharing: {
+			view: false, control: false, clipboard: true, files: false, terminal: false,
+			camera: false, system_audio: false, microphone: false, recording: false, system_actions: false,
+		},
 		system: { allow_lock: true, allow_restart: false, allow_shutdown: false, allow_privacy: false },
 		support: { lock: true, restart: false, shutdown: true, privacy: true },
 		relays: [],

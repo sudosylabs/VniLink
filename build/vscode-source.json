@@ -572,9 +572,8 @@
     {
       "path": "src/base/common/hash.ts",
       "upstreamPath": "src/vs/base/common/hash.ts",
-      "sha256": "6faa20253ab7162b626f36f73009ebb30c0a22d2277cb9d97926cebb00fbd6bf",
-      "adapted": true,
-      "changedImports": 0
+      "sha256": "aff9064e078dd4fe23b33027e1f619cdbdde3654c677102b56e822aa45e74f90",
+      "adapted": true
     },
     {
       "path": "src/base/common/history.ts",
@@ -1424,7 +1423,7 @@
     {
       "path": "src/workbench/parts/titlebar/nativeTitlebarPart.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
-      "sha256": "6f0850675ee77daec3126174b40817a1793ac496a6e4ab65474f1237566b14b9",
+      "sha256": "cf7f5d8af9fd49d20600f4206f1802c0f8c1b76fdfaabf4a4c3c4566677c7802",
       "adapted": true
     },
     {

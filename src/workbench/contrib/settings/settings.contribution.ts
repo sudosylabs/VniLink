@@ -190,5 +190,6 @@ const pages: readonly ISettingsPageDescriptor[] = [
 const homePages = Registry.as<IHomePagesRegistry>(HomeExtensions.HomePages);
 
 pages.forEach((page, index) => {
-	homePages.registerPage({ id: page.id, group: HomePageGroup.Settings, order: index, title: page.title, icon: page.icon, ctorDescriptor: new SyncDescriptor(SettingsPage, [page]) });
+	const ctorDescriptor = new SyncDescriptor(SettingsPage, [page]);
+	homePages.registerPage({ id: page.id, group: HomePageGroup.Settings, order: index, title: page.title, icon: page.icon, ctorDescriptor });
 });

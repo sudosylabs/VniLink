@@ -15,4 +15,4 @@ Titlebar height and tab height are independent. Preserve active-tab/content cont
 
 Prefer container-aware sizing for regions that can resize independently. Use window sizing only for actual window-level behavior. Single-line contractual labels truncate with a discoverable full value; text intended to explain behavior wraps. Avoid silent clipping and accidental horizontal page scrolling.
 
-Resolve specificity through component scope rather than new `!important` overrides. Preserve intentional upstream rules in fidelity-controlled copies. Verify covering CSS lint and inspect relevant narrow/wide, zoom and scrolling states through `validate-ui-scenario`; `unit-tests` owns test selection.
+Resolve specificity through component scope rather than new `!important` overrides. Preserve intentional upstream rules in fidelity-controlled copies. Verify covering CSS lint and inspect relevant narrow/wide, zoom and scrolling states through `smoke-tests`; `unit-tests` owns test selection.
