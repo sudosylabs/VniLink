@@ -201,6 +201,41 @@ fn one_file_pairs_both_directions_without_granting_services() {
 }
 
 #[test]
+fn the_controller_waits_while_the_host_owner_types_the_digits() {
+    let host = start_direct();
+    let controller = start_direct();
+    host.start_hosting().unwrap();
+    let file = host
+        .export_pairing_file(Duration::from_secs(300), true)
+        .unwrap();
+    let preview = controller.open_pairing_file(&file.bytes).unwrap();
+    controller.confirm_pairing(&preview, &file.check).unwrap();
+    let pending = controller
+        .begin_connect_services(&host.endpoint_id())
+        .unwrap();
+    let request = wait_request(&host);
+    // Longer than an ordinary frame read: a person is reading digits aloud.
+    std::thread::sleep(Duration::from_secs(12));
+    assert_eq!(
+        host.control_request()
+            .unwrap()
+            .map(|current| current.endpoint_id),
+        Some(request.endpoint_id),
+        "the controller hung up while the host was still asking"
+    );
+    host.confirm_control_request(&controller.control_check())
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    while controller.controller_session(pending.id).unwrap().phase != SessionPhase::Active {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the approved link did not come up"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
 fn a_mismatched_file_check_saves_nothing() {
     let host = start_direct();
     let controller = start_direct();

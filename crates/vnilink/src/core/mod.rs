@@ -695,6 +695,10 @@ impl Drop for Core {
 
 const CONNECT_WAIT: Duration = Duration::from_secs(75);
 const CONTROL_APPROVAL_WAIT: Duration = Duration::from_secs(60);
+/// How long a controller waits for the answer to its Hello. The host may park
+/// an unpaired Hello for [`CONTROL_APPROVAL_WAIT`] while its owner types the
+/// digits, so the controller outlasts that instead of hanging up first.
+const HELLO_ANSWER_WAIT: Duration = CONTROL_APPROVAL_WAIT.saturating_add(Duration::from_secs(5));
 
 fn load_device(shared: &Shared, peer_key: &[u8; 32]) -> Result<Device, Error> {
     lock(&shared.state)

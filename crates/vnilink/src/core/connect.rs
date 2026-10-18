@@ -6,7 +6,7 @@ use super::blob::drop_blob_offers;
 use super::clipboard::open_controller_clipboard;
 use super::link::{remember_peer_addresses, write_addresses};
 use super::video::{video_inbox, video_recv_loop};
-use super::wire::{read_frame, read_session_frame, write_frame};
+use super::wire::{read_frame_within, read_session_frame, write_frame};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -593,7 +593,7 @@ pub(super) async fn establish(
             },
         )
         .await?;
-        match read_frame(&mut recv).await? {
+        match read_frame_within(&mut recv, Some(super::HELLO_ANSWER_WAIT)).await? {
             ControlMessage::Accept {
                 stamp,
                 monitor_width,
