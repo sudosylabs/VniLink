@@ -1,6 +1,7 @@
 import { app } from 'electron';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
+import { isBuilt } from '../../environment/electron-main/environment.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 import { ILogService } from '../../log/common/log.js';
 
@@ -87,6 +88,6 @@ export class LifecycleMainService extends Disposable {
 	}
 
 	private isDevelopmentRunner(): boolean {
-		return !app.isPackaged && process.env.VNILINK_DEV === '1';
+		return !isBuilt() && process.env.VNILINK_DEV === '1';
 	}
 }

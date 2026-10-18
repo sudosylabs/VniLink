@@ -74,18 +74,11 @@ test('desktop watcher rebuilds TS/CSS, handles atomic resource saves and leaves 
 	}
 });
 
-test('Reload Window shortcut is enabled only in unpackaged development launches', async () => {
-	const output = await build({
-		entryPoints: ['src/code/electron-main/development.ts'], bundle: true, write: false, platform: 'node', format: 'esm', plugins: [{
-			name: 'electron-fixture', setup(builder) {
-				builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }));
-				builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: 'export const app = { get isPackaged() { return process.env.VNILINK_TEST_PACKAGED === \'1\'; } };', loader: 'js' }));
-			}
-		}]
-	});
+test('Reload Window shortcut is enabled only in source-checkout development launches', async () => {
+	const output = await build({ entryPoints: ['src/code/electron-main/development.ts'], bundle: true, write: false, platform: 'node', format: 'esm' });
 	const { registerDevelopmentWindow } = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
 	const previous = process.env.VNILINK_DEV;
-	const previousPackaged = process.env.VNILINK_TEST_PACKAGED;
+	const previousDefaultApp = process.defaultApp;
 	let handler;
 	let reloaded = 0;
 	let prevented = 0;
@@ -98,13 +91,14 @@ test('Reload Window shortcut is enabled only in unpackaged development launches'
 	};
 	try {
 		delete process.env.VNILINK_DEV;
+		process.defaultApp = true;
 		registerDevelopmentWindow(window);
 		assert.equal(handler, undefined);
 		process.env.VNILINK_DEV = '1';
-		process.env.VNILINK_TEST_PACKAGED = '1';
+		process.defaultApp = undefined;
 		registerDevelopmentWindow(window);
 		assert.equal(handler, undefined);
-		delete process.env.VNILINK_TEST_PACKAGED;
+		process.defaultApp = true;
 		registerDevelopmentWindow(window);
 		const event = { preventDefault: () => prevented++ };
 		const input = { type: 'keyDown', key: 'r', meta: process.platform === 'darwin', control: process.platform !== 'darwin', alt: false, shift: false };
@@ -115,11 +109,7 @@ test('Reload Window shortcut is enabled only in unpackaged development launches'
 		assert.equal(reloaded, 1);
 		assert.equal(prevented, 1);
 	} finally {
-		if (previousPackaged === undefined) {
-			delete process.env.VNILINK_TEST_PACKAGED;
-		} else {
-			process.env.VNILINK_TEST_PACKAGED = previousPackaged;
-		}
+		process.defaultApp = previousDefaultApp;
 		if (previous === undefined) {
 			delete process.env.VNILINK_DEV;
 		} else {

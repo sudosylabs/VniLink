@@ -1,5 +1,6 @@
-import { app, shell, systemPreferences } from 'electron';
+import { shell, systemPreferences } from 'electron';
 import { platform } from '../../../base/common/process.js';
+import { isBuilt } from '../../environment/electron-main/environment.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 import { IEngineMainService } from '../../engine/electron-main/engineMainService.js';
 import type { EngineMainService } from '../../engine/electron-main/engineMainService.js';
@@ -15,7 +16,7 @@ export const IPermissionsMainService = createDecorator<PermissionsMainService>('
  */
 export class PermissionsMainService {
 	declare public readonly _serviceBrand: undefined;
-	private readonly machine = new MachinePermissions(platform, !app.isPackaged, systemPreferences, url => shell.openExternal(url));
+	private readonly machine = new MachinePermissions(platform, !isBuilt(), systemPreferences, url => shell.openExternal(url));
 	private synchronized: string | undefined;
 
 	constructor(@IEngineMainService private readonly engine: EngineMainService) { }
