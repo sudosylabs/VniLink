@@ -1780,8 +1780,16 @@ fn windows_serve_holds_its_source_against_replacement() {
         files_with_bytes(&host_scratch.join("root"), &original).len(),
         1
     );
-    // Released with the request: the source can move again.
-    std::fs::rename(&source, folder.join("moved.bin")).unwrap();
+    // Released with the request: the source can move again. The handle closes
+    // as the serve ends, and a scanner may hold a just-closed file for a moment.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while let Err(error) = std::fs::rename(&source, folder.join("moved.bin")) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the released source still cannot move: {error}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }
 
 #[test]
@@ -1905,8 +1913,10 @@ fn cross_filesystem_publication_succeeds() {
     let controller_scratch = Scratch::tagged("xfs-controller");
     // Blob dirs: try /dev/shm for one side when usable (different mount).
     let shm = std::path::PathBuf::from("/dev/shm");
-    let shm_usable =
-        std::fs::create_dir_all(shm.join(format!(".vnilink-xfs-{}", std::process::id())))
+    // /dev/shm is a separate tmpfs only on Linux; elsewhere the path would be
+    // created at the drive root. Windows cross-volume publication has its own test.
+    let shm_usable = cfg!(target_os = "linux")
+        && std::fs::create_dir_all(shm.join(format!(".vnilink-xfs-{}", std::process::id())))
             .and_then(|_| {
                 std::fs::remove_dir(shm.join(format!(".vnilink-xfs-{}", std::process::id())))
             })
@@ -3149,9 +3159,10 @@ mod prestage_gate {
     pub struct Guard;
 
     impl Guard {
-        pub fn install(job: u64) -> Self {
+        pub fn install(engine: usize, job: u64) -> Self {
             reset();
             crate::core::Core::set_prestage_hooks(crate::core::PrestageHooks {
+                engine,
                 job_id: Some(job),
                 force_cross_volume: true,
                 probe: Some(probe),
@@ -3166,6 +3177,7 @@ mod prestage_gate {
         fn drop(&mut self) {
             release();
             crate::core::Core::set_prestage_hooks(crate::core::PrestageHooks {
+                engine: 0,
                 job_id: None,
                 force_cross_volume: false,
                 probe: None,
@@ -3200,7 +3212,7 @@ fn revoked_cross_volume_publish_never_lands_and_locks_stay_free() {
         .job_submit_upload(&host.endpoint_id(), 0, "", 0, "arrived")
         .unwrap();
     let rx = receiver_id(&host, job);
-    let _guard = prestage_gate::Guard::install(rx);
+    let _guard = prestage_gate::Guard::install(host.prestage_key(), rx);
     let driver_host = Arc::clone(&host);
     let driver_controller = Arc::clone(&controller);
     let worker = std::thread::spawn(move || {
@@ -3329,9 +3341,10 @@ mod publish_gate {
     pub struct Guard;
 
     impl Guard {
-        pub fn install(job: u64) -> Self {
+        pub fn install(engine: usize, job: u64) -> Self {
             reset();
             crate::core::Core::set_prestage_hooks(crate::core::PrestageHooks {
+                engine,
                 job_id: Some(job),
                 force_cross_volume: true,
                 probe: None,
@@ -3347,6 +3360,7 @@ mod publish_gate {
             release_mkdir();
             release_sync();
             crate::core::Core::set_prestage_hooks(crate::core::PrestageHooks {
+                engine: 0,
                 job_id: None,
                 force_cross_volume: false,
                 probe: None,
@@ -3394,7 +3408,7 @@ fn parked_mkdir_and_stage_sync_leave_locks_free() {
         .job_submit_upload(&host.endpoint_id(), 0, "", 0, "arrived")
         .unwrap();
     let rx = receiver_id(&host, job);
-    let _guard = publish_gate::Guard::install(rx);
+    let _guard = publish_gate::Guard::install(host.prestage_key(), rx);
     let driver_host = Arc::clone(&host);
     let driver_controller = Arc::clone(&controller);
     let worker = std::thread::spawn(move || {

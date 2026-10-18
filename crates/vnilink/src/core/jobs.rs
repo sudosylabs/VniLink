@@ -38,6 +38,9 @@ const STAGING_DIR: &str = "staging";
 /// sync (`sync_probe`) to prove global locks stay free.
 #[cfg(unix)]
 pub(crate) struct PrestageHooks {
+    /// The engine the job belongs to ([`Core::prestage_key`]): job ids are
+    /// per engine, and tests run several engines in one process.
+    pub(crate) engine: usize,
     pub(crate) job_id: Option<u64>,
     pub(crate) force_cross_volume: bool,
     pub(crate) probe: Option<fn(u64, u64)>,
@@ -48,6 +51,7 @@ pub(crate) struct PrestageHooks {
 #[cfg(unix)]
 pub(crate) static PRESTAGE_HOOKS: std::sync::Mutex<PrestageHooks> =
     std::sync::Mutex::new(PrestageHooks {
+        engine: 0,
         job_id: None,
         force_cross_volume: false,
         probe: None,
@@ -1294,7 +1298,7 @@ impl Core {
         #[cfg(unix)]
         let mkdir_probe = {
             let hooks = lock(&PRESTAGE_HOOKS);
-            if hooks.job_id == Some(id) {
+            if hooks.engine == self.prestage_key() && hooks.job_id == Some(id) {
                 hooks.mkdir_probe
             } else {
                 None
@@ -1385,6 +1389,12 @@ impl Core {
         *lock(&PRESTAGE_HOOKS) = hooks;
     }
 
+    /// Identifies this engine to [`PrestageHooks`].
+    #[cfg(unix)]
+    pub(crate) fn prestage_key(&self) -> usize {
+        Arc::as_ptr(&self.shared) as usize
+    }
+
     /// Test probe for in-flight serve opens; see [`SERVE_SOURCE_PROBE`].
     /// Production leaves it unset.
     #[cfg(test)]
@@ -1436,7 +1446,7 @@ impl Core {
         use std::io::Read;
         let (force, probe, sync_probe) = {
             let hooks = lock(&PRESTAGE_HOOKS);
-            let scoped = hooks.job_id == Some(id);
+            let scoped = hooks.engine == self.prestage_key() && hooks.job_id == Some(id);
             (
                 scoped && hooks.force_cross_volume,
                 if scoped { hooks.probe } else { None },
@@ -1561,7 +1571,7 @@ impl Core {
         };
         let mkdir_probe = {
             let hooks = lock(&PRESTAGE_HOOKS);
-            if hooks.job_id == Some(id) {
+            if hooks.engine == self.prestage_key() && hooks.job_id == Some(id) {
                 hooks.mkdir_probe
             } else {
                 None

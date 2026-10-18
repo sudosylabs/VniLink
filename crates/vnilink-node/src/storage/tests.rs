@@ -14,9 +14,10 @@ use super::database::{
     arm_schema_fault, bundled_sqlite_version, expected_vfs_name, SchemaFault, CREATE_SQL,
 };
 use super::key::{FileVault, KeyVault, KeyringVault, MemoryVault, KEY_ACCOUNT, KEY_SERVICE};
+#[cfg(unix)]
+use super::paths::linux_app_dir;
 use super::paths::{
-    self, linux_app_dir, linux_fstype_is_remote, linux_mount_fstype, linux_path_is_remote,
-    resolve_mount_path,
+    self, linux_fstype_is_remote, linux_mount_fstype, linux_path_is_remote, resolve_mount_path,
 };
 use super::{recover_installation, EncryptedInstallationStore, Failure};
 
@@ -62,18 +63,11 @@ impl Drop for Fixture {
     }
 }
 
+/// The engine directory the store expects: owner-only, as production creates
+/// it. On Windows a plain directory inherits the temp folder's broader DACL,
+/// which the store rightly refuses.
 fn create_private_dir(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        let mut builder = fs::DirBuilder::new();
-        builder.mode(0o700);
-        builder.create(path).unwrap();
-    }
-    #[cfg(not(unix))]
-    {
-        fs::create_dir(path).unwrap();
-    }
+    super::paths::ensure_private_dir(path).expect("private fixture directory");
 }
 
 fn memory() -> Arc<MemoryVault> {
@@ -135,6 +129,8 @@ fn bundled_sqlite_is_the_pinned_351_release() {
     assert_eq!(bundled_sqlite_version(), "3.51.3");
 }
 
+// Linux path rules over Unix paths; on Windows `/var/data` is not even absolute.
+#[cfg(unix)]
 #[test]
 fn linux_paths_follow_absolute_xdg_then_home() {
     let home = Path::new("/home/me");

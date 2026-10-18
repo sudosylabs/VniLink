@@ -4,6 +4,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -18,11 +19,14 @@ use super::paths::linux_app_dir;
 use super::{EncryptedInstallationStore, Failure};
 
 fn unique() -> String {
+    // Tests run in parallel threads; the counter keeps names apart when clocks tie.
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    format!("{}-{nanos}", std::process::id())
+    format!("{}-{n}-{nanos}", std::process::id())
 }
 
 struct Fixture {
@@ -35,15 +39,8 @@ impl Fixture {
         let root = std::env::temp_dir().join(format!("vnilink-adapter-{}", unique()));
         fs::create_dir(&root).unwrap();
         let engine = root.join("engine");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            let mut builder = fs::DirBuilder::new();
-            builder.mode(0o700);
-            builder.create(&engine).unwrap();
-        }
-        #[cfg(not(unix))]
-        fs::create_dir(&engine).unwrap();
+        // Owner-only, as production creates it; Windows refuses an inherited DACL.
+        super::paths::ensure_private_dir(&engine).expect("private fixture directory");
         Self { root, engine }
     }
 }
