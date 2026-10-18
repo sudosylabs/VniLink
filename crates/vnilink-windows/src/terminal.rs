@@ -491,7 +491,12 @@ mod tests {
     }
     #[test]
     fn conpty_executes_unicode_and_releases_its_process_on_close() {
-        let factory = WindowsTerminalFactory::for_current_user().unwrap();
+        // cmd syntax: `^` keeps the echoed command line from containing the marker.
+        let cmd = available_shells()
+            .into_iter()
+            .find(|shell| shell.id == "cmd")
+            .unwrap();
+        let factory = WindowsTerminalFactory::for_shell(&cmd).unwrap();
         let mut backend = factory
             .open(
                 TerminalSize {
@@ -541,5 +546,50 @@ mod tests {
             unsafe { WaitForSingleObject(handle(&process), 5000) },
             WAIT_OBJECT_0
         );
+    }
+    /// Automatic is PowerShell when installed, as VS Code's default; it gets the
+    /// same ConPTY round trip in PowerShell syntax.
+    #[test]
+    fn automatic_shell_is_powershell_and_runs_under_conpty() {
+        let automatic = automatic_shell().unwrap();
+        assert!(
+            ["pwsh", "windows-powershell"].contains(&automatic.id.as_str()),
+            "automatic shell is {}",
+            automatic.id
+        );
+        let mut backend = WindowsTerminalFactory::for_shell(&automatic)
+            .unwrap()
+            .open(
+                TerminalSize {
+                    rows: 24,
+                    columns: 80,
+                },
+                BackendStartup::new(Duration::from_secs(10)),
+            )
+            .unwrap();
+        backend
+            .commands
+            .send(TerminalCommand::Input(
+                "Write-Output ('VNI_PWSH_' + 'READY_α')\r\n"
+                    .as_bytes()
+                    .to_vec(),
+            ))
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        let mut bytes = Vec::new();
+        while !bytes
+            .windows("VNI_PWSH_READY_α".len())
+            .any(|b| b == "VNI_PWSH_READY_α".as_bytes())
+        {
+            if let Ok(TerminalEvent::Output(chunk)) = backend.output.try_recv() {
+                bytes.extend(chunk);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "PowerShell output timed out: {}",
+                String::from_utf8_lossy(&bytes)
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 }
