@@ -74,19 +74,20 @@ test('desktop watcher rebuilds TS/CSS, handles atomic resource saves and leaves 
 	}
 });
 
-test('Reload Window shortcut is enabled only in source-checkout development launches', async () => {
+test('Reload Window and DevTools shortcuts are enabled only in source-checkout development launches', async () => {
 	const output = await build({ entryPoints: ['src/code/electron-main/development.ts'], bundle: true, write: false, platform: 'node', format: 'esm' });
 	const { registerDevelopmentWindow } = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
 	const previous = process.env.VNILINK_DEV;
 	const previousDefaultApp = process.defaultApp;
 	let handler;
 	let reloaded = 0;
+	let toggled = 0;
 	let prevented = 0;
 	const window = {
 		webContents: {
 			on: (_name, callback) => {
 				handler = callback;
-			}, reloadIgnoringCache: () => reloaded++
+			}, reloadIgnoringCache: () => reloaded++, toggleDevTools: () => toggled++
 		}
 	};
 	try {
@@ -108,6 +109,10 @@ test('Reload Window shortcut is enabled only in source-checkout development laun
 		handler(event, input);
 		assert.equal(reloaded, 1);
 		assert.equal(prevented, 1);
+		const devtools = process.platform === 'darwin' ? { ...input, key: 'ˆ', code: 'KeyI', alt: true } : { ...input, key: 'I', code: 'KeyI', shift: true };
+		handler(event, devtools);
+		assert.equal(toggled, 1);
+		assert.equal(prevented, 2);
 	} finally {
 		process.defaultApp = previousDefaultApp;
 		if (previous === undefined) {

@@ -26,6 +26,7 @@ import { ServiceCollection } from '../../platform/instantiation/common/serviceCo
 import { ILifecycleMainService, LifecycleMainService } from '../../platform/lifecycle/electron-main/lifecycleMainService.js';
 import { ConsoleMainLogger, ILogService, LogLevel } from '../../platform/log/common/log.js';
 import { LogService } from '../../platform/log/common/logService.js';
+import { installApplicationMenu, registerEditingShortcuts } from '../../platform/menubar/electron-main/menubar.js';
 import { NATIVE_HOST_CHANNEL_NAME } from '../../platform/native/common/native.js';
 import { NativeHostChannel } from '../../platform/native/electron-main/nativeHostChannel.js';
 import { INativeHostMainService, NativeHostMainService } from '../../platform/native/electron-main/nativeHostMainService.js';
@@ -101,6 +102,7 @@ export class VniLinkApplication extends Disposable {
 		try {
 			await app.whenReady();
 			this.checkRunning();
+			installApplicationMenu();
 			await this.instantiationService.invokeFunction(accessor => accessor.get(IConfigurationMainService)).initialize();
 			this.checkRunning();
 			this.instantiationService.invokeFunction(accessor => {
@@ -268,6 +270,7 @@ export class VniLinkApplication extends Disposable {
 		this.checkRunning();
 		const windows = this.instantiationService.invokeFunction(accessor => accessor.get(IWindowsMainService));
 		const window = await windows.openMainWindow(this.options.showWindow ?? true);
+		registerEditingShortcuts(window);
 		registerDevelopmentWindow(window);
 		this.checkRunning();
 		return window;
