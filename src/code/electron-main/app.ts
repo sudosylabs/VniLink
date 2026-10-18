@@ -20,6 +20,7 @@ import { ENGINE_CHANNEL_NAME } from '../../platform/engine/common/engineService.
 import { EngineChannel } from '../../platform/engine/electron-main/engineChannel.js';
 import { EngineMainService, IEngineMainService } from '../../platform/engine/electron-main/engineMainService.js';
 import { HostingMainService, IHostingMainService } from '../../platform/hosting/electron-main/hostingMainService.js';
+import { IScreenHostingMainService, ScreenHostingMainService } from '../../platform/hosting/electron-main/screenHostingMainService.js';
 import { ITrayMainService, TrayMainService } from '../../platform/tray/electron-main/trayMainService.js';
 import { traySupported } from '../../platform/tray/electron-main/traySupport.js';
 import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.js';
@@ -80,6 +81,7 @@ export class VniLinkApplication extends Disposable {
 			[INativeHostMainService, new SyncDescriptor(NativeHostMainService)],
 			[IEngineMainService, new SyncDescriptor(EngineMainService)],
 			[IHostingMainService, new SyncDescriptor(HostingMainService)],
+			[IScreenHostingMainService, new SyncDescriptor(ScreenHostingMainService)],
 			[ITrayMainService, new SyncDescriptor(TrayMainService)],
 			[IPermissionsMainService, new SyncDescriptor(PermissionsMainService)],
 			[IConfigurationMainService, new SyncDescriptor(ConfigurationMainService, [join(app.getPath('userData'), 'settings.json')])],
@@ -121,6 +123,7 @@ export class VniLinkApplication extends Disposable {
 			this.checkRunning();
 			this.instantiationService.invokeFunction(accessor => {
 				accessor.get(IHostingMainService).start();
+				void accessor.get(IScreenHostingMainService).start();
 			});
 			if (await traySupported()) {
 				this.checkRunning();

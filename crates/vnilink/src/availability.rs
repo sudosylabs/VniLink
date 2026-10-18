@@ -208,6 +208,14 @@ impl Availability {
         if self.available {
             return RemoteStatus::Available;
         }
+        // Consent is what its owner can fix. A desktop host that cannot start
+        // without it also reads as not implemented, which would hide that.
+        if self
+            .reasons
+            .contains(&AvailabilityReason::DeniedOsPermission)
+        {
+            return RemoteStatus::NeedsPermission;
+        }
         match self.reasons.first() {
             Some(AvailabilityReason::MissingImplementation) => RemoteStatus::Unsupported,
             Some(AvailabilityReason::DeniedOsPermission) => RemoteStatus::NeedsPermission,

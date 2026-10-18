@@ -11,6 +11,7 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 const bundle = await build({
 	stdin: {
 		contents: `export { HostingMainService } from './src/platform/hosting/electron-main/hostingMainService.js';
+			export { ScreenHostingMainService } from './src/platform/hosting/electron-main/screenHostingMainService.js';
 			export { SystemSettings, AutostartLoginItem, autostartEntry } from './src/platform/configuration/electron-main/systemSettings.js';
 			export { Emitter } from './src/base/common/event.js';`,
 		loader: 'ts', resolveDir: root,
@@ -19,12 +20,12 @@ const bundle = await build({
 	plugins: [{
 		name: 'electron-fixture', setup(builder) {
 			builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }));
-			builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: 'export const app = {}; export class MessageChannelMain { } export const utilityProcess = {}; export const ipcMain = {}; export default { app, ipcMain };', loader: 'js' }));
+			builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: 'export const app = {}; export class MessageChannelMain { } export const utilityProcess = {}; export const ipcMain = {}; export const screen = {}; export const shell = {}; export const systemPreferences = {}; export default { app, ipcMain };', loader: 'js' }));
 		}
 	}],
 });
 
-const { HostingMainService, SystemSettings, AutostartLoginItem, autostartEntry, Emitter } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
+const { HostingMainService, ScreenHostingMainService, SystemSettings, AutostartLoginItem, autostartEntry, Emitter } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 
 const settle = async () => {
 	for (let step = 0; step < 20; step++) {
@@ -227,5 +228,69 @@ test('the Linux autostart entry quotes the executable and is removed when disabl
 		await assert.rejects(stat(`${path}.tmp`));
 	} finally {
 		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test('the screen host follows the primary display, macOS consent and engine restarts', async () => {
+	const consent = new Emitter();
+	const availability = new Emitter();
+	const calls = [];
+	let granted = false;
+	let display = { displayId: 1, width: 1440, height: 900, pixelWidth: 2880, pixelHeight: 1800 };
+	let displaysChanged = () => undefined;
+	const engine = {
+		available: true, onDidChangeAvailability: availability.event,
+		async execute(command) {
+			calls.push(command);
+			return { type: 'done' };
+		},
+	};
+	const permissions = { isGranted: kind => kind === 'screen' && granted, onDidChangeConsent: consent.event };
+	const environment = (platform) => ({
+		platform, primaryDisplay: () => display, onDidChangeDisplays: listener => {
+			displaysChanged = listener;
+			return () => undefined;
+		},
+	});
+	const types = () => calls.map(command => command.type);
+	const mac = new ScreenHostingMainService(engine, permissions, { warn: () => undefined }, environment('darwin'));
+	try {
+		await mac.start();
+		assert.deepEqual(types(), [], 'macOS shared the screen without Screen Recording');
+		granted = true;
+		consent.fire();
+		await settle();
+		assert.deepEqual(calls, [{ type: 'startNativeScreenSharing', ...display }]);
+		displaysChanged();
+		await settle();
+		assert.equal(calls.length, 1, 'An unchanged display restarted the host');
+		display = { ...display, displayId: 2 };
+		displaysChanged();
+		await settle();
+		assert.deepEqual(types(), ['startNativeScreenSharing', 'stopNativeScreenSharing', 'startNativeScreenSharing']);
+		assert.equal(calls[2].displayId, 2);
+		availability.fire(false);
+		availability.fire(true);
+		await settle();
+		assert.deepEqual(types().slice(3), ['startNativeScreenSharing'], 'A restarted engine was left without a host');
+	} finally {
+		mac.dispose();
+	}
+	calls.length = 0;
+	granted = false;
+	const windows = new ScreenHostingMainService(engine, permissions, { warn: () => undefined }, environment('win32'));
+	try {
+		await windows.start();
+		assert.deepEqual(types(), ['startNativeScreenSharing'], 'Windows waited for a consent it does not have');
+	} finally {
+		windows.dispose();
+	}
+	calls.length = 0;
+	const linux = new ScreenHostingMainService(engine, permissions, { warn: () => undefined }, environment('other'));
+	try {
+		await linux.start();
+		assert.deepEqual(types(), [], 'A platform without a native host was asked to share');
+	} finally {
+		linux.dispose();
 	}
 });

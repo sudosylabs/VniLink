@@ -91,6 +91,9 @@ pub(super) struct NativeRuntimeState {
     next_recording: u64,
     #[cfg(target_os = "macos")]
     screen_hosts: HashMap<u32, vnilink_app::MacHost>,
+    /// The primary output; Windows hosts one desktop for every viewer.
+    #[cfg(windows)]
+    windows_host: Option<(u32, vnilink_app::WindowsHost)>,
     input_ready: bool,
 }
 impl NativeRuntimeState {
@@ -105,6 +108,8 @@ impl NativeRuntimeState {
             next_recording: 1,
             #[cfg(target_os = "macos")]
             screen_hosts: HashMap::new(),
+            #[cfg(windows)]
+            windows_host: None,
             input_ready: false,
         }
     }
@@ -148,7 +153,17 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                 state.native.screen_hosts.insert(*display_id, host);
                 Ok(Reply::Done)
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(windows)]
+            {
+                // Desktop Duplication reads the output itself; the geometry only names it.
+                let _ = (width, height, pixel_width, pixel_height);
+                if state.native.windows_host.is_none() {
+                    let host = state.core.windows_host().map_err(core_error)?;
+                    state.native.windows_host = Some((*display_id, host));
+                }
+                Ok(Reply::Done)
+            }
+            #[cfg(not(any(target_os = "macos", windows)))]
             {
                 let _ = (display_id, width, height, pixel_width, pixel_height);
                 Err(Error::from_reason(
@@ -164,11 +179,15 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                     host.stop();
                 }
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(windows)]
+            {
+                state.native.windows_host = None;
+            }
+            #[cfg(any(target_os = "macos", windows))]
             {
                 Ok(Reply::Done)
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", windows)))]
             {
                 Err(Error::from_reason(
                     "Native screen sharing is not connected on this platform",
@@ -194,7 +213,23 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                     error: host.error(),
                 })
                 .collect();
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(windows)]
+            let displays = state
+                .native
+                .windows_host
+                .iter()
+                .map(|(id, host)| TransferSharingStatus {
+                    display_id: *id,
+                    phase: if host.error().is_some() {
+                        "Failed"
+                    } else {
+                        "Sharing"
+                    }
+                    .into(),
+                    error: host.error(),
+                })
+                .collect();
+            #[cfg(not(any(target_os = "macos", windows)))]
             let displays = vec![];
             Ok(Reply::NativeSharingStatus { displays })
         }

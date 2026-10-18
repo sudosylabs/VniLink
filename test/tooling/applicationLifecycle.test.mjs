@@ -35,6 +35,9 @@ const services = {
 	hostingMainService: `import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js'; import { state } from 'electron';
 		export const IHostingMainService = createDecorator('hostingMainService');
 		export class HostingMainService { start() { state.hosting = (state.hosting ?? 0) + 1; } }`,
+	screenHostingMainService: `import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js';
+		export const IScreenHostingMainService = createDecorator('screenHostingMainService');
+		export class ScreenHostingMainService { async start() { } }`,
 	systemSettings: `import { state } from 'electron';
 		export function setRunInBackground(value) { state.background = value; }
 		export function launchedAtLogin() { return state.atLogin === true; }`,
@@ -63,7 +66,7 @@ async function load(entry, exports, extra = '') {
 		stdin: { contents: `export { ${exports} } from '${entry}'; export { app, state } from 'electron'; ${extra}`, loader: 'ts', resolveDir: root }, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json', plugins: [{
 			name: 'main-process-fixtures', setup(builder) {
 				builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }));
-				builder.onResolve({ filter: /\/(engineMainService|configurationMainService|windowsMainService|nativeHostMainService|permissionsMainService|recordingMainService|encryptionMainService|ipc\.electron|ipcMain|development|menubar|hostingMainService|systemSettings|trayMainService|traySupport)\.js$/ }, ({ path }) => entry.endsWith('lifecycleMainService.ts') ? undefined : ({ path: path.split('/').at(-1).replace(/\.js$/, ''), namespace: 'fixture' }));
+				builder.onResolve({ filter: /\/(engineMainService|configurationMainService|windowsMainService|nativeHostMainService|permissionsMainService|recordingMainService|encryptionMainService|ipc\.electron|ipcMain|development|menubar|hostingMainService|screenHostingMainService|systemSettings|trayMainService|traySupport)\.js$/ }, ({ path }) => entry.endsWith('lifecycleMainService.ts') ? undefined : ({ path: path.split('/').at(-1).replace(/\.js$/, ''), namespace: 'fixture' }));
 				builder.onLoad({ filter: /.*/, namespace: 'fixture' }, ({ path }) => ({ contents: path === 'electron' ? electron : services[path], loader: 'js', resolveDir: root }));
 			}
 		}]

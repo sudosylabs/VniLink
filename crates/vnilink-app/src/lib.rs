@@ -52,6 +52,8 @@ mod files;
 mod macos;
 mod power;
 mod recording;
+#[cfg(windows)]
+mod windows;
 pub use power::{FfiPowerKind, FfiPowerPhase, FfiPowerPolicy, FfiPowerStatus};
 pub use recording::{
     recover_desktop_recording, FfiRecordingFailure, FfiRecordingLimits, FfiRecordingPhase,
@@ -80,6 +82,8 @@ mod types;
 #[cfg(target_os = "macos")]
 pub use macos::{MacFrame, MacHost, MacViewer};
 pub use storage::{CredentialStore, FfiRelay, FfiRelayInput};
+#[cfg(windows)]
+pub use windows::WindowsHost;
 
 pub use error::FfiError;
 pub use events::{EventPoller, VideoPoller};

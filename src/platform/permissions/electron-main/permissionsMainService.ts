@@ -1,4 +1,6 @@
 import { shell, systemPreferences } from 'electron';
+import { Emitter } from '../../../base/common/event.js';
+import { Disposable } from '../../../base/common/lifecycle.js';
 import { platform } from '../../../base/common/process.js';
 import { isBuilt } from '../../environment/electron-main/environment.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
@@ -14,12 +16,17 @@ export const IPermissionsMainService = createDecorator<PermissionsMainService>('
  * Reads live OS consent and tells the engine which native backends it may use.
  * Synchronization repeats only when the reported consent changes.
  */
-export class PermissionsMainService {
+export class PermissionsMainService extends Disposable {
 	declare public readonly _serviceBrand: undefined;
+	private readonly consentChanged = this._register(new Emitter<void>());
+	/** Fires when reported OS consent changes, such as Screen Recording being granted. */
+	public readonly onDidChangeConsent = this.consentChanged.event;
 	private readonly machine = new MachinePermissions(platform, !isBuilt(), systemPreferences, url => shell.openExternal(url));
 	private synchronized: string | undefined;
 
-	constructor(@IEngineMainService private readonly engine: EngineMainService) { }
+	constructor(@IEngineMainService private readonly engine: EngineMainService) {
+		super();
+	}
 
 	public snapshot(): PermissionSnapshot {
 		return this.machine.snapshot();
@@ -33,15 +40,21 @@ export class PermissionsMainService {
 		const snapshot = await this.machine.execute(command);
 		const key = JSON.stringify(snapshot.permissions.map(permission => [permission.kind, permission.status]));
 		if (this.engine.available && key !== this.synchronized) {
+			const changed = this.synchronized !== undefined;
 			await synchronizeNativePermissions(this.engine, platform, snapshot).then(() => {
 				this.synchronized = key;
+				if (changed) {
+					this.consentChanged.fire();
+				}
 			}, () => { /* Keep OS state truthful; retry failed backend synchronization on the next read. */ });
 		}
 		return snapshot;
 	}
 
 	/** Reports current consent to the engine regardless of earlier synchronization. */
-	public synchronize(): Promise<void> {
-		return synchronizeNativePermissions(this.engine, platform, this.snapshot());
+	public async synchronize(): Promise<void> {
+		const snapshot = this.snapshot();
+		await synchronizeNativePermissions(this.engine, platform, snapshot);
+		this.synchronized = JSON.stringify(snapshot.permissions.map(permission => [permission.kind, permission.status]));
 	}
 }

@@ -394,3 +394,22 @@ fn codec_flags_and_input_geometry_do_not_claim_capture_or_clipboard_implementati
             .available
     );
 }
+
+#[test]
+fn a_host_without_screen_consent_tells_peers_it_needs_permission() {
+    let core = start_direct();
+    core.set_video_codecs(crate::VideoCodecCaps::h264_full(64, 64, "test"))
+        .unwrap();
+    // No capture could start: on its own that reads as not implemented.
+    let missing = core
+        .capability_availability(None, Capability::DesktopView)
+        .unwrap();
+    assert_eq!(missing.remote_status(), crate::RemoteStatus::Unsupported);
+    // The owner has not granted screen capture: that is what a peer is told.
+    core.report_os_permission(Capability::DesktopView, true)
+        .unwrap();
+    let denied = core
+        .capability_availability(None, Capability::DesktopView)
+        .unwrap();
+    assert_eq!(denied.remote_status(), crate::RemoteStatus::NeedsPermission);
+}
