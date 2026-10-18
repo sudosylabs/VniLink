@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { ESLint } from 'eslint';
 
 // Proves the ported VS Code rules are wired into the repository configuration, not just present on disk.
-const eslint = new ESLint({ cwd: new URL('../../', import.meta.url).pathname });
+const eslint = new ESLint({ cwd: fileURLToPath(new URL('../../', import.meta.url)) });
 
 async function rulesFor(code) {
 	const [result] = await eslint.lintText(code, { filePath: 'src/workbench/workbench.ts' });

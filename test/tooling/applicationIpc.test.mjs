@@ -21,9 +21,12 @@ export class MessageChannelMain { constructor() { this.port1 = { close() { } }; 
 export default { ipcMain, BrowserWindow };`;
 
 /** Replaces settings.json so commits can be refused on demand. */
+// Forward slashes: these paths are spliced into JavaScript source, where Windows backslashes would be escapes.
+const root = process.cwd().replaceAll('\\', '/');
+
 const store = `
-import { Emitter } from '${process.cwd()}/src/base/common/event.js';
-import { settingDefaults } from '${process.cwd()}/src/platform/configuration/common/configurationSchema.js';
+import { Emitter } from '${root}/src/base/common/event.js';
+import { settingDefaults } from '${root}/src/platform/configuration/common/configurationSchema.js';
 export const disk = { fail: false, commits: 0, file: {} };
 const changed = new Emitter();
 export class UserSettings {
