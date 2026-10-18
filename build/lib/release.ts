@@ -61,7 +61,6 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 		const packageJson = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as PackageJson;
 		await writeFile(join(app, 'package.json'), JSON.stringify({ name: product.applicationName, productName: product.nameLong, version: packageJson.version, private: true, main: 'main.cjs', type: 'module', author: product.publisherName, description: 'Cross-platform remote access through paired computers.', homepage: product.repositoryUrl, desktopName: product.platforms.linux.desktopFileName, license: 'UNLICENSED' }, null, 2) + '\n');
 		await writeFile(join(app, 'product.json'), JSON.stringify(product, null, 2) + '\n');
-		await cp(join(root, 'assets/tray'), join(app, 'assets/tray'), { recursive: true });
 		const artwork = process.platform === 'darwin' ? [platform.icon, product.platforms.darwin.fallbackIconSource] : [platform.icon];
 		for (const asset of artwork) {
 			const destination = join(stage, 'packaging-resources', asset);
@@ -75,7 +74,7 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 		const files = await releaseInventory(stage);
 		const paths = new Set(files.map(file => file.path));
 		const bundles = bundleOptions(root, { production: true, outputDirectory: app }).map(option => relative(stage, option.outfile ?? '').split('\\').join('/'));
-		for (const name of [...bundles, 'app/renderer/renderer.css', 'app/renderer/index.html', 'app/native/vnilink.node', 'app/native/build.json', 'app/licenses/native-codecs/native-codecs.txt', 'app/relink/source/Cargo.lock']) {
+		for (const name of [...bundles, 'app/renderer/renderer.css', 'app/renderer/index.html', 'app/assets/tray/idleTemplate.png', 'app/native/vnilink.node', 'app/native/build.json', 'app/licenses/native-codecs/native-codecs.txt', 'app/relink/source/Cargo.lock']) {
 			if (!paths.has(name)) {
 				throw new Error(`Missing release input: ${name}`);
 			}

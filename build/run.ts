@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { buildApplication } from './lib/bundles.ts';
 import { DevelopmentSession, startApplication } from './lib/development.ts';
 import { buildInstallers } from './lib/installers.ts';
+import { renderTrayAssets } from './lib/trayAssets.ts';
 import { packageApplication } from './lib/package.ts';
 import { checkProduct } from './lib/product.ts';
 import { buildRelease } from './lib/release.ts';
@@ -33,6 +34,7 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 	'test:rust': (root, signal) => testRust(root, signal),
 	'test:linux': (root, signal) => validateLinux(root, signal),
 	'check:product': root => checkProduct(root),
+	'assets:tray': (root, signal) => renderTrayAssets(root, signal),
 	'check:upstream': () => verifyUpstream(),
 	'format': (_root, _signal, args) => formatFiles(args),
 	'vscode': (_root, _signal, args) => vscodeCommand(args),

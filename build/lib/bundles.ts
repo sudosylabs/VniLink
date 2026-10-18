@@ -34,6 +34,8 @@ export function resources(root: string, outputDirectory = join(root, 'out')): Re
 	return [
 		['src/workbench/index.html', 'renderer/index.html'],
 		['assets/desktop/app-icon.svg', 'renderer/app-icon.svg'],
+		// Tray icons, loaded by the main process next to its bundle.
+		['assets/tray', 'assets/tray'],
 		['node_modules/@phosphor-icons/core/LICENSE', 'licenses/phosphor-icons.txt'],
 		['LICENSE.vscode.txt', 'licenses/vscode.txt'],
 		['ThirdPartyNotices.vscode.txt', 'licenses/vscode-third-party.txt'],

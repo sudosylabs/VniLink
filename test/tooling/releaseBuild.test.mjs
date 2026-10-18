@@ -113,7 +113,6 @@ test('release publication inventories only complete payloads, cleans failures an
 			await put(root, path);
 		}
 		await put(root, 'product.json', JSON.stringify(product));
-		await put(root, 'assets/tray/trayTemplate.png');
 		for (const platform of Object.values(product.platforms)) {
 			await put(root, platform.icon.endsWith('.icon') ? `${platform.icon}/icon.json` : platform.icon, '{}');
 		}
@@ -124,7 +123,7 @@ test('release publication inventories only complete payloads, cleans failures an
 			buildApplication: async (_root, _signal, options) => {
 				assert.equal(options.production, true);
 				assert.equal(options.native.profile, 'release');
-				const names = ['main.cjs', 'engine.cjs', 'preload.cjs', 'renderer/renderer.js', 'renderer/renderer.css', 'renderer/index.html', 'native/vnilink.node', 'native/build.json', 'licenses/native-codecs/native-codecs.txt', 'relink/source/Cargo.lock'];
+				const names = ['main.cjs', 'engine.cjs', 'preload.cjs', 'renderer/renderer.js', 'renderer/renderer.css', 'renderer/index.html', 'assets/tray/idleTemplate.png', 'native/vnilink.node', 'native/build.json', 'licenses/native-codecs/native-codecs.txt', 'relink/source/Cargo.lock'];
 				for (const name of names) {
 					await put(options.outputDirectory, name);
 				}
@@ -155,7 +154,7 @@ test('release publication inventories only complete payloads, cleans failures an
 		mutate = true;
 		await assert.rejects(release(), /inputs changed/);
 		assert.equal(await readFile(join(output, 'build-manifest.json'), 'utf8'), previous);
-		await access(join(output, 'app/assets/tray/trayTemplate.png'));
+		await access(join(output, 'app/assets/tray/idleTemplate.png'));
 		await put(output, 'app/main.cjs', 'modified');
 		await assert.rejects(verifyReleaseFiles(output), /inventory differs/);
 		await mkdir(`${output}.lock`);
