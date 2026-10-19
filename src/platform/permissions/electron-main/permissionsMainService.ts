@@ -1,4 +1,4 @@
-import { shell, systemPreferences } from 'electron';
+import { desktopCapturer, shell, systemPreferences } from 'electron';
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { platform } from '../../../base/common/process.js';
@@ -21,7 +21,10 @@ export class PermissionsMainService extends Disposable {
 	private readonly consentChanged = this._register(new Emitter<void>());
 	/** Fires when reported OS consent changes, such as Screen Recording being granted. */
 	public readonly onDidChangeConsent = this.consentChanged.event;
-	private readonly machine = new MachinePermissions(platform, !isBuilt(), systemPreferences, url => shell.openExternal(url));
+	private readonly machine = new MachinePermissions(platform, !isBuilt(), systemPreferences, url => shell.openExternal(url), async () => {
+		// Asking for capture sources is what makes macOS prompt and list the app.
+		await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
+	});
 	private synchronized: string | undefined;
 
 	constructor(@IEngineMainService private readonly engine: EngineMainService) {

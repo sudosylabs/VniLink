@@ -30,6 +30,8 @@ function fixture(platform = 'darwin') {
 			trusted = true;
 		}, service: new MachinePermissions(platform, true, preferences, async url => {
 			urls.push(url);
+		}, async () => {
+			prompts.push('screen');
 		})
 	};
 }
@@ -66,6 +68,22 @@ test('Accessibility requests do not assume a prompt grants access', async () => 
 	const snapshot = await f.service.execute({ type: 'request', kind: 'accessibility' });
 	assert.equal(snapshot.permissions[1].status, 'denied');
 	assert.deepEqual(f.prompts, ['accessibility']);
+});
+
+test('Screen Recording is asked for once so macOS lists the app, then given in its settings', async () => {
+	const f = fixture();
+	assert.equal(f.service.snapshot().permissions[0].canRequest, true);
+	const snapshot = await f.service.execute({ type: 'request', kind: 'screen' });
+	// macOS decides in its own prompt; the status stays what it reports.
+	assert.equal(snapshot.permissions[0].status, 'denied');
+	assert.equal(snapshot.permissions[0].canRequest, false);
+	assert.equal(snapshot.permissions[0].canOpenSettings, true);
+	assert.deepEqual(f.prompts, ['screen']);
+	await assert.rejects(f.service.execute({ type: 'request', kind: 'screen' }));
+	assert.deepEqual(f.prompts, ['screen']);
+	const granted = fixture();
+	granted.states.screen = 'granted';
+	assert.equal(granted.service.snapshot().permissions[0].canRequest, false);
 });
 
 test('platform limitations never become fake grants or invoke unsupported APIs', async () => {

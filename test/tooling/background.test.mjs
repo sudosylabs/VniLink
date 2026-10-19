@@ -20,7 +20,7 @@ const bundle = await build({
 	plugins: [{
 		name: 'electron-fixture', setup(builder) {
 			builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }));
-			builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: 'export const app = {}; export class MessageChannelMain { } export const utilityProcess = {}; export const ipcMain = {}; export const screen = {}; export const shell = {}; export const systemPreferences = {}; export default { app, ipcMain };', loader: 'js' }));
+			builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: 'export const app = {}; export class MessageChannelMain { } export const utilityProcess = {}; export const ipcMain = {}; export const screen = {}; export const shell = {}; export const desktopCapturer = {}; export const systemPreferences = {}; export default { app, ipcMain };', loader: 'js' }));
 		}
 	}],
 });

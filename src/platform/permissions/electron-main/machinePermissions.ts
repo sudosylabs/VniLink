@@ -8,12 +8,19 @@ const macSettings: Record<PermissionKind, string> = {
 /** OS consent is queried live; it is never stored as an application preference. */
 export class MachinePermissions {
 	private requesting = false;
+	/** macOS prompts for Screen Recording once; after that, access is given in System Settings. */
+	private screenRequested = false;
 
 	constructor(
 		private readonly platform: string,
 		private readonly development: boolean,
 		private readonly preferences: Preferences,
 		private readonly openExternal: (url: string) => Promise<void>,
+		/**
+		 * Asks for the screen as a capture source. Until an app asks, macOS
+		 * neither prompts nor lists it under Screen Recording.
+		 */
+		private readonly requestScreen: () => Promise<void> = () => Promise.resolve(),
 	) { }
 
 	private permission(kind: PermissionKind): MachinePermission {
@@ -26,7 +33,8 @@ export class MachinePermissions {
 				status = 'unknown';
 			}
 		}
-		return { kind, status, canRequest: this.platform === 'darwin' && (kind === 'accessibility' ? status === 'denied' : (kind === 'camera' || kind === 'microphone') && status === 'not-determined'), canOpenSettings: this.platform === 'darwin' || (this.platform === 'win32' && (kind === 'camera' || kind === 'microphone')) };
+		const canRequest = this.platform === 'darwin' && (kind === 'accessibility' ? status === 'denied' : kind === 'screen' ? status !== 'granted' && status !== 'unknown' && !this.screenRequested : status === 'not-determined');
+		return { kind, status, canRequest, canOpenSettings: this.platform === 'darwin' || (this.platform === 'win32' && (kind === 'camera' || kind === 'microphone')) };
 	}
 
 	public snapshot(): PermissionSnapshot {
@@ -46,7 +54,10 @@ export class MachinePermissions {
 			try {
 				if (command.kind === 'accessibility') {
 					this.preferences.isTrustedAccessibilityClient(true);
-				} else if (command.kind === 'camera' || command.kind === 'microphone') {
+				} else if (command.kind === 'screen') {
+					this.screenRequested = true;
+					await this.requestScreen();
+				} else {
 					await this.preferences.askForMediaAccess(command.kind);
 				}
 			} finally {
