@@ -10,7 +10,7 @@ import { IWorkbenchConfigurationService } from '../../services/configuration/con
 import { IPermissionService } from '../../services/permissions/permissionService.js';
 import { createPageHeading, type IHomePage } from '../home/homePages.js';
 import { Extensions, SettingBoolControl, SettingEnumControl, SettingNumberControl, type ISettingControl, type ISettingControlsRegistry } from './settingRenderers.js';
-import { SettingsPageStyle, type ISettingsPageDescriptor, type ISettingsSectionDescriptor, type ISettingsWidget } from './settingsLayout.js';
+import { type ISettingsPageDescriptor, type ISettingsSectionDescriptor, type ISettingsWidget } from './settingsLayout.js';
 import { SettingsStateObserver } from './settingsStateObserver.js';
 import './media/settingsForm.css';
 
@@ -63,7 +63,7 @@ export class SettingsPage extends Disposable implements IHomePage {
 		const descriptor = this.descriptor;
 		this.element.append(createPageHeading(descriptor.title, descriptor.description));
 		const content = append(this.element, $(`.${descriptor.contentClass.split(' ').join('.')}`));
-		const pageStatus = descriptor.style === SettingsPageStyle.Form ? $(`p.${descriptor.statusClass ?? 'settings-status'}`, { role: 'status' }) : undefined;
+		const pageStatus = $(`p.${descriptor.statusClass ?? 'settings-status'}`, { role: 'status' });
 		for (const section of descriptor.header ?? []) {
 			this.renderSection(content, section, pageStatus);
 		}
@@ -74,10 +74,8 @@ export class SettingsPage extends Disposable implements IHomePage {
 		if (descriptor.note) {
 			append(content, $('p.settings-help.settings-page-note')).textContent = descriptor.note;
 		}
-		if (pageStatus) {
-			content.append(pageStatus);
-			this.statuses.push(pageStatus);
-		}
+		content.append(pageStatus);
+		this.statuses.push(pageStatus);
 		for (const section of descriptor.footer ?? []) {
 			this.renderSection(content, section, pageStatus);
 		}
@@ -89,16 +87,6 @@ export class SettingsPage extends Disposable implements IHomePage {
 			return;
 		}
 		const element = append(container, $(`section${section.className ? `.${section.className}` : ''}`, { 'data-section': section.id }));
-		if (this.descriptor.style === SettingsPageStyle.Access) {
-			const intro = append(element, $('.access-section-intro'));
-			this.renderTitle(intro, section);
-			const body = append(append(element, $('.access-section-body')), $('div'));
-			const status = $('p.access-status', { role: 'status' });
-			this.renderContents(body, section, status);
-			body.append(status);
-			this.statuses.push(status);
-			return;
-		}
 		this.renderTitle(element, section);
 		this.renderContents(element, section, pageStatus);
 	}

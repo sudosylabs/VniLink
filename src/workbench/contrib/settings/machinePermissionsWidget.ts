@@ -4,35 +4,32 @@ import { Disposable } from '../../../base/common/lifecycle.js';
 import { isMacintosh } from '../../../base/common/platform.js';
 import { permissionKinds, type MachinePermission, type PermissionCommand, type PermissionKind, type PermissionSnapshot, type PermissionStatus } from '../../../platform/permissions/common/permissions.js';
 import { IPermissionService } from '../../services/permissions/permissionService.js';
+import { renderSettingRow } from './settingRenderers.js';
 import type { ISettingsWidget } from './settingsLayout.js';
 
 const titles: Record<PermissionKind, string> = {
 	screen: nls.localize('permissions.screen', 'Screen Recording'), accessibility: nls.localize('permissions.accessibility', 'Accessibility'), camera: nls.localize('permissions.camera', 'Camera'), microphone: nls.localize('permissions.microphone', 'Microphone'),
 };
 
-const descriptions: Record<PermissionKind, string> = {
-	screen: nls.localize('permissions.screenHelp', 'Capture this computer’s screen.'),
-	accessibility: nls.localize('permissions.accessibilityHelp', 'Send keyboard and mouse input to this computer.'),
-	camera: nls.localize('permissions.cameraHelp', 'Access cameras connected to this computer.'),
-	microphone: nls.localize('permissions.microphoneHelp', 'Capture microphone input.'),
+/** Only where the system's own name does not say what VniLink uses it for. */
+const descriptions: Partial<Record<PermissionKind, string>> = {
+	accessibility: nls.localize('permissions.accessibilityHelp', 'Needed to control this computer’s keyboard and mouse.'),
 };
 
 /** macOS applies some consent changes only after a restart; other systems have no such step. */
-const restartNote = nls.localize('permissions.restartNote', 'Changes in System Settings may require restarting the app.');
-
-const restartNoted: ReadonlySet<PermissionKind> = new Set<PermissionKind>(isMacintosh ? ['screen', 'microphone'] : []);
+const restartNote = isMacintosh ? nls.localize('permissions.restartNote', ' Changes made in System Settings may need VniLink to restart.') : '';
 
 const statuses: Record<PermissionStatus, string> = {
-	granted: nls.localize('permissions.granted', 'Allowed'), denied: nls.localize('permissions.denied', 'Not allowed'), restricted: nls.localize('permissions.restricted', 'Restricted'), 'not-determined': nls.localize('permissions.notDetermined', 'Not requested'), unknown: nls.localize('permissions.unknown', 'Status unavailable'), unsupported: nls.localize('permissions.unsupported', 'Not exposed by this platform'), 'not-required': nls.localize('permissions.notRequired', 'No permission needed'),
+	granted: nls.localize('permissions.granted', 'Allowed'), denied: nls.localize('permissions.denied', 'Not allowed'), restricted: nls.localize('permissions.restricted', 'Restricted'), 'not-determined': nls.localize('permissions.notDetermined', 'Not requested'), unknown: nls.localize('permissions.unknown', 'Status unavailable'), unsupported: nls.localize('permissions.unsupported', 'Not used on this system'), 'not-required': nls.localize('permissions.notRequired', 'No permission needed'),
 };
 
 interface PermissionRow { readonly status: HTMLElement; readonly button: HTMLButtonElement; }
 
 /** This app's operating-system access: live consent with request actions, not a setting. */
 export class MachinePermissionsWidget extends Disposable implements ISettingsWidget {
-	private readonly element = $('section.access-section');
+	private readonly element = $('section', { 'data-section': 'permissions' });
 	private readonly rows = new Map<PermissionKind, PermissionRow>();
-	private readonly message = $('p.access-status', { role: 'status' });
+	private readonly message = $('p.settings-help', { role: 'status' });
 	private snapshot: PermissionSnapshot | undefined;
 	private busy = false;
 
@@ -41,19 +38,14 @@ export class MachinePermissionsWidget extends Disposable implements ISettingsWid
 	}
 
 	public render(container: HTMLElement): void {
-		const intro = append(this.element, $('.access-section-intro'));
-		append(append(intro, $('.access-section-header')), $('h2')).textContent = nls.localize('permissions.heading', 'Permissions on this computer');
-		append(intro, $('p.access-description')).textContent = nls.localize('permissions.help', 'Operating-system access for this app. Allowing access here does not give a paired device permission to use it.');
-		const body = append(append(this.element, $('.access-section-body')), $('div'));
+		append(this.element, $('h2')).textContent = nls.localize('permissions.heading', 'Permissions on this computer');
+		append(this.element, $('p.settings-help.settings-section-description')).textContent = nls.localize('permissions.help', 'What your system lets VniLink do. Allowing something here doesn’t share it.') + restartNote;
 		for (const kind of permissionKinds) {
-			const row = append(body, $('.access-toggle-row', { 'data-permission-kind': kind }));
-			const text = append(row, $('div'));
-			append(text, $('span.access-toggle-title')).textContent = titles[kind];
-			append(text, $('span.access-description')).textContent = restartNoted.has(kind) ? `${descriptions[kind]} ${restartNote}` : descriptions[kind];
-			const controls = append(row, $('.machine-permission-controls'));
-			const status = append(controls, $('span.machine-permission-status'));
+			const row = renderSettingRow(this.element, titles[kind], descriptions[kind]);
+			row.element.dataset.permissionKind = kind;
+			const status = append(row.control, $('span.setting-status'));
 			status.textContent = nls.localize('permissions.checking', 'Checking…');
-			const button = append(controls, $<HTMLButtonElement>('button.access-text-button', { type: 'button' }));
+			const button = append(row.control, $<HTMLButtonElement>('button.settings-button', { type: 'button' }));
 			button.hidden = true;
 			this.rows.set(kind, { status, button });
 			this._register(addDisposableListener(button, EventType.CLICK, () => {
@@ -63,7 +55,7 @@ export class MachinePermissionsWidget extends Disposable implements ISettingsWid
 				}
 			}));
 		}
-		body.append(this.message);
+		this.element.append(this.message);
 		container.append(this.element);
 	}
 
@@ -78,8 +70,10 @@ export class MachinePermissionsWidget extends Disposable implements ISettingsWid
 		}
 		row.status.textContent = statuses[permission.status];
 		row.status.dataset.status = permission.status;
-		row.button.hidden = !permission.canRequest && !permission.canOpenSettings;
-		row.button.textContent = permission.canRequest ? nls.localize('permissions.request', 'Request access') : nls.localize('permissions.settings', 'Open settings');
+		// Allowed access needs no action here; the system's own settings can still revoke it.
+		row.button.hidden = permission.status === 'granted' || (!permission.canRequest && !permission.canOpenSettings);
+		row.button.textContent = permission.canRequest ? nls.localize('permissions.request', 'Request access')
+			: isMacintosh ? nls.localize('permissions.systemSettings', 'Open System Settings') : nls.localize('permissions.settings', 'Open Settings');
 		row.button.setAttribute('aria-label', nls.localize('permissions.actionLabel', '{0}: {1}', titles[permission.kind], row.button.textContent));
 	}
 

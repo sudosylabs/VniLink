@@ -1,11 +1,11 @@
 import * as nls from '../../../nls.js';
-import { $, addDisposableListener, append, EventType } from '../../../base/browser/dom.js';
+import { addDisposableListener, EventType } from '../../../base/browser/dom.js';
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import type { ISettingSchema } from '../../../platform/configuration/common/configurationSchema.js';
 import type { TerminalShells } from '../../../platform/engine/common/engine.js';
 import { ITerminalHostService } from '../../services/terminal/terminalHostService.js';
-import { createSelect, wrapSelect, type ISettingControl } from './settingRenderers.js';
+import { createSelect, renderSettingRow, wrapSelect, type ISettingControl } from './settingRenderers.js';
 
 /**
  * `terminal.shell`: the shells installed on this computer, after "Automatic",
@@ -16,7 +16,7 @@ export class TerminalShellControl extends Disposable implements ISettingControl 
 	private readonly changed = this._register(new Emitter<unknown>());
 	public readonly onDidChange = this.changed.event;
 	private readonly select = createSelect([['', nls.localize('terminal.shellAutomatic', 'Automatic')]]);
-	private readonly message = $('p.settings-help');
+	private help: HTMLElement | undefined;
 	private shells: TerminalShells | undefined;
 	private value: unknown = '';
 	private enabled = false;
@@ -32,12 +32,10 @@ export class TerminalShellControl extends Disposable implements ISettingControl 
 	}
 
 	public render(container: HTMLElement): void {
-		const row = append(container, $('label.settings-control-row'));
-		append(row, $('span')).textContent = this.schema.title ?? this.key;
+		const row = renderSettingRow(container, this.schema.title ?? this.key, this.schema.description, this.select);
+		this.help = row.help;
 		this.select.dataset.setting = this.key;
-		row.append(wrapSelect(this.select));
-		append(container, $('p.settings-help')).textContent = this.schema.description ?? '';
-		container.append(this.message);
+		row.control.append(wrapSelect(this.select));
 		this._register(addDisposableListener(this.select, EventType.CHANGE, () => {
 			this.changed.fire(this.select.value);
 		}));
@@ -61,7 +59,7 @@ export class TerminalShellControl extends Disposable implements ISettingControl 
 			this.renderOptions();
 		} catch {
 			if (!this._store.isDisposed) {
-				this.message.textContent = nls.localize('terminal.shellsFailed', 'The shells on this computer could not be checked.');
+				this.setMessage(nls.localize('terminal.shellsFailed', 'The shells on this computer could not be checked.'));
 			}
 		} finally {
 			if (!this._store.isDisposed) {
@@ -95,9 +93,14 @@ export class TerminalShellControl extends Disposable implements ISettingControl 
 		if (this.select.value !== saved) {
 			this.select.value = saved;
 		}
-		this.message.textContent = missing
-			? nls.localize('terminal.shellMissingHelp', 'Not installed on this computer; paired computers get the automatic shell.')
-			: '';
+		this.setMessage(missing ? nls.localize('terminal.shellMissingHelp', 'Not installed on this computer; paired computers get the automatic shell.') : '');
+	}
+
+	/** A problem replaces the help until it is resolved. */
+	private setMessage(message: string): void {
+		if (this.help) {
+			this.help.textContent = message || (this.schema.description ?? '');
+		}
 	}
 
 	public setValue(value: unknown): void {

@@ -7,7 +7,6 @@ import { Disposable, type IDisposable } from '../../../base/common/lifecycle.js'
 import type { ISettingSchema } from '../../../platform/configuration/common/configurationSchema.js';
 import type { BrandedService, IConstructorSignature } from '../../../platform/instantiation/common/instantiation.js';
 import { Registry } from '../../../platform/registry/common/platform.js';
-import { AccessToggle } from './accessToggle.js';
 import './media/settingsControls.css';
 
 /**
@@ -67,36 +66,78 @@ class SettingControlsRegistry implements ISettingControlsRegistry {
 
 Registry.add(Extensions.SettingControls, new SettingControlsRegistry());
 
-/** A switch row: title, description and a `role="switch"` checkbox. */
+let nextRowId = 0;
+
+/** The parts of a setting row a control fills in. */
+export interface ISettingRow {
+	readonly element: HTMLElement;
+	/** One line under the title; empty hides it. */
+	readonly help: HTMLElement;
+	/** Where the control goes, on the right of the row. */
+	readonly control: HTMLElement;
+}
+
+/**
+ * The row every setting uses, as the Connection page lays out its mode: the
+ * title and at most one line of help on the left, the control on the right.
+ * `target` is the control the title names and the help describes.
+ */
+export function renderSettingRow(container: HTMLElement, title: string, help: string | undefined, target?: HTMLElement): ISettingRow {
+	const id = `setting-row-${String(++nextRowId)}`;
+	const element = append(container, $('.setting-row'));
+	const text = append(element, target ? $<HTMLLabelElement>('label.setting-row-text') : $('span.setting-row-text'));
+	append(text, $('span.setting-row-title')).textContent = title;
+	const helpElement = append(text, $('span.setting-row-help', { id: `${id}-help` }));
+	helpElement.textContent = help ?? '';
+	const control = append(element, $('span.setting-row-control'));
+	if (target) {
+		target.id ||= id;
+		if (text instanceof HTMLLabelElement) {
+			text.htmlFor = target.id;
+		}
+		target.setAttribute('aria-describedby', helpElement.id);
+	}
+	return { element, help: helpElement, control };
+}
+
+/** A switch row: the setting's title and help beside a `role="switch"` checkbox. */
 export class SettingBoolControl extends Disposable implements ISettingControl {
 	private readonly changed = this._register(new Emitter<unknown>());
 	public readonly onDidChange = this.changed.event;
-	private readonly toggle: AccessToggle;
+	private readonly input = $<HTMLInputElement>('input.setting-switch', { type: 'checkbox', role: 'switch', disabled: true });
+	private help: HTMLElement | undefined;
 
 	constructor(private readonly key: string, private readonly schema: ISettingSchema) {
 		super();
-		this.toggle = this._register(new AccessToggle(schema.title ?? key, schema.description ?? '', allowed => {
-			this.changed.fire(allowed);
-		}));
 	}
 
 	public render(container: HTMLElement): void {
-		this.toggle.input.dataset.setting = this.key;
-		container.append(this.toggle.element);
+		const row = renderSettingRow(container, this.schema.title ?? this.key, this.schema.description, this.input);
+		this.help = row.help;
+		this.input.dataset.setting = this.key;
+		row.control.append(this.input);
+		this._register(addDisposableListener(this.input, EventType.CHANGE, () => {
+			if (!this.input.disabled) {
+				this.changed.fire(this.input.checked);
+			}
+		}));
 	}
 
 	public setValue(value: unknown): void {
-		this.toggle.setValue(value === true);
+		if (this.input.checked !== (value === true)) {
+			this.input.checked = value === true;
+		}
 	}
 
 	public setEnabled(enabled: boolean): void {
-		this.toggle.setEnabled(enabled);
+		this.input.disabled = !enabled;
 	}
 
 	public setRestricted(restricted: boolean): void {
-		const description = this.schema.description ?? '';
 		const reason = this.schema.restrictedReason ?? nls.localize('settings.unsupported', 'Not supported on this computer.');
-		this.toggle.setDescription(restricted ? `${description} ${reason}` : description);
+		if (this.help) {
+			this.help.textContent = restricted ? reason : this.schema.description ?? '';
+		}
 	}
 }
 
@@ -105,28 +146,20 @@ export class SettingNumberControl extends Disposable implements ISettingControl 
 	private readonly changed = this._register(new Emitter<unknown>());
 	public readonly onDidChange = this.changed.event;
 	public readonly continuous = true;
-	private readonly input = $<HTMLInputElement>('input', { type: 'number' });
+	private readonly input = $<HTMLInputElement>('input.setting-number', { type: 'number' });
 
 	constructor(private readonly key: string, private readonly schema: ISettingSchema) {
 		super();
 	}
 
 	public render(container: HTMLElement): void {
-		const row = append(container, $('label.settings-control-row'));
-		const caption = append(row, $('span'));
-		if (this.schema.description) {
-			append(caption, $('span.access-toggle-title')).textContent = this.schema.title ?? this.key;
-			append(caption, $('span.settings-help')).textContent = this.schema.description;
-		} else {
-			caption.textContent = this.schema.title ?? this.key;
-		}
-		const control = append(row, $('span.settings-number'));
+		const row = renderSettingRow(container, this.schema.title ?? this.key, this.schema.description, this.input);
 		this.input.min = String(this.schema.minimum ?? '');
 		this.input.max = String(this.schema.maximum ?? '');
 		this.input.step = this.schema.type === 'integer' ? '1' : 'any';
 		this.input.dataset.setting = this.key;
-		control.append(this.input);
-		append(control, $('span')).textContent = this.schema.unit ?? '';
+		row.control.append(this.input);
+		append(row.control, $('span.setting-unit')).textContent = this.schema.unit ?? '';
 		this._register(addDisposableListener(this.input, EventType.INPUT, () => {
 			this.changed.fire(this.input.value === '' ? undefined : Number(this.input.value));
 		}));
@@ -141,11 +174,12 @@ export class SettingNumberControl extends Disposable implements ISettingControl 
 	}
 }
 
-/** A native select with the shared arrow gutter, followed by the setting's description. */
+/** A native select; the help describes the chosen option when the schema describes each. */
 export class SettingEnumControl extends Disposable implements ISettingControl {
 	private readonly changed = this._register(new Emitter<unknown>());
 	public readonly onDidChange = this.changed.event;
 	private readonly select: HTMLSelectElement;
+	private help: HTMLElement | undefined;
 
 	constructor(private readonly key: string, private readonly schema: ISettingSchema) {
 		super();
@@ -153,24 +187,31 @@ export class SettingEnumControl extends Disposable implements ISettingControl {
 	}
 
 	public render(container: HTMLElement): void {
-		const row = append(container, $('label.settings-control-row'));
-		append(row, $('span')).textContent = this.schema.title ?? this.key;
+		const row = renderSettingRow(container, this.schema.title ?? this.key, undefined, this.select);
+		this.help = row.help;
 		this.select.dataset.setting = this.key;
-		row.append(wrapSelect(this.select));
-		if (this.schema.description) {
-			append(container, $('p.settings-help.setting-enum-help')).textContent = this.schema.description;
-		}
+		row.control.append(wrapSelect(this.select));
 		this._register(addDisposableListener(this.select, EventType.CHANGE, () => {
+			this.renderHelp();
 			this.changed.fire(this.select.value);
 		}));
+		this.renderHelp();
 	}
 
 	public setValue(value: unknown): void {
 		this.select.value = typeof value === 'string' ? value : '';
+		this.renderHelp();
 	}
 
 	public setEnabled(enabled: boolean): void {
 		this.select.disabled = !enabled;
+	}
+
+	private renderHelp(): void {
+		const index = (this.schema.enum ?? []).indexOf(this.select.value);
+		if (this.help) {
+			this.help.textContent = this.schema.enumDescriptions?.[index] ?? this.schema.description ?? '';
+		}
 	}
 }
 

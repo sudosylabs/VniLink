@@ -29,13 +29,6 @@ export const enum SettingsRefresh {
 	Interval = 'interval',
 }
 
-export const enum SettingsPageStyle {
-	/** Sections stacked in one column. */
-	Form = 'form',
-	/** Sections with an introduction beside their controls, each with its own status. */
-	Access = 'access',
-}
-
 /**
  * One settings page in Home, in the shape of VS Code's settings layout. The
  * class names keep each page's established look; the page renders the rest.
@@ -47,12 +40,11 @@ export interface ISettingsPageDescriptor {
 	readonly icon: IconId;
 	/** The page element's class; `<id>-page` when omitted. */
 	readonly className?: string;
-	readonly style: SettingsPageStyle;
 	readonly contentClass: string;
 	/** Wraps the sections; omitted when sections sit directly in the content. */
 	readonly fieldsClass?: string;
 	readonly descriptionClass: string;
-	/** The page's status line in the `Form` style. */
+	/** The page's status line. */
 	readonly statusClass?: string;
 	/** A closing remark about when the page's settings take effect. */
 	readonly note?: string;

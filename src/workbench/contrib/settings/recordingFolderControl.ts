@@ -1,32 +1,34 @@
 import * as nls from '../../../nls.js';
-import { $, addDisposableListener, append, EventType } from '../../../base/browser/dom.js';
+import { $, addDisposableListener, EventType } from '../../../base/browser/dom.js';
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import type { ISettingSchema } from '../../../platform/configuration/common/configurationSchema.js';
 import { INativeRuntimeService } from '../../services/nativeRuntime/nativeRuntimeService.js';
-import type { ISettingControl } from './settingRenderers.js';
+import { renderSettingRow, type ISettingControl } from './settingRenderers.js';
 
 /** `recording.directory`: a folder chosen in the system dialog, or the empty default. */
 export class RecordingFolderControl extends Disposable implements ISettingControl {
 	private readonly changed = this._register(new Emitter<unknown>());
 	public readonly onDidChange = this.changed.event;
-	private readonly path = $('span.recording-path');
 	private readonly choose = $<HTMLButtonElement>('button.settings-button', { type: 'button' });
 	private readonly reset = $<HTMLButtonElement>('button.settings-text-button', { type: 'button' });
-	private readonly message = $('p.settings-help');
+	/** The folder in use, shown as the row's help; a failure replaces it. */
+	private path: HTMLElement | undefined;
+	private failure = '';
 	private directory = '';
 	private defaultDirectory = '';
 
-	constructor(_key: string, _schema: ISettingSchema, @INativeRuntimeService private readonly runtime: INativeRuntimeService) {
+	constructor(private readonly key: string, private readonly schema: ISettingSchema, @INativeRuntimeService private readonly runtime: INativeRuntimeService) {
 		super();
 	}
 
 	public render(container: HTMLElement): void {
-		const row = append(container, $('.recording-location'));
-		this.choose.textContent = nls.localize('recording.chooseFolder', 'Choose folder');
+		const row = renderSettingRow(container, this.schema.title ?? this.key, undefined);
+		this.path = row.help;
+		this.path.classList.add('recording-path');
+		this.choose.textContent = nls.localize('recording.chooseFolder', 'Choose…');
 		this.reset.textContent = nls.localize('recording.defaultFolder', 'Use default');
-		row.append(this.path, this.choose, this.reset);
-		container.append(this.message);
+		row.control.append(this.reset, this.choose);
 		this._register(addDisposableListener(this.choose, EventType.CLICK, () => {
 			void this.chooseDirectory();
 		}));
@@ -40,7 +42,8 @@ export class RecordingFolderControl extends Disposable implements ISettingContro
 	}
 
 	private async chooseDirectory(): Promise<void> {
-		this.message.textContent = '';
+		this.failure = '';
+		this.renderPath();
 		try {
 			const directory = await this.runtime.recordingDirectory('choose');
 			if (!this.isDisposed() && directory) {
@@ -48,7 +51,8 @@ export class RecordingFolderControl extends Disposable implements ISettingContro
 			}
 		} catch (error) {
 			if (!this.isDisposed()) {
-				this.message.textContent = error instanceof Error ? error.message : nls.localize('recording.folderFailed', 'Could not choose a recording folder.');
+				this.failure = error instanceof Error ? error.message : nls.localize('recording.folderFailed', 'Could not choose a recording folder.');
+				this.renderPath();
 			}
 		}
 	}
@@ -63,7 +67,11 @@ export class RecordingFolderControl extends Disposable implements ISettingContro
 	}
 
 	private renderPath(): void {
-		this.path.textContent = this.directory || this.defaultDirectory;
+		if (this.path) {
+			this.path.textContent = this.failure || this.directory || this.defaultDirectory;
+		}
+		// The default needs no reset.
+		this.reset.hidden = !this.directory;
 	}
 
 	private isDisposed(): boolean {

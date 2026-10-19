@@ -53,7 +53,8 @@ test('OS permission synchronization does not install input on a Mac without Acce
 
 test('recording uses persisted defaults while retaining an explicit session destination and overrides', async () => {
 	const commands = [];
-	const defaults = { maxBytes: '2097152', maxDurationMs: '60000', maxSegments: 2, maxTotalBytes: '4194304' };
+	// Recording sizes are set in GiB.
+	const defaults = { maxBytes: String(2 * 1073741824), maxDurationMs: '60000', maxSegments: 2, maxTotalBytes: String(4 * 1073741824) };
 	const settings = configuration({ 'recording.maxSegmentSize': 2, 'recording.maxSegmentDuration': 1, 'recording.maxSegments': 2, 'recording.maxTotalSize': 4 });
 	const status = { id: '4', phase: 'Recording', failure: null, frames: '0', bytes: '0', durationMs: '0', segments: 1 };
 	const service = new NativeRuntimeService(fakeEngine({

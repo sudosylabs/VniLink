@@ -6,7 +6,6 @@ import { Extensions as HomeExtensions, HomePageGroup, type IHomePagesRegistry } 
 import { CodecSettingControl } from './codecSettingControl.js';
 import { DesktopQualityControl } from './desktopQualityControl.js';
 import { MachinePermissionsWidget } from './machinePermissionsWidget.js';
-import { MediaPermissionsWidget } from './mediaPermissionsWidget.js';
 import { MediaSourceControl } from './mediaSourceControl.js';
 import { PointerSensitivityControl } from './pointerSensitivityControl.js';
 import { PowerStatusWidget } from './powerStatusWidget.js';
@@ -14,7 +13,7 @@ import { RecordingFolderControl } from './recordingFolderControl.js';
 import { RelaysSettingControl } from './relaysSettingControl.js';
 import { RunningRelaysWidget } from './runningRelaysWidget.js';
 import { Extensions as SettingExtensions, type ISettingControlsRegistry } from './settingRenderers.js';
-import { SettingsPageStyle, SettingsRefresh, type ISettingsPageDescriptor } from './settingsLayout.js';
+import { SettingsRefresh, type ISettingsPageDescriptor } from './settingsLayout.js';
 import { SettingsPage } from './settingsPage.js';
 import { TerminalShellControl } from './terminalShellControl.js';
 import { ThemeSettingControl } from './themeSettingControl.js';
@@ -39,8 +38,8 @@ for (const key of ['media.camera', 'media.microphone', 'media.systemAudio']) {
 	controls.registerControl(key, MediaSourceControl);
 }
 
-/** Pages in sidebar order. Form pages share one column layout; Access pairs each introduction with its controls. */
-const form = { style: SettingsPageStyle.Form, contentClass: 'settings-form-content', fieldsClass: 'settings-form-fields', descriptionClass: 'settings-help' } as const;
+/** Pages in sidebar order. Every page but Connection shares one layout: sections of rows, divided by hairlines. */
+const form = { contentClass: 'settings-form-content', fieldsClass: 'settings-form-fields', descriptionClass: 'settings-help' } as const;
 
 const keepAwakeSettings = (scope: 'incoming' | 'outgoing'): string[] => [`power.${scope}.keepSystemAwake`, `power.${scope}.keepDisplayAwake`, `power.${scope}.idleTimeout`];
 
@@ -48,35 +47,30 @@ const pages: readonly ISettingsPageDescriptor[] = [
 	{
 		id: 'general',
 		title: nls.localize('home.general', 'General'),
-		description: nls.localize('general.description', 'How VniLink starts and stays available.'),
+		description: nls.localize('general.description', 'How VniLink starts and stays reachable.'),
 		icon: Icons.settings,
 		...form,
 		// Start at login is read from the operating system, which can change it too.
 		refresh: SettingsRefresh.Interval,
 		sections: [
-			{ id: 'sharing', title: nls.localize('general.sharing', 'Sharing'), description: nls.localize('general.sharingHelp', 'Whether paired devices can reach this computer. The VniLink icon in the menu bar or system tray shows the same choice.'), settings: ['application.acceptConnections'] },
-			{ id: 'startup', title: nls.localize('general.startup', 'Startup and background'), description: nls.localize('general.startupHelp', 'Paired devices can connect while VniLink is running, with or without its window.'), settings: ['application.openAtLogin', 'application.runInBackground'] },
+			{ id: 'availability', settings: ['application.acceptConnections', 'application.openAtLogin', 'application.runInBackground'] },
 		],
 	},
 	{
 		id: 'appearance',
 		title: nls.localize('home.appearance', 'Appearance'),
-		description: nls.localize('appearance.description', 'Make VniLink feel at home on your device.'),
+		description: nls.localize('appearance.description', 'Choose how VniLink looks.'),
 		icon: Icons.appearance,
-		style: SettingsPageStyle.Form,
-		contentClass: 'appearance-form',
-		descriptionClass: 'appearance-description',
-		statusClass: 'appearance-status',
+		...form,
 		sections: [
-			{ id: 'theme', className: 'appearance-section', title: nls.localize('appearance.theme', 'Color theme'), description: nls.localize('appearance.themeDescription', 'Choose a look, or let it change with your system.'), settings: ['appearance.theme'] },
+			{ id: 'theme', title: nls.localize('appearance.theme', 'Theme'), settings: ['appearance.theme'] },
 		],
 	},
 	{
 		id: 'connection',
 		title: nls.localize('home.connection', 'Connection'),
-		description: nls.localize('home.connectionDescription', 'Relays and how your devices connect.'),
+		description: nls.localize('home.connectionDescription', 'Relays and how your computers connect.'),
 		icon: Icons.connection,
-		style: SettingsPageStyle.Form,
 		contentClass: 'settings-form connection-form',
 		descriptionClass: 'connection-description',
 		sections: [{ id: 'relays', bare: true, settings: ['connection.relays'] }],
@@ -85,26 +79,22 @@ const pages: readonly ISettingsPageDescriptor[] = [
 	{
 		id: 'access',
 		title: nls.localize('home.access', 'Access & Security'),
-		description: nls.localize('access.description', 'Manage the app’s system permissions and the actions remote devices may request.'),
+		description: nls.localize('access.description', 'What paired computers may use here, and what your system lets VniLink do.'),
 		icon: Icons.security,
-		style: SettingsPageStyle.Access,
-		contentClass: 'access-content',
-		descriptionClass: 'access-description',
+		...form,
 		refresh: SettingsRefresh.Interval,
 		sections: [
 			{
 				id: 'sharing',
-				className: 'access-section',
 				title: nls.localize('sharing.title', 'Sharing with paired computers'),
-				description: nls.localize('sharing.description', 'These settings apply to every paired computer. Turning a service off stops its active use. System permissions still apply.'),
+				description: nls.localize('sharing.description', 'Applies to every paired computer. Turning something off ends its use right away.'),
 				settings: ['sharing.screen', 'sharing.files', 'sharing.terminal', 'sharing.camera', 'sharing.microphone', 'sharing.systemAudio', 'sharing.clipboard', 'sharing.recording', 'sharing.systemActions'],
 			},
 			{ id: 'permissions', bare: true, widget: new SyncDescriptor(MachinePermissionsWidget) },
 			{
 				id: 'security',
-				className: 'access-section',
-				title: nls.localize('security.local', 'Remote action rules'),
-				description: nls.localize('security.policyHelp', 'Allow these requests from paired devices when System actions sharing is enabled. These switches set VniLink’s rules; they do not run an action or grant operating-system access.'),
+				title: nls.localize('security.local', 'Remote actions'),
+				description: nls.localize('security.policyHelp', 'Used when System actions is on.'),
 				settings: ['security.allowLock', 'security.allowRestart', 'security.allowShutdown', 'security.allowPrivacy'],
 			},
 		],
@@ -112,24 +102,21 @@ const pages: readonly ISettingsPageDescriptor[] = [
 	{
 		id: 'desktop',
 		title: nls.localize('home.desktop', 'Remote Desktop'),
-		description: nls.localize('desktop.description', 'Choose the picture quality and codec used for new remote desktop connections.'),
+		description: nls.localize('desktop.description', 'Defaults for the remote desktop sessions you start. The other computer may lower them.'),
 		icon: Icons.remoteDesktop,
 		className: 'remote-desktop-page',
-		style: SettingsPageStyle.Form,
-		contentClass: 'desktop-content',
-		descriptionClass: 'settings-help',
+		...form,
 		sections: [
-			{ id: 'quality', className: 'desktop-defaults-section', settings: ['desktop.quality'] },
-			{ id: 'codec', className: 'desktop-processing-section', title: nls.localize('desktop.codecTitle', 'Video codec'), settings: ['desktop.codec'] },
+			{ id: 'quality', title: nls.localize('desktop.quality', 'Stream quality'), settings: ['desktop.quality'] },
+			{ id: 'codec', title: nls.localize('desktop.codecTitle', 'Video codec'), settings: ['desktop.codec'] },
 		],
 	},
 	{
 		id: 'input',
 		title: nls.localize('home.input', 'Keyboard & Mouse'),
-		description: nls.localize('input.description', 'Choose how your keyboard and mouse control remote computers. These defaults apply across your connections.'),
+		description: nls.localize('input.description', 'How your keyboard and mouse work on the computers you control.'),
 		icon: Icons.keyboard,
 		...form,
-		note: nls.localize('input.sessionNote', 'Applies to all connected computers and future connections. Release held keys and mouse buttons before changing these settings.'),
 		sections: [
 			{ id: 'keyboard', title: nls.localize('input.keyboard', 'Keyboard'), settings: ['input.keyboardMode', 'input.swapModifiers'] },
 			{ id: 'mouse', title: nls.localize('input.mouse', 'Mouse'), settings: ['input.pointerSensitivity', 'input.reverseWheel', 'input.swapMouseButtons'] },
@@ -138,57 +125,41 @@ const pages: readonly ISettingsPageDescriptor[] = [
 	{
 		id: 'terminal',
 		title: nls.localize('home.terminal', 'Terminal'),
-		description: nls.localize('terminal.description', 'The shell and limits for remote terminals hosted on this computer.'),
+		description: nls.localize('terminal.description', 'What paired computers get when they open a terminal on this computer.'),
 		icon: Icons.terminal,
 		...form,
 		// The shell list is read again on return, so a shell installed meanwhile appears.
 		refresh: SettingsRefresh.Focus,
+		// Keeping detached shells and replaying their output wait for reconnecting terminals; their engine defaults stand.
 		sections: [
-			{
-				id: 'shell',
-				title: nls.localize('terminal.shellSection', 'Shell'),
-				description: nls.localize('terminal.shellSectionHelp', 'Paired computers with Terminal permission get this shell and cannot choose another.'),
-				settings: ['terminal.shell'],
-			},
-			{
-				id: 'sessions',
-				title: nls.localize('terminal.sessions', 'Session limits'),
-				description: nls.localize('terminal.limitsHelp', 'A device needs Terminal permission and an available shell backend. Changing these limits does not launch a shell. Close hosted terminals before changing them.'),
-				settings: ['terminal.maxSessions', 'terminal.maxSessionsPerDevice'],
-			},
-			{ id: 'reconnect', title: nls.localize('terminal.reconnect', 'Disconnect & reconnect'), settings: ['terminal.persistence', 'terminal.detachedTimeout'] },
-			{ id: 'history', title: nls.localize('terminal.history', 'Output history'), settings: ['terminal.historySize', 'terminal.replaySize'] },
+			{ id: 'shell', settings: ['terminal.shell'] },
+			{ id: 'sessions', title: nls.localize('terminal.sessions', 'Limits'), settings: ['terminal.maxSessions', 'terminal.maxSessionsPerDevice'] },
 		],
 	},
 	{
 		id: 'media',
 		title: nls.localize('home.media', 'Audio & Camera'),
-		description: nls.localize('media.description', 'Choose which cameras and audio sources this computer can share.'),
+		description: nls.localize('media.description', 'The camera and sound this computer shares. Paired computers also need them turned on in Access & Security.'),
 		icon: Icons.audio,
 		...form,
-		note: nls.localize('media.note', 'Devices still need Camera, Microphone or System audio permission to use these sources.'),
 		refresh: SettingsRefresh.Interval,
-		header: [{ id: 'permissions', bare: true, widget: new SyncDescriptor(MediaPermissionsWidget) }],
 		sections: [
-			{ id: 'cameras', title: nls.localize('media.cameras', 'Cameras'), description: nls.localize('media.camerasHelp', 'Choose the camera this computer shares with permitted devices.'), settings: ['media.camera'] },
-			{ id: 'microphones', title: nls.localize('media.microphones', 'Microphones'), description: nls.localize('media.microphonesHelp', 'Choose the microphone used when a permitted device requests it.'), settings: ['media.microphone'] },
-			{ id: 'system', title: nls.localize('media.system', 'System audio'), description: nls.localize('media.systemHelp', 'Share this computer’s sound without changing its local speakers.'), settings: ['media.systemAudio'] },
+			{ id: 'sources', settings: ['media.camera', 'media.microphone', 'media.systemAudio'] },
 		],
 	},
 	{
 		id: 'recording',
 		title: nls.localize('home.recording', 'Recording'),
-		description: nls.localize('recording.description', 'Set the limits used when you record a remote desktop session.'),
+		description: nls.localize('recording.description', 'Where recordings of remote desktop sessions go, and how large they grow.'),
 		icon: Icons.recording,
 		...form,
-		note: nls.localize('recording.note', 'Used for new recordings. You can choose another destination when starting a recording.'),
 		sections: [
-			{ id: 'destination', title: nls.localize('recording.destination', 'Save recordings'), description: nls.localize('recording.destinationHelp', 'Each recording gets its own file in this folder.'), settings: ['recording.directory'] },
-			{ id: 'limits', title: nls.localize('recording.limits', 'Recording segments'), description: nls.localize('recording.limitsHelp', 'A new segment begins when a limit is reached or the video format changes.'), settings: ['recording.maxSegmentSize', 'recording.maxSegmentDuration'] },
+			{ id: 'destination', settings: ['recording.directory'] },
+			{ id: 'files', title: nls.localize('recording.files', 'Files'), description: nls.localize('recording.filesHelp', 'A recording is split into files when one reaches either limit.'), settings: ['recording.maxSegmentSize', 'recording.maxSegmentDuration'] },
 			{
-				id: 'retention',
-				title: nls.localize('recording.retention', 'Retention per recording'),
-				description: nls.localize('recording.retentionHelp', 'Older completed segments from the same recording are removed when these limits are exceeded. Unrelated files are never part of this retention rule.'),
+				id: 'cleanup',
+				title: nls.localize('recording.cleanup', 'Cleanup'),
+				description: nls.localize('recording.cleanupHelp', 'The oldest files of a recording are deleted past either limit. Nothing else in the folder is touched.'),
 				settings: ['recording.maxSegments', 'recording.maxTotalSize'],
 			},
 		],
@@ -196,15 +167,14 @@ const pages: readonly ISettingsPageDescriptor[] = [
 	{
 		id: 'power',
 		title: nls.localize('home.power', 'Power'),
-		description: nls.localize('power.description', 'Keep this computer awake while remote sessions are in use.'),
+		description: nls.localize('power.description', 'Keep computers awake during remote sessions.'),
 		icon: Icons.power,
 		...form,
-		note: nls.localize('power.note', 'Applies to this computer, including sessions already running.'),
 		refresh: SettingsRefresh.Interval,
 		sections: [
-			{ id: 'incoming', title: nls.localize('power.incoming', 'While sharing this computer'), description: nls.localize('power.incomingHelp', 'Sleep behavior while another device is connected. Set the idle timeout to 0 to keep desktop sessions open.'), settings: keepAwakeSettings('incoming') },
-			{ id: 'outgoing', title: nls.localize('power.outgoing', 'While controlling a remote computer'), description: nls.localize('power.outgoingHelp', 'Sleep behavior while you use another device. Set the idle timeout to 0 to keep desktop sessions open.'), settings: keepAwakeSettings('outgoing') },
-			{ id: 'ending', title: nls.localize('power.ending', 'After remote control ends'), description: nls.localize('power.endingHelp', 'Protect the computer when the last controlling session finishes.'), settings: ['power.lockAfterControl'] },
+			{ id: 'incoming', title: nls.localize('power.incoming', 'While sharing this computer'), settings: keepAwakeSettings('incoming') },
+			{ id: 'outgoing', title: nls.localize('power.outgoing', 'While controlling another computer'), settings: keepAwakeSettings('outgoing') },
+			{ id: 'ending', title: nls.localize('power.ending', 'When remote control ends'), settings: ['power.lockAfterControl'] },
 		],
 		footer: [{ id: 'status', bare: true, widget: new SyncDescriptor(PowerStatusWidget) }],
 	},

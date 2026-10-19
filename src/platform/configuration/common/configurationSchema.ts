@@ -1,6 +1,7 @@
 import * as nls from '../../../nls.js';
 import type { IStringDictionary } from '../../../base/common/collections.js';
 import { Registry } from '../../registry/common/platform.js';
+import { isMacintosh } from '../../../base/common/platform.js';
 import { isCodecPreference, isQualityLimits, shellId } from '../../engine/common/engine.js';
 import { Extensions, type IConfigurationNode, type IConfigurationPropertySchema, type IConfigurationRegistry } from './configurationRegistry.js';
 
@@ -113,6 +114,11 @@ function shellChoice(value: unknown): string | undefined {
 	return value === '' || shellId(value) ? undefined : nls.localize('terminal.shellChoice', 'Choose a shell installed on this computer.');
 }
 
+/** Recording sizes are entered in GiB to one decimal place. */
+function tenthsOfGibibytes(value: unknown): string | undefined {
+	return typeof value === 'number' && Math.abs(value * 10 - Math.round(value * 10)) < 1e-9 ? undefined : nls.localize('recording.tenths', 'Enter a size to one decimal place, for example 1.5.');
+}
+
 function relayInfos(value: unknown): string | undefined {
 	return Array.isArray(value) && value.length <= 8 && value.every((relay: unknown) => typeof relay === 'object' && relay !== null && 'url' in relay && typeof relay.url === 'string'
 		&& 'authenticated' in relay && typeof relay.authenticated === 'boolean' && ('replacementToken' in relay ? typeof relay.replacementToken === 'string' && Object.keys(relay).length === 3 : Object.keys(relay).length === 2))
@@ -126,14 +132,15 @@ registerSettings('user', {
 		'application.acceptConnections': {
 			type: 'boolean',
 			default: true,
-			title: nls.localize('application.accept', 'Accept connections from paired devices'),
-			description: nls.localize('application.acceptHelp', 'When off, paired devices cannot connect and anyone connected is disconnected, until you turn it back on.'),
+			title: nls.localize('application.accept', 'Accept connections from paired computers'),
+			description: isMacintosh
+				? nls.localize('application.acceptHelpMac', 'When off, connected computers are disconnected. The menu bar icon has the same switch.')
+				: nls.localize('application.acceptHelp', 'When off, connected computers are disconnected. The tray icon has the same switch.'),
 		},
 		'application.runInBackground': {
 			type: 'boolean',
 			default: true,
 			title: nls.localize('application.background', 'Keep running when the window is closed'),
-			description: nls.localize('application.backgroundHelp', 'Paired devices can still connect to this computer.'),
 			restrictedReason: nls.localize('application.backgroundUnavailable', 'Needs a panel that shows tray icons. On GNOME, install the AppIndicator extension.'),
 		},
 	},
@@ -147,7 +154,6 @@ registerSettings('system', {
 			type: 'boolean',
 			default: false,
 			title: nls.localize('application.login', 'Start when you sign in'),
-			description: nls.localize('application.loginHelp', 'VniLink starts in the background so paired devices can connect.'),
 			restrictedReason: nls.localize('application.loginUnavailable', 'Available in the installed app.'),
 		},
 	},
@@ -162,8 +168,7 @@ registerSettings('user', {
 			enum: ['system', 'light', 'dark'],
 			enumItemLabels: [nls.localize('appearance.system', 'System'), nls.localize('appearance.light', 'Light'), nls.localize('appearance.dark', 'Dark')],
 			default: 'system',
-			title: nls.localize('appearance.theme', 'Color theme'),
-			description: nls.localize('appearance.themeDescription', 'Choose a look, or let it change with your system.'),
+			title: nls.localize('appearance.theme', 'Theme'),
 		},
 	},
 });
@@ -175,15 +180,14 @@ registerSettings('user', {
 		'desktop.quality': {
 			type: 'object',
 			default: { max_bitrate_kbps: 2000, max_frame_rate: 30, max_width: 1920, max_height: 1080 },
-			title: nls.localize('desktop.defaultQuality', 'Default stream quality'),
-			description: nls.localize('desktop.defaultsHelp', 'Default limits for new outgoing desktop sessions. The host may negotiate lower values. Existing sessions keep their current settings.'),
+			title: nls.localize('desktop.quality', 'Stream quality'),
 			validate: value => isQualityLimits(value) ? undefined : nls.localize('desktop.invalidQuality', 'Enter limits up to 50,000 kbps, 60 fps and 7680 × 7680 px.'),
 		},
 		'desktop.codec': {
 			type: 'string',
 			default: 'auto',
-			title: nls.localize('desktop.codecChoice', 'Preferred codec'),
-			description: nls.localize('desktop.codecHelp', 'Auto chooses a codec supported by both computers. A specific choice requires support on both sides. Changes apply to new desktop sessions.'),
+			title: nls.localize('desktop.codecChoice', 'Codec'),
+			description: nls.localize('desktop.codecHelp', 'Automatic picks one both computers support.'),
 			validate: value => isCodecPreference(value) ? undefined : nls.localize('settings.choice', 'Choose one of the available options.'),
 		},
 	},
@@ -196,16 +200,20 @@ registerSettings('user', {
 		'input.keyboardMode': {
 			type: 'string',
 			enum: ['Character', 'Map', 'Translate'],
-			enumItemLabels: ['Characters', 'Physical keys', 'Translate to host layout'],
+			enumItemLabels: [nls.localize('input.characters', 'Characters'), nls.localize('input.physicalKeys', 'Physical keys'), nls.localize('input.translate', 'Translate shortcuts')],
+			enumDescriptions: [
+				nls.localize('input.charactersHelp', 'Sends the text you type, whatever the other keyboard layout.'),
+				nls.localize('input.physicalKeysHelp', 'Sends the keys you press; the other computer’s layout decides the letter.'),
+				nls.localize('input.translateHelp', 'Sends matching shortcuts. Needs a Linux computer running X11.'),
+			],
 			default: 'Character',
-			title: nls.localize('input.mapping', 'Mapping'),
-			description: nls.localize('input.mappingHelp', 'Characters sends the text you type. Physical keys uses the remote keyboard layout. Translate sends matching key combinations and requires a Linux X11 host.'),
+			title: nls.localize('input.mapping', 'Typing'),
 		},
 		'input.swapModifiers': {
 			type: 'boolean',
 			default: false,
 			title: nls.localize('input.swap', 'Swap Control and Command'),
-			description: nls.localize('input.swapHelp', 'Use familiar shortcuts when moving between Mac and Windows or Linux.'),
+			description: nls.localize('input.swapHelp', 'For moving between a Mac and Windows or Linux.'),
 		},
 		'input.pointerSensitivity': {
 			type: 'integer',
@@ -213,20 +221,17 @@ registerSettings('user', {
 			maximum: 400,
 			default: 100,
 			unit: '%',
-			title: nls.localize('input.sensitivity', 'Relative pointer sensitivity'),
-			description: nls.localize('input.relativeHelp', '100% keeps mouse movement unchanged. Absolute pointer positioning is unaffected.'),
+			title: nls.localize('input.sensitivity', 'Pointer speed'),
 		},
 		'input.reverseWheel': {
 			type: 'boolean',
 			default: false,
 			title: nls.localize('input.wheel', 'Reverse scrolling'),
-			description: nls.localize('input.wheelHelp', 'Reverse both horizontal and vertical scrolling on the remote computer.'),
 		},
 		'input.swapMouseButtons': {
 			type: 'boolean',
 			default: false,
-			title: nls.localize('input.buttons', 'Swap primary and secondary buttons'),
-			description: nls.localize('input.buttonsHelp', 'Use the right mouse button for primary clicks.'),
+			title: nls.localize('input.buttons', 'Swap left and right buttons'),
 		},
 	},
 });
@@ -238,22 +243,20 @@ registerSettings('user', {
 		'media.camera': {
 			type: 'string',
 			default: 'vnilink:auto-camera',
-			title: nls.localize('media.cameras', 'Cameras'),
-			description: nls.localize('media.camerasHelp', 'Choose the camera this computer shares with permitted devices.'),
+			title: nls.localize('media.camera', 'Camera'),
 			validate: mediaSource,
 		},
 		'media.microphone': {
 			type: 'string',
 			default: 'vnilink:default-microphone',
-			title: nls.localize('media.microphones', 'Microphones'),
-			description: nls.localize('media.microphonesHelp', 'Choose the microphone used when a permitted device requests it.'),
+			title: nls.localize('media.microphone', 'Microphone'),
 			validate: mediaSource,
 		},
 		'media.systemAudio': {
 			type: 'string',
 			default: 'vnilink:default-system-audio',
 			title: nls.localize('media.system', 'System audio'),
-			description: nls.localize('media.systemHelp', 'Share this computer’s sound without changing its local speakers.'),
+			description: nls.localize('media.systemHelp', 'Your own speakers keep playing.'),
 			validate: mediaSource,
 		},
 	},
@@ -266,17 +269,17 @@ registerSettings('user', {
 		'recording.directory': {
 			type: 'string',
 			default: '',
-			title: nls.localize('recording.destination', 'Save recordings'),
-			description: nls.localize('recording.destinationHelp', 'Each recording gets its own file in this folder.'),
+			title: nls.localize('recording.folder', 'Folder'),
 			validate: value => value === '' || (typeof value === 'string' && isAbsolutePath(value)) ? undefined : nls.localize('recording.invalidFolder', 'Choose a folder on this computer.'),
 		},
 		'recording.maxSegmentSize': {
-			type: 'integer',
-			minimum: 1,
-			maximum: 1048576,
-			default: 1024,
-			unit: 'MiB',
-			title: nls.localize('recording.size', 'Maximum segment size'),
+			type: 'number',
+			minimum: 0.1,
+			maximum: 1024,
+			default: 1,
+			unit: 'GiB',
+			title: nls.localize('recording.size', 'File size'),
+			validate: tenthsOfGibibytes,
 		},
 		'recording.maxSegmentDuration': {
 			type: 'integer',
@@ -284,23 +287,23 @@ registerSettings('user', {
 			maximum: 1440,
 			default: 60,
 			unit: nls.localize('recording.minutes', 'min'),
-			title: nls.localize('recording.duration', 'Maximum segment duration'),
+			title: nls.localize('recording.duration', 'File length'),
 		},
 		'recording.maxSegments': {
 			type: 'integer',
 			minimum: 1,
 			maximum: 65535,
 			default: 10,
-			unit: nls.localize('recording.segmentUnit', 'segments'),
-			title: nls.localize('recording.segments', 'Keep up to'),
+			title: nls.localize('recording.segments', 'Files per recording'),
 		},
 		'recording.maxTotalSize': {
-			type: 'integer',
-			minimum: 1,
-			maximum: 1048576,
-			default: 10240,
-			unit: 'MiB',
-			title: nls.localize('recording.storage', 'Maximum combined size'),
+			type: 'number',
+			minimum: 0.1,
+			maximum: 1024,
+			default: 10,
+			unit: 'GiB',
+			title: nls.localize('recording.storage', 'Size per recording'),
+			validate: tenthsOfGibibytes,
 		},
 	},
 });
@@ -314,7 +317,7 @@ registerSettings('user', {
 			items: { type: 'string' },
 			default: [],
 			title: nls.localize('files.shared', 'Folder restrictions'),
-			description: nls.localize('files.help', 'By default, permitted devices can browse the filesystem within this app’s operating-system access. Add folders only to restrict browsing. Devices still need Files permission.'),
+			description: nls.localize('files.help', 'By default, paired computers with Files can browse what this app can reach. Add folders only to restrict them.'),
 			validate: value => isFileRoots(value) ? undefined : nls.localize('files.invalid', 'Use unique, full folder paths. Remove empty rows before saving.'),
 		},
 	},
@@ -324,14 +327,12 @@ const keepAwake = (scope: 'incoming' | 'outgoing'): IStringDictionary<ISettingSc
 	[`power.${scope}.keepSystemAwake`]: {
 		type: 'boolean',
 		default: false,
-		title: nls.localize('power.system', 'Keep the computer awake'),
-		description: nls.localize('power.systemHelp', 'Prevent system sleep while the session is being used.'),
+		title: nls.localize('power.system', 'Keep this computer awake'),
 	},
 	[`power.${scope}.keepDisplayAwake`]: {
 		type: 'boolean',
 		default: false,
-		title: nls.localize('power.display', 'Keep the display awake'),
-		description: nls.localize('power.displayHelp', 'Prevent the display from sleeping during the session.'),
+		title: nls.localize('power.display', 'Keep the display on'),
 	},
 	[`power.${scope}.idleTimeout`]: {
 		type: 'number',
@@ -339,7 +340,8 @@ const keepAwake = (scope: 'incoming' | 'outgoing'): IStringDictionary<ISettingSc
 		maximum: 1440,
 		default: 0,
 		unit: nls.localize('power.minutes', 'min'),
-		title: nls.localize('power.idle', 'End idle desktop sessions after'),
+		title: nls.localize('power.idle', 'End idle sessions after'),
+		description: nls.localize('power.idleHelp', '0 never ends them.'),
 		validate: minutes,
 	},
 });
@@ -354,7 +356,6 @@ registerSettings('power', {
 			type: 'boolean',
 			default: false,
 			title: nls.localize('power.lock', 'Lock this computer'),
-			description: nls.localize('power.lockHelp', 'Ask the operating system to lock when remote control ends.'),
 		},
 	},
 });
@@ -367,7 +368,7 @@ registerSettings('user', {
 			type: 'string',
 			default: '',
 			title: nls.localize('terminal.shell', 'Shell'),
-			description: nls.localize('terminal.shellHelp', 'Close hosted terminals before changing it.'),
+			description: nls.localize('terminal.shellHelp', 'Paired computers can’t choose another.'),
 			validate: shellChoice,
 		},
 	},
@@ -382,16 +383,15 @@ registerSettings('terminal', {
 			minimum: 1,
 			maximum: 16,
 			default: 16,
-			title: nls.localize('terminal.total', 'Maximum terminals'),
-			description: nls.localize('terminal.totalHelp', 'Total across all paired devices.'),
+			title: nls.localize('terminal.total', 'Terminals at once'),
+			description: nls.localize('terminal.totalHelp', 'Across all paired computers.'),
 		},
 		'terminal.maxSessionsPerDevice': {
 			type: 'integer',
 			minimum: 1,
 			maximum: 16,
 			default: 16,
-			title: nls.localize('terminal.perDevice', 'Maximum per device'),
-			description: nls.localize('terminal.perDeviceHelp', 'Cannot exceed the total limit.'),
+			title: nls.localize('terminal.perDevice', 'Per computer'),
 		},
 		'terminal.persistence': {
 			type: 'boolean',
@@ -437,39 +437,42 @@ export function validateTerminalLimits(values: Readonly<Record<string, unknown>>
 	const perDevice = values['terminal.maxSessionsPerDevice'];
 	const history = values['terminal.historySize'];
 	const replay = values['terminal.replaySize'];
-	return typeof total === 'number' && typeof perDevice === 'number' && typeof history === 'number' && typeof replay === 'number' && perDevice <= total && replay <= history
+	if (typeof total !== 'number' || typeof perDevice !== 'number' || perDevice > total) {
+		return nls.localize('terminal.perDeviceInvalid', 'Per computer can’t be more than Terminals at once.');
+	}
+	return typeof history === 'number' && typeof replay === 'number' && replay <= history
 		? undefined
-		: nls.localize('terminal.invalid', 'Check the limits: 1–16 terminals, per-device limit no higher than the total, history from 16 KiB to 4 MiB, replay no larger than history, and lifetime from 1 to 86,400 seconds.');
+		: nls.localize('terminal.replayInvalid', 'Replay can’t be larger than the history limit.');
 }
 
-const sharing = (key: string, title: string, description: string): IStringDictionary<ISettingSchema> => ({ [`sharing.${key}`]: { type: 'boolean', default: false, title, description } });
+const sharing = (key: string, title: string, description?: string): IStringDictionary<ISettingSchema> => ({ [`sharing.${key}`]: { type: 'boolean', default: false, title, description } });
 
 registerSettings('sharing', {
 	id: 'sharing',
 	title: nls.localize('sharing.title', 'Sharing with paired computers'),
 	properties: {
-		...sharing('screen', nls.localize('sharing.screen', 'Screen viewing and remote control'), nls.localize('sharing.screenHelp', 'Allow paired computers to view this screen and use the keyboard and mouse.')),
-		...sharing('files', nls.localize('sharing.files', 'Files'), nls.localize('sharing.filesHelp', 'Allow file browsing and transfers on this computer.')),
-		...sharing('terminal', nls.localize('sharing.terminal', 'Terminal'), nls.localize('sharing.terminalHelp', 'Allow shell sessions on this computer.')),
-		...sharing('camera', nls.localize('sharing.camera', 'Camera'), nls.localize('sharing.cameraHelp', 'Allow access to the camera sources you share.')),
-		...sharing('microphone', nls.localize('sharing.microphone', 'Microphone'), nls.localize('sharing.microphoneHelp', 'Allow listening to shared microphone input.')),
-		...sharing('systemAudio', nls.localize('sharing.audio', 'System audio'), nls.localize('sharing.audioHelp', 'Allow listening to audio played by this computer.')),
-		...sharing('clipboard', nls.localize('sharing.clipboard', 'Clipboard'), nls.localize('sharing.clipboardHelp', 'Allow clipboard exchange during desktop sessions.')),
-		...sharing('recording', nls.localize('sharing.recording', 'Recording'), nls.localize('sharing.recordingHelp', 'Allow recording through VniLink during permitted desktop sessions.')),
-		...sharing('systemActions', nls.localize('sharing.actions', 'System actions'), nls.localize('sharing.actionsHelp', 'Allow the supported actions enabled under Remote action rules.')),
+		...sharing('screen', nls.localize('sharing.screen', 'Screen viewing and remote control')),
+		...sharing('files', nls.localize('sharing.files', 'Files')),
+		...sharing('terminal', nls.localize('sharing.terminal', 'Terminal')),
+		...sharing('camera', nls.localize('sharing.camera', 'Camera')),
+		...sharing('microphone', nls.localize('sharing.microphone', 'Microphone')),
+		...sharing('systemAudio', nls.localize('sharing.audio', 'System audio')),
+		...sharing('clipboard', nls.localize('sharing.clipboard', 'Clipboard'), nls.localize('sharing.clipboardHelp', 'During remote desktop sessions.')),
+		...sharing('recording', nls.localize('sharing.recording', 'Record desktop sessions')),
+		...sharing('systemActions', nls.localize('sharing.actions', 'System actions'), nls.localize('sharing.actionsHelp', 'Only the actions turned on under Remote actions.')),
 	},
 });
 
-const action = (key: string, title: string, description: string, allowed = false): IStringDictionary<ISettingSchema> => ({ [`security.${key}`]: { type: 'boolean', default: allowed, title, description } });
+const action = (key: string, title: string, description?: string, allowed = false): IStringDictionary<ISettingSchema> => ({ [`security.${key}`]: { type: 'boolean', default: allowed, title, description } });
 
 registerSettings('security', {
 	id: 'security',
-	title: nls.localize('security.local', 'Remote action rules'),
+	title: nls.localize('security.local', 'Remote actions'),
 	properties: {
-		...action('allowLock', nls.localize('security.lock', 'Allow remote lock'), nls.localize('security.lockHelp', 'Let permitted devices lock this computer.'), true),
-		...action('allowRestart', nls.localize('security.restart', 'Allow remote restart'), nls.localize('security.restartHelp', 'Let permitted devices restart this computer.')),
-		...action('allowShutdown', nls.localize('security.shutdown', 'Allow remote shutdown'), nls.localize('security.shutdownHelp', 'Let permitted devices shut down this computer.')),
-		...action('allowPrivacy', nls.localize('security.privacy', 'Allow privacy mode'), nls.localize('security.privacyHelp', 'Let permitted devices request privacy mode during remote sessions.')),
+		...action('allowLock', nls.localize('security.lock', 'Lock this computer'), undefined, true),
+		...action('allowRestart', nls.localize('security.restart', 'Restart')),
+		...action('allowShutdown', nls.localize('security.shutdown', 'Shut down')),
+		...action('allowPrivacy', nls.localize('security.privacy', 'Privacy mode'), nls.localize('security.privacyHelp', 'Blanks this display for people nearby during a remote session.')),
 	},
 });
 

@@ -213,11 +213,11 @@ test('engine policies read whole and write through a read-modify-write with read
 		assert.equal(state.power.incoming_idle_secs, 90, 'Another field of the policy changed');
 		await settings.update('terminal.replaySize', 16);
 		assert.equal(state.terminal.replay_bytes, 16384);
-		await assert.rejects(settings.update('terminal.maxSessions', 4), /per-device limit/);
+		await assert.rejects(settings.update('terminal.maxSessions', 4), /Per computer can’t be more than Terminals at once/);
 		assert.equal(state.terminal.max_sessions, 16, 'A limit below the per-device limit reached the engine');
 		await settings.update('terminal.maxSessionsPerDevice', 4);
 		await settings.update('terminal.maxSessions', 4);
-		await assert.rejects(settings.update('terminal.replaySize', 2048), /replay no larger than history/);
+		await assert.rejects(settings.update('terminal.replaySize', 2048), /Replay can’t be larger than the history limit/);
 		assert.deepEqual([state.terminal.max_sessions, state.terminal.max_sessions_per_peer], [4, 4]);
 		await settings.update('sharing.screen', true);
 		assert.deepEqual(state.commands.filter(command => command.type === 'setSharingPolicy').at(-1).policy, { view: true, control: true });

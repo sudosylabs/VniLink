@@ -262,25 +262,22 @@ class SmokeSuite {
 				await window.webContents.executeJavaScript(`window.driver.configuration.updateValue('appearance.theme', ${JSON.stringify(theme)})`);
 				for (const width of [1200, 760]) {
 					window.setSize(width, 820);
-					for (const category of ['appearance', 'access', 'desktop', 'input', 'terminal', 'media', 'recording', 'power', 'connection']) {
+					for (const category of ['general', 'appearance', 'access', 'desktop', 'input', 'terminal', 'media', 'recording', 'power', 'connection']) {
 						const layout: unknown = await window.webContents.executeJavaScript(`new Promise(resolve => {
        document.querySelector('[data-section-id="${category}"]').click();
        requestAnimationFrame(() => requestAnimationFrame(() => {
         const content = document.querySelector('.home-content');
         const page = content.querySelector('main');
         const buttons = [...page.querySelectorAll('button')];
-        resolve({ note: page.querySelector('.settings-page-note')?.textContent.trim() ?? '', submit: !!page.querySelector('button[type="submit"]'), overflow: content.scrollWidth > content.clientWidth, heading: page.querySelector('h1').textContent, refresh: buttons.some(button => button.textContent === 'Refresh'), session: page.textContent.includes('Session overrides'), device: page.textContent.includes('Device access'), container: getComputedStyle(page.querySelector('.appearance-section') ?? page).borderTopWidth });
+        resolve({ note: page.querySelector('.settings-page-note')?.textContent.trim() ?? '', submit: !!page.querySelector('button[type="submit"]'), overflow: content.scrollWidth > content.clientWidth, heading: page.querySelector('h1').textContent, refresh: buttons.some(button => button.textContent === 'Refresh'), session: page.textContent.includes('Session overrides'), device: page.textContent.includes('Device access'), legacyRows: page.querySelectorAll('.settings-control-row, .access-toggle-row, .access-section').length });
        }));
       })`);
 						assert(record(layout) && layout.overflow === false, `${category} overflowed at ${String(width)}px`);
 						assert.equal(layout.submit, false, `${category} still saves through a button`);
 						assert.equal(layout.refresh, false, `${category} offers a Refresh button`);
-						if (['input', 'media', 'recording', 'power'].includes(category)) {
-							assert(typeof layout.note === 'string' && layout.note.length > 0, `${category} lost its note on when changes apply`);
-						}
-						if (category === 'appearance') {
-							assert.equal(layout.container, '0px');
-						}
+						// Each fact is said once, in its row or section; pages carry no closing note.
+						assert.equal(layout.note, '', `${category} has a page note`);
+						assert.equal(layout.legacyRows, 0, `${category} uses a retired row layout`);
 						if (category === 'access') {
 							assert.equal(layout.device, false);
 						}

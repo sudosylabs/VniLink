@@ -119,20 +119,23 @@ async function verifyCustomControls(): Promise<void> {
 		const sensitivity = input.element.querySelector<HTMLInputElement>('input[type="range"]');
 		assert(sensitivity, 'Pointer sensitivity missing');
 		edit(sensitivity, '150');
-		assert(input.element.querySelector('.input-sensitivity output')?.textContent === '150%', 'Sensitivity did not show its value');
+		assert(input.element.querySelector('.setting-slider + output')?.textContent === '150%', 'Sensitivity did not show its value');
 		await settleEdit();
 		assert(fixture.configuration.getValue<unknown>('input.pointerSensitivity') === 150, 'Sensitivity did not apply');
 		const recording = fixture.open('recording');
 		await settle();
 		assert(recording.element.querySelector('.recording-path')?.textContent === '/Pictures/VniLink', 'Default recording folder not shown');
-		recording.element.querySelector<HTMLButtonElement>('.recording-location .settings-button')?.click();
+		recording.element.querySelector<HTMLButtonElement>('[data-section="destination"] .settings-button')?.click();
 		await settle();
 		assert(fixture.configuration.getValue<unknown>('recording.directory') === '/Recordings' && recording.element.querySelector('.recording-path')?.textContent === '/Recordings', 'Chosen folder did not apply');
-		recording.element.querySelector<HTMLButtonElement>('.recording-location .settings-text-button')?.click();
+		// Use default appears only once a folder is chosen.
+		const reset = recording.element.querySelector<HTMLButtonElement>('[data-section="destination"] .settings-text-button');
+		assert(reset?.hidden === false, 'Use default is not offered for a chosen folder');
+		reset.click();
 		await settle();
 		assert(fixture.configuration.getValue<unknown>('recording.directory') === '', 'Default folder did not apply');
 		const size = recording.element.querySelector<HTMLInputElement>('[data-setting="recording.maxSegmentSize"]');
-		assert(size?.value === '1024' && size.nextElementSibling?.textContent === 'MiB', 'Segment size not shown in MiB');
+		assert(size?.value === '1' && size.nextElementSibling?.textContent === 'GiB', 'File size not shown in GiB');
 	} finally {
 		fixture.dispose();
 	}

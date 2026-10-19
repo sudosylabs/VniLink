@@ -17,12 +17,13 @@ export class ThemeSettingControl extends Disposable implements ISettingControl {
 
 	public render(container: HTMLElement): void {
 		const picker = append(container, $('fieldset.theme-mode-picker'));
-		append(picker, $('legend.appearance-visually-hidden')).textContent = nls.localize('appearance.theme', 'Color theme');
+		append(picker, $('legend.appearance-visually-hidden')).textContent = nls.localize('appearance.theme', 'Theme');
 		const name = `theme-mode-${String(++nextPickerId)}`;
 		const choices: readonly (readonly [ThemeMode, string, string])[] = [
-			['system', nls.localize('appearance.system', 'System'), nls.localize('appearance.systemHelp', 'Follow your device')],
-			['light', nls.localize('appearance.light', 'Light'), nls.localize('appearance.lightHelp', 'A lighter workspace')],
-			['dark', nls.localize('appearance.dark', 'Dark'), nls.localize('appearance.darkHelp', 'A darker workspace')],
+			// Light and Dark say what they are; only System needs a word.
+			['system', nls.localize('appearance.system', 'System'), nls.localize('appearance.systemHelp', 'Follows your computer')],
+			['light', nls.localize('appearance.light', 'Light'), ''],
+			['dark', nls.localize('appearance.dark', 'Dark'), ''],
 		];
 		for (const [mode, title, description] of choices) {
 			const choice = append(picker, $('label.theme-choice'));
@@ -34,7 +35,9 @@ export class ThemeSettingControl extends Disposable implements ISettingControl {
 			const caption = append(choice, $('span.theme-choice-caption'));
 			const input = append(caption, $<HTMLInputElement>('input', { type: 'radio', name, value: mode }));
 			append(caption, $('span')).textContent = title;
-			append(choice, $('span.theme-choice-help')).textContent = description;
+			if (description) {
+				append(choice, $('span.theme-choice-help')).textContent = description;
+			}
 			this.inputs.set(mode, input);
 			this._register(addDisposableListener(input, EventType.CHANGE, () => {
 				if (input.checked && !input.disabled) {

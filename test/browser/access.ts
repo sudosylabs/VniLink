@@ -1,3 +1,4 @@
+import { isMacintosh } from '../../src/base/common/platform.js';
 import { assert, settle, SettingsFixture, toggle } from './settingsFixture.js';
 
 /** Sharing and remote action rules apply per switch; OS access is live state with its own actions. */
@@ -16,17 +17,17 @@ export async function verifyAccess(): Promise<void> {
 		toggle(view);
 		await settle();
 		assert(view.checked, 'Refused sharing change kept the refused value');
-		assert(view.closest('.access-section')?.querySelector('.access-status')?.textContent === 'Sharing settings could not be changed.', 'Refused sharing change was not explained in its section');
+		assert(page.element.querySelector('.settings-status')?.textContent === 'Sharing settings could not be changed.', 'Refused sharing change was not explained');
 		fixture.configuration.failure = undefined;
 		const restart = page.element.querySelector<HTMLInputElement>('[data-setting="security.allowRestart"]');
-		assert(restart?.disabled && restart.closest('.access-toggle-row')?.textContent.includes('Not supported on this computer.'), 'Unsupported action was not marked');
+		assert(restart?.disabled && restart.closest('.setting-row')?.textContent.includes('Not supported on this computer.'), 'Unsupported action was not marked');
 		assert(page.element.querySelector<HTMLInputElement>('[data-setting="security.allowLock"]')?.checked, 'Remote lock default missing');
-		const permissions = page.element.querySelector('[data-permission-kind="camera"]')?.closest('.access-section');
+		const permissions = page.element.querySelector('[data-permission-kind="camera"]')?.closest('section');
 		assert(permissions && !permissions.querySelector('input'), 'Permissions section shows a switch');
 		assert(!permissions.textContent.includes('Development builds'), 'Permissions retained development-only copy');
 		const camera = permissions.querySelector<HTMLButtonElement>('[data-permission-kind="camera"] button');
 		assert(camera?.textContent === 'Request access', 'Camera request missing');
-		assert(permissions.querySelector('[data-permission-kind="screen"] button')?.textContent === 'Open settings', 'Screen settings action missing');
+		assert(permissions.querySelector('[data-permission-kind="screen"] button')?.textContent === (isMacintosh ? 'Open System Settings' : 'Open Settings'), 'Screen settings action missing');
 		camera.click();
 		await settle();
 		assert(permissions.querySelector('[data-permission-kind="camera"] [data-status="granted"]'), 'Camera request did not refresh');
