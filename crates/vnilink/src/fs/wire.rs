@@ -20,7 +20,8 @@ use super::{MAX_COMPONENT_BYTES, MAX_REL_BYTES};
 /// what they do not speak.
 pub const FS_VERSION: u8 = 1;
 
-const MAX_WIRE_BYTES: usize = 4 * 1024;
+/// A request holds one path and at most two names.
+const MAX_WIRE_BYTES: usize = 8 * 1024;
 const TAG_LIST: u8 = 1;
 const TAG_MKDIR: u8 = 2;
 const TAG_RENAME: u8 = 3;

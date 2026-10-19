@@ -14,8 +14,9 @@ use crate::manifest::Manifest;
 /// Job wire version. Bump on any incompatible change.
 pub const JOB_VERSION: u8 = 1;
 
-/// Largest job-control frame: manifests stay bounded by manifest limits.
-pub const MAX_JOB_FRAME: usize = 2 * 1024 * 1024;
+/// Largest job-control frame. It holds a whole manifest: up to
+/// `MAX_MANIFEST_FILES` entries of a path, a hash and sizes in JSON.
+pub const MAX_JOB_FRAME: usize = 64 * 1024 * 1024;
 
 /// Stream tag for filesystem requests (see `fs::wire`).
 pub const TAG_FS: u8 = 0x01;

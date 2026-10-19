@@ -834,7 +834,7 @@ fn prepare_outcome(
             shared,
             peer,
             &resolved,
-            crate::manifest::MAX_MANIFEST_FILE_BYTES,
+            u64::MAX,
             true,
         )) {
             Ok((hash, size)) => ready.push((*hash.as_bytes(), size)),

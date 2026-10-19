@@ -300,13 +300,6 @@ fn manifest_validation_rejects_bad_shapes() {
         vec![file("a\\b.txt")],
         vec![file("a/./b.txt")],
         vec![dir("d"), file("d")],
-        vec![ManifestEntry {
-            path: "big.bin".to_owned(),
-            is_dir: false,
-            hash: [7; 32],
-            size: manifest::MAX_MANIFEST_FILE_BYTES + 1,
-            source_mtime_ms: 0,
-        }],
         vec![dir("bad")]
             .into_iter()
             .map(|mut entry| {
@@ -1531,13 +1524,7 @@ fn anchored_import_refuses_swapped_parent() {
         ino: 0,
     };
     let pin = controller.pin_file_root(0).unwrap();
-    let err = controller.blob_offer_file_at(
-        &host.endpoint_id(),
-        0,
-        &dummy,
-        manifest::MAX_MANIFEST_FILE_BYTES,
-        &pin,
-    );
+    let err = controller.blob_offer_file_at(&host.endpoint_id(), 0, &dummy, u64::MAX, &pin);
     assert!(err.is_err());
     // Restore honest dir so temp cleanup works.
     std::fs::remove_file(controller_scratch.join("root/docs")).unwrap();

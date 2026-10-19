@@ -149,8 +149,7 @@ pub use installation::{InstallationStore, MemoryStore};
 pub use job::{ConflictChoice, JobDirection, JobSnapshot, JobState};
 pub use keyboard::{KeyboardMode, LocalKey};
 pub use manifest::{
-    keep_both_name, Manifest, ManifestEntry, MAX_MANIFEST_BYTES, MAX_MANIFEST_DEPTH,
-    MAX_MANIFEST_FILES, MAX_MANIFEST_FILE_BYTES,
+    keep_both_name, Manifest, ManifestEntry, MAX_MANIFEST_DEPTH, MAX_MANIFEST_FILES,
 };
 pub use os_input::{linux_evdev_keycode, OsInput};
 pub use pairing::{PairingFile, PairingPreview, PAIRING_FILE_EXTENSION};

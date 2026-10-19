@@ -231,7 +231,7 @@ impl Core {
                 peer_endpoint_id,
                 src_root,
                 file,
-                manifest::MAX_MANIFEST_FILE_BYTES,
+                u64::MAX,
                 pin.as_ref().expect("leg pin just pinned"),
             )?;
             prepared.hashes.push(*hash.as_bytes());
@@ -2141,7 +2141,7 @@ impl Core {
                         entry.hash,
                         entry.size,
                         old_mtime,
-                        manifest::MAX_MANIFEST_FILE_BYTES,
+                        u64::MAX,
                         &local_pin,
                     )
                     .map_err(|error| match error {

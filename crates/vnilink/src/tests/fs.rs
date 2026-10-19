@@ -791,7 +791,7 @@ fn wire_codec_round_trips_and_rejects() {
     tagged[13] = 77;
     assert!(crate::fs::decode_request(&tagged).is_err());
     // Oversize text is refused at encode time, never sent.
-    let huge = "a".repeat(2048);
+    let huge = "a".repeat(crate::fs::MAX_REL_BYTES + 1);
     assert!(crate::fs::encode_request(&WireRequest::List {
         id: 1,
         generation: 1,
@@ -801,6 +801,29 @@ fn wire_codec_round_trips_and_rejects() {
         limit: 10,
     })
     .is_err());
+}
+
+/// A whole disk is deeper than a shared folder: 40 levels below a scratch
+/// folder still list, and paths stop at 64 levels.
+#[test]
+fn deep_folders_list_and_the_depth_limit_holds() {
+    let scratch = Scratch::new();
+    let mut deep = scratch.path.clone();
+    for level in 0..40 {
+        deep.push(format!("level-{level}"));
+    }
+    std::fs::create_dir_all(&deep).unwrap();
+    std::fs::write(deep.join("bottom.txt"), b"deep").unwrap();
+    let core = start_direct();
+    core.enable_filesystem_access().unwrap();
+    let location = FilesystemLocation::new(core.file_roots().unwrap(), &deep);
+    let page = core
+        .list_dir(location.root, &location.path(""), 0, 10)
+        .unwrap();
+    assert_eq!(page.entries[0].name, "bottom.txt");
+    let too_deep = vec!["a"; 65].join("/");
+    assert!(core.list_dir(location.root, &too_deep, 0, 10).is_err());
+    assert!(crate::fs::check_rel(&vec!["a"; 64].join("/")).is_ok());
 }
 
 #[test]

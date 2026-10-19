@@ -45,7 +45,8 @@ pub use roots::MAX_ROOTS;
 
 /// Largest single name component, in bytes.
 pub(crate) const MAX_COMPONENT_BYTES: usize = 255;
-/// Largest relative path, in bytes.
-pub(crate) const MAX_REL_BYTES: usize = 1024;
+/// Largest relative path, in bytes: Linux's `PATH_MAX`, above macOS's and
+/// Windows' long-path limits, so any path the disk holds is reachable.
+pub(crate) const MAX_REL_BYTES: usize = 4096;
 /// Largest depth of a relative path, in components.
-pub(crate) const MAX_COMPONENTS: usize = 16;
+pub(crate) const MAX_COMPONENTS: usize = 64;

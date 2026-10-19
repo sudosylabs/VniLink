@@ -19,7 +19,12 @@ use super::roots::RootSet;
 
 /// Largest page a caller may ask for.
 pub const MAX_PAGE: u16 = 500;
-/// Largest directory prefix ever listed in one call.
+/// Largest directory prefix ever listed in one call. Each page reads the
+/// directory again, so this bounds the work per page, not just the reply.
+/// Tests exercise the same bound with a smaller budget.
+#[cfg(not(test))]
+pub const MAX_LISTED: usize = 20_000;
+#[cfg(test)]
 pub const MAX_LISTED: usize = 5000;
 
 /// One page of a listing. `Debug` redacts names.

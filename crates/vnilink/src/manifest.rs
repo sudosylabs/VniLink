@@ -20,14 +20,15 @@ use serde::{Deserialize, Serialize};
 use crate::error::Error;
 use crate::fs::{self, RootSet};
 
-/// Largest files in one manifest.
+/// Largest number of files and folders in one manifest. Sizes have no cap
+/// of their own: the receiver's free-space admission refuses what does not
+/// fit. Tests exercise the same bound with a smaller budget.
+#[cfg(not(test))]
+pub const MAX_MANIFEST_FILES: usize = 50_000;
+#[cfg(test)]
 pub const MAX_MANIFEST_FILES: usize = 5000;
-/// Largest total payload of one manifest, in bytes (1 GiB).
-pub const MAX_MANIFEST_BYTES: u64 = 1024 * 1024 * 1024;
-/// Largest single file in a manifest, in bytes (256 MiB).
-pub const MAX_MANIFEST_FILE_BYTES: u64 = 256 * 1024 * 1024;
 /// Largest depth of a manifest path, in components.
-pub const MAX_MANIFEST_DEPTH: usize = 16;
+pub const MAX_MANIFEST_DEPTH: usize = 64;
 
 pub(crate) const MANIFEST_EMPTY: &str = "the transfer is empty";
 pub(crate) const MANIFEST_LIMIT: &str = "the transfer exceeds its limits";
@@ -290,9 +291,6 @@ fn scan_anchored(
                 dirs.push(manifest_rel.clone());
                 stack.push((full, child_rel, child_fd));
             } else if st.is_file {
-                if st.size > MAX_MANIFEST_FILE_BYTES {
-                    return Err(Error::InvalidSetting(MANIFEST_LIMIT));
-                }
                 files.push(ScannedFile {
                     rel: manifest_rel,
                     absolute: full,
@@ -408,9 +406,6 @@ fn scan_pathname(
                 stack.push((full, child_rel));
             } else if meta.is_file() {
                 let size = meta.len();
-                if size > MAX_MANIFEST_FILE_BYTES {
-                    return Err(Error::InvalidSetting(MANIFEST_LIMIT));
-                }
                 #[cfg(not(unix))]
                 let (dev, ino) = scan_identity(&full, "the source folder cannot be read")?;
                 files.push(ScannedFile {
@@ -485,9 +480,6 @@ fn scan_single_file(roots: &RootSet, id: u64, rel: &str) -> Result<Scan, Error> 
         if !st.is_file || st.is_symlink {
             return Err(Error::InvalidSetting(NOT_A_SCAN_DIR));
         }
-        if st.size > MAX_MANIFEST_FILE_BYTES {
-            return Err(Error::InvalidSetting(MANIFEST_LIMIT));
-        }
         let parent = roots
             .resolve_dir(id, parent_rel)
             .map_err(|_| Error::InvalidSetting(NOT_A_SCAN_DIR))?;
@@ -518,9 +510,6 @@ fn scan_single_file(roots: &RootSet, id: u64, rel: &str) -> Result<Scan, Error> 
             return Err(Error::InvalidSetting(NOT_A_SCAN_DIR));
         }
         let size = meta.len();
-        if size > MAX_MANIFEST_FILE_BYTES {
-            return Err(Error::InvalidSetting(MANIFEST_LIMIT));
-        }
         let (dev, ino) = scan_identity(&full, NOT_A_SCAN_DIR)?;
         Ok(Scan {
             files: vec![ScannedFile {
@@ -590,7 +579,6 @@ pub(crate) fn validate(manifest: &Manifest) -> Result<(), Error> {
     }
     let mut seen = HashSet::with_capacity(manifest.entries.len());
     let mut folded = HashSet::with_capacity(manifest.entries.len());
-    let mut total = 0u64;
     for entry in &manifest.entries {
         check_manifest_path(&entry.path)?;
         if !seen.insert(entry.path.clone()) {
@@ -601,30 +589,18 @@ pub(crate) fn validate(manifest: &Manifest) -> Result<(), Error> {
         if !folded.insert(entry.path.to_lowercase()) {
             return Err(Error::InvalidSetting(MANIFEST_COLLISION));
         }
-        if entry.is_dir {
-            if entry.size != 0 || entry.hash != [0; 32] {
-                return Err(Error::InvalidSetting(MANIFEST_UNSAFE));
-            }
-        } else {
-            if entry.size > MAX_MANIFEST_FILE_BYTES {
-                return Err(Error::InvalidSetting(MANIFEST_LIMIT));
-            }
-            total = total.saturating_add(entry.size);
-            if total > MAX_MANIFEST_BYTES {
-                return Err(Error::InvalidSetting(MANIFEST_LIMIT));
-            }
+        // Folders carry no payload; a manifest of folders alone is allowed,
+        // since empty folders are real content of a folder transfer.
+        if entry.is_dir && (entry.size != 0 || entry.hash != [0; 32]) {
+            return Err(Error::InvalidSetting(MANIFEST_UNSAFE));
         }
-    }
-    if total == 0 && manifest.entries.iter().all(|entry| entry.is_dir) {
-        // Directories alone still need no payload; allowed (empty folders
-        // are real content of a folder transfer).
     }
     Ok(())
 }
 
 fn check_manifest_path(path: &str) -> Result<(), Error> {
     if path.is_empty()
-        || path.len() > 1024
+        || path.len() > crate::fs::MAX_REL_BYTES
         || path.as_bytes().contains(&0)
         || path.contains('\\')
         || path.contains(':')
