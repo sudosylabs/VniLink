@@ -197,46 +197,73 @@ test('intentional close with unacknowledged input does not report a failure', as
 	}
 });
 
-test('cancel passes through renderer and utility while progress is pending', async () => {
+test('file operations run side by side, a refusal is an answer, and job changes arrive unasked', async () => {
 	const { port1, port2 } = new MessageChannel();
-	let resolvePoll;
+	let resolveList;
 	const operations = [];
 	const errors = [];
+	const packets = [];
+	const job = { id: '7', peer: 'p', label: 'a.txt', direction: 'Upload', sender: true, state: 'Transferring', total_bytes: '100', done_bytes: '40', files_total: '1', files_done: '0', resumed_files: '0', skipped_files: '0', skipped_symlinks: '0', waiting_file: null, error: null };
+	const pushed = [{ kind: 'jobs', metadata: JSON.stringify({ jobs: [job] }) }];
 	const native = {
-		close() { }, fileOperation: command => {
+		read: () => pushed.shift() ?? null,
+		close() { },
+		fileOperation: command => {
 			const operation = JSON.parse(command);
 			operations.push(operation);
-			if (operation.type === 'poll') {
+			if (operation.type === 'list') {
 				return new Promise(resolve => {
-					resolvePoll = resolve;
+					resolveList = resolve;
 				});
 			}
-			return Promise.resolve('{"state":"Cancelled"}');
-		}
+			if (operation.type === 'rename') {
+				return Promise.resolve('{"error":"FileExists: the name is taken"}');
+			}
+			return Promise.resolve(JSON.stringify({ ok: { ...job, state: 'Cancelled' } }));
+		},
 	};
 	const port = { on: (name, listener) => port2.on(name, name === 'message' ? data => listener({ data }) : listener), start() { }, close: () => port2.close(), postMessage: message => port2.postMessage(message) };
 	const host = new DataChannelHost(port, { ...request, kind: 'files' }, () => { });
 	host.start(native);
 	// The startup handshake is handled by open(), outside the client constructor.
 	await new Promise(resolve => port1.once('message', resolve));
-	const client = new DataChannelClient(port1, () => { }, error => errors.push(error));
-	let poll;
+	const client = new DataChannelClient(port1, packet => packets.push(packet), error => errors.push(error));
+	let list;
 	try {
-		poll = client.fileOperation({ type: 'poll', jobId: '1' });
-		await until(() => resolvePoll !== undefined);
-		await assert.rejects(client.fileOperation({ type: 'poll', jobId: '2' }), /backpressure/);
-		assert.equal(await client.fileOperation({ type: 'cancel', jobId: '1' }), '{"state":"Cancelled"}');
-		assert.deepEqual(operations.map(operation => operation.type), ['poll', 'cancel']);
-		resolvePoll('{"state":"Cancelled"}');
-		assert.equal(await poll, '{"state":"Cancelled"}');
+		list = client.fileOperation({ type: 'list', root: '0', path: 'Users', offset: '0' });
+		await until(() => resolveList !== undefined);
+		// A slow listing holds up neither a rename nor a cancel.
+		assert.deepEqual(await client.fileOperation({ type: 'rename', root: '0', path: 'Users', name: 'a.txt', token: null, newName: 'b.txt' }), { error: 'FileExists: the name is taken' });
+		assert.equal((await client.fileOperation({ type: 'cancel', jobId: '7' })).ok.state, 'Cancelled');
+		await until(() => packets.length === 1);
+		assert.equal(packets[0].kind, 'jobs');
+		assert.deepEqual(JSON.parse(packets[0].metadata).jobs[0], job);
+		resolveList(JSON.stringify({ ok: { entries: [], total: '0', nextOffset: null, truncated: false, skipped: '0' } }));
+		assert.equal((await list).ok.total, '0');
+		assert.deepEqual(operations.map(operation => operation.type), ['list', 'rename', 'cancel']);
 		assert.deepEqual(errors, []);
 	} finally {
 		client.close();
 		host.close();
-		if (poll) {
-			await poll.catch(() => { });
+		if (list) {
+			await list.catch(() => { });
 		}
 	}
+});
+
+test('a file operation outside its shape never reaches the engine', async () => {
+	const { isFileOperation } = await load('../../src/platform/engine/common/files.ts');
+	assert(isFileOperation({ type: 'list', root: '0', path: 'Users/hammed', offset: '0' }));
+	assert(isFileOperation({ type: 'list', root: '2', path: '', offset: '500' }));
+	assert(!isFileOperation({ type: 'list', root: '0', path: '/Users', offset: '0' }), 'a leading slash');
+	assert(!isFileOperation({ type: 'list', root: '0', path: 'Users/../etc', offset: '0' }), 'a parent step');
+	assert(!isFileOperation({ type: 'mkdir', root: '0', path: '', name: 'a/b' }), 'a name with a separator');
+	assert(!isFileOperation({ type: 'rename', root: '0', path: '', name: 'a', newName: 'b' }), 'no token field');
+	assert(isFileOperation({ type: 'rename', root: '0', path: '', name: 'a', token: { dev: '1', ino: null }, newName: 'b' }));
+	assert(!isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: '', dstRoot: '0', dstPath: 'x' }), 'copying a whole root');
+	assert(isFileOperation({ type: 'resolve', jobId: '3', choice: 'keepBoth', applyToRemaining: true }));
+	assert(!isFileOperation({ type: 'resolve', jobId: '3', choice: 'overwrite', applyToRemaining: true }));
+	assert(!isFileOperation({ type: 'poll', jobId: '3' }), 'progress is pushed, never polled');
 });
 
 test('media channels require matching bounded source configuration and reject extra authority', () => {

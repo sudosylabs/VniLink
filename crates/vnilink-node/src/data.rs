@@ -112,6 +112,8 @@ pub struct DataChannel {
     owner: Option<(u64, u64)>,
     files: Mutex<Option<Arc<vnilink_app::FilesService>>>,
     jobs: Arc<Mutex<Vec<u64>>>,
+    /// What this channel last told JavaScript about its jobs.
+    job_view: Mutex<JobView>,
     video: Mutex<Option<VideoPoller>>,
     desktop: Mutex<Option<Arc<DesktopOwner>>>,
     terminal: Mutex<Option<Arc<TerminalService>>>,
@@ -121,6 +123,22 @@ pub struct DataChannel {
     snapshot_cancel: Arc<std::sync::atomic::AtomicBool>,
     snapshot: Arc<Mutex<SnapshotState>>,
 }
+
+/// Jobs as last sent: each one's last snapshot, and the revision read.
+#[derive(Default)]
+struct JobView {
+    revision: Option<u64>,
+    sent: HashMap<u64, String>,
+    /// Changes not yet sent because one event filled up.
+    more: bool,
+    at: Option<std::time::Instant>,
+}
+
+/// Job updates go out at most this often; state changes wait no longer.
+const JOB_UPDATE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Room for job snapshots in one event, under the 16 KiB packet metadata.
+const JOB_UPDATE_BYTES: usize = 12 * 1024;
 
 enum SnapshotState {
     Idle,
@@ -338,6 +356,9 @@ impl DataChannel {
             }
             return Ok(None);
         }
+        if self.kind == "files" {
+            return self.job_updates();
+        }
         if self.kind == "terminal" {
             let terminal = self
                 .terminal
@@ -370,6 +391,57 @@ impl DataChannel {
             ));
         }
         Ok(None)
+    }
+
+    /// This channel's jobs that changed since they were last sent, unasked.
+    /// Reads them again only when the engine's job revision moved.
+    fn job_updates(&self) -> Result<Option<DataEvent>> {
+        let Some(files) = self
+            .files
+            .lock()
+            .map_err(|_| Error::from_reason("Channel unavailable"))?
+            .clone()
+        else {
+            return Ok(None);
+        };
+        let mut view = self
+            .job_view
+            .lock()
+            .map_err(|_| Error::from_reason("Channel unavailable"))?;
+        let revision = files.job_revision().map_err(core_error)?;
+        if (view.revision == Some(revision) && !view.more)
+            || view.at.is_some_and(|at| at.elapsed() < JOB_UPDATE_INTERVAL)
+        {
+            return Ok(None);
+        }
+        view.revision = Some(revision);
+        view.at = Some(std::time::Instant::now());
+        view.more = false;
+        let mut changed = Vec::new();
+        let mut bytes = 0;
+        for job in files.jobs().map_err(core_error)? {
+            let shape = crate::transfer_job(&job);
+            let text =
+                serde_json::to_string(&shape).map_err(|_| Error::from_reason("Invalid job"))?;
+            if view.sent.get(&job.id) == Some(&text) {
+                continue;
+            }
+            if !changed.is_empty() && bytes + text.len() > JOB_UPDATE_BYTES {
+                view.more = true;
+                break;
+            }
+            bytes += text.len();
+            view.sent.insert(job.id, text);
+            changed.push(shape);
+        }
+        if changed.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(DataEvent {
+            kind: "jobs".into(),
+            data: None,
+            metadata: serde_json::json!({ "jobs": changed }).to_string(),
+        }))
     }
 
     #[napi]
@@ -880,6 +952,7 @@ impl Task for OpenChannelTask {
             owner: owner.map(|owner| (owner.id, owner.generation)),
             files: Mutex::new(files),
             jobs: Arc::new(Mutex::new(Vec::new())),
+            job_view: Mutex::new(JobView::default()),
             video: Mutex::new(video),
             desktop: Mutex::new(desktop),
             terminal: Mutex::new(terminal),
@@ -948,6 +1021,31 @@ impl Engine {
 #[derive(serde::Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 enum FileOperation {
+    Places,
+    List {
+        root: String,
+        path: String,
+        offset: String,
+    },
+    Mkdir {
+        root: String,
+        path: String,
+        name: String,
+    },
+    Rename {
+        root: String,
+        path: String,
+        name: String,
+        token: Option<crate::files::TransferToken>,
+        #[serde(rename = "newName")]
+        new_name: String,
+    },
+    Delete {
+        root: String,
+        path: String,
+        name: String,
+        token: Option<crate::files::TransferToken>,
+    },
     Submit {
         direction: String,
         #[serde(rename = "srcRoot")]
@@ -959,13 +1057,25 @@ enum FileOperation {
         #[serde(rename = "dstPath")]
         dst_path: String,
     },
-    Poll {
-        #[serde(rename = "jobId")]
-        job_id: String,
-    },
+    Jobs,
     Cancel {
         #[serde(rename = "jobId")]
         job_id: String,
+    },
+    Resume {
+        #[serde(rename = "jobId")]
+        job_id: String,
+    },
+    Forget {
+        #[serde(rename = "jobId")]
+        job_id: String,
+    },
+    Resolve {
+        #[serde(rename = "jobId")]
+        job_id: String,
+        choice: String,
+        #[serde(rename = "applyToRemaining")]
+        apply_to_remaining: bool,
     },
 }
 pub struct FileTask {
@@ -993,7 +1103,100 @@ impl Task for FileTask {
         {
             return Err(Error::from_reason("Stale file session"));
         }
-        let snapshot = match &self.operation {
+        // What the engine refused is an answer, not a broken channel.
+        Ok(match self.answer() {
+            Ok(value) => serde_json::json!({ "ok": value }),
+            Err(Refused(error)) => serde_json::json!({ "error": error }),
+        }
+        .to_string())
+    }
+    fn resolve(&mut self, _: Env, value: String) -> Result<String> {
+        Ok(value)
+    }
+}
+
+/// An operation the engine refused, as `Category: message`.
+struct Refused(String);
+
+impl From<vnilink_app::FfiError> for Refused {
+    fn from(error: vnilink_app::FfiError) -> Self {
+        Self(core_error(error).reason)
+    }
+}
+
+impl From<Error> for Refused {
+    fn from(error: Error) -> Self {
+        Self(error.reason)
+    }
+}
+
+impl FileTask {
+    fn owned(&self, job_id: &str) -> std::result::Result<u64, Refused> {
+        let job = parse_id(job_id, "Invalid job")?;
+        if !self
+            .jobs
+            .lock()
+            .map_err(|_| Error::from_reason("Channel unavailable"))?
+            .contains(&job)
+        {
+            return Err(Refused(
+                "Unauthorized: the job belongs to another window".into(),
+            ));
+        }
+        Ok(job)
+    }
+
+    fn json<T: serde::Serialize>(value: T) -> std::result::Result<serde_json::Value, Refused> {
+        serde_json::to_value(value)
+            .map_err(|_| Refused("Malformed: the reply could not be encoded".into()))
+    }
+
+    fn answer(&self) -> std::result::Result<serde_json::Value, Refused> {
+        let files = &self.files;
+        match &self.operation {
+            FileOperation::Places => Self::json(crate::files::transfer_places(files.places()?)),
+            FileOperation::List { root, path, offset } => {
+                Self::json(crate::files::transfer_page(files.list(
+                    parse_id(root, "Invalid root")?,
+                    path.clone(),
+                    parse_id(offset, "Invalid offset")?,
+                    500,
+                )?))
+            }
+            FileOperation::Mkdir { root, path, name } => {
+                files.mkdir(parse_id(root, "Invalid root")?, path.clone(), name.clone())?;
+                Ok(serde_json::Value::Null)
+            }
+            FileOperation::Rename {
+                root,
+                path,
+                name,
+                token,
+                new_name,
+            } => {
+                files.rename(
+                    parse_id(root, "Invalid root")?,
+                    path.clone(),
+                    name.clone(),
+                    token.as_ref().map(crate::files::entry_token).transpose()?,
+                    new_name.clone(),
+                )?;
+                Ok(serde_json::Value::Null)
+            }
+            FileOperation::Delete {
+                root,
+                path,
+                name,
+                token,
+            } => {
+                files.delete(
+                    parse_id(root, "Invalid root")?,
+                    path.clone(),
+                    name.clone(),
+                    token.as_ref().map(crate::files::entry_token).transpose()?,
+                )?;
+                Ok(serde_json::Value::Null)
+            }
             FileOperation::Submit {
                 direction,
                 src_root,
@@ -1006,12 +1209,11 @@ impl Task for FileTask {
                     .lock()
                     .map_err(|_| Error::from_reason("Channel unavailable"))?
                     .clone();
-                // Keep completed identities for a cancellation racing its final progress read.
                 // Bound both retained history and simultaneous active transfers.
                 if owned.len() >= 256
                     || owned
                         .iter()
-                        .filter_map(|id| self.files.job_snapshot(*id).ok())
+                        .filter_map(|id| files.job_snapshot(*id).ok())
                         .filter(|job| {
                             !matches!(
                                 job.state,
@@ -1023,20 +1225,15 @@ impl Task for FileTask {
                         .count()
                         >= 8
                 {
-                    return Err(Error::from_reason("File job limit"));
+                    return Err(Refused("Busy: too many transfers at once".into()));
                 }
                 let src = parse_id(src_root, "Invalid root")?;
                 let dst = parse_id(dst_root, "Invalid root")?;
                 let job = match direction.as_str() {
-                    "upload" => self
-                        .files
-                        .upload(src, src_path.clone(), dst, dst_path.clone()),
-                    "download" => self
-                        .files
-                        .download(src, src_path.clone(), dst, dst_path.clone()),
-                    _ => return Err(Error::from_reason("Invalid direction")),
-                }
-                .map_err(core_error)?;
+                    "upload" => files.upload(src, src_path.clone(), dst, dst_path.clone()),
+                    "download" => files.download(src, src_path.clone(), dst, dst_path.clone()),
+                    _ => return Err(Refused("InvalidSetting: unknown direction".into())),
+                }?;
                 let mut jobs = self
                     .jobs
                     .lock()
@@ -1044,34 +1241,52 @@ impl Task for FileTask {
                 if self.closed.load(std::sync::atomic::Ordering::Acquire) {
                     drop(jobs);
                     let _ = self.core.job_cancel(job);
-                    return Err(Error::from_reason("Channel closed"));
+                    return Err(Refused("NoSession: the window closed".into()));
                 }
                 jobs.push(job);
                 drop(jobs);
-                self.files.job_snapshot(job).map_err(core_error)?
+                Self::json(crate::transfer_job(&files.job_snapshot(job)?))
             }
-            FileOperation::Poll { job_id } | FileOperation::Cancel { job_id } => {
-                let job = parse_id(job_id, "Invalid job")?;
-                if !self
-                    .jobs
+            FileOperation::Jobs => Self::json(
+                files
+                    .jobs()?
+                    .iter()
+                    .map(crate::transfer_job)
+                    .collect::<Vec<_>>(),
+            ),
+            FileOperation::Cancel { job_id } => {
+                Self::json(crate::transfer_job(&files.job_cancel(self.owned(job_id)?)?))
+            }
+            FileOperation::Resume { job_id } => {
+                Self::json(crate::transfer_job(&files.job_resume(self.owned(job_id)?)?))
+            }
+            FileOperation::Resolve {
+                job_id,
+                choice,
+                apply_to_remaining,
+            } => {
+                let choice = match choice.as_str() {
+                    "skip" => vnilink_app::FfiConflictChoice::Skip,
+                    "replace" => vnilink_app::FfiConflictChoice::Replace,
+                    "keepBoth" => vnilink_app::FfiConflictChoice::KeepBoth,
+                    _ => return Err(Refused("InvalidSetting: unknown choice".into())),
+                };
+                Self::json(crate::transfer_job(&files.job_resolve(
+                    self.owned(job_id)?,
+                    choice,
+                    *apply_to_remaining,
+                )?))
+            }
+            FileOperation::Forget { job_id } => {
+                let job = self.owned(job_id)?;
+                files.job_forget(job)?;
+                self.jobs
                     .lock()
                     .map_err(|_| Error::from_reason("Channel unavailable"))?
-                    .contains(&job)
-                {
-                    return Err(Error::from_reason("Job belongs to another channel"));
-                }
-                match &self.operation {
-                    FileOperation::Poll { .. } => self.files.job_snapshot(job),
-                    _ => self.files.job_cancel(job),
-                }
-                .map_err(core_error)?
+                    .retain(|id| *id != job);
+                Ok(serde_json::Value::Null)
             }
-        };
-        let state = format!("{:?}", snapshot.state);
-        Ok(serde_json::json!({"jobId":snapshot.id.to_string(),"state":state,"doneBytes":snapshot.done_bytes.to_string(),"totalBytes":snapshot.total_bytes.to_string(),"filesDone":snapshot.files_done.to_string(),"filesTotal":snapshot.files_total.to_string()}).to_string())
-    }
-    fn resolve(&mut self, _: Env, value: String) -> Result<String> {
-        Ok(value)
+        }
     }
 }
 
@@ -1401,49 +1616,110 @@ mod tests {
                 dst_path: "received.bin".into(),
             },
         };
-        let progress: serde_json::Value =
-            serde_json::from_str(&file_task.compute().unwrap()).unwrap();
+        let answer = |task: &mut FileTask| -> serde_json::Value {
+            serde_json::from_str(&task.compute().unwrap()).unwrap()
+        };
+        let progress = answer(&mut file_task)["ok"].clone();
         assert!(
             progress.get("data").is_none(),
             "File payload crossed the UI boundary"
         );
-        file_task.operation = FileOperation::Poll {
-            job_id: progress["jobId"].as_str().unwrap().into(),
-        };
-        assert!(file_task.compute().is_ok());
+        let job_id = progress["id"].as_str().unwrap().to_owned();
         file_task.operation = FileOperation::Cancel {
-            job_id: progress["jobId"].as_str().unwrap().into(),
+            job_id: job_id.clone(),
         };
-        assert!(file_task.compute().unwrap().contains("Cancelled"));
-        file_task.operation = FileOperation::Poll {
-            job_id: progress["jobId"].as_str().unwrap().into(),
+        assert_eq!(answer(&mut file_task)["ok"]["state"], "Cancelled");
+        file_task.operation = FileOperation::Forget { job_id };
+        assert_eq!(answer(&mut file_task)["ok"], serde_json::Value::Null);
+        // The other computer's folders are listed, made, renamed and deleted
+        // through the channel; a refusal is an answer, and the channel lives.
+        let host_root = host.file_roots().unwrap()[0].id.to_string();
+        file_task.operation = FileOperation::Places;
+        let places = answer(&mut file_task)["ok"].clone();
+        assert_eq!(places["roots"][0]["id"], host_root);
+        for name in ["made", "taken"] {
+            file_task.operation = FileOperation::Mkdir {
+                root: host_root.clone(),
+                path: "".into(),
+                name: name.into(),
+            };
+            assert_eq!(answer(&mut file_task)["ok"], serde_json::Value::Null);
+        }
+        file_task.operation = FileOperation::List {
+            root: host_root.clone(),
+            path: "".into(),
+            offset: "0".into(),
         };
-        assert!(file_task.compute().unwrap().contains("Cancelled"));
-        // UI progress reads are snapshots. Both cores' workers must still finish the transfer.
+        let page = answer(&mut file_task)["ok"].clone();
+        let made = page["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == "made")
+            .unwrap()
+            .clone();
+        assert_eq!(made["kind"], "dir");
+        let token: crate::files::TransferToken =
+            serde_json::from_value(made["token"].clone()).unwrap();
+        file_task.operation = FileOperation::Rename {
+            root: host_root.clone(),
+            path: "".into(),
+            name: "made".into(),
+            token: Some(token.clone()),
+            new_name: "taken".into(),
+        };
+        let refused = answer(&mut file_task);
+        assert!(
+            refused["error"].as_str().unwrap().starts_with("FileExists"),
+            "{refused}"
+        );
+        file_task.operation = FileOperation::Rename {
+            root: host_root.clone(),
+            path: "".into(),
+            name: "made".into(),
+            token: Some(token),
+            new_name: "renamed".into(),
+        };
+        assert_eq!(answer(&mut file_task)["ok"], serde_json::Value::Null);
+        assert!(destination.join("renamed").is_dir());
+        file_task.operation = FileOperation::Delete {
+            root: host_root.clone(),
+            path: "".into(),
+            name: "renamed".into(),
+            token: None,
+        };
+        assert_eq!(answer(&mut file_task)["ok"], serde_json::Value::Null);
+        assert!(!destination.join("renamed").exists());
+        // Both cores' drivers finish the transfer; the channel reports it
+        // without being asked.
         controller.start_file_job_driver();
         host.start_file_job_driver();
         file_task.operation = FileOperation::Submit {
             direction: "upload".into(),
             src_root: controller.file_roots().unwrap()[0].id.to_string(),
             src_path: "test.bin".into(),
-            dst_root: host.file_roots().unwrap()[0].id.to_string(),
+            dst_root: host_root.clone(),
             dst_path: "completed.bin".into(),
         };
-        let submitted: serde_json::Value =
-            serde_json::from_str(&file_task.compute().unwrap()).unwrap();
-        file_task.operation = FileOperation::Poll {
-            job_id: submitted["jobId"].as_str().unwrap().into(),
-        };
+        let submitted = answer(&mut file_task)["ok"].clone();
         let end = Instant::now() + Duration::from_secs(15);
+        let mut states = Vec::new();
         loop {
-            let progress: serde_json::Value =
-                serde_json::from_str(&file_task.compute().unwrap()).unwrap();
-            if progress["state"] == "Complete" {
-                break;
+            if let Some(event) = files.read().unwrap() {
+                assert_eq!(event.kind, "jobs");
+                let update: serde_json::Value = serde_json::from_str(&event.metadata).unwrap();
+                for job in update["jobs"].as_array().unwrap() {
+                    if job["id"] == submitted["id"] {
+                        states.push(job["state"].as_str().unwrap().to_owned());
+                    }
+                }
+                if states.last().is_some_and(|state| state == "Complete") {
+                    break;
+                }
             }
             assert!(
                 Instant::now() < end,
-                "background transfer did not complete: {progress}"
+                "the transfer's completion was never pushed: {states:?}"
             );
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -1454,7 +1730,7 @@ mod tests {
         files.take_cleanup().compute().unwrap();
         assert_eq!(
             controller
-                .job_snapshot(submitted["jobId"].as_str().unwrap().parse().unwrap())
+                .job_snapshot(submitted["id"].as_str().unwrap().parse().unwrap())
                 .unwrap()
                 .state,
             vnilink_app::FfiJobState::Complete

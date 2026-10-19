@@ -84,16 +84,8 @@ export function isDataPacket(value: unknown): value is DataPacket {
 	);
 }
 
-export type FileOperation =
-	| {
-		type: 'submit';
-		direction: 'upload' | 'download';
-		srcRoot: string;
-		srcPath: string;
-		dstRoot: string;
-		dstPath: string;
-	}
-	| { type: 'poll' | 'cancel'; jobId: string };
+/** File operations on a `files` channel; see `files.ts`. */
+export const MAX_FILE_OPERATIONS = 4;
 
 export function isSnapshotMedia(value: unknown): value is { type: 'snapshot'; prompt: boolean; access: boolean } {
 	return record(value) && Object.keys(value).length === 3 && value.type === 'snapshot' && typeof value.prompt === 'boolean' && typeof value.access === 'boolean';

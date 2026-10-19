@@ -52,9 +52,7 @@ test('identity, codecs, relays and session settings validate exactly', () => {
 	assert.equal(isEngineCommand({ type: 'saveCustomRelays', relays: new Array(17).fill({ url: 'https://relay.example', authenticated: false, replacementToken: '' }) }), false);
 	assert.equal(isEngineCommand({ type: 'peerHostname', endpointId: 'peer' }), true);
 	assert.equal(isEngineCommand({ type: 'peerHostname' }), false);
-	assert.equal(isEngineCommand({ type: 'connectFiles', endpointId: 'peer' }), true);
-	assert.equal(isEngineCommand({ type: 'beginConnectFiles', endpointId: 'peer' }), true);
-	assert.equal(isEngineCommand({ type: 'connectFiles' }), false);
+	assert.equal(isEngineCommand({ type: 'connectFiles', endpointId: 'peer' }), false, 'Files rides the services connection');
 	assert.equal(isEngineCommand({ type: 'sessionKeyboardMode', sessionId: '1', generation: '2' }), true);
 	assert.equal(isEngineCommand({ type: 'setSessionKeyboardMode', sessionId: '1', generation: '2', mode: 'Map' }), true);
 	assert.equal(isEngineCommand({ type: 'setSessionKeyboardMode', sessionId: '1', generation: '2', mode: 'Dvorak' }), false);
@@ -132,21 +130,26 @@ test('service commands validate kinds, policies, sessions and jobs exactly', () 
 	assert.equal(isEngineCommand({ type: 'closeRemoteTerminalSession', connectionId: '1', generation: '2', id: 'abc' }), true);
 	assert.equal(isEngineCommand({ type: 'hostedTerminalSessions' }), true);
 	assert.equal(isEngineCommand({ type: 'closeTerminalSession', id: 'abc' }), true);
-	assert.equal(isEngineCommand({ type: 'subscribeFilesJobs', sessionId: '1', generation: '2' }), true);
-	assert.equal(isEngineCommand({ type: 'pollFilesJobs', subscriptionId: '1' }), true);
-	assert.equal(isEngineCommand({ type: 'releaseFilesJobs', subscriptionId: '1' }), true);
-	assert.equal(isEngineCommand({ type: 'filesJobCancel', subscriptionId: '1', jobId: '2' }), true);
-	assert.equal(isEngineCommand({ type: 'filesJobResume', subscriptionId: '1', jobId: '2' }), true);
-	assert.equal(isEngineCommand({ type: 'filesJobCancel', subscriptionId: '1', jobId: 'nope' }), false);
+	assert.equal(isEngineCommand({ type: 'subscribeFilesJobs', sessionId: '1', generation: '2' }), false, 'transfers report on the files channel');
+	assert.equal(isEngineCommand({ type: 'localPlaces' }), true);
+	assert.equal(isEngineCommand({ type: 'listLocal', root: '0', path: 'Users/hammed', offset: '0' }), true);
+	assert.equal(isEngineCommand({ type: 'listLocal', root: '0', path: '../etc', offset: '0' }), false);
+	assert.equal(isEngineCommand({ type: 'createLocalDir', root: '0', path: '', name: 'New Folder' }), true);
+	assert.equal(isEngineCommand({ type: 'renameLocal', root: '0', path: 'Users', name: 'a', token: { dev: '1', ino: '2' }, newName: 'b' }), true);
+	assert.equal(isEngineCommand({ type: 'renameLocal', root: '0', path: 'Users', name: 'a', token: { dev: 1, ino: 2 }, newName: 'b' }), false, 'token parts are decimal strings');
+	assert.equal(isEngineCommand({ type: 'deleteLocal', root: '0', path: 'Users', name: 'a', token: null }), true);
+	assert.equal(isEngineCommand({ type: 'deleteLocal', root: '0', path: 'Users', name: 'a' }), false);
 	assert.equal(isEngineReply({ type: 'servicePermissions', permissions: { desktop: true, files: true, terminal: false, camera: false, system_audio: false, microphone: false, recording: false, system_actions: false } }), false);
 	assert.equal(isEngineReply({ type: 'terminalPolicy', policy }), true);
 	assert.equal(isEngineReply({ type: 'terminalSessions', sessions: [] }), true);
 	assert.equal(isEngineReply({ type: 'terminalSessions', sessions: [{ id: 'a', process_id: 42, shell: '/bin/zsh', rows: 24, columns: 80, persistent: true, attached: true }] }), true);
-	const job = { id: '7', peer: 'p', label: 'l', direction: 'Upload', sender: true, state: 'Transferring', total_bytes: '100', done_bytes: '10', files_total: '2', files_done: '0', resumed_files: '0', skipped_files: '0', skipped_symlinks: '0', waiting_file: null, error: null };
-	assert.equal(isEngineReply({ type: 'jobs', jobs: [job] }), true);
-	assert.equal(isEngineReply({ type: 'job', job }), true);
-	assert.equal(isEngineReply({ type: 'job', job: { ...job, state: 'Warping' } }), false);
-	assert.equal(isEngineReply({ type: 'fileJobsSubscription', subscriptionId: '5' }), true);
+	const places = { roots: [{ id: '2', name: 'C:' }], folders: [{ kind: 'home', root: '2', path: 'Users/abass' }] };
+	assert.equal(isEngineReply({ type: 'places', places }), true);
+	assert.equal(isEngineReply({ type: 'places', places: { ...places, folders: [{ kind: 'home', root: '2', path: '/Users' }] } }), false);
+	const entry = { name: 'a.txt', kind: 'file', size: '3', mtimeMs: '1700000000000', token: { dev: '1', ino: '9' } };
+	const page = { entries: [entry], total: '1', nextOffset: null, truncated: false, skipped: '0' };
+	assert.equal(isEngineReply({ type: 'dirPage', page }), true);
+	assert.equal(isEngineReply({ type: 'dirPage', page: { ...page, entries: [{ ...entry, name: '..' }] } }), false);
 });
 
 test('pairing handles cross the bridge as lossless decimal strings', () => {

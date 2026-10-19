@@ -15,17 +15,21 @@ use native::{
 #[cfg(feature = "reset-installation")]
 pub use storage::reset_installation_cli;
 mod data;
+mod files;
 
 use napi::{bindgen_prelude::AsyncTask, Env, Error, Result, Status, Task};
 use napi_derive::napi;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use vnilink_app::{EventPoller, FfiError, FilesService, VideoPoller, VnilinkCore};
+use vnilink_app::{EventPoller, FfiError, VideoPoller, VnilinkCore};
 
 /// Largest accepted command body. Clipboard text reaches 256 KiB and encoded
 /// frames cross as base64, so this must clear a ~1 MiB frame plus JSON shape.
 const COMMAND_BYTES_MAX: usize = 2 * 1024 * 1024;
+
+/// Entries per local listing page: the core's largest page.
+const LIST_PAGE: u16 = 500;
 
 /// Bridge-local transfer shapes. The application `Ffi*` records behind these
 /// are not serde types, so the bridge owns the exact JSON field names.
@@ -128,7 +132,7 @@ struct TransferTerminalSession {
 }
 
 #[derive(Serialize)]
-struct TransferJob {
+pub(crate) struct TransferJob {
     id: String,
     peer: String,
     label: String,
@@ -146,7 +150,7 @@ struct TransferJob {
     error: Option<String>,
 }
 
-fn transfer_job(snapshot: &vnilink_app::FfiJobSnapshot) -> TransferJob {
+pub(crate) fn transfer_job(snapshot: &vnilink_app::FfiJobSnapshot) -> TransferJob {
     fn direction_name(direction: &vnilink_app::FfiJobDirection) -> &'static str {
         match direction {
             vnilink_app::FfiJobDirection::Upload => "Upload",
@@ -610,31 +614,6 @@ enum Command {
     CloseTerminalSession {
         id: String,
     },
-    SubscribeFilesJobs {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-    },
-    PollFilesJobs {
-        #[serde(rename = "subscriptionId")]
-        subscription_id: String,
-    },
-    ReleaseFilesJobs {
-        #[serde(rename = "subscriptionId")]
-        subscription_id: String,
-    },
-    FilesJobCancel {
-        #[serde(rename = "subscriptionId")]
-        subscription_id: String,
-        #[serde(rename = "jobId")]
-        job_id: String,
-    },
-    FilesJobResume {
-        #[serde(rename = "subscriptionId")]
-        subscription_id: String,
-        #[serde(rename = "jobId")]
-        job_id: String,
-    },
     CreateInvitation {
         #[serde(rename = "ttlSeconds")]
         ttl_seconds: u32,
@@ -674,14 +653,6 @@ enum Command {
         name: String,
     },
     Connect {
-        #[serde(rename = "endpointId")]
-        endpoint_id: String,
-    },
-    ConnectFiles {
-        #[serde(rename = "endpointId")]
-        endpoint_id: String,
-    },
-    BeginConnectFiles {
         #[serde(rename = "endpointId")]
         endpoint_id: String,
     },
@@ -839,6 +810,32 @@ enum Command {
     EnableFilesystemAccess,
     SetTransferDirectory {
         path: String,
+    },
+    /// This computer's roots, home folder and usual folders.
+    LocalPlaces,
+    ListLocal {
+        root: String,
+        path: String,
+        offset: String,
+    },
+    CreateLocalDir {
+        root: String,
+        path: String,
+        name: String,
+    },
+    RenameLocal {
+        root: String,
+        path: String,
+        name: String,
+        token: Option<files::TransferToken>,
+        #[serde(rename = "newName")]
+        new_name: String,
+    },
+    DeleteLocal {
+        root: String,
+        path: String,
+        name: String,
+        token: Option<files::TransferToken>,
     },
     KeyboardMode,
     SetKeyboardMode {
@@ -1094,15 +1091,11 @@ enum Reply {
         automatic: String,
         current: Option<String>,
     },
-    Jobs {
-        jobs: Vec<TransferJob>,
+    Places {
+        places: files::TransferPlaces,
     },
-    Job {
-        job: TransferJob,
-    },
-    FileJobsSubscription {
-        #[serde(rename = "subscriptionId")]
-        subscription_id: String,
+    DirPage {
+        page: files::TransferDirPage,
     },
     NativeSharingStatus {
         displays: Vec<TransferSharingStatus>,
@@ -1136,7 +1129,6 @@ struct State {
     native: native::NativeRuntimeState,
     video: HashMap<u64, VideoPoller>,
     events: HashMap<u64, EventPoller>,
-    files: HashMap<u64, Arc<FilesService>>,
     /// The System service held on each connection this computer asked.
     systems: HashMap<(u64, u64), Arc<vnilink_app::SystemServiceHandle>>,
     next_subscription: u64,
@@ -1201,7 +1193,6 @@ impl Task for OpenTask {
                 native: native::NativeRuntimeState::new(opened.backends, desktops, cameras),
                 video: HashMap::new(),
                 events: HashMap::new(),
-                files: HashMap::new(),
                 systems: HashMap::new(),
                 next_subscription: 1,
             })),
@@ -1678,6 +1669,57 @@ impl EngineBridge {
                 core.set_blob_directory(path.clone()).map_err(core_error)?;
                 Reply::Done
             }
+            Command::LocalPlaces => Reply::Places {
+                places: files::transfer_places(core.places().map_err(core_error)?),
+            },
+            Command::ListLocal { root, path, offset } => Reply::DirPage {
+                page: files::transfer_page(
+                    core.list_dir(
+                        parse_id(root, "Invalid root")?,
+                        path.clone(),
+                        parse_id(offset, "Invalid offset")?,
+                        LIST_PAGE,
+                    )
+                    .map_err(core_error)?,
+                ),
+            },
+            Command::CreateLocalDir { root, path, name } => {
+                core.create_dir(parse_id(root, "Invalid root")?, path.clone(), name.clone())
+                    .map_err(core_error)?;
+                Reply::Done
+            }
+            Command::RenameLocal {
+                root,
+                path,
+                name,
+                token,
+                new_name,
+            } => {
+                core.rename_entry(
+                    parse_id(root, "Invalid root")?,
+                    path.clone(),
+                    name.clone(),
+                    token.as_ref().map(files::entry_token).transpose()?,
+                    new_name.clone(),
+                )
+                .map_err(core_error)?;
+                Reply::Done
+            }
+            Command::DeleteLocal {
+                root,
+                path,
+                name,
+                token,
+            } => {
+                core.delete_entry(
+                    parse_id(root, "Invalid root")?,
+                    path.clone(),
+                    name.clone(),
+                    token.as_ref().map(files::entry_token).transpose()?,
+                )
+                .map_err(core_error)?;
+                Reply::Done
+            }
             Command::KeyboardMode => Reply::KeyboardMode {
                 mode: keyboard_mode_name(core.keyboard_mode().map_err(core_error)?).to_string(),
             },
@@ -1755,16 +1797,6 @@ impl EngineBridge {
             },
             Command::Connect { endpoint_id } => Reply::Session {
                 session: core.connect(endpoint_id.clone()).map_err(core_error)?,
-            },
-            Command::ConnectFiles { endpoint_id } => Reply::Session {
-                session: core
-                    .connect_files(endpoint_id.clone())
-                    .map_err(core_error)?,
-            },
-            Command::BeginConnectFiles { endpoint_id } => Reply::Session {
-                session: core
-                    .begin_connect_files(endpoint_id.clone())
-                    .map_err(core_error)?,
             },
             Command::BeginConnect { endpoint_id } => Reply::Session {
                 session: core
@@ -1976,113 +2008,81 @@ impl EngineBridge {
 
     /// Commands that grant service permissions and inspect terminal and file jobs.
     fn services(state: &mut State, command: &Command) -> Result<Reply> {
-        let reply: Reply =
-            match command {
-                Command::SharingPolicy => Reply::SharingPolicy {
-                    policy: state.core.sharing_policy().map_err(core_error)?,
-                },
-                Command::SetSharingPolicy { policy } => {
-                    state.core.set_sharing_policy(*policy).map_err(core_error)?;
-                    Reply::Done
+        let reply: Reply = match command {
+            Command::SharingPolicy => Reply::SharingPolicy {
+                policy: state.core.sharing_policy().map_err(core_error)?,
+            },
+            Command::SetSharingPolicy { policy } => {
+                state.core.set_sharing_policy(*policy).map_err(core_error)?;
+                Reply::Done
+            }
+            Command::SystemPolicy => {
+                let policy = state.core.system_policy().map_err(core_error)?;
+                let support = state.core.system_support().map_err(core_error)?.support;
+                Reply::SystemPolicy {
+                    policy,
+                    support: TransferSystemSupport {
+                        lock: support.lock,
+                        restart: support.restart,
+                        shutdown: support.shutdown,
+                        privacy: support.privacy,
+                    },
                 }
-                Command::SystemPolicy => {
-                    let policy = state.core.system_policy().map_err(core_error)?;
-                    let support = state.core.system_support().map_err(core_error)?.support;
-                    Reply::SystemPolicy {
-                        policy,
-                        support: TransferSystemSupport {
-                            lock: support.lock,
-                            restart: support.restart,
-                            shutdown: support.shutdown,
-                            privacy: support.privacy,
-                        },
-                    }
+            }
+            Command::SetSystemPolicy { policy } => {
+                state.core.set_system_policy(*policy).map_err(core_error)?;
+                Reply::Done
+            }
+            Command::TerminalPolicy => Reply::TerminalPolicy {
+                policy: TransferTerminalPolicy::from(
+                    state.core.terminal_policy().map_err(core_error)?,
+                ),
+            },
+            Command::SetTerminalPolicy { policy } => {
+                state
+                    .core
+                    .set_terminal_policy(policy.clone().into())
+                    .map_err(core_error)?;
+                Reply::Done
+            }
+            Command::TerminalShells => {
+                let shells = state.core.terminal_shells().map_err(core_error)?;
+                Reply::TerminalShells {
+                    shells: shells
+                        .shells
+                        .into_iter()
+                        .map(|shell| TransferShell {
+                            id: shell.id,
+                            label: shell.label,
+                        })
+                        .collect(),
+                    automatic: shells.automatic,
+                    current: shells.current,
                 }
-                Command::SetSystemPolicy { policy } => {
-                    state.core.set_system_policy(*policy).map_err(core_error)?;
-                    Reply::Done
+            }
+            Command::SetTerminalShell { shell } => {
+                if shell
+                    .as_ref()
+                    .is_some_and(|id| id.is_empty() || id.len() > MAX_SHELL_ID)
+                {
+                    return Err(Error::from_reason("Invalid shell"));
                 }
-                Command::TerminalPolicy => Reply::TerminalPolicy {
-                    policy: TransferTerminalPolicy::from(
-                        state.core.terminal_policy().map_err(core_error)?,
-                    ),
-                },
-                Command::SetTerminalPolicy { policy } => {
-                    state
-                        .core
-                        .set_terminal_policy(policy.clone().into())
-                        .map_err(core_error)?;
-                    Reply::Done
-                }
-                Command::TerminalShells => {
-                    let shells = state.core.terminal_shells().map_err(core_error)?;
-                    Reply::TerminalShells {
-                        shells: shells
-                            .shells
-                            .into_iter()
-                            .map(|shell| TransferShell {
-                                id: shell.id,
-                                label: shell.label,
-                            })
-                            .collect(),
-                        automatic: shells.automatic,
-                        current: shells.current,
-                    }
-                }
-                Command::SetTerminalShell { shell } => {
-                    if shell
-                        .as_ref()
-                        .is_some_and(|id| id.is_empty() || id.len() > MAX_SHELL_ID)
-                    {
-                        return Err(Error::from_reason("Invalid shell"));
-                    }
-                    state
-                        .core
-                        .set_terminal_shell(shell.clone())
-                        .map_err(core_error)?;
-                    Reply::Done
-                }
-                Command::RemoteTerminalSessions {
-                    connection_id,
-                    generation,
-                } => {
-                    let connection = parse_id(connection_id, "Invalid connection ID")?;
-                    let generation = parse_id(generation, "Invalid generation")?;
-                    Reply::TerminalSessions {
-                        sessions: state
-                            .core
-                            .remote_terminal_sessions(connection, generation)
-                            .map_err(core_error)?
-                            .into_iter()
-                            .map(|session| TransferTerminalSession {
-                                id: session.id,
-                                process_id: session.process_id,
-                                shell: session.shell,
-                                rows: session.rows,
-                                columns: session.columns,
-                                persistent: session.persistent,
-                                attached: session.attached,
-                            })
-                            .collect(),
-                    }
-                }
-                Command::CloseRemoteTerminalSession {
-                    connection_id,
-                    generation,
-                    id,
-                } => {
-                    let connection = parse_id(connection_id, "Invalid connection ID")?;
-                    let generation = parse_id(generation, "Invalid generation")?;
-                    state
-                        .core
-                        .close_remote_terminal_session(connection, generation, id.clone())
-                        .map_err(core_error)?;
-                    Reply::Done
-                }
-                Command::HostedTerminalSessions => Reply::TerminalSessions {
+                state
+                    .core
+                    .set_terminal_shell(shell.clone())
+                    .map_err(core_error)?;
+                Reply::Done
+            }
+            Command::RemoteTerminalSessions {
+                connection_id,
+                generation,
+            } => {
+                let connection = parse_id(connection_id, "Invalid connection ID")?;
+                let generation = parse_id(generation, "Invalid generation")?;
+                Reply::TerminalSessions {
                     sessions: state
                         .core
-                        .hosted_terminal_sessions()
+                        .remote_terminal_sessions(connection, generation)
                         .map_err(core_error)?
                         .into_iter()
                         .map(|session| TransferTerminalSession {
@@ -2095,80 +2095,47 @@ impl EngineBridge {
                             attached: session.attached,
                         })
                         .collect(),
-                },
-                Command::CloseTerminalSession { id } => {
-                    state
-                        .core
-                        .close_terminal_session(id.clone())
-                        .map_err(core_error)?;
-                    Reply::Done
                 }
-                Command::SubscribeFilesJobs {
-                    session_id,
-                    generation,
-                } => {
-                    let (id, gen) = session_target(session_id, generation)?;
-                    let handle = state.core.open_files_service(id, gen).map_err(core_error)?;
-                    let subscription = state.next_subscription;
-                    state.next_subscription = subscription.saturating_add(1);
-                    state.files.insert(subscription, handle);
-                    Reply::FileJobsSubscription {
-                        subscription_id: subscription.to_string(),
-                    }
-                }
-                Command::PollFilesJobs { subscription_id } => {
-                    let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
-                    let handle = state.files.get(&subscription).ok_or_else(|| {
-                        Error::new(Status::InvalidArg, "Unknown files subscription")
-                    })?;
-                    Reply::Jobs {
-                        jobs: handle
-                            .jobs()
-                            .map_err(core_error)?
-                            .iter()
-                            .map(transfer_job)
-                            .collect(),
-                    }
-                }
-                Command::ReleaseFilesJobs { subscription_id } => {
-                    let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
-                    state.files.remove(&subscription);
-                    Reply::Done
-                }
-                Command::FilesJobCancel {
-                    subscription_id,
-                    job_id,
-                } => {
-                    let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
-                    let handle = state.files.get(&subscription).ok_or_else(|| {
-                        Error::new(Status::InvalidArg, "Unknown files subscription")
-                    })?;
-                    Reply::Job {
-                        job: transfer_job(
-                            &handle
-                                .job_cancel(parse_id(job_id, "Invalid job ID")?)
-                                .map_err(core_error)?,
-                        ),
-                    }
-                }
-                Command::FilesJobResume {
-                    subscription_id,
-                    job_id,
-                } => {
-                    let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
-                    let handle = state.files.get(&subscription).ok_or_else(|| {
-                        Error::new(Status::InvalidArg, "Unknown files subscription")
-                    })?;
-                    Reply::Job {
-                        job: transfer_job(
-                            &handle
-                                .job_resume(parse_id(job_id, "Invalid job ID")?)
-                                .map_err(core_error)?,
-                        ),
-                    }
-                }
-                _ => return Err(Error::new(Status::InvalidArg, "Invalid engine command")),
-            };
+            }
+            Command::CloseRemoteTerminalSession {
+                connection_id,
+                generation,
+                id,
+            } => {
+                let connection = parse_id(connection_id, "Invalid connection ID")?;
+                let generation = parse_id(generation, "Invalid generation")?;
+                state
+                    .core
+                    .close_remote_terminal_session(connection, generation, id.clone())
+                    .map_err(core_error)?;
+                Reply::Done
+            }
+            Command::HostedTerminalSessions => Reply::TerminalSessions {
+                sessions: state
+                    .core
+                    .hosted_terminal_sessions()
+                    .map_err(core_error)?
+                    .into_iter()
+                    .map(|session| TransferTerminalSession {
+                        id: session.id,
+                        process_id: session.process_id,
+                        shell: session.shell,
+                        rows: session.rows,
+                        columns: session.columns,
+                        persistent: session.persistent,
+                        attached: session.attached,
+                    })
+                    .collect(),
+            },
+            Command::CloseTerminalSession { id } => {
+                state
+                    .core
+                    .close_terminal_session(id.clone())
+                    .map_err(core_error)?;
+                Reply::Done
+            }
+            _ => return Err(Error::new(Status::InvalidArg, "Invalid engine command")),
+        };
         Ok(reply)
     }
 
@@ -2270,9 +2237,7 @@ impl EngineBridge {
             }
             Command::BeginConnectServices { .. }
             | Command::Connect { .. }
-            | Command::ConnectFiles { .. }
             | Command::BeginConnect { .. }
-            | Command::BeginConnectFiles { .. }
             | Command::Disconnect
             | Command::DisconnectSession { .. }
             | Command::ControllerSessions
@@ -2304,6 +2269,11 @@ impl EngineBridge {
             | Command::SetInputDefaults { .. }
             | Command::EnableFilesystemAccess
             | Command::SetTransferDirectory { .. }
+            | Command::LocalPlaces
+            | Command::ListLocal { .. }
+            | Command::CreateLocalDir { .. }
+            | Command::RenameLocal { .. }
+            | Command::DeleteLocal { .. }
             | Command::KeyboardMode
             | Command::SetKeyboardMode { .. }
             | Command::SwapControlAndCommand
@@ -2375,12 +2345,7 @@ impl EngineBridge {
             | Command::RemoteTerminalSessions { .. }
             | Command::CloseRemoteTerminalSession { .. }
             | Command::HostedTerminalSessions
-            | Command::CloseTerminalSession { .. }
-            | Command::SubscribeFilesJobs { .. }
-            | Command::PollFilesJobs { .. }
-            | Command::ReleaseFilesJobs { .. }
-            | Command::FilesJobCancel { .. }
-            | Command::FilesJobResume { .. } => Self::services(state, command),
+            | Command::CloseTerminalSession { .. } => Self::services(state, command),
             Command::SystemAction { .. }
             | Command::SystemOperation { .. }
             | Command::CancelSystemAction { .. }
@@ -2478,9 +2443,7 @@ impl CommandShape {
             "confirmPairing" => &["type", "previewId", "digits"],
             "revoke" | "unpair" => &["type", "endpointId"],
             "setPeerName" => &["type", "endpointId", "name"],
-            "connect" | "beginConnect" | "connectFiles" | "beginConnectFiles" => {
-                &["type", "endpointId"]
-            }
+            "connect" | "beginConnect" => &["type", "endpointId"],
             "disconnectSession" | "stopHostedPeer" => &["type", "sessionId"],
             "peerAvailability" => &["type", "endpointId"],
             "submitKey" => &["type", "sessionId", "generation", "usage", "down"],
@@ -2579,6 +2542,11 @@ impl CommandShape {
             "setInputDefaults" => &["type", "mode", "swap", "pointer"],
             "enableFilesystemAccess" => &["type"],
             "setTransferDirectory" => &["type", "path"],
+            "localPlaces" => &["type"],
+            "listLocal" => &["type", "root", "path", "offset"],
+            "createLocalDir" => &["type", "root", "path", "name"],
+            "renameLocal" => &["type", "root", "path", "name", "token", "newName"],
+            "deleteLocal" => &["type", "root", "path", "name", "token"],
             "setKeyboardMode" => &["type", "mode"],
             "setSwapControlAndCommand" => &["type", "enabled"],
             "setSessionPointerSettings" => &["type", "sessionId", "generation", "settings"],
@@ -2605,9 +2573,6 @@ impl CommandShape {
             "remoteTerminalSessions" => &["type", "connectionId", "generation"],
             "closeRemoteTerminalSession" => &["type", "connectionId", "generation", "id"],
             "closeTerminalSession" => &["type", "id"],
-            "subscribeFilesJobs" => &["type", "sessionId", "generation"],
-            "pollFilesJobs" | "releaseFilesJobs" => &["type", "subscriptionId"],
-            "filesJobCancel" | "filesJobResume" => &["type", "subscriptionId", "jobId"],
             "sessionTopology" => &["type", "sessionId", "generation"],
             "selectDisplays" => &["type", "sessionId", "generation", "ids"],
             "setTopology" => &["type", "revision", "displays"],

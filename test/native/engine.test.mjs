@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, parse, relative, sep } from 'node:path';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 
@@ -142,4 +142,32 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 		}
 	}
 	await assert.rejects(execute(first, { type: 'snapshot' }), /shut down/);
+});
+
+test('this computer\'s disk lists, makes, renames and deletes through its own engine', { timeout: 30000 }, async () => {
+	const engine = await addon.openTemporaryEngine();
+	const folder = realpathSync(mkdtempSync(join(tmpdir(), 'vnilink-local-')));
+	try {
+		writeFileSync(join(folder, 'note.txt'), 'note');
+		assert.deepEqual((await execute(engine, { type: 'localPlaces' })).places.roots, [], 'a temporary engine shares nothing');
+		await execute(engine, { type: 'enableFilesystemAccess' });
+		const { places } = await execute(engine, { type: 'localPlaces' });
+		const drive = parse(folder).root;
+		const root = places.roots.find(candidate => drive === '/' ? candidate.name === '/' : drive.toUpperCase().startsWith(candidate.name));
+		assert(root, `no root holds ${folder}`);
+		const path = relative(drive, folder).split(sep).join('/');
+		const list = async () => (await execute(engine, { type: 'listLocal', root: root.id, path, offset: '0' })).page;
+		const page = await list();
+		assert.deepEqual(page.entries.map(entry => [entry.name, entry.kind, entry.size]), [['note.txt', 'file', '4']]);
+		assert.equal((await execute(engine, { type: 'createLocalDir', root: root.id, path, name: 'made' })).type, 'done');
+		await assert.rejects(execute(engine, { type: 'createLocalDir', root: root.id, path, name: 'made' }), /FileExists/);
+		const made = (await list()).entries.find(entry => entry.name === 'made');
+		assert.equal((await execute(engine, { type: 'renameLocal', root: root.id, path, name: 'made', token: made.token, newName: 'renamed' })).type, 'done');
+		assert(existsSync(join(folder, 'renamed')));
+		assert.equal((await execute(engine, { type: 'deleteLocal', root: root.id, path, name: 'renamed', token: null })).type, 'done');
+		assert(!existsSync(join(folder, 'renamed')));
+	} finally {
+		await execute(engine, { type: 'shutdown' });
+		rmSync(folder, { recursive: true, force: true });
+	}
 });

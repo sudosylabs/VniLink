@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
-import { dimension, isInputCommand, isDesktopAudioOperation, isDesktopAudioStatus } from '../common/dataChannel.js';
+import { dimension, isInputCommand, isDesktopAudioOperation, isDesktopAudioStatus, MAX_FILE_OPERATIONS } from '../common/dataChannel.js';
 import type { DataChannelRequest } from '../common/dataChannel.js';
+import { isFileOperation } from '../common/files.js';
 import { record } from '../common/engine.js';
 
 export interface NativeDataChannel {
@@ -31,8 +32,8 @@ export class DataChannelHost {
 	private ended = false;
 	private sentAt = 0;
 	private lastAckMs = 0;
-	private fileBusy = false;
-	private cancelBusy = false;
+	/** File operations answered by the engine but not yet replied. */
+	private fileFlight = 0;
 
 	constructor(
 		private readonly port: DataPort,
@@ -58,7 +59,8 @@ export class DataChannelHost {
 		}
 		this.native = native;
 		this.port.postMessage({ type: 'ready' });
-		if (this.request.kind !== 'input' && this.request.kind !== 'files') {
+		// A files channel reads too: the engine pushes its job changes.
+		if (this.request.kind !== 'input') {
 			this.pump();
 		}
 	}
@@ -134,37 +136,25 @@ export class DataChannelHost {
 			if (
 				message.type === 'file' &&
 				this.request.kind === 'files' &&
-				record(message.operation) &&
-				!(message.operation.type === 'cancel' ? this.cancelBusy : this.fileBusy) &&
+				isFileOperation(message.operation) &&
+				this.fileFlight < MAX_FILE_OPERATIONS &&
 				Number.isSafeInteger(message.id)
 			) {
 				const command = JSON.stringify(message.operation);
 				if (command.length > 16384) {
 					throw new Error('File operation too large');
 				}
-				const cancel = message.operation.type === 'cancel';
-				if (cancel) {
-					this.cancelBusy = true;
-				} else {
-					this.fileBusy = true;
-				}
+				this.fileFlight++;
+				// A refused operation is an answer; only a lost session rejects.
 				void this.native.fileOperation(command).then(
 					(metadata) => {
-						if (cancel) {
-							this.cancelBusy = false;
-						} else {
-							this.fileBusy = false;
-						}
+						this.fileFlight--;
 						if (!this.closed) {
 							this.port.postMessage({ type: 'fileReply', id: message.id, metadata });
 						}
 					},
 					() => {
-						if (cancel) {
-							this.cancelBusy = false;
-						} else {
-							this.fileBusy = false;
-						}
+						this.fileFlight--;
 						this.fail();
 					},
 				);
@@ -190,8 +180,7 @@ export class DataChannelHost {
 			this.closed ||
 			this.pending ||
 			!this.native ||
-			this.request.kind === 'input' ||
-			this.request.kind === 'files'
+			this.request.kind === 'input'
 		) {
 			return;
 		}

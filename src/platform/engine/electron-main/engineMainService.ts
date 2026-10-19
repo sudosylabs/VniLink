@@ -25,7 +25,7 @@ function timeoutFor(command: EngineCommand | { type: 'shutdown' }): number {
 	if (command.type === 'shutdown' || command.type === 'startNativeScreenSharing') {
 		return 30000;
 	}
-	return command.type === 'connect' || command.type === 'connectFiles' ? 90000 : 10000;
+	return command.type === 'connect' ? 90000 : 10000;
 }
 
 /** Owns the engine utility process, its request lanes and its lifetime. */

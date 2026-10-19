@@ -1,3 +1,5 @@
+import { isFileName, isFilePage, isFilePath, isFilePlaces, isFileToken, type FilePage, type FilePlaces, type FileToken } from './files.js';
+
 export interface Grants { view: boolean; control: boolean; clipboard: boolean; transfer: boolean; }
 
 export type OperatingSystem = 'macos' | 'windows' | 'linux' | 'other';
@@ -116,14 +118,6 @@ export interface TerminalSession {
 	persistent: boolean; attached: boolean;
 }
 
-export interface FileJob {
-	id: string; peer: string; label: string; direction: 'Upload' | 'Download'; sender: boolean;
-	state: 'Preparing' | 'Serving' | 'Transferring' | 'WaitingDecision' | 'Interrupted' | 'Cancelled' | 'Failed' | 'Complete';
-	total_bytes: string; done_bytes: string; files_total: string; files_done: string;
-	resumed_files: string; skipped_files: string; skipped_symlinks: string;
-	waiting_file: string | null; error: string | null;
-}
-
 export type EngineEvent =
 	| { type: 'hostingChanged'; hosting: boolean }
 	| { type: 'devicePaired' | 'deviceAuthorized' | 'deviceRevoked' | 'deviceUnpaired'; endpoint_id: string }
@@ -173,7 +167,6 @@ export type EngineCommand =
 	| { type: 'setVideoCodecs'; codecs: VideoCodecCaps }
 	| { type: 'saveCustomRelays'; relays: RelayInput[] }
 	| { type: 'peerHostname'; endpointId: string }
-	| { type: 'connectFiles' | 'beginConnectFiles'; endpointId: string }
 	| { type: 'sessionKeyboardMode' | 'sessionSwapControlAndCommand'; sessionId: string; generation: string }
 	| { type: 'setSessionKeyboardMode'; sessionId: string; generation: string; mode: 'Character' | 'Map' | 'Translate' }
 	| { type: 'setSessionSwapControlAndCommand'; sessionId: string; generation: string; enabled: boolean }
@@ -196,9 +189,6 @@ export type EngineCommand =
 	| { type: 'remoteTerminalSessions'; connectionId: string; generation: string }
 	| { type: 'closeRemoteTerminalSession'; connectionId: string; generation: string; id: string }
 	| { type: 'closeTerminalSession'; id: string }
-	| { type: 'subscribeFilesJobs'; sessionId: string; generation: string }
-	| { type: 'pollFilesJobs' | 'releaseFilesJobs'; subscriptionId: string }
-	| { type: 'filesJobCancel' | 'filesJobResume'; subscriptionId: string; jobId: string }
 	| { type: 'createInvitation'; ttlSeconds: number }
 	| { type: 'acceptInvitation'; token: string }
 	| { type: 'exportPairingFile'; ttlSeconds: number; allowControl: boolean }
@@ -222,6 +212,11 @@ export type EngineCommand =
 	| { type: 'setInputDefaults'; mode: 'Character' | 'Map' | 'Translate'; swap: boolean; pointer: PointerSettings }
 	| { type: 'enableFilesystemAccess' }
 	| { type: 'setTransferDirectory'; path: string }
+	| { type: 'localPlaces' }
+	| { type: 'listLocal'; root: string; path: string; offset: string }
+	| { type: 'createLocalDir'; root: string; path: string; name: string }
+	| { type: 'renameLocal'; root: string; path: string; name: string; token: FileToken | null; newName: string }
+	| { type: 'deleteLocal'; root: string; path: string; name: string; token: FileToken | null }
 	| { type: 'startNativeScreenSharing'; displayId: number; width: number; height: number; pixelWidth: number; pixelHeight: number }
 	| { type: 'stopNativeScreenSharing' | 'nativeSharingStatus' }
 	| { type: 'startRecording'; sessionId: string; generation: string; destination: string; maxBytes: string; maxDurationMs: string; retention?: RecordingRetention; source?: 'desktop' | 'camera' }
@@ -308,9 +303,8 @@ export type EngineReply =
 	| { type: 'terminalPolicy'; policy: TerminalPolicy }
 	| { type: 'terminalSessions'; sessions: TerminalSession[] }
 	| ({ type: 'terminalShells' } & TerminalShells)
-	| { type: 'jobs'; jobs: FileJob[] }
-	| { type: 'job'; job: FileJob }
-	| { type: 'fileJobsSubscription'; subscriptionId: string }
+	| { type: 'places'; places: FilePlaces }
+	| { type: 'dirPage'; page: FilePage }
 	| { type: 'done' };
 
 export function record(value: unknown): value is Record<string, unknown> {
@@ -511,25 +505,6 @@ function terminalSessions(value: unknown): value is TerminalSession[] {
 	return Array.isArray(value) && value.length <= 256 && value.every((item: unknown) => terminalSession(item));
 }
 
-function fileJobState(value: unknown): value is FileJob['state'] {
-	return value === 'Preparing' || value === 'Serving' || value === 'Transferring' || value === 'WaitingDecision'
-		|| value === 'Interrupted' || value === 'Cancelled' || value === 'Failed' || value === 'Complete';
-}
-
-function fileJob(value: unknown): value is FileJob {
-	return record(value) && text(value.id) && text(value.peer) && text(value.label)
-		&& (value.direction === 'Upload' || value.direction === 'Download') && typeof value.sender === 'boolean'
-		&& fileJobState(value.state) && decimal(value.total_bytes) && decimal(value.done_bytes)
-		&& decimal(value.files_total) && decimal(value.files_done) && decimal(value.resumed_files)
-		&& decimal(value.skipped_files) && decimal(value.skipped_symlinks)
-		&& (value.waiting_file === null || text(value.waiting_file)) && (value.error === null || text(value.error))
-		&& Object.keys(value).length === 15;
-}
-
-function fileJobs(value: unknown): value is FileJob[] {
-	return Array.isArray(value) && value.length <= 256 && value.every((item: unknown) => fileJob(item));
-}
-
 function serviceCause(value: unknown): value is string {
 	return value === 'OwnerClose' || value === 'ParentLoss' || value === 'Revoked' || value === 'Replaced'
 		|| value === 'DeviceLoss' || value === 'Shutdown' || value === 'PeerClose' || value === 'IdleExpired';
@@ -655,7 +630,7 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'confirmPairing': keys = ['previewId', 'digits']; valid = decimal(value.previewId) && typeof value.digits === 'string' && /^[0-9]{3}$/.test(value.digits); break;
 		case 'revoke': case 'unpair': keys = ['endpointId']; valid = text(value.endpointId); break;
 		case 'setPeerName': keys = ['endpointId', 'name']; valid = text(value.endpointId) && text(value.name) && value.name.length <= 256; break;
-		case 'connect': case 'beginConnect': case 'connectFiles': case 'beginConnectFiles': keys = ['endpointId']; valid = text(value.endpointId); break;
+		case 'connect': case 'beginConnect': keys = ['endpointId']; valid = text(value.endpointId); break;
 		case 'disconnect': keys = []; valid = true; break;
 		case 'disconnectSession': case 'stopHostedPeer': keys = ['sessionId']; valid = decimal(value.sessionId); break;
 		case 'submitKey': keys = ['sessionId', 'generation', 'usage', 'down']; valid = decimal(value.sessionId) && decimal(value.generation) && uint(value.usage, 65535) && typeof value.down === 'boolean'; break;
@@ -669,6 +644,11 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'setInputDefaults': keys = ['mode', 'swap', 'pointer']; valid = keyboardMode(value.mode) && typeof value.swap === 'boolean' && pointerSettings(value.pointer); break;
 		case 'enableFilesystemAccess': keys = []; break;
 		case 'setTransferDirectory': keys = ['path']; valid = typeof value.path === 'string' && value.path.length > 0 && value.path.length <= 4096 && !value.path.includes('\0'); break;
+		case 'localPlaces': keys = []; valid = true; break;
+		case 'listLocal': keys = ['root', 'path', 'offset']; valid = decimal(value.root) && isFilePath(value.path) && decimal(value.offset); break;
+		case 'createLocalDir': keys = ['root', 'path', 'name']; valid = decimal(value.root) && isFilePath(value.path) && isFileName(value.name); break;
+		case 'renameLocal': keys = ['root', 'path', 'name', 'token', 'newName']; valid = decimal(value.root) && isFilePath(value.path) && isFileName(value.name) && (value.token === null || isFileToken(value.token)) && isFileName(value.newName); break;
+		case 'deleteLocal': keys = ['root', 'path', 'name', 'token']; valid = decimal(value.root) && isFilePath(value.path) && isFileName(value.name) && (value.token === null || isFileToken(value.token)); break;
 		case 'startNativeScreenSharing': keys = ['displayId', 'width', 'height', 'pixelWidth', 'pixelHeight']; valid = isNativeScreenSource({ displayId: value.displayId, width: value.width, height: value.height, pixelWidth: value.pixelWidth, pixelHeight: value.pixelHeight }); break;
 		case 'nativeSharingStatus': case 'stopNativeScreenSharing': keys = []; valid = true; break;
 		case 'remoteCameraDevices': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
@@ -719,9 +699,6 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'remoteTerminalSessions': keys = ['connectionId', 'generation']; valid = decimal(value.connectionId) && decimal(value.generation); break;
 		case 'closeRemoteTerminalSession': keys = ['connectionId', 'generation', 'id']; valid = decimal(value.connectionId) && decimal(value.generation) && text(value.id); break;
 		case 'closeTerminalSession': keys = ['id']; valid = text(value.id); break;
-		case 'subscribeFilesJobs': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
-		case 'pollFilesJobs': case 'releaseFilesJobs': keys = ['subscriptionId']; valid = decimal(value.subscriptionId); break;
-		case 'filesJobCancel': case 'filesJobResume': keys = ['subscriptionId', 'jobId']; valid = decimal(value.subscriptionId) && decimal(value.jobId); break;
 		case 'topology': keys = []; valid = true; break;
 		case 'sessionTopology': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
 		case 'selectDisplays': keys = ['sessionId', 'generation', 'ids']; valid = decimal(value.sessionId) && decimal(value.generation) && decimals(value.ids); break;
@@ -785,9 +762,8 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'terminalPolicy': return terminalPolicy(value.policy) && Object.keys(value).length === 2;
 		case 'terminalSessions': return terminalSessions(value.sessions) && Object.keys(value).length === 2;
 		case 'terminalShells': return terminalShells(value);
-		case 'jobs': return fileJobs(value.jobs) && Object.keys(value).length === 2;
-		case 'job': return fileJob(value.job) && Object.keys(value).length === 2;
-		case 'fileJobsSubscription': return decimal(value.subscriptionId) && Object.keys(value).length === 2;
+		case 'places': return isFilePlaces(value.places) && Object.keys(value).length === 2;
+		case 'dirPage': return isFilePage(value.page) && Object.keys(value).length === 2;
 		case 'done': return true;
 		default: return false;
 	}

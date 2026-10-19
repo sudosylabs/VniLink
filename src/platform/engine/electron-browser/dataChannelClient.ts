@@ -1,5 +1,6 @@
-import { isDesktopAudioOperation, isDesktopAudioStatus, isDataPacket, isChannelRequest } from '../common/dataChannel.js';
-import type { DataChannelRequest, DataPacket, FileOperation, DataChannelMetrics, DesktopAudioOperation, DesktopAudioStatus } from '../common/dataChannel.js';
+import { isDesktopAudioOperation, isDesktopAudioStatus, isDataPacket, isChannelRequest, MAX_FILE_OPERATIONS } from '../common/dataChannel.js';
+import type { DataChannelRequest, DataPacket, DataChannelMetrics, DesktopAudioOperation, DesktopAudioStatus } from '../common/dataChannel.js';
+import { isFileAnswer, type FileAnswer, type FileOperation } from '../common/files.js';
 import { ipcMessagePort } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { record } from '../common/engine.js';
 import type { EngineCommand } from '../common/engine.js';
@@ -23,7 +24,7 @@ export class DataChannelClient {
 		reject(error: Error): void;
 		timer: ReturnType<typeof setTimeout>;
 	} | undefined;
-	private readonly filePending = new Map<number, { cancel: boolean; resolve(value: string): void; reject(error: Error): void }>();
+	private readonly filePending = new Map<number, { resolve(value: FileAnswer): void; reject(error: Error): void }>();
 
 	constructor(
 		private readonly port: MessagePort,
@@ -157,7 +158,11 @@ export class DataChannelClient {
 				typeof message.id === 'number' && this.filePending.has(message.id) &&
 				typeof message.metadata === 'string'
 			) {
-				this.filePending.get(message.id)?.resolve(message.metadata);
+				const answer: unknown = JSON.parse(message.metadata);
+				if (!isFileAnswer(answer)) {
+					throw new Error('Invalid file answer');
+				}
+				this.filePending.get(message.id)?.resolve(answer);
 				this.filePending.delete(message.id);
 				return;
 			}
@@ -235,14 +240,14 @@ export class DataChannelClient {
 		});
 	}
 
-	public async fileOperation(operation: FileOperation): Promise<string> {
-		const cancel = operation.type === 'cancel';
-		if (this.closed || [...this.filePending.values()].some(pending => pending.cancel === cancel)) {
+	/** Asks the other computer; resolves with its answer, which may be a refusal. Rejects only when the channel is gone or full. */
+	public async fileOperation(operation: FileOperation): Promise<FileAnswer> {
+		if (this.closed || this.filePending.size >= MAX_FILE_OPERATIONS) {
 			throw new Error('File operation backpressure');
 		}
-		return await new Promise<string>((resolve, reject) => {
+		return await new Promise<FileAnswer>((resolve, reject) => {
 			const id = ++this.nextWrite;
-			this.filePending.set(id, { cancel, resolve, reject });
+			this.filePending.set(id, { resolve, reject });
 			this.port.postMessage({ type: 'file', id, operation });
 		});
 	}
