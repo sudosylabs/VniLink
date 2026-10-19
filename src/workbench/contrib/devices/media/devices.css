@@ -486,6 +486,31 @@ button.device-service:hover:not(:disabled) {
 	text-align: end;
 }
 
+/* A restart or shutdown counting down: its row's Cancel, under the status. */
+.device-service-cancel {
+	display: block;
+	margin: 0 16px 4px auto;
+	padding: 2px 8px;
+	border: 1px solid var(--line);
+	border-radius: 5px;
+	background: transparent;
+	color: var(--text);
+	font-size: 12px;
+}
+
+.device-service-cancel:hover {
+	background: var(--surface-hover);
+}
+
+.device-service-cancel:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+
+.device-service-cancel[hidden] {
+	display: none;
+}
+
 /* Details. */
 
 .device-facts {

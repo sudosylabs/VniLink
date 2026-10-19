@@ -1,3 +1,4 @@
+import { ISystemActionService } from '../../src/workbench/services/systemActions/systemActionService.js';
 import { IApplicationService } from '../../src/workbench/services/application/applicationService.js';
 import { IConnectionService } from '../../src/workbench/services/connection/connectionService.js';
 import { IPermissionService } from '../../src/workbench/services/permissions/permissionService.js';
@@ -102,7 +103,10 @@ export async function verifyHomeLifecycle(): Promise<void> {
 		[ILogService, new NullLogService()],
 		[IContextKeyService, new SyncDescriptor(ContextKeyService)],
 		[ICommandService, new SyncDescriptor(CommandService)],
-		[IMenuService, new SyncDescriptor(MenuService)], [IDevicePairingPopover, popover]), true);
+		[IMenuService, new SyncDescriptor(MenuService)], [IDevicePairingPopover, popover],
+		[ISystemActionService, {
+			_serviceBrand: undefined, onDidChange: Event.None, progress: () => undefined, run: () => Promise.resolve(), cancel: () => Promise.resolve(),
+		}]), true);
 	const home = services.createInstance(HomeView);
 	try {
 		assert(!home.element.querySelector('[data-section-id="files"]'), 'Files settings still appear in the sidebar');

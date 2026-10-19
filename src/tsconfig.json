@@ -218,7 +218,8 @@
     "./base/browser/contextmenu.ts",
     "./platform/jsonschemas/common/jsonContributionRegistry.ts",
     "./platform/terminal/common/terminalStrings.ts",
-    "./platform/clipboard/common/clipboardService.ts"
+    "./platform/clipboard/common/clipboardService.ts",
+    "./base/parts/sandbox/common/electronTypes.ts"
   ],
   "include": [],
   "exclude": []

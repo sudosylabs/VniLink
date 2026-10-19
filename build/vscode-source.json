@@ -1118,6 +1118,12 @@
       "changedImports": 0
     },
     {
+      "path": "src/base/parts/sandbox/common/electronTypes.ts",
+      "upstreamPath": "src/vs/base/parts/sandbox/common/electronTypes.ts",
+      "sha256": "492918b28dfa80e7acfc0362f7424dfef97040c3049f5d0da723ffcd07db2b8f",
+      "changedImports": 0
+    },
+    {
       "path": "src/base/parts/sandbox/common/sandboxTypes.ts",
       "upstreamPath": "src/vs/base/parts/sandbox/common/sandboxTypes.ts",
       "sha256": "e48fdd47794b208e13f127371e18e86dda100d455ce8b200442bb9a098e4d849",
@@ -1308,7 +1314,7 @@
     {
       "path": "src/platform/native/common/native.ts",
       "upstreamPath": "src/vs/platform/native/common/native.ts",
-      "sha256": "11a1ac60f1e905235a9f0ea85d25d3da597bf4313383bfa2b5e094696a2e186f",
+      "sha256": "3f5a2030d88129193016ac0b2a9fba9a128e9caa43418b569d3f95713d239e5e",
       "adapted": true
     },
     {
@@ -1321,7 +1327,7 @@
       "path": "src/platform/native/electron-main/nativeHostMainService.ts",
       "upstreamPath": "src/vs/platform/native/electron-main/nativeHostMainService.ts",
       "adapted": true,
-      "sha256": "78541963c9cd60c9bf28f61b63ac3678c3de2bc236b24933cf0880f83b3c3eb6"
+      "sha256": "aa89d6c7a37810da36b134fcecb7633b7e4872c75f354baed494d0c0f63b2024"
     },
     {
       "path": "src/platform/registry/common/platform.ts",
@@ -2981,6 +2987,11 @@
     },
     {
       "from": "src/platform/native/common/native.ts",
+      "to": "src/base/parts/sandbox/common/electronTypes.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/common/native.ts",
       "to": "src/platform/instantiation/common/instantiation.ts",
       "kind": "import"
     },
@@ -3707,6 +3718,11 @@
     {
       "from": "src/platform/native/electron-main/nativeHostMainService.ts",
       "to": "src/base/common/buffer.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/base/parts/sandbox/common/electronTypes.ts",
       "kind": "import"
     },
     {

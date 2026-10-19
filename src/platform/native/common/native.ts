@@ -1,13 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: native window controls, window state, folder picking, displays, allowlisted links, text and picture clipboard and relaunch.
+ *  Adapted for VniLink: native window controls, window state, folder picking, message boxes, displays, allowlisted links, clipboard and relaunch.
  *--------------------------------------------------------------------------------------------*/
 
 import type { WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
 import type { NativeScreenSource } from '../../engine/common/engine.js';
 import type { Event } from '../../../base/common/event.js';
 import { VSBuffer } from '../../../base/common/buffer.js';
+import type { MessageBoxOptions, MessageBoxReturnValue } from '../../../base/parts/sandbox/common/electronTypes.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 
 export interface IWindowState {
@@ -48,6 +49,8 @@ export interface INativeHostService {
 	setFullScreen(fullscreen: boolean, options?: ITargetWindowOptions): Promise<void>;
 	updateWindowControls(options: IWindowControlsOptions): Promise<void>;
 	pickFolder(defaultPath: string): Promise<string | null>;
+	/** A native message box over the window, as VS Code's desktop dialogs are. */
+	showMessageBox(options: MessageBoxOptions & ITargetWindowOptions): Promise<MessageBoxReturnValue>;
 	getCaptureDisplays(): Promise<NativeScreenSource[]>;
 	openExternal(url: string): Promise<void>;
 
@@ -74,6 +77,7 @@ export type NativeHostMethod =
 	| 'setFullScreen'
 	| 'updateWindowControls'
 	| 'pickFolder'
+	| 'showMessageBox'
 	| 'getCaptureDisplays'
 	| 'openExternal'
 	| 'readClipboardText'
@@ -127,6 +131,28 @@ export function isWindowState(value: unknown): value is IWindowState {
 	);
 }
 
+const messageBoxKeys = ['message', 'detail', 'type', 'buttons', 'defaultId', 'cancelId', 'title', 'noLink', 'targetWindowId'];
+
+/** A short message box with at most four buttons; nothing that reaches files or links. */
+export function isMessageBoxOptions(value: unknown, windowId: number): value is MessageBoxOptions & ITargetWindowOptions {
+	if (typeof value !== 'object' || value === null || Array.isArray(value) || Object.keys(value).some(key => !messageBoxKeys.includes(key))) {
+		return false;
+	}
+	const shortText = (field: unknown, max: number): boolean => field === undefined || (typeof field === 'string' && field.length <= max && !field.includes('\0'));
+	const buttons: unknown = Reflect.get(value, 'buttons');
+	const count = Array.isArray(buttons) ? buttons.length : 0;
+	const index = (field: unknown): boolean => field === undefined || (Number.isInteger(field) && Number(field) >= 0 && Number(field) < Math.max(count, 1));
+	const type: unknown = Reflect.get(value, 'type');
+	const target: unknown = Reflect.get(value, 'targetWindowId');
+	return typeof Reflect.get(value, 'message') === 'string' && shortText(Reflect.get(value, 'message'), 500)
+		&& shortText(Reflect.get(value, 'detail'), 1000) && shortText(Reflect.get(value, 'title'), 100)
+		&& (type === undefined || type === 'none' || type === 'info' || type === 'warning' || type === 'question')
+		&& (buttons === undefined || (Array.isArray(buttons) && buttons.length <= 4 && buttons.every(button => typeof button === 'string' && button.length > 0 && button.length <= 64)))
+		&& index(Reflect.get(value, 'defaultId')) && index(Reflect.get(value, 'cancelId'))
+		&& (Reflect.get(value, 'noLink') === undefined || typeof Reflect.get(value, 'noLink') === 'boolean')
+		&& (target === undefined || target === windowId);
+}
+
 export function isNativeHostRequest(method: unknown, args: unknown): method is NativeHostMethod {
 	if (typeof method !== 'string' || !Array.isArray(args) || !Number.isSafeInteger(args[0]) || args[0] <= 0) {
 		return false;
@@ -142,6 +168,9 @@ export function isNativeHostRequest(method: unknown, args: unknown): method is N
 	}
 	if (method === 'writeClipboardPicture') {
 		return args.length === 2 && isPng(args[1]);
+	}
+	if (method === 'showMessageBox') {
+		return args.length === 2 && isMessageBoxOptions(args[1], Number(args[0]));
 	}
 	if (method === 'pickFolder' || method === 'openExternal') {
 		return args.length === 2 && typeof args[1] === 'string' && args[1].length > 0 && args[1].length <= 4096 && !args[1].includes('\0');

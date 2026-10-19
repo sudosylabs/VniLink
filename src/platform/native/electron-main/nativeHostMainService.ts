@@ -1,12 +1,13 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: native window controls, window state, folder picking, displays, allowlisted links and text and picture clipboard.
+ *  Adapted for VniLink: native window controls, window state, folder picking, message boxes, displays, allowlisted links and clipboard.
  *--------------------------------------------------------------------------------------------*/
 
 import { clipboard, ClipboardItem, dialog, screen, shell } from 'electron';
 import type { BrowserWindow } from 'electron';
 import type { VSBuffer } from '../../../base/common/buffer.js';
+import type { MessageBoxOptions, MessageBoxReturnValue } from '../../../base/parts/sandbox/common/electronTypes.js';
 import { Disposable, DisposableStore } from '../../../base/common/lifecycle.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
@@ -137,6 +138,21 @@ export class NativeHostMainService extends Disposable {
 	public async pickFolder(windowId: number, defaultPath: string): Promise<string | null> {
 		const result = await dialog.showOpenDialog(this.window(windowId), { defaultPath, properties: ['openDirectory', 'createDirectory'] });
 		return result.canceled ? null : result.filePaths[0] ?? null;
+	}
+
+	/** A native message box over the window, as VS Code's dialog service shows one. */
+	public async showMessageBox(windowId: number, options: MessageBoxOptions): Promise<MessageBoxReturnValue> {
+		const { response, checkboxChecked } = await dialog.showMessageBox(this.window(windowId), {
+			message: options.message,
+			detail: options.detail,
+			type: options.type,
+			buttons: options.buttons,
+			defaultId: options.defaultId,
+			cancelId: options.cancelId,
+			title: options.title,
+			noLink: options.noLink,
+		});
+		return { response, checkboxChecked };
 	}
 
 	/** Displays that native screen sharing can capture; only macOS has a capture backend. */

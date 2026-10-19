@@ -1,7 +1,7 @@
 import { Event } from '../../../base/common/event.js';
 import type { IServerChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { windowIdFromContext } from '../../ipc/electron-main/windowContext.js';
-import { isNativeHostRequest, isPng, type IWindowControlsOptions, type IWindowState } from '../common/native.js';
+import { isMessageBoxOptions, isNativeHostRequest, isPng, type IWindowControlsOptions, type IWindowState } from '../common/native.js';
 import type { NativeHostMainService } from './nativeHostMainService.js';
 
 /**
@@ -43,6 +43,11 @@ export class NativeHostChannel implements IServerChannel {
 			case 'setFullScreen': return this.nativeHost.setFullScreen(windowId, args[1] === true);
 			case 'updateWindowControls': return this.nativeHost.updateWindowControls(windowId, args[1] as IWindowControlsOptions);
 			case 'pickFolder': return this.nativeHost.pickFolder(windowId, String(args[1]));
+			case 'showMessageBox':
+				if (isMessageBoxOptions(args[1], windowId)) {
+					return this.nativeHost.showMessageBox(windowId, args[1]);
+				}
+				break;
 			case 'writeClipboardPicture':
 				if (isPng(args[1])) {
 					return this.nativeHost.writeClipboardPicture(windowId, args[1]);

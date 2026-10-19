@@ -14,6 +14,7 @@ import { InstantiationService } from '../../src/platform/instantiation/common/in
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
 import { IDeviceService as IDeviceServiceId } from '../../src/workbench/services/devices/deviceService.js';
 import { IScreenSnapshotService as IScreenSnapshotServiceId } from '../../src/workbench/services/screenSnapshot/screenSnapshotService.js';
+import { ISystemActionService, type SystemActionProgress } from '../../src/workbench/services/systemActions/systemActionService.js';
 
 function assert(value: unknown, message: string): asserts value {
 	if (!value) {
@@ -28,6 +29,35 @@ async function settle(): Promise<void> {
 }
 
 export type DeviceFixtureState = 'empty' | 'populated' | 'selected' | 'unavailable';
+
+/** Restart and lock progress the rows show, set by the test. */
+class FixtureSystemActions implements ISystemActionService {
+	declare public readonly _serviceBrand: undefined;
+	private readonly changed = new Emitter<string>();
+	public readonly onDidChange = this.changed.event;
+	private readonly progresses = new Map<string, SystemActionProgress>();
+
+	public set(deviceId: string, progress: SystemActionProgress | undefined): void {
+		if (progress) {
+			this.progresses.set(deviceId, progress);
+		} else {
+			this.progresses.delete(deviceId);
+		}
+		this.changed.fire(deviceId);
+	}
+
+	public progress(deviceId: string): SystemActionProgress | undefined {
+		return this.progresses.get(deviceId);
+	}
+
+	public run(): Promise<void> {
+		return Promise.resolve();
+	}
+
+	public cancel(): Promise<void> {
+		return Promise.resolve();
+	}
+}
 
 /** Explicit test data; the production page always receives the real service. */
 export class DevicePageFixture extends Disposable implements IDeviceService {
@@ -56,6 +86,7 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 	public renameResult: Promise<void> | undefined;
 	public incoming: ControlRequestInfo | null = null;
 	public readonly snapshots: FixtureSnapshots;
+	public readonly systemActions = new FixtureSystemActions();
 
 	constructor(state: DeviceFixtureState = 'populated', snapshots?: FixtureSnapshots) {
 		super();
@@ -79,6 +110,7 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 			},
 		};
 		const collection = new ServiceCollection([IDeviceServiceId, this], [IScreenSnapshotServiceId, this.snapshots], [ICommandService, commands],
+			[ISystemActionService, this.systemActions],
 			[IDevicePairingService, new SyncDescriptor(DevicePairingService)], [IDevicePairingPopover, new SyncDescriptor(DevicePairingPopover)]);
 		const services = this._register(new InstantiationService(collection, true));
 		this.page = this._register(services.createInstance(DevicesPage));
@@ -336,11 +368,12 @@ async function verifyInspector(fixture: DevicePageFixture, rows: () => HTMLEleme
 		'Camera': 'Unavailable right now', 'Lock screen': 'Not supported there', 'Restart or shut down': 'Available',
 	};
 	assert(JSON.stringify(services()) === JSON.stringify(expected), `Service rows misreport availability: ${JSON.stringify(services())}`);
-	// Terminal and Camera open tabs; each is a button, disabled while the computer refuses it.
+	// Terminal and Camera open tabs, Lock and Restart act; each is a button, disabled while the computer refuses it.
 	const serviceButton = (name: string): HTMLButtonElement | undefined => [...page.querySelectorAll<HTMLButtonElement>('button.device-service')].find(button => button.textContent.startsWith(name));
 	const terminal = (): HTMLButtonElement | undefined => serviceButton('Terminal');
 	const interactive = page.querySelectorAll('button.device-service, .device-service[tabindex]').length;
-	assert(page.querySelector('.device-services')?.getAttribute('role') === 'list' && interactive === 2, 'A service row without a tab became interactive');
+	assert(page.querySelector('.device-services')?.getAttribute('role') === 'list' && interactive === 4, 'Only Terminal, Camera, Lock and Restart should be interactive');
+	assert(serviceButton('Lock screen')?.disabled === true && serviceButton('Restart or shut down')?.disabled === false, 'Lock and Restart do not follow what that computer allows');
 	assert(serviceButton('Camera')?.disabled === true, 'Camera is not a disabled button while that computer can\'t open it');
 	assert(terminal()?.textContent.startsWith('Terminal') === true && terminal()?.disabled === true && terminal()?.parentElement?.tagName === 'LI', 'Terminal is not a disabled button in its list item while it needs permission');
 	assert(page.querySelector('.device-service[data-status="turnedOff"]')?.getAttribute('aria-disabled') === 'true', 'An unavailable service is not marked disabled');
@@ -350,10 +383,25 @@ async function verifyInspector(fixture: DevicePageFixture, rows: () => HTMLEleme
 	assert(terminal()?.disabled === false && terminal()?.getAttribute('aria-disabled') === 'false', 'An available Terminal row cannot be pressed');
 	terminal()?.click();
 	assert(JSON.stringify(fixture.commands) === JSON.stringify([['vnilink.terminal.open', STUDIO]]), `Terminal did not open for the selected computer: ${JSON.stringify(fixture.commands)}`);
-	fixture.report(STUDIO, [{ capability: 'camera', status: 'available' }]);
+	fixture.report(STUDIO, [{ capability: 'camera', status: 'available' }, { capability: 'systemShutdown', status: 'available' }]);
 	await settle();
 	serviceButton('Camera')?.click();
 	assert(JSON.stringify(fixture.commands.at(-1)) === JSON.stringify(['vnilink.camera.open', STUDIO]), `Camera did not open for the selected computer: ${JSON.stringify(fixture.commands)}`);
+	// Restart asks first, through its command; a countdown shows on the row with Cancel.
+	serviceButton('Restart or shut down')?.click();
+	assert(JSON.stringify(fixture.commands.at(-1)) === JSON.stringify(['vnilink.system.restartOrShutDown', STUDIO]), 'Restart or shut down did not ask for the selected computer');
+	const cancel = (): HTMLButtonElement | null => page.querySelector<HTMLButtonElement>('.device-service-cancel:not([hidden])');
+	assert(cancel() === null, 'Cancel shows with nothing to cancel');
+	fixture.systemActions.set(STUDIO, { action: 'restart', phase: 'scheduled', message: 'Restarting in 24 s' });
+	assert(services()['Restart or shut down'] === 'Restarting in 24 s' && serviceButton('Restart or shut down')?.disabled === true, 'The countdown is not on its row');
+	assert(services()['Lock screen'] === 'Not supported there', 'A restart\'s progress showed on the Lock row');
+	assert(cancel()?.textContent === 'Cancel', 'A counting-down restart offers no Cancel');
+	cancel()?.click();
+	assert(JSON.stringify(fixture.commands.at(-1)) === JSON.stringify(['vnilink.system.cancel', STUDIO]), 'Cancel did not cancel on the selected computer');
+	fixture.systemActions.set(STUDIO, { action: 'restart', phase: 'ended', message: 'Cancelled on Studio Mac' });
+	assert(services()['Restart or shut down'] === 'Cancelled on Studio Mac' && cancel() === null && serviceButton('Restart or shut down')?.disabled === false, 'The outcome does not replace the countdown');
+	fixture.systemActions.set(STUDIO, undefined);
+	assert(services()['Restart or shut down'] === 'Available', 'The row did not return to its availability');
 	const facts = Object.fromEntries([...page.querySelectorAll('.device-facts > div')].map(row => [row.querySelector('dt')?.textContent ?? '', row.querySelector('dd')?.textContent ?? '']));
 	assert(facts['Device ID'] === 'aaaaaaaa…aaaaaa' && facts.Computer === 'studio.local' && facts.System === 'macOS' && facts.Addresses === '2 direct, 1 relay', `Details are wrong: ${JSON.stringify(facts)}`);
 	assert(page.querySelector('.device-id')?.getAttribute('title') === STUDIO && page.querySelector('.device-copy')?.getAttribute('aria-label') === 'Copy device ID', 'The full device ID is not reachable');

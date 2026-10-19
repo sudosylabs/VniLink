@@ -13,6 +13,7 @@ import { ICommandService } from '../../../platform/commands/common/commands.js';
 import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
 import { defaultButtonStyles, defaultInputBoxStyles } from '../../../platform/theme/browser/defaultStyles.js';
 import { IDeviceService, type DeviceSummary } from '../../services/devices/deviceService.js';
+import { ISystemActionService } from '../../services/systemActions/systemActionService.js';
 import { devicePlatform, devicePresence } from './deviceLabels.js';
 import { DeviceScreenSnapshot } from './deviceScreenSnapshot.js';
 
@@ -26,6 +27,8 @@ interface ServiceRow {
 	readonly capabilities: readonly RemoteCapability[];
 	/** Run with the device id while the row is available; rows without one only report. */
 	readonly command?: string;
+	/** A system action row also shows how the action it asked for stands, and can cancel it. */
+	readonly systemAction?: boolean;
 }
 
 const serviceRows: readonly ServiceRow[] = [
@@ -34,8 +37,8 @@ const serviceRows: readonly ServiceRow[] = [
 	{ label: nls.localize('devices.serviceTerminal', 'Terminal'), icon: Icons.terminal, capabilities: ['terminal'], command: 'vnilink.terminal.open' },
 	{ label: nls.localize('devices.serviceFiles', 'Files'), icon: Icons.files, capabilities: ['files'] },
 	{ label: nls.localize('devices.serviceCamera', 'Camera'), icon: Icons.camera, capabilities: ['camera'], command: 'vnilink.camera.open' },
-	{ label: nls.localize('devices.serviceLock', 'Lock screen'), icon: Icons.lock, capabilities: ['systemLock'] },
-	{ label: nls.localize('devices.servicePower', 'Restart or shut down'), icon: Icons.power, capabilities: ['systemRestart', 'systemShutdown'] },
+	{ label: nls.localize('devices.serviceLock', 'Lock screen'), icon: Icons.lock, capabilities: ['systemLock'], command: 'vnilink.system.lock', systemAction: true },
+	{ label: nls.localize('devices.servicePower', 'Restart or shut down'), icon: Icons.power, capabilities: ['systemRestart', 'systemShutdown'], command: 'vnilink.system.restartOrShutDown', systemAction: true },
 ];
 
 function remoteStatusLabel(status: RemoteStatus): string {
@@ -77,6 +80,8 @@ export class DeviceDetails extends Disposable {
 		readonly element: HTMLElement;
 		readonly status: HTMLElement;
 		readonly open?: HTMLButtonElement;
+		/** Cancels a restart or shutdown counting down; system action rows only. */
+		readonly cancel?: HTMLButtonElement;
 	}[] = [];
 	private readonly idValue: HTMLElement;
 	private readonly copyId: HTMLButtonElement;
@@ -101,6 +106,7 @@ export class DeviceDetails extends Disposable {
 		@IDeviceService private readonly devices: IDeviceService,
 		@IInstantiationService instantiationService: IInstantiationService,
 		@ICommandService private readonly commandService: ICommandService,
+		@ISystemActionService private readonly systemActions: ISystemActionService,
 	) {
 		super();
 		const closeLabel = nls.localize('devices.close', 'Close device details');
@@ -169,7 +175,8 @@ export class DeviceDetails extends Disposable {
 			const open = command ? $<HTMLButtonElement>('button.device-service', { type: 'button' }) : undefined;
 			const element = open ?? $('li.device-service');
 			append(element, renderIcon(row.icon), label, status);
-			append(open ? append(panel.services, $('li.device-service-item')) : panel.services, element);
+			const item = open ? append(panel.services, $('li.device-service-item')) : panel.services;
+			append(item, element);
 			if (open && command) {
 				this._register(addDisposableListener(open, EventType.CLICK, () => {
 					const deviceId = this.device?.id;
@@ -178,7 +185,19 @@ export class DeviceDetails extends Disposable {
 					}
 				}));
 			}
-			this.services.push({ row, element, status, open });
+			// A restart or shutdown counting down can be cancelled from its row.
+			const cancel = row.systemAction ? append(item, $<HTMLButtonElement>('button.device-service-cancel', { type: 'button' })) : undefined;
+			if (cancel) {
+				cancel.textContent = nls.localize('devices.cancelSystemAction', 'Cancel');
+				cancel.hidden = true;
+				this._register(addDisposableListener(cancel, EventType.CLICK, () => {
+					const deviceId = this.device?.id;
+					if (deviceId) {
+						void this.commandService.executeCommand('vnilink.system.cancel', deviceId);
+					}
+				}));
+			}
+			this.services.push({ row, element, status, open, cancel });
 		}
 		this.idValue = panel.idValue;
 		this.copyId = panel.copyId;
@@ -204,6 +223,11 @@ export class DeviceDetails extends Disposable {
 	}
 
 	private registerListeners(close: HTMLElement): void {
+		this._register(this.systemActions.onDidChange(deviceId => {
+			if (deviceId === this.device?.id) {
+				this.renderServices();
+			}
+		}));
 		this._register(addDisposableListener(close, EventType.CLICK, () => {
 			this.closed.fire();
 		}));
@@ -310,7 +334,8 @@ export class DeviceDetails extends Disposable {
 			return;
 		}
 		const connected = device.presence === 'connected';
-		for (const { row, element, status, open } of this.services) {
+		const progress = this.systemActions.progress(device.id);
+		for (const { row, element, status, open, cancel } of this.services) {
 			// Away from the computer, every row says why instead of a stale report.
 			const value = !connected ? undefined : this.report ? rowStatus(row, this.report) : null;
 			status.textContent = value === undefined ? devicePresence(device)
@@ -320,6 +345,17 @@ export class DeviceDetails extends Disposable {
 			element.setAttribute('aria-disabled', String(value !== 'available'));
 			if (open) {
 				open.disabled = value !== 'available';
+			}
+			// The action this row asked for says how it stands, in place of availability.
+			const own = row.systemAction && progress && (progress.action === 'lock') === row.capabilities.includes('systemLock') ? progress : undefined;
+			if (own) {
+				status.textContent = own.message;
+				if (open) {
+					open.disabled ||= own.phase !== 'ended';
+				}
+			}
+			if (cancel) {
+				cancel.hidden = own?.phase !== 'scheduled';
 			}
 		}
 	}
