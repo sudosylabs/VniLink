@@ -1,23 +1,36 @@
 //! Checked native RGB32 rows, and the camera format nearest a request.
 use vnilink_media::{Error, RawFrame};
 
-/// The camera's own size and rate nearest the request, so Media Foundation
-/// converts colour only and never scales or letterboxes the picture.
-/// Candidates are `(width, height, fps)`; odd or out-of-range ones are skipped.
-pub(crate) fn nearest_format(
-    candidates: impl IntoIterator<Item = (u32, u32, u32)>,
+/// The native mode a capture reads, and the picture it delivers from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CameraMode {
+    /// Index into the candidates: the camera's own mode to open.
+    pub native: usize,
+    pub width: u16,
+    pub height: u16,
+    pub fps: u16,
+}
+
+/// The camera's mode for a request, keeping the sensor's shape.
+///
+/// A camera's largest mode is its sensor's shape. Its modes of another
+/// shape are often letterboxed by the camera itself (a 4:3 sensor's 720p
+/// arrives with black bars), so only modes of the sensor's shape are used:
+/// the smallest at least as wide as the request, else the widest, at the
+/// rate nearest the request. The picture keeps that shape, at the
+/// requested width when the mode is wider, so Media Foundation only scales
+/// it down. Candidates are `(width, height, fps)`; odd or out-of-range
+/// ones are skipped.
+pub(crate) fn choose_mode(
+    candidates: &[(u32, u32, u32)],
     width: u16,
-    height: u16,
     fps: u16,
-) -> Option<(u16, u16, u16)> {
-    candidates
-        .into_iter()
-        .filter_map(|(w, h, f)| {
-            let (w, h, f) = (
-                u16::try_from(w).ok()?,
-                u16::try_from(h).ok()?,
-                u16::try_from(f).ok()?,
-            );
+) -> Option<CameraMode> {
+    let valid: Vec<(usize, u32, u32, u16)> = candidates
+        .iter()
+        .enumerate()
+        .filter_map(|(index, &(w, h, f))| {
+            let f = u16::try_from(f).ok()?;
             (w > 0
                 && h > 0
                 && w <= 4096
@@ -25,13 +38,38 @@ pub(crate) fn nearest_format(
                 && w % 2 == 0
                 && h % 2 == 0
                 && (1..=60).contains(&f))
-            .then_some((w, h, f))
+            .then_some((index, w, h, f))
         })
-        .min_by_key(|&(w, h, f)| {
-            u32::from(w.abs_diff(width))
-                + u32::from(h.abs_diff(height))
-                + u32::from(f.abs_diff(fps)) * 8
+        .collect();
+    let &(_, sensor_w, sensor_h, _) = valid
+        .iter()
+        .max_by_key(|(_, w, h, _)| u64::from(*w) * u64::from(*h))?;
+    let shaped: Vec<_> = valid
+        .into_iter()
+        .filter(|(_, w, h, _)| {
+            u64::from(*w) * u64::from(sensor_h) == u64::from(*h) * u64::from(sensor_w)
         })
+        .collect();
+    let wide_enough = shaped
+        .iter()
+        .filter(|(_, w, ..)| *w >= u32::from(width))
+        .map(|(_, w, ..)| *w)
+        .min();
+    let mode_width = wide_enough.or_else(|| shaped.iter().map(|(_, w, ..)| *w).max())?;
+    let &(native, mode_w, mode_h, mode_fps) = shaped
+        .iter()
+        .filter(|(_, w, ..)| *w == mode_width)
+        .min_by_key(|(.., f)| f.abs_diff(fps))?;
+    let out_w = mode_w.min(u32::from(width).max(2)) & !1;
+    let out_h = ((u64::from(out_w) * u64::from(mode_h) + u64::from(mode_w) / 2) / u64::from(mode_w))
+        as u32
+        & !1;
+    Some(CameraMode {
+        native,
+        width: u16::try_from(out_w).ok()?,
+        height: u16::try_from(out_h.clamp(2, 4096)).ok()?,
+        fps: mode_fps,
+    })
 }
 #[derive(Clone, Copy)]
 pub(crate) struct Format {
@@ -155,32 +193,75 @@ mod tests {
         assert!(format.copy_pitched(&top_down, 0, 3, 1).is_err());
     }
     #[test]
-    fn the_nearest_native_format_keeps_the_cameras_shape() {
-        // A 4:3 camera asked for 720p gets its own 1280x960, not a letterboxed 1280x720.
-        let formats = [
+    fn a_camera_keeps_its_sensors_shape_and_is_only_scaled_down() {
+        // This laptop's camera: a 4:3 sensor whose 16:9 modes it letterboxes.
+        let laptop = [
+            (2592, 1944, 30),
+            (2592, 1944, 15),
+            (2560, 1440, 30),
+            (1920, 1080, 30),
+            (1280, 720, 30),
+            (1280, 720, 15),
+            (960, 540, 30),
             (640, 480, 30),
-            (1280, 960, 30),
-            (1920, 1440, 15),
-            (1281, 720, 30),
-            (5000, 720, 30),
+            (640, 360, 30),
+            (320, 240, 30),
         ];
         assert_eq!(
-            nearest_format(formats, 1280, 720, 30),
-            Some((1280, 960, 30))
+            choose_mode(&laptop, 1280, 30),
+            Some(CameraMode {
+                native: 0,
+                width: 1280,
+                height: 960,
+                fps: 30
+            })
         );
+        // A 16:9 camera keeps 16:9 and opens the mode it was asked for.
+        let wide = [
+            (1920, 1080, 30),
+            (1280, 720, 60),
+            (1280, 720, 30),
+            (640, 360, 30),
+        ];
         assert_eq!(
-            nearest_format(
-                [(1920, 1080, 30), (1280, 720, 60), (1280, 720, 30)],
+            choose_mode(&wide, 1280, 30),
+            Some(CameraMode {
+                native: 2,
+                width: 1280,
+                height: 720,
+                fps: 30
+            })
+        );
+        // A small camera is never scaled up.
+        assert_eq!(
+            choose_mode(&[(640, 480, 30), (320, 240, 30)], 1280, 30),
+            Some(CameraMode {
+                native: 0,
+                width: 640,
+                height: 480,
+                fps: 30
+            })
+        );
+        // Odd, oversized or rateless modes are skipped, and with none left there is no mode.
+        assert_eq!(
+            choose_mode(
+                &[
+                    (5000, 3750, 30),
+                    (1281, 720, 30),
+                    (640, 480, 0),
+                    (1280, 960, 15)
+                ],
                 1280,
-                720,
                 30
             ),
-            Some((1280, 720, 30))
+            Some(CameraMode {
+                native: 3,
+                width: 1280,
+                height: 960,
+                fps: 15
+            })
         );
-        assert_eq!(
-            nearest_format([(0, 0, 30), (640, 480, 0)], 1280, 720, 30),
-            None
-        );
+        assert_eq!(choose_mode(&[(0, 0, 30), (640, 480, 0)], 1280, 30), None);
     }
     #[test]
     fn malformed_stride_and_short_native_samples_are_refused() {

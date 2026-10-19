@@ -1,7 +1,7 @@
 //! Locally approved Media Foundation camera capture. OS samples are copied in
 //! asynchronous callbacks; no COM sample or borrowed native buffer crosses threads.
 use crate::{
-    camera_format::{nearest_format, Format},
+    camera_format::{choose_mode, Format},
     WindowsEncoder,
 };
 use std::sync::{
@@ -354,36 +354,48 @@ fn run(
     };
     startup.check()?;
     unsafe {
-        // Ask for the camera's own size, so the reader converts colour only:
-        // a size the camera lacks is scaled and letterboxed into the picture.
+        // Open one of the camera's own modes in its sensor's shape and ask
+        // for that shape: other sizes come scaled and letterboxed.
         let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
         let mut formats = Vec::new();
         for index in 0..256 {
             let Ok(native_type) = capture.reader.GetNativeMediaType(stream, index) else {
                 break;
             };
+            // One entry per native index, so the choice names the mode to open.
             let (Ok(size), Ok(rate)) = (
                 native_type.GetUINT64(&MF_MT_FRAME_SIZE),
                 native_type.GetUINT64(&MF_MT_FRAME_RATE),
             ) else {
+                formats.push((0, 0, 0));
                 continue;
             };
-            let denominator = rate as u32;
-            if denominator != 0 {
-                let fps = ((rate >> 32) + u64::from(denominator) / 2) / u64::from(denominator);
-                formats.push((
-                    (size >> 32) as u32,
-                    size as u32,
-                    u32::try_from(fps).unwrap_or(0),
-                ));
-            }
+            let denominator = u64::from(rate as u32).max(1);
+            let fps = ((rate >> 32) + denominator / 2) / denominator;
+            formats.push((
+                (size >> 32) as u32,
+                size as u32,
+                if rate as u32 == 0 {
+                    0
+                } else {
+                    u32::try_from(fps).unwrap_or(0)
+                },
+            ));
         }
-        if let Some((width, height, fps)) =
-            nearest_format(formats, config.width, config.height, config.fps)
-        {
-            config.width = width;
-            config.height = height;
-            config.fps = fps;
+        if let Some(mode) = choose_mode(&formats, config.width, config.fps) {
+            let native_type = native(
+                capture
+                    .reader
+                    .GetNativeMediaType(stream, mode.native as u32),
+            )?;
+            native(
+                capture
+                    .reader
+                    .SetCurrentMediaType(stream, None, &native_type),
+            )?;
+            config.width = mode.width;
+            config.height = mode.height;
+            config.fps = mode.fps;
         }
         let mt = native(MFCreateMediaType())?;
         native(mt.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video))?;
