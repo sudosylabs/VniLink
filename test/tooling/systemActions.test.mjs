@@ -100,7 +100,9 @@ test('the person at the computer can cancel a restart, or start it now', async (
 		await settle();
 		assert.equal(prompts.length, 1);
 		assert.equal(prompts[0].message, 'Studio Mac wants to restart this computer');
-		assert.match(prompts[0].detail, /in 30 seconds\). Save your work, or cancel\.$/);
+		// The moment it runs, to the second, since the box cannot count down.
+		const at = new Date(Date.UTC(2026, 9, 19, 12, 0, 30)).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+		assert.equal(prompts[0].detail, `It will restart at ${at} unless you cancel. Save your work first.`);
 		assert.deepEqual(prompts[0].buttons, ['Cancel', 'Restart Now']);
 		assert.deepEqual(commands.at(-1), { type: expected, id: '7' });
 		notices.dispose();

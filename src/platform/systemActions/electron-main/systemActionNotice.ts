@@ -98,16 +98,16 @@ export class SystemActionNotices extends Disposable {
 		const controller = new AbortController();
 		this.open.set(id, controller);
 		const name = await this.nameOf(endpointId);
-		const seconds = Math.max(1, Math.round(remainingMs / 1000));
-		const at = new Date(this.now() + remainingMs).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+		// A native box cannot count down, so it names the moment instead.
+		const at = new Date(this.now() + remainingMs).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 		const restart = action === 'restart';
 		const request: NoticeRequest = {
 			message: restart
 				? nls.localize('systemNotice.restart', '{0} wants to restart this computer', name)
 				: nls.localize('systemNotice.shutdown', '{0} wants to shut down this computer', name),
 			detail: restart
-				? nls.localize('systemNotice.restartDetail', 'It will restart at {0} (in {1} seconds). Save your work, or cancel.', at, seconds)
-				: nls.localize('systemNotice.shutdownDetail', 'It will shut down at {0} (in {1} seconds). Save your work, or cancel.', at, seconds),
+				? nls.localize('systemNotice.restartDetail', 'It will restart at {0} unless you cancel. Save your work first.', at)
+				: nls.localize('systemNotice.shutdownDetail', 'It will shut down at {0} unless you cancel. Save your work first.', at),
 			buttons: [
 				nls.localize('systemNotice.cancel', 'Cancel'),
 				restart ? nls.localize('systemNotice.restartNow', 'Restart Now') : nls.localize('systemNotice.shutDownNow', 'Shut Down Now'),
