@@ -2474,6 +2474,7 @@ impl CommandShape {
                                 "maxBytes",
                                 "maxDurationMs",
                                 "retention",
+                                "source",
                             ]
                             .contains(&k.as_str())
                         })

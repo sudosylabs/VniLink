@@ -67,6 +67,10 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 		await assert.rejects(execute(first, { type: 'recordingStatus', id: '1' }));
 		await assert.rejects(execute(first, { type: 'stopRecording', id: '1' }));
 		await assert.rejects(execute(first, { type: 'releaseRecording', id: '1' }));
+		// A camera recording is accepted as a command and needs a camera open on that connection.
+		const recording = { type: 'startRecording', sessionId: '1', generation: '1', destination: '/tmp/vnilink-camera.mkv', maxBytes: '1000000', maxDurationMs: '60000' };
+		await assert.rejects(execute(first, { ...recording, source: 'camera' }), /NoSession: no camera is open/);
+		await assert.rejects(execute(first, { ...recording, source: 'microphone' }), /Invalid|unknown variant/);
 		await assert.rejects(async () => first.openDataChannel('camera', '1', '1', 24, 80));
 		await assert.rejects(async () => first.openDataChannel('audio', '1', '1', 24, 80, JSON.stringify({ type: 'camera', deviceId: 'camera', width: 1280, height: 720, fps: 30 })));
 		await assert.rejects(async () => first.openDataChannel('camera', '1', '1', 24, 80, JSON.stringify({ type: 'camera', deviceId: 'camera', width: 1280, height: 720, fps: 30, endpointId: 'other' })));
