@@ -304,10 +304,10 @@ fn native_terminal_drains_busy_output_without_waiting_between_reads() {
         "native terminal: {LINES} lines, {} bytes in {chunks} chunks, {elapsed:.2?} ({rate:.0} lines/s)",
         text.len()
     );
-    // Reading once per 5 ms pass managed about 2,000 lines a second; allow a
-    // slow CI runner a wide margin above that.
+    // Reading once per 5 ms pass did not finish 200,000 lines in minutes; this
+    // Mac does about 87,000 a second and a shared CI runner about 13,000.
     assert!(
-        rate > 20_000.0,
+        rate > 5_000.0,
         "busy terminal output is throttled: {rate:.0} lines/s"
     );
     // Each chunk crosses the network and the viewer's acknowledgement on its

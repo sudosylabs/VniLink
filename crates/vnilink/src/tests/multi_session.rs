@@ -7,8 +7,11 @@ use crate::{
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-fn wait(mut ready: impl FnMut() -> bool) {
-    let until = Instant::now() + Duration::from_secs(8);
+fn wait(ready: impl FnMut() -> bool) {
+    wait_up_to(Duration::from_secs(8), ready);
+}
+fn wait_up_to(limit: Duration, mut ready: impl FnMut() -> bool) {
+    let until = Instant::now() + limit;
     while !ready() {
         assert!(Instant::now() < until, "multi-session condition timed out");
         std::thread::sleep(Duration::from_millis(10));
@@ -423,10 +426,12 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() {
     assert_eq!(b.job_list().unwrap()[0].state, crate::JobState::Cancelled);
     assert_eq!(a.job_list().unwrap()[0].state, crate::JobState::Serving);
     controller.job_resume(jb).unwrap();
+    // Every byte arrives quickly; finishing both files can take a starved
+    // Windows runner longer, so this waits on completion, not speed.
     let diagnostic = Instant::now();
-    wait(|| {
+    wait_up_to(Duration::from_secs(31), || {
         assert!(
-            diagnostic.elapsed() < Duration::from_secs(7),
+            diagnostic.elapsed() < Duration::from_secs(30),
             "controller={:?} A={:?} B={:?}",
             controller.job_list(),
             a.job_list(),

@@ -778,7 +778,7 @@ fn paste_needs_the_transfer_grant_on_both_sides() {
     controller.set_desktop_sharing(transfer_grants()).unwrap();
     // Grants are what this checks, not latency: on a starved CI runner the
     // stream's 10-second send acknowledgement can lapse, so only that retries.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     let prepared = loop {
         match host.prepare_incoming_paste(hosted.id, 1) {
             Err(Error::Timeout) if std::time::Instant::now() < deadline => {}

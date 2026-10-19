@@ -166,6 +166,15 @@ export async function verifyTerminal(): Promise<boolean> {
 		assert(view.element.getAttribute('role') === 'region' && view.element.getAttribute('aria-label') === 'Terminal on Studio Mac', 'The terminal region is not named');
 		host.append(view.element);
 		tabService.open(view);
+		// A computer without WebGL 2, such as the Linux CI container, cannot draw the terminal:
+		// the tab says so and starts no shell nobody could see.
+		if (document.createElement('canvas').getContext('webgl2') === null) {
+			await until(() => view.element.querySelector('.terminal-notice') !== null, 'A terminal that cannot draw did not say so');
+			assert(view.element.querySelector('.terminal-notice')?.getAttribute('role') === 'alert', 'The renderer notice is not announced');
+			await new Promise(resolve => setTimeout(resolve, 100));
+			assert(ptys.length === 0, 'A shell started in a terminal that cannot draw');
+			return true;
+		}
 		await until(() => ptys.length === 1 && ptys[0].started === 1, 'The shell did not start once the tab had a size');
 		assert(view.element.querySelector('.xterm-screen canvas') !== null, 'WebGL did not draw the terminal');
 		// The shell starts at the measured grid, not xterm's 80×24 default.

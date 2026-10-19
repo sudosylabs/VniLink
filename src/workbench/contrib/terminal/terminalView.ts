@@ -141,6 +141,10 @@ export class TerminalView extends Disposable implements WorkbenchTab {
 		if (first) {
 			this.attached = true;
 			this.xterm.attachToElement(this.host);
+			// Without a renderer nothing could show the shell, so none starts.
+			if (this.host.hidden) {
+				return;
+			}
 		}
 		const size = this.xterm.getDimensions(this.host.clientWidth, this.host.clientHeight);
 		if (size) {

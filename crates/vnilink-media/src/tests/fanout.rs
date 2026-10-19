@@ -65,8 +65,10 @@ struct Encoder {
 
 impl VideoEncoder for Encoder {
     fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
+        // Far slower than a shared CI runner's capture loop, so a fast viewer
+        // held behind it would show as a count near its own.
         if self.slow {
-            std::thread::sleep(Duration::from_millis(150));
+            std::thread::sleep(Duration::from_millis(400));
         }
         self.encodes.fetch_add(1, Ordering::Relaxed);
         if frame.width() != 64 || frame.height() != 64 {
@@ -288,7 +290,7 @@ fn shared_capture_workload(idle: bool) {
     assert!(parse_annex_b(&first_slow.payload).unwrap().has_idr());
 
     let started = Instant::now();
-    while started.elapsed() < Duration::from_millis(900) {
+    while started.elapsed() < Duration::from_millis(1200) {
         std::thread::sleep(Duration::from_millis(30));
     }
     let fast_count = fast_encodes.load(Ordering::Relaxed);
