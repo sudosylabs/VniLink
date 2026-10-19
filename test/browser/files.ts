@@ -160,7 +160,7 @@ function filesFixture(width: number, height: number) {
 	const remoteDisk = new MemoryDisk({ roots: [{ id: '2', name: 'C:' }, { id: '3', name: 'D:' }], folders: [{ kind: 'home', root: '2', path: 'Users/abass' }] }, new Map([
 		['2:Users/abass', [entry('Downloads', 'dir'), entry('Desktop', 'dir')]],
 		['2:Users/abass/Downloads', [entry('report-q3.xlsx', 'file', 2_300_000), entry('Installers', 'dir')]],
-		['2:Users/abass/Downloads/Installers', []],
+		['2:Users/abass/Downloads/Installers', Array.from({ length: 60 }, (_, index) => entry(`setup-${String(index).padStart(2, '0')}.exe`, 'file', 1000))],
 		['2:', [entry('Users', 'dir')]],
 	]));
 	const session = new FakeSession(localDisk, remoteDisk);
@@ -210,11 +210,13 @@ function filesFixture(width: number, height: number) {
 	host.className = 'view-host';
 	host.style.cssText = `position:fixed;left:0;top:40px;width:${String(Math.min(width, window.innerWidth))}px;height:${String(Math.min(height, window.innerHeight - 40))}px;z-index:99;display:flex;`;
 	document.body.append(host);
-	return { disposables, device, localDisk, session, openings, state, dialogs, answers, shown, tabService, services, host };
+	return { disposables, device, localDisk, remoteDisk, session, openings, state, dialogs, answers, shown, tabService, services, host };
 }
 
 export async function verifyFiles(): Promise<void> {
-	const { disposables, device, localDisk, session, openings, state, dialogs, answers, shown, tabService, services, host } = filesFixture(1280, 720);
+	const fixture = filesFixture(1280, 720);
+	const { disposables, device, localDisk, remoteDisk, session, openings, state } = fixture;
+	const { dialogs, answers, shown, tabService, services, host } = fixture;
 	let menu: readonly IAction[] = [];
 	const panes = (view: FilesView): HTMLElement[] => [...view.element.querySelectorAll<HTMLElement>('.files-pane')];
 	const names = (pane: HTMLElement): string[] => [...pane.querySelectorAll('.monaco-list-row .files-row-name')].map(node => node.textContent);
@@ -274,6 +276,10 @@ export async function verifyFiles(): Promise<void> {
 		copyButton.click();
 		await until(() => session.copies.length === 1, 'Copy did not start');
 		assert(session.copies[0].from === 'local' && session.copies[0].items.map(item => item.name).join(',') === 'invoice.pdf,notes.md' && session.copies[0].to.path === 'Users/abass/Downloads', `Wrong copy: ${JSON.stringify(session.copies[0])}`);
+		// What lands shows on the receiving side without reloading it.
+		const listed = remoteDisk.lists.length;
+		session.set(session.jobs.map(item => ({ ...item, state: 'Complete', files_done: item.files_total })));
+		await until(() => remoteDisk.lists.length > listed, 'The receiving pane did not list again when the copy completed');
 		const panel = view.element.querySelector<HTMLElement>('.files-transfers');
 		assert(panel !== null && !panel.hidden, 'Copying did not show the transfers');
 
@@ -318,6 +324,18 @@ export async function verifyFiles(): Promise<void> {
 		local.querySelector<HTMLButtonElement>('.files-icon-button[aria-label="More Actions"]')?.click();
 		run('files.hidden');
 		assert(state.get('files.showHidden') === true, 'Show Hidden Files was not remembered');
+
+		// A long folder scrolls to its last row, which shows whole above the status bar.
+		list(remote).focus();
+		press(list(remote), 'Home', 36);
+		press(list(remote), 'Enter', 13);
+		await until(() => crumbs(remote).at(-1) === 'Installers', 'Installers did not open');
+		press(list(remote), 'End', 35);
+		await until(() => names(remote).includes('setup-59.exe'), 'The end of a long folder is not reachable');
+		await new Promise(resolve => requestAnimationFrame(resolve));
+		const last = [...remote.querySelectorAll<HTMLElement>('.monaco-list-row')].find(row => row.querySelector('.files-row-name')?.textContent === 'setup-59.exe');
+		const box = remote.querySelector<HTMLElement>('.files-list')?.getBoundingClientRect();
+		assert(last !== undefined && box !== undefined && last.getBoundingClientRect().bottom <= box.bottom, `The last row is cut off: row ends at ${String(last?.getBoundingClientRect().bottom)}, the list at ${String(box?.bottom)}`);
 
 		// The other computer turned Files off, then the connection ends.
 		session.end();

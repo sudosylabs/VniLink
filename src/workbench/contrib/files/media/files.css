@@ -163,8 +163,9 @@
 }
 
 .files-list {
+	/* No padding: the list is laid out to this box exactly, its top and
+	 * bottom spacing inside its own scrolling (paddingTop/paddingBottom). */
 	min-height: 0;
-	padding: 4px 8px;
 }
 
 .files-row {
@@ -172,6 +173,7 @@
 	grid-template-columns: minmax(0, 1fr) 150px 84px;
 	align-items: center;
 	height: 26px;
+	margin: 0 8px;
 	padding: 0 8px 0 10px;
 	border-radius: 5px;
 }

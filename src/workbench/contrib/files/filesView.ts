@@ -39,6 +39,10 @@ export class FilesView extends Disposable implements WorkbenchTab {
 	private session: IFilesSession | undefined;
 	private active: FilesPane = 'local';
 	private opening = 0;
+	/** Each transfer's last state and files done, to see what newly landed. */
+	private readonly landed = new Map<string, { readonly state: string; readonly files: number }>();
+	private readonly refreshTimers = new Map<FilesPane, ReturnType<typeof setTimeout>>();
+	private readonly refreshAgain = new Set<FilesPane>();
 
 	constructor(
 		private readonly device: DeviceSummary,
@@ -90,6 +94,9 @@ export class FilesView extends Disposable implements WorkbenchTab {
 		this._register({
 			dispose: () => {
 				this.session?.release();
+				for (const timer of this.refreshTimers.values()) {
+					clearTimeout(timer);
+				}
 			},
 		});
 		this.activate('local');
@@ -125,10 +132,56 @@ export class FilesView extends Disposable implements WorkbenchTab {
 		this.session?.release();
 		this.session = session;
 		this.transfers.setSession(session);
+		this.landed.clear();
+		for (const job of session.jobs) {
+			this.landed.set(job.id, { state: job.state, files: Number(job.files_done) });
+		}
+		this.sessionListeners.add(session.onDidChangeJobs(() => {
+			this.refreshDestinations(session);
+		}));
 		this.sessionListeners.add(session.onDidEnd(() => {
 			this.showFailure('disconnected');
 		}));
 		this.update();
+	}
+
+	/**
+	 * Shows what a transfer brought: the pane on the receiving side lists
+	 * its folder again as files land and when the transfer completes, while
+	 * it shows that folder or one inside it.
+	 */
+	private refreshDestinations(session: IFilesSession): void {
+		for (const job of session.jobs) {
+			const before = this.landed.get(job.id);
+			const now = { state: job.state, files: Number(job.files_done) };
+			this.landed.set(job.id, now);
+			const arrived = before !== undefined && (now.files > before.files || (now.state === 'Complete' && before.state !== 'Complete'));
+			if (!arrived) {
+				continue;
+			}
+			const pane = job.direction === 'Upload' ? this.remote : this.local;
+			const destination = session.routeOf(job.id)?.destination;
+			const folder = pane.folder;
+			if (destination && folder && (folder.root !== destination.root || !(folder.path === destination.path || folder.path.startsWith(destination.path ? `${destination.path}/` : '')))) {
+				continue;
+			}
+			this.scheduleRefresh(pane);
+		}
+	}
+
+	/** Lists `pane`'s folder again now, then at most once a second, with a last listing for what landed in between. */
+	private scheduleRefresh(pane: FilesPaneView): void {
+		if (this.refreshTimers.has(pane.side)) {
+			this.refreshAgain.add(pane.side);
+			return;
+		}
+		void pane.refresh();
+		this.refreshTimers.set(pane.side, setTimeout(() => {
+			this.refreshTimers.delete(pane.side);
+			if (this.refreshAgain.delete(pane.side)) {
+				this.scheduleRefresh(pane);
+			}
+		}, 1000));
 	}
 
 	private showFailure(failure: FilesFailure): void {

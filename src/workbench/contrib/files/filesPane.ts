@@ -299,6 +299,8 @@ export class FilesPaneView extends Disposable {
 			...defaultListStyles,
 			styleController: () => cssStyleController,
 			setRowLineHeight: false,
+			paddingTop: 4,
+			paddingBottom: 8,
 			multipleSelectionSupport: true,
 			identityProvider: { getId: entry => entry.name },
 			keyboardNavigationLabelProvider: { getKeyboardNavigationLabel: entry => this.editing === undefined ? entry.name : undefined },
@@ -897,6 +899,17 @@ export class FilesPaneView extends Disposable {
 		if (event.equals(KeyCode.Enter) && focused) {
 			handled();
 			this.open(focused);
+		} else if (event.equals(KeyCode.Home) || event.equals(KeyCode.End)) {
+			handled();
+			if (event.equals(KeyCode.Home)) {
+				this.list.focusFirst(event.browserEvent);
+			} else {
+				this.list.focusLast(event.browserEvent);
+			}
+			const index = this.list.getFocus().at(0);
+			if (index !== undefined) {
+				this.list.reveal(index);
+			}
 		} else if (event.equals(KeyCode.F2)) {
 			handled();
 			this.startRename();
