@@ -1,6 +1,9 @@
 //! Locally approved Media Foundation camera capture. OS samples are copied in
 //! asynchronous callbacks; no COM sample or borrowed native buffer crosses threads.
-use crate::{camera_format::Format, WindowsEncoder};
+use crate::{
+    camera_format::{nearest_format, Format},
+    WindowsEncoder,
+};
 use std::sync::{
     mpsc::{self, SyncSender},
     Arc, Mutex,
@@ -11,6 +14,7 @@ use vnilink::{
     BackendStartup, Error,
 };
 use vnilink_media::{EncodeParams, RawFrame, VideoEncoder};
+use windows::core::Interface;
 use windows::core::{implement, Ref, GUID, HRESULT, PWSTR};
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::{
@@ -237,6 +241,39 @@ unsafe fn copy_sample(
     timestamp: u64,
 ) -> Result<RawFrame, Error> {
     let format = format.ok_or(Error::Unsupported("camera format is not ready"))?;
+    // A 2D buffer says where its top row is and which way rows run; the
+    // media type's stride is only a fallback, and its default for RGB
+    // (bottom-up) turned pictures upside down.
+    if native(sample.GetBufferCount())? == 1 {
+        if let Ok(buffer) = native(sample.GetBufferByIndex(0))?.cast::<IMF2DBuffer2>() {
+            let mut scan0 = std::ptr::null_mut();
+            let mut pitch = 0;
+            let mut start = std::ptr::null_mut();
+            let mut length = 0;
+            native(buffer.Lock2DSize(
+                MF2DBuffer_LockFlags_Read,
+                &mut scan0,
+                &mut pitch,
+                &mut start,
+                &mut length,
+            ))?;
+            let copied = if start.is_null() || scan0 < start || length > 64 * 1024 * 1024 {
+                Err(Error::Unsupported("camera buffer size"))
+            } else {
+                format
+                    .copy_pitched(
+                        std::slice::from_raw_parts(start, length as usize),
+                        scan0.offset_from(start) as usize,
+                        pitch as isize,
+                        timestamp,
+                    )
+                    .map_err(|_| Error::Unsupported("camera RGB32 sample"))
+            };
+            let unlocked = native(buffer.Unlock2D());
+            unlocked?;
+            return copied;
+        }
+    }
     let buffer = native(sample.ConvertToContiguousBuffer())?;
     let mut pointer = std::ptr::null_mut();
     let mut length = 0;
@@ -317,6 +354,37 @@ fn run(
     };
     startup.check()?;
     unsafe {
+        // Ask for the camera's own size, so the reader converts colour only:
+        // a size the camera lacks is scaled and letterboxed into the picture.
+        let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
+        let mut formats = Vec::new();
+        for index in 0..256 {
+            let Ok(native_type) = capture.reader.GetNativeMediaType(stream, index) else {
+                break;
+            };
+            let (Ok(size), Ok(rate)) = (
+                native_type.GetUINT64(&MF_MT_FRAME_SIZE),
+                native_type.GetUINT64(&MF_MT_FRAME_RATE),
+            ) else {
+                continue;
+            };
+            let denominator = rate as u32;
+            if denominator != 0 {
+                let fps = ((rate >> 32) + u64::from(denominator) / 2) / u64::from(denominator);
+                formats.push((
+                    (size >> 32) as u32,
+                    size as u32,
+                    u32::try_from(fps).unwrap_or(0),
+                ));
+            }
+        }
+        if let Some((width, height, fps)) =
+            nearest_format(formats, config.width, config.height, config.fps)
+        {
+            config.width = width;
+            config.height = height;
+            config.fps = fps;
+        }
         let mt = native(MFCreateMediaType())?;
         native(mt.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video))?;
         native(mt.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32))?;
