@@ -27,6 +27,7 @@ import './services/permissions/permissionServiceImpl.js';
 import './services/remoteDesktop/remoteDesktopServiceImpl.js';
 import './services/screenSnapshot/screenSnapshotServiceImpl.js';
 import './services/tabs/tabServiceImpl.js';
+import './services/uiState/uiStateServiceImpl.js';
 import './services/terminal/terminalHostServiceImpl.js';
 import './services/terminal/terminalServiceImpl.js';
 import './services/camera/cameraServiceImpl.js';

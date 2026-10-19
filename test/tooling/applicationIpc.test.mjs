@@ -50,6 +50,8 @@ const output = await build({
 			export { EngineChannel } from './src/platform/engine/electron-main/engineChannel.js';
 			export { ConfigurationMainService } from './src/platform/configuration/electron-main/configurationMainService.js';
 			export { RecordingMainService } from './src/platform/recording/electron-main/recordingMainService.js';
+			export { UIStateChannel } from './src/platform/state/electron-main/uiStateChannel.js';
+			export { SaveStrategy, StateService } from './src/platform/state/node/stateService.js';
 			export { windowIdFromContext } from './src/platform/ipc/electron-main/windowContext.js';
 			export { setUnexpectedErrorHandler } from './src/base/common/errors.js';
 			export { Event } from './src/base/common/event.js';
@@ -68,6 +70,7 @@ const output = await build({
 
 const {
 	validatedIpcMain, WORKBENCH_URL, NativeHostChannel, NativeHostMainService, EngineChannel, ConfigurationMainService, RecordingMainService,
+	UIStateChannel, SaveStrategy, StateService,
 	windowIdFromContext, setUnexpectedErrorHandler, Event, handlers, opened, windows, disk, clipboard, VSBuffer,
 } = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
 
@@ -328,6 +331,53 @@ test('a picture lands in the recordings folder under its own name, never over an
 		for (const [name, bytes] of [['../escape.png', png], ['nested/picture.png', png], ['picture.png', VSBuffer.fromString('not a picture')], ['picture.png', Uint8Array.from(png.buffer)]]) {
 			await assert.rejects(recording.savePicture(name, bytes), /Invalid picture/);
 		}
+	} finally {
+		await rm(folder, { recursive: true, force: true });
+	}
+});
+
+test('windows remember only known UI state, in its own shape, in the state file', async () => {
+	const folder = await mkdtemp(join(tmpdir(), 'vnilink-state-'));
+	const path = join(folder, 'storage.json');
+	try {
+		const state = new StateService(SaveStrategy.DELAYED, path, logService);
+		await state.init();
+		state.setItem('windowsState', { main: true });
+		const channel = new UIStateChannel(state);
+		const lastFolder = 'files.lastFolder.k51qzi5uqu5d-studio_2.remote';
+		const folderValue = { root: '0', path: 'Users/sam/Documents' };
+		await assert.rejects(channel.call('renderer', 'set', { key: 'files.showHidden', value: true }), /window/i);
+		await channel.call('window:1', 'set', { key: lastFolder, value: folderValue });
+		await channel.call('window:1', 'set', { key: 'files.showHidden', value: true });
+		assert.deepEqual(await channel.call('window:1', 'get', { key: lastFolder }), folderValue);
+		assert.equal(await channel.call('window:1', 'get', { key: 'files.showHidden' }), true);
+		assert.equal(await channel.call('window:1', 'get', { key: 'files.lastFolder.other.local' }), undefined);
+
+		// The main process's own keys, unknown keys and malformed values are refused, and nothing is written for them.
+		for (const key of ['windowsState', 'files.lastFolder.studio.both', 'files.lastFolder..local', 'files.lastFolder.a/b.local', `files.lastFolder.${'x'.repeat(129)}.local`, 'files.showHidden.extra', 42]) {
+			await assert.rejects(channel.call('window:1', 'get', { key }), /Invalid UI state key/, String(key));
+			await assert.rejects(channel.call('window:1', 'set', { key, value: true }), /Invalid UI state value/, String(key));
+		}
+		for (const value of ['yes', 1, null, undefined, { root: '0', path: 'a', extra: 1 }]) {
+			await assert.rejects(channel.call('window:1', 'set', { key: 'files.showHidden', value }), /Invalid UI state value/);
+		}
+		for (const value of [true, '/Users', { root: '', path: 'a' }, { root: 1, path: 'a' }, { root: '0' }, { root: '0', path: 'a'.repeat(4097) }, { root: '0', path: 'a', extra: 1 }]) {
+			await assert.rejects(channel.call('window:1', 'set', { key: lastFolder, value }), /Invalid UI state value/);
+		}
+		await assert.rejects(channel.call('window:1', 'get', { key: lastFolder, value: 1 }), /Invalid UI state key/);
+		await assert.rejects(channel.call('window:1', 'clear', {}), /Unknown UI state command/);
+		assert.throws(() => channel.listen('window:1', 'onDidChange'), /Unknown UI state event/);
+
+		// Saved values survive a restart; a removed key is gone and the main process's keys are untouched.
+		await channel.call('window:1', 'remove', { key: 'files.showHidden' });
+		await state.close();
+		state.dispose();
+		const reopened = new StateService(SaveStrategy.DELAYED, path, logService);
+		await reopened.init();
+		assert.deepEqual(reopened.getItem(lastFolder), folderValue);
+		assert.equal(reopened.getItem('files.showHidden'), undefined);
+		assert.deepEqual(reopened.getItem('windowsState'), { main: true });
+		reopened.dispose();
 	} finally {
 		await rm(folder, { recursive: true, force: true });
 	}

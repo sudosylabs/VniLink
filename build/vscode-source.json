@@ -1388,6 +1388,19 @@
       "changedImports": 0
     },
     {
+      "path": "src/platform/state/node/state.ts",
+      "upstreamPath": "src/vs/platform/state/node/state.ts",
+      "sha256": "4d08893aef73c2b12d3cc5d8c745b1c43ada8a067cf7e26bd062c8af98c17c58",
+      "changedImports": 0
+    },
+    {
+      "path": "src/platform/state/node/stateService.ts",
+      "upstreamPath": "src/vs/platform/state/node/stateService.ts",
+      "sha256": "94dfb8ea8c7852e74f5375f25ce6374916c754e54fdb381b8112c16664206f30",
+      "adapted": true,
+      "upstreamStyle": true
+    },
+    {
       "path": "src/platform/terminal/common/terminalStrings.ts",
       "upstreamPath": "src/vs/platform/terminal/common/terminalStrings.ts",
       "sha256": "7f1d3e3561e9a17410cfd18e6f9da754a29f3bcce9062804ff4ed2ff3224a3ef",
@@ -1586,6 +1599,8 @@
     "src/platform/native/common/native.ts",
     "src/platform/native/electron-main/nativeHostMainService.ts",
     "src/platform/registry/common/platform.ts",
+    "src/platform/state/node/state.ts",
+    "src/platform/state/node/stateService.ts",
     "src/platform/terminal/common/terminalStrings.ts",
     "src/platform/theme/browser/themeService.ts",
     "src/platform/theme/common/themeService.ts",
@@ -1604,7 +1619,9 @@
   ],
   "externalDependencies": [
     "electron",
+    "node:fs/promises",
     "node:os",
+    "node:path",
     "trusted-types/lib/index.d.ts",
     "trusted-types/lib/index.js"
   ],
@@ -3772,6 +3789,36 @@
     {
       "from": "src/platform/theme/browser/themeService.ts",
       "to": "src/platform/instantiation/common/extensions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/state/node/stateService.ts",
+      "to": "src/base/common/async.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/state/node/stateService.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/state/node/stateService.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/state/node/stateService.ts",
+      "to": "src/platform/log/common/log.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/state/node/stateService.ts",
+      "to": "src/platform/state/node/state.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/state/node/state.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
       "kind": "import"
     },
     {
@@ -7077,6 +7124,8 @@
     "src/platform/native/common/native.ts",
     "src/platform/native/electron-main/nativeHostMainService.ts",
     "src/platform/registry/common/platform.ts",
+    "src/platform/state/node/state.ts",
+    "src/platform/state/node/stateService.ts",
     "src/platform/terminal/common/terminalStrings.ts",
     "src/platform/theme/browser/themeService.ts",
     "src/platform/theme/common/themeService.ts",

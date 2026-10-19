@@ -226,7 +226,9 @@
     "./platform/contextview/browser/contextView.ts",
     "./platform/contextview/browser/contextMenuHandler.ts",
     "./platform/contextview/browser/contextViewService.ts",
-    "./platform/layout/browser/layoutService.ts"
+    "./platform/layout/browser/layoutService.ts",
+    "./platform/state/node/stateService.ts",
+    "./platform/state/node/state.ts"
   ],
   "include": [],
   "exclude": []

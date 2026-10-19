@@ -58,6 +58,9 @@ const services = {
 	systemActionNotice: `import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js'; import { state } from 'electron';
 		export const ISystemActionNoticeMainService = createDecorator('systemActionNoticeMainService');
 		export class SystemActionNoticeMainService { start() { state.notices = (state.notices ?? 0) + 1; } }`,
+	stateService: `import { state } from 'electron';
+		export const SaveStrategy = { IMMEDIATE: 0, DELAYED: 1 };
+		export class StateService { async init() { state.stateLoaded = true; } getItem() { } setItem() { } setItems() { } removeItem() { } async close() { state.stateClosed = (state.stateClosed ?? 0) + 1; } dispose() { } }`,
 	'ipc.electron': `export class Server { registerChannel() { } dispose() { } }`,
 	ipcMain: `export const WORKBENCH_URL = 'vnilink://app/index.html'; export const validatedIpcMain = { handle() { }, removeHandler() { } };`,
 	development: `export function registerDevelopmentWindow() { }`,
@@ -69,7 +72,7 @@ async function load(entry, exports, extra = '') {
 		stdin: { contents: `export { ${exports} } from '${entry}'; export { app, state } from 'electron'; ${extra}`, loader: 'ts', resolveDir: root }, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json', plugins: [{
 			name: 'main-process-fixtures', setup(builder) {
 				builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }));
-				builder.onResolve({ filter: /\/(engineMainService|configurationMainService|windowsMainService|nativeHostMainService|permissionsMainService|recordingMainService|encryptionMainService|ipc\.electron|ipcMain|development|menubar|hostingMainService|screenHostingMainService|systemSettings|trayMainService|traySupport|systemActionNotice)\.js$/ }, ({ path }) => entry.endsWith('lifecycleMainService.ts') ? undefined : ({ path: path.split('/').at(-1).replace(/\.js$/, ''), namespace: 'fixture' }));
+				builder.onResolve({ filter: /\/(engineMainService|configurationMainService|windowsMainService|nativeHostMainService|permissionsMainService|recordingMainService|encryptionMainService|ipc\.electron|ipcMain|development|menubar|hostingMainService|screenHostingMainService|systemSettings|trayMainService|traySupport|systemActionNotice|stateService)\.js$/ }, ({ path }) => entry.endsWith('lifecycleMainService.ts') ? undefined : ({ path: path.split('/').at(-1).replace(/\.js$/, ''), namespace: 'fixture' }));
 				builder.onLoad({ filter: /.*/, namespace: 'fixture' }, ({ path }) => ({ contents: path === 'electron' ? electron : services[path], loader: 'js', resolveDir: root }));
 			}
 		}]
@@ -119,12 +122,14 @@ test('activation during startup does not open a second window and quitting waits
 	});
 	await application.start();
 	assert.equal(state.windows, 1, 'Activation during startup created a second window');
+	assert.equal(state.stateLoaded, true, 'The window opened before UI state was read');
 	assert.equal(state.completed, false, 'Quit completed before the engine stopped');
 	assert.equal(shutdown.stops, 1);
 	finish();
 	await new Promise(resolve => setImmediate(resolve));
 	assert.equal(state.completed, true);
 	assert.equal(shutdown.stops, 1);
+	assert.equal(state.stateClosed, 1, 'Quitting did not save UI state');
 });
 
 test('relaunching or activating without a window opens exactly one window', async () => {
