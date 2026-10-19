@@ -26,7 +26,7 @@ const privateCommands: ReadonlySet<EngineCommand['type']> = new Set([
 	'saveCustomRelays', 'setRelayPublic', 'setRelayCustom',
 	'setSharingPolicy', 'setSystemPolicy', 'setTerminalPolicy', 'setTerminalShell', 'setPowerPolicy',
 	'setDesktopCodecDefault', 'setDesktopQualityDefaults', 'setInputDefaults',
-	'setNativeCameraSources', 'setNativeAudioSources', 'enableFilesystemAccess',
+	'setNativeCameraSources', 'setNativeAudioSources', 'setTransferDirectory', 'enableFilesystemAccess',
 	// A restart or shutdown asked of this computer is answered in the main process's notice.
 	'scheduledSystemActions', 'cancelHostedSystemAction', 'runHostedSystemActionNow',
 ]);

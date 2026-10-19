@@ -1232,16 +1232,12 @@ impl Core {
             let path = lock(&self.shared.file_roots).resolve_dir(root, &full)?;
             super::file_resources::available(&path)?
         };
-        let blob_dir = lock(&self.shared.blob_dir)
-            .clone()
-            .ok_or(Error::Unsupported("no blob directory is installed"))?;
+        let blob_dir = super::blob::blob_directory(&self.shared)?;
         Ok(destination.min(super::file_resources::available(&blob_dir)?))
     }
 
     fn stage_path(&self, id: u64, rel_path: &str) -> Result<std::path::PathBuf, Error> {
-        let blob_dir = lock(&self.shared.blob_dir)
-            .clone()
-            .ok_or(Error::Unsupported("no blob directory is installed"))?;
+        let blob_dir = super::blob::blob_directory(&self.shared)?;
         Ok(blob_dir
             .join(STAGING_DIR)
             .join(format!("job-{id}"))
@@ -2761,9 +2757,10 @@ fn interrupt_jobs(shared: &Shared, peer: &[u8; 32], controller_only: bool) {
 
 pub(super) fn save_jobs(shared: &Shared) -> Result<(), Error> {
     let _writer = lock(&shared.job_save);
-    let Some(dir) = lock(&shared.blob_dir).clone() else {
+    if lock(&shared.blob_dir).is_none() {
         return Ok(());
-    };
+    }
+    let dir = super::blob::blob_directory(shared)?;
     let jobs = lock(&shared.jobs);
     let mut records: Vec<&JobRecord> = jobs.values().collect();
     records.sort_by_key(|record| record.id);

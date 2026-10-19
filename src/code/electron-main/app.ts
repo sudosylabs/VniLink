@@ -301,6 +301,10 @@ export class VniLinkApplication extends Disposable {
 		const temporary = this.options.temporaryEngine ?? false;
 		try {
 			await engine.start(temporary);
+			// Transfers stage here; the engine creates it the first time one does.
+			await engine.execute({ type: 'setTransferDirectory', path: join(app.getPath('userData'), 'Transfers') }).catch((error: unknown) => {
+				this.logService.error('The transfer folder could not be set; Files transfers will fail.', error);
+			});
 			if (!temporary) {
 				await permissions.synchronize().catch(() => {
 					this.logService.error('Native input backend could not be initialized.');

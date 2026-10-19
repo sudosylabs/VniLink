@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 
@@ -36,6 +39,12 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 		assert.equal((await execute(first, { type: 'keyboardMode' })).mode, 'Map');
 		assert.equal((await execute(first, { type: 'swapControlAndCommand' })).enabled, true);
 		await assert.rejects(execute(first, { type: 'setInputDefaults', ...input, pointer: { ...input.pointer, sensitivity_percent: 0 } }));
+		// The transfer folder is only named here; the first transfer creates it.
+		const transfers = join(tmpdir(), `vnilink-transfers-${String(process.pid)}`);
+		assert.equal((await execute(first, { type: 'setTransferDirectory', path: transfers })).type, 'done');
+		assert(!existsSync(transfers), 'Naming the transfer folder created it');
+		await assert.rejects(execute(first, { type: 'setTransferDirectory', path: 'relative/Transfers' }), /InvalidSetting/);
+		await assert.rejects(execute(first, { type: 'setTransferDirectory', path: '/does-not-exist/vnilink-test/Transfers' }), /InvalidSetting/);
 		await assert.rejects(execute(first, { type: 'stopHostedPeer', sessionId: 'not-a-number' }), /Invalid session ID/);
 		await assert.rejects(execute(first, { type: 'stopHostedPeer', sessionId: '1', extra: true }));
 		await assert.rejects(execute(first, { type: 'stopHostedPeer', sessionId: '1' }), /NoSession/);

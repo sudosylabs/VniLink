@@ -20,10 +20,10 @@ transfer stream were removed; all movement goes through jobs.
    stream.
 2. Each side shares its whole filesystem with
    `Core::enable_filesystem_access` (`/` on Unix, every mounted drive on
-   Windows) and names a job store with `Core::set_blob_directory`.
-   `Capabilities::file_transfer` is true once the filesystem is shared.
-   `Core::set_file_roots` confines browsing to chosen folders; only tests
-   use it.
+   Windows) and names a job store with `Core::set_blob_directory`, created
+   the first time a transfer needs it. `Capabilities::file_transfer` is true
+   once the filesystem is shared. `Core::set_file_roots` confines browsing
+   to chosen folders; only tests use it.
 3. The peer browses with `fs_list`/`fs_mkdir`/`fs_rename` against a live
    session. Every request re-checks the Transfer grant; a revoked grant
    answers `TransferDenied` without ending the session.

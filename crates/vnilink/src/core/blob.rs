@@ -147,8 +147,10 @@ pub(super) fn open_verified_source(
 }
 
 impl Core {
-    /// Chooses the managed directory for blob storage. Created when
-    /// missing. Refused while a controlling session is active.
+    /// Chooses the managed directory for blob storage: an absolute path,
+    /// created the first time a transfer needs it rather than here. Saved
+    /// jobs load from it when it already exists. Refused while a
+    /// controlling session is active.
     pub fn set_blob_directory(&self, path: impl AsRef<std::path::Path>) -> Result<(), Error> {
         let state = self.alive_state()?;
         if state
@@ -160,10 +162,18 @@ impl Core {
         }
         drop(state);
         let path = path.as_ref();
-        std::fs::create_dir_all(path).map_err(|_| Error::InvalidSetting(BLOB_DIR_FAILED))?;
-        let canonical =
-            std::fs::canonicalize(path).map_err(|_| Error::InvalidSetting(BLOB_DIR_FAILED))?;
-        if !canonical.is_dir() {
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return Err(Error::InvalidSetting(BLOB_DIR_FAILED));
+        };
+        if !path.is_absolute() {
+            return Err(Error::InvalidSetting(BLOB_DIR_FAILED));
+        }
+        // Canonical through the parent, which exists, so the path is stable
+        // whether or not the directory itself has been created yet.
+        let canonical = std::fs::canonicalize(parent)
+            .map_err(|_| Error::InvalidSetting(BLOB_DIR_FAILED))?
+            .join(name);
+        if canonical.exists() && !canonical.is_dir() {
             return Err(Error::InvalidSetting(BLOB_DIR_FAILED));
         }
         *lock(&self.shared.blob_dir) = Some(canonical);
@@ -864,6 +874,15 @@ pub(super) async fn offer_file_for_peer(
     Ok((hash, size))
 }
 
+/// The managed directory, created the first time a transfer needs it.
+pub(super) fn blob_directory(shared: &Shared) -> Result<std::path::PathBuf, Error> {
+    let dir = lock(&shared.blob_dir)
+        .clone()
+        .ok_or(Error::Unsupported(NO_BLOB_DIR))?;
+    std::fs::create_dir_all(&dir).map_err(|_| Error::InvalidSetting(BLOB_DIR_FAILED))?;
+    Ok(dir)
+}
+
 pub(super) async fn open_store(shared: &Shared) -> Result<FsStore, Error> {
     if let Some(store) = lock(&shared.blob_store).clone() {
         return Ok(store);
@@ -874,9 +893,7 @@ pub(super) async fn open_store(shared: &Shared) -> Result<FsStore, Error> {
     if let Some(store) = lock(&shared.blob_store).clone() {
         return Ok(store);
     }
-    let dir = lock(&shared.blob_dir)
-        .clone()
-        .ok_or(Error::Unsupported(NO_BLOB_DIR))?;
+    let dir = blob_directory(shared)?;
     // The upstream store shuts down asynchronously: reopening a directory
     // whose previous store is still winding down races its lock, so a
     // fresh load can stall. Bounded retries ride that out; steady-state
@@ -1121,7 +1138,7 @@ async fn handle_blob_stream(
         // never a re-pointable pathname. The private store references the
         // held source only while it is alive, then removes all metadata.
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let base = lock(&shared.blob_dir).clone().ok_or(())?;
+        let base = blob_directory(shared).map_err(|_| ())?;
         let dir = base.join(format!(
             "serve-{}-{}",
             std::process::id(),
