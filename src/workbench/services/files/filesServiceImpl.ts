@@ -9,7 +9,7 @@ import { InstantiationType, registerSingleton } from '../../../platform/instanti
 import type { FilesPane, FolderLocation } from '../../../platform/state/common/uiState.js';
 import { activeControllerSession } from '../devices/controllerSession.js';
 import { IDeviceService } from '../devices/deviceService.js';
-import { IFilesService, isUnfinished, type FilesFailure, type FilesItem, type FilesListing, type IFilesDisk, type IFilesSession } from './filesService.js';
+import { IFilesService, isUnfinished, type FilesFailure, type FilesItem, type FilesListing, type FilesRoute, type IFilesDisk, type IFilesSession } from './filesService.js';
 
 /** The engine's largest listing; past it a folder reports `truncated`. */
 const MAX_LISTED = 20_000;
@@ -138,24 +138,27 @@ class FilesSession extends Disposable implements IFilesSession {
 	private readonly endedEmitter = this._register(new Emitter<void>());
 	public readonly onDidEnd = this.endedEmitter.event;
 	private readonly byId = new Map<string, FileJob>();
+	private readonly routes = new Map<string, FilesRoute>();
 	private channel: FilesChannel | undefined;
 	private holders = 1;
 	private endedValue = false;
-	public readonly local: IFilesDisk;
 	public readonly remote: IFilesDisk;
 
 	constructor(
 		public readonly deviceId: string,
-		engine: IEngineService,
+		public readonly local: IFilesDisk,
 		private readonly onRetire: (session: FilesSession) => void,
 	) {
 		super();
-		this.local = new LocalDisk(engine);
 		this.remote = new RemoteDisk(operation => this.ask(operation));
 	}
 
 	public get jobs(): readonly FileJob[] {
 		return [...this.byId.values()].sort((a, b) => Number(BigInt(a.id) - BigInt(b.id)));
+	}
+
+	public routeOf(jobId: string): FilesRoute | undefined {
+		return this.routes.get(jobId);
 	}
 
 	public get ended(): boolean {
@@ -221,6 +224,9 @@ class FilesSession extends Disposable implements IFilesSession {
 				dstRoot: to.root,
 				dstPath: to.path,
 			});
+			if (isFileJob(job)) {
+				this.routes.set(job.id, { from, source: item.folder, destination: to });
+			}
 			this.adopt(job);
 		}
 	}
@@ -240,6 +246,7 @@ class FilesSession extends Disposable implements IFilesSession {
 	public async forget(jobId: string): Promise<void> {
 		await this.ask({ type: 'forget', jobId });
 		this.byId.delete(jobId);
+		this.routes.delete(jobId);
 		this.jobsChanged.fire();
 	}
 
@@ -275,12 +282,14 @@ export class FilesService implements IFilesService {
 	private readonly sessions = new Map<string, FilesSession>();
 	private readonly opening = new Map<string, Promise<{ readonly failure: FilesFailure } | { readonly session: IFilesSession }>>();
 	protected openChannel: FilesChannelOpener;
+	public readonly local: IFilesDisk;
 
 	constructor(
 		@IEngineService private readonly engine: IEngineService,
 		@IDeviceService private readonly devices: IDeviceService,
 	) {
 		this.openChannel = (request, consume, onError) => DataChannelClient.open(engine, request, consume, onError);
+		this.local = new LocalDisk(engine);
 	}
 
 	public async open(deviceId: string): Promise<{ readonly failure: FilesFailure } | { readonly session: IFilesSession }> {
@@ -323,7 +332,7 @@ export class FilesService implements IFilesService {
 		if (!connection) {
 			return { failure: 'disconnected' };
 		}
-		const session = new FilesSession(deviceId, this.engine, retired => {
+		const session = new FilesSession(deviceId, this.local, retired => {
 			if (this.sessions.get(deviceId) === retired) {
 				this.sessions.delete(deviceId);
 			}

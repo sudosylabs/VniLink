@@ -7,6 +7,7 @@ const result = await build({
 		contents: `
 			export { FilesService, filesRefusal, filesOpenFailure } from './src/workbench/services/files/filesServiceImpl.js';
 			export { engineErrorCategory } from './src/platform/engine/common/engine.js';
+			export { folderName, formatSize, itemCount, jobStatus } from './src/workbench/contrib/files/filesText.js';
 		`,
 		loader: 'ts',
 		resolveDir: process.cwd(),
@@ -28,7 +29,7 @@ const result = await build({
 	}],
 });
 
-const { FilesService, filesRefusal, filesOpenFailure, engineErrorCategory } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+const { FilesService, filesRefusal, filesOpenFailure, engineErrorCategory, folderName, formatSize, itemCount, jobStatus } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 
 const job = (id, state) => ({ id, peer: 'p', label: 'a.txt', direction: 'Upload', sender: true, state, total_bytes: '100', done_bytes: '40', files_total: '1', files_done: '0', resumed_files: '0', skipped_files: '0', skipped_symlinks: '0', waiting_file: null, error: null });
 
@@ -121,4 +122,26 @@ test('a folder listing reads every page', async () => {
 	assert.deepEqual(listing.entries.map(entry => entry.name), ['a', 'b']);
 	assert.equal(listing.skipped, 1);
 	session.release();
+});
+
+test('sizes, folders and transfers read as a file manager says them', () => {
+	assert.equal(formatSize(4), '4 bytes');
+	assert.equal(formatSize(4000), '4 KB');
+	assert.equal(formatSize(38_200_000), '38.2 MB');
+	assert.equal(formatSize(412_000_000), '412 MB');
+	assert.equal(formatSize(1_100_000_000), '1.1 GB');
+	const places = { roots: [{ id: '0', name: '/' }, { id: '2', name: 'C:' }], folders: [] };
+	assert.equal(folderName({ root: '0', path: 'Users/hammed/Downloads' }, places, 'This Mac'), 'Downloads');
+	assert.equal(folderName({ root: '0', path: '' }, places, 'This Mac'), 'This Mac', 'the whole disk takes its computer\'s name');
+	assert.equal(folderName({ root: '2', path: '' }, places, 'Sudosy'), 'C:');
+	assert.equal(itemCount(1), '1 item');
+	assert.equal(itemCount(3), '3 items');
+	const running = job('1', 'Transferring');
+	assert.equal(jobStatus(running, undefined), '40 bytes of 100 bytes');
+	assert.equal(jobStatus({ ...running, done_bytes: '500000000', total_bytes: '1500000000' }, 20_000_000), '500 MB of 1.5 GB · 20 MB/s · 50 s left');
+	assert.equal(jobStatus({ ...running, state: 'WaitingDecision', waiting_file: 'Reports/q3.xlsx' }), '“q3.xlsx” is already there');
+	assert.equal(jobStatus({ ...running, state: 'Interrupted' }), 'Stopped at 40 bytes of 100 bytes');
+	assert.equal(jobStatus({ ...running, state: 'Interrupted', done_bytes: '0' }), 'Stopped: the connection was lost');
+	assert.equal(jobStatus({ ...running, state: 'Failed', error: 'there is not enough space' }), 'there is not enough space');
+	assert.equal(jobStatus({ ...running, state: 'Complete', files_total: '86', total_bytes: '212000000' }), '86 files, 212 MB, checked');
 });

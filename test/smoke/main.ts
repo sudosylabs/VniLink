@@ -25,6 +25,28 @@ class SmokeSuite {
 		return this.application.run((window, driver) => this.verify(window, driver));
 	}
 
+	/** The Files tab mid-task in each theme, and at a narrow width where its panes stack. */
+	private async verifyFilesLayouts(driver: WindowDriver): Promise<void> {
+		const window = driver.window;
+		const theme = nativeTheme.themeSource;
+		try {
+			for (const [mode, width, height] of [['light', 1280, 760], ['dark', 1280, 760], ['dark', 700, 760]] as const) {
+				nativeTheme.themeSource = mode;
+				await window.webContents.executeJavaScript(`browserTests.browserScenarios.showFilesFixture(${String(width)}, ${String(height)})`);
+				await window.webContents.executeJavaScript(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+				await driver.screenshot(width < 760 ? 'files-narrow' : `files-${mode}`);
+				const overflow: unknown = await window.webContents.executeJavaScript(`(() => {
+					const view = document.querySelector('.files-view');
+					return view ? view.scrollWidth > view.clientWidth : true;
+				})()`);
+				assert.equal(overflow, false, `The Files tab scrolls sideways at ${String(width)} px`);
+			}
+		} finally {
+			await window.webContents.executeJavaScript(`browserTests.browserScenarios.clearFilesFixture()`);
+			nativeTheme.themeSource = theme;
+		}
+	}
+
 	/** The restart confirmation as Windows and Linux draw it, in each theme. */
 	private async verifyDialogThemes(window: BrowserWindow, driver: WindowDriver): Promise<void> {
 		const theme = nativeTheme.themeSource;
@@ -258,6 +280,9 @@ class SmokeSuite {
 				}
 				if (name === 'dialogs') {
 					await this.verifyDialogThemes(window, driver);
+				}
+				if (name === 'files') {
+					await this.verifyFilesLayouts(driver);
 				}
 				if (name === 'context-menu') {
 					await this.verifyContextMenuThemes(window, driver);

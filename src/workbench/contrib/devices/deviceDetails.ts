@@ -35,7 +35,7 @@ const serviceRows: readonly ServiceRow[] = [
 	{ label: nls.localize('devices.serviceDesktop', 'Remote desktop'), icon: Icons.remoteDesktop, capabilities: ['desktopControl'] },
 	{ label: nls.localize('devices.serviceView', 'View screen only'), icon: Icons.view, capabilities: ['desktopView'] },
 	{ label: nls.localize('devices.serviceTerminal', 'Terminal'), icon: Icons.terminal, capabilities: ['terminal'], command: 'vnilink.terminal.open' },
-	{ label: nls.localize('devices.serviceFiles', 'Files'), icon: Icons.files, capabilities: ['files'] },
+	{ label: nls.localize('devices.serviceFiles', 'Files'), icon: Icons.files, capabilities: ['files'], command: 'vnilink.files.open' },
 	{ label: nls.localize('devices.serviceCamera', 'Camera'), icon: Icons.camera, capabilities: ['camera'], command: 'vnilink.camera.open' },
 	{ label: nls.localize('devices.serviceLock', 'Lock screen'), icon: Icons.lock, capabilities: ['systemLock'], command: 'vnilink.system.lock', systemAction: true },
 	{ label: nls.localize('devices.servicePower', 'Restart or shut down'), icon: Icons.power, capabilities: ['systemRestart', 'systemShutdown'], command: 'vnilink.system.restartOrShutDown', systemAction: true },

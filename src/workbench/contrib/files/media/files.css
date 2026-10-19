@@ -1,0 +1,605 @@
+/* The Files tab: two panes edge to edge with the copy column between them,
+ * the transfers panel and the status bar below. Rows look like the system's
+ * own file lists: dense, with the accent selection only in the pane being
+ * worked in. */
+
+.files-view {
+	container-type: inline-size;
+	display: grid;
+	flex: 1;
+	grid-template-rows: minmax(0, 1fr) auto auto;
+	min-width: 0;
+	min-height: 0;
+	background: var(--canvas);
+	color: var(--text);
+	font-size: 13px;
+}
+
+.files-panes {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 112px minmax(0, 1fr);
+	min-height: 0;
+}
+
+/* A pane */
+
+.files-pane {
+	position: relative;
+	display: grid;
+	grid-template-rows: auto auto minmax(0, 1fr) auto;
+	min-width: 0;
+	min-height: 0;
+}
+
+.files-path-bar {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	height: 38px;
+	padding: 0 8px 0 10px;
+	border-bottom: 1px solid var(--line);
+	min-width: 0;
+}
+
+.files-icon-button,
+.files-computer,
+.files-crumb,
+.files-sort,
+.files-text-button {
+	border: 0;
+	border-radius: 5px;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+}
+
+.files-icon-button {
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 26px;
+	height: 26px;
+	color: var(--muted);
+}
+
+.files-icon-button > .vnilink-icon {
+	width: 15px;
+	height: 15px;
+}
+
+.files-computer {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: none;
+	height: 26px;
+	margin-left: 6px;
+	padding: 0 6px;
+	font-weight: 600;
+}
+
+.files-computer > .vnilink-icon {
+	width: 14px;
+	height: 14px;
+}
+
+.files-computer > .files-computer-chevron {
+	width: 10px;
+	height: 10px;
+	color: var(--muted);
+}
+
+.files-crumbs {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	min-width: 0;
+	overflow: hidden;
+}
+
+.files-crumbs > .vnilink-icon {
+	flex: none;
+	width: 10px;
+	height: 10px;
+	color: var(--muted);
+	opacity: 0.6;
+}
+
+.files-crumb {
+	flex: 0 1 auto;
+	min-width: 0;
+	height: 26px;
+	padding: 0 5px;
+	overflow: hidden;
+	color: var(--muted);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.files-crumb[aria-current='location'] {
+	flex-shrink: 0;
+	color: var(--text);
+}
+
+.files-tools {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	margin-left: auto;
+	flex: none;
+}
+
+.files-filter {
+	width: 160px;
+}
+
+.files-columns {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 150px 84px;
+	align-items: center;
+	height: 26px;
+	padding: 0 16px 0 18px;
+	border-bottom: 1px solid var(--line);
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.files-sort {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	height: 22px;
+	padding: 0 6px;
+}
+
+.files-sort-modified,
+.files-sort-size {
+	border-left: 1px solid var(--line);
+	border-radius: 0;
+}
+
+.files-sort-size {
+	justify-content: flex-end;
+}
+
+.files-list {
+	min-height: 0;
+	padding: 4px 8px;
+}
+
+.files-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 150px 84px;
+	align-items: center;
+	height: 26px;
+	padding: 0 8px 0 10px;
+	border-radius: 5px;
+}
+
+.files-cell-name {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.files-row-icon {
+	display: grid;
+	flex: none;
+	color: var(--muted);
+}
+
+.files-row-icon > .vnilink-icon {
+	width: 16px;
+	height: 16px;
+}
+
+.files-row-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.files-row-name .monaco-inputbox {
+	width: 100%;
+}
+
+.files-cell-modified,
+.files-cell-size {
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.files-cell-modified {
+	padding-left: 12px;
+}
+
+.files-cell-size {
+	text-align: right;
+}
+
+.files-list .monaco-list-row:hover .files-row {
+	background: var(--surface-hover);
+}
+
+/* Dropping onto a folder from the other pane. */
+.files-list .monaco-list-row.drop-target .files-row {
+	background: var(--selection-surface);
+	outline: 2px dashed var(--accent);
+	outline-offset: -2px;
+}
+
+/* Grey selection in the other pane; the accent in the one being worked in. */
+.files-list .monaco-list-row.selected .files-row {
+	background: var(--selected);
+}
+
+.files-pane.active .files-list .monaco-list-row.selected .files-row {
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+.files-pane.active .files-list .monaco-list-row.selected :is(.files-row-icon, .files-cell-modified, .files-cell-size) {
+	color: color-mix(in srgb, var(--on-accent) 82%, transparent);
+}
+
+.files-list .monaco-list:focus-visible .monaco-list-row.focused .files-row {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+.files-pane.active .files-list .monaco-list:focus-visible .monaco-list-row.focused.selected .files-row {
+	outline-color: var(--on-accent);
+}
+
+.files-drop-bar {
+	padding: 9px 14px;
+	border-top: 1px solid var(--accent);
+	background: var(--selection-surface);
+}
+
+.files-pane.drop-target {
+	box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* States, inside the pane, where the list would be. */
+.files-state {
+	position: absolute;
+	inset: 66px 0 auto;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 6px;
+	padding: 14px 18px;
+}
+
+.files-state p {
+	margin: 0;
+	max-width: 46ch;
+	line-height: 1.5;
+}
+
+.files-state-body {
+	color: var(--muted);
+}
+
+.files-state-action {
+	margin-top: 6px;
+	height: 26px;
+	padding: 0 10px;
+	border: 1px solid var(--line);
+	border-radius: 5px;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+}
+
+.files-notice {
+	margin: 0;
+	padding: 8px 14px;
+	border-top: 1px solid var(--line);
+	color: var(--status-disconnected);
+}
+
+/* The copy column */
+
+.files-copy {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	padding: 0 12px;
+	border-inline: 1px solid var(--line);
+	text-align: center;
+}
+
+.files-copy-button {
+	display: grid;
+	place-items: center;
+	width: 44px;
+	height: 44px;
+	border: 1px solid var(--accent);
+	border-radius: 10px;
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+.files-copy-button > .vnilink-icon {
+	width: 20px;
+	height: 20px;
+}
+
+.files-copy-button:disabled {
+	border-color: var(--line);
+	background: transparent;
+	color: var(--muted);
+}
+
+.files-copy-text {
+	display: flex;
+	flex-direction: column;
+	margin: 0;
+	font-size: 12px;
+	line-height: 1.4;
+	overflow-wrap: anywhere;
+}
+
+.files-copy-button:disabled + .files-copy-text {
+	color: var(--muted);
+}
+
+/* Transfers */
+
+.files-transfers {
+	display: flex;
+	flex-direction: column;
+	height: 196px;
+	border-top: 1px solid var(--line);
+}
+
+.files-transfers-header {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 32px;
+	padding: 0 12px;
+	font-size: 12px;
+}
+
+.files-transfers-tab {
+	height: 32px;
+	padding: 0 6px;
+	border: 0;
+	border-bottom: 1px solid transparent;
+	background: transparent;
+	color: var(--muted);
+	font: inherit;
+}
+
+.files-transfers-tab[aria-selected='true'] {
+	border-bottom-color: var(--text);
+	color: var(--text);
+}
+
+.files-transfers-space,
+.files-status-space {
+	flex: 1;
+}
+
+.files-text-button {
+	height: 22px;
+	padding: 0 8px;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.files-transfers-rows {
+	flex: 1;
+	min-height: 0;
+	padding: 0 8px 6px;
+	overflow: auto;
+}
+
+.files-transfers-empty {
+	margin: 0;
+	padding: 8px 10px;
+	color: var(--muted);
+}
+
+.files-transfer {
+	display: grid;
+	grid-template-columns: 16px minmax(0, 1.1fr) minmax(0, 1.5fr) minmax(80px, 200px) minmax(0, 1.2fr) 96px;
+	align-items: center;
+	gap: 14px;
+	height: 32px;
+	padding: 0 10px;
+	border-radius: 5px;
+}
+
+.files-transfer-direction {
+	color: var(--muted);
+}
+
+.files-transfer-name,
+.files-transfer-route,
+.files-transfer-status {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.files-transfer-route,
+.files-transfer-status {
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.files-transfer[data-state='WaitingDecision'] .files-transfer-status,
+.files-transfer[data-state='Interrupted'] .files-transfer-status {
+	color: var(--status-pending);
+}
+
+.files-transfer[data-state='Failed'] .files-transfer-status {
+	color: var(--status-disconnected);
+}
+
+.files-transfer-bar {
+	height: 3px;
+	border-radius: 2px;
+	background: var(--line);
+	overflow: hidden;
+}
+
+.files-transfer-fill {
+	display: block;
+	height: 3px;
+	background: var(--accent);
+}
+
+.files-transfer[data-state='Complete'] .files-transfer-fill {
+	background: var(--status-connected);
+}
+
+.files-transfer[data-state='WaitingDecision'] .files-transfer-fill,
+.files-transfer[data-state='Interrupted'] .files-transfer-fill {
+	background: var(--status-pending);
+}
+
+.files-transfer-action {
+	justify-self: end;
+}
+
+.files-transfer-action .files-text-button {
+	border: 1px solid var(--line);
+	color: var(--text);
+}
+
+.files-transfer-action .files-text-button.primary {
+	border-color: var(--accent);
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+/* Status bar */
+
+.files-status {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	height: 26px;
+	padding: 0 12px;
+	border-top: 1px solid var(--line);
+	background: var(--chrome);
+	color: var(--muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+
+.files-status-selection {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.files-status-transfers {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 22px;
+	padding: 0 8px;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text);
+	font: inherit;
+}
+
+.files-status-transfers.open,
+.files-status-transfers:hover {
+	background: var(--surface-hover);
+}
+
+.files-status-transfers > .vnilink-icon {
+	width: 13px;
+	height: 13px;
+}
+
+.files-status-decision {
+	color: var(--status-pending);
+}
+
+.files-view :is(button, .monaco-list):focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+/* Elements with a display of their own still honour `hidden`. */
+.files-state[hidden],
+.files-transfers[hidden],
+.files-status-transfers[hidden],
+.files-filter[hidden] {
+	display: none;
+}
+
+/* The sort marker, then hover and disabled, after every component's own rules. */
+.files-sort > .vnilink-icon {
+	width: 9px;
+	height: 9px;
+	visibility: hidden;
+}
+
+.files-sort.sorted {
+	color: var(--text);
+}
+
+.files-sort.sorted > .vnilink-icon {
+	visibility: visible;
+}
+
+.files-sort.descending > .vnilink-icon {
+	transform: rotate(180deg);
+}
+
+.files-icon-button:disabled {
+	opacity: 0.4;
+}
+
+.files-icon-button:hover:not(:disabled),
+.files-computer:hover,
+.files-crumb:hover,
+.files-sort:hover,
+.files-text-button:hover:not(:disabled) {
+	background: var(--surface-hover);
+}
+
+/* A narrow window stacks the panes, the copy column between them. */
+@container (width < 760px) {
+	.files-panes {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+	}
+
+	.files-copy {
+		flex-direction: row;
+		padding: 8px 12px;
+		border-inline: 0;
+		border-block: 1px solid var(--line);
+	}
+
+	.files-copy-button > .vnilink-icon {
+		transform: rotate(90deg);
+	}
+}
+
+@media (forced-colors: active) {
+	.files-pane.active .files-list .monaco-list-row.selected .files-row {
+		forced-color-adjust: none;
+		background: Highlight;
+		color: HighlightText;
+	}
+}

@@ -1,0 +1,103 @@
+import * as nls from '../../../nls.js';
+import type { FileEntry, FileJob, FilePlaces } from '../../../platform/engine/common/files.js';
+import type { FolderLocation } from '../../../platform/state/common/uiState.js';
+
+const units = ['bytes', 'KB', 'MB', 'GB', 'TB'] as const;
+
+/** A size as file managers show it: 412 MB, 1.1 GB, 4 KB. */
+export function formatSize(bytes: number): string {
+	if (bytes < 1000) {
+		return nls.localize('files.bytes', '{0} bytes', bytes);
+	}
+	let value = bytes;
+	let unit = 0;
+	while (value >= 1000 && unit < units.length - 1) {
+		value /= 1000;
+		unit++;
+	}
+	// Three significant digits at most: 4 KB, 38.2 MB, 412 MB.
+	const shown = value >= 100 ? Math.round(value).toString() : value.toFixed(1).replace(/\.0$/, '');
+	return `${shown} ${units[unit]}`;
+}
+
+/** The size column: a file's size, nothing for a folder, since folders have no size of their own. */
+export function entrySize(entry: FileEntry): string {
+	return entry.kind === 'file' ? formatSize(Number(entry.size)) : '—';
+}
+
+/** The modified column: today's time, a date this year, or a full date. */
+export function formatModified(mtimeMs: number, now: Date): string {
+	if (mtimeMs <= 0) {
+		return '';
+	}
+	const date = new Date(mtimeMs);
+	const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+	if (date.toDateString() === now.toDateString()) {
+		return nls.localize('files.today', 'Today {0}', time);
+	}
+	if (date.getFullYear() === now.getFullYear()) {
+		return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${time}`;
+	}
+	return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+/** A folder's own name: its last part, or its root's name for the root itself. */
+export function folderName(folder: FolderLocation, places: FilePlaces | undefined, computer: string): string {
+	if (folder.path) {
+		return folder.path.slice(folder.path.lastIndexOf('/') + 1);
+	}
+	const root = places?.roots.find(candidate => candidate.id === folder.root);
+	return !root || root.name === '/' ? computer : root.name;
+}
+
+/** "Downloads on Sudosy". */
+export function folderOn(folder: FolderLocation, places: FilePlaces | undefined, computer: string): string {
+	return nls.localize('files.folderOn', '{0} on {1}', folderName(folder, places, computer), computer);
+}
+
+/** "3 items", "1 item". */
+export function itemCount(count: number): string {
+	return count === 1 ? nls.localize('files.oneItem', '1 item') : nls.localize('files.items', '{0} items', count);
+}
+
+/** A transfer's progress or outcome in words, short enough for one row. */
+export function jobStatus(job: FileJob, rate: number | undefined): string {
+	const done = Number(job.done_bytes);
+	const total = Number(job.total_bytes);
+	switch (job.state) {
+		case 'Preparing':
+			return nls.localize('files.preparing', 'Checking files…');
+		case 'Serving':
+			return done > 0 ? progress(done, total, rate) : nls.localize('files.waiting', 'Waiting to start');
+		case 'Transferring':
+			return progress(done, total, rate);
+		case 'WaitingDecision':
+			return job.waiting_file
+				? nls.localize('files.exists', '“{0}” is already there', job.waiting_file.slice(job.waiting_file.lastIndexOf('/') + 1))
+				: nls.localize('files.decide', 'Needs your decision');
+		case 'Interrupted':
+			return done > 0
+				? nls.localize('files.interruptedAt', 'Stopped at {0} of {1}', formatSize(done), formatSize(total))
+				: nls.localize('files.interrupted', 'Stopped: the connection was lost');
+		case 'Cancelled':
+			return nls.localize('files.cancelled', 'Cancelled');
+		case 'Failed':
+			return job.error ?? nls.localize('files.failed', 'Couldn’t copy');
+		case 'Complete':
+			return Number(job.files_total) === 1
+				? nls.localize('files.completeOne', '{0}, checked', formatSize(total))
+				: nls.localize('files.complete', '{0} files, {1}, checked', job.files_total, formatSize(total));
+	}
+}
+
+function progress(done: number, total: number, rate: number | undefined): string {
+	const amount = nls.localize('files.progress', '{0} of {1}', formatSize(done), formatSize(total));
+	if (!rate || rate <= 0 || done >= total) {
+		return amount;
+	}
+	const seconds = Math.ceil((total - done) / rate);
+	const left = seconds < 60
+		? nls.localize('files.secondsLeft', '{0} s left', seconds)
+		: nls.localize('files.minutesLeft', '{0} min left', Math.ceil(seconds / 60));
+	return nls.localize('files.progressRate', '{0} · {1}/s · {2}', amount, formatSize(rate), left);
+}

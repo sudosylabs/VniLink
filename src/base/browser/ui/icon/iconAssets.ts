@@ -83,6 +83,24 @@ import stopOutlined from '@phosphor-icons/core/assets/regular/stop.svg';
 import stopFilled from '@phosphor-icons/core/assets/fill/stop-fill.svg';
 import checkOutlined from '@phosphor-icons/core/assets/regular/check.svg';
 import checkFilled from '@phosphor-icons/core/assets/fill/check-fill.svg';
+import fileOutlined from '@phosphor-icons/core/assets/regular/file.svg';
+import fileFilled from '@phosphor-icons/core/assets/fill/file-fill.svg';
+import newFolderOutlined from '@phosphor-icons/core/assets/regular/folder-plus.svg';
+import newFolderFilled from '@phosphor-icons/core/assets/fill/folder-plus-fill.svg';
+import trashOutlined from '@phosphor-icons/core/assets/regular/trash.svg';
+import trashFilled from '@phosphor-icons/core/assets/fill/trash-fill.svg';
+import renameOutlined from '@phosphor-icons/core/assets/regular/pencil-simple.svg';
+import renameFilled from '@phosphor-icons/core/assets/fill/pencil-simple-fill.svg';
+import driveOutlined from '@phosphor-icons/core/assets/regular/hard-drive.svg';
+import driveFilled from '@phosphor-icons/core/assets/fill/hard-drive-fill.svg';
+import upOutlined from '@phosphor-icons/core/assets/regular/arrow-up.svg';
+import upFilled from '@phosphor-icons/core/assets/fill/arrow-up-fill.svg';
+import searchOutlined from '@phosphor-icons/core/assets/regular/magnifying-glass.svg';
+import searchFilled from '@phosphor-icons/core/assets/fill/magnifying-glass-fill.svg';
+import moreOutlined from '@phosphor-icons/core/assets/regular/dots-three.svg';
+import moreFilled from '@phosphor-icons/core/assets/fill/dots-three-fill.svg';
+import transfersOutlined from '@phosphor-icons/core/assets/regular/arrows-left-right.svg';
+import transfersFilled from '@phosphor-icons/core/assets/fill/arrows-left-right-fill.svg';
 
 // The only place that knows the icon provider and its filenames.
 const assets: Record<IconId, Record<IconVariant, string>> = {
@@ -113,6 +131,15 @@ const assets: Record<IconId, Record<IconVariant, string>> = {
 	fitToView: { outlined: fitToViewOutlined, filled: fitToViewFilled },
 	stop: { outlined: stopOutlined, filled: stopFilled },
 	check: { outlined: checkOutlined, filled: checkFilled },
+	file: { outlined: fileOutlined, filled: fileFilled },
+	newFolder: { outlined: newFolderOutlined, filled: newFolderFilled },
+	trash: { outlined: trashOutlined, filled: trashFilled },
+	rename: { outlined: renameOutlined, filled: renameFilled },
+	drive: { outlined: driveOutlined, filled: driveFilled },
+	up: { outlined: upOutlined, filled: upFilled },
+	search: { outlined: searchOutlined, filled: searchFilled },
+	more: { outlined: moreOutlined, filled: moreFilled },
+	transfers: { outlined: transfersOutlined, filled: transfersFilled },
 	devices: { outlined: devicesOutlined, filled: devicesFilled },
 	remoteDesktop: { outlined: remoteDesktopOutlined, filled: remoteDesktopFilled },
 	refresh: { outlined: refreshOutlined, filled: refreshFilled },

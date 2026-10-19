@@ -368,13 +368,14 @@ async function verifyInspector(fixture: DevicePageFixture, rows: () => HTMLEleme
 		'Camera': 'Unavailable right now', 'Lock screen': 'Not supported there', 'Restart or shut down': 'Available',
 	};
 	assert(JSON.stringify(services()) === JSON.stringify(expected), `Service rows misreport availability: ${JSON.stringify(services())}`);
-	// Terminal and Camera open tabs, Lock and Restart act; each is a button, disabled while the computer refuses it.
+	// Terminal, Files and Camera open tabs, Lock and Restart act; each is a button, disabled while the computer refuses it.
 	const serviceButton = (name: string): HTMLButtonElement | undefined => [...page.querySelectorAll<HTMLButtonElement>('button.device-service')].find(button => button.textContent.startsWith(name));
 	const terminal = (): HTMLButtonElement | undefined => serviceButton('Terminal');
 	const interactive = page.querySelectorAll('button.device-service, .device-service[tabindex]').length;
-	assert(page.querySelector('.device-services')?.getAttribute('role') === 'list' && interactive === 4, 'Only Terminal, Camera, Lock and Restart should be interactive');
+	assert(page.querySelector('.device-services')?.getAttribute('role') === 'list' && interactive === 5, 'Only Terminal, Files, Camera, Lock and Restart should be interactive');
 	assert(serviceButton('Lock screen')?.disabled === true && serviceButton('Restart or shut down')?.disabled === false, 'Lock and Restart do not follow what that computer allows');
 	assert(serviceButton('Camera')?.disabled === true, 'Camera is not a disabled button while that computer can\'t open it');
+	assert(serviceButton('Files')?.disabled === true, 'Files is not a disabled button while that computer has it turned off');
 	assert(terminal()?.textContent.startsWith('Terminal') === true && terminal()?.disabled === true && terminal()?.parentElement?.tagName === 'LI', 'Terminal is not a disabled button in its list item while it needs permission');
 	assert(page.querySelector('.device-service[data-status="turnedOff"]')?.getAttribute('aria-disabled') === 'true', 'An unavailable service is not marked disabled');
 	fixture.report(STUDIO, [{ capability: 'files', status: 'available' }, { capability: 'terminal', status: 'available' }]);

@@ -54,6 +54,7 @@ import './contrib/devices/devices.contribution.js';
 import './contrib/settings/settings.contribution.js';
 import './contrib/terminal/terminal.contribution.js';
 import './contrib/camera/camera.contribution.js';
+import './contrib/files/files.contribution.js';
 import './contrib/systemActions/systemActions.contribution.js';
 import './contrib/home/home.contribution.js';
 

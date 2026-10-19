@@ -39,6 +39,13 @@ export interface FilesItem {
 	readonly name: string;
 }
 
+/** Where a transfer this session started goes: from a folder on one side to a folder on the other. */
+export interface FilesRoute {
+	readonly from: FilesPane;
+	readonly source: FolderLocation;
+	readonly destination: FolderLocation;
+}
+
 /**
  * Files with one paired computer: both disks and the transfers between
  * them. Shared by every Files tab for that computer.
@@ -50,6 +57,8 @@ export interface IFilesSession {
 	/** This connection's transfers, oldest first. */
 	readonly jobs: readonly FileJob[];
 	readonly onDidChangeJobs: Event<void>;
+	/** Where a transfer goes, when this session started it. */
+	routeOf(jobId: string): FilesRoute | undefined;
 	/** Whether the connection to the other computer has ended. */
 	readonly ended: boolean;
 	readonly onDidEnd: Event<void>;
@@ -66,6 +75,8 @@ export interface IFilesSession {
 
 export interface IFilesService {
 	readonly _serviceBrand: undefined;
+	/** This computer's disk, which needs no connection. */
+	readonly local: IFilesDisk;
 	/** Opens Files with `deviceId`, or says why it can't. Each success needs one `release`. */
 	open(deviceId: string): Promise<{ readonly failure: FilesFailure } | { readonly session: IFilesSession }>;
 }

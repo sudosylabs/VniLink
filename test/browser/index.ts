@@ -8,6 +8,7 @@ import { verifyConnection } from './connection.js';
 import { ContextMenuFixture, verifyContextMenu } from './contextMenu.js';
 import { verifyDataChannels } from './dataChannels.js';
 import { showThemedDialog, verifyDialogs } from './dialogs.js';
+import { showFilesFixture, verifyFiles } from './files.js';
 import { verifyHomeLifecycle } from './home.js';
 import { verifyIcons } from './icons.js';
 import { verifyRemoteDesktop } from './remoteDesktop.js';
@@ -61,6 +62,19 @@ export class BrowserScenarios {
 		this.contextMenuFixture = undefined;
 	}
 
+	private filesFixture: { dispose(): void } | undefined;
+
+	/** Shows the Files tab mid-task at `width`×`height`; `clearFilesFixture` removes it. */
+	public async showFilesFixture(width: number, height: number): Promise<void> {
+		this.clearFilesFixture();
+		this.filesFixture = await showFilesFixture(width, height);
+	}
+
+	public clearFilesFixture(): void {
+		this.filesFixture?.dispose();
+		this.filesFixture = undefined;
+	}
+
 	public clearDeviceFixture(): void {
 		this.deviceFixture?.dispose();
 		this.deviceFixture = undefined;
@@ -68,7 +82,7 @@ export class BrowserScenarios {
 
 	private readonly scenarios = new Map<string, () => unknown>([
 		['workbench', verifyWorkbenchLifecycle], ['access', verifyAccess], ['camera', verifyCamera], ['connection', verifyConnection], ['context-menu', verifyContextMenu], ['data-channels', verifyDataChannels],
-		['devices', verifyDevices], ['dialogs', verifyDialogs], ['device-pairing', verifyPairingPopover], ['device-screenshot', verifyDeviceScreenshot], ['home', verifyHomeLifecycle], ['icons', verifyIcons],
+		['devices', verifyDevices], ['dialogs', verifyDialogs], ['files', verifyFiles], ['device-pairing', verifyPairingPopover], ['device-screenshot', verifyDeviceScreenshot], ['home', verifyHomeLifecycle], ['icons', verifyIcons],
 		['media-settings', verifyMediaSettings], ['remote-desktop', verifyRemoteDesktop], ['settings', verifySettingsPages], ['tabs', verifyTabs], ['terminal', verifyTerminal],
 	]);
 
