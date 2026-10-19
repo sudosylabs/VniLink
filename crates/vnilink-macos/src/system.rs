@@ -3,10 +3,40 @@ use std::process::Command;
 use vnilink::system::{HostSessionState, HostSystemActions, SystemSupport};
 use vnilink::Error;
 
-/// `CGSession -suspend` returns immediately after requesting the lock; the
-/// login window performs the actual transition.
-const CGSESSION: &str =
-    "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession";
+/// Locks the screen as Control-Command-Q does. macOS removed the
+/// `CGSession -suspend` tool; the login framework's entry point is what the
+/// system's own lock uses. It is private, so it is looked up at run time and
+/// Lock is offered only where it exists.
+const LOGIN_FRAMEWORK: &std::ffi::CStr =
+    c"/System/Library/PrivateFrameworks/login.framework/Versions/Current/login";
+const LOCK_SYMBOL: &std::ffi::CStr = c"SACLockScreenImmediate";
+
+extern "C" {
+    fn dlopen(path: *const std::ffi::c_char, mode: std::ffi::c_int) -> *mut std::ffi::c_void;
+    fn dlsym(
+        handle: *mut std::ffi::c_void,
+        symbol: *const std::ffi::c_char,
+    ) -> *mut std::ffi::c_void;
+}
+const RTLD_LAZY: std::ffi::c_int = 1;
+
+type LockScreen = unsafe extern "C" fn() -> std::ffi::c_int;
+
+/// The system's lock entry point, if this macOS has it.
+fn lock_screen() -> Option<LockScreen> {
+    static LOCK: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    let address = LOCK.get_or_init(|| unsafe {
+        let handle = dlopen(LOGIN_FRAMEWORK.as_ptr(), RTLD_LAZY);
+        if handle.is_null() {
+            return None;
+        }
+        let symbol = dlsym(handle, LOCK_SYMBOL.as_ptr());
+        (!symbol.is_null()).then_some(symbol as usize)
+    });
+    let address = (*address)?;
+    // SAFETY: the symbol is `int SACLockScreenImmediate(void)` in the system's login framework.
+    Some(unsafe { std::mem::transmute::<usize, LockScreen>(address) })
+}
 
 #[derive(Default)]
 pub struct MacSystemActions {
@@ -16,7 +46,7 @@ pub struct MacSystemActions {
 impl HostSystemActions for MacSystemActions {
     fn support(&self) -> SystemSupport {
         SystemSupport {
-            lock: true,
+            lock: lock_screen().is_some(),
             restart: true,
             shutdown: true,
             privacy: true,
@@ -25,15 +55,10 @@ impl HostSystemActions for MacSystemActions {
     }
 
     fn lock_workstation(&self) -> Result<(), Error> {
-        let status = Command::new(CGSESSION)
-            .arg("-suspend")
-            .status()
-            .map_err(|_| Error::Unsupported("workstation lock is not available"))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(Error::Unsupported("workstation lock was rejected"))
-        }
+        let lock = lock_screen().ok_or(Error::Unsupported("workstation lock is not available"))?;
+        // The login window performs the transition; the call returns at once.
+        unsafe { lock() };
+        Ok(())
     }
 
     fn restart(&self) -> Result<(), Error> {
