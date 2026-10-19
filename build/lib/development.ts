@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { electronExecutable } from './electron.ts';
 import { assertNativeFresh } from './native.ts';
 import { ProcessRunner } from './processes.ts';
+import { selfResponsible, type Launch } from './responsibility.ts';
 import { ApplicationWatcher } from './watch.ts';
 
 const require = createRequire(import.meta.url);
@@ -15,7 +16,7 @@ export class DevelopmentSession {
 	readonly #args: readonly string[];
 	readonly #processes = new ProcessRunner();
 	readonly #signal: AbortSignal;
-	#executable: string | undefined;
+	#launch: Launch | undefined;
 	readonly #watcher: ApplicationWatcher;
 	#stopping: Promise<void> | undefined;
 	#closed = false;
@@ -40,7 +41,7 @@ export class DevelopmentSession {
 			const watchOnly = this.#args.includes('--watch-only');
 			if (!watchOnly) {
 				await assertNativeFresh(this.#root);
-				this.#executable = await electronExecutable(this.#root, this.#signal);
+				this.#launch = await selfResponsible(this.#root, await electronExecutable(this.#root, this.#signal), [this.#root, ...this.#args], this.#signal);
 			}
 			await this.#watcher.start();
 			if (this.#closed) {
@@ -71,10 +72,10 @@ export class DevelopmentSession {
 	}
 
 	#electron(): void {
-		if (this.#closed || !this.#executable) {
+		if (this.#closed || !this.#launch) {
 			return;
 		}
-		const launched = this.#processes.start(this.#executable, [this.#root, ...this.#args], { cwd: this.#root, env: { ...process.env, VNILINK_DEV: '1' } });
+		const launched = this.#processes.start(this.#launch.command, this.#launch.args, { cwd: this.#root, env: { ...process.env, VNILINK_DEV: '1' } });
 		launched.child.once('exit', code => {
 			if (this.#closed) {
 				return;
@@ -109,7 +110,8 @@ export async function startApplication(root: string, signal: AbortSignal, args: 
 	const processes = new ProcessRunner(signal);
 	try {
 		await assertNativeFresh(root);
-		await processes.run(await electronExecutable(root, signal), [root, ...args], { cwd: root });
+		const launch = await selfResponsible(root, await electronExecutable(root, signal), [root, ...args], signal);
+		await processes.run(launch.command, launch.args, { cwd: root });
 	} finally {
 		await processes.stop();
 	}
