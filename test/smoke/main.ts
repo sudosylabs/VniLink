@@ -43,6 +43,23 @@ class SmokeSuite {
 		}
 	}
 
+	/** An open context menu in each theme. */
+	private async verifyContextMenuThemes(window: BrowserWindow, driver: WindowDriver): Promise<void> {
+		const theme = nativeTheme.themeSource;
+		try {
+			for (const mode of ['light', 'dark'] as const) {
+				nativeTheme.themeSource = mode;
+				await window.webContents.executeJavaScript(`browserTests.browserScenarios.showContextMenuFixture()`);
+				await window.webContents.executeJavaScript(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+				await driver.screenshot(`context-menu-${mode}`);
+				await window.webContents.executeJavaScript(`browserTests.browserScenarios.closeContextMenuFixture()`);
+				assert.equal(await window.webContents.executeJavaScript(`document.querySelector('.monaco-menu') === null`), true, 'Escape left the menu open');
+			}
+		} finally {
+			nativeTheme.themeSource = theme;
+		}
+	}
+
 	/** The notice window counts down from its deadline, answers Cancel, and closes when its signal aborts. */
 	private async verifyNotice(): Promise<void> {
 		const theme = nativeTheme.themeSource;
@@ -241,6 +258,9 @@ class SmokeSuite {
 				}
 				if (name === 'dialogs') {
 					await this.verifyDialogThemes(window, driver);
+				}
+				if (name === 'context-menu') {
+					await this.verifyContextMenuThemes(window, driver);
 				}
 			}
 		}

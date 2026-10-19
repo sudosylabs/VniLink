@@ -1,23 +1,26 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted for VniLink: the menu's rules are a stylesheet (the CSP refuses injected style elements) and its check and submenu glyphs are product icons.
  *--------------------------------------------------------------------------------------------*/
 
 import { isFirefox } from '../../browser.js';
 import { EventType as TouchEventType, Gesture } from '../../touch.js';
-import { $, addDisposableListener, append, clearNode, Dimension, EventHelper, EventLike, EventType, getActiveElement, getWindow, IDomNodePagePosition, isAncestor, isInShadowDOM } from '../../dom.js';
-import { createStyleSheet } from '../../domStylesheets.js';
+import './vnilinkMenu.css';
+import { $, addDisposableListener, append, clearNode, Dimension, EventHelper, EventLike, EventType, getActiveElement, getWindow, IDomNodePagePosition, isAncestor } from '../../dom.js';
 import { StandardKeyboardEvent } from '../../keyboardEvent.js';
 import { StandardMouseEvent } from '../../mouseEvent.js';
 import { ActionBar, ActionsOrientation, IActionViewItemProvider } from '../actionbar/actionbar.js';
 import { ActionViewItem, BaseActionViewItem, IActionViewItemOptions } from '../actionbar/actionViewItems.js';
 import { DomScrollableElement } from '../scrollbar/scrollableElement.js';
+import { renderIcon } from '../icon/icon.js';
 import { EmptySubmenuAction, IAction, IActionRunner, Separator, SubmenuAction } from '../../../common/actions.js';
 import { RunOnceScheduler } from '../../../common/async.js';
 import { Codicon } from '../../../common/codicons.js';
 import { getCodiconFontCharacters } from '../../../common/codiconsUtil.js';
 import { ThemeIcon } from '../../../common/themables.js';
 import { Event } from '../../../common/event.js';
+import { Icons } from '../../../common/icons.js';
 import { stripIcons } from '../../../common/iconLabels.js';
 import { KeyCode } from '../../../common/keyCodes.js';
 import { ResolvedKeybinding } from '../../../common/keybindings.js';
@@ -101,8 +104,6 @@ export class Menu extends ActionBar {
 	private mnemonics: Map<string, Array<BaseMenuActionViewItem>>;
 	private scrollableElement: DomScrollableElement;
 	private menuElement: HTMLElement;
-	static globalStyleSheet: HTMLStyleElement;
-	protected styleSheet: HTMLStyleElement | undefined;
 
 	constructor(container: HTMLElement, actions: ReadonlyArray<IAction>, options: IMenuOptions, private readonly menuStyles: IMenuStyles) {
 		container.classList.add('monaco-menu-container');
@@ -126,7 +127,6 @@ export class Menu extends ActionBar {
 
 		this.actionsList.tabIndex = 0;
 
-		this.initializeOrUpdateStyleSheet(container, menuStyles);
 
 		this._register(Gesture.addTarget(menuElement));
 
@@ -311,20 +311,6 @@ export class Menu extends ActionBar {
 		this.viewItems.filter(item => !(item instanceof MenuSeparatorActionViewItem)).forEach((item, index, array) => {
 			(item as BaseMenuActionViewItem).updatePositionInSet(index + 1, array.length);
 		});
-	}
-
-	private initializeOrUpdateStyleSheet(container: HTMLElement, style: IMenuStyles): void {
-		if (!this.styleSheet) {
-			if (isInShadowDOM(container)) {
-				this.styleSheet = createStyleSheet(container);
-			} else {
-				if (!Menu.globalStyleSheet) {
-					Menu.globalStyleSheet = createStyleSheet();
-				}
-				this.styleSheet = Menu.globalStyleSheet;
-			}
-		}
-		this.styleSheet.textContent = getMenuWidgetCSS(style, isInShadowDOM(container));
 	}
 
 	private styleScrollElement(scrollElement: HTMLElement, style: IMenuStyles): void {
@@ -552,7 +538,8 @@ class BaseMenuActionViewItem extends BaseActionViewItem {
 			}
 		}
 
-		this.check = append(this.item, $('span.menu-item-check' + ThemeIcon.asCSSSelector(Codicon.menuSelection)));
+		this.check = append(this.item, $('span.menu-item-check'));
+		this.check.append(renderIcon(Icons.check));
 		this.check.setAttribute('role', 'none');
 
 		this.label = append(this.item, $('span.action-label'));
@@ -777,7 +764,8 @@ class SubmenuMenuActionViewItem extends BaseMenuActionViewItem {
 			this.item.tabIndex = 0;
 			this.item.setAttribute('aria-haspopup', 'true');
 			this.updateAriaExpanded('false');
-			this.submenuIndicator = append(this.item, $('span.submenu-indicator' + ThemeIcon.asCSSSelector(Codicon.menuSubmenu)));
+			this.submenuIndicator = append(this.item, $('span.submenu-indicator'));
+			this.submenuIndicator.append(renderIcon(Icons.chevronRight));
 			this.submenuIndicator.setAttribute('aria-hidden', 'true');
 		}
 

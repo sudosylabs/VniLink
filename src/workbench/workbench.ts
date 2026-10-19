@@ -5,6 +5,7 @@ import { errorHandler, isCancellationError, setUnexpectedErrorHandler } from '..
 import { IWorkbenchConfigurationService } from './services/configuration/configurationService.js';
 import { IEngineService } from '../platform/engine/common/engineService.js';
 import { getSingletonServiceDescriptors } from '../platform/instantiation/common/extensions.js';
+import { ILayoutService } from '../platform/layout/browser/layoutService.js';
 import { IInstantiationService, type ServicesAccessor } from '../platform/instantiation/common/instantiation.js';
 import { InstantiationService } from '../platform/instantiation/common/instantiationService.js';
 import type { ServiceCollection } from '../platform/instantiation/common/serviceCollection.js';
@@ -76,6 +77,7 @@ export class Workbench extends Layout {
 	}
 
 	private initServices(): InstantiationService {
+		this.serviceCollection.set(ILayoutService, this);
 		for (const [id, descriptor] of getSingletonServiceDescriptors()) {
 			this.serviceCollection.set(id, descriptor);
 		}

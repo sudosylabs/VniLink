@@ -39,6 +39,7 @@ export const Icons = Object.freeze({
 	fillView: 'fillView',
 	fitToView: 'fitToView',
 	stop: 'stop',
+	check: 'check',
 
 	close: 'close',
 	minimize: 'minimize',

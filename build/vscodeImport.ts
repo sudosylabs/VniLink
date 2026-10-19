@@ -123,12 +123,18 @@ function checkoutUrl(directory: string): URL {
 	return new URL(`${directory.replace(/\/$/, '')}/`, 'file://');
 }
 
-/** Copies `roots` and every upstream file they reach that the repository does not already contain. */
-export async function importSources(upstreamDirectory: string, roots: readonly string[]): Promise<string[]> {
+/**
+ * Copies `roots` and every upstream file they reach that the repository does
+ * not already contain. An application module at an upstream path (such as
+ * `defaultStyles.ts`) is the import's boundary: it is neither overwritten nor
+ * followed, and is reported in `boundaries`.
+ */
+export async function importSources(upstreamDirectory: string, roots: readonly string[]): Promise<{ copied: string[]; boundaries: string[] }> {
 	const upstream = checkoutUrl(upstreamDirectory);
 	const manifest = await readManifest(upstream);
 	const known = new Set(manifest.files.map(file => file.path));
 	const copies = new Map<string, { readonly upstreamPath: string; readonly content: string }>();
+	const boundaries = new Set<string>();
 	const pending = [...roots];
 	const seen = new Set<string>();
 	while (pending.length) {
@@ -142,8 +148,12 @@ export async function importSources(upstreamDirectory: string, roots: readonly s
 		if (!known.has(target)) {
 			const flattened = /\.(ts|js|css)$/.test(path) ? flattenSource(content) : content;
 			if (existsSync(new URL(target, root)) && await readFile(new URL(target, root), 'utf8') !== flattened) {
-				// An application file owns this path; never overwrite it silently.
-				throw new Error(`${target} exists but is not a recorded upstream copy`);
+				if (roots.includes(path)) {
+					throw new Error(`${target} exists but is not a recorded upstream copy`);
+				}
+				// An application module owns this path; copies import it as it is.
+				boundaries.add(target);
+				continue;
 			}
 			copies.set(target, { upstreamPath: path, content: flattened });
 		}
@@ -179,7 +189,7 @@ export async function importSources(upstreamDirectory: string, roots: readonly s
 		}
 	}
 	await writeFile(tsconfigUrl, `${JSON.stringify(tsconfig, null, 2)}\n`);
-	return copied;
+	return { copied, boundaries: [...boundaries].sort() };
 }
 
 /** Re-derives entry points and dependency edges after application imports change. */
@@ -234,8 +244,11 @@ const usage = `Usage:
 export async function vscodeCommand(args: readonly string[]): Promise<void> {
 	const [command, ...rest] = args;
 	if (command === 'import' && rest.length > 1) {
-		const copied = await importSources(rest[0], rest.slice(1));
+		const { copied, boundaries } = await importSources(rest[0], rest.slice(1));
 		console.log(`Copied ${String(copied.length)} upstream files.`);
+		for (const boundary of boundaries) {
+			console.log(`Kept application module ${boundary}; check that it provides what the copies import.`);
+		}
 	} else if (command === 'adapt' && rest.length) {
 		const upstreamStyle = rest.includes('--upstream-style');
 		const paths = rest.filter(arg => arg !== '--upstream-style');

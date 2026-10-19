@@ -81,6 +81,8 @@ import fitToViewOutlined from '@phosphor-icons/core/assets/regular/arrows-in-sim
 import fitToViewFilled from '@phosphor-icons/core/assets/fill/arrows-in-simple-fill.svg';
 import stopOutlined from '@phosphor-icons/core/assets/regular/stop.svg';
 import stopFilled from '@phosphor-icons/core/assets/fill/stop-fill.svg';
+import checkOutlined from '@phosphor-icons/core/assets/regular/check.svg';
+import checkFilled from '@phosphor-icons/core/assets/fill/check-fill.svg';
 
 // The only place that knows the icon provider and its filenames.
 const assets: Record<IconId, Record<IconVariant, string>> = {
@@ -110,6 +112,7 @@ const assets: Record<IconId, Record<IconVariant, string>> = {
 	fillView: { outlined: fillViewOutlined, filled: fillViewFilled },
 	fitToView: { outlined: fitToViewOutlined, filled: fitToViewFilled },
 	stop: { outlined: stopOutlined, filled: stopFilled },
+	check: { outlined: checkOutlined, filled: checkFilled },
 	devices: { outlined: devicesOutlined, filled: devicesFilled },
 	remoteDesktop: { outlined: remoteDesktopOutlined, filled: remoteDesktopFilled },
 	refresh: { outlined: refreshOutlined, filled: refreshFilled },

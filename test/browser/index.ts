@@ -5,6 +5,7 @@ import { verifyWorkbenchLifecycle } from './workbench.js';
 import { verifyAccess } from './access.js';
 import { verifyCamera } from './camera.js';
 import { verifyConnection } from './connection.js';
+import { ContextMenuFixture, verifyContextMenu } from './contextMenu.js';
 import { verifyDataChannels } from './dataChannels.js';
 import { showThemedDialog, verifyDialogs } from './dialogs.js';
 import { verifyHomeLifecycle } from './home.js';
@@ -16,6 +17,7 @@ import { verifyTerminal } from './terminal.js';
 
 export class BrowserScenarios {
 	private deviceFixture: DevicePageFixture | undefined;
+	private contextMenuFixture: ContextMenuFixture | undefined;
 
 	public showDeviceFixture(state: DeviceFixtureState): void {
 		this.clearDeviceFixture();
@@ -44,13 +46,28 @@ export class BrowserScenarios {
 		}
 	}
 
+	/** Opens a context menu for screenshots; `closeContextMenuFixture` cancels it with Escape. */
+	public showContextMenuFixture(): void {
+		this.contextMenuFixture?.dispose();
+		this.contextMenuFixture = new ContextMenuFixture();
+		this.contextMenuFixture.show();
+	}
+
+	public closeContextMenuFixture(): void {
+		for (const type of ['keydown', 'keyup']) {
+			document.activeElement?.dispatchEvent(new KeyboardEvent(type, { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+		}
+		this.contextMenuFixture?.dispose();
+		this.contextMenuFixture = undefined;
+	}
+
 	public clearDeviceFixture(): void {
 		this.deviceFixture?.dispose();
 		this.deviceFixture = undefined;
 	}
 
 	private readonly scenarios = new Map<string, () => unknown>([
-		['workbench', verifyWorkbenchLifecycle], ['access', verifyAccess], ['camera', verifyCamera], ['connection', verifyConnection], ['data-channels', verifyDataChannels],
+		['workbench', verifyWorkbenchLifecycle], ['access', verifyAccess], ['camera', verifyCamera], ['connection', verifyConnection], ['context-menu', verifyContextMenu], ['data-channels', verifyDataChannels],
 		['devices', verifyDevices], ['dialogs', verifyDialogs], ['device-pairing', verifyPairingPopover], ['device-screenshot', verifyDeviceScreenshot], ['home', verifyHomeLifecycle], ['icons', verifyIcons],
 		['media-settings', verifyMediaSettings], ['remote-desktop', verifyRemoteDesktop], ['settings', verifySettingsPages], ['tabs', verifyTabs], ['terminal', verifyTerminal],
 	]);

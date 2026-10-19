@@ -8,6 +8,9 @@ import { IContextKeyService } from '../platform/contextkey/common/contextkey.js'
 import { ContextKeyService } from '../platform/contextkey/browser/contextKeyService.js';
 import { IMenuService } from '../platform/actions/common/actions.js';
 import { MenuService } from '../platform/actions/common/menuService.js';
+import { IContextMenuService, IContextViewService } from '../platform/contextview/browser/contextView.js';
+import { ContextMenuService } from '../platform/contextview/browser/contextMenuService.js';
+import { ContextViewService } from '../platform/contextview/browser/contextViewService.js';
 import '../platform/recording/electron-browser/recordingService.js';
 import '../platform/theme/browser/themeService.js';
 import './services/application/applicationServiceImpl.js';
@@ -33,6 +36,10 @@ import './services/dialogs/dialogServiceImpl.js';
 registerSingleton(IContextKeyService, ContextKeyService, InstantiationType.Delayed);
 
 registerSingleton(IMenuService, MenuService, InstantiationType.Delayed);
+
+registerSingleton(IContextViewService, ContextViewService, InstantiationType.Delayed);
+
+registerSingleton(IContextMenuService, ContextMenuService, InstantiationType.Delayed);
 
 //#endregion
 

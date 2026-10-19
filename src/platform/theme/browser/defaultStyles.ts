@@ -2,6 +2,7 @@ import type { IButtonStyles } from '../../../base/browser/ui/button/button.js';
 import type { IDialogStyles } from '../../../base/browser/ui/dialog/dialog.js';
 import type { IInputBoxStyles } from '../../../base/browser/ui/inputbox/inputBox.js';
 import type { IListStyles } from '../../../base/browser/ui/list/listWidget.js';
+import type { IMenuStyles } from '../../../base/browser/ui/menu/menu.js';
 import type { ICheckboxStyles } from '../../../base/browser/ui/toggle/toggle.js';
 
 /**
@@ -91,4 +92,23 @@ export const defaultListStyles: IListStyles = {
 	treeStickyScrollShadow: undefined,
 	tableColumnsBorder: undefined,
 	tableOddRowsBackgroundColor: undefined,
+};
+
+/**
+ * Menus float over the window like the dialog; the item under the pointer or
+ * keyboard is drawn in the accent, as the system's own menus are.
+ */
+export const defaultMenuStyles: IMenuStyles = {
+	shadowColor: undefined,
+	borderColor: 'var(--line)',
+	foregroundColor: 'var(--text)',
+	backgroundColor: 'var(--surface-raised)',
+	selectionForegroundColor: 'var(--on-accent)',
+	selectionBackgroundColor: 'var(--accent)',
+	selectionBorderColor: undefined,
+	separatorColor: 'var(--line)',
+	scrollbarShadow: undefined,
+	scrollbarSliderBackground: undefined,
+	scrollbarSliderHoverBackground: undefined,
+	scrollbarSliderActiveBackground: undefined,
 };
