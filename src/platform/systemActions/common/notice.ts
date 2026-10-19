@@ -11,6 +11,8 @@ export type NoticeAnswer = 'cancel' | 'now';
 export const NOTICE_SHOW_CHANNEL = 'vnilink:notice-show';
 
 export const NOTICE_RESPOND_CHANNEL = 'vnilink:notice-respond';
+/** The window's backdrop, sent at load and whenever it changes; see `WindowMaterial`. */
+export const NOTICE_MATERIAL_CHANNEL = 'vnilink:notice-material';
 
 /** The page the notice window loads. */
 export const NOTICE_URL = 'vnilink://app/notice.html';

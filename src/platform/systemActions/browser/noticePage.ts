@@ -7,12 +7,14 @@ import { renderIcon } from '../../../base/browser/ui/icon/icon.js';
 import { Icons } from '../../../base/common/icons.js';
 import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { defaultButtonStyles } from '../../theme/browser/defaultStyles.js';
+import type { WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
 import type { NoticeAnswer, NoticeContent } from '../common/notice.js';
 import { noticeCountdown, noticeTitle } from '../common/noticeText.js';
 
 /** The notice window's preload API. */
 export interface NoticeBridge {
 	onShow(listener: (content: NoticeContent) => void): void;
+	onMaterial(listener: (material: WindowBackgroundMaterial) => void): void;
 	respond(answer: NoticeAnswer): void;
 }
 
@@ -33,6 +35,10 @@ export class NoticePage extends Disposable {
 		private readonly now: () => number = Date.now,
 	) {
 		super();
+		// The window's backdrop shows through only where the page is transparent, as in the workbench.
+		bridge.onMaterial(material => {
+			container.ownerDocument.documentElement.dataset.windowMaterial = material;
+		});
 		bridge.onShow(content => {
 			this.render(content);
 		});

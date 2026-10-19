@@ -66,6 +66,8 @@ class SmokeSuite {
 				assert.equal(window.webContents.getURL(), NOTICE_URL);
 				assert.equal(await window.webContents.executeJavaScript(`document.querySelector('#notice-title')?.textContent`), 'Studio Mac wants to restart this computer');
 				assert.equal(await window.webContents.executeJavaScript(`document.activeElement?.textContent`), 'Cancel', 'Cancel is not focused');
+				// The workbench's backdrop, or none where the system cannot draw one.
+				assert.match(String(await window.webContents.executeJavaScript(`document.documentElement.dataset.windowMaterial`)), /^(none|vibrancy|glass|mica)$/);
 				const first = await detail(window);
 				assert.match(String(first), /^Restarting in (30|29) s\. Save your work, or cancel\.$/);
 				await new Promise(resolve => setTimeout(resolve, 1300));

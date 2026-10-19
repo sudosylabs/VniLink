@@ -76,6 +76,19 @@ body {
 	outline-offset: 2px;
 }
 
+/* Over Liquid Glass, vibrancy or Mica, the backdrop is the surface; the window draws its own edge. */
+:root[data-window-material='vibrancy'] body {
+	background: var(--native-chrome);
+}
+
+:root:is([data-window-material='glass'], [data-window-material='mica']) body {
+	background: transparent;
+}
+
+:root:is([data-window-material='vibrancy'], [data-window-material='glass'], [data-window-material='mica']) .notice {
+	border-color: transparent;
+}
+
 @media (forced-colors: active) {
 	.notice {
 		border-color: CanvasText;

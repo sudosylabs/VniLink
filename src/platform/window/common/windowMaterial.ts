@@ -5,6 +5,10 @@ export const windowPlatform = isMacintosh ? 'darwin' : isWindows ? 'win32' : 'li
 /** `glass` is macOS Liquid Glass (macOS 26 and later); `vibrancy` is its fallback. */
 export type WindowBackgroundMaterial = 'none' | 'vibrancy' | 'glass' | 'mica';
 
+export function isWindowBackgroundMaterial(value: unknown): value is WindowBackgroundMaterial {
+	return value === 'none' || value === 'vibrancy' || value === 'glass' || value === 'mica';
+}
+
 /** Native backdrops are optional; accessibility preferences take precedence. */
 export function resolveWindowMaterial(platform: string, osRelease: string, reducedTransparency: boolean, highContrast: boolean): WindowBackgroundMaterial {
 	if (reducedTransparency || highContrast) {

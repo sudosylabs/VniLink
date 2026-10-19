@@ -1,9 +1,10 @@
 /**
- * Preload of the restart notice window. It exposes two calls on the
+ * Preload of the restart notice window. It exposes three calls on the
  * notice's own channels and nothing of the workbench's IPC.
  */
 import { contextBridge, ipcRenderer } from 'electron';
-import { isNoticeAnswer, isNoticeContent, NOTICE_RESPOND_CHANNEL, NOTICE_SHOW_CHANNEL, type NoticeContent } from './platform/systemActions/common/notice.js';
+import { isNoticeAnswer, isNoticeContent, NOTICE_MATERIAL_CHANNEL, NOTICE_RESPOND_CHANNEL, NOTICE_SHOW_CHANNEL, type NoticeContent } from './platform/systemActions/common/notice.js';
+import { isWindowBackgroundMaterial, type WindowBackgroundMaterial } from './platform/window/common/windowMaterial.js';
 
 if (!process.sandboxed || !process.contextIsolated) {
 	throw new Error('Renderer isolation required');
@@ -18,6 +19,14 @@ contextBridge.exposeInMainWorld('vnilinkNotice', {
 			if (!shown && isNoticeContent(content)) {
 				shown = true;
 				listener(content);
+			}
+		});
+	},
+	/** Receives the window's backdrop, now and on every change. */
+	onMaterial(listener: (material: WindowBackgroundMaterial) => void): void {
+		ipcRenderer.on(NOTICE_MATERIAL_CHANNEL, (_event, material: unknown) => {
+			if (isWindowBackgroundMaterial(material)) {
+				listener(material);
 			}
 		});
 	},
