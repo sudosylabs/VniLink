@@ -103,8 +103,9 @@ impl HostCameraFactory for MacCameraFactory {
             .spawn(move || {
                 let run =
                     autoreleasepool(|_| capture(config, source.clone(), &ready, &worker_startup));
-                if run.is_err() {
-                    let _ = ready.try_send(Err(Error::Unsupported("AVFoundation camera")));
+                if let Err(error) = run {
+                    // The cause, such as missing permission or no usable format, reaches availability.
+                    let _ = ready.try_send(Err(error));
                     source.fail();
                 }
                 source.close();
@@ -201,11 +202,40 @@ struct CaptureGuard {
 }
 impl Drop for CaptureGuard {
     fn drop(&mut self) {
-        unsafe {
+        // A session left mid-configuration by a refused setting may throw
+        // again here; the engine outlives a camera that could not stop.
+        let _ = objc2::exception::catch(std::panic::AssertUnwindSafe(|| unsafe {
             self.session.stopRunning();
             self.output.setSampleBufferDelegate_queue(None, None);
-        }
+        }));
     }
+}
+/// The whole frame rate a range offers nearest `requested`. Ranges are
+/// reported in floating point (30 fps as 30.00003), so the bounds are
+/// rounded with a small tolerance before a rate is taken from them.
+fn frame_rate_in(min: f64, max: f64, requested: u16) -> Option<u16> {
+    let min = (min - 0.01).ceil().max(1.0);
+    let max = (max + 0.01).floor().min(60.0);
+    (min.is_finite() && max.is_finite() && min <= max)
+        .then(|| f64::from(requested).clamp(min, max) as u16)
+}
+/// Makes `format` the device's format at a steady frame `duration`, one of
+/// the format's own ranges.
+unsafe fn set_format(
+    device: &AVCaptureDevice,
+    format: &AVCaptureDeviceFormat,
+    duration: CMTime,
+) -> bool {
+    if unsafe { device.lockForConfiguration() }.is_err() {
+        return false;
+    }
+    unsafe {
+        device.setActiveFormat(format);
+        device.setActiveVideoMinFrameDuration(duration);
+        device.setActiveVideoMaxFrameDuration(duration);
+        device.unlockForConfiguration();
+    }
+    true
 }
 fn capture(
     mut config: CameraConfig,
@@ -248,19 +278,31 @@ fn capture(
             continue;
         }
         for range in unsafe { format.videoSupportedFrameRateRanges() }.iter() {
-            let min = unsafe { range.minFrameRate() }.ceil().max(1.0);
-            let max = unsafe { range.maxFrameRate() }.floor().min(60.0);
-            if !min.is_finite() || !max.is_finite() || min > max {
+            let Some(fps) = frame_rate_in(
+                unsafe { range.minFrameRate() },
+                unsafe { range.maxFrameRate() },
+                config.fps,
+            ) else {
                 continue;
-            }
-            let fps = f64::from(config.fps).clamp(min, max) as u16;
+            };
             let score = u32::from(width.abs_diff(config.width))
                 + u32::from(height.abs_diff(config.height))
                 + u32::from(fps.abs_diff(config.fps)) * 8;
-            choices.push((score, format.clone(), width, height, fps));
+            // The device accepts only durations inside the range it reports,
+            // and throws for any other: at a bound, use the bound itself.
+            let duration = unsafe {
+                if f64::from(fps) >= range.maxFrameRate() - 0.01 {
+                    range.minFrameDuration()
+                } else if f64::from(fps) <= range.minFrameRate() + 0.01 {
+                    range.maxFrameDuration()
+                } else {
+                    CMTime::new(1, i32::from(fps))
+                }
+            };
+            choices.push((score, format.clone(), width, height, fps, duration));
         }
     }
-    let (_, format, width, height, fps) = choices
+    let (_, format, width, height, fps, duration) = choices
         .into_iter()
         .min_by_key(|choice| choice.0)
         .ok_or(Error::Unsupported("camera resolution or frame rate"))?;
@@ -286,44 +328,61 @@ fn capture(
     let session = unsafe { AVCaptureSession::new() };
     let output = unsafe { AVCaptureVideoDataOutput::new() };
     let guard = CaptureGuard { session, output };
-    unsafe {
-        let input = AVCaptureDeviceInput::deviceInputWithDevice_error(&device)
-            .map_err(|_| Error::Unsupported("camera input"))?;
-        guard.session.beginConfiguration();
-        if !guard.session.canAddInput(&input) || !guard.session.canAddOutput(&guard.output) {
-            guard.session.commitConfiguration();
-            return Err(Error::Unsupported("camera session"));
-        }
-        guard.session.addInput(&input);
-        guard.session.addOutput(&guard.output);
-        if device.lockForConfiguration().is_err() {
-            guard.session.commitConfiguration();
-            return Err(Error::Unsupported("camera configuration lock"));
-        }
-        device.setActiveFormat(&format);
-        device.setActiveVideoMinFrameDuration(CMTime::new(1, i32::from(config.fps)));
-        device.setActiveVideoMaxFrameDuration(CMTime::new(1, i32::from(config.fps)));
-        device.unlockForConfiguration();
-        let settings: Retained<NSDictionary<NSString, AnyObject>> = NSDictionary::from_slices(
-            &[&*NSString::from_str("PixelFormatType")],
-            &[&*NSNumber::new_u32(kCVPixelFormatType_32BGRA) as &AnyObject],
-        );
-        guard.output.setVideoSettings(Some(&settings));
-        guard.output.setAlwaysDiscardsLateVideoFrames(true);
-        guard.output.setSampleBufferDelegate_queue(
-            Some(ProtocolObject::from_ref(&*delegate)),
-            Some(&queue),
-        );
-        guard.session.commitConfiguration();
-        if source.is_cancelled() {
-            return Ok(());
-        }
-        startup.check()?;
-        guard.session.startRunning();
-        startup.check()?;
-        if !guard.session.isRunning() {
-            return Err(Error::Unsupported("camera startup"));
-        }
+    // AVFoundation throws for a setting a device refuses; that must fail
+    // this camera, not unwind through Rust and abort the engine.
+    let configured =
+        objc2::exception::catch(std::panic::AssertUnwindSafe(|| -> Result<bool, Error> {
+            unsafe {
+                let input = AVCaptureDeviceInput::deviceInputWithDevice_error(&device)
+                    .map_err(|_| Error::Unsupported("camera input"))?;
+                guard.session.beginConfiguration();
+                if !guard.session.canAddInput(&input) || !guard.session.canAddOutput(&guard.output)
+                {
+                    guard.session.commitConfiguration();
+                    return Err(Error::Unsupported("camera session"));
+                }
+                guard.session.addInput(&input);
+                guard.session.addOutput(&guard.output);
+                // Setting the format makes the session's preset follow it
+                // (macOS refuses an explicit InputPriority preset); the
+                // format is applied again after start, which can reset it.
+                if !set_format(&device, &format, duration) {
+                    guard.session.commitConfiguration();
+                    return Err(Error::Unsupported("camera configuration lock"));
+                }
+                let settings: Retained<NSDictionary<NSString, AnyObject>> =
+                    NSDictionary::from_slices(
+                        &[&*NSString::from_str("PixelFormatType")],
+                        &[&*NSNumber::new_u32(kCVPixelFormatType_32BGRA) as &AnyObject],
+                    );
+                guard.output.setVideoSettings(Some(&settings));
+                guard.output.setAlwaysDiscardsLateVideoFrames(true);
+                guard.output.setSampleBufferDelegate_queue(
+                    Some(ProtocolObject::from_ref(&*delegate)),
+                    Some(&queue),
+                );
+                guard.session.commitConfiguration();
+                if source.is_cancelled() {
+                    return Ok(false);
+                }
+                startup.check()?;
+                guard.session.startRunning();
+                startup.check()?;
+                if !guard.session.isRunning() {
+                    return Err(Error::Unsupported("camera startup"));
+                }
+                // Starting may still reset the device; apply the format again if so.
+                if device.activeFormat() != format && !set_format(&device, &format, duration) {
+                    return Err(Error::Unsupported("camera configuration lock"));
+                }
+            }
+            Ok(true)
+        }));
+    match configured {
+        Ok(Ok(true)) => {}
+        Ok(Ok(false)) => return Ok(()),
+        Ok(Err(error)) => return Err(error),
+        Err(_) => return Err(Error::Unsupported("camera refused its configuration")),
     }
     let mut reported = false;
     let mut last = Instant::now();
@@ -334,6 +393,26 @@ fn capture(
         match receiver.recv_timeout(Duration::from_millis(25)) {
             Ok(frame) => {
                 last = Instant::now();
+                // The camera's buffers decide the picture size: a device may
+                // deliver another size than the format chosen above. The
+                // stream reports its size with the first picture, so only a
+                // change after that is refused.
+                if (frame.width(), frame.height()) != (config.width, config.height) {
+                    if reported || frame.width() % 2 != 0 || frame.height() % 2 != 0 {
+                        return Err(Error::Unsupported("camera picture size changed"));
+                    }
+                    config.width = frame.width();
+                    config.height = frame.height();
+                    config.validate()?;
+                    encoder = MacEncoder::open(
+                        config.width,
+                        config.height,
+                        config.fps as u8,
+                        BITRATE,
+                        false,
+                    )
+                    .map_err(|_| Error::Unsupported("camera H.264 encoder"))?;
+                }
                 let sample = encoder
                     .encode(
                         &frame,
@@ -369,6 +448,22 @@ fn capture(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn frame_rates_reported_in_floating_point_keep_their_whole_rate() {
+        // A Logitech C270 reports its fixed 30 fps as 30.00003 and 7.5 fps exactly.
+        assert_eq!(frame_rate_in(30.00003000003, 30.00003000003, 30), Some(30));
+        assert_eq!(
+            frame_rate_in(15.000015000015, 15.000015000015, 30),
+            Some(15)
+        );
+        assert_eq!(frame_rate_in(1.0, 60.0, 30), Some(30));
+        assert_eq!(
+            frame_rate_in(7.500001875000469, 7.500001875000469, 30),
+            None,
+            "no whole rate"
+        );
+        assert_eq!(frame_rate_in(90.0, 120.0, 30), None);
+    }
     #[test]
     fn native_camera_pixel_copy_and_baseline_encode_without_capture() {
         use objc2_core_foundation::CFRetained;
