@@ -345,6 +345,8 @@ fn upload_tree_matches_exactly() {
     assert_eq!(receiver.state, JobState::Complete);
     assert_eq!(sender.state, JobState::Complete);
     assert_eq!(receiver.done_bytes, receiver.total_bytes);
+    // The sender shows what the receiver holds, not only that it finished.
+    assert_eq!(sender.done_bytes, sender.total_bytes);
     assert!(receiver.total_bytes > 9 * 1024 * 1024);
     // Queue rows show the first path plus a count, never raw internals.
     assert!(

@@ -627,6 +627,10 @@ struct Shared {
     /// Job ids currently being advanced, preventing concurrent polls for
     /// the same job from both the background driver and window ticks.
     job_driving: Mutex<std::collections::HashSet<u64>>,
+    /// Advances whenever a job changes: its state, its decision or its
+    /// bytes. Watchers compare it to the last value they saw instead of
+    /// polling every job.
+    job_revision: AtomicU64,
     file_resources: Arc<Mutex<file_resources::Resources>>,
     /// Last-known backend facts per capability, published by adapters and
     /// serve loops. Read by the availability query; never guessed.

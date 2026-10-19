@@ -340,6 +340,7 @@ impl Core {
             job_owner_gate: Mutex::new(()),
             job_cancel: Mutex::new(std::collections::HashMap::new()),
             job_driving: Mutex::new(std::collections::HashSet::new()),
+            job_revision: AtomicU64::new(0),
             file_resources: Arc::new(Mutex::new(file_resources::Resources::default())),
             backend_state: Mutex::new(std::collections::HashMap::new()),
             presence_wake: Mutex::new(HashMap::new()),

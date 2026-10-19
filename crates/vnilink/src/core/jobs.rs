@@ -104,9 +104,59 @@ pub(super) struct JobRecord {
     choices: HashMap<usize, ConflictChoice>,
     apply_remaining: Option<ConflictChoice>,
     pub(super) error: Option<String>,
+    /// Verified bytes of the file arriving now; not saved, since a restart
+    /// resumes that file from the store's own record.
+    #[serde(skip)]
+    in_flight: u64,
 }
 
 impl JobRecord {
+    /// A download of one `size`-byte file, as a receiver holds it.
+    #[cfg(test)]
+    fn test_receiver(id: u64, size: u64) -> Self {
+        Self {
+            owner: None,
+            id,
+            wire_id: id,
+            created_at: retention_now(),
+            peer_key: [0; 32],
+            peer_id: String::new(),
+            direction: JobDirection::Download,
+            sender: false,
+            state: JobState::Transferring,
+            manifest: Some(Manifest {
+                entries: vec![ManifestEntry {
+                    path: "file.bin".to_owned(),
+                    is_dir: false,
+                    hash: [1; 32],
+                    size,
+                    source_mtime_ms: 0,
+                }],
+            }),
+            local_root: 0,
+            local_rel: String::new(),
+            local_pin: None,
+            outgoing: false,
+            skipped_symlinks: 0,
+            file_index: 0,
+            done_bytes: 0,
+            files_done: 0,
+            resumed_files: 0,
+            skipped_files: 0,
+            waiting_file: None,
+            landed: HashMap::new(),
+            choices: HashMap::new(),
+            apply_remaining: None,
+            error: None,
+            in_flight: 0,
+        }
+    }
+
+    /// Bytes done, including the file arriving now.
+    fn done(&self) -> u64 {
+        self.done_bytes.saturating_add(self.in_flight)
+    }
+
     fn files(&self) -> Vec<&ManifestEntry> {
         self.manifest
             .as_ref()
@@ -147,7 +197,7 @@ impl JobRecord {
             sender: self.sender,
             state: self.state,
             total_bytes,
-            done_bytes: self.done_bytes,
+            done_bytes: self.done().min(total_bytes.max(self.done_bytes)),
             files_total,
             files_done: self.files_done,
             resumed_files: self.resumed_files,
@@ -290,6 +340,7 @@ impl Core {
             choices: HashMap::new(),
             apply_remaining: None,
             error: None,
+            in_flight: 0,
         };
         // Announce over the auxiliary stream on the live control session.
         let offer = job::UploadOffer {
@@ -443,6 +494,7 @@ impl Core {
                     choices: HashMap::new(),
                     apply_remaining: None,
                     error: None,
+                    in_flight: 0,
                 },
             );
         }
@@ -549,8 +601,37 @@ impl Core {
             if lock(&core.shared.state).shut_down {
                 break;
             }
-            let _ = core.drive_jobs();
+            core.drive_jobs_apart();
         });
+    }
+
+    /// Advances each active job on a worker of its own, so a large file
+    /// arriving for one job never holds up the others. A job already being
+    /// advanced is left to its worker (`job_driving`).
+    fn drive_jobs_apart(self: &std::sync::Arc<Self>) {
+        let ids: Vec<u64> = {
+            let jobs = lock(&self.shared.jobs);
+            let driving = lock(&self.shared.job_driving);
+            jobs.values()
+                .filter(|record| {
+                    !record.state.is_terminal()
+                        && (record.sender || record.state != JobState::WaitingDecision)
+                        && !driving.contains(&record.id)
+                })
+                .map(|record| record.id)
+                .collect()
+        };
+        for id in ids {
+            let core = self.clone();
+            std::thread::spawn(move || {
+                let _ = core.job_poll(id);
+            });
+        }
+    }
+
+    /// Advances whenever any job changes; see [`Core::job_changes_since`].
+    pub fn job_revision(&self) -> u64 {
+        self.shared.job_revision.load(Ordering::Acquire)
     }
 
     fn check_job_capacity(shared: &Shared) -> Result<(), Error> {
@@ -898,6 +979,8 @@ impl Core {
             if record.state == JobState::Cancelled {
                 drop(jobs);
             } else {
+                // The receiver is the one that knows what has arrived.
+                record.done_bytes = reply.done_bytes;
                 match state {
                     JobState::Complete => {
                         record.state = JobState::Complete;
@@ -1018,6 +1101,7 @@ impl Core {
             }
             record.skipped_files += 1;
             record.done_bytes = record.done_bytes.saturating_add(entry.size);
+            record.in_flight = 0;
             record.file_index += 1;
             drop(jobs);
             save_jobs(&self.shared)?;
@@ -1052,7 +1136,10 @@ impl Core {
             lock(&self.shared.job_cancel).insert(id, stop_tx);
         }
         let hash = iroh_blobs::Hash::from_bytes(entry.hash);
-        let fetch = self.blob_fetch_streamed(&peer_id, hash, None, Some(stop_rx));
+        let (progress, arriving) = std::sync::mpsc::channel();
+        let watcher = follow_arrival(self.shared.jobs.clone(), self.shared.clone(), id, arriving);
+        let fetch = self.blob_fetch_streamed(&peer_id, hash, Some(progress), Some(stop_rx));
+        let _ = watcher.join();
         lock(&self.shared.job_cancel).remove(&id);
         // A cancel or interruption during fetch preserves its state even if bytes arrived.
         {
@@ -1128,6 +1215,7 @@ impl Core {
             }
             record.files_done += 1;
             record.done_bytes = record.done_bytes.saturating_add(entry.size);
+            record.in_flight = 0;
             record.file_index += 1;
             drop(jobs);
         }
@@ -2307,9 +2395,9 @@ pub(super) const ACTIVE_STATES: &[JobState] = &[
 /// Blob store bytes persist for resume efficiency; offers are memory-only and
 /// dropped when no active or resumable job needs the hash (terminal Complete
 /// or Failed drops orphaned offers; Cancelled/Interrupted retain for resume).
-/// Manifests bound each job (5000 files, 1 GiB total, 256 MiB/file) and
-/// `MAX_ACTIVE_JOBS` bounds concurrency, so disk stays proportional to
-/// in-flight plus resumable work, not unbounded history.
+/// Manifests bound each job's file count, free-space admission bounds its
+/// bytes and `MAX_ACTIVE_JOBS` bounds concurrency, so disk stays
+/// proportional to in-flight plus resumable work, not unbounded history.
 
 /// Resumable payload cache: seven days, at most 4 GiB across inactive jobs.
 /// Active work remains protected by the manifest and concurrency limits.
@@ -2755,7 +2843,45 @@ fn interrupt_jobs(shared: &Shared, peer: &[u8; 32], controller_only: bool) {
     let _ = save_jobs(shared);
 }
 
+/// Tells job watchers that something changed.
+pub(super) fn jobs_changed(shared: &Shared) {
+    shared.job_revision.fetch_add(1, Ordering::AcqRel);
+}
+
+/// Copies a file's arriving byte count onto its job, at most four times a
+/// second, until the fetch drops its end of `arriving`.
+fn follow_arrival(
+    jobs: Arc<Mutex<HashMap<u64, JobRecord>>>,
+    shared: Arc<Shared>,
+    id: u64,
+    arriving: std::sync::mpsc::Receiver<u64>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        const EVERY: std::time::Duration = std::time::Duration::from_millis(250);
+        let mut shown = std::time::Instant::now() - EVERY;
+        let mut latest = None;
+        loop {
+            let next = arriving.recv_timeout(EVERY);
+            match next {
+                Ok(bytes) => latest = Some(bytes),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            if let Some(bytes) = latest.filter(|_| shown.elapsed() >= EVERY) {
+                if let Some(record) = lock(&jobs).get_mut(&id) {
+                    record.in_flight = bytes;
+                }
+                jobs_changed(&shared);
+                shown = std::time::Instant::now();
+                latest = None;
+            }
+        }
+    })
+}
+
+/// Saves every job, and tells watchers: each change to a job ends here.
 pub(super) fn save_jobs(shared: &Shared) -> Result<(), Error> {
+    jobs_changed(shared);
     let _writer = lock(&shared.job_save);
     if lock(&shared.blob_dir).is_none() {
         return Ok(());
@@ -2915,6 +3041,7 @@ pub(super) async fn handle_job_request(
             state: JobState::Interrupted.name().to_owned(),
             error: None,
             waiting_file: None,
+            done_bytes: 0,
         };
         reply(send, job::encode(&denied).map_err(|_| ())?).await?;
         return Ok(());
@@ -3082,6 +3209,7 @@ async fn handle_status_query(
             state: JobState::Interrupted.name().to_owned(),
             error: None,
             waiting_file: None,
+            done_bytes: 0,
         };
         reply(send, job::encode(&stale).map_err(|_| ())?).await?;
         return Ok(());
@@ -3111,6 +3239,7 @@ async fn handle_status_query(
                     state: record.state.name().to_owned(),
                     error: record.error.clone(),
                     waiting_file,
+                    done_bytes: record.done(),
                 }
             }
             _ => job::JobStateReply {
@@ -3120,6 +3249,7 @@ async fn handle_status_query(
                 state: JobState::Interrupted.name().to_owned(),
                 error: None,
                 waiting_file: None,
+                done_bytes: 0,
             },
         }
     };
@@ -3768,6 +3898,7 @@ pub(super) async fn handle_upload_offer(
                 choices: HashMap::new(),
                 apply_remaining: None,
                 error: None,
+                in_flight: 0,
             },
         );
         Ok(())
@@ -3917,6 +4048,7 @@ pub(super) async fn handle_download_request(
                         choices: HashMap::new(),
                         apply_remaining: None,
                         error: None,
+                        in_flight: 0,
                     },
                 );
                 Ok((id, manifest, skipped))
@@ -4228,6 +4360,7 @@ mod lifecycle_tests {
             choices: HashMap::new(),
             apply_remaining: None,
             error: None,
+            in_flight: 0,
         }
     }
 
@@ -4491,5 +4624,41 @@ mod crash_staging_tests {
                 b"payload"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod arrival_tests {
+    use super::*;
+
+    /// Bytes arriving mid-file reach the job and tell watchers, without
+    /// waiting for the file to finish.
+    #[test]
+    fn arriving_bytes_show_on_the_job_and_advance_the_revision() {
+        let core = crate::core::Core::boot(
+            crate::core::CoreConfig {
+                listen: crate::core::Listen::Loopback,
+                ..crate::core::CoreConfig::default()
+            },
+            iroh::RelayMode::Disabled,
+        )
+        .unwrap();
+        let shared = core.shared.clone();
+        lock(&shared.jobs).insert(7, JobRecord::test_receiver(7, 1000));
+        let before = core.job_revision();
+        let (progress, arriving) = std::sync::mpsc::channel();
+        let watcher = follow_arrival(shared.jobs.clone(), shared.clone(), 7, arriving);
+        progress.send(400).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while lock(&shared.jobs)[&7].snapshot().done_bytes != 400 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "arriving bytes never showed"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(core.job_revision() > before);
+        drop(progress);
+        watcher.join().unwrap();
     }
 }

@@ -115,6 +115,9 @@ pub struct JobStateReply {
     pub state: String,
     pub error: Option<String>,
     pub waiting_file: Option<String>,
+    /// Bytes the receiver holds, verified, including the file arriving now.
+    #[serde(default)]
+    pub done_bytes: u64,
 }
 
 /// Sender forwards the owner's conflict decision to the receiver that owns

@@ -507,6 +507,11 @@ impl FilesService {
             )
             .map_err(map_error)
     }
+    /// Advances whenever any job changes. Read `jobs` again only when it
+    /// differs from the value last seen.
+    pub fn job_revision(&self) -> Result<u64, FfiError> {
+        Ok(self.core()?.job_revision())
+    }
     pub fn jobs(&self) -> Result<Vec<crate::FfiJobSnapshot>, FfiError> {
         let info = self.inner.info();
         self.core()?
