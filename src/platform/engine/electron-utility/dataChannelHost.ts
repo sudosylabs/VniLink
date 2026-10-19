@@ -226,12 +226,13 @@ export class DataChannelHost {
 		}
 	}
 
-	public fail(): void {
+	/** Ends the channel. `category` is the engine's error category when it refused to open. */
+	public fail(category?: string): void {
 		if (this.closed) {
 			return;
 		}
 		try {
-			this.port.postMessage({ type: 'error', message: 'Data channel unavailable' });
+			this.port.postMessage({ type: 'error', message: 'Data channel unavailable', category });
 		} finally {
 			this.close();
 		}

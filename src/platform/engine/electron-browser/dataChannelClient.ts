@@ -86,7 +86,9 @@ export class DataChannelClient {
 						resolve(new DataChannelClient(port, consume, onError));
 					} else {
 						port.close();
-						reject(new Error('Native data channel unavailable'));
+						// The engine's category (Busy, Unauthorized…) says why it refused; the message stays generic.
+						const category = record(message.data) && typeof message.data.category === 'string' && /^[A-Z][A-Za-z]{1,31}$/.test(message.data.category) ? message.data.category : undefined;
+						reject(new Error(category ? `${category}: Native data channel unavailable` : 'Native data channel unavailable'));
 					}
 				};
 				port.start();

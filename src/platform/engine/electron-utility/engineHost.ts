@@ -4,7 +4,7 @@ import { Emitter } from '../../../base/common/event.js';
 import type { IClientConnectionFilter } from '../../../base/parts/ipc/node/ipc.mp.js';
 import type { MessageEvent } from '../../../base/parts/sandbox/node/electronTypes.js';
 import { isChannelRequest } from '../common/dataChannel.js';
-import { record } from '../common/engine.js';
+import { engineErrorCategory, record } from '../common/engine.js';
 import type { EngineEvent } from '../common/engine.js';
 import type { EngineEventBatch } from '../common/engineService.js';
 import { DataChannelHost } from './dataChannelHost.js';
@@ -148,8 +148,8 @@ export class EngineHost implements IClientConnectionFilter {
 		const media = request.media ? JSON.stringify(request.media) : undefined;
 		void this.engine.openDataChannel(request.kind, request.sessionId, request.generation, request.rows ?? 24, request.columns ?? 80, media).then(native => {
 			channel.start(native);
-		}, () => {
-			channel.fail();
+		}, (error: unknown) => {
+			channel.fail(engineErrorCategory(error));
 		});
 	}
 
