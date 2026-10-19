@@ -6,6 +6,7 @@ import { IEngineService } from '../../../platform/engine/common/engineService.js
 import { isFileJob, isFileJobs, isFileJobUpdate, isFilePage, isFilePlaces, type FileAnswer, type FileConflictChoice, type FileEntry, type FileJob, type FileOperation, type FilePlaces } from '../../../platform/engine/common/files.js';
 import { DataChannelClient } from '../../../platform/engine/electron-browser/dataChannelClient.js';
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
+import { ILogService } from '../../../platform/log/common/log.js';
 import type { FilesPane, FolderLocation } from '../../../platform/state/common/uiState.js';
 import { activeControllerSession } from '../devices/controllerSession.js';
 import { IDeviceService } from '../devices/deviceService.js';
@@ -148,6 +149,7 @@ class FilesSession extends Disposable implements IFilesSession {
 		public readonly deviceId: string,
 		public readonly local: IFilesDisk,
 		private readonly onRetire: (session: FilesSession) => void,
+		private readonly onLost: (reason: string) => void,
 	) {
 		super();
 		this.remote = new RemoteDisk(operation => this.ask(operation));
@@ -194,11 +196,15 @@ class FilesSession extends Disposable implements IFilesSession {
 		this.retireIfIdle();
 	}
 
-	public end(): void {
+	/** Ends the session; `reason` says why for the log, when it wasn't asked to end. */
+	public end(reason?: string): void {
 		if (this.endedValue) {
 			return;
 		}
 		this.endedValue = true;
+		if (reason) {
+			this.onLost(reason);
+		}
 		this.channel?.close();
 		this.channel = undefined;
 		this.endedEmitter.fire();
@@ -287,6 +293,7 @@ export class FilesService implements IFilesService {
 	constructor(
 		@IEngineService private readonly engine: IEngineService,
 		@IDeviceService private readonly devices: IDeviceService,
+		@ILogService private readonly logService: ILogService,
 	) {
 		this.openChannel = (request, consume, onError) => DataChannelClient.open(engine, request, consume, onError);
 		this.local = new LocalDisk(engine);
@@ -337,6 +344,8 @@ export class FilesService implements IFilesService {
 				this.sessions.delete(deviceId);
 			}
 			retired.dispose();
+		}, reason => {
+			this.logService.warn(`Files with ${deviceId} ended: ${reason}`);
 		});
 		try {
 			const channel = await this.openChannel(
@@ -345,8 +354,8 @@ export class FilesService implements IFilesService {
 					session.consume(packet);
 					return Promise.resolve();
 				},
-				() => {
-					session.end();
+				error => {
+					session.end(error.message);
 				},
 			);
 			await session.attach(channel);

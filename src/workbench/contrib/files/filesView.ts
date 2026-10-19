@@ -2,7 +2,7 @@ import * as nls from '../../../nls.js';
 import { $, addDisposableListener, append, EventType } from '../../../base/browser/dom.js';
 import { renderIcon } from '../../../base/browser/ui/icon/icon.js';
 import { Icons } from '../../../base/common/icons.js';
-import { Disposable, DisposableStore } from '../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { isMacintosh, isWindows } from '../../../base/common/platform.js';
 import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
 import type { FilesPane, FolderLocation } from '../../../platform/state/common/uiState.js';
@@ -39,6 +39,9 @@ export class FilesView extends Disposable implements WorkbenchTab {
 	private session: IFilesSession | undefined;
 	private active: FilesPane = 'local';
 	private opening = 0;
+	/** Reconnecting after the connection was lost: attempts so far, and the next one. */
+	private retries = 0;
+	private readonly retry = this._register(new MutableDisposable());
 	/** Each transfer's last state and files done, to see what newly landed. */
 	private readonly landed = new Map<string, { readonly state: string; readonly files: number }>();
 	private readonly refreshTimers = new Map<FilesPane, ReturnType<typeof setTimeout>>();
@@ -108,10 +111,18 @@ export class FilesView extends Disposable implements WorkbenchTab {
 		return `${FilesView.PREFIX}${deviceId}`;
 	}
 
-	/** Opens the other computer's side, or says in its pane why it can't. */
-	private async connect(): Promise<void> {
+	/**
+	 * Opens the other computer's side, or says in its pane why it can't.
+	 * `again` is an attempt after the connection was lost; a lost
+	 * connection is tried again, sooner first, while the tab is open.
+	 */
+	private async connect(again = false): Promise<void> {
 		const attempt = ++this.opening;
-		this.remote.setUnavailable(nls.localize('files.connecting', 'Opening {0}…', this.device.name), '');
+		if (!again) {
+			this.retries = 0;
+			this.retry.clear();
+		}
+		this.remote.setUnavailable(again ? nls.localize('files.reconnecting', 'Reconnecting to {0}…', this.device.name) : nls.localize('files.connecting', 'Opening {0}…', this.device.name), '');
 		const result = await this.filesService.open(this.device.id);
 		if (attempt !== this.opening || this._store.isDisposed) {
 			if ('session' in result) {
@@ -121,10 +132,27 @@ export class FilesView extends Disposable implements WorkbenchTab {
 		}
 		if ('failure' in result) {
 			this.showFailure(result.failure);
+			if (again && result.failure === 'disconnected') {
+				this.scheduleRetry();
+			}
 			return;
 		}
+		this.retries = 0;
 		this.adopt(result.session);
 		void this.remote.start(result.session.remote);
+	}
+
+	/** Tries the connection again: after 1, 2, 5 and 10 seconds, then every 30. */
+	private scheduleRetry(): void {
+		const delays = [1000, 2000, 5000, 10000];
+		const delay = delays.at(this.retries) ?? 30000;
+		this.retries++;
+		const timer = setTimeout(() => {
+			void this.connect(true);
+		}, delay);
+		this.retry.value = toDisposable(() => {
+			clearTimeout(timer);
+		});
 	}
 
 	private adopt(session: IFilesSession): void {
@@ -141,6 +169,7 @@ export class FilesView extends Disposable implements WorkbenchTab {
 		}));
 		this.sessionListeners.add(session.onDidEnd(() => {
 			this.showFailure('disconnected');
+			this.scheduleRetry();
 		}));
 		this.update();
 	}

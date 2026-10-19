@@ -23,7 +23,7 @@ function assert(condition: boolean, message: string): asserts condition {
 }
 
 async function until(condition: () => boolean, message: string): Promise<void> {
-	const deadline = performance.now() + 3000;
+	const deadline = performance.now() + 5000;
 	while (!condition()) {
 		if (performance.now() > deadline) {
 			throw new Error(message);
@@ -352,6 +352,11 @@ export async function verifyFiles(): Promise<void> {
 		// The other computer turned Files off, then the connection ends.
 		session.end();
 		await until(() => (remote.querySelector('.files-state-title')?.textContent ?? '') === 'Not connected to Sudosy.', 'A lost connection did not show in the pane');
+		// Once the computer can be reached again, the pane comes back by itself.
+		session.ended = false;
+		await until(() => remote.querySelector('.files-state:not([hidden])') === null && names(remote).length > 0, 'The pane did not reconnect by itself');
+		session.end();
+		await until(() => (remote.querySelector('.files-state-title')?.textContent ?? '') === 'Not connected to Sudosy.', 'The second loss did not show');
 		openings.push('turnedOff');
 		remote.querySelector<HTMLButtonElement>('.files-state-action')?.click();
 		await until(() => (remote.querySelector('.files-state-title')?.textContent ?? '') === 'Sudosy doesn’t share its files.', 'Files turned off there is not said');

@@ -44,7 +44,8 @@ function fixture({ status = 'available', answer } = {}) {
 			: { type: 'done' },
 	};
 	const devices = { availability: async () => [{ capability: 'files', status }] };
-	const service = new FilesService(engine, devices);
+	const logged = [];
+	const service = new FilesService(engine, devices, { warn: message => logged.push(message) });
 	service.openChannel = async (request, consume, onError) => {
 		const channel = {
 			request, consume, onError, closed: false,
