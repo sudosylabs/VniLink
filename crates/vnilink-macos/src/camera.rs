@@ -19,7 +19,9 @@ use std::{
     time::{Duration, Instant},
 };
 use vnilink::{
-    camera::{CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory},
+    camera::{
+        CameraApproval, CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory,
+    },
     Error,
 };
 use vnilink_media::{EncodeParams, RawFrame, VideoEncoder};
@@ -67,13 +69,11 @@ pub fn camera_devices() -> Result<Vec<CameraDevice>, Error> {
     })
 }
 pub struct MacCameraFactory {
-    approved: Vec<String>,
+    approved: CameraApproval,
 }
 impl MacCameraFactory {
-    pub fn new(approved: Vec<String>) -> Result<Self, Error> {
-        if approved.len() > 32 || approved.iter().any(|s| s.is_empty() || s.len() > 256) {
-            return Err(Error::InvalidSetting("invalid approved camera IDs"));
-        }
+    pub fn new(approved: CameraApproval) -> Result<Self, Error> {
+        approved.validate()?;
         Ok(Self { approved })
     }
 }
@@ -81,7 +81,7 @@ impl HostCameraFactory for MacCameraFactory {
     fn devices(&self) -> Result<Vec<CameraDevice>, Error> {
         Ok(camera_devices()?
             .into_iter()
-            .filter(|d| self.approved.contains(&d.id))
+            .filter(|d| self.approved.allows(&d.id))
             .collect())
     }
     fn open(
@@ -91,7 +91,7 @@ impl HostCameraFactory for MacCameraFactory {
     ) -> Result<CameraBackend, Error> {
         startup.check()?;
         config.validate()?;
-        if !self.approved.contains(&config.device_id) {
+        if !self.approved.allows(&config.device_id) {
             return Err(Error::Unauthorized);
         }
         let source = CameraSource::new();
@@ -436,7 +436,7 @@ mod tests {
     }
     #[test]
     fn native_camera_factory_refuses_unapproved_device_without_capture() {
-        let factory = MacCameraFactory::new(vec![]).unwrap();
+        let factory = MacCameraFactory::new(CameraApproval::Only(vec![])).unwrap();
         assert!(factory.devices().unwrap().is_empty());
         assert!(matches!(
             factory.open(

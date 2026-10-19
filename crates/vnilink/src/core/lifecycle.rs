@@ -298,6 +298,7 @@ impl Core {
             paste_preparing: Mutex::new(std::collections::HashSet::new()),
             paste_nonce: AtomicU64::new(1),
             camera_factory: Mutex::new(None),
+            camera_turned_off: std::sync::atomic::AtomicBool::new(false),
             snapshot_factory: Mutex::new(None),
             snapshot_tap: Mutex::new(None),
             camera_open: Mutex::new(std::collections::HashSet::new()),

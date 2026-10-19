@@ -89,7 +89,7 @@ export class NativeRuntimeService implements INativeRuntimeService {
 		if (!destination) {
 			throw new Error('Recording destination unavailable');
 		}
-		return this.recording({ type: 'startRecording', sessionId: target.id, generation: target.generation, destination, maxBytes: options.maxBytes ?? bytes('recording.maxSegmentSize'), maxDurationMs: options.maxDurationMs ?? String(this.configurationService.getValue<number>('recording.maxSegmentDuration') * 60000), retention: options.retention ?? { maxSegments: this.configurationService.getValue<number>('recording.maxSegments'), maxTotalBytes: bytes('recording.maxTotalSize') } });
+		return this.recording({ type: 'startRecording', sessionId: target.id, generation: target.generation, ...(target.source ? { source: target.source } : {}), destination, maxBytes: options.maxBytes ?? bytes('recording.maxSegmentSize'), maxDurationMs: options.maxDurationMs ?? String(this.configurationService.getValue<number>('recording.maxSegmentDuration') * 60000), retention: options.retention ?? { maxSegments: this.configurationService.getValue<number>('recording.maxSegments'), maxTotalBytes: bytes('recording.maxTotalSize') } });
 	}
 
 	public recordingStatus(id: string): Promise<Readonly<RecordingStatus>> {

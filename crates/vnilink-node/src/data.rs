@@ -22,6 +22,28 @@ fn retire_service(core: &VnilinkCore, id: u64, generation: u64) {
 /// Video and input share one Desktop owner, without holding the command mutex.
 #[derive(Default)]
 pub(crate) struct DesktopChannels(Mutex<HashMap<(u64, u64), Weak<DesktopOwner>>>);
+/// The camera stream each connection last opened, so a recording can be
+/// started on the pictures the viewer is already receiving.
+#[derive(Default)]
+pub(crate) struct CameraChannels(Mutex<HashMap<(u64, u64), Weak<CameraService>>>);
+impl CameraChannels {
+    fn register(&self, session: u64, generation: u64, camera: &Arc<CameraService>) {
+        if let Ok(mut cameras) = self.0.lock() {
+            cameras.retain(|_, camera| camera.strong_count() > 0);
+            cameras.insert((session, generation), Arc::downgrade(camera));
+        }
+    }
+    /// The live camera stream of this connection.
+    pub(crate) fn get(&self, session: u64, generation: u64) -> Result<Arc<CameraService>> {
+        self.0
+            .lock()
+            .map_err(|_| Error::from_reason("Camera channels unavailable"))?
+            .get(&(session, generation))
+            .and_then(Weak::upgrade)
+            .filter(|camera| !camera.is_cancelled())
+            .ok_or_else(|| Error::from_reason("NoSession: no camera is open on this connection"))
+    }
+}
 pub(super) struct DesktopOwner {
     core: Arc<VnilinkCore>,
     pub(super) service: Arc<vnilink_app::DesktopService>,
@@ -267,10 +289,24 @@ impl DataChannel {
                 .camera
                 .lock()
                 .map_err(|_| Error::from_reason("Channel unavailable"))?;
-            return Ok(camera.as_ref().and_then(|camera| camera.poll().map(|frame| {
+            let Some(camera) = camera.as_ref() else {
+                return Ok(None);
+            };
+            if let Some(frame) = camera.poll() {
                 let config = camera.config();
-                DataEvent { kind: "camera".into(), data: Some(frame.payload.into()), metadata: serde_json::json!({"codec":frame.codec.label(),"keyframe":frame.keyframe,"timestampUs":frame.timestamp_us.to_string(),"width":config.width,"height":config.height}).to_string() }
-            })));
+                return Ok(Some(DataEvent { kind: "camera".into(), data: Some(frame.payload.into()), metadata: serde_json::json!({"codec":frame.codec.label(),"keyframe":frame.keyframe,"timestampUs":frame.timestamp_us.to_string(),"width":config.width,"height":config.height}).to_string() }));
+            }
+            // The last packet says why the picture stopped.
+            return Ok(camera.take_end().map(|end| DataEvent {
+                kind: "exited".into(),
+                data: None,
+                metadata: serde_json::json!({ "reason": match end {
+                    vnilink_app::FfiCameraEnd::Stopped => "stopped",
+                    vnilink_app::FfiCameraEnd::Withdrawn => "withdrawn",
+                    vnilink_app::FfiCameraEnd::Lost => "lost",
+                } })
+                .to_string(),
+            }));
         }
         if self.kind == "snapshot" {
             let mut slot = self
@@ -653,6 +689,7 @@ pub enum MediaConfig {
 pub struct OpenChannelTask {
     core: Arc<VnilinkCore>,
     desktops: Arc<DesktopChannels>,
+    cameras: Arc<CameraChannels>,
     id: u64,
     generation: u64,
     kind: String,
@@ -759,7 +796,10 @@ impl Task for OpenChannelTask {
                     fps: *fps,
                 },
             ) {
-                Ok(service) => Some(service),
+                Ok(service) => {
+                    self.cameras.register(self.id, self.generation, &service);
+                    Some(service)
+                }
                 Err(error) => {
                     retire_service(&self.core, owner.id, owner.generation);
                     return Err(core_error(error));
@@ -894,6 +934,7 @@ impl Engine {
         Ok(AsyncTask::new(OpenChannelTask {
             core: self.core.clone(),
             desktops: self.desktops.clone(),
+            cameras: self.cameras.clone(),
             id: parse_id(&session_id, "Invalid session ID")?,
             generation: parse_id(&generation, "Invalid generation")?,
             kind,
@@ -1082,6 +1123,7 @@ mod tests {
         let mut open = OpenChannelTask {
             core: controller.clone(),
             desktops,
+            cameras: Arc::new(CameraChannels::default()),
             id: session.id,
             generation: session.generation,
             kind: "video".into(),
@@ -1287,6 +1329,7 @@ mod tests {
         let mut task = OpenChannelTask {
             core: controller.clone(),
             desktops: Arc::new(DesktopChannels::default()),
+            cameras: Arc::new(CameraChannels::default()),
             id: active.id,
             generation: active.generation,
             kind: "terminal".into(),
@@ -1334,6 +1377,7 @@ mod tests {
         let mut file_open = OpenChannelTask {
             core: controller.clone(),
             desktops: Arc::new(DesktopChannels::default()),
+            cameras: Arc::new(CameraChannels::default()),
             id: active.id,
             generation: active.generation,
             kind: "files".into(),

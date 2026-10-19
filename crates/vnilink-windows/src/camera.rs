@@ -10,7 +10,9 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 use vnilink::{
-    camera::{CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory},
+    camera::{
+        CameraApproval, CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory,
+    },
     BackendStartup, Error,
 };
 use vnilink_media::{EncodeParams, RawFrame, VideoEncoder};
@@ -136,13 +138,11 @@ pub fn camera_devices() -> Result<Vec<CameraDevice>, Error> {
         .map_err(|_| Error::Unsupported("camera enumeration failed"))?
 }
 pub struct WindowsCameraFactory {
-    approved: Vec<String>,
+    approved: CameraApproval,
 }
 impl WindowsCameraFactory {
-    pub fn new(approved: Vec<String>) -> Result<Self, Error> {
-        if approved.len() > 32 || approved.iter().any(|id| id.is_empty() || id.len() > 256) {
-            return Err(Error::InvalidSetting("invalid approved camera IDs"));
-        }
+    pub fn new(approved: CameraApproval) -> Result<Self, Error> {
+        approved.validate()?;
         Ok(Self { approved })
     }
 }
@@ -150,13 +150,13 @@ impl HostCameraFactory for WindowsCameraFactory {
     fn devices(&self) -> Result<Vec<CameraDevice>, Error> {
         Ok(camera_devices()?
             .into_iter()
-            .filter(|device| self.approved.contains(&device.id))
+            .filter(|device| self.approved.allows(&device.id))
             .collect())
     }
     fn open(&self, config: CameraConfig, startup: BackendStartup) -> Result<CameraBackend, Error> {
         startup.check()?;
         config.validate()?;
-        if !self.approved.contains(&config.device_id) {
+        if !self.approved.allows(&config.device_id) {
             return Err(Error::Unauthorized);
         }
         let source = CameraSource::new();
@@ -568,7 +568,7 @@ mod tests {
     fn approved_physical_camera_starts_after_first_keyframe_and_closes() {
         let id = std::env::var("VNILINK_TEST_CAMERA_ID")
             .expect("select an enumerated camera explicitly; no automatic camera activation");
-        let factory = WindowsCameraFactory::new(vec![id.clone()]).unwrap();
+        let factory = WindowsCameraFactory::new(CameraApproval::Only(vec![id.clone()])).unwrap();
         assert!(factory
             .devices()
             .unwrap()

@@ -21,7 +21,7 @@ interface MediaSourceKind {
 
 const kinds = new Map<string, MediaSourceKind>(Object.entries({
 	'media.camera': {
-		devices: 'camera', kind: 'camera', automaticName: nls.localize('media.autoCamera', 'Automatic'), failed: nls.localize('media.cameraFailed', 'Cameras could not be checked. Check system access and reconnect the device.'),
+		devices: 'camera', kind: 'camera', automaticName: nls.localize('media.allCameras', 'All cameras'), failed: nls.localize('media.cameraFailed', 'Cameras could not be checked. Check system access and reconnect the device.'),
 		permission: { kind: 'camera', missing: nls.localize('media.cameraMissing', 'Camera access isn’t allowed yet.') },
 	},
 	'media.microphone': {

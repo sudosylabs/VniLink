@@ -647,7 +647,7 @@ fn v11_recording_totals(frame_count: u64, wall: bool) {
     if wall {
         budget.max_duration_ms = 1000;
     }
-    let recorder = crate::DesktopRecorder::start(&desktop, &dir.join("talk.mkv"), budget).unwrap();
+    let recorder = crate::Recorder::start(&desktop, &dir.join("talk.mkv"), budget).unwrap();
     let target = host.video_targets().unwrap()[0];
     let deadline = Instant::now() + Duration::from_secs(5);
     for index in 0..frame_count {
@@ -765,8 +765,7 @@ fn review_v12_failed_recorder_preserves_finalized_segment_totals() {
         .open_desktop_service(owner.id, owner.generation)
         .unwrap();
     let dir = scratch("review-v12-failed-status");
-    let recorder =
-        crate::DesktopRecorder::start(&desktop, &dir.join("talk.mkv"), limits()).unwrap();
+    let recorder = crate::Recorder::start(&desktop, &dir.join("talk.mkv"), limits()).unwrap();
     let target = host.video_targets().unwrap()[0];
     host.publish_desktop_video(target.id, target.generation, idr64(0))
         .unwrap();

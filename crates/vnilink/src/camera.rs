@@ -40,6 +40,47 @@ impl CameraConfig {
         Ok(())
     }
 }
+/// Which cameras the host's own user offers to paired computers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CameraApproval {
+    /// Every camera, including one connected later.
+    All,
+    /// Only these camera ids.
+    Only(Vec<String>),
+}
+impl CameraApproval {
+    pub fn validate(&self) -> Result<(), Error> {
+        match self {
+            Self::All => Ok(()),
+            Self::Only(ids)
+                if ids.len() <= 32 && ids.iter().all(|id| !id.is_empty() && id.len() <= 256) =>
+            {
+                Ok(())
+            }
+            Self::Only(_) => Err(Error::InvalidSetting("invalid approved camera IDs")),
+        }
+    }
+    pub fn allows(&self, id: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(ids) => ids.iter().any(|approved| approved == id),
+        }
+    }
+    /// Whether `id` was chosen by name, as opposed to allowed by All.
+    pub fn names(&self, id: &str) -> bool {
+        matches!(self, Self::Only(ids) if ids.iter().any(|approved| approved == id))
+    }
+}
+/// Why a camera stream ended, as its viewer learns it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CameraEnd {
+    /// The host's camera stopped delivering pictures.
+    Stopped,
+    /// The host stopped sharing the camera: its access or its camera setting changed.
+    Withdrawn,
+    /// The connection to the host ended.
+    Lost,
+}
 /// Host opt-in is separate from each peer's Camera grant. Return only devices
 /// approved locally. Open must honour OS consent and return the actual format.
 /// Encode Annex-B H.264 Constrained Baseline, with SPS/PPS on every keyframe,

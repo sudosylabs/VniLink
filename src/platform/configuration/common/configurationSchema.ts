@@ -242,8 +242,9 @@ registerSettings('user', {
 	properties: {
 		'media.camera': {
 			type: 'string',
-			default: 'vnilink:auto-camera',
+			default: 'vnilink:all-cameras',
 			title: nls.localize('media.camera', 'Camera'),
+			description: nls.localize('media.cameraHelp', 'The cameras paired computers can view.'),
 			validate: mediaSource,
 		},
 		'media.microphone': {

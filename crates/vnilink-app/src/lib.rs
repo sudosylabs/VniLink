@@ -39,6 +39,7 @@ pub use availability::{
 };
 pub use camera::{
     BackendStartup, CameraProvider, CameraService, CameraSource, FfiCameraConfig, FfiCameraDevice,
+    FfiCameraEnd, ALL_CAMERAS,
 };
 mod clipboard;
 pub use clipboard::{

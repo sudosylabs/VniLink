@@ -217,7 +217,7 @@ export type EngineCommand =
 	| { type: 'setFileRoots'; paths: string[] }
 	| { type: 'startNativeScreenSharing'; displayId: number; width: number; height: number; pixelWidth: number; pixelHeight: number }
 	| { type: 'stopNativeScreenSharing' | 'nativeSharingStatus' }
-	| { type: 'startRecording'; sessionId: string; generation: string; destination: string; maxBytes: string; maxDurationMs: string; retention?: RecordingRetention }
+	| { type: 'startRecording'; sessionId: string; generation: string; destination: string; maxBytes: string; maxDurationMs: string; retention?: RecordingRetention; source?: 'desktop' | 'camera' }
 	| { type: 'recordingStatus' | 'stopRecording' | 'releaseRecording'; id: string }
 	| { type: 'remoteCameraDevices'; sessionId: string; generation: string }
 	| { type: 'remoteAudioDevices'; sessionId: string; generation: string; kind: 'Microphone' | 'System' }
@@ -621,7 +621,7 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'remoteCameraDevices': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
 		case 'remoteAudioDevices': keys = ['sessionId', 'generation', 'kind']; valid = decimal(value.sessionId) && decimal(value.generation) && (value.kind === 'Microphone' || value.kind === 'System'); break;
 		case 'recordingStatus': case 'stopRecording': case 'releaseRecording': keys = ['id']; valid = decimal(value.id); break;
-		case 'startRecording': keys = ['sessionId', 'generation', 'destination', 'maxBytes', 'maxDurationMs', ...(value.retention === undefined ? [] : ['retention'])]; valid = decimal(value.sessionId) && decimal(value.generation) && typeof value.destination === 'string' && value.destination.length > 0 && value.destination.length <= 4096 && !value.destination.includes('\0') && decimal(value.maxBytes) && decimal(value.maxDurationMs) && (value.retention === undefined || recordingRetention(value.retention)); break;
+		case 'startRecording': keys = ['sessionId', 'generation', 'destination', 'maxBytes', 'maxDurationMs', ...(value.retention === undefined ? [] : ['retention']), ...(value.source === undefined ? [] : ['source'])]; valid = decimal(value.sessionId) && decimal(value.generation) && typeof value.destination === 'string' && value.destination.length > 0 && value.destination.length <= 4096 && !value.destination.includes('\0') && decimal(value.maxBytes) && decimal(value.maxDurationMs) && (value.retention === undefined || recordingRetention(value.retention)) && (value.source === undefined || value.source === 'desktop' || value.source === 'camera'); break;
 		case 'setNativeCameraSources': keys = ['ids']; valid = nativeSourceIds(value.ids); break;
 		case 'setNativeAudioSources': keys = ['microphones', 'system']; valid = nativeSourceIds(value.microphones) && nativeSourceIds(value.system) && value.microphones.length + value.system.length <= 32 && new Set([...value.microphones, ...value.system]).size === value.microphones.length + value.system.length; break;
 		case 'setPowerPolicy': keys = ['policy']; valid = powerPolicy(value.policy); break;

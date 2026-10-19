@@ -56,7 +56,7 @@ pub fn recover_desktop_recording(destination: String) -> Result<FfiRecordingReco
     })
 }
 pub struct RecordingHandle {
-    inner: vnilink_media::DesktopRecorder,
+    inner: vnilink_media::Recorder,
 }
 
 impl RecordingHandle {
@@ -105,8 +105,33 @@ impl VnilinkCore {
         if !Arc::ptr_eq(&core, &self.inner) {
             return Err(FfiError::Unauthorized);
         }
-        let inner = vnilink_media::DesktopRecorder::start_with_retention(
+        let inner = vnilink_media::Recorder::start_with_retention(
             &desktop.inner,
+            Path::new(&destination),
+            vnilink_media::RecordingLimits {
+                max_bytes: limits.max_bytes,
+                max_duration_ms: limits.max_duration_ms,
+            },
+            retention.map(|r| vnilink_media::RecordingRetention {
+                max_segments: r.max_segments,
+                max_total_bytes: r.max_total_bytes,
+            }),
+        )
+        .map_err(recording_error)?;
+        Ok(Arc::new(RecordingHandle { inner }))
+    }
+    /// Records a paired computer's camera into `destination`, as
+    /// [`Self::start_desktop_recording`] does a desktop. The host must allow
+    /// recording; withdrawing it, or the camera stopping, ends the recording.
+    pub fn start_camera_recording(
+        &self,
+        camera: &crate::CameraService,
+        destination: String,
+        limits: FfiRecordingLimits,
+        retention: Option<FfiRecordingRetention>,
+    ) -> Result<Arc<RecordingHandle>, FfiError> {
+        let inner = vnilink_media::Recorder::start_camera(
+            camera.remote(),
             Path::new(&destination),
             vnilink_media::RecordingLimits {
                 max_bytes: limits.max_bytes,

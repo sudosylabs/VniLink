@@ -119,6 +119,9 @@ pub(super) fn evaluate_capability(
     let view_ready = lock(&shared.video_caps).can_encode()
         && monitor_size(&shared) != (0, 0)
         && lock(&shared.capture).is_some();
+    let camera_turned_off = shared
+        .camera_turned_off
+        .load(std::sync::atomic::Ordering::Acquire);
     let implemented = match capability {
         Capability::DesktopView => view_ready,
         Capability::Clipboard => {
@@ -130,7 +133,7 @@ pub(super) fn evaluate_capability(
         Capability::DesktopControl => view_ready && lock(&shared.desktop_info).is_some(),
         Capability::Files | Capability::Recording => true,
         Capability::Terminal => lock(&shared.terminal_factory).is_some(),
-        Capability::Camera => lock(&shared.camera_factory).is_some(),
+        Capability::Camera => lock(&shared.camera_factory).is_some() || camera_turned_off,
         Capability::SystemAudio | Capability::Microphone => {
             let factory = lock(&shared.audio_factory);
             factory.as_ref().is_some_and(|factory| {
@@ -174,6 +177,7 @@ pub(super) fn evaluate_capability(
             .system_policy
             .allows(crate::system::SystemAction::Shutdown),
         Capability::SystemPrivacy => state.system_policy.allow_privacy,
+        Capability::Camera => !camera_turned_off,
         _ => true,
     };
     let peer_granted = match capability {

@@ -737,6 +737,8 @@ enum Command {
         #[serde(rename = "maxDurationMs")]
         max_duration_ms: String,
         retention: Option<TransferRecordingRetention>,
+        /// `camera` records the connection's open camera; otherwise its desktop.
+        source: Option<RecordingSource>,
     },
     RecordingStatus {
         id: String,
@@ -1083,10 +1085,17 @@ struct State {
     files: HashMap<u64, Arc<FilesService>>,
     next_subscription: u64,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum RecordingSource {
+    Desktop,
+    Camera,
+}
 #[napi]
 pub struct Engine {
     core: Arc<VnilinkCore>,
     desktops: Arc<data::DesktopChannels>,
+    cameras: Arc<data::CameraChannels>,
     state: Arc<Mutex<State>>,
 }
 
@@ -1125,13 +1134,15 @@ impl Task for OpenTask {
     fn resolve(&mut self, _: Env, opened: Self::Output) -> Result<Engine> {
         let core = Arc::new(opened.core);
         let desktops = Arc::new(data::DesktopChannels::default());
+        let cameras = Arc::new(data::CameraChannels::default());
         Ok(Engine {
             core: core.clone(),
             desktops: desktops.clone(),
+            cameras: cameras.clone(),
             state: Arc::new(Mutex::new(State {
                 core,
                 closed: false,
-                native: native::NativeRuntimeState::new(opened.backends, desktops),
+                native: native::NativeRuntimeState::new(opened.backends, desktops, cameras),
                 video: HashMap::new(),
                 events: HashMap::new(),
                 files: HashMap::new(),

@@ -208,7 +208,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
     use vnilink::{
         Core, CoreConfig, CustomRelay, Grants, Listen, RelaySettings, ServiceKind, SessionPhase,
     };
-    use vnilink_media::{DesktopRecorder, RecordingLimits, RecordingPhase};
+    use vnilink_media::{Recorder, RecordingLimits, RecordingPhase};
     fn boot() -> Core {
         let core = Core::start(CoreConfig {
             listen: Listen::Loopback,
@@ -283,7 +283,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
         max_duration_ms: 10_000,
     };
     assert!(matches!(
-        DesktopRecorder::start(&desktop, &path, limits),
+        Recorder::start(&desktop, &path, limits),
         Err(vnilink_media::RecordingError::Source(
             vnilink::Error::Unauthorized
         ))
@@ -293,7 +293,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
     wait(|| desktop.recording_allowed().unwrap());
     // Capture is already encoding when a viewer starts a recording.
     let mut encoder = MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
-    let recorder = DesktopRecorder::start(
+    let recorder = Recorder::start(
         &desktop,
         &path,
         RecordingLimits {
@@ -349,7 +349,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
     assert!(folder.join("test.000001.mkv").is_file());
     assert!(!folder.join("test.000001.mkv.part").exists());
     let revoked_path = folder.join("revoked.mkv");
-    let revoked = DesktopRecorder::start(&desktop, &revoked_path, limits).unwrap();
+    let revoked = Recorder::start(&desktop, &revoked_path, limits).unwrap();
     let sample = encoder
         .encode(
             &solid(64, 64, 1_000_000, 0, 255, 0),
@@ -407,7 +407,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
     // segment instead of failing it; both segments stay self-contained.
     host.set_recording_sharing(true).unwrap();
     wait(|| desktop.recording_allowed().unwrap());
-    let roll = DesktopRecorder::start(
+    let roll = Recorder::start(
         &desktop,
         &folder.join("roll.mkv"),
         RecordingLimits {
@@ -499,7 +499,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
         controller.controller_session(parent.id).unwrap().phase,
         SessionPhase::Active
     );
-    assert!(DesktopRecorder::start(
+    assert!(Recorder::start(
         &desktop,
         &path,
         RecordingLimits {

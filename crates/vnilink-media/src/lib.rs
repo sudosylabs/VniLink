@@ -35,9 +35,7 @@ pub use recording_segments::{
     RecordingFailure, RecordingRetention, RecordingSnapshot, SegmentWriter,
 };
 mod recording_worker;
-pub use recording_worker::{
-    recover_desktop_recording, DesktopRecorder, RecordingPhase, RecordingStatus,
-};
+pub use recording_worker::{recover_desktop_recording, Recorder, RecordingPhase, RecordingStatus};
 mod recording_recovery;
 pub use recording_recovery::{scan_recording_prefix, RecordingRecovery};
 mod sps;

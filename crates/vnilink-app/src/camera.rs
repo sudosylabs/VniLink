@@ -1,6 +1,9 @@
 //! Native capture callbacks and independently owned encoded camera streams.
 use crate::{error::map_error, FfiEncodedFrame, FfiError, FfiServiceInfo, VnilinkCore};
 use std::sync::Arc;
+
+/// The camera setting value that offers every camera.
+pub const ALL_CAMERAS: &str = "vnilink:all-cameras";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiCameraDevice {
     pub id: String,
@@ -151,8 +154,30 @@ impl CameraService {
     pub fn lagged(&self) -> u64 {
         self.inner.lagged()
     }
+    pub(crate) fn remote(&self) -> &vnilink::RemoteCameraService {
+        &self.inner
+    }
+    /// Why the stream ended, once, after the frames sent before the end.
+    pub fn take_end(&self) -> Option<FfiCameraEnd> {
+        self.inner.take_end().map(Into::into)
+    }
     pub fn close(&self) {
         self.inner.close();
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiCameraEnd {
+    Stopped,
+    Withdrawn,
+    Lost,
+}
+impl From<vnilink::camera::CameraEnd> for FfiCameraEnd {
+    fn from(end: vnilink::camera::CameraEnd) -> Self {
+        match end {
+            vnilink::camera::CameraEnd::Stopped => Self::Stopped,
+            vnilink::camera::CameraEnd::Withdrawn => Self::Withdrawn,
+            vnilink::camera::CameraEnd::Lost => Self::Lost,
+        }
     }
 }
 
@@ -165,8 +190,14 @@ impl VnilinkCore {
             .set_camera_factory(Some(Arc::new(NativeCamera(provider))))
             .map_err(map_error)
     }
+    /// Offers no camera. Where this computer has a camera backend, paired
+    /// computers read Camera as turned off rather than missing.
     pub fn disable_camera(&self) -> Result<(), FfiError> {
-        self.inner.set_camera_factory(None).map_err(map_error)
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+        let result = self.inner.turn_off_camera();
+        #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+        let result = self.inner.set_camera_factory(None);
+        result.map_err(map_error)
     }
     pub fn remote_camera_devices(
         &self,
@@ -223,26 +254,20 @@ impl VnilinkCore {
             .map_err(map_error)
     }
     /// Opt-in selection made locally, never camera selection by an unapproved
-    /// remote ID. macOS OS consent must already have been granted.
-    pub fn enable_native_camera(
-        &self,
-        mut approved_device_ids: Vec<String>,
-    ) -> Result<(), FfiError> {
-        if approved_device_ids
-            .iter()
-            .any(|id| id == "vnilink:auto-camera")
-        {
-            if approved_device_ids.len() != 1 {
-                return Err(map_error(vnilink::Error::InvalidSetting(
-                    "automatic camera cannot be combined with explicit cameras",
-                )));
-            }
-            approved_device_ids = self
-                .native_camera_devices()?
-                .first()
-                .map(|device| vec![device.id.clone()])
-                .unwrap_or_default();
+    /// remote ID. `vnilink:all-cameras` offers every camera, including one
+    /// connected later. macOS OS consent must already have been granted.
+    pub fn enable_native_camera(&self, approved_device_ids: Vec<String>) -> Result<(), FfiError> {
+        let all = approved_device_ids.iter().any(|id| id == ALL_CAMERAS);
+        if all && approved_device_ids.len() != 1 {
+            return Err(map_error(vnilink::Error::InvalidSetting(
+                "all cameras cannot be combined with explicit cameras",
+            )));
         }
+        let approved_device_ids = if all {
+            vnilink::camera::CameraApproval::All
+        } else {
+            vnilink::camera::CameraApproval::Only(approved_device_ids)
+        };
         #[cfg(target_os = "macos")]
         let factory =
             vnilink_macos::MacCameraFactory::new(approved_device_ids).map_err(map_error)?;

@@ -10,14 +10,49 @@ use crate::{
 use iroh::endpoint::{RecvStream, SendStream};
 const TIMEOUT: Duration = Duration::from_secs(5);
 const LIST: u8 = 2;
+/// Last message on a camera stream: the host closed it, its capture failed,
+/// or it withdrew the camera (access revoked or its camera setting changed).
+const END_CLOSED: u8 = 0;
+const END_FAILED: u8 = 2;
+const END_WITHDRAWN: u8 = 3;
+/// `[RECORDING, allowed]`: whether the host lets this viewer record the
+/// camera. Sent before the first picture and whenever its user changes it.
+const RECORDING: u8 = 4;
 
 pub struct RemoteCameraService {
     config: CameraConfig,
     lease: ServiceLease,
     stop: tokio::sync::watch::Sender<bool>,
     inbox: Arc<VideoInbox>,
+    end: Arc<std::sync::Mutex<Option<CameraEnd>>>,
+    /// The host's recording consent. Its lock also orders tap creation
+    /// against revocation, so no tap outlives a withdrawn consent.
+    recording: Arc<std::sync::Mutex<bool>>,
+    keyframe: Arc<tokio::sync::Notify>,
 }
 impl RemoteCameraService {
+    /// Whether the host currently lets this viewer record the camera.
+    pub fn recording_allowed(&self) -> bool {
+        *lock(&self.recording)
+    }
+    /// A bounded copy of the encoded pictures for a local recording, starting
+    /// at a keyframe the host is asked for. It closes when the host withdraws
+    /// recording consent or the stream ends; the viewer keeps its pictures.
+    pub fn recording_video_tap(&self) -> Result<crate::RecordingVideoTap, Error> {
+        let allowed = lock(&self.recording);
+        if !*allowed {
+            return Err(Error::Unauthorized);
+        }
+        let tap = self.inbox.recording_tap()?;
+        drop(allowed);
+        self.keyframe.notify_one();
+        Ok(tap)
+    }
+    /// Why the stream ended, after the frames sent before the end. Reported
+    /// once; `None` while it runs.
+    pub fn take_end(&self) -> Option<CameraEnd> {
+        lock(&self.end).take()
+    }
     pub fn config(&self) -> CameraConfig {
         self.config.clone()
     }
@@ -51,8 +86,23 @@ impl Core {
         &self,
         factory: Option<Arc<dyn HostCameraFactory>>,
     ) -> Result<(), Error> {
+        self.replace_camera_factory(factory, false)
+    }
+    /// Stops offering a camera this computer has: paired computers read it
+    /// as turned off, not as missing.
+    pub fn turn_off_camera(&self) -> Result<(), Error> {
+        self.replace_camera_factory(None, true)
+    }
+    fn replace_camera_factory(
+        &self,
+        factory: Option<Arc<dyn HostCameraFactory>>,
+        turned_off: bool,
+    ) -> Result<(), Error> {
         let mut state = self.alive_state()?;
         *lock(&self.shared.camera_factory) = factory;
+        self.shared
+            .camera_turned_off
+            .store(turned_off, std::sync::atomic::Ordering::Release);
         for record in state
             .hosted_services
             .values_mut()
@@ -130,6 +180,12 @@ impl Core {
         };
         let inbox = Arc::new(VideoInbox::new());
         let frames = inbox.clone();
+        let end = Arc::new(std::sync::Mutex::new(None));
+        let ended = end.clone();
+        let recording = Arc::new(std::sync::Mutex::new(false));
+        let consent = recording.clone();
+        let keyframe = Arc::new(tokio::sync::Notify::new());
+        let keyframes = keyframe.clone();
         let shared = self.shared.clone();
         let (ready, result) = std::sync::mpsc::sync_channel(1);
         self.runtime.spawn(async move {
@@ -165,15 +221,39 @@ impl Core {
                 }
                 Ok((mut send, mut recv, actual)) => {
                     let _ = ready.send(Ok(actual));
-                    let run = async {
+                    let mut reason = CameraEnd::Lost;
+                    let requests = async {
+                        loop {
+                            keyframes.notified().await;
+                            write(&mut send, vec![1]).await?;
+                        }
+                    };
+                    let pictures = async {
                         let mut needs_keyframe = true;
                         loop {
                             let bytes = read_video(&mut recv).await?;
-                            if bytes == [0] {
-                                break;
-                            }
-                            if bytes == [2] {
-                                return Err(Error::Unsupported("remote camera capture ended"));
+                            match bytes.as_slice() {
+                                [RECORDING, allowed @ (0 | 1)] => {
+                                    let mut recording = lock(&consent);
+                                    *recording = *allowed == 1;
+                                    if !*recording {
+                                        frames.close_taps();
+                                    }
+                                    continue;
+                                }
+                                [END_CLOSED] => {
+                                    reason = CameraEnd::Stopped;
+                                    break;
+                                }
+                                [END_WITHDRAWN] => {
+                                    reason = CameraEnd::Withdrawn;
+                                    break;
+                                }
+                                [END_FAILED] => {
+                                    reason = CameraEnd::Stopped;
+                                    return Err(Error::Unsupported("remote camera capture ended"));
+                                }
+                                _ => {}
                             }
                             let frame = crate::video::decode_video_body(&bytes)?;
                             if frame.keyframe {
@@ -184,16 +264,21 @@ impl Core {
                             }
                             if matches!(frames.push(frame), VideoPush::KeyframeNeeded) {
                                 needs_keyframe = true;
-                                write(&mut send, vec![1]).await?;
+                                keyframes.notify_one();
                             }
                         }
                         Ok::<(), Error>(())
+                    };
+                    let run = async {
+                        tokio::select! { result = pictures => result, result = requests => result }
                     };
                     if lease.run(run).await.is_err() && !lease.is_cancelled() {
                         phase = ServicePhase::Failed("camera pipe ended".into());
                     } else if lease.is_cancelled() {
                         phase = ServicePhase::Closed(CloseCause::OwnerClose);
                     }
+                    // A viewer that closed the stream itself no longer reads this.
+                    *lock(&ended) = Some(reason);
                     let _ = send.finish();
                 }
             }
@@ -219,6 +304,9 @@ impl Core {
             lease: handle,
             stop,
             inbox,
+            end,
+            recording,
+            keyframe,
         })
     }
 }
@@ -460,11 +548,22 @@ pub(super) async fn serve(
         };
         let sending = async {
             let mut timer = tokio::time::interval(Duration::from_millis(25));
+            let mut recording = None;
             loop {
+                // Recording consent follows the host's sharing policy as it changes.
+                let allowed = lock(&shared.state).trust.sharing.recording;
+                if recording != Some(allowed) {
+                    write(&mut send, vec![RECORDING, u8::from(allowed)]).await?;
+                    recording = Some(allowed);
+                }
                 if backend.source.is_cancelled() {
                     write(
                         &mut send,
-                        vec![if backend.source.has_failed() { 2 } else { 0 }],
+                        vec![if backend.source.has_failed() {
+                            END_FAILED
+                        } else {
+                            END_CLOSED
+                        }],
                     )
                     .await?;
                     return Ok::<(), Error>(());
@@ -481,7 +580,12 @@ pub(super) async fn serve(
     if *parent.borrow() || *stop.borrow() {
         return Err(Error::NoSession);
     }
-    let result = tokio::select! { biased; _ = parent.changed() => Err(Error::NoSession), _ = stop.changed() => Err(Error::NoSession), result = run => result };
+    let mut withdrawn = false;
+    let result = tokio::select! { biased; _ = parent.changed() => Err(Error::NoSession), _ = stop.changed() => { withdrawn = true; Err(Error::NoSession) }, result = run => result };
+    if withdrawn {
+        // Tell the viewer why the picture stopped; it may already be gone.
+        let _ = tokio::time::timeout(TIMEOUT, write(&mut send, vec![END_WITHDRAWN])).await;
+    }
     let _ = send.finish();
     result
 }

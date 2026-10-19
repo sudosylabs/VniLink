@@ -9,7 +9,7 @@ export async function verifyMediaSettings(): Promise<void> {
 		assert(page.element.querySelectorAll('.settings-select > .vnilink-icon').length === 3, 'Media source pickers missing');
 		const cameras = page.element.querySelector<HTMLSelectElement>('select[data-setting="media.camera"]');
 		assert(cameras, 'Camera picker missing');
-		assert(Array.from(cameras.options).map(option => option.value).join() === 'vnilink:auto-camera,,camera-one', 'Camera options changed');
+		assert(Array.from(cameras.options).map(option => option.value).join() === 'vnilink:all-cameras,,camera-one', 'Camera options changed');
 		assert(Array.from(cameras.options).some(option => option.textContent === 'Camera <one>'), 'Device name was not shown as text');
 		edit(cameras, 'camera-one');
 		await settle();

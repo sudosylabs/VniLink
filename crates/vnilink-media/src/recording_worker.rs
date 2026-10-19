@@ -26,11 +26,12 @@ pub struct RecordingStatus {
     /// finished segments plus the live one.
     pub segments: u32,
 }
-pub struct DesktopRecorder {
+/// A local recording of a paired computer's desktop or camera, written by its own worker.
+pub struct Recorder {
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<RecordingStatus>>,
 }
-impl DesktopRecorder {
+impl Recorder {
     /// The caller locally selects a new .mkv destination. This engine never
     /// reads a remote path or uses the Files grant/root as a recording permission.
     /// Recording consent is checked independently from the desktop viewing grant.
@@ -50,7 +51,7 @@ impl DesktopRecorder {
         limits: RecordingLimits,
         retention: Option<RecordingRetention>,
     ) -> Result<Self, RecordingError> {
-        let mut segments = SegmentWriter::create(path, limits, retention)?;
+        let segments = SegmentWriter::create(path, limits, retention)?;
         if !desktop
             .recording_allowed()
             .map_err(RecordingError::Source)?
@@ -60,6 +61,31 @@ impl DesktopRecorder {
         let tap = desktop
             .recording_video_tap()
             .map_err(RecordingError::Source)?;
+        Self::record(tap, segments, limits)
+    }
+    /// Records a paired computer's camera, with the same limits and
+    /// retention. The host's recording consent is checked as for a desktop,
+    /// and its withdrawal ends the recording.
+    pub fn start_camera(
+        camera: &vnilink::RemoteCameraService,
+        path: &Path,
+        limits: RecordingLimits,
+        retention: Option<RecordingRetention>,
+    ) -> Result<Self, RecordingError> {
+        let segments = SegmentWriter::create(path, limits, retention)?;
+        if !camera.recording_allowed() {
+            return Err(RecordingError::Source(vnilink::Error::Unauthorized));
+        }
+        let tap = camera
+            .recording_video_tap()
+            .map_err(RecordingError::Source)?;
+        Self::record(tap, segments, limits)
+    }
+    fn record(
+        tap: vnilink::RecordingVideoTap,
+        mut segments: SegmentWriter,
+        limits: RecordingLimits,
+    ) -> Result<Self, RecordingError> {
         let stop = Arc::new(AtomicBool::new(false));
         let status = Arc::new(Mutex::new(RecordingStatus {
             phase: RecordingPhase::Starting,
@@ -136,7 +162,7 @@ impl DesktopRecorder {
         Ok(Self { stop, status })
     }
     /// Requests finalization without blocking on storage. Poll status for the
-    /// terminal result; closing a recorder never closes its Desktop service.
+    /// terminal result; closing a recorder never closes the service it records.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
     }
@@ -147,7 +173,7 @@ impl DesktopRecorder {
             .clone()
     }
 }
-impl Drop for DesktopRecorder {
+impl Drop for Recorder {
     fn drop(&mut self) {
         self.stop();
     }

@@ -511,3 +511,151 @@ fn camera_device_is_exclusive_across_peers_and_releases_on_close() {
     };
     taken.close();
 }
+
+#[test]
+fn camera_viewer_learns_why_the_picture_stopped() {
+    let controller = start_direct();
+    let host = start_direct();
+    pair_for_control(&host, &controller);
+    host.set_service_sharing(ServiceKind::Camera, true).unwrap();
+    let factory = Arc::new(Factory::default());
+    host.set_camera_factory(Some(factory.clone())).unwrap();
+    let connection = connect(&controller, &host);
+    let open = || {
+        host.set_service_sharing(ServiceKind::Camera, true).unwrap();
+        host.set_camera_factory(Some(factory.clone())).unwrap();
+        let owner = controller
+            .attach_controller_service(connection.id, connection.generation, ServiceKind::Camera)
+            .unwrap();
+        let camera = controller
+            .open_camera_service(owner.id, owner.generation, config())
+            .unwrap();
+        let source = factory.sources.lock().unwrap().last().unwrap().clone();
+        source
+            .publish(EncodedFrame::h264(true, 1, vec![7; 64]).unwrap())
+            .unwrap();
+        assert!(camera.recv_timeout(Duration::from_secs(5)).is_some());
+        assert_eq!(camera.take_end(), None);
+        (camera, source)
+    };
+    let ended = |camera: &crate::RemoteCameraService| {
+        let mut end = None;
+        wait(|| {
+            end = camera.take_end();
+            end.is_some()
+        });
+        assert_eq!(camera.take_end(), None, "the reason is reported once");
+        end.unwrap()
+    };
+    // The host's capture fails, or its camera stops delivering.
+    let (camera, source) = open();
+    source.fail();
+    assert_eq!(ended(&camera), CameraEnd::Stopped);
+    let (camera, source) = open();
+    source.close();
+    assert_eq!(ended(&camera), CameraEnd::Stopped);
+    // The host's user stops sharing the camera, or turns the camera off.
+    let (camera, _) = open();
+    host.set_service_sharing(ServiceKind::Camera, false)
+        .unwrap();
+    assert_eq!(ended(&camera), CameraEnd::Withdrawn);
+    let (camera, _) = open();
+    host.turn_off_camera().unwrap();
+    assert_eq!(ended(&camera), CameraEnd::Withdrawn);
+    // The host goes away.
+    let (camera, _) = open();
+    host.shutdown();
+    assert_eq!(ended(&camera), CameraEnd::Lost);
+}
+
+#[test]
+fn a_camera_turned_off_by_its_user_reads_as_turned_off() {
+    use crate::{Capability, RemoteStatus};
+    let controller = start_direct();
+    let host = start_direct();
+    pair_for_control(&host, &controller);
+    host.set_service_sharing(ServiceKind::Camera, true).unwrap();
+    controller.set_presence_links(true).unwrap();
+    let peer = host.endpoint_id();
+    let camera = || {
+        controller
+            .peer_availability(&peer)
+            .unwrap()
+            .and_then(|report| report.into_iter().find(|(c, _)| *c == Capability::Camera))
+            .map(|(_, status)| status)
+    };
+    // No backend at all: nothing to offer.
+    wait(|| camera() == Some(RemoteStatus::Unsupported));
+    host.set_camera_factory(Some(Arc::new(Factory::default())))
+        .unwrap();
+    wait(|| camera() == Some(RemoteStatus::Available));
+    host.turn_off_camera().unwrap();
+    wait(|| camera() == Some(RemoteStatus::TurnedOff));
+    host.set_camera_factory(Some(Arc::new(Factory::default())))
+        .unwrap();
+    wait(|| camera() == Some(RemoteStatus::Available));
+}
+
+#[test]
+fn camera_approval_names_or_allows_every_camera() {
+    let only = CameraApproval::Only(vec!["a".into()]);
+    assert!(only.allows("a") && only.names("a"));
+    assert!(!only.allows("b") && !only.names("b"));
+    assert!(CameraApproval::All.allows("later") && !CameraApproval::All.names("later"));
+    assert!(CameraApproval::All.validate().is_ok());
+    assert!(CameraApproval::Only(vec![String::new()])
+        .validate()
+        .is_err());
+    assert!(CameraApproval::Only(vec!["x".into(); 33])
+        .validate()
+        .is_err());
+}
+
+#[test]
+fn camera_recording_follows_the_hosts_consent() {
+    let controller = start_direct();
+    let host = start_direct();
+    pair_for_control(&host, &controller);
+    host.set_service_sharing(ServiceKind::Camera, true).unwrap();
+    let factory = Arc::new(Factory::default());
+    host.set_camera_factory(Some(factory.clone())).unwrap();
+    let connection = connect(&controller, &host);
+    let owner = controller
+        .attach_controller_service(connection.id, connection.generation, ServiceKind::Camera)
+        .unwrap();
+    let camera = controller
+        .open_camera_service(owner.id, owner.generation, config())
+        .unwrap();
+    let source = factory.sources.lock().unwrap()[0].clone();
+    source
+        .publish(EncodedFrame::h264(true, 1, vec![7; 64]).unwrap())
+        .unwrap();
+    assert!(camera.recv_timeout(Duration::from_secs(5)).is_some());
+    // Recording is the host's to allow, and it starts off.
+    assert!(!camera.recording_allowed());
+    assert!(matches!(
+        camera.recording_video_tap(),
+        Err(Error::Unauthorized)
+    ));
+    host.set_recording_sharing(true).unwrap();
+    wait(|| camera.recording_allowed());
+    let _ = source.take_keyframe_request();
+    let tap = camera.recording_video_tap().unwrap();
+    // The tap asks the host for a keyframe to begin on.
+    wait(|| source.take_keyframe_request());
+    source
+        .publish(EncodedFrame::h264(true, 2, vec![8; 64]).unwrap())
+        .unwrap();
+    wait(|| tap.try_recv().is_some_and(|frame| frame.keyframe));
+    assert!(
+        camera.recv_timeout(Duration::from_secs(5)).is_some(),
+        "the viewer keeps its pictures"
+    );
+    host.set_recording_sharing(false).unwrap();
+    wait(|| tap.is_closed());
+    assert!(!camera.recording_allowed());
+    assert!(
+        !camera.is_cancelled(),
+        "withdrawing recording leaves the camera open"
+    );
+}

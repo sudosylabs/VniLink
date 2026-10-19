@@ -47,7 +47,12 @@ pub(super) struct TransferRecordingStatus {
 }
 pub(super) struct RecordingOwner {
     handle: Arc<vnilink_app::RecordingHandle>,
-    _desktop: Arc<data::DesktopOwner>,
+    _source: RecordedService,
+}
+/// Keeps a desktop recording's service open; a camera recording follows its tab's stream.
+enum RecordedService {
+    Desktop { _owner: Arc<data::DesktopOwner> },
+    Camera,
 }
 fn recording_status(id: u64, handle: &vnilink_app::RecordingHandle) -> TransferRecordingStatus {
     let status = handle.status();
@@ -87,6 +92,7 @@ pub(super) struct TransferCapability {
 pub(super) struct NativeRuntimeState {
     backends: Vec<TransferNativeBackend>,
     desktops: Arc<data::DesktopChannels>,
+    cameras: Arc<data::CameraChannels>,
     recordings: HashMap<u64, RecordingOwner>,
     next_recording: u64,
     #[cfg(target_os = "macos")]
@@ -100,10 +106,12 @@ impl NativeRuntimeState {
     pub(super) fn new(
         backends: Vec<TransferNativeBackend>,
         desktops: Arc<data::DesktopChannels>,
+        cameras: Arc<data::CameraChannels>,
     ) -> Self {
         Self {
             backends,
             desktops,
+            cameras,
             recordings: HashMap::new(),
             next_recording: 1,
             #[cfg(target_os = "macos")]
@@ -239,6 +247,7 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
             max_bytes,
             max_duration_ms,
             retention,
+            source,
         } => {
             if state.native.recordings.len() >= 16 {
                 return Err(Error::from_reason("Too many recordings"));
@@ -267,25 +276,35 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
             let next = id
                 .checked_add(1)
                 .ok_or_else(|| Error::from_reason("Recording IDs exhausted"))?;
-            let desktop = state
-                .native
-                .desktops
-                .open(&state.core, session, generation)?;
-            let handle = state
-                .core
-                .start_desktop_recording(
-                    desktop.service.clone(),
-                    destination.clone(),
-                    limits,
-                    retention,
-                )
-                .map_err(core_error)?;
+            let (handle, source) = if *source == Some(crate::RecordingSource::Camera) {
+                let camera = state.native.cameras.get(session, generation)?;
+                let handle = state
+                    .core
+                    .start_camera_recording(&camera, destination.clone(), limits, retention)
+                    .map_err(core_error)?;
+                (handle, RecordedService::Camera)
+            } else {
+                let desktop = state
+                    .native
+                    .desktops
+                    .open(&state.core, session, generation)?;
+                let handle = state
+                    .core
+                    .start_desktop_recording(
+                        desktop.service.clone(),
+                        destination.clone(),
+                        limits,
+                        retention,
+                    )
+                    .map_err(core_error)?;
+                (handle, RecordedService::Desktop { _owner: desktop })
+            };
             let status = recording_status(id, &handle);
             state.native.recordings.insert(
                 id,
                 RecordingOwner {
                     handle,
-                    _desktop: desktop,
+                    _source: source,
                 },
             );
             state.native.next_recording = next;

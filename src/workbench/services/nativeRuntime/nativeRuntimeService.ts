@@ -1,7 +1,8 @@
 import { createDecorator } from '../../../platform/instantiation/common/instantiation.js';
 import type { NativeBackend, NativeCapability, NativeDevice, PowerStatus, NativeScreenSource, NativeSharingStatus, RecordingStatus, RecordingRetention } from '../../../platform/engine/common/engine.js';
 
-export interface RecordingTarget { readonly id: string; readonly generation: string; }
+/** A connection, and which of its streams to record: its desktop unless said otherwise. */
+export interface RecordingTarget { readonly id: string; readonly generation: string; readonly source?: 'desktop' | 'camera'; }
 
 /** Per-recording overrides of the recording settings. */
 export interface RecordingOptions {

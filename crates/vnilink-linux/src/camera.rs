@@ -23,7 +23,9 @@ use v4l::{
     Device, Format, FourCC,
 };
 use vnilink::{
-    camera::{CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory},
+    camera::{
+        CameraApproval, CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory,
+    },
     Error,
 };
 #[cfg(target_os = "linux")]
@@ -237,16 +239,23 @@ struct FactoryState {
 }
 
 pub struct LinuxCameraFactory {
-    approved: Vec<String>,
+    approved: CameraApproval,
     inspector: Box<dyn Inspector>,
     state: Mutex<FactoryState>,
 }
 impl LinuxCameraFactory {
     #[cfg(target_os = "linux")]
-    pub fn new(approved: Vec<String>) -> Result<Self, Error> {
-        Self::with_inspector(approved, Box::new(V4lInspector))
+    pub fn new(approved: CameraApproval) -> Result<Self, Error> {
+        Self::with_approval(approved, Box::new(V4lInspector))
     }
+    #[cfg(test)]
     fn with_inspector(approved: Vec<String>, inspector: Box<dyn Inspector>) -> Result<Self, Error> {
+        Self::with_approval(CameraApproval::Only(approved), inspector)
+    }
+    fn with_approval(
+        approved: CameraApproval,
+        inspector: Box<dyn Inspector>,
+    ) -> Result<Self, Error> {
         Self {
             approved,
             inspector,
@@ -255,8 +264,10 @@ impl LinuxCameraFactory {
         .validated()
     }
     fn validated(self) -> Result<Self, Error> {
-        if self.approved.len() > 32 || self.approved.iter().any(|id| !valid_approval(id)) {
-            return Err(Error::InvalidSetting("invalid approved V4L2 camera IDs"));
+        if let CameraApproval::Only(ids) = &self.approved {
+            if ids.len() > 32 || ids.iter().any(|id| !valid_approval(id)) {
+                return Err(Error::InvalidSetting("invalid approved V4L2 camera IDs"));
+            }
         }
         Ok(self)
     }
@@ -273,11 +284,15 @@ impl LinuxCameraFactory {
     /// node that cannot be opened is withheld until it can be held, and
     /// a first appearance that cannot be held is not recorded as seen.
     /// Serial-bound identities are never held or retired: the same
-    /// serial reappearing is the same instance.
+    /// serial reappearing is the same instance. With All, no camera was
+    /// chosen by name, so any present camera is the one offered.
     fn observe(&self, unique: &[(String, String, String, Option<String>)]) {
+        let CameraApproval::Only(approved_ids) = &self.approved else {
+            return;
+        };
         let mut state = self.state.lock().unwrap();
         for (identity, path, _, serial) in unique {
-            if serial.is_some() || !self.approved.contains(identity) {
+            if serial.is_some() || !approved_ids.contains(identity) {
                 continue;
             }
             if state.invalidated.contains(identity) {
@@ -299,7 +314,7 @@ impl LinuxCameraFactory {
                 }
             }
         }
-        for approved in &self.approved {
+        for approved in approved_ids {
             let present = unique
                 .iter()
                 .any(|(identity, _, _, _)| identity == approved);
@@ -320,7 +335,7 @@ impl LinuxCameraFactory {
         identity: &str,
         serial: &Option<String>,
     ) -> Result<Option<Arc<dyn HeldNode>>, Error> {
-        if serial.is_some() {
+        if serial.is_some() || !self.approved.names(identity) {
             return Ok(None);
         }
         let mut state = self.state.lock().unwrap();
@@ -344,7 +359,7 @@ impl LinuxCameraFactory {
     /// original transient error propagates. Serial-bound approvals never
     /// retire here: only the serial distinguishes their instances.
     fn capture_failed(&self, identity: &str, serial: &Option<String>, error: Error) -> Error {
-        if serial.is_some() {
+        if serial.is_some() || !self.approved.names(identity) {
             return error;
         }
         let mut state = self.state.lock().unwrap();
@@ -367,9 +382,11 @@ impl HostCameraFactory for LinuxCameraFactory {
         Ok(unique
             .into_iter()
             .filter(|(identity, _, _, serial)| {
-                self.approved.contains(identity)
+                self.approved.allows(identity)
                     && !retired.contains(identity)
-                    && (serial.is_some() || held.contains(identity))
+                    && (serial.is_some()
+                        || held.contains(identity)
+                        || !self.approved.names(identity))
             })
             .map(|(identity, _, name, _)| CameraDevice { id: identity, name })
             .collect())
@@ -381,7 +398,7 @@ impl HostCameraFactory for LinuxCameraFactory {
     ) -> Result<CameraBackend, Error> {
         startup.check()?;
         requested.validate()?;
-        if !self.approved.contains(&requested.device_id) {
+        if !self.approved.allows(&requested.device_id) {
             return Err(Error::Unauthorized);
         }
         // Resolve the approved identity to its current node. A replacement
@@ -864,6 +881,57 @@ mod tests {
             bus: bus.into(),
             serial: serial.map(str::to_owned),
         }
+    }
+
+    #[test]
+    fn all_cameras_lists_each_present_camera_including_one_plugged_in_later() {
+        let (inspector, script) = scripted(vec![node(
+            "/dev/video0",
+            "uvcvideo",
+            "Alpha Cam",
+            "usb-0000:00:14.0-1",
+            None,
+        )]);
+        let factory =
+            LinuxCameraFactory::with_approval(CameraApproval::All, Box::new(inspector)).unwrap();
+        let names = |factory: &LinuxCameraFactory| {
+            factory
+                .devices()
+                .unwrap()
+                .into_iter()
+                .map(|device| device.name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&factory), ["Alpha Cam"]);
+        script.set_nodes(vec![
+            node(
+                "/dev/video0",
+                "uvcvideo",
+                "Alpha Cam",
+                "usb-0000:00:14.0-1",
+                None,
+            ),
+            node(
+                "/dev/video2",
+                "uvcvideo",
+                "Beta Cam",
+                "usb-0000:00:14.0-2",
+                Some("B1"),
+            ),
+        ]);
+        assert_eq!(names(&factory), ["Alpha Cam", "Beta Cam"]);
+        // Nothing was chosen by name, so a camera that left and came back
+        // is still offered.
+        script.set_nodes(vec![]);
+        assert!(names(&factory).is_empty());
+        script.set_nodes(vec![node(
+            "/dev/video0",
+            "uvcvideo",
+            "Alpha Cam",
+            "usb-0000:00:14.0-1",
+            None,
+        )]);
+        assert_eq!(names(&factory), ["Alpha Cam"]);
     }
 
     #[test]
