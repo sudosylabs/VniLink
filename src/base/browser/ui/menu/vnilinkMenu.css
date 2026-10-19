@@ -1,0 +1,210 @@
+/*
+ * The rules VS Code's menu writes into a style element (`getMenuWidgetCSS` in
+ * menu.ts). VniLink's CSP refuses injected style elements, so they live here,
+ * in the colours of colors.css. Item colours come from `defaultMenuStyles`.
+ * Frosted glass, high-contrast themes and codicon glyphs are VS Code's own and
+ * are left out; forced colours come through the colour tokens.
+ */
+
+/* The colours actionbar.css reads upstream. */
+.monaco-menu-container {
+	/* stylelint-disable custom-property-pattern -- the names actionbar.css reads upstream */
+	--vscode-menu-separatorBackground: var(--line);
+	--vscode-disabledForeground: var(--muted);
+	/* stylelint-enable custom-property-pattern */
+}
+
+.monaco-menu {
+	font-size: 13px;
+	border-radius: 8px;
+	border: 1px solid var(--line);
+	min-width: 160px;
+}
+
+.monaco-menu .monaco-action-bar {
+	text-align: right;
+	overflow: hidden;
+	white-space: nowrap;
+}
+
+.monaco-menu .monaco-action-bar .actions-container {
+	display: flex;
+	margin: 0 auto;
+	padding: 0;
+	width: 100%;
+	justify-content: flex-end;
+}
+
+.monaco-menu .monaco-action-bar.reverse .actions-container {
+	flex-direction: row-reverse;
+}
+
+.monaco-menu .monaco-action-bar .action-item {
+	cursor: default;
+	display: inline-block;
+	position: relative;
+}
+
+.monaco-menu .monaco-action-bar .action-item .icon {
+	display: inline-block;
+}
+
+.monaco-menu .monaco-action-bar .action-label {
+	font-size: 11px;
+	margin-right: 4px;
+}
+
+/* Vertical actions */
+
+.monaco-menu .monaco-action-bar.vertical {
+	text-align: left;
+	margin-left: 0;
+	overflow: visible;
+	padding: 4px 0;
+}
+
+.monaco-menu .monaco-action-bar.vertical .actions-container {
+	display: block;
+}
+
+.monaco-menu .monaco-action-bar.vertical .action-item {
+	padding: 0;
+	transform: none;
+	display: flex;
+	position: static;
+	overflow: visible;
+}
+
+.monaco-menu .monaco-action-bar.vertical .action-menu-item {
+	flex: 1 1 auto;
+	display: flex;
+	height: 24px;
+	align-items: center;
+	position: relative;
+	margin: 0 4px;
+	border-radius: 4px;
+}
+
+.monaco-menu .monaco-action-bar.vertical .action-label {
+	flex: 1 1 auto;
+	text-decoration: none;
+	background: none;
+	line-height: 1;
+}
+
+.monaco-menu .monaco-action-bar.vertical .action-label:not(.separator) {
+	display: inline-block;
+	box-sizing: border-box;
+	margin: 0;
+	font-size: inherit;
+	padding: 0 2em;
+	max-height: 100%;
+}
+
+.monaco-menu .monaco-action-bar.vertical .action-label:hover {
+	color: inherit;
+}
+
+.monaco-menu .monaco-action-bar.vertical .keybinding,
+.monaco-menu .monaco-action-bar.vertical .submenu-indicator {
+	display: inline-block;
+	flex: 2 1 auto;
+	text-align: right;
+	line-height: 1;
+	opacity: 0.7;
+}
+
+.monaco-menu .monaco-action-bar.vertical .keybinding {
+	font-size: inherit;
+	padding: 0 2em;
+	max-height: 100%;
+}
+
+.monaco-menu .monaco-action-bar.vertical .action-menu-item:hover .keybinding,
+.monaco-menu .monaco-action-bar.vertical .action-menu-item:focus .keybinding {
+	opacity: unset;
+}
+
+.monaco-menu .monaco-action-bar.vertical .submenu-indicator {
+	--icon-size: 12px;
+
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	height: 100%;
+	padding: 0 0.6em;
+}
+
+.monaco-menu .monaco-action-bar.vertical .action-item.disabled .keybinding,
+.monaco-menu .monaco-action-bar.vertical .action-item.disabled .submenu-indicator {
+	opacity: 0.4;
+}
+
+.monaco-menu .monaco-action-bar.vertical .action-item .monaco-submenu {
+	position: absolute;
+}
+
+.monaco-menu .monaco-action-bar.vertical .action-label.separator {
+	display: block;
+	width: 100%;
+	height: 0 !important;
+	margin: 5px 0 !important;
+	padding: 0;
+	border-bottom: 1px solid var(--line);
+	border-radius: 0;
+	opacity: 1;
+}
+
+.monaco-menu .monaco-action-bar.vertical .action-label.separator.text {
+	padding: 0.7em 1em 0.1em;
+	font-weight: bold;
+}
+
+.monaco-menu .monaco-action-bar.vertical .menu-item-check {
+	--icon-size: 14px;
+
+	position: absolute;
+	visibility: hidden;
+	width: 2em;
+	height: 100%;
+}
+
+.monaco-menu .monaco-action-bar.vertical .action-menu-item.checked .menu-item-check {
+	visibility: visible;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+/* Context menu */
+
+.context-view.monaco-menu-container {
+	outline: 0;
+	border: none;
+	-webkit-app-region: no-drag;
+	box-shadow: 0 4px 16px rgb(0 0 0 / 18%);
+	border-radius: 8px;
+	overflow: hidden;
+}
+
+.context-view.monaco-menu-container :focus,
+.context-view.monaco-menu-container .monaco-action-bar.vertical:focus,
+.context-view.monaco-menu-container .monaco-action-bar.vertical :focus {
+	outline: 0;
+}
+
+/* The focused item is filled; a keyboard user also sees an outline in forced colours. */
+.monaco-menu .monaco-action-bar.vertical .action-menu-item:focus:not(:focus-visible) {
+	outline: none !important;
+}
+
+@media (forced-colors: active) {
+	.context-view.monaco-menu-container {
+		box-shadow: none;
+	}
+
+	.monaco-menu .monaco-action-bar.vertical .action-item.focused > .action-menu-item {
+		outline: 1px solid Highlight !important;
+		outline-offset: -1px !important;
+	}
+}

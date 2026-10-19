@@ -12,3 +12,11 @@
 	width: 100%;
 	height: 100%;
 }
+
+.monaco-dialog-box .dialog-checkbox-row .monaco-checkbox > .vnilink-icon {
+	--icon-size: 14px;
+}
+
+.monaco-dialog-box .dialog-checkbox-row .monaco-checkbox:not(.checked) > .vnilink-icon {
+	visibility: hidden;
+}

@@ -1,11 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted for VniLink: no menu motion style element, which the CSP refuses; VniLink never enables VS Code's menu motion.
  *--------------------------------------------------------------------------------------------*/
 
 import { BrowserFeatures } from '../../canIUse.js';
 import * as DOM from '../../dom.js';
-import { createStyleSheet } from '../../domStylesheets.js';
 import { StandardMouseEvent } from '../../mouseEvent.js';
 import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../common/lifecycle.js';
 import { AnchorAlignment, AnchorAxisAlignment, AnchorPosition, IRect, layout2d } from '../../../common/layout.js';
@@ -175,16 +175,6 @@ function getContextViewMenuMotionCss(enabledSelectorPrefix: string): string {
 	}`;
 }
 
-let contextViewMenuMotionStyleSheet: HTMLStyleElement | undefined;
-
-function ensureContextViewMenuMotionStyleSheet(): void {
-	if (!contextViewMenuMotionStyleSheet) {
-		contextViewMenuMotionStyleSheet = createStyleSheet(undefined, style => {
-			style.textContent = getContextViewMenuMotionCss('.modern-ui.monaco-enable-motion');
-		});
-	}
-}
-
 export interface IContextViewProvider {
 	showContextView(delegate: IDelegate, container?: HTMLElement): void;
 	hideContextView(): void;
@@ -246,8 +236,6 @@ export class ContextView extends Disposable {
 
 	constructor(container: HTMLElement, domPosition: ContextViewDOMPosition) {
 		super();
-
-		ensureContextViewMenuMotionStyleSheet();
 
 		this.view = DOM.$('.context-view');
 		DOM.hide(this.view);

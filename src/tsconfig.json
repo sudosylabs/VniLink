@@ -221,7 +221,14 @@
     "./platform/clipboard/common/clipboardService.ts",
     "./base/parts/sandbox/common/electronTypes.ts",
     "./base/browser/ui/dialog/dialog.ts",
-    "./base/common/labels.ts"
+    "./base/common/labels.ts",
+    "./platform/contextview/browser/contextMenuService.ts",
+    "./platform/contextview/browser/contextView.ts",
+    "./platform/contextview/browser/contextMenuHandler.ts",
+    "./platform/contextview/browser/contextViewService.ts",
+    "./platform/layout/browser/layoutService.ts",
+    "./platform/state/node/stateService.ts",
+    "./platform/state/node/state.ts"
   ],
   "include": [],
   "exclude": []

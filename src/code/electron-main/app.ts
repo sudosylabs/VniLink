@@ -39,6 +39,10 @@ import { PERMISSIONS_CHANNEL_NAME } from '../../platform/permissions/common/perm
 import { PermissionsChannel } from '../../platform/permissions/electron-main/permissionsChannel.js';
 import { IPermissionsMainService, PermissionsMainService } from '../../platform/permissions/electron-main/permissionsMainService.js';
 import { RECORDING_CHANNEL_NAME } from '../../platform/recording/common/recording.js';
+import { UI_STATE_CHANNEL_NAME } from '../../platform/state/common/uiState.js';
+import { UIStateChannel } from '../../platform/state/electron-main/uiStateChannel.js';
+import { IStateService } from '../../platform/state/node/state.js';
+import { SaveStrategy, StateService } from '../../platform/state/node/stateService.js';
 import { IRecordingMainService, RecordingMainService } from '../../platform/recording/electron-main/recordingMainService.js';
 import { CONFIGURATION_CHANNEL_NAME } from '../../platform/configuration/common/configurationSnapshot.js';
 import { WINDOW_CONFIGURATION_CHANNEL, type INativeWindowConfiguration } from '../../platform/window/common/windowConfiguration.js';
@@ -60,6 +64,7 @@ const workbenchFiles = new Set(['/index.html', '/renderer.js', '/renderer.css', 
  */
 export class VniLinkApplication extends Disposable {
 	private readonly logService: LogService;
+	private readonly stateService: StateService;
 	private readonly instantiationService: InstantiationService;
 	private started: Promise<void> | undefined;
 	private restored = false;
@@ -71,6 +76,7 @@ export class VniLinkApplication extends Disposable {
 		setUnexpectedErrorHandler(error => {
 			this.logService.error(error instanceof Error ? error : new Error(String(error)));
 		});
+		this.stateService = this._register(new StateService(SaveStrategy.DELAYED, join(app.getPath('userData'), 'storage.json'), this.logService));
 		this.instantiationService = this._register(new InstantiationService(this.createServices(), true));
 	}
 
@@ -89,6 +95,7 @@ export class VniLinkApplication extends Disposable {
 			[IConfigurationMainService, new SyncDescriptor(ConfigurationMainService, [join(app.getPath('userData'), 'settings.json')])],
 			[IRecordingMainService, new SyncDescriptor(RecordingMainService)],
 			[IEncryptionMainService, new SyncDescriptor(EncryptionMainService)],
+			[IStateService, this.stateService],
 		);
 	}
 
@@ -113,7 +120,10 @@ export class VniLinkApplication extends Disposable {
 			await app.whenReady();
 			this.checkRunning();
 			installApplicationMenu();
-			await this.instantiationService.invokeFunction(accessor => accessor.get(IConfigurationMainService)).initialize();
+			await Promise.all([
+				this.instantiationService.invokeFunction(accessor => accessor.get(IConfigurationMainService)).initialize(),
+				this.stateService.init(),
+			]);
 			this.checkRunning();
 			this.instantiationService.invokeFunction(accessor => {
 				this.applyAppearance(accessor);
@@ -168,9 +178,11 @@ export class VniLinkApplication extends Disposable {
 		const windows = accessor.get(IWindowsMainService);
 		const engine = accessor.get(IEngineMainService);
 		const configuration = accessor.get(IConfigurationMainService);
+		const state = accessor.get(IStateService);
 		this._register(lifecycle.onWillShutdown(event => {
 			event.join('engine', engine.stop());
 			event.join('configuration', configuration.flush());
+			event.join('state', state.close());
 		}));
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'will-quit')(() => {
 			this.dispose();
@@ -263,6 +275,7 @@ export class VniLinkApplication extends Disposable {
 		server.registerChannel(ENGINE_CHANNEL_NAME, disposables.add(new EngineChannel(engine, windows, nativeHost, permissions)));
 		server.registerChannel(PERMISSIONS_CHANNEL_NAME, new PermissionsChannel(permissions));
 		server.registerChannel(CONFIGURATION_CHANNEL_NAME, new ConfigurationChannel(configuration));
+		server.registerChannel(UI_STATE_CHANNEL_NAME, new UIStateChannel(accessor.get(IStateService)));
 		server.registerChannel(RECORDING_CHANNEL_NAME, ProxyChannel.fromService({
 			getDefaultDirectory: () => recording.getDefaultDirectory(),
 			createDestination: () => recording.createDestination(),

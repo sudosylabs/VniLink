@@ -194,8 +194,9 @@
     {
       "path": "src/base/browser/ui/contextview/contextview.ts",
       "upstreamPath": "src/vs/base/browser/ui/contextview/contextview.ts",
-      "sha256": "28821a8d4ca447658aef236b857e3ae6a5d287369c61de8c6d0e15f25f78f221",
-      "changedImports": 0
+      "sha256": "f517782e36e4bf9ad0379848dc7815e700317f3ae8dad9ac9803700aba4d24c2",
+      "adapted": true,
+      "upstreamStyle": true
     },
     {
       "path": "src/base/browser/ui/dialog/dialog.css",
@@ -332,8 +333,9 @@
     {
       "path": "src/base/browser/ui/menu/menu.ts",
       "upstreamPath": "src/vs/base/browser/ui/menu/menu.ts",
-      "sha256": "e2b9723e4c8b5d811b75467943b80de0b718128972bcb8ea24f8c73adde2ec8e",
-      "changedImports": 0
+      "sha256": "f429a6bd639d9fa069cf99cd3d8e8a7b6796ae43ced8a34d73a1379841500c2e",
+      "adapted": true,
+      "upstreamStyle": true
     },
     {
       "path": "src/base/browser/ui/scrollbar/abstractScrollbar.ts",
@@ -1246,6 +1248,32 @@
       "changedImports": 0
     },
     {
+      "path": "src/platform/contextview/browser/contextMenuHandler.ts",
+      "upstreamPath": "src/vs/platform/contextview/browser/contextMenuHandler.ts",
+      "sha256": "9490d678ca39cf13d4f88219ea1963854d9eabc3267238121152aaeed9aced06",
+      "adapted": true,
+      "upstreamStyle": true
+    },
+    {
+      "path": "src/platform/contextview/browser/contextMenuService.ts",
+      "upstreamPath": "src/vs/platform/contextview/browser/contextMenuService.ts",
+      "sha256": "238b08674542db00ecbea7e59ccd09d15857d2867730bdfd9b9d249ee8b4f8d2",
+      "adapted": true,
+      "upstreamStyle": true
+    },
+    {
+      "path": "src/platform/contextview/browser/contextView.ts",
+      "upstreamPath": "src/vs/platform/contextview/browser/contextView.ts",
+      "sha256": "a384a0dfbf6452a71a08089c2ebef1c3452e425cb33c1b37654e2fd7448ebe6e",
+      "changedImports": 0
+    },
+    {
+      "path": "src/platform/contextview/browser/contextViewService.ts",
+      "upstreamPath": "src/vs/platform/contextview/browser/contextViewService.ts",
+      "sha256": "616e8c2b61b11ad33264aa12c04c40518cf2d597205fb5a2f0c841e55428eb1f",
+      "changedImports": 0
+    },
+    {
       "path": "src/platform/environment/common/argv.ts",
       "upstreamPath": "src/vs/platform/environment/common/argv.ts",
       "sha256": "337e49b6b107d77a9df4571adfb8ca54d8e4c974c8cf5710fdb646d582bcaa3c",
@@ -1330,9 +1358,15 @@
       "changedImports": 0
     },
     {
+      "path": "src/platform/layout/browser/layoutService.ts",
+      "upstreamPath": "src/vs/platform/layout/browser/layoutService.ts",
+      "sha256": "1a8d014691b81499a07c6d3a284a5eff057745b81924dc38dcf17b030bd7517e",
+      "changedImports": 0
+    },
+    {
       "path": "src/platform/native/common/native.ts",
       "upstreamPath": "src/vs/platform/native/common/native.ts",
-      "sha256": "3f5a2030d88129193016ac0b2a9fba9a128e9caa43418b569d3f95713d239e5e",
+      "sha256": "9d3992c16f078239f80761ed8098ad0a9303ad1a859db08f154f4c33824d8e55",
       "adapted": true
     },
     {
@@ -1345,13 +1379,26 @@
       "path": "src/platform/native/electron-main/nativeHostMainService.ts",
       "upstreamPath": "src/vs/platform/native/electron-main/nativeHostMainService.ts",
       "adapted": true,
-      "sha256": "aa89d6c7a37810da36b134fcecb7633b7e4872c75f354baed494d0c0f63b2024"
+      "sha256": "4bd335b30eaf934b6e73b8392bd7263492fd445cd671b0d6522182c6b4de67a8"
     },
     {
       "path": "src/platform/registry/common/platform.ts",
       "upstreamPath": "src/vs/platform/registry/common/platform.ts",
       "sha256": "5a1fceef6c96ced1a5b1da20af0bb89b73f035dc42f23f162a583d6b89dbb523",
       "changedImports": 0
+    },
+    {
+      "path": "src/platform/state/node/state.ts",
+      "upstreamPath": "src/vs/platform/state/node/state.ts",
+      "sha256": "4d08893aef73c2b12d3cc5d8c745b1c43ada8a067cf7e26bd062c8af98c17c58",
+      "changedImports": 0
+    },
+    {
+      "path": "src/platform/state/node/stateService.ts",
+      "upstreamPath": "src/vs/platform/state/node/stateService.ts",
+      "sha256": "94dfb8ea8c7852e74f5375f25ce6374916c754e54fdb381b8112c16664206f30",
+      "adapted": true,
+      "upstreamStyle": true
     },
     {
       "path": "src/platform/terminal/common/terminalStrings.ts",
@@ -1499,6 +1546,7 @@
     "src/base/browser/ui/inputbox/inputBox.ts",
     "src/base/browser/ui/list/list.ts",
     "src/base/browser/ui/list/listWidget.ts",
+    "src/base/browser/ui/menu/menu.ts",
     "src/base/browser/ui/toggle/toggle.ts",
     "src/base/browser/window.ts",
     "src/base/common/actions.ts",
@@ -1537,6 +1585,9 @@
     "src/platform/configuration/common/configurationRegistry.ts",
     "src/platform/contextkey/browser/contextKeyService.ts",
     "src/platform/contextkey/common/contextkey.ts",
+    "src/platform/contextview/browser/contextMenuService.ts",
+    "src/platform/contextview/browser/contextView.ts",
+    "src/platform/contextview/browser/contextViewService.ts",
     "src/platform/instantiation/common/descriptors.ts",
     "src/platform/instantiation/common/extensions.ts",
     "src/platform/instantiation/common/instantiation.ts",
@@ -1544,9 +1595,12 @@
     "src/platform/instantiation/common/serviceCollection.ts",
     "src/platform/ipc/common/mainProcessService.ts",
     "src/platform/ipc/electron-browser/services.ts",
+    "src/platform/layout/browser/layoutService.ts",
     "src/platform/native/common/native.ts",
     "src/platform/native/electron-main/nativeHostMainService.ts",
     "src/platform/registry/common/platform.ts",
+    "src/platform/state/node/state.ts",
+    "src/platform/state/node/stateService.ts",
     "src/platform/terminal/common/terminalStrings.ts",
     "src/platform/theme/browser/themeService.ts",
     "src/platform/theme/common/themeService.ts",
@@ -1565,7 +1619,9 @@
   ],
   "externalDependencies": [
     "electron",
+    "node:fs/promises",
     "node:os",
+    "node:path",
     "trusted-types/lib/index.d.ts",
     "trusted-types/lib/index.js"
   ],
@@ -3736,6 +3792,36 @@
       "kind": "import"
     },
     {
+      "from": "src/platform/state/node/stateService.ts",
+      "to": "src/base/common/async.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/state/node/stateService.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/state/node/stateService.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/state/node/stateService.ts",
+      "to": "src/platform/log/common/log.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/state/node/stateService.ts",
+      "to": "src/platform/state/node/state.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/state/node/state.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
       "from": "src/platform/native/electron-main/nativeHostMainService.ts",
       "to": "src/base/common/buffer.ts",
       "kind": "import"
@@ -3821,6 +3907,26 @@
       "kind": "import"
     },
     {
+      "from": "src/platform/layout/browser/layoutService.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/layout/browser/layoutService.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/layout/browser/layoutService.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/layout/browser/layoutService.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
       "from": "src/platform/ipc/electron-browser/services.ts",
       "to": "src/base/parts/ipc/common/ipc.ts",
       "kind": "import"
@@ -3896,6 +4002,81 @@
       "kind": "import"
     },
     {
+      "from": "src/platform/contextview/browser/contextViewService.ts",
+      "to": "src/base/browser/ui/contextview/contextview.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextViewService.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextViewService.ts",
+      "to": "src/platform/layout/browser/layoutService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextViewService.ts",
+      "to": "src/platform/contextview/browser/contextView.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextViewService.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextView.ts",
+      "to": "src/base/browser/contextmenu.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextView.ts",
+      "to": "src/base/browser/mouseEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextView.ts",
+      "to": "src/base/browser/ui/contextview/contextview.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextView.ts",
+      "to": "src/base/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextView.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextView.ts",
+      "to": "src/base/common/layout.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextView.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextView.ts",
+      "to": "src/platform/actions/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextView.ts",
+      "to": "src/platform/contextkey/common/contextkey.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextView.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
       "from": "src/platform/contextkey/common/contextkey.ts",
       "to": "src/base/common/charCode.ts",
       "kind": "import"
@@ -3956,218 +4137,93 @@
       "kind": "import"
     },
     {
-      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "from": "src/platform/actions/common/actions.ts",
+      "to": "src/base/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/actions/common/actions.ts",
       "to": "src/base/common/event.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/contextkey/browser/contextKeyService.ts",
-      "to": "src/base/common/iterator.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "from": "src/platform/actions/common/actions.ts",
       "to": "src/base/common/lifecycle.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/contextkey/browser/contextKeyService.ts",
-      "to": "src/base/common/marshalling.ts",
+      "from": "src/platform/actions/common/actions.ts",
+      "to": "src/base/common/linkedList.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/contextkey/browser/contextKeyService.ts",
-      "to": "src/base/common/marshallingIds.ts",
+      "from": "src/platform/actions/common/actions.ts",
+      "to": "src/base/common/themables.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/contextkey/browser/contextKeyService.ts",
-      "to": "src/base/common/objects.ts",
+      "from": "src/platform/actions/common/actions.ts",
+      "to": "src/platform/action/common/action.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/contextkey/browser/contextKeyService.ts",
-      "to": "src/base/common/ternarySearchTree.ts",
+      "from": "src/platform/actions/common/actions.ts",
+      "to": "src/platform/action/common/actionCommonCategories.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/contextkey/browser/contextKeyService.ts",
-      "to": "src/base/common/uri.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/contextkey/browser/contextKeyService.ts",
-      "to": "src/nls.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "from": "src/platform/actions/common/actions.ts",
       "to": "src/platform/commands/common/commands.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/contextkey/browser/contextKeyService.ts",
-      "to": "src/platform/configuration/common/configuration.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "from": "src/platform/actions/common/actions.ts",
       "to": "src/platform/contextkey/common/contextkey.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "from": "src/platform/actions/common/actions.ts",
       "to": "src/platform/instantiation/common/instantiation.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/contextkey/browser/contextKeyService.ts",
-      "to": "src/platform/contextkey/common/contextkeys.ts",
+      "from": "src/platform/actions/common/actions.ts",
+      "to": "src/platform/keybinding/common/keybindingsRegistry.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/contextkey/browser/contextKeyService.ts",
-      "to": "src/base/browser/window.ts",
+      "from": "src/platform/keybinding/common/keybindingsRegistry.ts",
+      "to": "src/base/common/keybindings.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/contextkey/browser/contextKeyService.ts",
-      "to": "src/base/browser/dom.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/contextkey/common/contextkeys.ts",
+      "from": "src/platform/keybinding/common/keybindingsRegistry.ts",
       "to": "src/base/common/platform.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/contextkey/common/contextkeys.ts",
-      "to": "src/nls.ts",
+      "from": "src/platform/keybinding/common/keybindingsRegistry.ts",
+      "to": "src/platform/commands/common/commands.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/contextkey/common/contextkeys.ts",
+      "from": "src/platform/keybinding/common/keybindingsRegistry.ts",
       "to": "src/platform/contextkey/common/contextkey.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/configuration/common/configuration.ts",
-      "to": "src/base/common/assert.ts",
+      "from": "src/platform/keybinding/common/keybindingsRegistry.ts",
+      "to": "src/platform/registry/common/platform.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/configuration/common/configuration.ts",
-      "to": "src/base/common/collections.ts",
+      "from": "src/platform/keybinding/common/keybindingsRegistry.ts",
+      "to": "src/base/common/lifecycle.ts",
       "kind": "import"
     },
     {
-      "from": "src/platform/configuration/common/configuration.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/configuration/common/configuration.ts",
-      "to": "src/base/common/types.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/configuration/common/configuration.ts",
-      "to": "src/base/common/uri.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/configuration/common/configuration.ts",
-      "to": "src/platform/instantiation/common/instantiation.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/configuration/common/configuration.ts",
-      "to": "src/platform/workspace/common/workspace.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/workspace/common/workspace.ts",
-      "to": "src/nls.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/workspace/common/workspace.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/workspace/common/workspace.ts",
-      "to": "src/base/common/path.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/workspace/common/workspace.ts",
-      "to": "src/base/common/ternarySearchTree.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/workspace/common/workspace.ts",
-      "to": "src/base/common/resources.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/workspace/common/workspace.ts",
-      "to": "src/base/common/uri.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/workspace/common/workspace.ts",
-      "to": "src/platform/instantiation/common/instantiation.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/workspace/common/workspace.ts",
-      "to": "src/platform/environment/common/environment.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/workspace/common/workspace.ts",
-      "to": "src/base/common/network.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/environment/common/environment.ts",
-      "to": "src/base/common/uri.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/environment/common/environment.ts",
-      "to": "src/platform/environment/common/argv.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/environment/common/environment.ts",
-      "to": "src/platform/instantiation/common/instantiation.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/ternarySearchTree.ts",
-      "to": "src/base/common/arrays.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/ternarySearchTree.ts",
-      "to": "src/base/common/assert.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/ternarySearchTree.ts",
-      "to": "src/base/common/charCode.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/ternarySearchTree.ts",
-      "to": "src/base/common/strings.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/ternarySearchTree.ts",
-      "to": "src/base/common/uri.ts",
+      "from": "src/platform/keybinding/common/keybindingsRegistry.ts",
+      "to": "src/base/common/linkedList.ts",
       "kind": "import"
     },
     {
@@ -4276,146 +4332,6 @@
       "kind": "import"
     },
     {
-      "from": "src/base/common/objects.ts",
-      "to": "src/base/common/types.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/configuration/common/configurationRegistry.ts",
-      "to": "src/base/common/arrays.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/configuration/common/configurationRegistry.ts",
-      "to": "src/base/common/collections.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/configuration/common/configurationRegistry.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/configuration/common/configurationRegistry.ts",
-      "to": "src/base/common/jsonSchema.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/configuration/common/configurationRegistry.ts",
-      "to": "src/base/common/types.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/configuration/common/configurationRegistry.ts",
-      "to": "src/nls.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/configuration/common/configurationRegistry.ts",
-      "to": "src/platform/configuration/common/configuration.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/configuration/common/configurationRegistry.ts",
-      "to": "src/platform/jsonschemas/common/jsonContributionRegistry.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/configuration/common/configurationRegistry.ts",
-      "to": "src/platform/registry/common/platform.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/configuration/common/configurationRegistry.ts",
-      "to": "src/base/common/policy.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/configuration/common/configurationRegistry.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/jsonschemas/common/jsonContributionRegistry.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/jsonschemas/common/jsonContributionRegistry.ts",
-      "to": "src/base/common/jsonSchema.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/jsonschemas/common/jsonContributionRegistry.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/jsonschemas/common/jsonContributionRegistry.ts",
-      "to": "src/platform/registry/common/platform.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/clipboard/common/clipboardService.ts",
-      "to": "src/platform/instantiation/common/instantiation.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/menuService.ts",
-      "to": "src/base/common/async.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/menuService.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/menuService.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/menuService.ts",
-      "to": "src/platform/actions/common/actions.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/menuService.ts",
-      "to": "src/platform/action/common/action.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/menuService.ts",
-      "to": "src/platform/commands/common/commands.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/menuService.ts",
-      "to": "src/platform/contextkey/common/contextkey.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/menuService.ts",
-      "to": "src/base/common/actions.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/menuService.ts",
-      "to": "src/base/common/arrays.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/menuService.ts",
-      "to": "src/base/common/iterator.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/menuService.ts",
-      "to": "src/nls.ts",
-      "kind": "import"
-    },
-    {
       "from": "src/base/common/actions.ts",
       "to": "src/base/common/event.ts",
       "kind": "import"
@@ -4428,206 +4344,6 @@
     {
       "from": "src/base/common/actions.ts",
       "to": "src/nls.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/actions.ts",
-      "to": "src/base/common/actions.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/actions.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/actions.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/actions.ts",
-      "to": "src/base/common/linkedList.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/actions.ts",
-      "to": "src/base/common/themables.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/actions.ts",
-      "to": "src/platform/action/common/action.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/actions.ts",
-      "to": "src/platform/action/common/actionCommonCategories.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/actions.ts",
-      "to": "src/platform/commands/common/commands.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/actions.ts",
-      "to": "src/platform/contextkey/common/contextkey.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/actions.ts",
-      "to": "src/platform/instantiation/common/instantiation.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/actions/common/actions.ts",
-      "to": "src/platform/keybinding/common/keybindingsRegistry.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/keybinding/common/keybindingsRegistry.ts",
-      "to": "src/base/common/keybindings.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/keybinding/common/keybindingsRegistry.ts",
-      "to": "src/base/common/platform.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/keybinding/common/keybindingsRegistry.ts",
-      "to": "src/platform/commands/common/commands.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/keybinding/common/keybindingsRegistry.ts",
-      "to": "src/platform/contextkey/common/contextkey.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/keybinding/common/keybindingsRegistry.ts",
-      "to": "src/platform/registry/common/platform.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/keybinding/common/keybindingsRegistry.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/keybinding/common/keybindingsRegistry.ts",
-      "to": "src/base/common/linkedList.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/node/ipc.mp.ts",
-      "to": "src/base/parts/sandbox/node/electronTypes.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/node/ipc.mp.ts",
-      "to": "src/base/common/buffer.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/node/ipc.mp.ts",
-      "to": "src/base/parts/ipc/common/ipc.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/node/ipc.mp.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/node/ipc.mp.ts",
-      "to": "src/base/common/types.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/electron-main/ipcMain.ts",
-      "to": "src/base/common/errors.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/electron-main/ipcMain.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/electron-main/ipc.mp.ts",
-      "to": "src/base/parts/ipc/electron-main/ipcMain.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/electron-main/ipc.mp.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/electron-main/ipc.mp.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/electron-main/ipc.mp.ts",
-      "to": "src/base/common/uuid.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/electron-main/ipc.mp.ts",
-      "to": "src/base/parts/ipc/common/ipc.mp.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/common/ipc.mp.ts",
-      "to": "src/base/common/buffer.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/common/ipc.mp.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/common/ipc.mp.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/common/ipc.mp.ts",
-      "to": "src/base/parts/ipc/common/ipc.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
-      "to": "src/base/parts/ipc/electron-main/ipcMain.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
-      "to": "src/base/common/buffer.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
-      "to": "src/base/parts/ipc/common/ipc.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
-      "to": "src/base/parts/ipc/common/ipc.electron.ts",
       "kind": "import"
     },
     {
@@ -4636,172 +4352,157 @@
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/toggle/toggle.ts",
-      "to": "src/base/common/actions.ts",
+      "from": "src/base/browser/ui/contextview/contextview.ts",
+      "to": "src/base/browser/canIUse.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/toggle/toggle.ts",
-      "to": "src/base/common/codicons.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/toggle/toggle.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/toggle/toggle.ts",
-      "to": "src/base/common/htmlContent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/toggle/toggle.ts",
-      "to": "src/base/common/iconLabels.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/toggle/toggle.ts",
-      "to": "src/base/common/keyCodes.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/toggle/toggle.ts",
-      "to": "src/base/common/themables.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/toggle/toggle.ts",
+      "from": "src/base/browser/ui/contextview/contextview.ts",
       "to": "src/base/browser/dom.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/toggle/toggle.ts",
-      "to": "src/base/browser/keyboardEvent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/toggle/toggle.ts",
-      "to": "src/base/browser/ui/actionbar/actionViewItems.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/toggle/toggle.ts",
-      "to": "src/base/browser/ui/actionbar/actionbar.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/toggle/toggle.ts",
-      "to": "src/base/browser/ui/hover/hover.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/toggle/toggle.ts",
-      "to": "src/base/browser/ui/hover/hoverDelegate2.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/toggle/toggle.ts",
-      "to": "src/base/browser/ui/widget.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/toggle/toggle.ts",
-      "to": "src/base/browser/ui/toggle/toggle.css",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/widget.ts",
-      "to": "src/base/browser/dom.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/widget.ts",
-      "to": "src/base/browser/keyboardEvent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/widget.ts",
+      "from": "src/base/browser/ui/contextview/contextview.ts",
       "to": "src/base/browser/mouseEvent.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/widget.ts",
-      "to": "src/base/browser/touch.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/widget.ts",
+      "from": "src/base/browser/ui/contextview/contextview.ts",
       "to": "src/base/common/lifecycle.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/touch.ts",
-      "to": "src/base/browser/dom.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/touch.ts",
-      "to": "src/base/browser/window.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/touch.ts",
-      "to": "src/base/common/decorators.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/touch.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/touch.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/touch.ts",
-      "to": "src/base/common/linkedList.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hoverDelegate2.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hoverDelegate2.ts",
-      "to": "src/base/browser/ui/hover/hover.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hover.ts",
-      "to": "src/base/browser/ui/hover/hoverDelegate.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hover.ts",
-      "to": "src/base/browser/ui/hover/hoverWidget.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hover.ts",
-      "to": "src/base/common/cancellation.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hover.ts",
-      "to": "src/base/common/htmlContent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hover.ts",
+      "from": "src/base/browser/ui/contextview/contextview.ts",
       "to": "src/base/common/layout.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/hover/hover.ts",
+      "from": "src/base/browser/ui/contextview/contextview.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/contextview/contextview.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/contextview/contextview.ts",
+      "to": "src/base/browser/ui/contextview/contextview.css",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/contextview/contextview.ts",
+      "to": "src/base/common/layout.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/contextmenu.ts",
+      "to": "src/base/browser/mouseEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/contextmenu.ts",
+      "to": "src/base/browser/ui/actionbar/actionViewItems.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/contextmenu.ts",
+      "to": "src/base/browser/ui/actionbar/actionbar.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/contextmenu.ts",
+      "to": "src/base/browser/ui/contextview/contextview.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/contextmenu.ts",
+      "to": "src/base/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/contextmenu.ts",
+      "to": "src/base/common/keybindings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/contextmenu.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/browser/keyboardEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/browser/ui/actionbar/actionViewItems.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/browser/ui/hover/hoverDelegateFactory.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/browser/ui/hover/hoverDelegate.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/common/keyCodes.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "to": "src/base/browser/ui/actionbar/actionbar.css",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverDelegate.ts",
+      "to": "src/base/browser/ui/hover/hover.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverDelegate.ts",
+      "to": "src/base/browser/ui/hover/hoverWidget.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverDelegate.ts",
+      "to": "src/base/common/htmlContent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverDelegate.ts",
       "to": "src/base/common/lifecycle.ts",
       "kind": "import"
     },
@@ -5001,6 +4702,61 @@
       "kind": "import"
     },
     {
+      "from": "src/base/browser/ui/widget.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/widget.ts",
+      "to": "src/base/browser/keyboardEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/widget.ts",
+      "to": "src/base/browser/mouseEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/widget.ts",
+      "to": "src/base/browser/touch.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/widget.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/touch.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/touch.ts",
+      "to": "src/base/browser/window.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/touch.ts",
+      "to": "src/base/common/decorators.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/touch.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/touch.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/touch.ts",
+      "to": "src/base/common/linkedList.ts",
+      "kind": "import"
+    },
+    {
       "from": "src/base/browser/ui/scrollbar/verticalScrollbar.ts",
       "to": "src/base/browser/mouseEvent.ts",
       "kind": "import"
@@ -5181,78 +4937,33 @@
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/hover/hoverDelegate.ts",
-      "to": "src/base/browser/ui/hover/hover.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hoverDelegate.ts",
-      "to": "src/base/browser/ui/hover/hoverWidget.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hoverDelegate.ts",
-      "to": "src/base/common/htmlContent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/hover/hoverDelegate.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
-      "to": "src/base/browser/dom.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
-      "to": "src/base/browser/keyboardEvent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
-      "to": "src/base/browser/ui/actionbar/actionViewItems.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
-      "to": "src/base/browser/ui/hover/hoverDelegateFactory.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "from": "src/base/browser/ui/hover/hover.ts",
       "to": "src/base/browser/ui/hover/hoverDelegate.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
-      "to": "src/base/common/actions.ts",
+      "from": "src/base/browser/ui/hover/hover.ts",
+      "to": "src/base/browser/ui/hover/hoverWidget.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
-      "to": "src/base/common/event.ts",
+      "from": "src/base/browser/ui/hover/hover.ts",
+      "to": "src/base/common/cancellation.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
-      "to": "src/base/common/keyCodes.ts",
+      "from": "src/base/browser/ui/hover/hover.ts",
+      "to": "src/base/common/htmlContent.ts",
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
+      "from": "src/base/browser/ui/hover/hover.ts",
+      "to": "src/base/common/layout.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hover.ts",
       "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
-      "to": "src/base/common/types.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/actionbar/actionbar.ts",
-      "to": "src/base/browser/ui/actionbar/actionbar.css",
       "kind": "import"
     },
     {
@@ -5353,6 +5064,91 @@
     {
       "from": "src/base/browser/ui/actionbar/actionViewItems.ts",
       "to": "src/base/browser/ui/hover/hoverDelegate2.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverDelegate2.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/hover/hoverDelegate2.ts",
+      "to": "src/base/browser/ui/hover/hover.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/toggle/toggle.ts",
+      "to": "src/base/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/toggle/toggle.ts",
+      "to": "src/base/common/codicons.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/toggle/toggle.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/toggle/toggle.ts",
+      "to": "src/base/common/htmlContent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/toggle/toggle.ts",
+      "to": "src/base/common/iconLabels.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/toggle/toggle.ts",
+      "to": "src/base/common/keyCodes.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/toggle/toggle.ts",
+      "to": "src/base/common/themables.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/toggle/toggle.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/toggle/toggle.ts",
+      "to": "src/base/browser/keyboardEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/toggle/toggle.ts",
+      "to": "src/base/browser/ui/actionbar/actionViewItems.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/toggle/toggle.ts",
+      "to": "src/base/browser/ui/actionbar/actionbar.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/toggle/toggle.ts",
+      "to": "src/base/browser/ui/hover/hover.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/toggle/toggle.ts",
+      "to": "src/base/browser/ui/hover/hoverDelegate2.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/toggle/toggle.ts",
+      "to": "src/base/browser/ui/widget.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/toggle/toggle.ts",
+      "to": "src/base/browser/ui/toggle/toggle.css",
       "kind": "import"
     },
     {
@@ -5961,56 +5757,6 @@
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/browser/canIUse.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/browser/dom.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/browser/domStylesheets.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/browser/mouseEvent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/common/layout.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/common/platform.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/common/types.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/browser/ui/contextview/contextview.css",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/contextview/contextview.ts",
-      "to": "src/base/common/layout.ts",
-      "kind": "import"
-    },
-    {
       "from": "src/base/browser/markdownRenderer.ts",
       "to": "src/base/common/errors.ts",
       "kind": "import"
@@ -6171,6 +5917,11 @@
       "kind": "import"
     },
     {
+      "from": "src/base/common/objects.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
       "from": "src/base/common/marked/marked.js",
       "to": "src/base/common/marked/marked.d.ts",
       "kind": "declaration or attribution"
@@ -6184,6 +5935,691 @@
       "from": "src/base/common/marked/marked.js",
       "to": "src/base/common/marked/cgmanifest.json",
       "kind": "declaration or attribution"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuService.ts",
+      "to": "src/base/browser/contextmenu.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuService.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuService.ts",
+      "to": "src/base/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuService.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuService.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuService.ts",
+      "to": "src/platform/actions/browser/menuEntryActionViewItem.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuService.ts",
+      "to": "src/platform/actions/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuService.ts",
+      "to": "src/platform/contextkey/common/contextkey.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuService.ts",
+      "to": "src/platform/contextview/browser/contextMenuHandler.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuService.ts",
+      "to": "src/platform/contextview/browser/contextView.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuHandler.ts",
+      "to": "src/base/browser/contextmenu.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuHandler.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuHandler.ts",
+      "to": "src/base/browser/mouseEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuHandler.ts",
+      "to": "src/base/browser/ui/menu/menu.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuHandler.ts",
+      "to": "src/base/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuHandler.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuHandler.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuHandler.ts",
+      "to": "src/platform/contextview/browser/contextView.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextview/browser/contextMenuHandler.ts",
+      "to": "src/platform/theme/browser/defaultStyles.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/browser.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/touch.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/ui/menu/vnilinkMenu.css",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/keyboardEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/mouseEvent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/ui/actionbar/actionbar.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/ui/actionbar/actionViewItems.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/ui/scrollbar/scrollableElement.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/ui/icon/icon.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/async.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/codicons.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/codiconsUtil.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/themables.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/icons.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/iconLabels.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/keyCodes.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/keybindings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/scrollable.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/strings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/common/layout.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/browser/ui/menu/menu.ts",
+      "to": "src/base/browser/ui/contextview/contextview.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "to": "src/base/common/iterator.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "to": "src/base/common/marshalling.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "to": "src/base/common/marshallingIds.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "to": "src/base/common/objects.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "to": "src/base/common/ternarySearchTree.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "to": "src/nls.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "to": "src/platform/commands/common/commands.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "to": "src/platform/configuration/common/configuration.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "to": "src/platform/contextkey/common/contextkey.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "to": "src/platform/contextkey/common/contextkeys.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "to": "src/base/browser/window.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/browser/contextKeyService.ts",
+      "to": "src/base/browser/dom.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/common/contextkeys.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/common/contextkeys.ts",
+      "to": "src/nls.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/contextkey/common/contextkeys.ts",
+      "to": "src/platform/contextkey/common/contextkey.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configuration.ts",
+      "to": "src/base/common/assert.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configuration.ts",
+      "to": "src/base/common/collections.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configuration.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configuration.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configuration.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configuration.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configuration.ts",
+      "to": "src/platform/workspace/common/workspace.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/workspace/common/workspace.ts",
+      "to": "src/nls.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/workspace/common/workspace.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/workspace/common/workspace.ts",
+      "to": "src/base/common/path.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/workspace/common/workspace.ts",
+      "to": "src/base/common/ternarySearchTree.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/workspace/common/workspace.ts",
+      "to": "src/base/common/resources.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/workspace/common/workspace.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/workspace/common/workspace.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/workspace/common/workspace.ts",
+      "to": "src/platform/environment/common/environment.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/workspace/common/workspace.ts",
+      "to": "src/base/common/network.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/environment/common/environment.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/environment/common/environment.ts",
+      "to": "src/platform/environment/common/argv.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/environment/common/environment.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/ternarySearchTree.ts",
+      "to": "src/base/common/arrays.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/ternarySearchTree.ts",
+      "to": "src/base/common/assert.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/ternarySearchTree.ts",
+      "to": "src/base/common/charCode.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/ternarySearchTree.ts",
+      "to": "src/base/common/strings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/ternarySearchTree.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/base/common/arrays.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/base/common/collections.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/base/common/jsonSchema.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/nls.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/platform/configuration/common/configuration.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/platform/jsonschemas/common/jsonContributionRegistry.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/platform/registry/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/base/common/policy.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/configuration/common/configurationRegistry.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/jsonschemas/common/jsonContributionRegistry.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/jsonschemas/common/jsonContributionRegistry.ts",
+      "to": "src/base/common/jsonSchema.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/jsonschemas/common/jsonContributionRegistry.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/jsonschemas/common/jsonContributionRegistry.ts",
+      "to": "src/platform/registry/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/clipboard/common/clipboardService.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/actions/common/menuService.ts",
+      "to": "src/base/common/async.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/actions/common/menuService.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/actions/common/menuService.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/actions/common/menuService.ts",
+      "to": "src/platform/actions/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/actions/common/menuService.ts",
+      "to": "src/platform/action/common/action.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/actions/common/menuService.ts",
+      "to": "src/platform/commands/common/commands.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/actions/common/menuService.ts",
+      "to": "src/platform/contextkey/common/contextkey.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/actions/common/menuService.ts",
+      "to": "src/base/common/actions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/actions/common/menuService.ts",
+      "to": "src/base/common/arrays.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/actions/common/menuService.ts",
+      "to": "src/base/common/iterator.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/actions/common/menuService.ts",
+      "to": "src/nls.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/node/ipc.mp.ts",
+      "to": "src/base/parts/sandbox/node/electronTypes.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/node/ipc.mp.ts",
+      "to": "src/base/common/buffer.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/node/ipc.mp.ts",
+      "to": "src/base/parts/ipc/common/ipc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/node/ipc.mp.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/node/ipc.mp.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipcMain.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipcMain.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipc.mp.ts",
+      "to": "src/base/parts/ipc/electron-main/ipcMain.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipc.mp.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipc.mp.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipc.mp.ts",
+      "to": "src/base/common/uuid.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipc.mp.ts",
+      "to": "src/base/parts/ipc/common/ipc.mp.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.mp.ts",
+      "to": "src/base/common/buffer.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.mp.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.mp.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/common/ipc.mp.ts",
+      "to": "src/base/parts/ipc/common/ipc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
+      "to": "src/base/parts/ipc/electron-main/ipcMain.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
+      "to": "src/base/common/buffer.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
+      "to": "src/base/parts/ipc/common/ipc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/parts/ipc/electron-main/ipc.electron.ts",
+      "to": "src/base/parts/ipc/common/ipc.electron.ts",
+      "kind": "import"
     },
     {
       "from": "src/base/browser/ui/inputbox/inputBox.ts",
@@ -6476,161 +6912,6 @@
       "kind": "import"
     },
     {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/browser/browser.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/browser/touch.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/browser/dom.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/browser/domStylesheets.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/browser/keyboardEvent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/browser/mouseEvent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/browser/ui/actionbar/actionbar.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/browser/ui/actionbar/actionViewItems.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/browser/ui/scrollbar/scrollableElement.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/common/actions.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/common/async.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/common/codicons.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/common/codiconsUtil.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/common/themables.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/common/event.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/common/iconLabels.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/common/keyCodes.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/common/keybindings.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/common/platform.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/common/scrollable.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/common/strings.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/common/layout.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/ui/menu/menu.ts",
-      "to": "src/base/browser/ui/contextview/contextview.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/contextmenu.ts",
-      "to": "src/base/browser/mouseEvent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/contextmenu.ts",
-      "to": "src/base/browser/ui/actionbar/actionViewItems.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/contextmenu.ts",
-      "to": "src/base/browser/ui/actionbar/actionbar.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/contextmenu.ts",
-      "to": "src/base/browser/ui/contextview/contextview.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/contextmenu.ts",
-      "to": "src/base/common/actions.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/contextmenu.ts",
-      "to": "src/base/common/keybindings.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/contextmenu.ts",
-      "to": "src/base/common/types.ts",
-      "kind": "import"
-    },
-    {
       "from": "src/base/common/labels.ts",
       "to": "src/base/common/extpath.ts",
       "kind": "import"
@@ -6790,6 +7071,7 @@
     "src/base/browser/ui/inputbox/inputBox.ts",
     "src/base/browser/ui/list/list.ts",
     "src/base/browser/ui/list/listWidget.ts",
+    "src/base/browser/ui/menu/menu.ts",
     "src/base/browser/ui/toggle/toggle.ts",
     "src/base/browser/window.ts",
     "src/base/common/actions.ts",
@@ -6828,6 +7110,9 @@
     "src/platform/configuration/common/configurationRegistry.ts",
     "src/platform/contextkey/browser/contextKeyService.ts",
     "src/platform/contextkey/common/contextkey.ts",
+    "src/platform/contextview/browser/contextMenuService.ts",
+    "src/platform/contextview/browser/contextView.ts",
+    "src/platform/contextview/browser/contextViewService.ts",
     "src/platform/instantiation/common/descriptors.ts",
     "src/platform/instantiation/common/extensions.ts",
     "src/platform/instantiation/common/instantiation.ts",
@@ -6835,9 +7120,12 @@
     "src/platform/instantiation/common/serviceCollection.ts",
     "src/platform/ipc/common/mainProcessService.ts",
     "src/platform/ipc/electron-browser/services.ts",
+    "src/platform/layout/browser/layoutService.ts",
     "src/platform/native/common/native.ts",
     "src/platform/native/electron-main/nativeHostMainService.ts",
     "src/platform/registry/common/platform.ts",
+    "src/platform/state/node/state.ts",
+    "src/platform/state/node/stateService.ts",
     "src/platform/terminal/common/terminalStrings.ts",
     "src/platform/theme/browser/themeService.ts",
     "src/platform/theme/common/themeService.ts",
@@ -6863,6 +7151,11 @@
     "src/workbench/part.ts",
     "src/platform/log/common/log.ts",
     "src/platform/log/common/logService.ts",
-    "src/base/common/performance.ts"
+    "src/base/common/performance.ts",
+    "src/base/browser/ui/menu/vnilinkMenu.css",
+    "src/base/browser/ui/icon/icon.ts",
+    "src/base/common/icons.ts",
+    "src/platform/actions/browser/menuEntryActionViewItem.ts",
+    "src/platform/theme/browser/defaultStyles.ts"
   ]
 }
