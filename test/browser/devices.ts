@@ -398,8 +398,8 @@ async function verifyInspector(fixture: DevicePageFixture, rows: () => HTMLEleme
 	assert(cancel()?.textContent === 'Cancel', 'A counting-down restart offers no Cancel');
 	cancel()?.click();
 	assert(JSON.stringify(fixture.commands.at(-1)) === JSON.stringify(['vnilink.system.cancel', STUDIO]), 'Cancel did not cancel on the selected computer');
-	fixture.systemActions.set(STUDIO, { action: 'restart', phase: 'ended', message: 'Cancelled on Studio Mac' });
-	assert(services()['Restart or shut down'] === 'Cancelled on Studio Mac' && cancel() === null && serviceButton('Restart or shut down')?.disabled === false, 'The outcome does not replace the countdown');
+	fixture.systemActions.set(STUDIO, { action: 'restart', phase: 'ended', message: 'Cancelled there' });
+	assert(services()['Restart or shut down'] === 'Cancelled there' && cancel() === null && serviceButton('Restart or shut down')?.disabled === false, 'The outcome does not replace the countdown');
 	fixture.systemActions.set(STUDIO, undefined);
 	assert(services()['Restart or shut down'] === 'Available', 'The row did not return to its availability');
 	const facts = Object.fromEntries([...page.querySelectorAll('.device-facts > div')].map(row => [row.querySelector('dt')?.textContent ?? '', row.querySelector('dd')?.textContent ?? '']));

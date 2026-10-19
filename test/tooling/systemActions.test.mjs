@@ -136,18 +136,18 @@ test('a notice closes itself when the action ends another way, and a missed one 
 });
 
 test('the computer that asked reads every outcome in words', () => {
-	const at = (action, state, detail = '', noticeRemainingMs = 0) => systemActionMessage('Sudosy', { action, state, detail, noticeRemainingMs });
+	const at = (action, state, detail = '', noticeRemainingMs = 0) => systemActionMessage({ action, state, detail, noticeRemainingMs });
 	assert.equal(at('lock', 'executed'), 'Locked');
 	assert.equal(at('restart', 'scheduled', 'scheduled', 23400), 'Restarting in 24 s');
 	assert.equal(at('shutdown', 'scheduled', 'scheduled', 400), 'Shutting down in 1 s');
 	assert.equal(at('restart', 'executed'), 'Restart started');
-	assert.equal(at('restart', 'cancelled', 'cancelled at that computer'), 'Cancelled on Sudosy');
-	assert.equal(at('restart', 'cancelled', 'the computer that asked disconnected'), 'Cancelled: this computer disconnected');
+	assert.equal(at('restart', 'cancelled', 'cancelled at that computer'), 'Cancelled there');
+	assert.equal(at('restart', 'cancelled', 'the computer that asked disconnected'), 'Cancelled: disconnected');
 	assert.equal(at('shutdown', 'cancelled', 'cancelled by the computer that asked'), 'Cancelled');
-	assert.equal(at('restart', 'refused', 'disabled by host policy'), 'Turned off on Sudosy');
-	assert.equal(at('lock', 'refused', 'system permission revoked'), 'Sudosy didn\'t allow it');
-	assert.equal(at('shutdown', 'failed', 'osascript failed'), 'Sudosy couldn\'t shut down');
-	assert.equal(systemRequestMessage('Sudosy', new Error('Unauthorized: denied')), 'Sudosy doesn\'t allow system actions from this computer');
-	assert.equal(systemRequestMessage('Sudosy', new Error('NoSession: gone')), 'Sudosy isn\'t connected');
-	assert.equal(systemRequestMessage('Sudosy', new Error('boom')), 'Couldn\'t reach Sudosy');
+	assert.equal(at('restart', 'refused', 'disabled by host policy'), 'Turned off there');
+	assert.equal(at('lock', 'refused', 'system permission revoked'), 'Not allowed there');
+	assert.equal(at('shutdown', 'failed', 'osascript failed'), 'Couldn\'t shut down');
+	assert.equal(systemRequestMessage(new Error('Unauthorized: denied')), 'Not allowed there');
+	assert.equal(systemRequestMessage(new Error('NoSession: gone')), 'Not connected');
+	assert.equal(systemRequestMessage(new Error('boom')), 'Couldn\'t reach it');
 });

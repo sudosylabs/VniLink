@@ -445,7 +445,9 @@
 
 .device-service {
 	display: grid;
-	grid-template-columns: 16px minmax(0, 1fr) auto;
+
+	/* The label stays whole; a long status wraps in the space left to it. */
+	grid-template-columns: 16px max-content minmax(0, 1fr);
 	align-items: center;
 	gap: 10px;
 	min-height: 28px;
@@ -480,10 +482,16 @@ button.device-service:hover:not(:disabled) {
 	background: var(--surface-hover);
 }
 
+.device-service-label {
+	white-space: nowrap;
+}
+
 .device-service-status {
+	min-width: 0;
 	font-size: 12px;
 	color: var(--muted);
 	text-align: end;
+	overflow-wrap: anywhere;
 }
 
 /* A restart or shutdown counting down: its row's Cancel, under the status. */

@@ -5,7 +5,6 @@ import { engineErrorCategory, type SystemActionKind, type SystemOperation } from
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { activeControllerSession, type ControllerSession } from '../devices/controllerSession.js';
-import { IDeviceService } from '../devices/deviceService.js';
 import { ISystemActionService, type SystemActionProgress } from './systemActionService.js';
 
 /** How often a counting-down restart or shutdown is read again. */
@@ -22,7 +21,7 @@ interface Followed {
 }
 
 /** What an operation's state means to the person who asked, in words. */
-export function systemActionMessage(name: string, operation: Pick<SystemOperation, 'action' | 'state' | 'detail' | 'noticeRemainingMs'>): string {
+export function systemActionMessage(operation: Pick<SystemOperation, 'action' | 'state' | 'detail' | 'noticeRemainingMs'>): string {
 	const seconds = Math.max(1, Math.ceil(operation.noticeRemainingMs / 1000));
 	switch (operation.state) {
 		case 'admitted':
@@ -35,16 +34,16 @@ export function systemActionMessage(name: string, operation: Pick<SystemOperatio
 			return startedMessage(operation.action);
 		case 'cancelled':
 			switch (operation.detail) {
-				case 'cancelled at that computer': return nls.localize('system.cancelledThere', 'Cancelled on {0}', name);
-				case 'the computer that asked disconnected': return nls.localize('system.cancelledDisconnected', 'Cancelled: this computer disconnected');
+				case 'cancelled at that computer': return nls.localize('system.cancelledThere', 'Cancelled there');
+				case 'the computer that asked disconnected': return nls.localize('system.cancelledDisconnected', 'Cancelled: disconnected');
 				default: return nls.localize('system.cancelled', 'Cancelled');
 			}
 		case 'refused':
 			return operation.detail === 'disabled by host policy'
-				? nls.localize('system.turnedOff', 'Turned off on {0}', name)
-				: nls.localize('system.notAllowed', '{0} didn\'t allow it', name);
+				? nls.localize('system.turnedOff', 'Turned off there')
+				: nls.localize('system.notAllowed', 'Not allowed there');
 		case 'failed':
-			return failedMessage(name, operation.action);
+			return failedMessage(operation.action);
 	}
 }
 
@@ -56,21 +55,21 @@ function startedMessage(action: SystemActionKind): string {
 	}
 }
 
-function failedMessage(name: string, action: SystemActionKind): string {
+function failedMessage(action: SystemActionKind): string {
 	switch (action) {
-		case 'lock': return nls.localize('system.lockFailed', '{0} couldn\'t lock', name);
-		case 'restart': return nls.localize('system.restartFailed', '{0} couldn\'t restart', name);
-		case 'shutdown': return nls.localize('system.shutdownFailed', '{0} couldn\'t shut down', name);
+		case 'lock': return nls.localize('system.lockFailed', 'Couldn\'t lock');
+		case 'restart': return nls.localize('system.restartFailed', 'Couldn\'t restart');
+		case 'shutdown': return nls.localize('system.shutdownFailed', 'Couldn\'t shut down');
 	}
 }
 
 /** Why asking failed before the other computer answered, in words. */
-export function systemRequestMessage(name: string, error: unknown): string {
+export function systemRequestMessage(error: unknown): string {
 	switch (engineErrorCategory(error) ?? '') {
-		case 'Unauthorized': return nls.localize('system.requestNotAllowed', '{0} doesn\'t allow system actions from this computer', name);
+		case 'Unauthorized': return nls.localize('system.requestNotAllowed', 'Not allowed there');
 		case 'NoSession':
-		case 'StaleSession': return nls.localize('system.requestDisconnected', '{0} isn\'t connected', name);
-		default: return nls.localize('system.requestFailed', 'Couldn\'t reach {0}', name);
+		case 'StaleSession': return nls.localize('system.requestDisconnected', 'Not connected');
+		default: return nls.localize('system.requestFailed', 'Couldn\'t reach it');
 	}
 }
 
@@ -84,7 +83,6 @@ export class SystemActionService extends Disposable implements ISystemActionServ
 
 	constructor(
 		@IEngineService private readonly engine: IEngineService,
-		@IDeviceService private readonly devices: IDeviceService,
 	) {
 		super();
 		this._register({
@@ -110,7 +108,7 @@ export class SystemActionService extends Disposable implements ISystemActionServ
 		this.set(deviceId, { action, phase: 'asking', message: action === 'lock' ? nls.localize('system.locking', 'Locking…') : nls.localize('system.asking', 'Asking…') });
 		const session = await activeControllerSession(this.engine, deviceId);
 		if (!session) {
-			this.end(deviceId, action, nls.localize('system.requestDisconnected', '{0} isn\'t connected', this.name(deviceId)));
+			this.end(deviceId, action, nls.localize('system.requestDisconnected', 'Not connected'));
 			return;
 		}
 		try {
@@ -120,7 +118,7 @@ export class SystemActionService extends Disposable implements ISystemActionServ
 			}
 			this.show(deviceId, session, reply.operation);
 		} catch (error) {
-			this.end(deviceId, action, systemRequestMessage(this.name(deviceId), error));
+			this.end(deviceId, action, systemRequestMessage(error));
 		}
 	}
 
@@ -135,14 +133,14 @@ export class SystemActionService extends Disposable implements ISystemActionServ
 				this.show(deviceId, followed.session, reply.operation);
 			}
 		} catch (error) {
-			this.end(deviceId, followed.operation.action, systemRequestMessage(this.name(deviceId), error));
+			this.end(deviceId, followed.operation.action, systemRequestMessage(error));
 		}
 	}
 
 	/** Shows where an operation stands, and follows it while it counts down. */
 	private show(deviceId: string, session: ControllerSession, operation: SystemOperation): void {
 		clearTimeout(this.followed.get(deviceId)?.timer);
-		const message = systemActionMessage(this.name(deviceId), operation);
+		const message = systemActionMessage(operation);
 		if (operation.state !== 'scheduled' && operation.state !== 'admitted') {
 			this.followed.delete(deviceId);
 			this.end(deviceId, operation.action, message);
@@ -170,7 +168,7 @@ export class SystemActionService extends Disposable implements ISystemActionServ
 				const started = followed.operation.state === 'admitted' || followed.operation.noticeRemainingMs <= 2 * followInterval;
 				this.end(deviceId, followed.operation.action, started
 					? startedMessage(followed.operation.action)
-					: nls.localize('system.lost', 'Lost the connection to {0}', this.name(deviceId)));
+					: nls.localize('system.lost', 'Connection lost'));
 			}
 		}
 	}
@@ -192,10 +190,6 @@ export class SystemActionService extends Disposable implements ISystemActionServ
 		this.clearTimers.delete(deviceId);
 		this.progresses.set(deviceId, progress);
 		this.changed.fire(deviceId);
-	}
-
-	private name(deviceId: string): string {
-		return this.devices.devices.find(device => device.id === deviceId)?.name ?? nls.localize('system.thatComputer', 'That computer');
 	}
 }
 
