@@ -22,6 +22,7 @@ import { EngineMainService, IEngineMainService } from '../../platform/engine/ele
 import { HostingMainService, IHostingMainService } from '../../platform/hosting/electron-main/hostingMainService.js';
 import { IScreenHostingMainService, ScreenHostingMainService } from '../../platform/hosting/electron-main/screenHostingMainService.js';
 import { ITrayMainService, TrayMainService } from '../../platform/tray/electron-main/trayMainService.js';
+import { ISystemActionNoticeMainService, SystemActionNoticeMainService } from '../../platform/systemActions/electron-main/systemActionNotice.js';
 import { traySupported } from '../../platform/tray/electron-main/traySupport.js';
 import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.js';
 import type { ServicesAccessor } from '../../platform/instantiation/common/instantiation.js';
@@ -83,6 +84,7 @@ export class VniLinkApplication extends Disposable {
 			[IHostingMainService, new SyncDescriptor(HostingMainService)],
 			[IScreenHostingMainService, new SyncDescriptor(ScreenHostingMainService)],
 			[ITrayMainService, new SyncDescriptor(TrayMainService)],
+			[ISystemActionNoticeMainService, new SyncDescriptor(SystemActionNoticeMainService)],
 			[IPermissionsMainService, new SyncDescriptor(PermissionsMainService)],
 			[IConfigurationMainService, new SyncDescriptor(ConfigurationMainService, [join(app.getPath('userData'), 'settings.json')])],
 			[IRecordingMainService, new SyncDescriptor(RecordingMainService)],
@@ -124,6 +126,8 @@ export class VniLinkApplication extends Disposable {
 			this.instantiationService.invokeFunction(accessor => {
 				accessor.get(IHostingMainService).start();
 				void accessor.get(IScreenHostingMainService).start();
+				// A paired computer may ask this one to restart or shut down; its user sees and answers it.
+				accessor.get(ISystemActionNoticeMainService).start();
 			});
 			if (await traySupported()) {
 				this.checkRunning();

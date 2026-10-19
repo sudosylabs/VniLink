@@ -5,6 +5,7 @@
 //! bounded, nonblocking native drains and input queues outside this mutex.
 mod native;
 mod storage;
+mod system;
 
 use native::{
     TransferCapability, TransferNativeBackend, TransferNativeDevice, TransferPowerPolicy,
@@ -306,6 +307,26 @@ impl EventTransfer {
             vnilink_app::FfiEvent::HostingChanged { hosting } => {
                 serde_json::json!({ "type": "hostingChanged", "hosting": hosting })
             }
+            vnilink_app::FfiEvent::SystemActionScheduled {
+                operation_id,
+                action,
+                endpoint_id,
+                remaining_ms,
+            } => serde_json::json!({
+                "type": "systemActionScheduled",
+                "id": operation_id.to_string(),
+                "action": system::action_name(*action),
+                "endpoint_id": endpoint_id,
+                "remainingMs": remaining_ms,
+            }),
+            vnilink_app::FfiEvent::SystemActionEnded {
+                operation_id,
+                state,
+            } => serde_json::json!({
+                "type": "systemActionEnded",
+                "id": operation_id.to_string(),
+                "state": system::state_name(*state),
+            }),
             vnilink_app::FfiEvent::DevicePaired { endpoint_id } => {
                 serde_json::json!({ "type": "devicePaired", "endpoint_id": endpoint_id })
             }
@@ -537,6 +558,33 @@ enum Command {
     SystemPolicy,
     SetSystemPolicy {
         policy: TransferSystemPolicy,
+    },
+    /// Asks a paired computer to lock, restart or shut down.
+    SystemAction {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        generation: String,
+        action: String,
+    },
+    SystemOperation {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        generation: String,
+        id: String,
+    },
+    CancelSystemAction {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        generation: String,
+        id: String,
+    },
+    /// Restarts and shutdowns counting down on this computer.
+    ScheduledSystemActions,
+    CancelHostedSystemAction {
+        id: String,
+    },
+    RunHostedSystemActionNow {
+        id: String,
     },
     TerminalPolicy,
     SetTerminalPolicy {
@@ -1029,6 +1077,12 @@ enum Reply {
         policy: TransferSystemPolicy,
         support: TransferSystemSupport,
     },
+    SystemOperation {
+        operation: system::TransferSystemOperation,
+    },
+    ScheduledSystemActions {
+        actions: Vec<system::TransferScheduledSystemAction>,
+    },
     TerminalPolicy {
         policy: TransferTerminalPolicy,
     },
@@ -1083,6 +1137,8 @@ struct State {
     video: HashMap<u64, VideoPoller>,
     events: HashMap<u64, EventPoller>,
     files: HashMap<u64, Arc<FilesService>>,
+    /// The System service held on each connection this computer asked.
+    systems: HashMap<(u64, u64), Arc<vnilink_app::SystemServiceHandle>>,
     next_subscription: u64,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -1146,6 +1202,7 @@ impl Task for OpenTask {
                 video: HashMap::new(),
                 events: HashMap::new(),
                 files: HashMap::new(),
+                systems: HashMap::new(),
                 next_subscription: 1,
             })),
         })
@@ -2324,6 +2381,12 @@ impl EngineBridge {
             | Command::ReleaseFilesJobs { .. }
             | Command::FilesJobCancel { .. }
             | Command::FilesJobResume { .. } => Self::services(state, command),
+            Command::SystemAction { .. }
+            | Command::SystemOperation { .. }
+            | Command::CancelSystemAction { .. }
+            | Command::ScheduledSystemActions
+            | Command::CancelHostedSystemAction { .. }
+            | Command::RunHostedSystemActionNow { .. } => system::dispatch(state, command),
             Command::Shutdown => {
                 state.closed = true;
                 native::shutdown(state)?;
@@ -2531,6 +2594,10 @@ impl CommandShape {
             "setSharingPolicy" => &["type", "policy"],
             "systemPolicy" => &["type"],
             "setSystemPolicy" => &["type", "policy"],
+            "systemAction" => &["type", "sessionId", "generation", "action"],
+            "systemOperation" | "cancelSystemAction" => &["type", "sessionId", "generation", "id"],
+            "scheduledSystemActions" => &["type"],
+            "cancelHostedSystemAction" | "runHostedSystemActionNow" => &["type", "id"],
             "terminalPolicy" => &["type"],
             "setTerminalPolicy" => &["type", "policy"],
             "terminalShells" | "hostedTerminalSessions" => &["type"],

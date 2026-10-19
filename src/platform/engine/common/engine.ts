@@ -128,6 +128,9 @@ export type EngineEvent =
 	| { type: 'hostingChanged'; hosting: boolean }
 	| { type: 'devicePaired' | 'deviceAuthorized' | 'deviceRevoked' | 'deviceUnpaired'; endpoint_id: string }
 	| { type: 'controlRequested'; endpoint_id: string; check: string }
+	/** A paired computer asked this one to restart or shut down; it runs after `remainingMs` unless cancelled. */
+	| { type: 'systemActionScheduled'; id: string; action: 'restart' | 'shutdown'; endpoint_id: string; remainingMs: number }
+	| { type: 'systemActionEnded'; id: string; state: SystemOperationState }
 	| { type: 'addressesUpdated'; endpoint_id: string }
 	| { type: 'peerRenamed'; endpoint_id: string; hostname: string | null }
 	| { type: 'presenceChanged'; endpoint_id: string; presence: DevicePresence }
@@ -181,6 +184,10 @@ export type EngineCommand =
 	| { type: 'setSharingPolicy'; policy: Partial<SharingPolicy> }
 	| { type: 'systemPolicy' }
 	| { type: 'setSystemPolicy'; policy: SystemPolicy }
+	| { type: 'systemAction'; sessionId: string; generation: string; action: SystemActionKind }
+	| { type: 'systemOperation' | 'cancelSystemAction'; sessionId: string; generation: string; id: string }
+	| { type: 'scheduledSystemActions' }
+	| { type: 'cancelHostedSystemAction' | 'runHostedSystemActionNow'; id: string }
 	| { type: 'terminalPolicy' }
 	| { type: 'setTerminalPolicy'; policy: TerminalPolicy }
 	| { type: 'terminalShells' | 'hostedTerminalSessions' }
@@ -296,6 +303,8 @@ export type EngineReply =
 	| { type: 'events'; events: EngineEvent[]; lagged: string }
 	| { type: 'sharingPolicy'; policy: SharingPolicy }
 	| { type: 'systemPolicy'; policy: SystemPolicy; support: SystemSupport }
+	| { type: 'systemOperation'; operation: SystemOperation }
+	| { type: 'scheduledSystemActions'; actions: ScheduledSystemAction[] }
 	| { type: 'terminalPolicy'; policy: TerminalPolicy }
 	| { type: 'terminalSessions'; sessions: TerminalSession[] }
 	| ({ type: 'terminalShells' } & TerminalShells)
@@ -403,6 +412,48 @@ function relayInputs(value: unknown): value is RelayInput[] {
 function systemPolicy(value: unknown): value is SystemPolicy {
 	return record(value) && typeof value.allow_lock === 'boolean' && typeof value.allow_restart === 'boolean'
 		&& typeof value.allow_shutdown === 'boolean' && typeof value.allow_privacy === 'boolean' && Object.keys(value).length === 4;
+}
+
+export type SystemActionKind = 'lock' | 'restart' | 'shutdown';
+
+export type SystemOperationState = 'admitted' | 'refused' | 'executed' | 'failed' | 'scheduled' | 'cancelled';
+
+/** One lock, restart or shutdown asked of a paired computer, as it stands. */
+export interface SystemOperation {
+	readonly id: string;
+	readonly action: SystemActionKind;
+	readonly state: SystemOperationState;
+	/** The host's short reason, such as "disabled by host policy". */
+	readonly detail: string;
+	/** Time left in a restart or shutdown's notice; zero once it ends. */
+	readonly noticeRemainingMs: number;
+}
+
+/** A restart or shutdown counting down on this computer. */
+export interface ScheduledSystemAction {
+	readonly id: string;
+	readonly action: 'restart' | 'shutdown';
+	readonly endpoint_id: string;
+	readonly remainingMs: number;
+}
+
+const systemActionKinds: readonly string[] = ['lock', 'restart', 'shutdown'];
+
+const systemOperationStates: readonly string[] = ['admitted', 'refused', 'executed', 'failed', 'scheduled', 'cancelled'];
+
+function noticeMs(value: unknown): value is number {
+	return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 4294967295;
+}
+
+function systemOperation(value: unknown): value is SystemOperation {
+	return record(value) && decimal(value.id) && systemActionKinds.includes(String(value.action))
+		&& systemOperationStates.includes(String(value.state)) && typeof value.detail === 'string' && value.detail.length <= 256
+		&& noticeMs(value.noticeRemainingMs) && Object.keys(value).length === 5;
+}
+
+function scheduledSystemAction(value: unknown): value is ScheduledSystemAction {
+	return record(value) && decimal(value.id) && (value.action === 'restart' || value.action === 'shutdown')
+		&& text(value.endpoint_id) && noticeMs(value.remainingMs) && Object.keys(value).length === 4;
 }
 
 function systemSupport(value: unknown): value is SystemSupport {
@@ -520,6 +571,8 @@ export function isEngineEvent(value: unknown): value is EngineEvent {
 		case 'devicePaired': case 'deviceAuthorized': case 'deviceRevoked': case 'deviceUnpaired':
 			return text(value.endpoint_id) && Object.keys(value).length === 2;
 		case 'controlRequested': return text(value.endpoint_id) && text(value.check) && Object.keys(value).length === 3;
+		case 'systemActionScheduled': return decimal(value.id) && (value.action === 'restart' || value.action === 'shutdown') && text(value.endpoint_id) && noticeMs(value.remainingMs) && Object.keys(value).length === 5;
+		case 'systemActionEnded': return decimal(value.id) && systemOperationStates.includes(String(value.state)) && Object.keys(value).length === 3;
 		case 'addressesUpdated': return text(value.endpoint_id) && Object.keys(value).length === 2;
 		case 'peerRenamed': return text(value.endpoint_id) && (value.hostname === null || text(value.hostname)) && Object.keys(value).length === 3;
 		case 'presenceChanged': return text(value.endpoint_id) && devicePresences.some(presence => presence === value.presence) && Object.keys(value).length === 3;
@@ -655,6 +708,10 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'setSharingPolicy': keys = ['policy']; valid = sharingPolicyUpdate(value.policy); break;
 		case 'systemPolicy': keys = []; valid = true; break;
 		case 'setSystemPolicy': keys = ['policy']; valid = systemPolicy(value.policy); break;
+		case 'systemAction': keys = ['sessionId', 'generation', 'action']; valid = decimal(value.sessionId) && decimal(value.generation) && systemActionKinds.includes(String(value.action)); break;
+		case 'systemOperation': case 'cancelSystemAction': keys = ['sessionId', 'generation', 'id']; valid = decimal(value.sessionId) && decimal(value.generation) && decimal(value.id); break;
+		case 'scheduledSystemActions': keys = []; valid = true; break;
+		case 'cancelHostedSystemAction': case 'runHostedSystemActionNow': keys = ['id']; valid = decimal(value.id); break;
 		case 'terminalPolicy': keys = []; valid = true; break;
 		case 'setTerminalPolicy': keys = ['policy']; valid = terminalPolicy(value.policy); break;
 		case 'terminalShells': case 'hostedTerminalSessions': keys = []; valid = true; break;
@@ -723,6 +780,8 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'events': return Array.isArray(value.events) && value.events.length <= 256 && value.events.every((item: unknown) => isEngineEvent(item)) && decimal(value.lagged) && Object.keys(value).length === 3;
 		case 'sharingPolicy': return sharingPolicy(value.policy) && Object.keys(value).length === 2;
 		case 'systemPolicy': return systemPolicy(value.policy) && systemSupport(value.support) && Object.keys(value).length === 3;
+		case 'systemOperation': return systemOperation(value.operation) && Object.keys(value).length === 2;
+		case 'scheduledSystemActions': return Array.isArray(value.actions) && value.actions.length <= 64 && value.actions.every((action: unknown) => scheduledSystemAction(action)) && Object.keys(value).length === 2;
 		case 'terminalPolicy': return terminalPolicy(value.policy) && Object.keys(value).length === 2;
 		case 'terminalSessions': return terminalSessions(value.sessions) && Object.keys(value).length === 2;
 		case 'terminalShells': return terminalShells(value);

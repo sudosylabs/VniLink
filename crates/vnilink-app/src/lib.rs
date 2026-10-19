@@ -72,8 +72,9 @@ pub use services::{
     FfiSharingPolicyUpdate, FilesService, ServiceLeasePoller,
 };
 pub use system::{
-    FfiHostSystemReport, FfiOperationState, FfiPrivacyState, FfiSessionState, FfiSystemAction,
-    FfiSystemOperation, FfiSystemPolicy, FfiSystemSupport, SystemServiceHandle,
+    FfiHostSystemReport, FfiOperationState, FfiPrivacyState, FfiScheduledSystemAction,
+    FfiSessionState, FfiSystemAction, FfiSystemOperation, FfiSystemPolicy, FfiSystemSupport,
+    SystemServiceHandle,
 };
 pub use terminal::{
     FfiShell, FfiTerminalEvent, FfiTerminalPolicy, FfiTerminalSessionInfo, FfiTerminalShells,

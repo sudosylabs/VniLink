@@ -17,6 +17,19 @@ pub enum CoreEvent {
     HostingChanged {
         hosting: bool,
     },
+    /// A paired computer asked this one to restart or shut down. It runs
+    /// after `remaining_ms` unless cancelled; show its user the notice.
+    SystemActionScheduled {
+        operation_id: u64,
+        action: crate::system::SystemAction,
+        endpoint_id: String,
+        remaining_ms: u32,
+    },
+    /// A scheduled restart or shutdown ran, failed, was refused or was cancelled.
+    SystemActionEnded {
+        operation_id: u64,
+        state: crate::system::OperationState,
+    },
     DevicePaired {
         endpoint_id: String,
     },

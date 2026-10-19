@@ -196,13 +196,165 @@ fn lock_executes_and_restart_needs_explicit_policy() {
         ..SystemPolicy::default()
     })
     .unwrap();
+    // Allowed, they wait out a notice first; here a zero-length one.
+    host.set_system_action_notice(Duration::ZERO);
     let restart = system.execute(SystemAction::Restart).unwrap();
-    assert_eq!(restart.state, OperationState::Executed);
+    assert_eq!(restart.state, OperationState::Scheduled);
     assert!(!restart.completion_observable);
+    wait(|| system.operation(restart.id).unwrap().state == OperationState::Executed);
     assert_eq!(actions.calls.lock().unwrap().restarts, 1);
     let shutdown = system.execute(SystemAction::Shutdown).unwrap();
-    assert_eq!(shutdown.state, OperationState::Executed);
-    assert!(!shutdown.completion_observable);
+    wait(|| system.operation(shutdown.id).unwrap().state == OperationState::Executed);
+    assert_eq!(actions.calls.lock().unwrap().shutdowns, 1);
+}
+
+fn allow_restart(host: &Core, notice: Duration) {
+    host.set_system_policy(SystemPolicy {
+        allow_restart: true,
+        allow_shutdown: true,
+        ..SystemPolicy::default()
+    })
+    .unwrap();
+    host.set_system_action_notice(notice);
+}
+
+#[test]
+fn a_restart_waits_out_its_notice_and_tells_the_host() {
+    let (host, controller, actions) = paired_system();
+    allow_restart(&host, Duration::from_millis(600));
+    let events = host.subscribe().unwrap();
+    let parent = active_parent(&controller, &host);
+    let system = open_system(&controller, &parent);
+    let restart = system.execute(SystemAction::Restart).unwrap();
+    assert_eq!(restart.state, OperationState::Scheduled);
+    assert!(restart.notice_remaining_ms > 0 && restart.notice_remaining_ms <= 600);
+    let scheduled = host.scheduled_system_actions().unwrap();
+    assert_eq!(scheduled.len(), 1);
+    assert_eq!(scheduled[0].operation_id, restart.id);
+    assert_eq!(scheduled[0].endpoint_id, controller.endpoint_id());
+    // Nothing runs during the notice.
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(actions.calls.lock().unwrap().restarts, 0);
+    wait(|| system.operation(restart.id).unwrap().state == OperationState::Executed);
+    assert_eq!(actions.calls.lock().unwrap().restarts, 1);
+    assert!(host.scheduled_system_actions().unwrap().is_empty());
+    let mut seen = Vec::new();
+    wait(|| {
+        while let Some(event) = events.try_recv() {
+            match event {
+                crate::CoreEvent::SystemActionScheduled {
+                    operation_id,
+                    action,
+                    endpoint_id,
+                    ..
+                } => {
+                    seen.push(format!(
+                        "scheduled {operation_id} {action:?} {}",
+                        endpoint_id == controller.endpoint_id()
+                    ));
+                }
+                crate::CoreEvent::SystemActionEnded {
+                    operation_id,
+                    state,
+                } => {
+                    seen.push(format!("ended {operation_id} {state:?}"));
+                }
+                _ => {}
+            }
+        }
+        seen.len() == 2
+    });
+    assert_eq!(
+        seen,
+        [
+            format!("scheduled {} Restart true", restart.id),
+            format!("ended {} Executed", restart.id)
+        ]
+    );
+}
+
+#[test]
+fn either_computer_can_cancel_a_scheduled_restart() {
+    let (host, controller, actions) = paired_system();
+    allow_restart(&host, Duration::from_secs(30));
+    let parent = active_parent(&controller, &host);
+    let system = open_system(&controller, &parent);
+    // At the host, as its user chooses in the notice.
+    let first = system.execute(SystemAction::Restart).unwrap();
+    let cancelled = host.cancel_system_action(first.id).unwrap();
+    assert_eq!(cancelled.state, OperationState::Cancelled);
+    assert_eq!(cancelled.detail, "cancelled at that computer");
+    assert_eq!(
+        system.operation(first.id).unwrap().state,
+        OperationState::Cancelled
+    );
+    // From the computer that asked.
+    let second = system.execute(SystemAction::Shutdown).unwrap();
+    let cancelled = system.cancel(second.id).unwrap();
+    assert_eq!(cancelled.state, OperationState::Cancelled);
+    assert_eq!(cancelled.detail, "cancelled by the computer that asked");
+    // An operation that already ended stays as it is.
+    assert_eq!(system.cancel(second.id).unwrap(), cancelled);
+    std::thread::sleep(Duration::from_millis(300));
+    let calls = actions.calls.lock().unwrap();
+    assert_eq!((calls.restarts, calls.shutdowns), (0, 0));
+}
+
+#[test]
+fn another_connection_cannot_cancel_and_run_now_starts_at_once() {
+    let (host, controller, actions) = paired_system();
+    allow_restart(&host, Duration::from_secs(30));
+    let parent = active_parent(&controller, &host);
+    let system = open_system(&controller, &parent);
+    let restart = system.execute(SystemAction::Restart).unwrap();
+    // A second paired computer asks to cancel someone else's restart.
+    let other = start_direct();
+    pair_for_control(&host, &other);
+    let other_parent = active_parent(&other, &host);
+    let other_system = open_system(&other, &other_parent);
+    assert!(other_system.cancel(restart.id).is_err());
+    assert_eq!(
+        system.operation(restart.id).unwrap().state,
+        OperationState::Scheduled
+    );
+    // The person at the computer starts it sooner.
+    host.run_system_action_now(restart.id).unwrap();
+    wait(|| system.operation(restart.id).unwrap().state == OperationState::Executed);
+    assert_eq!(actions.calls.lock().unwrap().restarts, 1);
+    assert!(host.run_system_action_now(restart.id).is_err());
+}
+
+#[test]
+fn a_restart_ends_when_the_computer_that_asked_leaves_or_policy_changes() {
+    let (host, controller, actions) = paired_system();
+    allow_restart(&host, Duration::from_secs(30));
+    let parent = active_parent(&controller, &host);
+    let system = open_system(&controller, &parent);
+    let restart = system.execute(SystemAction::Restart).unwrap();
+    let id = restart.id;
+    controller.disconnect_session(parent.id).unwrap();
+    let ended = |host: &Core, id: u64| {
+        host.scheduled_system_actions()
+            .unwrap()
+            .iter()
+            .all(|action| action.operation_id != id)
+    };
+    wait(|| ended(&host, id));
+    // Policy turned off during the notice: the start gate refuses it.
+    allow_restart(&host, Duration::from_millis(300));
+    let parent = active_parent(&controller, &host);
+    let system = open_system(&controller, &parent);
+    let restart = system.execute(SystemAction::Restart).unwrap();
+    host.set_system_policy(SystemPolicy::default()).unwrap();
+    wait(|| system.operation(restart.id).unwrap().state == OperationState::Refused);
+    assert_eq!(
+        system.operation(restart.id).unwrap().detail,
+        "disabled by host policy"
+    );
+    assert_eq!(actions.calls.lock().unwrap().restarts, 0);
+    // A lock still runs at once.
+    let locked = system.execute(SystemAction::Lock).unwrap();
+    assert_eq!(locked.state, OperationState::Executed);
 }
 
 #[test]

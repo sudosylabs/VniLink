@@ -558,6 +558,8 @@ struct Shared {
     /// Serializes native privacy/input transitions so a revoke restore can
     /// never interleave with an in-flight enable. Never held across network.
     privacy_serial: Mutex<()>,
+    /// [`crate::system::SYSTEM_ACTION_NOTICE`], shortened by tests.
+    system_notice: Mutex<Duration>,
     terminal_sessions: Mutex<HashMap<String, Arc<terminal_runtime::HostedTerminal>>>,
     /// Latest text published by the controlled computer. Not logged.
     video_inbox: Mutex<Option<Arc<VideoInbox>>>,

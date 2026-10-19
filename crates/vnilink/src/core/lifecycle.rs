@@ -306,6 +306,7 @@ impl Core {
             terminal_factory: Mutex::new(None),
             system_actions: Mutex::new(None),
             privacy_serial: Mutex::new(()),
+            system_notice: Mutex::new(crate::system::SYSTEM_ACTION_NOTICE),
             terminal_sessions: Mutex::new(HashMap::new()),
             clipboard_available: AtomicBool::new(false),
             video_inbox: Mutex::new(None),

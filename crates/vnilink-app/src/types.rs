@@ -384,6 +384,17 @@ pub enum FfiEvent {
     HostingChanged {
         hosting: bool,
     },
+    /// A paired computer asked this one to restart or shut down.
+    SystemActionScheduled {
+        operation_id: u64,
+        action: crate::FfiSystemAction,
+        endpoint_id: String,
+        remaining_ms: u32,
+    },
+    SystemActionEnded {
+        operation_id: u64,
+        state: crate::FfiOperationState,
+    },
     DevicePaired {
         endpoint_id: String,
     },
@@ -655,6 +666,24 @@ pub(crate) fn event(event: vnilink::CoreEvent) -> FfiEvent {
             FfiEvent::PeerAvailabilityChanged { endpoint_id }
         }
         vnilink::CoreEvent::HostingChanged { hosting } => FfiEvent::HostingChanged { hosting },
+        vnilink::CoreEvent::SystemActionScheduled {
+            operation_id,
+            action,
+            endpoint_id,
+            remaining_ms,
+        } => FfiEvent::SystemActionScheduled {
+            operation_id,
+            action: action.into(),
+            endpoint_id,
+            remaining_ms,
+        },
+        vnilink::CoreEvent::SystemActionEnded {
+            operation_id,
+            state,
+        } => FfiEvent::SystemActionEnded {
+            operation_id,
+            state: state.into(),
+        },
         vnilink::CoreEvent::DevicePaired { endpoint_id } => FfiEvent::DevicePaired { endpoint_id },
         vnilink::CoreEvent::DeviceAuthorized { endpoint_id } => {
             FfiEvent::DeviceAuthorized { endpoint_id }

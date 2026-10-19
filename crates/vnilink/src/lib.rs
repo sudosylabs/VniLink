@@ -162,8 +162,8 @@ pub use service::{
 };
 pub use session::{Grants, SessionInfo, SessionPhase, SessionRole};
 pub use system::{
-    HostSessionState, HostSystemActions, OperationState, PrivacyState, SystemAction,
-    SystemOperation, SystemPolicy, SystemSupport,
+    HostSessionState, HostSystemActions, OperationState, PrivacyState, ScheduledSystemAction,
+    SystemAction, SystemOperation, SystemPolicy, SystemSupport, SYSTEM_ACTION_NOTICE,
 };
 pub use video::{
     CodecSupport, EncodedFrame, HostCapture, RecordingVideoTap, VideoCodec, VideoSubscription,
