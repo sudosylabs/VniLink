@@ -125,6 +125,16 @@ impl RemoteFilesService {
             _ => Err(Error::Malformed),
         }
     }
+    /// The host's roots, home folder and usual folders.
+    pub fn places(&self) -> Result<fs::Places, Error> {
+        match self.request(fs::Request::Places {
+            id: 1,
+            generation: 0,
+        })? {
+            super::fs::FsOutcome::Places(places) => Ok(places),
+            _ => Err(Error::Malformed),
+        }
+    }
     pub fn mkdir(&self, root: u64, path: &str, name: &str) -> Result<(), Error> {
         self.request(fs::Request::Mkdir {
             id: 1,
@@ -529,9 +539,11 @@ async fn exchange(
         fs::Request::List { generation, .. }
         | fs::Request::Mkdir { generation, .. }
         | fs::Request::Rename { generation, .. }
-        | fs::Request::Delete { generation, .. } => *generation = stamp.generation,
+        | fs::Request::Delete { generation, .. }
+        | fs::Request::Places { generation, .. } => *generation = stamp.generation,
     }
     let list = matches!(request, fs::Request::List { .. });
+    let places = matches!(request, fs::Request::Places { .. });
     write(send, fs::encode_request(&request)?).await?;
     let response = fs::decode_response(&read(recv).await?).map_err(|e| e.to_error())?;
     if response.id != 1 {
@@ -541,6 +553,10 @@ async fn exchange(
     if list {
         Ok(super::fs::FsOutcome::Page(
             fs::decode_list_body(&read(recv).await?).map_err(|e| e.to_error())?,
+        ))
+    } else if places {
+        Ok(super::fs::FsOutcome::Places(
+            fs::decode_places_body(&read(recv).await?).map_err(|e| e.to_error())?,
         ))
     } else {
         Ok(super::fs::FsOutcome::Done)

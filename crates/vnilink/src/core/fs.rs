@@ -34,6 +34,7 @@ fn encode_raw(bytes: &[u8]) -> Result<Vec<u8>, Error> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FsOutcome {
     Page(DirPage),
+    Places(fs::Places),
     Done,
 }
 
@@ -82,6 +83,13 @@ impl Core {
     pub(crate) fn pin_file_root(&self, id: u64) -> Result<crate::fs::PinnedRoot, Error> {
         self.ensure_alive()?;
         lock(&self.shared.file_roots).pin(id)
+    }
+
+    /// This computer's roots, home folder and usual folders.
+    pub fn places(&self) -> Result<fs::Places, Error> {
+        self.ensure_alive()?;
+        let snapshot = lock(&self.shared.file_roots).clone();
+        Ok(fs::places(&snapshot))
     }
 
     /// Lists one page of a directory under an approved root.
@@ -194,7 +202,7 @@ impl Core {
             },
         )? {
             FsOutcome::Page(page) => Ok(page),
-            FsOutcome::Done => Err(Error::Malformed),
+            FsOutcome::Done | FsOutcome::Places(_) => Err(Error::Malformed),
         }
     }
 
@@ -219,7 +227,7 @@ impl Core {
             },
         )? {
             FsOutcome::Done => Ok(()),
-            FsOutcome::Page(_) => Err(Error::Malformed),
+            FsOutcome::Page(_) | FsOutcome::Places(_) => Err(Error::Malformed),
         }
     }
 
@@ -251,7 +259,7 @@ impl Core {
             },
         )? {
             FsOutcome::Done => Ok(()),
-            FsOutcome::Page(_) => Err(Error::Malformed),
+            FsOutcome::Page(_) | FsOutcome::Places(_) => Err(Error::Malformed),
         }
     }
 
@@ -280,7 +288,7 @@ impl Core {
             },
         )? {
             FsOutcome::Done => Ok(()),
-            FsOutcome::Page(_) => Err(Error::Malformed),
+            FsOutcome::Page(_) | FsOutcome::Places(_) => Err(Error::Malformed),
         }
     }
 
@@ -303,7 +311,8 @@ impl Core {
                 fs::Request::List { generation, .. }
                 | fs::Request::Mkdir { generation, .. }
                 | fs::Request::Rename { generation, .. }
-                | fs::Request::Delete { generation, .. } => {
+                | fs::Request::Delete { generation, .. }
+                | fs::Request::Places { generation, .. } => {
                     *generation = session.wire_stamp.generation
                 }
             }
@@ -356,6 +365,22 @@ impl Core {
                     .await?;
                     let page = fs::decode_list_body(&body).map_err(|error| error.to_error())?;
                     Ok(FsOutcome::Page(page))
+                }
+                fs::Request::Places { .. } => {
+                    let body: Vec<u8> = crate::sidestream::read_frame(
+                        &mut recv,
+                        |len| {
+                            if len > MAX_FS_FRAME {
+                                Err(Error::Malformed)
+                            } else {
+                                Ok(())
+                            }
+                        },
+                        |bytes| Ok(bytes.to_vec()),
+                    )
+                    .await?;
+                    let places = fs::decode_places_body(&body).map_err(|error| error.to_error())?;
+                    Ok(FsOutcome::Places(places))
                 }
                 _ => Ok(FsOutcome::Done),
             }
@@ -558,7 +583,8 @@ pub(super) async fn handle_fs_request(
         fs::Request::List { id, generation, .. }
         | fs::Request::Mkdir { id, generation, .. }
         | fs::Request::Rename { id, generation, .. }
-        | fs::Request::Delete { id, generation, .. } => (*id, *generation),
+        | fs::Request::Delete { id, generation, .. }
+        | fs::Request::Places { id, generation } => (*id, *generation),
     };
     // Fence generation + authorization with the mutation under one state
     // hold (jobs->state order for renames, consistent with publication):
@@ -668,6 +694,23 @@ pub(super) async fn handle_fs_request(
                 fs::ListHooks::none(),
             )
             .await
+        }
+        fs::Request::Places { .. } => {
+            // Admitted like a listing: it names folders, never their contents.
+            let gate = list_gate(&lock(&shared.state), session_id, peer, generation);
+            match gate {
+                Some(status) => (fs::Response::coded(id, status), None),
+                None => {
+                    let snapshot = lock(&shared.file_roots).clone();
+                    match tokio::task::spawn_blocking(move || fs::places(&snapshot)).await {
+                        Ok(places) => match fs::encode_places_body(&places) {
+                            Ok(body) => (fs::Response::ok(id), Some(body)),
+                            Err(_) => (fs::Response::coded(id, fs::STATUS_ERROR), None),
+                        },
+                        Err(_) => (fs::Response::coded(id, fs::STATUS_ERROR), None),
+                    }
+                }
+            }
         }
         fs::Request::Mkdir {
             root, path, name, ..

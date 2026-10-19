@@ -17,6 +17,38 @@ pub struct FfiFileRoot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiFolderKind {
+    Home,
+    Desktop,
+    Documents,
+    Downloads,
+    Pictures,
+}
+
+/// One shared root: its id and name (`/` or a drive such as `C:`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiPlaceRoot {
+    pub id: u64,
+    pub name: String,
+}
+
+/// A well-known folder, named by root and relative path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiPlace {
+    pub kind: FfiFolderKind,
+    pub root: u64,
+    pub path: String,
+}
+
+/// Where a file manager starts on one computer: its roots, then the
+/// folders that exist there, home first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiPlaces {
+    pub roots: Vec<FfiPlaceRoot>,
+    pub folders: Vec<FfiPlace>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiEntryKind {
     File,
     Dir,
@@ -160,6 +192,34 @@ pub(crate) fn fs_entry(entry: vnilink::FsEntry) -> FfiFsEntry {
     }
 }
 
+pub(crate) fn places(places: vnilink::Places) -> FfiPlaces {
+    FfiPlaces {
+        roots: places
+            .roots
+            .into_iter()
+            .map(|root| FfiPlaceRoot {
+                id: root.id,
+                name: root.name,
+            })
+            .collect(),
+        folders: places
+            .folders
+            .into_iter()
+            .map(|folder| FfiPlace {
+                kind: match folder.kind {
+                    vnilink::FolderKind::Home => FfiFolderKind::Home,
+                    vnilink::FolderKind::Desktop => FfiFolderKind::Desktop,
+                    vnilink::FolderKind::Documents => FfiFolderKind::Documents,
+                    vnilink::FolderKind::Downloads => FfiFolderKind::Downloads,
+                    vnilink::FolderKind::Pictures => FfiFolderKind::Pictures,
+                },
+                root: folder.root,
+                path: folder.path,
+            })
+            .collect(),
+    }
+}
+
 pub(crate) fn dir_page(page: vnilink::DirPage) -> FfiDirPage {
     FfiDirPage {
         entries: page.entries.into_iter().map(fs_entry).collect(),
@@ -255,6 +315,11 @@ impl VnilinkCore {
                     .collect()
             })
             .map_err(map_error)
+    }
+
+    /// This computer's roots, home folder and usual folders.
+    pub fn places(&self) -> Result<FfiPlaces, FfiError> {
+        self.inner.places().map(places).map_err(map_error)
     }
 
     /// Lists one page of a local directory under an approved root.

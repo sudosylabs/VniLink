@@ -92,7 +92,8 @@ pub use error::FfiError;
 pub use events::{EventPoller, VideoPoller};
 pub use files::{
     FfiConflictChoice, FfiDirPage, FfiEntryKind, FfiEntryToken, FfiFileResourcePolicy,
-    FfiFileRetentionPolicy, FfiFileRoot, FfiFsEntry, FfiJobDirection, FfiJobSnapshot, FfiJobState,
+    FfiFileRetentionPolicy, FfiFileRoot, FfiFolderKind, FfiFsEntry, FfiJobDirection,
+    FfiJobSnapshot, FfiJobState, FfiPlace, FfiPlaceRoot, FfiPlaces,
 };
 pub use types::{
     new_quality, FfiCapabilities, FfiCapabilityStatus, FfiCodecPreference, FfiCodecSupport,

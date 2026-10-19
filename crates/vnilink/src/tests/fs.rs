@@ -753,6 +753,10 @@ fn wire_codec_round_trips_and_rejects() {
             name: "a.txt".to_string(),
             expected: None,
         },
+        WireRequest::Places {
+            id: 13,
+            generation: 4,
+        },
     ] {
         let bytes = crate::fs::encode_request(&request).unwrap();
         assert_eq!(crate::fs::decode_request(&bytes).unwrap(), request);
@@ -801,6 +805,97 @@ fn wire_codec_round_trips_and_rejects() {
         limit: 10,
     })
     .is_err());
+}
+
+#[test]
+fn places_body_round_trips_and_refuses_unsafe_folders() {
+    let places = crate::fs::Places {
+        roots: vec![
+            crate::fs::PlaceRoot {
+                id: 2,
+                name: "C:".to_owned(),
+            },
+            crate::fs::PlaceRoot {
+                id: 3,
+                name: "D:".to_owned(),
+            },
+        ],
+        folders: vec![
+            crate::fs::Place {
+                kind: crate::fs::FolderKind::Home,
+                root: 2,
+                path: "Users/abass".to_owned(),
+            },
+            crate::fs::Place {
+                kind: crate::fs::FolderKind::Downloads,
+                root: 2,
+                path: "Users/abass/Downloads".to_owned(),
+            },
+        ],
+    };
+    let body = crate::fs::encode_places_body(&places).unwrap();
+    assert_eq!(crate::fs::decode_places_body(&body).unwrap(), places);
+    let mut escaping = places.clone();
+    escaping.folders[0].path = "../outside".to_owned();
+    let body = crate::fs::encode_places_body(&escaping).unwrap();
+    assert!(crate::fs::decode_places_body(&body).is_err());
+    let mut trailing = crate::fs::encode_places_body(&places).unwrap();
+    trailing.push(0);
+    assert!(crate::fs::decode_places_body(&trailing).is_err());
+    // A places request carries no root or path of its own.
+    let mut rooted = crate::fs::encode_request(&crate::fs::Request::Places {
+        id: 1,
+        generation: 1,
+    })
+    .unwrap();
+    rooted[21] = 1;
+    assert!(crate::fs::decode_request(&rooted).is_err());
+}
+
+/// Home and its usual folders are named by root and path, and each opens.
+#[test]
+fn places_name_home_and_its_folders_by_root() {
+    let core = start_direct();
+    assert!(
+        core.places().unwrap().roots.is_empty(),
+        "nothing is shared yet"
+    );
+    core.enable_filesystem_access().unwrap();
+    let places = core.places().unwrap();
+    let roots: Vec<u64> = core
+        .file_roots()
+        .unwrap()
+        .iter()
+        .map(|root| root.0)
+        .collect();
+    assert_eq!(
+        places.roots.iter().map(|root| root.id).collect::<Vec<_>>(),
+        roots
+    );
+    #[cfg(unix)]
+    assert_eq!(places.roots[0].name, "/");
+    let Some(home) = places.folders.first() else {
+        return;
+    };
+    assert_eq!(home.kind, crate::fs::FolderKind::Home);
+    let account = std::fs::canonicalize(
+        std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .unwrap(),
+    )
+    .unwrap();
+    let location = FilesystemLocation::new(core.file_roots().unwrap(), &account);
+    assert_eq!(
+        (home.root, home.path.as_str()),
+        (location.root, location.path("").as_str())
+    );
+    for folder in &places.folders {
+        assert!(
+            core.list_dir(folder.root, &folder.path, 0, 1).is_ok(),
+            "{:?} does not open",
+            folder.kind
+        );
+    }
 }
 
 /// A whole disk is deeper than a shared folder: 40 levels below a scratch

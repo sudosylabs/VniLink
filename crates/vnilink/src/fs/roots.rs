@@ -1,7 +1,9 @@
 //! Owner-approved filesystem roots.
 //!
 //! The set starts empty and is replaced wholesale by the owner. A root id
-//! is its position at set time. Unix access is anchored to directory handles:
+//! is its position at set time, except that a shared Windows drive keeps its
+//! letter's id (A: is 0, C: is 2), so a remembered folder still names the
+//! same drive after another one comes or goes. Unix access is anchored to directory handles:
 //! the root is opened `O_NOFOLLOW|O_DIRECTORY` and pinned to its
 //! device+inode, then every component is opened via `openat` with
 //! `O_NOFOLLOW`. A symlink anywhere on the resolved path, including a
@@ -26,6 +28,7 @@ pub(crate) const ROOTS_REBOUND: &str = "the file roots were rebound during the t
 
 #[derive(Debug, Clone)]
 struct Root {
+    id: u64,
     path: PathBuf,
     #[allow(dead_code)]
     dev: u64,
@@ -100,7 +103,7 @@ impl RootSet {
         if self.epoch == pin.epoch {
             return Ok(());
         }
-        match self.roots.get(pin.id as usize) {
+        match self.roots.iter().find(|root| root.id == pin.id) {
             Some(root) if root.dev == pin.dev && root.ino == pin.ino && root.path == pin.path => {
                 Ok(())
             }
@@ -125,7 +128,12 @@ impl RootSet {
             ));
         }
         let mut roots = Vec::with_capacity(paths.len());
-        for path in paths {
+        for (index, path) in paths.iter().enumerate() {
+            let id = if whole_filesystem {
+                drive_id(path).unwrap_or(index as u64)
+            } else {
+                index as u64
+            };
             let meta = std::fs::symlink_metadata(path)
                 .map_err(|_| Error::InvalidSetting("a file root is not usable"))?;
             if meta.file_type().is_symlink() || !meta.is_dir() {
@@ -152,6 +160,7 @@ impl RootSet {
                 let (dev, ino) = vnilink_rename::anchored::fstat_dev_ino(fd.as_fd())
                     .map_err(|_| Error::InvalidSetting("a file root is not usable"))?;
                 roots.push(Root {
+                    id,
                     path: canonical,
                     dev,
                     ino,
@@ -164,6 +173,7 @@ impl RootSet {
                 let (dev, ino) = vnilink_rename::windows::directory_identity(&file)
                     .map_err(|_| Error::InvalidSetting("a file root is not usable"))?;
                 roots.push(Root {
+                    id,
                     path: canonical,
                     dev,
                     ino,
@@ -172,6 +182,7 @@ impl RootSet {
             #[cfg(not(any(unix, windows)))]
             {
                 roots.push(Root {
+                    id,
                     path: canonical,
                     dev: 0,
                     ino: 0,
@@ -229,9 +240,24 @@ impl RootSet {
     pub(crate) fn snapshot(&self) -> Vec<(u64, PathBuf)> {
         self.roots
             .iter()
-            .enumerate()
-            .map(|(index, root)| (index as u64, root.path.clone()))
+            .map(|root| (root.id, root.path.clone()))
             .collect()
+    }
+
+    /// Names an absolute directory as a root and a relative path, or
+    /// `None` when it lies outside every root or the path rules.
+    pub(crate) fn locate(&self, path: &Path) -> Option<(u64, String)> {
+        let canonical = std::fs::canonicalize(path).ok()?;
+        self.roots.iter().find_map(|root| {
+            let relative = canonical.strip_prefix(&root.path).ok()?;
+            let parts = relative
+                .components()
+                .map(|component| component.as_os_str().to_str())
+                .collect::<Option<Vec<_>>>()?;
+            let rel = parts.join("/");
+            check_rel(&rel).ok()?;
+            Some((root.id, rel))
+        })
     }
 
     fn root(&self, id: u64) -> Result<&Root, Error> {
@@ -239,7 +265,8 @@ impl RootSet {
             return Err(Error::Unsupported(NO_ROOTS));
         }
         self.roots
-            .get(id as usize)
+            .iter()
+            .find(|root| root.id == id)
             .ok_or(Error::InvalidSetting(UNKNOWN_ROOT))
     }
 
@@ -372,6 +399,25 @@ impl RootSet {
     }
 }
 
+/// A drive root's id from its letter: `A:\` is 0, `C:\` is 2.
+fn drive_id(path: &Path) -> Option<u64> {
+    drive_letter(path).map(|letter| u64::from(letter - b'A'))
+}
+
+/// The drive letter a Windows path starts with, plain (`C:\`) or verbatim
+/// (`\\?\C:\`), in upper case. `None` elsewhere, including on Unix.
+pub(crate) fn drive_letter(path: &Path) -> Option<u8> {
+    match path.components().next()? {
+        std::path::Component::Prefix(prefix) => match prefix.kind() {
+            std::path::Prefix::Disk(letter) | std::path::Prefix::VerbatimDisk(letter) => {
+                Some(letter.to_ascii_uppercase())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn under_root(root: &Path, path: &Path) -> bool {
     if path == root {
         return true;
@@ -397,6 +443,19 @@ fn ensure_real_dir(path: &Path) -> Result<(), Error> {
 #[cfg(all(test, windows))]
 mod windows_admission_tests {
     use super::*;
+    #[test]
+    fn drives_keep_their_letter_as_id() {
+        assert_eq!(drive_id(Path::new("C:\\")), Some(2));
+        assert_eq!(drive_id(Path::new("\\\\?\\D:\\")), Some(3));
+        assert_eq!(drive_letter(Path::new("\\\\?\\e:\\")), Some(b'E'));
+        assert_eq!(drive_id(Path::new("\\\\server\\share")), None);
+        let mut roots = RootSet::default();
+        roots.set_filesystem().unwrap();
+        for (id, path) in roots.snapshot() {
+            assert_eq!(Some(id), drive_id(&path), "{path:?}");
+        }
+    }
+
     #[test]
     fn nonempty_roots_fail_closed_without_mutating_admission() {
         let mut roots = RootSet::default();

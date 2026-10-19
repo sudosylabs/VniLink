@@ -137,7 +137,8 @@ pub use diagnostics::{
 pub use error::Error;
 pub use events::{CoreEvent, EventSubscription};
 pub use fs::{
-    DirPage, EntryKind, EntryToken, FsEntry, RevisionGate, MAX_LISTED, MAX_PAGE, MAX_ROOTS,
+    DirPage, EntryKind, EntryToken, FolderKind, FsEntry, Place, PlaceRoot, Places, RevisionGate,
+    MAX_LISTED, MAX_PAGE, MAX_ROOTS,
 };
 pub use hostname::{clean_hostname, local_hostname};
 pub use input::{

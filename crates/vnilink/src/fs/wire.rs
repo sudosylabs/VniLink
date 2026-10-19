@@ -14,6 +14,7 @@ use crate::error::Error;
 
 use super::entry::{EntryKind, EntryToken};
 use super::list::{DirPage, MAX_PAGE};
+use super::places::{FolderKind, Place, PlaceRoot, Places};
 use super::{MAX_COMPONENT_BYTES, MAX_REL_BYTES};
 
 /// Filesystem wire version. Bump on any incompatible change; peers reject
@@ -26,6 +27,7 @@ const TAG_LIST: u8 = 1;
 const TAG_MKDIR: u8 = 2;
 const TAG_RENAME: u8 = 3;
 const TAG_DELETE: u8 = 4;
+const TAG_PLACES: u8 = 5;
 
 const STATUS_OK: u8 = 0;
 /// Machine-readable response codes. The message line stays human-only.
@@ -70,6 +72,8 @@ pub enum Request {
         name: String,
         expected: Option<EntryToken>,
     },
+    /// The host's roots, home folder and usual folders.
+    Places { id: u32, generation: u64 },
 }
 
 /// A decoded response header. Entry payloads follow on the accepted stream
@@ -178,6 +182,15 @@ pub(crate) fn encode_request(request: &Request) -> Result<Vec<u8>, Error> {
             push_text(&mut bytes, name, MAX_COMPONENT_BYTES)?;
             push_expected(&mut bytes, *expected);
         }
+        Request::Places { id, generation } => {
+            // The common root and path fields stay, empty, so every request
+            // shares one header.
+            push_u32(&mut bytes, *id);
+            push_u64(&mut bytes, *generation);
+            bytes.push(TAG_PLACES);
+            push_u64(&mut bytes, 0);
+            push_text(&mut bytes, "", MAX_REL_BYTES)?;
+        }
     }
     if bytes.len() > MAX_WIRE_BYTES {
         return Err(Error::InvalidSetting("the filesystem request is too large"));
@@ -272,6 +285,12 @@ pub(crate) fn decode_request(bytes: &[u8]) -> Result<Request, WireError> {
                 name,
                 expected,
             })
+        }
+        TAG_PLACES => {
+            if root != 0 || !path.is_empty() || !cursor.is_empty() {
+                return Err(error("the filesystem frame is malformed"));
+            }
+            Ok(Request::Places { id, generation })
         }
         _ => Err(error("the filesystem frame is malformed")),
     }
@@ -407,6 +426,58 @@ pub(crate) fn decode_list_body(bytes: &[u8]) -> Result<DirPage, WireError> {
         truncated,
         non_utf8_skipped,
     })
+}
+
+/// Encodes the places reply body: roots, then folders.
+pub(crate) fn encode_places_body(places: &Places) -> Result<Vec<u8>, Error> {
+    let mut bytes = Vec::new();
+    if places.roots.len() > usize::from(u16::MAX) || places.folders.len() > usize::from(u16::MAX) {
+        return Err(Error::InvalidSetting("the places reply is too large"));
+    }
+    push_u16(&mut bytes, places.roots.len() as u16);
+    for root in &places.roots {
+        push_u64(&mut bytes, root.id);
+        push_text(&mut bytes, &root.name, MAX_REL_BYTES)?;
+    }
+    push_u16(&mut bytes, places.folders.len() as u16);
+    for folder in &places.folders {
+        bytes.push(folder.kind.code());
+        push_u64(&mut bytes, folder.root);
+        push_text(&mut bytes, &folder.path, MAX_REL_BYTES)?;
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn decode_places_body(bytes: &[u8]) -> Result<Places, WireError> {
+    let error = || WireError("the places body is malformed");
+    let mut cursor = bytes;
+    let count = take_u16(&mut cursor).ok_or_else(error)?;
+    if usize::from(count) > super::MAX_ROOTS {
+        return Err(error());
+    }
+    let mut roots = Vec::with_capacity(usize::from(count));
+    for _ in 0..count {
+        let id = take_u64(&mut cursor).ok_or_else(error)?;
+        let name = take_text(&mut cursor, MAX_REL_BYTES).ok_or_else(error)?;
+        roots.push(PlaceRoot { id, name });
+    }
+    let count = take_u16(&mut cursor).ok_or_else(error)?;
+    if count > 16 {
+        return Err(error());
+    }
+    let mut folders = Vec::with_capacity(usize::from(count));
+    for _ in 0..count {
+        let kind =
+            FolderKind::from_code(take_byte(&mut cursor).ok_or_else(error)?).ok_or_else(error)?;
+        let root = take_u64(&mut cursor).ok_or_else(error)?;
+        let path = take_text(&mut cursor, MAX_REL_BYTES).ok_or_else(error)?;
+        super::check_rel(&path).map_err(|_| error())?;
+        folders.push(Place { kind, root, path });
+    }
+    if !cursor.is_empty() {
+        return Err(error());
+    }
+    Ok(Places { roots, folders })
 }
 
 /// Caller-side navigation revisions. Each navigation mints a revision;

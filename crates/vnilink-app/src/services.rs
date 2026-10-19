@@ -587,6 +587,13 @@ impl FilesService {
             .map(crate::files::dir_page)
             .map_err(map_error)
     }
+    /// The other computer's roots, home folder and usual folders.
+    pub fn places(&self) -> Result<crate::FfiPlaces, FfiError> {
+        self.inner
+            .places()
+            .map(crate::files::places)
+            .map_err(map_error)
+    }
     pub fn mkdir(&self, root: u64, path: String, name: String) -> Result<(), FfiError> {
         self.inner.mkdir(root, &path, &name).map_err(map_error)
     }

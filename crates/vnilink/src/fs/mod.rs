@@ -17,6 +17,7 @@ mod entry;
 mod list;
 mod mkdir;
 mod path;
+mod places;
 mod rename;
 mod roots;
 mod wire;
@@ -27,14 +28,17 @@ pub(crate) use delete::{
 pub(crate) use list::{list_page, list_page_async, ListHooks};
 pub(crate) use mkdir::create_dir;
 pub(crate) use path::{check_name, check_rel};
+pub(crate) use places::places;
+pub use places::{FolderKind, Place, PlaceRoot, Places};
 pub(crate) use rename::rename_entry;
 #[cfg(test)]
 pub(crate) use rename::STALE_ENTRY;
 pub(crate) use roots::{PinnedRoot, RootSet, ROOTS_REBOUND};
 pub use wire::RevisionGate;
 pub(crate) use wire::{
-    decode_list_body, decode_request, decode_response, encode_list_body, encode_request,
-    encode_response, Request, Response, STATUS_DENIED, STATUS_ERROR, STATUS_EXISTS, STATUS_STALE,
+    decode_list_body, decode_places_body, decode_request, decode_response, encode_list_body,
+    encode_places_body, encode_request, encode_response, Request, Response, STATUS_DENIED,
+    STATUS_ERROR, STATUS_EXISTS, STATUS_STALE,
 };
 
 #[cfg(test)]

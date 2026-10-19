@@ -382,6 +382,7 @@ fn remote_files_pipe_routes_real_operations_and_closes_independently() {
         controller.open_files_service(owner.id, owner.generation),
         Err(Error::Busy)
     ));
+    assert_eq!(files.places().unwrap(), host.places().unwrap());
     files
         .mkdir(location.root, &location.path(""), "original")
         .unwrap();
