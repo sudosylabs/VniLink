@@ -32,6 +32,7 @@ import { ILifecycleMainService, LifecycleMainService } from '../../platform/life
 import { ConsoleMainLogger, ILogService, LogLevel } from '../../platform/log/common/log.js';
 import { LogService } from '../../platform/log/common/logService.js';
 import { installApplicationMenu, registerEditingShortcuts } from '../../platform/menubar/electron-main/menubar.js';
+import { registerContextMenuListener } from '../../base/parts/contextmenu/electron-main/contextmenu.js';
 import { NATIVE_HOST_CHANNEL_NAME } from '../../platform/native/common/native.js';
 import { NativeHostChannel } from '../../platform/native/electron-main/nativeHostChannel.js';
 import { INativeHostMainService, NativeHostMainService } from '../../platform/native/electron-main/nativeHostMainService.js';
@@ -120,6 +121,8 @@ export class VniLinkApplication extends Disposable {
 			await app.whenReady();
 			this.checkRunning();
 			installApplicationMenu();
+			// The window's native context menus, which macOS uses.
+			registerContextMenuListener();
 			await Promise.all([
 				this.instantiationService.invokeFunction(accessor => accessor.get(IConfigurationMainService)).initialize(),
 				this.stateService.init(),

@@ -18,6 +18,8 @@ export const session = { defaultSession: { setPermissionRequestHandler() { }, se
 export const nativeTheme = {};
 export const net = {};
 export const BrowserWindow = { getAllWindows: () => [], fromWebContents: () => null };
+export const Menu = class { static setApplicationMenu() {} static buildFromTemplate() { return {}; } };
+export const MenuItem = class {};
 export class MessageChannelMain { }`;
 
 /** Main services the composition test replaces; each records only what the test asserts. */
@@ -62,7 +64,7 @@ const services = {
 		export const SaveStrategy = { IMMEDIATE: 0, DELAYED: 1 };
 		export class StateService { async init() { state.stateLoaded = true; } getItem() { } setItem() { } setItems() { } removeItem() { } async close() { state.stateClosed = (state.stateClosed ?? 0) + 1; } dispose() { } }`,
 	'ipc.electron': `export class Server { registerChannel() { } dispose() { } }`,
-	ipcMain: `export const WORKBENCH_URL = 'vnilink://app/index.html'; export const validatedIpcMain = { handle() { }, removeHandler() { } };`,
+	ipcMain: `export const WORKBENCH_URL = 'vnilink://app/index.html'; export const validatedIpcMain = { on() { }, handle() { }, removeHandler() { } };`,
 	development: `export function registerDevelopmentWindow() { }`,
 	menubar: `export function installApplicationMenu() { } export function registerEditingShortcuts() { }`,
 };

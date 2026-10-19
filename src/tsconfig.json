@@ -228,7 +228,11 @@
     "./platform/contextview/browser/contextViewService.ts",
     "./platform/layout/browser/layoutService.ts",
     "./platform/state/node/stateService.ts",
-    "./platform/state/node/state.ts"
+    "./platform/state/node/state.ts",
+    "./base/parts/contextmenu/electron-main/contextmenu.ts",
+    "./base/parts/contextmenu/common/contextmenu.ts",
+    "./base/parts/contextmenu/electron-browser/contextmenu.ts",
+    "./workbench/services/contextmenu/electron-browser/contextmenuService.ts"
   ],
   "include": [],
   "exclude": []
