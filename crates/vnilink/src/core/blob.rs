@@ -674,12 +674,7 @@ impl Core {
         let addr = device_addr(&device)?;
         self.runtime.block_on(async {
             let store = open_store(&self.shared).await?;
-            let connection = tokio::time::timeout(Duration::from_secs(30), async {
-                self.shared.endpoint.connect(addr, BLOB_ALPN).await
-            })
-            .await
-            .map_err(|_| Error::Timeout)?
-            .map_err(Error::network_debug)?;
+            let (mut connection, mut reused) = self.blob_connection(&peer, addr.clone()).await?;
             let batch = store
                 .batch()
                 .await
@@ -688,7 +683,21 @@ impl Core {
                 .temp_tag((hash, BlobFormat::Raw))
                 .await
                 .map_err(|e| Error::network(e.to_string()))?;
-            let outcome = fetch_with_cancel(&store, &connection, hash, progress, cancel).await;
+            let mut outcome =
+                fetch_with_cancel(&store, &connection, hash, progress.clone(), cancel.clone())
+                    .await;
+            // A kept connection may have ended without saying so yet; one
+            // fresh connection settles whether the peer is really gone.
+            while reused && outcome.is_err() {
+                forget_blob_connection(&self.shared, &peer, &connection);
+                (connection, reused) = self.blob_connection(&peer, addr.clone()).await?;
+                outcome =
+                    fetch_with_cancel(&store, &connection, hash, progress.clone(), cancel.clone())
+                        .await;
+            }
+            if outcome.is_err() {
+                forget_blob_connection(&self.shared, &peer, &connection);
+            }
             // Standalone blob callers have no durable job. Give them a
             // bounded export/retry window; job payloads use their manifest.
             if !job_owned {
@@ -706,9 +715,34 @@ impl Core {
             }
             drop(pin);
             drop(batch);
-            connection.close(0u8.into(), b"done");
             outcome
         })
+    }
+
+    /// The peer's kept fetching connection while it is open, or a new
+    /// one that is kept for the next fetch. The flag says it was kept.
+    async fn blob_connection(
+        &self,
+        peer: &[u8; 32],
+        addr: EndpointAddr,
+    ) -> Result<(iroh::endpoint::Connection, bool), Error> {
+        if let Some(kept) = lock(&self.shared.blob_fetching).get(peer) {
+            if kept.close_reason().is_none() {
+                return Ok((kept.clone(), true));
+            }
+        }
+        let connection = tokio::time::timeout(Duration::from_secs(30), async {
+            self.shared.endpoint.connect(addr, BLOB_ALPN).await
+        })
+        .await
+        .map_err(|_| Error::Timeout)?
+        .map_err(Error::network_debug)?;
+        if let Some(old) = lock(&self.shared.blob_fetching).insert(*peer, connection.clone()) {
+            if old.stable_id() != connection.stable_id() {
+                old.close(0u8.into(), b"done");
+            }
+        }
+        Ok((connection, false))
     }
 
     /// Exports one stored blob to `dest` without whole-file vectors and
@@ -1200,6 +1234,26 @@ pub(super) fn drop_blob_offers(shared: &Shared, peer: &[u8; 32]) {
     for conn in conns {
         conn.close(0u8.into(), b"denied");
     }
+    if let Some(fetching) = lock(&shared.blob_fetching).remove(peer) {
+        fetching.close(0u8.into(), b"denied");
+    }
+}
+
+/// Stops reusing `connection` for `peer` after a fetch over it failed.
+fn forget_blob_connection(
+    shared: &Shared,
+    peer: &[u8; 32],
+    connection: &iroh::endpoint::Connection,
+) {
+    let mut fetching = lock(&shared.blob_fetching);
+    if fetching
+        .get(peer)
+        .is_some_and(|kept| kept.stable_id() == connection.stable_id())
+    {
+        fetching.remove(peer);
+    }
+    drop(fetching);
+    connection.close(0u8.into(), b"failed");
 }
 
 /// True when the connection negotiated the blob ALPN.

@@ -592,16 +592,41 @@ impl Core {
     /// from the owning `Arc<Core>`; each Core gets its own driver thread
     /// that exits when the Core shuts down or drops.
     pub fn start_job_driver(self: &std::sync::Arc<Self>) {
+        const ACTIVE: std::time::Duration = std::time::Duration::from_millis(200);
+        const IDLE: std::time::Duration = std::time::Duration::from_secs(1);
+        const BETWEEN: std::time::Duration = std::time::Duration::from_millis(50);
         let weak = std::sync::Arc::downgrade(self);
-        std::thread::spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            let Some(core) = weak.upgrade() else {
-                break;
-            };
-            if lock(&core.shared.state).shut_down {
-                break;
+        let shared = self.shared.clone();
+        std::thread::spawn(move || {
+            let mut last = std::time::Instant::now();
+            loop {
+                // A job change wakes the driver at once; otherwise it looks
+                // again soon while work is active, and seldom when idle.
+                let pause = if any_active(&shared) { ACTIVE } else { IDLE };
+                {
+                    let (woken, wake) = &shared.job_wake;
+                    let mut flag = lock(woken);
+                    if !*flag {
+                        flag = wake
+                            .wait_timeout(flag, pause)
+                            .map(|(flag, _)| flag)
+                            .unwrap_or_else(|poison| poison.into_inner().0);
+                    }
+                    *flag = false;
+                }
+                // Changes come in bursts; one pass serves them all.
+                if let Some(rest) = BETWEEN.checked_sub(last.elapsed()) {
+                    std::thread::sleep(rest);
+                }
+                last = std::time::Instant::now();
+                let Some(core) = weak.upgrade() else {
+                    break;
+                };
+                if lock(&core.shared.state).shut_down {
+                    break;
+                }
+                core.drive_jobs_apart();
             }
-            core.drive_jobs_apart();
         });
     }
 
@@ -2843,9 +2868,19 @@ fn interrupt_jobs(shared: &Shared, peer: &[u8; 32], controller_only: bool) {
     let _ = save_jobs(shared);
 }
 
-/// Tells job watchers that something changed.
+/// Tells job watchers, and the background driver, that something changed.
 pub(super) fn jobs_changed(shared: &Shared) {
     shared.job_revision.fetch_add(1, Ordering::AcqRel);
+    let (woken, wake) = &shared.job_wake;
+    *lock(woken) = true;
+    wake.notify_all();
+}
+
+/// Whether any job still has a step to take.
+fn any_active(shared: &Shared) -> bool {
+    lock(&shared.jobs).values().any(|record| {
+        !record.state.is_terminal() && (record.sender || record.state != JobState::WaitingDecision)
+    })
 }
 
 /// Copies a file's arriving byte count onto its job, at most four times a

@@ -615,6 +615,9 @@ struct Shared {
     /// In-flight blob serving connections by peer, closed on revoke/unpair
     /// so an accepted request cannot finish after its offers are removed.
     blob_serving: Mutex<HashMap<[u8; 32], Vec<iroh::endpoint::Connection>>>,
+    /// One fetching connection per peer, reused by later fetches so a
+    /// small file does not pay for a new handshake; dropped on revoke/unpair.
+    blob_fetching: Mutex<HashMap<[u8; 32], iroh::endpoint::Connection>>,
     /// Transfer job records. Polled by each side; senders learn
     /// completion by asking the receiver.
     jobs: Arc<Mutex<HashMap<u64, jobs::JobRecord>>>,
@@ -631,6 +634,9 @@ struct Shared {
     /// bytes. Watchers compare it to the last value they saw instead of
     /// polling every job.
     job_revision: AtomicU64,
+    /// Set and signalled with each job change, so the background driver
+    /// takes the next step at once instead of at its next tick.
+    job_wake: (Mutex<bool>, std::sync::Condvar),
     file_resources: Arc<Mutex<file_resources::Resources>>,
     /// Last-known backend facts per capability, published by adapters and
     /// serve loops. Read by the availability query; never guessed.

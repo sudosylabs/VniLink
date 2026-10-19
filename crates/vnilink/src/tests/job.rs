@@ -3923,3 +3923,51 @@ fn open_handle_completes_across_source_rebind() {
     assert_eq!(sender.state, JobState::Complete);
     assert_eq!(receiver.state, JobState::Complete);
 }
+
+/// A small file arrives, and both sides see it complete, promptly with only
+/// the background drivers advancing it, as the Files tab leaves it to them.
+#[test]
+fn a_small_file_completes_promptly_on_its_own() {
+    let _heavy = HEAVY_JOB
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let (host, controller, host_scratch, controller_scratch) = setup("prompt");
+    let host = std::sync::Arc::new(host);
+    let controller = std::sync::Arc::new(controller);
+    host.start_job_driver();
+    controller.start_job_driver();
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
+    let _session = controller.connect(&host.endpoint_id()).unwrap();
+    // The second file reuses the first one's blob connection.
+    for name in ["first.bin", "second.bin"] {
+        std::fs::write(controller_scratch.join("root").join(name), vec![7u8; 2500]).unwrap();
+        let started = std::time::Instant::now();
+        let job = controller
+            .job_submit_upload(
+                &host.endpoint_id(),
+                controller_files.root,
+                &controller_files.path(name),
+                host_files.root,
+                &host_files.path(""),
+            )
+            .unwrap();
+        while controller.job_snapshot(job).unwrap().state != JobState::Complete {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(2),
+                "{name} took longer than two seconds"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(
+            std::fs::read(host_scratch.join("root").join(name))
+                .unwrap()
+                .len(),
+            2500
+        );
+    }
+}
