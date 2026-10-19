@@ -6,6 +6,7 @@ import { verifyAccess } from './access.js';
 import { verifyCamera } from './camera.js';
 import { verifyConnection } from './connection.js';
 import { verifyDataChannels } from './dataChannels.js';
+import { showThemedDialog, verifyDialogs } from './dialogs.js';
 import { verifyHomeLifecycle } from './home.js';
 import { verifyIcons } from './icons.js';
 import { verifyRemoteDesktop } from './remoteDesktop.js';
@@ -32,6 +33,17 @@ export class BrowserScenarios {
 		}
 	}
 
+	/** Opens the themed restart confirmation; `closeDialogFixture` answers it with Escape. */
+	public showDialogFixture(): void {
+		void showThemedDialog();
+	}
+
+	public closeDialogFixture(): void {
+		for (const type of ['keydown', 'keyup']) {
+			window.dispatchEvent(new KeyboardEvent(type, { key: 'Escape', code: 'Escape', keyCode: 27 }));
+		}
+	}
+
 	public clearDeviceFixture(): void {
 		this.deviceFixture?.dispose();
 		this.deviceFixture = undefined;
@@ -39,7 +51,7 @@ export class BrowserScenarios {
 
 	private readonly scenarios = new Map<string, () => unknown>([
 		['workbench', verifyWorkbenchLifecycle], ['access', verifyAccess], ['camera', verifyCamera], ['connection', verifyConnection], ['data-channels', verifyDataChannels],
-		['devices', verifyDevices], ['device-pairing', verifyPairingPopover], ['device-screenshot', verifyDeviceScreenshot], ['home', verifyHomeLifecycle], ['icons', verifyIcons],
+		['devices', verifyDevices], ['dialogs', verifyDialogs], ['device-pairing', verifyPairingPopover], ['device-screenshot', verifyDeviceScreenshot], ['home', verifyHomeLifecycle], ['icons', verifyIcons],
 		['media-settings', verifyMediaSettings], ['remote-desktop', verifyRemoteDesktop], ['settings', verifySettingsPages], ['tabs', verifyTabs], ['terminal', verifyTerminal],
 	]);
 

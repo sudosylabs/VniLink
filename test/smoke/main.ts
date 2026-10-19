@@ -24,6 +24,24 @@ class SmokeSuite {
 		return this.application.run((window, driver) => this.verify(window, driver));
 	}
 
+	/** The restart confirmation as Windows and Linux draw it, in each theme. */
+	private async verifyDialogThemes(window: BrowserWindow, driver: WindowDriver): Promise<void> {
+		const theme = nativeTheme.themeSource;
+		try {
+			for (const mode of ['light', 'dark'] as const) {
+				nativeTheme.themeSource = mode;
+				await window.webContents.executeJavaScript(`browserTests.browserScenarios.showDialogFixture()`);
+				await window.webContents.executeJavaScript(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+				await driver.screenshot(`dialogs-${mode}`);
+				await window.webContents.executeJavaScript(`browserTests.browserScenarios.closeDialogFixture()`);
+				await window.webContents.executeJavaScript(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+				assert.equal(await window.webContents.executeJavaScript(`document.querySelector('.monaco-dialog-box') === null`), true, 'Escape left the dialog open');
+			}
+		} finally {
+			nativeTheme.themeSource = theme;
+		}
+	}
+
 	private async verifyDeviceLayouts(window: BrowserWindow, driver: WindowDriver): Promise<void> {
 		const size = window.getSize();
 		const theme = nativeTheme.themeSource;
@@ -162,6 +180,9 @@ class SmokeSuite {
 				await driver.screenshot(name);
 				if (name === 'devices') {
 					await this.verifyDeviceLayouts(window, driver);
+				}
+				if (name === 'dialogs') {
+					await this.verifyDialogThemes(window, driver);
 				}
 			}
 		}

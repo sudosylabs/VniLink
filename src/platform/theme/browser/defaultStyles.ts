@@ -1,6 +1,8 @@
 import type { IButtonStyles } from '../../../base/browser/ui/button/button.js';
+import type { IDialogStyles } from '../../../base/browser/ui/dialog/dialog.js';
 import type { IInputBoxStyles } from '../../../base/browser/ui/inputbox/inputBox.js';
 import type { IListStyles } from '../../../base/browser/ui/list/listWidget.js';
+import type { ICheckboxStyles } from '../../../base/browser/ui/toggle/toggle.js';
 
 /**
  * Styles for VS Code's widgets, in the role of VS Code's `defaultStyles.ts`.
@@ -33,6 +35,26 @@ export const defaultInputBoxStyles: IInputBoxStyles = {
 	inputValidationErrorBorder: undefined,
 	inputValidationErrorBackground: undefined,
 	inputValidationErrorForeground: undefined,
+};
+
+/** VS Code's dialog, in the colours of the surface it floats over. */
+export const defaultDialogStyles: IDialogStyles = {
+	dialogForeground: 'var(--text)',
+	dialogBackground: 'var(--surface-raised)',
+	dialogShadow: 'rgb(0 0 0 / 30%)',
+	dialogBorder: 'var(--line)',
+	errorIconForeground: 'var(--status-disconnected)',
+	warningIconForeground: 'var(--status-pending)',
+	infoIconForeground: 'var(--accent)',
+	textLinkForeground: 'var(--accent)',
+};
+
+export const defaultCheckboxStyles: ICheckboxStyles = {
+	checkboxBackground: 'var(--canvas)',
+	checkboxBorder: 'var(--line)',
+	checkboxForeground: 'var(--text)',
+	checkboxDisabledBackground: undefined,
+	checkboxDisabledForeground: undefined,
 };
 
 /**

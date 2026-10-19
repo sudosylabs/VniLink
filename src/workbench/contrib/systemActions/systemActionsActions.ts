@@ -4,8 +4,8 @@ import { Icons } from '../../../base/common/icons.js';
 import { ThemeIcon } from '../../../base/common/themables.js';
 import { Action2 } from '../../../platform/actions/common/actions.js';
 import type { ServicesAccessor } from '../../../platform/instantiation/common/instantiation.js';
-import { INativeHostService } from '../../../platform/native/common/native.js';
-import { IDeviceService } from '../../services/devices/deviceService.js';
+import { IDeviceService, type DeviceSummary } from '../../services/devices/deviceService.js';
+import { IDialogService } from '../../services/dialogs/dialogService.js';
 import { ISystemActionService } from '../../services/systemActions/systemActionService.js';
 
 /** Locks the paired computer given by id. Signing back in undoes it, so it does not ask first. */
@@ -33,6 +33,8 @@ export class LockComputerAction extends Action2 {
  */
 export class RestartOrShutDownAction extends Action2 {
 	public static readonly ID = 'vnilink.system.restartOrShutDown';
+	/** Computers with a confirmation open: pressing the row again shows no second one. */
+	private static readonly confirming = new Set<string>();
 
 	constructor() {
 		super({
@@ -44,12 +46,21 @@ export class RestartOrShutDownAction extends Action2 {
 
 	public override async run(accessor: ServicesAccessor, deviceId?: unknown): Promise<void> {
 		const devices = accessor.get(IDeviceService);
-		const nativeHost = accessor.get(INativeHostService);
+		const dialogs = accessor.get(IDialogService);
 		const systemActions = accessor.get(ISystemActionService);
 		const device = typeof deviceId === 'string' ? devices.devices.find(candidate => candidate.id === deviceId) : undefined;
-		if (!device) {
+		if (!device || RestartOrShutDownAction.confirming.has(device.id)) {
 			return;
 		}
+		RestartOrShutDownAction.confirming.add(device.id);
+		try {
+			await RestartOrShutDownAction.confirm(device, devices, dialogs, systemActions);
+		} finally {
+			RestartOrShutDownAction.confirming.delete(device.id);
+		}
+	}
+
+	private static async confirm(device: DeviceSummary, devices: IDeviceService, dialogs: IDialogService, systemActions: ISystemActionService): Promise<void> {
 		const report = await devices.availability(device.id).catch(() => null);
 		const allowed = (capability: 'systemRestart' | 'systemShutdown'): boolean => report?.find(entry => entry.capability === capability)?.status === 'available';
 		const choices = [
@@ -64,12 +75,11 @@ export class RestartOrShutDownAction extends Action2 {
 			: choices[0].action === 'restart'
 				? nls.localize('system.confirmRestart', 'Restart {0}?', device.name)
 				: nls.localize('system.confirmShutDown', 'Shut down {0}?', device.name);
-		const { response } = await nativeHost.showMessageBox({
+		const response = await dialogs.show({
 			type: 'warning',
 			message,
 			detail: nls.localize('system.confirmDetail', 'Its user has 30 seconds to cancel. Anything not saved there may be lost.'),
 			buttons: [...choices.map(choice => choice.label), nls.localize('system.cancelButton', 'Cancel')],
-			defaultId: choices.length,
 			cancelId: choices.length,
 		});
 		const chosen = choices.at(response);

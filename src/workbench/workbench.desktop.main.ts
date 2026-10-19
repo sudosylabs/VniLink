@@ -28,6 +28,7 @@ import './services/terminal/terminalHostServiceImpl.js';
 import './services/terminal/terminalServiceImpl.js';
 import './services/camera/cameraServiceImpl.js';
 import './services/systemActions/systemActionServiceImpl.js';
+import './services/dialogs/dialogServiceImpl.js';
 
 registerSingleton(IContextKeyService, ContextKeyService, InstantiationType.Delayed);
 

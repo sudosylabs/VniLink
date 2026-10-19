@@ -67,6 +67,12 @@ import lockOutlined from '@phosphor-icons/core/assets/regular/lock-simple.svg';
 import lockFilled from '@phosphor-icons/core/assets/fill/lock-simple-fill.svg';
 import fullScreenOutlined from '@phosphor-icons/core/assets/regular/corners-out.svg';
 import fullScreenFilled from '@phosphor-icons/core/assets/fill/corners-out-fill.svg';
+import warningOutlined from '@phosphor-icons/core/assets/regular/warning.svg';
+import warningFilled from '@phosphor-icons/core/assets/fill/warning-fill.svg';
+import infoOutlined from '@phosphor-icons/core/assets/regular/info.svg';
+import infoFilled from '@phosphor-icons/core/assets/fill/info-fill.svg';
+import errorOutlined from '@phosphor-icons/core/assets/regular/warning-octagon.svg';
+import errorFilled from '@phosphor-icons/core/assets/fill/warning-octagon-fill.svg';
 import exitFullScreenOutlined from '@phosphor-icons/core/assets/regular/corners-in.svg';
 import exitFullScreenFilled from '@phosphor-icons/core/assets/fill/corners-in-fill.svg';
 import fillViewOutlined from '@phosphor-icons/core/assets/regular/arrows-out-simple.svg';
@@ -98,6 +104,9 @@ const assets: Record<IconId, Record<IconVariant, string>> = {
 	copy: { outlined: restoreOutlined, filled: restoreFilled },
 	fullScreen: { outlined: fullScreenOutlined, filled: fullScreenFilled },
 	exitFullScreen: { outlined: exitFullScreenOutlined, filled: exitFullScreenFilled },
+	warning: { outlined: warningOutlined, filled: warningFilled },
+	info: { outlined: infoOutlined, filled: infoFilled },
+	error: { outlined: errorOutlined, filled: errorFilled },
 	fillView: { outlined: fillViewOutlined, filled: fillViewFilled },
 	fitToView: { outlined: fitToViewOutlined, filled: fitToViewFilled },
 	stop: { outlined: stopOutlined, filled: stopFilled },
