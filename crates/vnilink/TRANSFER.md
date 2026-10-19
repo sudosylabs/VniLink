@@ -18,9 +18,12 @@ transfer stream were removed; all movement goes through jobs.
    ready byte. The host accepts the clipboard stream, then serves the
    filesystem auxiliary loop. Keyboard and pointer stay on the control
    stream.
-2. Each side approves roots with `Core::set_file_roots` and a job store
-   with `Core::set_blob_directory`. `Capabilities::file_transfer` is true
-   once at least one root is set.
+2. Each side shares its whole filesystem with
+   `Core::enable_filesystem_access` (`/` on Unix, every mounted drive on
+   Windows) and names a job store with `Core::set_blob_directory`.
+   `Capabilities::file_transfer` is true once the filesystem is shared.
+   `Core::set_file_roots` confines browsing to chosen folders; only tests
+   use it.
 3. The peer browses with `fs_list`/`fs_mkdir`/`fs_rename` against a live
    session. Every request re-checks the Transfer grant; a revoked grant
    answers `TransferDenied` without ending the session.

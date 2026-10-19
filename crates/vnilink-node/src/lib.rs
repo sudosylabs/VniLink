@@ -837,9 +837,6 @@ enum Command {
         pointer: TransferPointerSettings,
     },
     EnableFilesystemAccess,
-    SetFileRoots {
-        paths: Vec<String>,
-    },
     KeyboardMode,
     SetKeyboardMode {
         mode: String,
@@ -1674,10 +1671,6 @@ impl EngineBridge {
                 core.enable_filesystem_access().map_err(core_error)?;
                 Reply::Done
             }
-            Command::SetFileRoots { paths } => {
-                core.set_file_roots(paths.clone()).map_err(core_error)?;
-                Reply::Done
-            }
             Command::KeyboardMode => Reply::KeyboardMode {
                 mode: keyboard_mode_name(core.keyboard_mode().map_err(core_error)?).to_string(),
             },
@@ -2303,7 +2296,6 @@ impl EngineBridge {
             | Command::ReleaseSessionInput { .. }
             | Command::SetInputDefaults { .. }
             | Command::EnableFilesystemAccess
-            | Command::SetFileRoots { .. }
             | Command::KeyboardMode
             | Command::SetKeyboardMode { .. }
             | Command::SwapControlAndCommand
@@ -2578,7 +2570,6 @@ impl CommandShape {
             | "captureDisplays" => &["type"],
             "setInputDefaults" => &["type", "mode", "swap", "pointer"],
             "enableFilesystemAccess" => &["type"],
-            "setFileRoots" => &["type", "paths"],
             "setKeyboardMode" => &["type", "mode"],
             "setSwapControlAndCommand" => &["type", "enabled"],
             "setSessionPointerSettings" => &["type", "sessionId", "generation", "settings"],

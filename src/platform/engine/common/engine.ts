@@ -221,7 +221,6 @@ export type EngineCommand =
 	| { type: 'releaseSessionInput'; sessionId: string; generation: string }
 	| { type: 'setInputDefaults'; mode: 'Character' | 'Map' | 'Translate'; swap: boolean; pointer: PointerSettings }
 	| { type: 'enableFilesystemAccess' }
-	| { type: 'setFileRoots'; paths: string[] }
 	| { type: 'startNativeScreenSharing'; displayId: number; width: number; height: number; pixelWidth: number; pixelHeight: number }
 	| { type: 'stopNativeScreenSharing' | 'nativeSharingStatus' }
 	| { type: 'startRecording'; sessionId: string; generation: string; destination: string; maxBytes: string; maxDurationMs: string; retention?: RecordingRetention; source?: 'desktop' | 'camera' }
@@ -668,7 +667,6 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'releaseSessionInput': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
 		case 'setInputDefaults': keys = ['mode', 'swap', 'pointer']; valid = keyboardMode(value.mode) && typeof value.swap === 'boolean' && pointerSettings(value.pointer); break;
 		case 'enableFilesystemAccess': keys = []; break;
-		case 'setFileRoots': keys = ['paths']; valid = Array.isArray(value.paths) && value.paths.length <= 16 && value.paths.every((path: unknown) => typeof path === 'string' && path.length > 0 && path.length <= 4096 && !path.includes('\0')); break;
 		case 'startNativeScreenSharing': keys = ['displayId', 'width', 'height', 'pixelWidth', 'pixelHeight']; valid = isNativeScreenSource({ displayId: value.displayId, width: value.width, height: value.height, pixelWidth: value.pixelWidth, pixelHeight: value.pixelHeight }); break;
 		case 'nativeSharingStatus': case 'stopNativeScreenSharing': keys = []; valid = true; break;
 		case 'remoteCameraDevices': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;

@@ -233,8 +233,9 @@ impl VnilinkCore {
         self.inner.set_blob_directory(path).map_err(map_error)
     }
 
-    /// Replaces the owner-approved file roots. Nothing is browsable until
-    /// this runs. Refused while a controlling session is active.
+    /// Confines browsing to `paths`. The application always shares the
+    /// whole filesystem; tests use this to stay inside their scratch folders.
+    #[cfg(feature = "test-support")]
     pub fn set_file_roots(&self, paths: Vec<String>) -> Result<(), FfiError> {
         self.inner
             .set_file_roots(paths.into_iter().map(std::path::PathBuf::from).collect())

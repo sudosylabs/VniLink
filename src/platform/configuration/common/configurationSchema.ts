@@ -100,10 +100,6 @@ function isAbsolutePath(path: string): boolean {
 	return path.length > 0 && path.length <= 4096 && !path.includes('\0') && (path.startsWith('/') || /^[a-z]:[\\/]/i.test(path) || /^\\\\[^\\]+\\[^\\]+/.test(path));
 }
 
-export function isFileRoots(value: unknown): value is readonly string[] {
-	return Array.isArray(value) && value.length <= 16 && new Set(value).size === value.length && value.every((path: unknown) => typeof path === 'string' && isAbsolutePath(path));
-}
-
 /** A media source id; the empty id turns the source off. */
 function mediaSource(value: unknown): string | undefined {
 	return typeof value === 'string' && value.length <= 2048 && !value.includes('\0') ? undefined : nls.localize('settings.mediaSource', 'Choose an available source.');
@@ -305,21 +301,6 @@ registerSettings('user', {
 			unit: 'GiB',
 			title: nls.localize('recording.storage', 'Size per recording'),
 			validate: tenthsOfGibibytes,
-		},
-	},
-});
-
-registerSettings('user', {
-	id: 'files',
-	title: nls.localize('home.files', 'Files'),
-	properties: {
-		'files.roots': {
-			type: 'array',
-			items: { type: 'string' },
-			default: [],
-			title: nls.localize('files.shared', 'Folder restrictions'),
-			description: nls.localize('files.help', 'By default, paired computers with Files can browse what this app can reach. Add folders only to restrict them.'),
-			validate: value => isFileRoots(value) ? undefined : nls.localize('files.invalid', 'Use unique, full folder paths. Remove empty rows before saving.'),
 		},
 	},
 });

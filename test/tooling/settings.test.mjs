@@ -42,7 +42,6 @@ test('every setting is titled, has a valid default and refuses values outside it
 	assert.equal(validateSetting('power.incoming.idleTimeout', 1.5), undefined);
 	assert.match(validateSetting('terminal.maxSessions', 2.5), /whole number/);
 	assert.match(validateSetting('desktop.quality', { max_bitrate_kbps: 1, max_frame_rate: 61, max_width: 1, max_height: 1 }), /60 fps/);
-	assert.match(validateSetting('files.roots', ['relative/path']), /full folder paths/);
 	assert.match(validateSetting('future.setting', true), /Unknown setting/);
 	assert.equal(settingKeys().includes('appearance.nativeBackground'), false);
 });

@@ -7,7 +7,7 @@ import { engineErrorCategory, isCodecPreference, isQualityLimits, type EngineCom
 import { IEngineMainService } from '../../engine/electron-main/engineMainService.js';
 import type { EngineMainService } from '../../engine/electron-main/engineMainService.js';
 import { UserSettings } from '../node/userSettings.js';
-import { isFileRoots, settingSource, validateSetting } from '../common/configurationSchema.js';
+import { settingSource, validateSetting } from '../common/configurationSchema.js';
 import type { ConfigurationSnapshot } from '../common/configurationSnapshot.js';
 import { EngineSettings } from './engineSettings.js';
 import { SystemSettings } from './systemSettings.js';
@@ -38,10 +38,6 @@ function engineCommands(group: string, values: Values): EngineCommand[] {
 			return [{ type: 'setNativeCameraSources', ids: sourceIds(values['media.camera']) }];
 		case 'media.audio':
 			return [{ type: 'setNativeAudioSources', microphones: sourceIds(values['media.microphone']), system: sourceIds(values['media.systemAudio']) }];
-		case 'files.roots': {
-			const paths = fileRoots(values);
-			return [paths.length ? { type: 'setFileRoots', paths } : { type: 'enableFilesystemAccess' }];
-		}
 		case 'terminal.shell': {
 			// The empty id offers the automatic shell.
 			const shell = values['terminal.shell'];
@@ -51,14 +47,9 @@ function engineCommands(group: string, values: Values): EngineCommand[] {
 	return [];
 }
 
-function fileRoots(values: Values): string[] {
-	const paths = values['files.roots'];
-	return isFileRoots(paths) ? [...paths] : [];
-}
-
 /** The engine group a user setting belongs to; settings without one stay in this process. */
 function engineGroup(key: string): string | undefined {
-	if (key === 'desktop.quality' || key === 'desktop.codec' || key === 'files.roots' || key === 'media.camera' || key === 'terminal.shell') {
+	if (key === 'desktop.quality' || key === 'desktop.codec' || key === 'media.camera' || key === 'terminal.shell') {
 		return key;
 	}
 	if (key === 'media.microphone' || key === 'media.systemAudio') {
@@ -212,11 +203,12 @@ export class ConfigurationMainService extends Disposable {
 				this.logService.warn('The saved terminal shell is not available; paired computers get the automatic shell.', error);
 			});
 		}
-		try {
-			const paths = fileRoots(values);
-			await this.engine.execute(paths.length || temporaryEngine ? { type: 'setFileRoots', paths } : { type: 'enableFilesystemAccess' });
-		} catch (error) {
-			this.logService.error('Shared folders could not be opened; file access remains disabled.', error);
+		// Files shares the whole disk; whether a paired computer may browse it
+		// is `sharing.files`. A temporary engine shares nothing.
+		if (!temporaryEngine) {
+			await this.engine.execute({ type: 'enableFilesystemAccess' }).catch((error: unknown) => {
+				this.logService.error('The disk could not be opened for Files; file access remains disabled.', error);
+			});
 		}
 		await this.reload();
 	}

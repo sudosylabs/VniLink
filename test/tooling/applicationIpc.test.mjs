@@ -162,7 +162,7 @@ test('windows change settings only through the configuration channel', async () 
 	await assert.rejects(channel.call('window:1', 'execute', { type: 'shutdown' }), /Invalid/);
 	const privateCommands = [
 		{ type: 'subscribeEvents' }, { type: 'pollEvents', subscriptionId: '1', maxEvents: 1 }, { type: 'releaseEvents', subscriptionId: '1' },
-		{ type: 'setRelayPublic' }, { type: 'setSharingPolicy', policy: { view: true } }, { type: 'setDesktopCodecDefault', codec: 'auto' }, { type: 'setFileRoots', paths: [] }, { type: 'setTerminalShell', shell: null },
+		{ type: 'setRelayPublic' }, { type: 'setSharingPolicy', policy: { view: true } }, { type: 'setDesktopCodecDefault', codec: 'auto' }, { type: 'setTerminalShell', shell: null },
 	];
 	for (const command of privateCommands) {
 		await assert.rejects(channel.call('window:1', 'execute', command), /Invalid/, `${command.type} must stay private to main`);
