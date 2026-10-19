@@ -5,7 +5,7 @@ import { getWorkbenchTitlebarHeight } from '../../src/platform/window/common/tit
 import { resolveWindowMaterial } from '../../src/platform/window/common/windowMaterial.js';
 import { isEngineReply, record } from '../../src/platform/engine/common/engine.js';
 import { app, BrowserWindow, net, nativeTheme } from 'electron';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { release } from 'node:os';
 import { isMacintosh } from '../../src/base/common/platform.js';
@@ -67,7 +67,18 @@ class SmokeSuite {
 				assert.equal(await window.webContents.executeJavaScript(`document.querySelector('#notice-title')?.textContent`), 'Studio Mac wants to restart this computer');
 				assert.equal(await window.webContents.executeJavaScript(`document.activeElement?.textContent`), 'Cancel', 'Cancel is not focused');
 				// The workbench's backdrop, or none where the system cannot draw one.
-				assert.match(String(await window.webContents.executeJavaScript(`document.documentElement.dataset.windowMaterial`)), /^(none|vibrancy|glass|mica)$/);
+				const backdrop: unknown = await window.webContents.executeJavaScript(`(() => {
+					const root = document.documentElement;
+					return { material: root.dataset.windowMaterial, root: getComputedStyle(root).backgroundColor, body: getComputedStyle(document.body).backgroundColor };
+				})()`);
+				assert(typeof backdrop === 'object' && backdrop !== null);
+				const { material, root, body } = backdrop as Record<string, string>;
+				assert.match(material, /^(none|vibrancy|glass|mica)$/);
+				// Over glass or Mica nothing of the page's own paints behind the notice.
+				if (material === 'glass' || material === 'mica') {
+					assert.deepEqual([root, body], ['rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0)'], `The page hides the ${material} backdrop`);
+				}
+				appendFileSync(join(this.application.output, 'notice.log'), `${mode}: ${material} ${root} ${body}\n`);
 				const first = await detail(window);
 				assert.match(String(first), /^Restarting in (30|29) s\. Save your work, or cancel\.$/);
 				await new Promise(resolve => setTimeout(resolve, 1300));
