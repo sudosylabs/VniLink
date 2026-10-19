@@ -186,10 +186,22 @@ impl VideoEncoder for MacEncoder {
                 );
             }
             let keyframe = contains_idr(&encoded.data, usize::from(nal_length_size));
+            // VideoToolbox writes no VUI, so decoders may hold pictures back
+            // for reordering that never happens; say so in the SPS.
+            let parameter_sets: Vec<Vec<u8>> = sets
+                .parameter_sets
+                .iter()
+                .map(|set| {
+                    set.first()
+                        .filter(|header| *header & 0x1F == 7)
+                        .and_then(|_| vnilink_media::h264_low_delay_sps(set))
+                        .unwrap_or_else(|| set.clone())
+                })
+                .collect();
             let annex_b = to_annex_b(&AvccAccessUnit {
                 nal_length_size,
                 avcc: &encoded.data,
-                parameter_sets: &sets.parameter_sets,
+                parameter_sets: &parameter_sets,
                 keyframe,
             })?;
             self.frame_index = self.frame_index.saturating_add(1);

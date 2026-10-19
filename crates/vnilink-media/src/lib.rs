@@ -40,7 +40,7 @@ mod recording_recovery;
 pub use recording_recovery::{scan_recording_prefix, RecordingRecovery};
 mod sps;
 pub use recording::{MatroskaRecorder, RecordingError, RecordingLimits};
-pub use sps::h264_picture_size;
+pub use sps::{h264_low_delay_sps, h264_picture_size};
 
 pub use annexb::{parse_annex_b, to_annex_b, AvccAccessUnit, NalUnit, ParsedAccessUnit};
 pub use channel::{ChannelSlot, FrameChannel};
