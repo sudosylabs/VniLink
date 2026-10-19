@@ -14,6 +14,7 @@ export class DataChannelClient {
 	private pointerTimer: ReturnType<typeof setTimeout> | undefined;
 	private expectedSequence = 1;
 	private lastHeard = performance.now();
+	private lastTick = performance.now();
 	private readonly heartbeat: ReturnType<typeof setInterval>;
 	public metrics: DataChannelMetrics = { sent: 0, acknowledged: 0, pending: 0, lastAckMs: 0 };
 	private readonly pendingWrites = new Map<number, { resolve(): void; reject(error: Error): void }>();
@@ -39,11 +40,19 @@ export class DataChannelClient {
 		};
 		port.start();
 		this.heartbeat = setInterval(() => {
-			if (performance.now() - this.lastHeard > 15000) {
-				this.fail(new Error('Data channel disconnected'));
-			} else {
-				port.postMessage({ type: 'metrics' });
+			const now = performance.now();
+			// A tick that comes late means this window's timers were held
+			// back, as a hidden or covered window's are, or the computer
+			// slept: no metrics were asked for meanwhile, so the silence
+			// proves nothing. Ask again and give the answer a fresh window.
+			if (now - this.lastTick > 6000) {
+				this.lastHeard = now;
+			} else if (now - this.lastHeard > 15000) {
+				this.fail(new Error('Data channel disconnected: the engine host stopped answering'));
+				return;
 			}
+			this.lastTick = now;
+			port.postMessage({ type: 'metrics' });
 		}, 2000);
 	}
 
@@ -150,7 +159,7 @@ export class DataChannelClient {
 				return;
 			}
 			if (record(message) && message.type === 'error') {
-				throw new Error('Data channel unavailable');
+				throw new Error(typeof message.reason === 'string' ? `Data channel unavailable: ${message.reason}` : 'Data channel unavailable');
 			}
 			if (
 				record(message) &&

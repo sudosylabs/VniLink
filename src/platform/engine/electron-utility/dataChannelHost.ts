@@ -153,9 +153,9 @@ export class DataChannelHost {
 							this.port.postMessage({ type: 'fileReply', id: message.id, metadata });
 						}
 					},
-					() => {
+					(error: unknown) => {
 						this.fileFlight--;
-						this.fail();
+						this.fail(undefined, error instanceof Error ? error.message : undefined);
 					},
 				);
 				return;
@@ -170,8 +170,8 @@ export class DataChannelHost {
 				return;
 			}
 			throw new Error('Invalid data-channel message');
-		} catch {
-			this.fail();
+		} catch (error) {
+			this.fail(undefined, error instanceof Error ? error.message : undefined);
 		}
 	}
 
@@ -203,25 +203,28 @@ export class DataChannelHost {
 				});
 				// A stalled renderer must not retain a session indefinitely.
 				this.timer = setTimeout(() => {
-					this.fail();
+					this.fail(undefined, 'the window did not take a packet within 10 seconds');
 				}, 10000);
 			} else {
 				this.timer = setTimeout(() => {
 					this.pump();
 				}, 4);
 			}
-		} catch {
-			this.fail();
+		} catch (error) {
+			this.fail(undefined, error instanceof Error ? error.message : undefined);
 		}
 	}
 
-	/** Ends the channel. `category` is the engine's error category when it refused to open. */
-	public fail(category?: string): void {
+	/**
+	 * Ends the channel. `category` is the engine's error category when it
+	 * refused to open; `reason` says why a working channel ended, for the log.
+	 */
+	public fail(category?: string, reason?: string): void {
 		if (this.closed) {
 			return;
 		}
 		try {
-			this.port.postMessage({ type: 'error', message: 'Data channel unavailable', category });
+			this.port.postMessage({ type: 'error', message: 'Data channel unavailable', category, reason: reason?.slice(0, 300) });
 		} finally {
 			this.close();
 		}
