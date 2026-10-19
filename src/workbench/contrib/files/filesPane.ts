@@ -250,6 +250,7 @@ export class FilesPaneView extends Disposable {
 	public editing: string | undefined;
 	/** Where a Shift selection starts. */
 	private anchor: number | undefined;
+	private confirming = false;
 	private stateAct: (() => void) | undefined;
 
 	constructor(
@@ -859,6 +860,20 @@ export class FilesPaneView extends Disposable {
 	}
 
 	private async deleteSelection(): Promise<void> {
+		// One confirmation at a time: a second request while one is open, or
+		// a key repeating, shows no other.
+		if (this.confirming) {
+			return;
+		}
+		this.confirming = true;
+		try {
+			await this.confirmDelete();
+		} finally {
+			this.confirming = false;
+		}
+	}
+
+	private async confirmDelete(): Promise<void> {
 		const folder = this.current;
 		const entries = this.list.getSelectedElements();
 		if (!folder || !this.disk || !entries.length) {

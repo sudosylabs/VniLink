@@ -167,7 +167,7 @@ function filesFixture(width: number, height: number) {
 	const openings: (FilesFailure | undefined)[] = [];
 	const state = new Map<UIStateKey, unknown>([['files.lastFolder.studio.local', { root: '0', path: 'Users/hammed/Downloads' }]]);
 	const dialogs: IDialogOptions[] = [];
-	const answers: IDialogResult[] = [];
+	const answers: (IDialogResult | Promise<IDialogResult>)[] = [];
 	const noActions: readonly IAction[] = [];
 	const shown = { menu: noActions };
 	const tabService = disposables.add(new TabService());
@@ -315,8 +315,20 @@ export async function verifyFiles(): Promise<void> {
 		await until(() => dialogs.length === 2, 'Delete did not ask');
 		assert(dialogs[1].message === 'Permanently delete “invoice.pdf” from This Mac?' || dialogs[1].message.startsWith('Permanently delete “invoice.pdf” from'), `Wrong delete question: ${dialogs[1].message}`);
 		assert(localDisk.deletes.length === 0, 'Delete ran without confirmation');
-		answers.push({ button: 0, checked: false });
+		// The cancelled question settles before Delete is pressed again.
+		await new Promise(resolve => setTimeout(resolve, 0));
+		// Asking twice while the question is open asks once.
+		const asked = dialogs.length;
+		let answer: (result: IDialogResult) => void = () => undefined;
+		answers.push(new Promise<IDialogResult>(resolve => {
+			answer = resolve;
+		}));
 		press(list(local), 'Delete', 46);
+		press(list(local), 'Delete', 46);
+		await until(() => dialogs.length === asked + 1, 'Delete did not ask again');
+		await new Promise(resolve => setTimeout(resolve, 50));
+		assert(dialogs.length === asked + 1, `Delete asked ${String(dialogs.length - asked)} times at once`);
+		answer({ button: 0, checked: false });
 		await until(() => localDisk.deletes.join() === 'invoice.pdf', 'Confirmed delete did not run');
 		await until(() => !names(local).includes('invoice.pdf'), 'The deleted item stayed listed');
 
