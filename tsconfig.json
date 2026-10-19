@@ -22,6 +22,8 @@
     "src/main.ts",
     "src/renderer.ts",
     "src/preload.ts",
+    "src/notice.ts",
+    "src/noticePreload.ts",
     "src/platform/engine/electron-utility/engineMain.ts",
     "src/platform/secrets/common/secrets.ts",
     "src/assets.d.ts",

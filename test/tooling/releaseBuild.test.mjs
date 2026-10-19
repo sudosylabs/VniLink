@@ -24,8 +24,8 @@ test('release entry points exclude tests and compile with production configurati
 	try {
 		const outputDirectory = join(root, 'release-app');
 		const options = bundleOptions(root, { production: true, outputDirectory });
-		assert.equal(options.length, 4);
-		assert.equal(bundleOptions(root).length, 6);
+		assert.equal(options.length, 6);
+		assert.equal(bundleOptions(root).length, 8);
 		await put(root, 'tsconfig.json', '{}');
 		for (const option of options) {
 			await put(root, option.entryPoints[0], 'console.log(process.env.NODE_ENV);');
@@ -174,7 +174,7 @@ test('release publication inventories only complete payloads, cleans failures an
 				assert.equal(options.production, true);
 				assert.equal(options.native.profile, 'release');
 				const glass = process.platform === 'darwin' ? ['native/elg/index.cjs', 'native/elg/elg.node', 'licenses/elg.txt'] : [];
-				const names = ['main.cjs', 'engine.cjs', 'preload.cjs', 'renderer/renderer.js', 'renderer/renderer.css', 'renderer/index.html', 'assets/tray/idleTemplate.png', 'native/vnilink.node', 'native/build.json', 'licenses/native-codecs/native-codecs.txt', 'relink/source/Cargo.lock', ...glass];
+				const names = ['main.cjs', 'engine.cjs', 'preload.cjs', 'renderer/renderer.js', 'renderer/renderer.css', 'renderer/index.html', 'noticePreload.cjs', 'renderer/notice.js', 'renderer/notice.css', 'renderer/notice.html', 'assets/tray/idleTemplate.png', 'native/vnilink.node', 'native/build.json', 'licenses/native-codecs/native-codecs.txt', 'relink/source/Cargo.lock', ...glass];
 				for (const name of names) {
 					await put(options.outputDirectory, name);
 				}

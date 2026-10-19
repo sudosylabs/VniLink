@@ -24,8 +24,11 @@ export function bundleOptions(root: string, { production = false, outputDirector
 		node('src/main.ts', 'main.cjs'),
 		node('src/platform/engine/electron-utility/engineMain.ts', 'engine.cjs'),
 		node('src/preload.ts', 'preload.cjs'),
+		// The restart notice: its own page, bundle and preload, apart from the workbench's IPC.
+		node('src/noticePreload.ts', 'noticePreload.cjs'),
 		...(!production ? [node('test/smoke/main.ts', 'smoke.cjs')] : []),
 		browser('src/renderer.ts', 'renderer/renderer.js'),
+		browser('src/notice.ts', 'renderer/notice.js'),
 		...(!production ? [browser('test/browser/index.ts', 'browser-tests.js', { format: 'iife', globalName: 'browserTests' })] : []),
 	];
 }
@@ -33,6 +36,7 @@ export function bundleOptions(root: string, { production = false, outputDirector
 export function resources(root: string, outputDirectory = join(root, 'out')): Resource[] {
 	return [
 		['src/workbench/index.html', 'renderer/index.html'],
+		['src/workbench/notice.html', 'renderer/notice.html'],
 		['assets/desktop/app-icon.svg', 'renderer/app-icon.svg'],
 		// Tray icons, loaded by the main process next to its bundle.
 		['assets/tray', 'assets/tray'],

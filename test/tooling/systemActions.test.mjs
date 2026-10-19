@@ -8,6 +8,8 @@ const result = await build({
 			export { isEngineCommand, isEngineEvent, isEngineReply } from './src/platform/engine/common/engine.js';
 			export { isMessageBoxOptions } from './src/platform/native/common/native.js';
 			export { SystemActionNotices } from './src/platform/systemActions/electron-main/systemActionNotice.js';
+			export { noticeCountdown, noticeTitle } from './src/platform/systemActions/common/noticeText.js';
+			export { isNoticeAnswer, isNoticeContent } from './src/platform/systemActions/common/notice.js';
 			export { systemActionMessage, systemRequestMessage } from './src/workbench/services/systemActions/systemActionServiceImpl.js';
 			export { Emitter } from './src/base/common/event.js';
 		`,
@@ -25,14 +27,14 @@ const result = await build({
 			builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'stub' }));
 			builder.onResolve({ filter: /(engineMainService|extensions)\.js$/ }, args => ({ path: args.path, namespace: 'stub' }));
 			builder.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({
-				contents: 'export const app = { focus() {} }; export const dialog = {}; export const IEngineMainService = () => {}; export const registerSingleton = () => {}; export const InstantiationType = {};',
+				contents: 'export const app = { focus() {} }; export const BrowserWindow = class {}; export const nativeTheme = {}; export const screen = {}; export const IEngineMainService = () => {}; export const registerSingleton = () => {}; export const InstantiationType = {};',
 				loader: 'js',
 			}));
 		},
 	}],
 });
 
-const { isEngineCommand, isEngineEvent, isEngineReply, isMessageBoxOptions, SystemActionNotices, systemActionMessage, systemRequestMessage, Emitter } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+const { isEngineCommand, isEngineEvent, isEngineReply, isMessageBoxOptions, isNoticeAnswer, isNoticeContent, noticeCountdown, noticeTitle, SystemActionNotices, systemActionMessage, systemRequestMessage, Emitter } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 10));
 
@@ -92,18 +94,14 @@ test('the person at the computer can cancel a restart, or start it now', async (
 	for (const [answer, expected] of [[0, 'cancelHostedSystemAction'], [1, 'runHostedSystemActionNow']]) {
 		const { engine, events, commands } = fakeEngine();
 		const prompts = [];
-		const notices = new SystemActionNotices(engine, async request => {
-			prompts.push(request);
+		const notices = new SystemActionNotices(engine, async content => {
+			prompts.push(content);
 			return answer;
-		}, error => assert.fail(String(error)), () => Date.UTC(2026, 9, 19, 12, 0, 0));
+		}, error => assert.fail(String(error)), () => 1_000_000);
 		events.fire({ events: [{ type: 'systemActionScheduled', id: '7', action: 'restart', endpoint_id: 'peer', remainingMs: 30000 }], resync: false });
 		await settle();
-		assert.equal(prompts.length, 1);
-		assert.equal(prompts[0].message, 'Studio Mac wants to restart this computer');
-		// The moment it runs, to the second, since the box cannot count down.
-		const at = new Date(Date.UTC(2026, 9, 19, 12, 0, 30)).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-		assert.equal(prompts[0].detail, `It will restart at ${at} unless you cancel. Save your work first.`);
-		assert.deepEqual(prompts[0].buttons, ['Cancel', 'Restart Now']);
+		// The window counts down to the deadline itself.
+		assert.deepEqual(prompts, [{ action: 'restart', name: 'Studio Mac', deadline: 1_030_000 }]);
 		assert.deepEqual(commands.at(-1), { type: expected, id: '7' });
 		notices.dispose();
 	}
@@ -119,8 +117,8 @@ test('a notice closes itself when the action ends another way, and a missed one 
 	await settle();
 	// Started while events lapsed: the resync at start shows it, with a generic name.
 	assert.equal(shown.length, 1);
-	assert.equal(shown[0].message, 'A paired computer wants to shut down this computer');
-	assert.deepEqual(shown[0].buttons, ['Cancel', 'Shut Down Now']);
+	assert.equal(shown[0].action, 'shutdown');
+	assert.equal(shown[0].name, 'A paired computer');
 	// The same countdown arriving again is not shown twice.
 	events.fire({ events: [{ type: 'systemActionScheduled', id: '9', action: 'shutdown', endpoint_id: 'unknown', remainingMs: 11000 }], resync: false });
 	await settle();
@@ -133,6 +131,19 @@ test('a notice closes itself when the action ends another way, and a missed one 
 	await settle();
 	assert.equal(commands.filter(command => command.type === 'scheduledSystemActions').length, 2, 'an engine that comes back is asked again');
 	notices.dispose();
+});
+
+test('the notice names who asked and counts down in whole seconds', () => {
+	const restart = { action: 'restart', name: 'Studio Mac', deadline: 30_000 };
+	assert.equal(noticeTitle(restart), 'Studio Mac wants to restart this computer');
+	assert.equal(noticeTitle({ ...restart, action: 'shutdown' }), 'Studio Mac wants to shut down this computer');
+	assert.equal(noticeCountdown(restart, 0), 'Restarting in 30 s. Save your work, or cancel.');
+	assert.equal(noticeCountdown(restart, 5_100), 'Restarting in 25 s. Save your work, or cancel.');
+	assert.equal(noticeCountdown({ ...restart, action: 'shutdown' }, 40_000), 'Shutting down in 0 s. Save your work, or cancel.');
+	assert(isNoticeContent(restart));
+	assert(!isNoticeContent({ ...restart, action: 'lock' }), 'a lock never counts down');
+	assert(!isNoticeContent({ ...restart, extra: true }));
+	assert(isNoticeAnswer('cancel') && isNoticeAnswer('now') && !isNoticeAnswer('later'));
 });
 
 test('the computer that asked reads every outcome in words', () => {

@@ -76,7 +76,7 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 		const bundles = bundleOptions(root, { production: true, outputDirectory: app }).map(option => relative(stage, option.outfile ?? '').split('\\').join('/'));
 		// macOS ships Liquid Glass with its licence; a missing file would silently fall back to vibrancy.
 		const glass = process.platform === 'darwin' ? [`app/${GLASS_DIRECTORY}/index.cjs`, `app/${GLASS_DIRECTORY}/elg.node`, 'app/licenses/elg.txt'] : [];
-		for (const name of [...bundles, ...glass, 'app/renderer/renderer.css', 'app/renderer/index.html', 'app/assets/tray/idleTemplate.png', 'app/native/vnilink.node', 'app/native/build.json', 'app/licenses/native-codecs/native-codecs.txt', 'app/relink/source/Cargo.lock']) {
+		for (const name of [...bundles, ...glass, 'app/renderer/renderer.css', 'app/renderer/index.html', 'app/renderer/notice.css', 'app/renderer/notice.html', 'app/assets/tray/idleTemplate.png', 'app/native/vnilink.node', 'app/native/build.json', 'app/licenses/native-codecs/native-codecs.txt', 'app/relink/source/Cargo.lock']) {
 			if (!paths.has(name)) {
 				throw new Error(`Missing release input: ${name}`);
 			}

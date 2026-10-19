@@ -21,7 +21,7 @@ test('desktop watcher rebuilds TS/CSS, handles atomic resource saves and leaves 
 		await mkdir(dirname(filename), { recursive: true });
 		await writeFile(filename, text);
 	}
-	const paths = ['src/main.ts', 'src/preload.ts', 'src/platform/engine/electron-utility/engineMain.ts', 'test/smoke/main.ts', 'test/browser/index.ts'];
+	const paths = ['src/main.ts', 'src/preload.ts', 'src/noticePreload.ts', 'src/notice.ts', 'src/platform/engine/electron-utility/engineMain.ts', 'test/smoke/main.ts', 'test/browser/index.ts'];
 	let watcher;
 	try {
 		await put('tsconfig.json', '{}');
@@ -31,6 +31,7 @@ test('desktop watcher rebuilds TS/CSS, handles atomic resource saves and leaves 
 		await put('src/renderer.ts', 'import "./style.css"; console.log("original");');
 		await put('src/style.css', 'body { color: red; }');
 		await put('src/workbench/index.html', '<title>original</title>');
+		await put('src/workbench/notice.html', '<title>notice</title>');
 		await put('assets/desktop/app-icon.svg', '<svg/>');
 		await put('node_modules/@phosphor-icons/core/LICENSE', 'phosphor');
 		await put('LICENSE.vscode.txt', 'MIT');

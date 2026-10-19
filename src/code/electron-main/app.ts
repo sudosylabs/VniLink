@@ -51,8 +51,8 @@ export interface ApplicationOptions {
 	readonly onReady?: (window: BrowserWindowType) => Promise<void>;
 }
 
-/** Files the `vnilink://app/` protocol serves; everything else is not found. */
-const workbenchFiles = new Set(['/index.html', '/renderer.js', '/renderer.css', '/app-icon.svg']);
+/** Files the `vnilink://app/` protocol serves: the workbench and the restart notice. Everything else is not found. */
+const workbenchFiles = new Set(['/index.html', '/renderer.js', '/renderer.css', '/app-icon.svg', '/notice.html', '/notice.js', '/notice.css']);
 
 /**
  * Main-process composition: creates services, exposes them to windows over

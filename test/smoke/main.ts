@@ -4,9 +4,8 @@ import { getMacOSWindowControlsPosition } from '../../src/platform/window/common
 import { getWorkbenchTitlebarHeight } from '../../src/platform/window/common/titlebar.js';
 import { resolveWindowMaterial } from '../../src/platform/window/common/windowMaterial.js';
 import { isEngineReply, record } from '../../src/platform/engine/common/engine.js';
-import type { BrowserWindow } from 'electron';
-import { app, net, nativeTheme } from 'electron';
-import { readFileSync } from 'node:fs';
+import { app, BrowserWindow, net, nativeTheme } from 'electron';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { release } from 'node:os';
 import { isMacintosh } from '../../src/base/common/platform.js';
@@ -15,6 +14,8 @@ import { TestApplication } from '../automation/application.js';
 import type { WindowDriver } from '../automation/driver.js';
 import { ScenarioSelection, browserScenarioNames } from '../automation/scenarios.js';
 import { registerDevelopmentWindow } from '../../src/code/electron-main/development.js';
+import { NOTICE_URL } from '../../src/platform/systemActions/common/notice.js';
+import { windowPrompt } from '../../src/platform/systemActions/electron-main/noticeWindow.js';
 
 class SmokeSuite {
 	private readonly application = new TestApplication();
@@ -37,6 +38,50 @@ class SmokeSuite {
 				await window.webContents.executeJavaScript(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
 				assert.equal(await window.webContents.executeJavaScript(`document.querySelector('.monaco-dialog-box') === null`), true, 'Escape left the dialog open');
 			}
+		} finally {
+			nativeTheme.themeSource = theme;
+		}
+	}
+
+	/** The notice window counts down from its deadline, answers Cancel, and closes when its signal aborts. */
+	private async verifyNotice(): Promise<void> {
+		const theme = nativeTheme.themeSource;
+		const known = new Set(BrowserWindow.getAllWindows());
+		const opened = async (): Promise<BrowserWindow> => {
+			for (let attempt = 0; attempt < 100; attempt++) {
+				const window = BrowserWindow.getAllWindows().find(candidate => !known.has(candidate) && candidate.isVisible());
+				if (window) {
+					return window;
+				}
+				await new Promise(resolve => setTimeout(resolve, 50));
+			}
+			throw new Error('The notice window did not open');
+		};
+		const detail = (window: BrowserWindow): Promise<unknown> => window.webContents.executeJavaScript(`document.querySelector('#notice-detail')?.textContent`);
+		try {
+			for (const mode of ['light', 'dark'] as const) {
+				nativeTheme.themeSource = mode;
+				const answer = windowPrompt({ action: 'restart', name: 'Studio Mac', deadline: Date.now() + 30_000 }, new AbortController().signal);
+				const window = await opened();
+				assert.equal(window.webContents.getURL(), NOTICE_URL);
+				assert.equal(await window.webContents.executeJavaScript(`document.querySelector('#notice-title')?.textContent`), 'Studio Mac wants to restart this computer');
+				assert.equal(await window.webContents.executeJavaScript(`document.activeElement?.textContent`), 'Cancel', 'Cancel is not focused');
+				const first = await detail(window);
+				assert.match(String(first), /^Restarting in (30|29) s\. Save your work, or cancel\.$/);
+				await new Promise(resolve => setTimeout(resolve, 1300));
+				assert.notEqual(await detail(window), first, 'The notice did not count down');
+				writeFileSync(join(this.application.output, `notice-${mode}.png`), (await window.webContents.capturePage()).toPNG());
+				await window.webContents.executeJavaScript(`[...document.querySelectorAll('.monaco-button')].find(button => button.textContent === 'Cancel').click()`);
+				assert.equal(await answer, 0, 'Cancel did not answer');
+				assert(window.isDestroyed(), 'The answered notice stayed open');
+			}
+			// Ended another way: the window closes and answers nothing.
+			const controller = new AbortController();
+			const answer = windowPrompt({ action: 'shutdown', name: 'Studio Mac', deadline: Date.now() + 30_000 }, controller.signal);
+			const window = await opened();
+			controller.abort();
+			assert.equal(await answer, undefined);
+			assert(window.isDestroyed(), 'An aborted notice stayed open');
 		} finally {
 			nativeTheme.themeSource = theme;
 		}
@@ -185,6 +230,9 @@ class SmokeSuite {
 					await this.verifyDialogThemes(window, driver);
 				}
 			}
+		}
+		if (this.selection.includes('notice')) {
+			await this.verifyNotice();
 		}
 		if (!this.selection.names.some((name: string) => ['engine', 'navigation', 'window', 'appearance', 'settings-layout', 'reload'].includes(name))) {
 			return;
