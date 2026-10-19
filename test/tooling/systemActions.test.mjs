@@ -60,7 +60,12 @@ test('a window shows only a short message box with a few plain buttons', () => {
 	assert(!isMessageBoxOptions({ message: 'x', buttons: ['1', '2', '3', '4', '5'] }, 3), 'five buttons');
 	assert(!isMessageBoxOptions({ message: 'x'.repeat(501) }, 3), 'a long message');
 	assert(!isMessageBoxOptions({ message: 'x', buttons: ['OK'], cancelId: 1 }, 3), 'a cancel id past the buttons');
-	assert(!isMessageBoxOptions({ message: 'x', checkboxLabel: 'Always' }, 3), 'an option the window may not set');
+	assert(isMessageBoxOptions({ message: 'Replace notes.txt?', buttons: ['Replace', 'Skip'], checkboxLabel: 'Do the same for the other conflicts', checkboxChecked: true }, 3), 'a checkbox');
+	assert(!isMessageBoxOptions({ message: 'x', checkboxLabel: '' }, 3), 'an empty checkbox label');
+	assert(!isMessageBoxOptions({ message: 'x', checkboxLabel: 'x'.repeat(101) }, 3), 'a long checkbox label');
+	assert(!isMessageBoxOptions({ message: 'x', checkboxLabel: 'Always', checkboxChecked: 'yes' }, 3), 'a checkbox state that is not a boolean');
+	assert(!isMessageBoxOptions({ message: 'x', checkboxChecked: true }, 3), 'a checkbox state without a checkbox');
+	assert(!isMessageBoxOptions({ message: 'x', textWidth: 300 }, 3), 'an option the window may not set');
 	assert(!isMessageBoxOptions({ message: 'x', targetWindowId: 4 }, 3), 'another window');
 	assert(!isMessageBoxOptions({ message: 'x', type: 'error' }, 3));
 });

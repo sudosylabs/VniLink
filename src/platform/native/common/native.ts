@@ -131,9 +131,9 @@ export function isWindowState(value: unknown): value is IWindowState {
 	);
 }
 
-const messageBoxKeys = ['message', 'detail', 'type', 'buttons', 'defaultId', 'cancelId', 'title', 'noLink', 'targetWindowId'];
+const messageBoxKeys = ['message', 'detail', 'type', 'buttons', 'defaultId', 'cancelId', 'title', 'noLink', 'checkboxLabel', 'checkboxChecked', 'targetWindowId'];
 
-/** A short message box with at most four buttons; nothing that reaches files or links. */
+/** A short message box with at most four buttons and an optional checkbox; nothing that reaches files or links. */
 export function isMessageBoxOptions(value: unknown, windowId: number): value is MessageBoxOptions & ITargetWindowOptions {
 	if (typeof value !== 'object' || value === null || Array.isArray(value) || Object.keys(value).some(key => !messageBoxKeys.includes(key))) {
 		return false;
@@ -150,6 +150,8 @@ export function isMessageBoxOptions(value: unknown, windowId: number): value is 
 		&& (buttons === undefined || (Array.isArray(buttons) && buttons.length <= 4 && buttons.every(button => typeof button === 'string' && button.length > 0 && button.length <= 64)))
 		&& index(Reflect.get(value, 'defaultId')) && index(Reflect.get(value, 'cancelId'))
 		&& (Reflect.get(value, 'noLink') === undefined || typeof Reflect.get(value, 'noLink') === 'boolean')
+		&& shortText(Reflect.get(value, 'checkboxLabel'), 100) && Reflect.get(value, 'checkboxLabel') !== ''
+		&& (Reflect.get(value, 'checkboxChecked') === undefined || (typeof Reflect.get(value, 'checkboxChecked') === 'boolean' && Reflect.get(value, 'checkboxLabel') !== undefined))
 		&& (target === undefined || target === windowId);
 }
 

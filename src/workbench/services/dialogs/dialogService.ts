@@ -10,6 +10,18 @@ export interface IDialogOptions {
 	/** The answers, in order; `cancelId` names the one that dismisses. */
 	readonly buttons: readonly string[];
 	readonly cancelId: number;
+	/** A checkbox under the message, such as "Do the same for the other items". */
+	readonly checkbox?: {
+		readonly label: string;
+		readonly checked?: boolean;
+	};
+}
+
+export interface IDialogResult {
+	/** The index of the chosen button. */
+	readonly button: number;
+	/** Whether the checkbox was ticked when the dialog closed; `false` without one. */
+	readonly checked: boolean;
 }
 
 /**
@@ -19,6 +31,5 @@ export interface IDialogOptions {
  */
 export interface IDialogService {
 	readonly _serviceBrand: undefined;
-	/** Resolves with the index of the chosen button. */
-	show(options: IDialogOptions): Promise<number>;
+	show(options: IDialogOptions): Promise<IDialogResult>;
 }

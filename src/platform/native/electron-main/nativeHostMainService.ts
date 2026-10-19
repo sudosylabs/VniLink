@@ -151,6 +151,8 @@ export class NativeHostMainService extends Disposable {
 			cancelId: options.cancelId,
 			title: options.title,
 			noLink: options.noLink,
+			checkboxLabel: options.checkboxLabel,
+			checkboxChecked: options.checkboxChecked,
 		});
 		return { response, checkboxChecked };
 	}

@@ -75,15 +75,15 @@ export class RestartOrShutDownAction extends Action2 {
 			: choices[0].action === 'restart'
 				? nls.localize('system.confirmRestart', 'Restart {0}?', device.name)
 				: nls.localize('system.confirmShutDown', 'Shut down {0}?', device.name);
-		const response = await dialogs.show({
+		const { button } = await dialogs.show({
 			type: 'warning',
 			message,
 			detail: nls.localize('system.confirmDetail', 'Its user has 30 seconds to cancel. Anything not saved there may be lost.'),
 			buttons: [...choices.map(choice => choice.label), nls.localize('system.cancelButton', 'Cancel')],
 			cancelId: choices.length,
 		});
-		const chosen = choices.at(response);
-		if (chosen && response < choices.length) {
+		const chosen = choices.at(button);
+		if (chosen && button < choices.length) {
 			await systemActions.run(device.id, chosen.action);
 		}
 	}
