@@ -31,6 +31,11 @@ export const Icons = Object.freeze({
 	camera: 'camera',
 	lock: 'lock',
 	copy: 'copy',
+	fullScreen: 'fullScreen',
+	exitFullScreen: 'exitFullScreen',
+	fillView: 'fillView',
+	fitToView: 'fitToView',
+	stop: 'stop',
 
 	close: 'close',
 	minimize: 'minimize',

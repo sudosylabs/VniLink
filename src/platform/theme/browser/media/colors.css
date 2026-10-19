@@ -24,6 +24,12 @@
 	--chrome-hover: color-mix(in srgb, var(--text) 5%, transparent);
 	--chrome-selected: var(--selected);
 
+	/* Camera: pictures sit on a dark stage in either theme, as photos and video do. */
+	--camera-stage: #1c1c1e;
+	--camera-on-stage: #ececef;
+	--camera-scrim: rgb(0 0 0 / 45%);
+	--camera-record: #ff453a;
+
 	/* Terminal: the page's own colours, with VS Code's default ANSI palette (terminalColorRegistry.ts). */
 	--terminal-background: var(--canvas);
 	--terminal-foreground: var(--text);
@@ -104,6 +110,10 @@
 		--chrome-line: CanvasText;
 		--chrome-hover: Canvas;
 		--chrome-selected: Highlight;
+		--camera-stage: Canvas;
+		--camera-on-stage: CanvasText;
+		--camera-scrim: Canvas;
+		--camera-record: CanvasText;
 		--terminal-foreground: CanvasText;
 		--terminal-cursor: CanvasText;
 		--terminal-selection: Highlight;

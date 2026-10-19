@@ -6,6 +6,7 @@ import type { RemoteStatus } from '../../../platform/engine/common/engine.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import { MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS, type IProcessDataEvent, type ITerminalChildProcess, type ITerminalLaunchError, type TerminalExit, type TerminalLaunchFailure } from '../../../platform/terminal/common/terminal.js';
 import { formatMessageForTerminal } from '../../../platform/terminal/common/terminalStrings.js';
+import { activeControllerSession, type ControllerSession } from '../devices/controllerSession.js';
 import { IDeviceService } from '../devices/deviceService.js';
 
 /** The renderer end of a terminal data channel (`DataChannelClient`). */
@@ -207,19 +208,8 @@ export class EnginePty extends Disposable implements ITerminalChildProcess {
 		}
 	}
 
-	private async session(): Promise<{ readonly id: string; readonly generation: string } | undefined> {
-		if (!this.engine.available) {
-			return undefined;
-		}
-		try {
-			const reply = await this.engine.execute({ type: 'controllerSessions' });
-			if (reply.type !== 'sessions') {
-				return undefined;
-			}
-			return reply.sessions.find(item => item.role === 'Controller' && item.peer_id === this.deviceId && item.phase === 'Active');
-		} catch {
-			return undefined;
-		}
+	private session(): Promise<ControllerSession | undefined> {
+		return activeControllerSession(this.engine, this.deviceId);
 	}
 
 	private async consume(packet: DataPacket): Promise<void> {

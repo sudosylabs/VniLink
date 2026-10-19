@@ -65,6 +65,16 @@ import cameraOutlined from '@phosphor-icons/core/assets/regular/camera.svg';
 import cameraFilled from '@phosphor-icons/core/assets/fill/camera-fill.svg';
 import lockOutlined from '@phosphor-icons/core/assets/regular/lock-simple.svg';
 import lockFilled from '@phosphor-icons/core/assets/fill/lock-simple-fill.svg';
+import fullScreenOutlined from '@phosphor-icons/core/assets/regular/corners-out.svg';
+import fullScreenFilled from '@phosphor-icons/core/assets/fill/corners-out-fill.svg';
+import exitFullScreenOutlined from '@phosphor-icons/core/assets/regular/corners-in.svg';
+import exitFullScreenFilled from '@phosphor-icons/core/assets/fill/corners-in-fill.svg';
+import fillViewOutlined from '@phosphor-icons/core/assets/regular/arrows-out-simple.svg';
+import fillViewFilled from '@phosphor-icons/core/assets/fill/arrows-out-simple-fill.svg';
+import fitToViewOutlined from '@phosphor-icons/core/assets/regular/arrows-in-simple.svg';
+import fitToViewFilled from '@phosphor-icons/core/assets/fill/arrows-in-simple-fill.svg';
+import stopOutlined from '@phosphor-icons/core/assets/regular/stop.svg';
+import stopFilled from '@phosphor-icons/core/assets/fill/stop-fill.svg';
 
 // The only place that knows the icon provider and its filenames.
 const assets: Record<IconId, Record<IconVariant, string>> = {
@@ -86,6 +96,11 @@ const assets: Record<IconId, Record<IconVariant, string>> = {
 	camera: { outlined: cameraOutlined, filled: cameraFilled },
 	lock: { outlined: lockOutlined, filled: lockFilled },
 	copy: { outlined: restoreOutlined, filled: restoreFilled },
+	fullScreen: { outlined: fullScreenOutlined, filled: fullScreenFilled },
+	exitFullScreen: { outlined: exitFullScreenOutlined, filled: exitFullScreenFilled },
+	fillView: { outlined: fillViewOutlined, filled: fillViewFilled },
+	fitToView: { outlined: fitToViewOutlined, filled: fitToViewFilled },
+	stop: { outlined: stopOutlined, filled: stopFilled },
 	devices: { outlined: devicesOutlined, filled: devicesFilled },
 	remoteDesktop: { outlined: remoteDesktopOutlined, filled: remoteDesktopFilled },
 	refresh: { outlined: refreshOutlined, filled: refreshFilled },

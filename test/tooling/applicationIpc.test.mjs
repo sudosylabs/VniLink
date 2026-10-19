@@ -1,5 +1,7 @@
 import { EventEmitter } from 'node:events';
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { build } from 'esbuild';
@@ -11,7 +13,8 @@ export const windows = new Map();
 export const ipcMain = { handle: (name, callback) => handlers.set(name, callback), removeHandler: name => handlers.delete(name), on() { }, once() { }, removeListener() { } };
 export const app = { isPackaged: false, getVersion: () => 'test', getPath: () => '/Pictures', getLoginItemSettings: () => ({ openAtLogin: false }) };
 export const shell = { openExternal: async url => opened.push(url) };
-export const clipboard = { text: '', readText: async () => clipboard.text, writeText: async text => { clipboard.text = text; } };
+export const clipboard = { text: '', items: [], readText: async () => clipboard.text, writeText: async text => { clipboard.text = text; }, write: async items => { clipboard.items = items; } };
+export class ClipboardItem { constructor(items) { this.items = items; } }
 export const dialog = { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) };
 export const systemPreferences = {};
 export const screen = { getAllDisplays: () => [] };
@@ -50,7 +53,8 @@ const output = await build({
 			export { windowIdFromContext } from './src/platform/ipc/electron-main/windowContext.js';
 			export { setUnexpectedErrorHandler } from './src/base/common/errors.js';
 			export { Event } from './src/base/common/event.js';
-			export { handlers, opened, windows } from 'electron';
+			export { handlers, opened, windows, clipboard } from 'electron';
+			export { VSBuffer } from './src/base/common/buffer.js';
 			export { disk } from 'fixture:store';`,
 		loader: 'ts', resolveDir: process.cwd(),
 	}, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json', plugins: [{
@@ -64,7 +68,7 @@ const output = await build({
 
 const {
 	validatedIpcMain, WORKBENCH_URL, NativeHostChannel, NativeHostMainService, EngineChannel, ConfigurationMainService, RecordingMainService,
-	windowIdFromContext, setUnexpectedErrorHandler, Event, handlers, opened, windows, disk,
+	windowIdFromContext, setUnexpectedErrorHandler, Event, handlers, opened, windows, disk, clipboard, VSBuffer,
 } = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
 
 const logService = { error() { }, trace() { } };
@@ -132,6 +136,18 @@ test('native host requests must name their own window and links are allowlisted'
 	await assert.rejects(channel.call('window:7', 'readClipboardText', [7, 'files']), /Invalid/);
 	await assert.rejects(channel.call('window:7', 'readClipboardText', [8]), /Invalid/);
 	assert.equal(await channel.call('window:7', 'readClipboardText', [7]), 'copied ✓', 'A refused write reached the clipboard');
+});
+
+test('a window copies a PNG picture, and nothing else, to the clipboard', async () => {
+	const window = appWindow(7);
+	const nativeHost = new NativeHostMainService({ onDidOpenWindow: Event.None, getWindowById: id => id === 7 ? window : undefined });
+	const channel = new NativeHostChannel(nativeHost, async () => { });
+	const png = VSBuffer.wrap(Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]));
+	await channel.call('window:7', 'writeClipboardPicture', [7, png]);
+	assert.deepEqual(clipboard.items.map(item => Object.keys(item.items)), [['image/png']]);
+	await assert.rejects(channel.call('window:7', 'writeClipboardPicture', [7, VSBuffer.fromString('not a picture')]), /Invalid/);
+	await assert.rejects(channel.call('window:7', 'writeClipboardPicture', [8, png]), /Invalid/);
+	await assert.rejects(channel.call('window:7', 'savePicture', [7, 'picture.png', png]), /Invalid/);
 });
 
 test('windows change settings only through the configuration channel', async () => {
@@ -297,4 +313,22 @@ test('the offered shell is chosen by id, refused while shells run, and a missing
 test('the default recording folder stays independent of a saved custom folder', async () => {
 	const recording = new RecordingMainService({ getValue: () => '/custom-recordings' });
 	assert.equal(await recording.getDefaultDirectory(), join('/Pictures', 'VniLink'));
+});
+
+test('a picture lands in the recordings folder under its own name, never over another', async () => {
+	const folder = await mkdtemp(join(tmpdir(), 'vnilink-pictures-'));
+	try {
+		const recording = new RecordingMainService({ getValue: () => folder });
+		const png = VSBuffer.wrap(Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]));
+		await recording.savePicture('Studio 2026-10-19 14.32.05.png', png);
+		await recording.savePicture('Studio 2026-10-19 14.32.05.png', png);
+		assert.deepEqual([...await readFile(join(folder, 'Studio 2026-10-19 14.32.05.png'))], [...png.buffer]);
+		assert.deepEqual([...await readFile(join(folder, 'Studio 2026-10-19 14.32.05 (2).png'))], [...png.buffer]);
+		// Arguments come from the window unchecked: a path, a non-PNG or a non-buffer is refused.
+		for (const [name, bytes] of [['../escape.png', png], ['nested/picture.png', png], ['picture.png', VSBuffer.fromString('not a picture')], ['picture.png', Uint8Array.from(png.buffer)]]) {
+			await assert.rejects(recording.savePicture(name, bytes), /Invalid picture/);
+		}
+	} finally {
+		await rm(folder, { recursive: true, force: true });
+	}
 });

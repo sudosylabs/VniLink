@@ -336,9 +336,12 @@ async function verifyInspector(fixture: DevicePageFixture, rows: () => HTMLEleme
 		'Camera': 'Unavailable right now', 'Lock screen': 'Not supported there', 'Restart or shut down': 'Available',
 	};
 	assert(JSON.stringify(services()) === JSON.stringify(expected), `Service rows misreport availability: ${JSON.stringify(services())}`);
-	// Only Terminal opens something yet; it is a button, disabled while the computer refuses it.
-	const terminal = (): HTMLButtonElement | null => page.querySelector<HTMLButtonElement>('button.device-service');
-	assert(page.querySelector('.device-services')?.getAttribute('role') === 'list' && page.querySelectorAll('button.device-service, .device-service[tabindex]').length === 1, 'A service row without a tab became interactive');
+	// Terminal and Camera open tabs; each is a button, disabled while the computer refuses it.
+	const serviceButton = (name: string): HTMLButtonElement | undefined => [...page.querySelectorAll<HTMLButtonElement>('button.device-service')].find(button => button.textContent.startsWith(name));
+	const terminal = (): HTMLButtonElement | undefined => serviceButton('Terminal');
+	const interactive = page.querySelectorAll('button.device-service, .device-service[tabindex]').length;
+	assert(page.querySelector('.device-services')?.getAttribute('role') === 'list' && interactive === 2, 'A service row without a tab became interactive');
+	assert(serviceButton('Camera')?.disabled === true, 'Camera is not a disabled button while that computer can\'t open it');
 	assert(terminal()?.textContent.startsWith('Terminal') === true && terminal()?.disabled === true && terminal()?.parentElement?.tagName === 'LI', 'Terminal is not a disabled button in its list item while it needs permission');
 	assert(page.querySelector('.device-service[data-status="turnedOff"]')?.getAttribute('aria-disabled') === 'true', 'An unavailable service is not marked disabled');
 	fixture.report(STUDIO, [{ capability: 'files', status: 'available' }, { capability: 'terminal', status: 'available' }]);
@@ -347,6 +350,10 @@ async function verifyInspector(fixture: DevicePageFixture, rows: () => HTMLEleme
 	assert(terminal()?.disabled === false && terminal()?.getAttribute('aria-disabled') === 'false', 'An available Terminal row cannot be pressed');
 	terminal()?.click();
 	assert(JSON.stringify(fixture.commands) === JSON.stringify([['vnilink.terminal.open', STUDIO]]), `Terminal did not open for the selected computer: ${JSON.stringify(fixture.commands)}`);
+	fixture.report(STUDIO, [{ capability: 'camera', status: 'available' }]);
+	await settle();
+	serviceButton('Camera')?.click();
+	assert(JSON.stringify(fixture.commands.at(-1)) === JSON.stringify(['vnilink.camera.open', STUDIO]), `Camera did not open for the selected computer: ${JSON.stringify(fixture.commands)}`);
 	const facts = Object.fromEntries([...page.querySelectorAll('.device-facts > div')].map(row => [row.querySelector('dt')?.textContent ?? '', row.querySelector('dd')?.textContent ?? '']));
 	assert(facts['Device ID'] === 'aaaaaaaa…aaaaaa' && facts.Computer === 'studio.local' && facts.System === 'macOS' && facts.Addresses === '2 direct, 1 relay', `Details are wrong: ${JSON.stringify(facts)}`);
 	assert(page.querySelector('.device-id')?.getAttribute('title') === STUDIO && page.querySelector('.device-copy')?.getAttribute('aria-label') === 'Copy device ID', 'The full device ID is not reachable');

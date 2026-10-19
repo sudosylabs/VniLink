@@ -1,0 +1,304 @@
+/* The picture fills the tab and the controls float over it, as in a camera app. */
+.camera-view {
+	position: relative;
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+	background: var(--camera-stage);
+	color: var(--camera-on-stage);
+	outline: none;
+}
+
+.camera-stage {
+	position: absolute;
+	inset: 0;
+}
+
+/* Fill: the picture covers the tab, cropping what overflows. Fit: all of it, with bars. */
+.camera-stage canvas {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	visibility: hidden;
+	transition: opacity 0.2s;
+}
+
+.camera-stage.camera-stage-picture canvas {
+	visibility: visible;
+}
+
+.camera-stage.camera-stage-fit canvas {
+	object-fit: contain;
+}
+
+.camera-stage.camera-stage-dimmed canvas {
+	opacity: 0.35;
+}
+
+.camera-message {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+	padding: 24px;
+	text-align: center;
+	pointer-events: none;
+}
+
+.camera-message[hidden] {
+	display: none;
+}
+
+.camera-message p {
+	max-width: 420px;
+	margin: 0;
+	font-size: 13px;
+	line-height: 1.5;
+}
+
+.camera-message .monaco-button {
+	pointer-events: auto;
+}
+
+.camera-message .monaco-button[hidden] {
+	display: none;
+}
+
+/* Recording: a red dot and the time, top left, while the controls hide. */
+.camera-recording {
+	position: absolute;
+	top: 14px;
+	left: 14px;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 10px;
+	border-radius: 999px;
+	background: var(--camera-scrim);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+
+.camera-recording[hidden] {
+	display: none;
+}
+
+.camera-recording-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--camera-record);
+	animation: camera-recording-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes camera-recording-pulse {
+	50% {
+		opacity: 0.35;
+	}
+}
+
+.camera-controls {
+	position: absolute;
+	right: 0;
+	bottom: 0;
+	left: 0;
+	display: grid;
+	grid-template-columns: 1fr auto 1fr;
+	align-items: center;
+	gap: 16px;
+	padding: 28px 20px 18px;
+	background: linear-gradient(to top, var(--camera-scrim), transparent);
+	transition: opacity 0.25s;
+}
+
+.camera-controls-side {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.camera-controls-end {
+	justify-content: flex-end;
+}
+
+.camera-controls-middle {
+	display: flex;
+	align-items: center;
+	gap: 18px;
+}
+
+.camera-picker {
+	max-width: 220px;
+	height: 32px;
+	padding: 0 10px;
+	border: 0;
+	border-radius: 16px;
+	background: var(--camera-scrim);
+	color: var(--camera-on-stage);
+	font: inherit;
+	font-size: 12px;
+}
+
+.camera-picker[hidden] {
+	display: none;
+}
+
+.camera-control {
+	display: grid;
+	place-items: center;
+	width: 36px;
+	height: 36px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
+	background: var(--camera-scrim);
+	color: var(--camera-on-stage);
+	font-size: 18px;
+}
+
+.camera-control:disabled {
+	opacity: 0.4;
+}
+
+.camera-control:focus-visible,
+.camera-picker:focus-visible {
+	outline: 2px solid var(--camera-on-stage);
+	outline-offset: 2px;
+}
+
+.camera-control:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--camera-on-stage) 22%, var(--camera-scrim));
+}
+
+/* The shutter: a white disc in a ring. */
+.camera-control.camera-shutter {
+	width: 56px;
+	height: 56px;
+	border: 3px solid var(--camera-on-stage);
+	background: transparent;
+}
+
+.camera-control.camera-shutter::after {
+	content: '';
+	width: 42px;
+	height: 42px;
+	border-radius: 50%;
+	background: var(--camera-on-stage);
+	transition: transform 0.1s;
+}
+
+.camera-control.camera-shutter:hover:not(:disabled) {
+	background: transparent;
+}
+
+.camera-control.camera-shutter:active:not(:disabled)::after {
+	transform: scale(0.88);
+}
+
+.camera-control.camera-record {
+	width: 44px;
+	height: 44px;
+	color: var(--camera-record);
+	font-size: 22px;
+}
+
+.camera-notice {
+	position: absolute;
+	top: 14px;
+	left: 50%;
+	margin: 0;
+	padding: 6px 12px;
+	border-radius: 6px;
+	background: var(--camera-scrim);
+	color: var(--camera-on-stage);
+	font-size: 12px;
+	opacity: 0;
+	transform: translateX(-50%);
+	transition: opacity 0.2s;
+	pointer-events: none;
+}
+
+.camera-notice-visible {
+	opacity: 1;
+}
+
+/* A picture taken: the frame flashes once. */
+.camera-view.camera-flash::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	background: var(--camera-on-stage);
+	opacity: 0;
+	animation: camera-flash 0.35s ease-out;
+	pointer-events: none;
+}
+
+@keyframes camera-flash {
+	from {
+		opacity: 0.6;
+	}
+}
+
+/* An untouched playing picture shows no controls, and no pointer over it. */
+.camera-view.camera-idle {
+	cursor: none;
+}
+
+.camera-view.camera-idle .camera-controls {
+	opacity: 0;
+	pointer-events: none;
+}
+
+/* Full screen: the window goes full screen and the camera covers it. */
+.camera-view.camera-view-fullscreen {
+	position: fixed;
+	inset: 0;
+	z-index: 1000;
+
+	/* The titlebar's drag region underneath would otherwise take the pointer. */
+	-webkit-app-region: no-drag;
+}
+
+@media (width <= 520px) {
+	.camera-controls {
+		gap: 8px;
+		padding-inline: 10px;
+	}
+
+	.camera-picker {
+		max-width: 120px;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.camera-stage canvas,
+	.camera-controls,
+	.camera-notice,
+	.camera-control.camera-shutter::after {
+		transition: none;
+	}
+
+	.camera-recording-dot,
+	.camera-view.camera-flash::after {
+		animation: none;
+	}
+}
+
+@media (forced-colors: active) {
+	.camera-control,
+	.camera-picker,
+	.camera-notice,
+	.camera-recording {
+		border: 1px solid CanvasText;
+	}
+
+	.camera-controls {
+		background: Canvas;
+	}
+}

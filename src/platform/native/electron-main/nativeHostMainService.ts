@@ -1,11 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: native window controls, window state, folder picking, displays, allowlisted links and plain-text clipboard.
+ *  Adapted for VniLink: native window controls, window state, folder picking, displays, allowlisted links and text and picture clipboard.
  *--------------------------------------------------------------------------------------------*/
 
-import { clipboard, dialog, screen, shell } from 'electron';
+import { clipboard, ClipboardItem, dialog, screen, shell } from 'electron';
 import type { BrowserWindow } from 'electron';
+import type { VSBuffer } from '../../../base/common/buffer.js';
 import { Disposable, DisposableStore } from '../../../base/common/lifecycle.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
@@ -160,6 +161,11 @@ export class NativeHostMainService extends Disposable {
 			throw new Error('Link is not allowed');
 		}
 		await shell.openExternal(url);
+	}
+
+	public async writeClipboardPicture(windowId: number, png: VSBuffer): Promise<void> {
+		this.window(windowId);
+		await clipboard.write([new ClipboardItem({ 'image/png': new Blob([Uint8Array.from(png.buffer)], { type: 'image/png' }) })]);
 	}
 
 	public async readClipboardText(windowId: number, type?: 'selection' | 'clipboard'): Promise<string> {

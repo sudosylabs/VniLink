@@ -1,12 +1,13 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: native window controls, window state, folder picking, displays, allowlisted links, plain-text clipboard and relaunch.
+ *  Adapted for VniLink: native window controls, window state, folder picking, displays, allowlisted links, text and picture clipboard and relaunch.
  *--------------------------------------------------------------------------------------------*/
 
 import type { WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
 import type { NativeScreenSource } from '../../engine/common/engine.js';
 import type { Event } from '../../../base/common/event.js';
+import { VSBuffer } from '../../../base/common/buffer.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 
 export interface IWindowState {
@@ -53,6 +54,8 @@ export interface INativeHostService {
 	// Clipboard
 	readClipboardText(type?: 'selection' | 'clipboard'): Promise<string>;
 	writeClipboardText(text: string, type?: 'selection' | 'clipboard'): Promise<void>;
+	/** Places a PNG picture on the clipboard. */
+	writeClipboardPicture(png: VSBuffer): Promise<void>;
 
 	/** Restarts the application; main refuses unless the engine requires a restart. */
 	relaunch(): Promise<void>;
@@ -75,10 +78,21 @@ export type NativeHostMethod =
 	| 'openExternal'
 	| 'readClipboardText'
 	| 'writeClipboardText'
+	| 'writeClipboardPicture'
 	| 'relaunch';
 
 /** Longest text a window may place on the clipboard. */
 const MAX_CLIPBOARD_TEXT = 16 * 1024 * 1024;
+
+/** Largest picture a window may save. */
+const MAX_PICTURE_BYTES = 32 * 1024 * 1024;
+
+const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+export function isPng(value: unknown): value is VSBuffer {
+	return value instanceof VSBuffer && value.byteLength > pngSignature.length && value.byteLength <= MAX_PICTURE_BYTES
+		&& pngSignature.every((byte, index) => value.buffer[index] === byte);
+}
 
 function isClipboardType(value: unknown): boolean {
 	return value === undefined || value === 'selection' || value === 'clipboard';
@@ -125,6 +139,9 @@ export function isNativeHostRequest(method: unknown, args: unknown): method is N
 	}
 	if (method === 'writeClipboardText') {
 		return args.length >= 2 && args.length <= 3 && typeof args[1] === 'string' && args[1].length <= MAX_CLIPBOARD_TEXT && isClipboardType(args[2]);
+	}
+	if (method === 'writeClipboardPicture') {
+		return args.length === 2 && isPng(args[1]);
 	}
 	if (method === 'pickFolder' || method === 'openExternal') {
 		return args.length === 2 && typeof args[1] === 'string' && args[1].length > 0 && args[1].length <= 4096 && !args[1].includes('\0');

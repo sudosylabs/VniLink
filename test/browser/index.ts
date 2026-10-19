@@ -3,6 +3,7 @@ import { verifyMediaSettings } from './mediaSettings.js';
 /** Independently selectable renderer scenarios; each owns its fixture teardown. */
 import { verifyWorkbenchLifecycle } from './workbench.js';
 import { verifyAccess } from './access.js';
+import { verifyCamera } from './camera.js';
 import { verifyConnection } from './connection.js';
 import { verifyDataChannels } from './dataChannels.js';
 import { verifyHomeLifecycle } from './home.js';
@@ -37,7 +38,7 @@ export class BrowserScenarios {
 	}
 
 	private readonly scenarios = new Map<string, () => unknown>([
-		['workbench', verifyWorkbenchLifecycle], ['access', verifyAccess], ['connection', verifyConnection], ['data-channels', verifyDataChannels],
+		['workbench', verifyWorkbenchLifecycle], ['access', verifyAccess], ['camera', verifyCamera], ['connection', verifyConnection], ['data-channels', verifyDataChannels],
 		['devices', verifyDevices], ['device-pairing', verifyPairingPopover], ['device-screenshot', verifyDeviceScreenshot], ['home', verifyHomeLifecycle], ['icons', verifyIcons],
 		['media-settings', verifyMediaSettings], ['remote-desktop', verifyRemoteDesktop], ['settings', verifySettingsPages], ['tabs', verifyTabs], ['terminal', verifyTerminal],
 	]);

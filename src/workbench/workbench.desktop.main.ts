@@ -26,6 +26,7 @@ import './services/screenSnapshot/screenSnapshotServiceImpl.js';
 import './services/tabs/tabServiceImpl.js';
 import './services/terminal/terminalHostServiceImpl.js';
 import './services/terminal/terminalServiceImpl.js';
+import './services/camera/cameraServiceImpl.js';
 
 registerSingleton(IContextKeyService, ContextKeyService, InstantiationType.Delayed);
 
@@ -41,6 +42,7 @@ import './actions/applicationActions.js';
 import './contrib/devices/devices.contribution.js';
 import './contrib/settings/settings.contribution.js';
 import './contrib/terminal/terminal.contribution.js';
+import './contrib/camera/camera.contribution.js';
 import './contrib/home/home.contribution.js';
 
 registerWorkbenchContribution2(WorkbenchContextKeysHandler.ID, WorkbenchContextKeysHandler, WorkbenchPhase.BlockStartup);

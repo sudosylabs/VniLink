@@ -262,6 +262,7 @@ export class VniLinkApplication extends Disposable {
 		server.registerChannel(RECORDING_CHANNEL_NAME, ProxyChannel.fromService({
 			getDefaultDirectory: () => recording.getDefaultDirectory(),
 			createDestination: () => recording.createDestination(),
+			savePicture: (name: unknown, png: unknown) => recording.savePicture(name, png),
 		}, disposables, { disableMarshalling: true }));
 		// The preload resolves this before any IPC client exists, as VS Code's window configuration does.
 		// eslint-disable-next-line @typescript-eslint/no-deprecated

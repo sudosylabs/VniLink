@@ -1308,7 +1308,7 @@
     {
       "path": "src/platform/native/common/native.ts",
       "upstreamPath": "src/vs/platform/native/common/native.ts",
-      "sha256": "8ce62e3efd47a6197504e3c79c56cfdf4ced99cf0f425663afd5b0601d1a6d53",
+      "sha256": "11a1ac60f1e905235a9f0ea85d25d3da597bf4313383bfa2b5e094696a2e186f",
       "adapted": true
     },
     {
@@ -1321,7 +1321,7 @@
       "path": "src/platform/native/electron-main/nativeHostMainService.ts",
       "upstreamPath": "src/vs/platform/native/electron-main/nativeHostMainService.ts",
       "adapted": true,
-      "sha256": "702847fcae3b84c97819ca6f14a07a111dd3fb641567be7e0fb66c008c8de9a1"
+      "sha256": "78541963c9cd60c9bf28f61b63ac3678c3de2bc236b24933cf0880f83b3c3eb6"
     },
     {
       "path": "src/platform/registry/common/platform.ts",
@@ -1478,6 +1478,7 @@
     "src/base/common/actions.ts",
     "src/base/common/arrays.ts",
     "src/base/common/async.ts",
+    "src/base/common/buffer.ts",
     "src/base/common/cancellation.ts",
     "src/base/common/collections.ts",
     "src/base/common/errors.ts",
@@ -2975,7 +2976,37 @@
     },
     {
       "from": "src/platform/native/common/native.ts",
+      "to": "src/base/common/buffer.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/common/native.ts",
       "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/buffer.ts",
+      "to": "src/base/common/lazy.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/buffer.ts",
+      "to": "src/base/common/stream.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/stream.ts",
+      "to": "src/base/common/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/stream.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/stream.ts",
+      "to": "src/base/common/lifecycle.ts",
       "kind": "import"
     },
     {
@@ -3166,31 +3197,6 @@
     {
       "from": "src/base/common/hash.ts",
       "to": "src/base/common/strings.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/buffer.ts",
-      "to": "src/base/common/lazy.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/buffer.ts",
-      "to": "src/base/common/stream.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/stream.ts",
-      "to": "src/base/common/cancellation.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/stream.ts",
-      "to": "src/base/common/errors.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/stream.ts",
-      "to": "src/base/common/lifecycle.ts",
       "kind": "import"
     },
     {
@@ -3696,6 +3702,11 @@
     {
       "from": "src/platform/theme/browser/themeService.ts",
       "to": "src/platform/instantiation/common/extensions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/base/common/buffer.ts",
       "kind": "import"
     },
     {
@@ -6636,6 +6647,7 @@
     "src/base/common/actions.ts",
     "src/base/common/arrays.ts",
     "src/base/common/async.ts",
+    "src/base/common/buffer.ts",
     "src/base/common/cancellation.ts",
     "src/base/common/collections.ts",
     "src/base/common/errors.ts",
