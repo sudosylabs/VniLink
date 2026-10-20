@@ -12,6 +12,8 @@ mod fanout_tests;
 mod frame_tests;
 #[path = "tests/host.rs"]
 mod host_tests;
+#[path = "tests/impaired_video.rs"]
+mod impaired_video_tests;
 #[path = "tests/nv12.rs"]
 mod nv12_tests;
 #[path = "tests/pump.rs"]

@@ -17,6 +17,13 @@ shiguredo_aom = "=2026.1.0"
 
 vnilink-hevc = { path = "../vnilink-hevc" }
 
+[dev-dependencies]
+serde_json = "=1.0.151"
+
+# The impaired-network harness boots each test core inside its own network namespace.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+nix = { version = "=0.28.0", features = ["sched"] }
+
 # Build against the local Linux libc instead of assuming an Ubuntu prebuilt ABI.
 [target.'cfg(target_os = "linux")'.dependencies]
 shiguredo_libvpx = { version = "=2026.1.0", features = ["source-build"] }

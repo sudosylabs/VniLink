@@ -28,6 +28,8 @@ mod hosting_tests;
 mod hostname_tests;
 #[path = "tests/identity.rs"]
 mod identity_tests;
+#[path = "tests/impaired_transfer.rs"]
+mod impaired_transfer_tests;
 #[path = "tests/input.rs"]
 mod input_tests;
 #[path = "tests/installation.rs"]

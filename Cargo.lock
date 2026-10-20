@@ -5417,6 +5417,8 @@ dependencies = [
 name = "vnilink-media"
 version = "0.1.0"
 dependencies = [
+ "nix 0.28.0",
+ "serde_json",
  "shiguredo_aom",
  "shiguredo_libvpx",
  "thiserror 2.0.21",
