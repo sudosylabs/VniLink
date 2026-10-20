@@ -417,6 +417,12 @@ fn ensure_datagram_router(
     });
 }
 
+/// How often the router checks its connection is still the live one; between
+/// checks a closed owner is noticed by its own retired flag.
+const ROUTER_LIVENESS: Duration = Duration::from_millis(100);
+/// Datagrams taken from the connection at once.
+const ROUTER_BATCH: usize = 32;
+
 async fn route_desktop_datagrams(
     shared: &Arc<Shared>,
     link: &Connection,
@@ -425,8 +431,14 @@ async fn route_desktop_datagrams(
 ) {
     let mut fragments: std::collections::HashMap<(u64, u64), crate::video::Reassembler> =
         std::collections::HashMap::new();
+    // Each owner's runtime, found once under the state lock and kept until
+    // it retires, so a datagram takes no shared lock.
+    let mut owners: std::collections::HashMap<(u64, u64), Arc<DesktopRuntime>> =
+        std::collections::HashMap::new();
+    let mut checked: Option<std::time::Instant> = None;
+    let mut batch = vec![bytes::Bytes::new(); ROUTER_BATCH];
     loop {
-        {
+        if checked.is_none_or(|at| at.elapsed() >= ROUTER_LIVENESS) {
             let state = lock(&shared.state);
             let live = !state.shut_down
                 && state.outgoing.get(&connection_id).is_some_and(|session| {
@@ -435,56 +447,70 @@ async fn route_desktop_datagrams(
             if !live {
                 return;
             }
+            checked = Some(std::time::Instant::now());
         }
-        let bytes = match link.read_datagram().await {
-            Ok(bytes) => bytes,
+        let count = match link.read_many_datagrams(&mut batch).await {
+            Ok(count) => count,
             Err(_) => return,
         };
-        let Some((stamp, fragment)) = split_datagram(&bytes) else {
-            continue;
-        };
-        let target: Option<Arc<DesktopRuntime>> = {
-            let state = lock(&shared.state);
-            state.services.values().find_map(|record| {
-                record
-                    .desktop
-                    .as_ref()
-                    .filter(|desktop| {
-                        record.info.connection_id == connection_id
-                            && record.info.generation == generation
-                            && !record.info.phase.finished()
-                            && desktop.stamp == stamp
-                    })
-                    .map(Arc::clone)
-            })
-        };
-        let Some(desktop) = target else {
-            continue;
-        };
-        // One reassembly context per owner stamp; stale contexts expire
-        // inside the reassembler, and the map cannot outgrow the owner
-        // bound plus one transient entry for a closing sibling.
-        if fragments.len() > MAX_DESKTOP_OWNERS_PER_CONNECTION + 1 {
-            fragments.clear();
-        }
-        let reassembly = fragments
-            .entry((stamp.id, stamp.generation))
-            .or_insert_with(crate::video::Reassembler::new);
-        let body = reassembly.push(fragment);
-        // A lost frame: what follows waits for a keyframe, which is asked for
-        // now rather than at the next periodic one.
-        let losses = reassembly.take_loss();
-        if losses.any() {
-            desktop.counters.lost(losses);
-            desktop.inbox.lost();
-            desktop.keyframe.request();
-        }
-        if let Some(body) = body {
-            if let Ok(frame) = crate::video::decode_video_body(&body) {
-                if Some(frame.codec) != crate::VideoCodec::from_wire_id(desktop.info.codec) {
-                    continue;
+        for bytes in &batch[..count] {
+            let Some((stamp, fragment)) = split_datagram(bytes) else {
+                continue;
+            };
+            let key = (stamp.id, stamp.generation);
+            let cached = owners
+                .get(&key)
+                .filter(|desktop| !desktop.retired.load(std::sync::atomic::Ordering::Acquire))
+                .cloned();
+            let target = cached.or_else(|| {
+                let state = lock(&shared.state);
+                state.services.values().find_map(|record| {
+                    record
+                        .desktop
+                        .as_ref()
+                        .filter(|desktop| {
+                            record.info.connection_id == connection_id
+                                && record.info.generation == generation
+                                && !record.info.phase.finished()
+                                && desktop.stamp == stamp
+                        })
+                        .map(Arc::clone)
+                })
+            });
+            let Some(desktop) = target else {
+                owners.remove(&key);
+                continue;
+            };
+            // One reassembly context and cached owner per stamp; stale
+            // contexts expire inside the reassembler, and neither map can
+            // outgrow the owner bound plus one transient entry for a closing
+            // sibling.
+            if fragments.len() > MAX_DESKTOP_OWNERS_PER_CONNECTION + 1 {
+                fragments.clear();
+            }
+            if owners.len() > MAX_DESKTOP_OWNERS_PER_CONNECTION + 1 {
+                owners.clear();
+            }
+            owners.insert(key, Arc::clone(&desktop));
+            let reassembly = fragments
+                .entry(key)
+                .or_insert_with(crate::video::Reassembler::new);
+            let body = reassembly.push(fragment);
+            // A lost frame: what follows waits for a keyframe, which is asked
+            // for now rather than at the next periodic one.
+            let losses = reassembly.take_loss();
+            if losses.any() {
+                desktop.counters.lost(losses);
+                desktop.inbox.lost();
+                desktop.keyframe.request();
+            }
+            if let Some(body) = body {
+                if let Ok(frame) = crate::video::decode_video_body(&body) {
+                    if Some(frame.codec) != crate::VideoCodec::from_wire_id(desktop.info.codec) {
+                        continue;
+                    }
+                    desktop.receive_video(frame);
                 }
-                desktop.receive_video(frame);
             }
         }
     }
