@@ -1,12 +1,13 @@
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import type { DataChannelRequest, DataPacket } from '../../../platform/engine/common/dataChannel.js';
-import { deviceName, engineErrorCategory, type DisplayInfo, type EngineCommand, type QualityLimits, type RemoteStatus } from '../../../platform/engine/common/engine.js';
+import { deviceName, engineErrorCategory, type DisplayInfo, type EngineCommand, type QualityLimits, type RemoteStatus, type VideoCodec, type WindowDecoder } from '../../../platform/engine/common/engine.js';
 import { DataChannelClient } from '../../../platform/engine/electron-browser/dataChannelClient.js';
 import { createWebCodecsDecoder } from '../camera/webCodecsDecoder.js';
 import { activeControllerSession } from '../devices/controllerSession.js';
 import { IDeviceService } from '../devices/deviceService.js';
 import { EngineDesktopSession, type DesktopVideoChannel } from './engineDesktopSession.js';
+import { probeWindowDecoders, webCodecsSupport, type DecoderSupport } from './windowDecoders.js';
 import { DesktopReadbackError, desktopTargetKey, isValidDesktopQuality, type DesktopFailure, type DesktopSession, type DesktopSettings, type DesktopTarget, type IDesktopSession, IRemoteDesktopService } from './remoteDesktopService.js';
 
 export type DesktopChannelOpener = (
@@ -43,6 +44,11 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 	declare public readonly _serviceBrand: undefined;
 	private pending: Promise<unknown> = Promise.resolve();
 	protected openChannel: DesktopChannelOpener;
+	protected decoderSupport: DecoderSupport = webCodecsSupport;
+	/** What this window decodes, asked once. */
+	private decoders: Promise<WindowDecoder[]> | undefined;
+	/** Codecs WebCodecs said it decodes, then couldn't show: offered no more. */
+	private readonly unshown = new Set<VideoCodec>();
 
 	constructor(
 		@IEngineService private readonly engine: IEngineService,
@@ -69,9 +75,18 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 		if (!target) {
 			return { failure: 'disconnected' };
 		}
+		await this.registerDecoders();
 		const session = new EngineDesktopSession(control, target, createWebCodecsDecoder, async () => {
 			const reply = await this.engine.execute({ type: 'sessionTopology', sessionId: target.id, generation: target.generation });
 			return reply.type === 'displays' ? reply.displays : [];
+		});
+		// A codec this window could not show is left out of the next offer.
+		const unshown = session.onEnd(end => {
+			unshown.dispose();
+			const codec = session.shownCodec;
+			if (end === 'cantShow' && codec) {
+				this.unshown.add(codec);
+			}
 		});
 		const request = { sessionId: target.id, generation: target.generation };
 		const lost = (): void => {
@@ -89,6 +104,26 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 			return { failure: desktopOpenFailure(error) };
 		}
 		return { session };
+	}
+
+	/**
+	 * Tells the engine which codecs this window decodes, so the other
+	 * computer sends one it can show, in hardware when it can. Without an
+	 * answer the engine offers what its own decoders take.
+	 */
+	private async registerDecoders(): Promise<void> {
+		this.decoders ??= probeWindowDecoders(this.decoderSupport);
+		try {
+			const probed = await this.decoders;
+			// A window whose WebCodecs answered nothing says nothing either.
+			if (!probed.length) {
+				return;
+			}
+			const decoders = probed.filter(decoder => !this.unshown.has(decoder.codec));
+			await this.engine.execute({ type: 'setWindowDecoders', decoders });
+		} catch {
+			// The offer falls back to the engine's own decoders.
+		}
 	}
 
 	public get available(): boolean {

@@ -956,7 +956,10 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
         )
     };
     let offer = core.desktop_quality_defaults()?;
-    let decoder_caps = core.video_codecs()?;
+    let decoder_caps = {
+        let caps = core.video_codecs()?;
+        caps.for_window(core.alive_state()?.window_decoders.as_deref())
+    };
     let codec_preference = core.desktop_codec_default()?;
     let codec_offer = decoder_caps.preferred_offer(codec_preference)?;
     // Reserve once per owner, including while Open awaits a reply.

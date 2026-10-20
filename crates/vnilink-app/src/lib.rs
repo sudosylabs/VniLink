@@ -100,7 +100,7 @@ pub use types::{
     FfiControlRequest, FfiDeviceInfo, FfiDisplay, FfiEncodedFrame, FfiEvent, FfiFrameTiming,
     FfiGrants, FfiKeyboardMode, FfiPairingFile, FfiPairingPreview, FfiPointerButton,
     FfiPointerSettings, FfiQuality, FfiSessionInfo, FfiSessionPath, FfiSessionPhase,
-    FfiSessionRole, FfiSnapshot, FfiVideoCodec, FfiVideoCodecCaps,
+    FfiSessionRole, FfiSnapshot, FfiVideoCodec, FfiVideoCodecCaps, FfiWindowDecoder,
 };
 
 use std::collections::HashMap;
@@ -894,6 +894,13 @@ impl VnilinkCore {
     ) -> Result<(), FfiError> {
         self.inner
             .set_input_defaults(types::to_keyboard_mode(mode), swap, pointer.into())
+            .map_err(map_error)
+    }
+
+    /// The codecs the window decodes; future Desktop owners offer only these.
+    pub fn set_window_decoders(&self, decoders: Vec<FfiWindowDecoder>) -> Result<(), FfiError> {
+        self.inner
+            .set_window_decoders(decoders.into_iter().map(Into::into).collect())
             .map_err(map_error)
     }
 

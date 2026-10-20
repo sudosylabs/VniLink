@@ -305,6 +305,26 @@ impl Core {
         Ok(self.alive_state()?.desktop_codec_default)
     }
 
+    /// The codecs the app's window decodes, hardware ones marked. Future
+    /// Desktop owners offer only these, and only the hardware ones when the
+    /// window has any; existing owners keep their codec.
+    pub fn set_window_decoders(
+        &self,
+        decoders: Vec<crate::video_caps::WindowDecoder>,
+    ) -> Result<(), Error> {
+        if decoders.len() > crate::VideoCodec::ALL.len()
+            || decoders.iter().enumerate().any(|(index, decoder)| {
+                decoders[..index]
+                    .iter()
+                    .any(|earlier| earlier.codec == decoder.codec)
+            })
+        {
+            return Err(Error::InvalidSetting("duplicate window decoder"));
+        }
+        self.alive_state()?.window_decoders = Some(decoders);
+        Ok(())
+    }
+
     /// Saves a preference without changing existing owners or requiring a decoder now.
     pub fn set_desktop_codec_default(&self, codec: Option<crate::VideoCodec>) -> Result<(), Error> {
         self.alive_state()?.desktop_codec_default = codec;

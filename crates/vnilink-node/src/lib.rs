@@ -54,6 +54,13 @@ struct TransferDisplay {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TransferWindowDecoder {
+    codec: String,
+    hardware: bool,
+}
+
+#[derive(Deserialize, Serialize)]
 struct TransferQuality {
     max_bitrate_kbps: u32,
     max_frame_rate: u8,
@@ -981,6 +988,9 @@ enum Command {
     SetDesktopCodecDefault {
         codec: String,
     },
+    SetWindowDecoders {
+        decoders: Vec<TransferWindowDecoder>,
+    },
     SetDesktopQualityDefaults {
         quality: TransferQuality,
     },
@@ -1348,6 +1358,35 @@ impl EngineBridge {
                 state
                     .core
                     .set_topology(revision, displays)
+                    .map_err(core_error)?;
+                Reply::Done
+            }
+            Command::SetWindowDecoders { decoders } => {
+                use vnilink_app::FfiVideoCodec as C;
+                let decoders = decoders
+                    .iter()
+                    .map(|decoder| {
+                        let codec = match decoder.codec.as_str() {
+                            "h264" => C::H264,
+                            "h265" => C::H265,
+                            "vp8" => C::Vp8,
+                            "vp9" => C::Vp9,
+                            "av1" => C::Av1,
+                            _ => {
+                                return Err(core_error(FfiError::InvalidSetting {
+                                    message: "invalid window decoder".into(),
+                                }))
+                            }
+                        };
+                        Ok(vnilink_app::FfiWindowDecoder {
+                            codec,
+                            hardware: decoder.hardware,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                state
+                    .core
+                    .set_window_decoders(decoders)
                     .map_err(core_error)?;
                 Reply::Done
             }
@@ -2415,6 +2454,7 @@ impl EngineBridge {
             | Command::CaptureDisplays
             | Command::SetTopology { .. }
             | Command::SetDesktopCodecDefault { .. }
+            | Command::SetWindowDecoders { .. }
             | Command::SetDesktopQualityDefaults { .. }
             | Command::UpdateSessionQuality { .. }
             | Command::PublishVideo { .. }
@@ -2679,6 +2719,7 @@ impl CommandShape {
             "selectDisplays" => &["type", "sessionId", "generation", "ids"],
             "setTopology" => &["type", "revision", "displays"],
             "setDesktopCodecDefault" => &["type", "codec"],
+            "setWindowDecoders" => &["type", "decoders"],
             "setDesktopQualityDefaults" => &["type", "quality"],
             "updateSessionQuality" => &["type", "sessionId", "generation", "role", "quality"],
             "pollVideo" | "releaseVideo" => &["type", "subscriptionId"],

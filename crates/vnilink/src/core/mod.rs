@@ -413,6 +413,8 @@ struct State {
     system_policy: crate::system::SystemPolicy,
     desktop_quality_default: crate::protocol::Quality,
     desktop_codec_default: Option<crate::VideoCodec>,
+    /// Codecs the app's window decodes, when it said; offers keep to them.
+    window_decoders: Option<Vec<crate::video_caps::WindowDecoder>>,
     system_operations: HashMap<u64, crate::system::SystemOperationRecord>,
     next_operation_id: u64,
     privacy: Option<crate::system::PrivacyLease>,

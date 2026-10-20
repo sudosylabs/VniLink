@@ -145,6 +145,21 @@ export interface SessionPath { relay: boolean; selected: boolean; rtt_ms: string
 
 export type VideoCodec = 'h264' | 'h265' | 'vp8' | 'vp9' | 'av1';
 
+export const videoCodecNames: readonly VideoCodec[] = ['h264', 'h265', 'vp8', 'vp9', 'av1'];
+
+/** A codec the window decodes, and whether in hardware. */
+export interface WindowDecoder {
+	readonly codec: VideoCodec;
+	readonly hardware: boolean;
+}
+
+function isWindowDecoders(value: unknown): value is WindowDecoder[] {
+	return Array.isArray(value) && value.length <= videoCodecNames.length
+		&& value.every((decoder: unknown, index) => record(decoder) && Object.keys(decoder).length === 2
+			&& videoCodecNames.includes(decoder.codec as VideoCodec) && typeof decoder.hardware === 'boolean'
+			&& !value.slice(0, index).some((earlier: unknown) => record(earlier) && earlier.codec === decoder.codec));
+}
+
 export interface VideoFrame { codec: VideoCodec; keyframe: boolean; timestamp_us: string; data: string; display_id: string; revision: string; }
 
 export interface RelayInfo { url: string; authenticated: boolean; }
@@ -261,6 +276,8 @@ export type EngineCommand =
 	| { type: 'captureDisplays' }
 	| { type: 'setTopology'; revision: string; displays: DisplayInfo[] }
 	| { type: 'setDesktopCodecDefault'; codec: CodecPreference }
+	/** The codecs this app's window decodes, each at most once; future screens offer only these. */
+	| { type: 'setWindowDecoders'; decoders: WindowDecoder[] }
 	| { type: 'setDesktopQualityDefaults'; quality: QualityLimits }
 	| { type: 'updateSessionQuality'; sessionId: string; generation: string; role: 'Controller' | 'Host'; quality: QualityLimits }
 	| { type: 'subscribeSessionVideo'; sessionId: string; generation: string }
@@ -725,6 +742,7 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'captureDisplays': keys = []; valid = true; break;
 		case 'setTopology': keys = ['revision', 'displays']; valid = decimal(value.revision) && displays(value.displays); break;
 		case 'setDesktopCodecDefault': keys = ['codec']; valid = isCodecPreference(value.codec); break;
+		case 'setWindowDecoders': keys = ['decoders']; valid = isWindowDecoders(value.decoders); break;
 		case 'setDesktopQualityDefaults': keys = ['quality']; valid = isQualityLimits(value.quality); break;
 		case 'updateSessionQuality': keys = ['sessionId', 'generation', 'role', 'quality']; valid = decimal(value.sessionId) && decimal(value.generation) && sessionRole(value.role) && isQualityLimits(value.quality); break;
 		case 'subscribeSessionVideo': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;

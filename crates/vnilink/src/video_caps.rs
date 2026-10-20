@@ -35,6 +35,13 @@ pub struct VideoCodecCaps {
     pub chroma444: bool,
 }
 
+/// A codec the window's own decoder can show, and whether in hardware.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowDecoder {
+    pub codec: crate::VideoCodec,
+    pub hardware: bool,
+}
+
 impl VideoCodecCaps {
     /// Full H.264 ability for tests and for native callers whose probe
     /// validated both directions. Sizes are the caller's documented limit.
@@ -93,6 +100,33 @@ impl VideoCodecCaps {
             chroma444: false,
             additional: Vec::new(),
         }
+    }
+
+    /// The decode side this installation can show in its window: only the
+    /// codecs the window's decoder takes, and of those only the ones it
+    /// decodes in hardware when it has any. `None` leaves the caps as the
+    /// native probe registered them.
+    pub fn for_window(&self, decoders: Option<&[WindowDecoder]>) -> Self {
+        let Some(decoders) = decoders else {
+            return self.clone();
+        };
+        let hardware = decoders
+            .iter()
+            .any(|decoder| decoder.hardware && self.supports_decode(decoder.codec));
+        let shown = |codec: crate::VideoCodec| {
+            decoders
+                .iter()
+                .any(|decoder| decoder.codec == codec && (decoder.hardware || !hardware))
+        };
+        let mut caps = self.clone();
+        if !shown(crate::VideoCodec::H264) {
+            caps.decode_baseline = false;
+            caps.decode_high = false;
+        }
+        for support in &mut caps.additional {
+            support.decode &= shown(support.codec);
+        }
+        caps
     }
 
     /// Offers only the selected codec; unavailable explicit choices never fall back.

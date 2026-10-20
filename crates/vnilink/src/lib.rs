@@ -170,7 +170,7 @@ pub use video::{
     VideoSubscription, MAX_VIDEO_FRAME,
 };
 pub use video_caps::{
-    clamp_quality, negotiate as negotiate_video_codec, AgreedCodec, VideoCodecCaps,
+    clamp_quality, negotiate as negotiate_video_codec, AgreedCodec, VideoCodecCaps, WindowDecoder,
 };
 
 #[cfg(test)]

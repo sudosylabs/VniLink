@@ -1,7 +1,7 @@
 use super::support::{pair_for_control, start_direct};
 use crate::protocol::{Quality, CODEC_H264, CODEC_H264_HIGH};
 use crate::video::{EncodedFrame, HostCapture};
-use crate::video_caps::{clamp_quality, negotiate, VideoCodecCaps};
+use crate::video_caps::{clamp_quality, negotiate, VideoCodecCaps, WindowDecoder};
 
 struct SizeCapture {
     width: u16,
@@ -468,4 +468,64 @@ fn explicit_codec_also_controls_direct_desktop_connections() {
     assert!(host.video_targets().unwrap().is_empty());
     viewer.shutdown();
     host.shutdown();
+}
+
+#[test]
+fn offers_keep_to_what_the_window_decodes_in_hardware_when_it_can() {
+    use crate::video::CodecSupport;
+    use crate::VideoCodec;
+    let mut caps = VideoCodecCaps::h264_full(4096, 4096, "test");
+    for codec in [VideoCodec::H265, VideoCodec::Vp9] {
+        caps.additional.push(CodecSupport {
+            codec,
+            encode: true,
+            decode: true,
+            hardware: false,
+        });
+    }
+    let decoder = |codec, hardware| WindowDecoder { codec, hardware };
+    assert_eq!(caps.for_window(None), caps, "a window that said nothing");
+    // HEVC decodes only in software here, H.264 in hardware: offer H.264.
+    let window = [
+        decoder(VideoCodec::H264, true),
+        decoder(VideoCodec::H265, false),
+    ];
+    let shown = caps.for_window(Some(&window));
+    assert!(shown.supports_decode(VideoCodec::H264));
+    assert!(!shown.supports_decode(VideoCodec::H265));
+    assert!(
+        !shown.supports_decode(VideoCodec::Vp9),
+        "the window can't decode VP9"
+    );
+    assert!(
+        shown.supports_encode(VideoCodec::H265),
+        "encoding is not the window's"
+    );
+    // Software only: every codec the window takes.
+    let software = [
+        decoder(VideoCodec::H264, false),
+        decoder(VideoCodec::H265, false),
+    ];
+    let shown = caps.for_window(Some(&software));
+    assert!(shown.supports_decode(VideoCodec::H264) && shown.supports_decode(VideoCodec::H265));
+    // Hardware for a codec this installation cannot decode does not count.
+    let mismatch = [
+        decoder(VideoCodec::Av1, true),
+        decoder(VideoCodec::Vp9, false),
+    ];
+    let shown = caps.for_window(Some(&mismatch));
+    assert!(shown.supports_decode(VideoCodec::Vp9));
+    assert!(!shown.can_decode() || !shown.supports_decode(VideoCodec::H264));
+}
+
+#[test]
+fn a_window_lists_each_codec_once() {
+    let core = start_direct();
+    let decoder = WindowDecoder {
+        codec: crate::VideoCodec::H264,
+        hardware: true,
+    };
+    assert!(core.set_window_decoders(vec![decoder, decoder]).is_err());
+    core.set_window_decoders(vec![decoder]).unwrap();
+    core.shutdown();
 }

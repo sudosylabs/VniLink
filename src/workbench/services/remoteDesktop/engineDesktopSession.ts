@@ -1,7 +1,7 @@
 import { Emitter, type Event } from '../../../base/common/event.js';
 import { Disposable, MutableDisposable } from '../../../base/common/lifecycle.js';
 import type { DataPacket, DesktopCursor, DesktopCursorImage, DesktopMediaStatus } from '../../../platform/engine/common/dataChannel.js';
-import { record, type DisplayInfo, type EngineCommand } from '../../../platform/engine/common/engine.js';
+import { record, videoCodecNames, type DisplayInfo, type EngineCommand, type VideoCodec } from '../../../platform/engine/common/engine.js';
 import type { CameraDecoder, CameraDecoderFactory } from '../camera/engineCameraStream.js';
 import { avcCodec } from '../camera/h264.js';
 import { DesktopLatency } from './desktopLatency.js';
@@ -9,6 +9,10 @@ import type { DesktopEnd, DesktopInput, DesktopPicture, DesktopPointerShape, Des
 
 /** Pictures allowed to wait for the decoder before the channel stops acknowledging. */
 const decodeQueueLimit = 2;
+
+function isVideoCodec(value: string | undefined): value is VideoCodec {
+	return videoCodecNames.includes(value as VideoCodec);
+}
 
 /** A microsecond count the engine sends: a whole number from 0 to 2^32 − 1. */
 function micros(value: unknown): value is number {
@@ -104,6 +108,11 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 		private readonly readDisplays: () => Promise<readonly DisplayInfo[]>,
 	) {
 		super();
+	}
+
+	/** The codec of the pictures being decoded, once one arrived. */
+	public get shownCodec(): VideoCodec | undefined {
+		return isVideoCodec(this.codec) ? this.codec : undefined;
 	}
 
 	/** Takes the open channels; a session that already ended closes them. */

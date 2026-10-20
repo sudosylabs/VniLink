@@ -350,6 +350,22 @@ impl std::fmt::Debug for FfiEncodedFrame {
     }
 }
 
+/// A codec the app's window decodes, and whether in hardware.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FfiWindowDecoder {
+    pub codec: FfiVideoCodec,
+    pub hardware: bool,
+}
+
+impl From<FfiWindowDecoder> for vnilink::WindowDecoder {
+    fn from(value: FfiWindowDecoder) -> Self {
+        Self {
+            codec: value.codec.into(),
+            hardware: value.hardware,
+        }
+    }
+}
+
 /// Stable application codec identity; domain negotiation owns preference order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum FfiVideoCodec {

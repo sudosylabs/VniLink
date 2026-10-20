@@ -257,6 +257,7 @@ impl Core {
                 system_policy,
                 desktop_quality_default: crate::session::controller_offer(),
                 desktop_codec_default: None,
+                window_decoders: None,
                 system_operations: HashMap::new(),
                 next_operation_id: 1,
                 privacy: None,

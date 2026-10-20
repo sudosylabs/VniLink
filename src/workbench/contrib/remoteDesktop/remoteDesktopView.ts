@@ -183,6 +183,8 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	private readonly retryTimer = this._register(new MutableDisposable());
 	private retries = 0;
 	private attempt = 0;
+	/** Whether this tab already reconnected once after a picture it couldn't show. */
+	private retriedCodec = false;
 	private hasPicture = false;
 	/** The display shown, and its bounds, as the other computer reports them at the picture's revision. */
 	private shown: { readonly display: string; readonly revision: string } | undefined;
@@ -667,6 +669,13 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 
 	private showProblem(problem: DesktopProblem, again: boolean): void {
 		const name = this.device.name;
+		// The next offer leaves out the codec this computer couldn't show:
+		// try once more by itself before saying so.
+		if (problem === 'cantShow' && !this.retriedCodec) {
+			this.retriedCodec = true;
+			void this.connect(true);
+			return;
+		}
 		if (retryable.has(problem) && (again || problem === 'lost')) {
 			this.showState('reconnecting');
 			this.scheduleRetry();

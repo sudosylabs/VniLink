@@ -252,6 +252,14 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		sessions[3].pointer(100, 100);
 		const viewed = viewer.element.querySelector<HTMLElement>('.desktop-pointer');
 		assert(viewed?.hidden === false && screen.style.cursor === '', 'Viewing did not draw the other pointer');
+		// A picture this computer can't show: once it reconnects by itself, as the
+		// next offer leaves that codec out; the second time it says so.
+		sessions[3].end('cantShow');
+		await until(() => sessions.length === 5, 'The tab did not reconnect after a picture it could not show');
+		sessions[4].end('cantShow');
+		const viewerOverlay = viewer.element.querySelector<HTMLElement>('.desktop-overlay');
+		await until(() => viewerOverlay?.textContent.includes('This computer can’t show the screen of Sudosy.') === true, 'A picture it can never show is not said');
+		assert(sessions.length === 5, 'The tab kept reconnecting to a screen it cannot show');
 	} finally {
 		host.remove();
 		disposables.dispose();
