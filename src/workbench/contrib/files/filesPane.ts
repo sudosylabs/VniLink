@@ -1,12 +1,14 @@
 import * as nls from '../../../nls.js';
 import { $, addDisposableListener, append, EventType, h } from '../../../base/browser/dom.js';
 import { StandardKeyboardEvent } from '../../../base/browser/keyboardEvent.js';
-import type { IDragAndDropData } from '../../../base/browser/dnd.js';
+import { DataTransfers, type IDragAndDropData } from '../../../base/browser/dnd.js';
 import { renderIcon } from '../../../base/browser/ui/icon/icon.js';
 import { InputBox } from '../../../base/browser/ui/inputbox/inputBox.js';
 import { DomScrollableElement } from '../../../base/browser/ui/scrollbar/scrollableElement.js';
 import { ListDragOverEffectType, type IListDragAndDrop, type IListDragOverReaction, type IListRenderer, type IListVirtualDelegate } from '../../../base/browser/ui/list/list.js';
 import { List, type IStyleController } from '../../../base/browser/ui/list/listWidget.js';
+import { NativeDragAndDropData } from '../../../base/browser/ui/list/listView.js';
+import { webUtils } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { Separator, toAction, type IAction } from '../../../base/common/actions.js';
 import { Emitter } from '../../../base/common/event.js';
 import { Icons, type IconId } from '../../../base/common/icons.js';
@@ -109,6 +111,11 @@ function child(folder: FolderLocation, name: string): FolderLocation {
 
 function parent(folder: FolderLocation): FolderLocation | undefined {
 	return folder.path ? { root: folder.root, path: folder.path.includes('/') ? folder.path.slice(0, folder.path.lastIndexOf('/')) : '' } : undefined;
+}
+
+/** Whether a drag carries files from the system's file manager. */
+function carriesFiles(event: DragEvent): boolean {
+	return [...event.dataTransfer?.types ?? []].includes(DataTransfers.FILES);
 }
 
 /** What is being dragged out of a pane, while it is. */
@@ -268,13 +275,26 @@ class PaneDragAndDrop implements IListDragAndDrop<PaneRow> {
 		dragging = folder && entries.length ? { pane: this.pane, items: entries.map(entry => ({ folder, name: entry.name })) } : undefined;
 	}
 
-	public onDragOver(_data: IDragAndDropData, row: PaneRow | undefined, targetIndex: number | undefined): boolean | IListDragOverReaction {
-		if (!dragging || dragging.pane === this.pane || !this.pane.folder) {
+	public onDragOver(
+		data: IDragAndDropData,
+		row: PaneRow | undefined,
+		targetIndex: number | undefined,
+		_sector: unknown,
+		event: DragEvent,
+	): boolean | IListDragOverReaction {
+		// From Finder or Explorer: this computer's files copy to the other one.
+		const external = data instanceof NativeDragAndDropData && carriesFiles(event);
+		if (external && this.pane.side === 'local') {
+			this.pane.showDropHint();
+			return false;
+		}
+		const count = external ? event.dataTransfer?.items.length ?? 0 : dragging?.pane !== this.pane ? dragging?.items.length ?? 0 : 0;
+		if (!count || !this.pane.folder) {
 			return false;
 		}
 		const target = row?.entry;
 		const into = target?.kind === 'dir' ? target : undefined;
-		this.pane.showDrop(dragging.items.length, into?.name);
+		this.pane.showDrop(count, into?.name);
 		return { accept: true, effect: { type: ListDragOverEffectType.Copy }, feedback: into && targetIndex !== undefined ? [targetIndex] : [-1] };
 	}
 
@@ -282,13 +302,22 @@ class PaneDragAndDrop implements IListDragAndDrop<PaneRow> {
 		this.pane.showDrop(0, undefined);
 	}
 
-	public drop(_data: IDragAndDropData, row: PaneRow | undefined): void {
+	public drop(data: IDragAndDropData, row: PaneRow | undefined, _index: number | undefined, _sector: unknown, event: DragEvent): void {
 		const source = dragging;
 		this.pane.showDrop(0, undefined);
 		const folder = this.pane.folder;
 		const target = row?.entry;
-		if (source && source.pane !== this.pane && folder) {
-			this.pane.dropped(source.items, target?.kind === 'dir' ? child(folder, target.name) : folder);
+		const into = folder && (target?.kind === 'dir' ? child(folder, target.name) : folder);
+		if (!into) {
+			return;
+		}
+		if (data instanceof NativeDragAndDropData && this.pane.side === 'remote') {
+			const paths = [...event.dataTransfer?.files ?? []].map(file => webUtils.getPathForFile(file)).filter(path => path !== '');
+			if (paths.length) {
+				this.pane.droppedFromSystem(paths, into);
+			}
+		} else if (source && source.pane !== this.pane) {
+			this.pane.dropped(source.items, into);
 		}
 	}
 
@@ -320,6 +349,9 @@ export class FilesPaneView extends Disposable {
 	private readonly droppedItems = this._register(new Emitter<{ readonly items: readonly FilesItem[]; readonly into: FolderLocation }>());
 	/** Fires when items dragged from the other pane are dropped here. */
 	public readonly onDidDrop = this.droppedItems.event;
+	private readonly droppedPaths = this._register(new Emitter<{ readonly paths: readonly string[]; readonly into: FolderLocation }>());
+	/** Fires when files from Finder or Explorer are dropped here, by their paths on this computer. */
+	public readonly onDidDropFromSystem = this.droppedPaths.event;
 	private readonly navigated = this._register(new Emitter<void>());
 	public readonly onDidNavigate = this.navigated.event;
 	private readonly transferRequested = this._register(new Emitter<TransferRequest>());
@@ -697,6 +729,17 @@ export class FilesPaneView extends Disposable {
 		this.droppedItems.fire({ items, into });
 	}
 
+	public droppedFromSystem(paths: readonly string[], into: FolderLocation): void {
+		this.droppedPaths.fire({ paths, into });
+	}
+
+	/** This computer's own pane can't take its own files: say where they go instead. */
+	public showDropHint(): void {
+		this.dropBar.hidden = false;
+		this.element.classList.remove('drop-target');
+		this.dropBar.textContent = nls.localize('files.dropOtherSide', 'Drop on the other computer’s side to copy these there');
+	}
+
 	/** A box in the row being renamed; Enter renames, Escape keeps the name. */
 	public renameBox(container: HTMLElement, entry: FileEntry): InputBox {
 		const box = new InputBox(container, undefined, { inputBoxStyles: defaultInputBoxStyles, ariaLabel: nls.localize('files.renameLabel', 'New name for {0}', entry.name) });
@@ -865,7 +908,7 @@ export class FilesPaneView extends Disposable {
 	}
 
 	/** A short message under the list for a refused operation. */
-	private say(message: string): void {
+	public say(message: string): void {
 		this.notice.textContent = message;
 		this.notice.hidden = false;
 		setTimeout(() => {

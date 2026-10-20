@@ -149,7 +149,7 @@ export function isFileJob(value: unknown): value is FileJob {
 		&& decimal(value.files_total) && decimal(value.files_done) && decimal(value.resumed_files)
 		&& decimal(value.skipped_files) && decimal(value.skipped_symlinks)
 		&& (value.waiting_file === null || text(value.waiting_file, 4096)) && (value.error === null || text(value.error, 4096))
-		&& (value.destination === null || (record(value.destination) && keys(value.destination, ['root', 'path', 'name']) && target(value.destination)))
+		&& (value.destination === null || isFileTarget(value.destination))
 		&& Object.keys(value).length === 16;
 }
 
@@ -159,6 +159,11 @@ export function isFileJobs(value: unknown): value is FileJob[] {
 
 function target(value: Record<string, unknown>): boolean {
 	return decimal(value.root) && isFilePath(value.path) && isFileName(value.name);
+}
+
+/** One item named by its root, its folder under the root, and its name. */
+export function isFileTarget(value: unknown): value is FileTarget {
+	return record(value) && keys(value, ['root', 'path', 'name']) && target(value);
 }
 
 export function isFileOperation(value: unknown): value is FileOperation {

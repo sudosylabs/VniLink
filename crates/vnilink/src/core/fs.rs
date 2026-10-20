@@ -92,6 +92,27 @@ impl Core {
         Ok(fs::places(&snapshot))
     }
 
+    /// Where `path` lies under the shared roots, as the panes name an
+    /// item: its folder's root and path, and its own name. The folder is
+    /// resolved and the item is not, so a link is copied as itself rather
+    /// than as what it points to. `None` when it is outside every root.
+    pub fn locate(&self, path: &std::path::Path) -> Result<Option<(u64, String, String)>, Error> {
+        self.ensure_alive()?;
+        let (Some(folder), Some(name)) = (
+            path.parent(),
+            path.file_name().and_then(|name| name.to_str()),
+        ) else {
+            return Ok(None);
+        };
+        if fs::check_name(name).is_err() {
+            return Ok(None);
+        }
+        let roots = lock(&self.shared.file_roots).clone();
+        Ok(roots
+            .locate(folder)
+            .map(|(root, rel)| (root, rel, name.to_owned())))
+    }
+
     /// Lists one page of a directory under an approved root.
     pub fn list_dir(
         &self,

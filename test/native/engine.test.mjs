@@ -159,6 +159,8 @@ test('this computer\'s disk lists, makes, renames and deletes through its own en
 		const list = async () => (await execute(engine, { type: 'listLocal', root: root.id, path, offset: '0' })).page;
 		const page = await list();
 		assert.deepEqual(page.entries.map(entry => [entry.name, entry.kind, entry.size]), [['note.txt', 'file', '4']]);
+		// A file dropped from Finder or Explorer is named as the panes name it.
+		assert.deepEqual((await execute(engine, { type: 'locateLocal', path: join(folder, 'note.txt') })).location, { root: root.id, path, name: 'note.txt' });
 		assert.equal((await execute(engine, { type: 'createLocalDir', root: root.id, path, name: 'made' })).type, 'done');
 		await assert.rejects(execute(engine, { type: 'createLocalDir', root: root.id, path, name: 'made' }), /FileExists/);
 		const made = (await list()).entries.find(entry => entry.name === 'made');

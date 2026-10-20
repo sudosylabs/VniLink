@@ -3,7 +3,7 @@
  * It exposes the same `vscode` globals that the copied IPC and platform modules
  * read, with VniLink's stricter `MessagePort` handling and no environment.
  */
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { IpcRendererEvent } from 'electron';
 import { isNativeWindowConfiguration, WINDOW_CONFIGURATION_CHANNEL, type INativeWindowConfiguration } from './platform/window/common/windowConfiguration.js';
 
@@ -142,6 +142,13 @@ const globals = {
 		},
 		cwd(): string {
 			return '/';
+		},
+	},
+
+	/** As VS Code's: the path of a file dropped from the system's file manager. */
+	webUtils: {
+		getPathForFile(file: File): string {
+			return webUtils.getPathForFile(file);
 		},
 	},
 

@@ -831,6 +831,10 @@ enum Command {
     },
     /// This computer's roots, home folder and usual folders.
     LocalPlaces,
+    /// Names a path on this computer, such as one dropped from the system's file manager.
+    LocateLocal {
+        path: String,
+    },
     ListLocal {
         root: String,
         path: String,
@@ -1111,6 +1115,9 @@ enum Reply {
     },
     Places {
         places: files::TransferPlaces,
+    },
+    Location {
+        location: Option<TransferDestination>,
     },
     DirPage {
         page: files::TransferDirPage,
@@ -1689,6 +1696,15 @@ impl EngineBridge {
             }
             Command::LocalPlaces => Reply::Places {
                 places: files::transfer_places(core.places().map_err(core_error)?),
+            },
+            Command::LocateLocal { path } => Reply::Location {
+                location: core.locate(path.clone()).map_err(core_error)?.map(|found| {
+                    TransferDestination {
+                        root: found.root.to_string(),
+                        folder: found.path,
+                        name: found.name,
+                    }
+                }),
             },
             Command::ListLocal { root, path, offset } => Reply::DirPage {
                 page: files::transfer_page(
@@ -2288,6 +2304,7 @@ impl EngineBridge {
             | Command::EnableFilesystemAccess
             | Command::SetTransferDirectory { .. }
             | Command::LocalPlaces
+            | Command::LocateLocal { .. }
             | Command::ListLocal { .. }
             | Command::CreateLocalDir { .. }
             | Command::RenameLocal { .. }
@@ -2561,6 +2578,7 @@ impl CommandShape {
             "enableFilesystemAccess" => &["type"],
             "setTransferDirectory" => &["type", "path"],
             "localPlaces" => &["type"],
+            "locateLocal" => &["type", "path"],
             "listLocal" => &["type", "root", "path", "offset"],
             "createLocalDir" => &["type", "root", "path", "name"],
             "renameLocal" => &["type", "root", "path", "name", "token", "newName"],

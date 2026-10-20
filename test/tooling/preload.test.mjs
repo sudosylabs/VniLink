@@ -6,7 +6,8 @@ const electron = `
 import { EventEmitter } from 'node:events';
 export const exposed = {};
 export const ipcRenderer = Object.assign(new EventEmitter(), { invoked: [], async invoke(channel) { this.invoked.push(channel); return { windowId: 1, osRelease: 'test', platform: 'darwin', version: 'test', engineAvailable: true, enableSmokeTestDriver: false }; }, send() { } });
-export const contextBridge = { exposeInMainWorld(name, value) { exposed[name] = value; } };`;
+export const contextBridge = { exposeInMainWorld(name, value) { exposed[name] = value; } };
+export const webUtils = { getPathForFile: () => '/dropped' };`;
 
 async function loadPreload() {
 	const output = await build({
@@ -28,7 +29,8 @@ async function loadPreload() {
 test('the preload exposes only prefixed IPC, a bounded port relay and no environment', async () => {
 	const { exposed, ipcRenderer, posted } = await loadPreload();
 	const globals = exposed.vscode;
-	assert.deepEqual(Object.keys(globals).sort(), ['context', 'ipcMessagePort', 'ipcRenderer', 'process']);
+	assert.deepEqual(Object.keys(globals).sort(), ['context', 'ipcMessagePort', 'ipcRenderer', 'process', 'webUtils']);
+	assert.deepEqual(Object.keys(globals.webUtils), ['getPathForFile'], 'only the path of a dropped file');
 	assert.deepEqual(globals.process.env, {});
 	assert.equal((await globals.context.resolveConfiguration()).windowId, 1);
 	assert.throws(() => globals.ipcRenderer.invoke('engine:command'), /Unsupported/);

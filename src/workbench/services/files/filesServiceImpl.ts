@@ -295,6 +295,14 @@ export class FilesService implements IFilesService {
 		this.local = new LocalDisk(engine);
 	}
 
+	public async locateLocal(path: string): Promise<FilesItem | undefined> {
+		const reply = await this.engine.execute({ type: 'locateLocal', path });
+		if (reply.type !== 'location') {
+			throw new Error('Malformed: invalid location');
+		}
+		return reply.location ? { folder: { root: reply.location.root, path: reply.location.path }, name: reply.location.name } : undefined;
+	}
+
 	public async open(deviceId: string): Promise<{ readonly failure: FilesFailure } | { readonly session: IFilesSession }> {
 		const existing = this.sessions.get(deviceId);
 		if (existing && !existing.ended) {

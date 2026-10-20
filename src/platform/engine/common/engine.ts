@@ -1,4 +1,4 @@
-import { isFileName, isFilePage, isFilePath, isFilePlaces, isFileToken, type FilePage, type FilePlaces, type FileToken } from './files.js';
+import { isFileName, isFilePage, isFilePath, isFilePlaces, isFileTarget, isFileToken, type FilePage, type FilePlaces, type FileTarget, type FileToken } from './files.js';
 
 export interface Grants { view: boolean; control: boolean; clipboard: boolean; transfer: boolean; }
 
@@ -213,6 +213,8 @@ export type EngineCommand =
 	| { type: 'enableFilesystemAccess' }
 	| { type: 'setTransferDirectory'; path: string }
 	| { type: 'localPlaces' }
+	/** Names a path on this computer, such as one dropped from the system's file manager. */
+	| { type: 'locateLocal'; path: string }
 	| { type: 'listLocal'; root: string; path: string; offset: string }
 	| { type: 'createLocalDir'; root: string; path: string; name: string }
 	| { type: 'renameLocal'; root: string; path: string; name: string; token: FileToken | null; newName: string }
@@ -305,6 +307,7 @@ export type EngineReply =
 	| ({ type: 'terminalShells' } & TerminalShells)
 	| { type: 'places'; places: FilePlaces }
 	| { type: 'dirPage'; page: FilePage }
+	| { type: 'location'; location: FileTarget | null }
 	| { type: 'done' };
 
 export function record(value: unknown): value is Record<string, unknown> {
@@ -645,6 +648,7 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'enableFilesystemAccess': keys = []; break;
 		case 'setTransferDirectory': keys = ['path']; valid = typeof value.path === 'string' && value.path.length > 0 && value.path.length <= 4096 && !value.path.includes('\0'); break;
 		case 'localPlaces': keys = []; valid = true; break;
+		case 'locateLocal': keys = ['path']; valid = typeof value.path === 'string' && value.path.length > 0 && value.path.length <= 4096 && !value.path.includes('\0'); break;
 		case 'listLocal': keys = ['root', 'path', 'offset']; valid = decimal(value.root) && isFilePath(value.path) && decimal(value.offset); break;
 		case 'createLocalDir': keys = ['root', 'path', 'name']; valid = decimal(value.root) && isFilePath(value.path) && isFileName(value.name); break;
 		case 'renameLocal': keys = ['root', 'path', 'name', 'token', 'newName']; valid = decimal(value.root) && isFilePath(value.path) && isFileName(value.name) && (value.token === null || isFileToken(value.token)) && isFileName(value.newName); break;
@@ -764,6 +768,7 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'terminalShells': return terminalShells(value);
 		case 'places': return isFilePlaces(value.places) && Object.keys(value).length === 2;
 		case 'dirPage': return isFilePage(value.page) && Object.keys(value).length === 2;
+		case 'location': return (value.location === null || isFileTarget(value.location)) && Object.keys(value).length === 2;
 		case 'done': return true;
 		default: return false;
 	}

@@ -94,6 +94,9 @@ export class FilesView extends Disposable implements WorkbenchTab {
 			this._register(pane.onDidRequestTransfer(request => {
 				void this.activity.act(request);
 			}));
+			this._register(pane.onDidDropFromSystem(({ paths, into }) => {
+				void this.copyFromSystem(paths, into);
+			}));
 			this._register(pane.onDidRequestCopy(() => {
 				this.activate(pane.side);
 				void this.copy();
@@ -283,6 +286,16 @@ export class FilesView extends Disposable implements WorkbenchTab {
 		if (items.length && target.folder) {
 			await this.copyItems(this.active, items, target.folder);
 		}
+	}
+
+	/** Copies files dropped from Finder or Explorer to the other computer, as a copy from this computer's pane would. */
+	private async copyFromSystem(paths: readonly string[], into: FolderLocation): Promise<void> {
+		const found = await Promise.all(paths.map(path => this.filesService.locateLocal(path).catch(() => undefined)));
+		const items = found.filter(item => item !== undefined);
+		if (items.length < paths.length) {
+			this.remote.say(nls.localize('files.dropUnreachable', 'Some of these can’t be copied: VniLink can’t reach them on this computer.'));
+		}
+		await this.copyItems('local', items, into);
 	}
 
 	private async copyItems(from: FilesPane, items: readonly FilesItem[], into: FolderLocation): Promise<void> {

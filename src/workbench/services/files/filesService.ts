@@ -68,6 +68,8 @@ export interface IFilesService {
 	readonly _serviceBrand: undefined;
 	/** This computer's disk, which needs no connection. */
 	readonly local: IFilesDisk;
+	/** Names a path on this computer as an item to copy, such as one dropped from Finder or Explorer; undefined outside what is shared. */
+	locateLocal(path: string): Promise<FilesItem | undefined>;
 	/** Opens Files with `deviceId`, or says why it can't. Each success needs one `release`. */
 	open(deviceId: string): Promise<{ readonly failure: FilesFailure } | { readonly session: IFilesSession }>;
 }

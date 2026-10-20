@@ -263,7 +263,7 @@ class SmokeSuite {
 			!('noticeHidden' in result) || result.noticeHidden !== true ||
 			!('api' in result) ||
 			JSON.stringify(result.api) !==
-			JSON.stringify(['context', 'ipcMessagePort', 'ipcRenderer', 'process'])
+			JSON.stringify(['context', 'ipcMessagePort', 'ipcRenderer', 'process', 'webUtils'])
 		) {
 			throw new Error(`Unexpected renderer state: ${JSON.stringify(result)}`);
 		}

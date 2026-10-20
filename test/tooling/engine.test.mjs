@@ -134,6 +134,8 @@ test('service commands validate kinds, policies, sessions and jobs exactly', () 
 	assert.equal(isEngineCommand({ type: 'localPlaces' }), true);
 	assert.equal(isEngineCommand({ type: 'listLocal', root: '0', path: 'Users/hammed', offset: '0' }), true);
 	assert.equal(isEngineCommand({ type: 'listLocal', root: '0', path: '../etc', offset: '0' }), false);
+	assert.equal(isEngineCommand({ type: 'locateLocal', path: '/Users/hammed/Desktop/a.txt' }), true);
+	assert.equal(isEngineCommand({ type: 'locateLocal', path: '' }), false, 'an empty path names nothing');
 	assert.equal(isEngineCommand({ type: 'createLocalDir', root: '0', path: '', name: 'New Folder' }), true);
 	assert.equal(isEngineCommand({ type: 'renameLocal', root: '0', path: 'Users', name: 'a', token: { dev: '1', ino: '2' }, newName: 'b' }), true);
 	assert.equal(isEngineCommand({ type: 'renameLocal', root: '0', path: 'Users', name: 'a', token: { dev: 1, ino: 2 }, newName: 'b' }), false, 'token parts are decimal strings');
@@ -145,6 +147,9 @@ test('service commands validate kinds, policies, sessions and jobs exactly', () 
 	assert.equal(isEngineReply({ type: 'terminalSessions', sessions: [{ id: 'a', process_id: 42, shell: '/bin/zsh', rows: 24, columns: 80, persistent: true, attached: true }] }), true);
 	const places = { roots: [{ id: '2', name: 'C:' }], folders: [{ kind: 'home', root: '2', path: 'Users/abass' }] };
 	assert.equal(isEngineReply({ type: 'places', places }), true);
+	assert.equal(isEngineReply({ type: 'location', location: { root: '0', path: 'Users/hammed', name: 'a.txt' } }), true);
+	assert.equal(isEngineReply({ type: 'location', location: null }), true, 'a path outside what is shared');
+	assert.equal(isEngineReply({ type: 'location', location: { root: '0', path: '/Users', name: 'a.txt' } }), false);
 	assert.equal(isEngineReply({ type: 'places', places: { ...places, folders: [{ kind: 'home', root: '2', path: '/Users' }] } }), false);
 	const entry = { name: 'a.txt', kind: 'file', size: '3', mtimeMs: '1700000000000', token: { dev: '1', ino: '9' } };
 	const page = { entries: [entry], total: '1', nextOffset: null, truncated: false, skipped: '0' };

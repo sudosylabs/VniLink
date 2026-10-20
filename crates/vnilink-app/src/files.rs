@@ -128,6 +128,14 @@ pub enum FfiConflictChoice {
     KeepBoth,
 }
 
+/// One item named as the panes name it: a root, its folder under the root, and its name.
+#[derive(Clone, PartialEq, Eq)]
+pub struct FfiFileLocation {
+    pub root: u64,
+    pub path: String,
+    pub name: String,
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct FfiJobSnapshot {
     pub id: u64,
@@ -329,6 +337,15 @@ impl VnilinkCore {
                     })
                     .collect()
             })
+            .map_err(map_error)
+    }
+
+    /// Where a path on this computer lies under the shared roots: its
+    /// folder's root and path, and its own name.
+    pub fn locate(&self, path: String) -> Result<Option<FfiFileLocation>, FfiError> {
+        self.inner
+            .locate(std::path::Path::new(&path))
+            .map(|found| found.map(|(root, path, name)| FfiFileLocation { root, path, name }))
             .map_err(map_error)
     }
 

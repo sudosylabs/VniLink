@@ -1637,3 +1637,34 @@ fn remote_delete_removes_the_host_entry_and_keeps_a_replacement() {
     assert!(!root.join("pack").exists());
     assert!(aside_names(&root).is_empty());
 }
+
+/// A path from the system's file manager is named as the panes name an
+/// item: its folder's root and path, and its own name. A link keeps its
+/// own name rather than its target's, and a path outside what is shared
+/// is not named at all.
+#[test]
+fn a_dropped_path_is_named_by_its_folder_and_its_own_name() {
+    let scratch = Scratch::new();
+    let folder = scratch.join("dropped");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("note.txt"), b"note").unwrap();
+    let core = start_direct();
+    core.enable_filesystem_access().unwrap();
+    let location = FilesystemLocation::new(core.file_roots().unwrap(), &folder);
+    assert_eq!(
+        core.locate(&folder.join("note.txt")).unwrap(),
+        Some((location.root, location.path(""), "note.txt".into()))
+    );
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(folder.join("note.txt"), folder.join("shortcut")).unwrap();
+        assert_eq!(
+            core.locate(&folder.join("shortcut")).unwrap(),
+            Some((location.root, location.path(""), "shortcut".into()))
+        );
+    }
+    let shared = scratch.join("shared");
+    std::fs::create_dir(&shared).unwrap();
+    core.set_file_roots(vec![shared]).unwrap();
+    assert_eq!(core.locate(&folder.join("note.txt")).unwrap(), None);
+}
