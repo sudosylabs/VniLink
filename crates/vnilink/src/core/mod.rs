@@ -642,6 +642,9 @@ struct Shared {
     job_wake: (Mutex<()>, std::sync::Condvar),
     /// Jobs a driver worker is taking steps for.
     job_workers: Mutex<std::collections::HashSet<u64>>,
+    /// Which sender jobs, and which of their entries, hold each hash a peer
+    /// may fetch. Taken after `jobs`, never before.
+    serve_index: Mutex<jobs::ServeIndex>,
     file_resources: Arc<Mutex<file_resources::Resources>>,
     /// Last-known backend facts per capability, published by adapters and
     /// serve loops. Read by the availability query; never guessed.

@@ -346,6 +346,7 @@ impl Core {
             job_revision: AtomicU64::new(0),
             job_wake: (Mutex::new(()), std::sync::Condvar::new()),
             job_workers: Mutex::new(std::collections::HashSet::new()),
+            serve_index: Mutex::new(Default::default()),
             file_resources: Arc::new(Mutex::new(file_resources::Resources::default())),
             backend_state: Mutex::new(std::collections::HashMap::new()),
             presence_wake: Mutex::new(HashMap::new()),

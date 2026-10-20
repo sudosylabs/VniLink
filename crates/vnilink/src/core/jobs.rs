@@ -361,6 +361,60 @@ impl JobRecord {
     }
 }
 
+/// Each hash a peer may fetch, by the sender jobs whose manifests hold it
+/// and the entry it is in each, so a served request finds its job without
+/// reading every manifest. A sender job is indexed once it has a manifest
+/// and until it is forgotten; whether it may still serve is its state's
+/// to say.
+#[derive(Default)]
+pub(super) struct ServeIndex {
+    entries: HashMap<([u8; 32], [u8; 32]), Vec<(u64, usize)>>,
+}
+
+impl ServeIndex {
+    /// Indexes `record` if it is a sender with a manifest.
+    fn add(&mut self, record: &JobRecord) {
+        let Some(manifest) = record.manifest.as_ref().filter(|_| record.sender) else {
+            return;
+        };
+        for (index, entry) in manifest.entries.iter().enumerate() {
+            if entry.is_dir {
+                continue;
+            }
+            let holders = self
+                .entries
+                .entry((record.peer_key, entry.hash))
+                .or_default();
+            if !holders.contains(&(record.id, index)) {
+                holders.push((record.id, index));
+            }
+        }
+    }
+
+    fn remove(&mut self, record: &JobRecord) {
+        let Some(manifest) = record.manifest.as_ref().filter(|_| record.sender) else {
+            return;
+        };
+        for entry in manifest.entries.iter().filter(|entry| !entry.is_dir) {
+            let key = (record.peer_key, entry.hash);
+            if let Some(holders) = self.entries.get_mut(&key) {
+                holders.retain(|(id, _)| *id != record.id);
+                if holders.is_empty() {
+                    self.entries.remove(&key);
+                }
+            }
+        }
+    }
+
+    /// The sender jobs and entries holding `hash` for `peer`.
+    fn holders(&self, peer: &[u8; 32], hash: &[u8; 32]) -> Vec<(u64, usize)> {
+        self.entries
+            .get(&(*peer, *hash))
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
 /// Where a transfer lands, as the side that submitted it keeps it: the
 /// folder on the receiving computer and the names arriving in it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -617,6 +671,7 @@ impl Core {
             for hash in record_hashes(&record) {
                 lock(&self.shared.blob_job_offers).insert((peer, hash));
             }
+            lock(&self.shared.serve_index).add(&record);
             jobs.insert(id, record);
             prepared.committed = true;
         }
@@ -1189,7 +1244,9 @@ impl Core {
         }
         {
             let mut jobs = lock(&self.shared.jobs);
-            jobs.remove(&id);
+            if let Some(record) = jobs.remove(&id) {
+                lock(&self.shared.serve_index).remove(&record);
+            }
         }
         Self::drop_orphaned_offers(&self.shared, &peer_key, &hashes, id);
         save_jobs(&self.shared)?;
@@ -2887,24 +2944,27 @@ pub(super) fn retained_job_ids(
 /// requires this in addition to pairing + offer set membership, so completed
 /// or cancelled jobs never authorize even when their offers linger.
 pub(super) fn is_active_serve(shared: &Shared, peer: &[u8; 32], hash: &[u8; 32]) -> bool {
+    let holders = lock(&shared.serve_index).holders(peer, hash);
+    if holders.is_empty() {
+        return false;
+    }
     let jobs = lock(&shared.jobs);
     let state = lock(&shared.state);
-    jobs.values().any(|record| {
-        super::service_jobs::check_owner(&state, record.owner).is_ok()
-            && record.peer_key == *peer
-            && record.sender
-            && matches!(
-                record.state,
-                JobState::Serving | JobState::Transferring | JobState::WaitingDecision
-            )
-            && record.manifest.as_ref().is_some_and(|manifest| {
-                manifest
-                    .entries
-                    .iter()
-                    .filter(|entry| !entry.is_dir)
-                    .any(|entry| entry.hash == *hash)
-            })
+    holders.iter().any(|(id, _)| {
+        jobs.get(id).is_some_and(|record| {
+            serving(record, peer) && super::service_jobs::check_owner(&state, record.owner).is_ok()
+        })
     })
+}
+
+/// Whether `record` is a sender job that may serve `peer` now.
+fn serving(record: &JobRecord, peer: &[u8; 32]) -> bool {
+    record.peer_key == *peer
+        && record.sender
+        && matches!(
+            record.state,
+            JobState::Serving | JobState::Transferring | JobState::WaitingDecision
+        )
 }
 
 /// Test probe parked by the rebind regression: called with the served
@@ -2915,7 +2975,8 @@ pub(crate) static SERVE_SOURCE_PROBE: std::sync::Mutex<Option<fn([u8; 32])>> =
     std::sync::Mutex::new(None);
 
 /// Serve-time source re-verification for job blob requests (see blob.rs):
-/// finds the active sender entry for `hash`, reconstructs its root-relative
+/// finds the active sender entry for `hash` through the serve index,
+/// reconstructs its root-relative
 /// source (the source folder `local_rel` + manifest path) and stats it through handles (NOFOLLOW, regular, size matches).
 /// Denies swapped parents/replaced files so TryReference absolute paths can
 /// never disclose outside bytes. The leg's pin is re-verified under the
@@ -2926,37 +2987,26 @@ pub(super) async fn verify_serve_source(
     peer: &[u8; 32],
     hash: &[u8; 32],
 ) -> Result<ServeSource, Error> {
+    let holders = lock(&shared.serve_index).holders(peer, hash);
     let (job_id, local_root, local_rel, entry_size, entry_path, mut pin) = {
         let jobs = lock(&shared.jobs);
-        let mut found = None;
-        for record in jobs.values() {
-            if record.peer_key != *peer || !record.sender {
-                continue;
-            }
-            match record.state {
-                JobState::Serving | JobState::Transferring | JobState::WaitingDecision => {}
-                _ => continue,
-            }
-            if let Some(manifest) = &record.manifest {
-                if let Some(entry) = manifest
-                    .entries
-                    .iter()
-                    .filter(|e| !e.is_dir)
-                    .find(|e| e.hash == *hash)
-                {
-                    found = Some((
+        holders
+            .iter()
+            .find_map(|(id, index)| {
+                let record = jobs.get(id).filter(|record| serving(record, peer))?;
+                let entry = record.manifest.as_ref()?.entries.get(*index)?;
+                (!entry.is_dir && entry.hash == *hash).then(|| {
+                    (
                         record.id,
                         record.local_root,
                         record.local_rel.clone(),
                         entry.size,
                         entry.path.clone(),
                         record.local_pin.clone(),
-                    ));
-                    break;
-                }
-            }
-        }
-        found.ok_or(Error::TransferDenied)?
+                    )
+                })
+            })
+            .ok_or(Error::TransferDenied)?
     };
     let root_rel = join_rel(&local_rel, &entry_path);
     let (parent_rel, name) = match root_rel.rfind('/') {
@@ -3370,6 +3420,7 @@ pub(super) fn load_jobs(shared: &Shared) {
                 _ => {}
             }
             max = max.max(record.id).max(wire_job_id(&record));
+            lock(&shared.serve_index).add(&record);
             jobs.insert(record.id, record);
         }
     }
@@ -4628,6 +4679,7 @@ fn finish_preparation(
                 record.manifest = Some(manifest.clone());
                 record.skipped_symlinks = skipped;
                 record.state = JobState::Serving;
+                lock(&shared.serve_index).add(record);
                 Ok(manifest)
             }
             Err(status) => {
@@ -5291,5 +5343,44 @@ mod arrival_tests {
         assert!(core.job_revision() > before);
         drop(progress);
         watcher.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod serve_index_tests {
+    use super::*;
+
+    fn sender(id: u64, peer: u8, hashes: &[u8]) -> JobRecord {
+        let mut record = JobRecord::test_receiver_of(id, hashes.len());
+        record.sender = true;
+        record.peer_key = [peer; 32];
+        let entries = &mut record.manifest.as_mut().unwrap().entries;
+        for (entry, hash) in entries.iter_mut().zip(hashes) {
+            entry.hash = [*hash; 32];
+        }
+        record
+    }
+
+    /// A served hash leads straight to the sender jobs holding it for that
+    /// peer, and to the entry it is in each, without reading manifests; a
+    /// forgotten job no longer holds it, and receivers hold nothing.
+    #[test]
+    fn a_hash_leads_to_the_entries_holding_it() {
+        let mut index = ServeIndex::default();
+        let first = sender(1, 9, &[1, 2, 3]);
+        let second = sender(2, 9, &[3, 4]);
+        let elsewhere = sender(3, 8, &[3]);
+        let receiver = JobRecord::test_receiver_of(4, 1);
+        for record in [&first, &first, &second, &elsewhere, &receiver] {
+            index.add(record);
+        }
+        assert_eq!(index.holders(&[9; 32], &[3; 32]), [(1, 2), (2, 0)]);
+        assert_eq!(index.holders(&[9; 32], &[1; 32]), [(1, 0)]);
+        assert_eq!(index.holders(&[8; 32], &[3; 32]), [(3, 0)]);
+        assert!(index.holders(&[0; 32], &[1; 32]).is_empty(), "a receiver");
+        index.remove(&first);
+        assert_eq!(index.holders(&[9; 32], &[3; 32]), [(2, 0)]);
+        assert!(index.holders(&[9; 32], &[1; 32]).is_empty());
+        assert!(!index.entries.contains_key(&([9; 32], [1; 32])));
     }
 }
