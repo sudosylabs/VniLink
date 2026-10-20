@@ -57,7 +57,7 @@ mod jobs;
 #[cfg(unix)]
 pub(crate) use jobs::PrestageHooks;
 #[cfg(test)]
-pub(crate) use jobs::MAX_ACTIVE_JOBS;
+pub(crate) use jobs::{MAX_ACTIVE_JOBS, PREPARE_SCAN_HOOKS};
 mod input_cleanup;
 mod keys;
 mod lifecycle;

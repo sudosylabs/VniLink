@@ -36,6 +36,11 @@ pub const TAG_JOB_RESOLVE: u8 = 0x06;
 /// Stream tag for coordinated resume: either side tells the peer to resume
 /// after symmetric cancellation, reauthorizing offers as needed.
 pub const TAG_JOB_RESUME: u8 = 0x07;
+/// Stream tag for a download's manifest: the controller asks, with a
+/// [`JobStatus`], until the host has prepared it ([`ManifestReply`]).
+/// Auxiliary streams share their tags with the service, desktop and
+/// clipboard streams (8 to 11).
+pub const TAG_JOB_MANIFEST: u8 = 0x0d;
 
 pub(crate) const STATUS_OK: u8 = 0;
 pub(crate) const STATUS_DENIED: u8 = 2;
@@ -75,7 +80,8 @@ pub struct JobReply {
     pub job_id: u64,
 }
 
-/// Host answers a download request with the prepared manifest.
+/// Host answers a download request, and each later ask for its manifest:
+/// with the prepared manifest, or with none while it is still preparing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestReply {
     pub v: u8,

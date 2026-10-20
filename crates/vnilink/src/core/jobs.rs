@@ -200,17 +200,26 @@ impl JobRecord {
     }
 
     /// Whether the driver has a step to take for this job: neither ended
-    /// nor interrupted, and not a receiver waiting on a decision.
+    /// nor interrupted, not a receiver waiting on a decision, and not a
+    /// sender being prepared, which its request owns.
     fn drivable(&self) -> bool {
         !self.state.is_terminal()
             && self.state != JobState::Interrupted
             && (self.sender || self.state != JobState::WaitingDecision)
+            && !(self.sender && self.state == JobState::Preparing)
     }
 
     /// Whether its steps come on a timer rather than at every change: a
-    /// sender only asks its receiver how far it got.
+    /// sender only asks its receiver how far it got, and a receiver whose
+    /// sender is still preparing asks for its manifest.
     fn paced(&self) -> bool {
-        self.sender
+        self.sender || self.manifest.is_none()
+    }
+
+    /// Whether this is a sender still being prepared here: it has nothing
+    /// to send yet, so nothing to resume.
+    pub(super) fn preparing_here(&self) -> bool {
+        self.sender && self.manifest.is_none()
     }
 
     /// What a receiver's answer may change on its sender.
@@ -693,8 +702,11 @@ impl Core {
             status if status == job::STATUS_OK => {}
             status => return Err(job::error_for_status(status)),
         }
-        let manifest = reply.manifest.ok_or(Error::Malformed)?;
-        manifest::validate(&manifest)?;
+        // A preparation still under way leaves the job Preparing; its
+        // manifest is asked for until ready (`poll_receiver`).
+        if let Some(manifest) = &reply.manifest {
+            manifest::validate(manifest)?;
+        }
         let id;
         {
             let mut jobs = lock(&self.shared.jobs);
@@ -726,8 +738,12 @@ impl Core {
                     peer_id: peer_endpoint_id.to_owned(),
                     direction: JobDirection::Download,
                     sender: false,
-                    state: JobState::Transferring,
-                    manifest: Some(manifest),
+                    state: if reply.manifest.is_some() {
+                        JobState::Transferring
+                    } else {
+                        JobState::Preparing
+                    },
+                    manifest: reply.manifest,
                     local_root: dst_root,
                     local_rel: dst_rel.to_owned(),
                     names: Vec::new(),
@@ -1052,7 +1068,11 @@ impl Core {
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             let state = lock(&self.shared.state);
             super::service_jobs::check_owner(&state, record.owner)?;
-            record.state = JobState::Transferring;
+            record.state = if record.manifest.is_some() {
+                JobState::Transferring
+            } else {
+                JobState::Preparing
+            };
             record.waiting_file = None;
             record.error = None;
             drop(state);
@@ -1308,6 +1328,10 @@ impl Core {
             if matches!(record.state, JobState::Cancelled | JobState::Interrupted) {
                 return Ok(record.snapshot());
             }
+            if record.manifest.is_none() {
+                drop(jobs);
+                return self.ask_prepared_manifest(id);
+            }
         }
         let (peer_id, peer_bytes, file_index, file_count) = {
             let jobs = lock(&self.shared.jobs);
@@ -1497,6 +1521,68 @@ impl Core {
             record.in_flight = 0;
             record.file_index += 1;
             drop(jobs);
+        }
+        save_jobs(&self.shared)?;
+        self.job_snapshot(id)
+    }
+
+    /// Asks the host whether a download it is preparing is ready, and
+    /// takes its manifest once it is. Still preparing leaves the job as it
+    /// is; a refusal fails it.
+    fn ask_prepared_manifest(&self, id: u64) -> Result<JobSnapshot, Error> {
+        let (peer, outgoing, owner, job_id) = {
+            let jobs = lock(&self.shared.jobs);
+            let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            (
+                record.peer_key,
+                record.outgoing,
+                record.owner,
+                wire_job_id(record),
+            )
+        };
+        let generation = match self.generation_for(&peer, outgoing, owner) {
+            Ok(generation) => generation,
+            Err(Error::NoSession | Error::StaleSession) => return self.mark_interrupted(id),
+            Err(error) => return Err(error),
+        };
+        let query = job::JobStatus {
+            v: job::JOB_VERSION,
+            id: 1,
+            generation,
+            job_id,
+        };
+        let Ok(bytes) = self.job_round_trip_side(
+            &peer,
+            outgoing,
+            owner,
+            job::TAG_JOB_MANIFEST,
+            &job::encode(&query)?,
+        ) else {
+            return self.job_snapshot(id);
+        };
+        let reply: job::ManifestReply = job::decode(&bytes)?;
+        if reply.id != query.id || reply.job_id != job_id {
+            return Err(Error::Malformed);
+        }
+        let manifest = match (reply.status, reply.manifest) {
+            (job::STATUS_OK, None) => return self.job_snapshot(id),
+            (job::STATUS_OK, Some(manifest)) => manifest,
+            (job::STATUS_STALE, _) => return self.mark_interrupted(id),
+            _ => return self.mark_failed(id, PREPARE_FAILED),
+        };
+        if manifest::validate(&manifest).is_err() {
+            return self.mark_failed(id, PREPARE_FAILED);
+        }
+        {
+            let mut jobs = lock(&self.shared.jobs);
+            let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            if record.manifest.is_some() || record.state.is_terminal() {
+                return Ok(record.snapshot());
+            }
+            record.manifest = Some(manifest);
+            if record.state == JobState::Preparing {
+                record.state = JobState::Transferring;
+            }
         }
         save_jobs(&self.shared)?;
         self.job_snapshot(id)
@@ -2709,7 +2795,7 @@ pub(super) fn wire_job_mut<'a>(
 }
 
 /// Neutral links accept lifecycle messages only for live service-owned jobs.
-/// All four control requests share the status request's identity fields.
+/// Every control request shares the status request's identity fields.
 pub(super) fn neutral_job_control_allowed(
     shared: &Shared,
     peer: &[u8; 32],
@@ -2718,7 +2804,11 @@ pub(super) fn neutral_job_control_allowed(
 ) -> bool {
     if !matches!(
         tag,
-        job::TAG_JOB_STATUS | job::TAG_JOB_CANCEL | job::TAG_JOB_RESOLVE | job::TAG_JOB_RESUME
+        job::TAG_JOB_STATUS
+            | job::TAG_JOB_CANCEL
+            | job::TAG_JOB_RESOLVE
+            | job::TAG_JOB_RESUME
+            | job::TAG_JOB_MANIFEST
     ) {
         return false;
     }
@@ -3267,8 +3357,13 @@ pub(super) fn load_jobs(shared: &Shared) {
             if !record.sender && record.direction == JobDirection::Download {
                 record.outgoing = true;
             }
-            // Anything in flight died with the process.
+            // Anything in flight died with the process; a preparation has
+            // nothing to resume from.
             match record.state {
+                _ if record.preparing_here() && !record.state.is_terminal() => {
+                    record.state = JobState::Failed;
+                    record.error = Some(PREPARE_STOPPED.to_owned());
+                }
                 JobState::Preparing | JobState::Serving | JobState::Transferring => {
                     record.state = JobState::Interrupted;
                 }
@@ -3397,6 +3492,7 @@ pub(super) async fn handle_job_request(
         t if t == job::TAG_JOB_STATUS => {
             handle_status_query(shared, peer, true, send, payload).await
         }
+        t if t == job::TAG_JOB_MANIFEST => handle_manifest_query(shared, peer, send, payload).await,
         t if t == job::TAG_JOB_CANCEL => handle_cancel(shared, peer, true, send, payload).await,
         t if t == job::TAG_JOB_RESOLVE => handle_resolve(shared, peer, true, send, payload).await,
         t if t == job::TAG_JOB_RESUME => handle_resume(shared, peer, true, send, payload).await,
@@ -3443,6 +3539,55 @@ fn peer_session_live(state: &State, peer: &[u8; 32], incoming_side: bool, genera
             && session.wire_stamp.generation == generation
             && session.phase == crate::session::SessionPhase::Active
     })
+}
+
+/// The host answers a controller asking for a prepared download's
+/// manifest: still preparing (no manifest), the manifest, or a refusal
+/// once preparation failed or the job ended.
+async fn handle_manifest_query(
+    shared: &Shared,
+    peer: &[u8; 32],
+    send: &mut iroh::endpoint::SendStream,
+    payload: &[u8],
+) -> Result<(), ()> {
+    let query: job::JobStatus = job::decode(payload).map_err(|_| ())?;
+    job::check_version(query.v).map_err(|_| ())?;
+    let answer = |status: u8, manifest: Option<Manifest>| job::ManifestReply {
+        v: job::JOB_VERSION,
+        id: query.id,
+        status,
+        job_id: query.job_id,
+        manifest,
+    };
+    let reply = if !peer_session_live(&lock(&shared.state), peer, true, query.generation) {
+        answer(job::STATUS_STALE, None)
+    } else {
+        let jobs = lock(&shared.jobs);
+        match wire_job(&jobs, peer, query.job_id).filter(|record| record.sender) {
+            Some(record) if record.state == JobState::Preparing => answer(job::STATUS_OK, None),
+            Some(record)
+                if matches!(
+                    record.state,
+                    JobState::Serving | JobState::Transferring | JobState::WaitingDecision
+                ) =>
+            {
+                answer(job::STATUS_OK, record.manifest.clone())
+            }
+            _ => answer(job::STATUS_ERROR, None),
+        }
+    };
+    let bytes = job::encode(&reply).map_err(|_| ())?;
+    let mut out = Vec::with_capacity(4 + bytes.len());
+    out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    out.extend_from_slice(&bytes);
+    crate::sidestream::write_frame(
+        send,
+        &out,
+        |framed: &Vec<u8>| Ok(framed.clone()),
+        "the job frame was not written",
+    )
+    .await
+    .map_err(|_| ())
 }
 
 /// Symmetric cancellation: either side tells the peer one job is cancelled.
@@ -4292,88 +4437,110 @@ pub(super) async fn handle_download_request(
         reply(send, respond(job::STATUS_DENIED, 0, None).map_err(|_| ())?).await?;
         return Ok(());
     };
-    // Scan, hash and offer from this host's roots. Failures reject the
-    // request; nothing is announced before every hash is served.
     if check_sources(&request.src_folder, &request.names).is_err() {
         reply(send, respond(job::STATUS_ERROR, 0, None).map_err(|_| ())?).await?;
         return Ok(());
     }
-    let prepared = prepare_host_manifest(
+    // The preparation is a job from the start: the controller sees it as
+    // Preparing, can cancel it, and loses it with its owner. Same order as
+    // publication/rename: jobs -> state, so activation and permission
+    // changes cannot interleave between the check and the insert. The
+    // source leg is pinned now: a rebind before the first serve fails the
+    // leg instead of serving moved bytes.
+    let local_pin = lock(&shared.file_roots).pin(request.src_root).ok();
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    let admitted: Result<u64, u8> = (|| {
+        let mut jobs = lock(&shared.jobs);
+        let state = lock(&shared.state);
+        if !prepared_download_permitted(
+            &state,
+            peer,
+            session_id,
+            request.generation,
+            permission_epoch,
+        ) || super::service_jobs::check_owner(&state, owner).is_err()
+        {
+            return Err(job::STATUS_DENIED);
+        }
+        // Sender job ids minted on the host share the local allocator, so
+        // adopted controller ids can never collide with a later mint.
+        let id = allocate_job_id(shared).map_err(|_| job::STATUS_ERROR)?;
+        jobs.insert(
+            id,
+            JobRecord {
+                owner,
+                destination: None,
+                id,
+                wire_id: id,
+                created_at: retention_now(),
+                peer_key: *peer,
+                peer_id: endpoint_id_of(peer),
+                direction: JobDirection::Upload,
+                sender: true,
+                state: JobState::Preparing,
+                manifest: None,
+                local_root: request.src_root,
+                local_rel: request.src_folder.clone(),
+                names: request.names.clone(),
+                local_pin,
+                outgoing: false,
+                skipped_symlinks: 0,
+                file_index: 0,
+                done_bytes: 0,
+                files_done: 0,
+                resumed_files: 0,
+                skipped_files: 0,
+                waiting_file: None,
+                landed: HashMap::new(),
+                choices: HashMap::new(),
+                apply_remaining: None,
+                error: None,
+                in_flight: 0,
+                unsaved_landed: Vec::new(),
+            },
+        );
+        lock(&shared.job_cancel).insert(id, stop);
+        Ok(id)
+    })();
+    let id = match admitted {
+        Ok(id) => id,
+        Err(status) => {
+            reply(send, respond(status, 0, None).map_err(|_| ())?).await?;
+            return Ok(());
+        }
+    };
+    let _ = save_jobs(shared);
+    // Whatever ends this request before preparation does, the job does
+    // not stay Preparing.
+    let mut unfinished = Unprepared { shared, id };
+    // Scan, hash and offer from this host's roots; nothing is announced
+    // before every hash is served. A quick preparation answers with its
+    // manifest; a longer one answers at once that it is preparing, and the
+    // controller asks for the manifest until it is ready.
+    let preparing = prepare_host_manifest(
         shared,
         request.src_root,
         &request.src_folder,
         &request.names,
-        manifest::ScanHooks::none(),
-    )
-    .await;
-    let outcome: Result<(u64, Manifest, u64), u8> = match prepared {
-        Err(status) => Err(status),
-        Ok((id, manifest, skipped)) => {
-            // Same order as publication/rename: jobs -> state. Activation
-            // and permission changes cannot interleave between this check
-            // and insertion. A new session cannot inherit prepared work.
-            // Pin the source leg before insertion: a rebind between here
-            // and first serve fails the leg instead of serving moved bytes.
-            let local_pin = lock(&shared.file_roots).pin(request.src_root).ok();
-            let mut jobs = lock(&shared.jobs);
-            let state = lock(&shared.state);
-            let permitted = prepared_download_permitted(
-                &state,
-                peer,
-                session_id,
-                request.generation,
-                permission_epoch,
-            );
-            if !permitted || super::service_jobs::check_owner(&state, owner).is_err() {
-                Err(job::STATUS_DENIED)
-            } else if jobs.contains_key(&id) {
-                Err(job::STATUS_ERROR)
-            } else {
-                let skipped_symlinks = skipped;
-                for entry in manifest.entries.iter().filter(|entry| !entry.is_dir) {
-                    lock(&shared.blob_job_offers).insert((*peer, entry.hash));
-                }
-                jobs.insert(
-                    id,
-                    JobRecord {
-                        owner,
-                        destination: None,
-                        id,
-                        wire_id: id,
-                        created_at: retention_now(),
-                        peer_key: *peer,
-                        peer_id: endpoint_id_of(peer),
-                        direction: JobDirection::Upload,
-                        sender: true,
-                        state: JobState::Serving,
-                        manifest: Some(manifest.clone()),
-                        local_root: request.src_root,
-                        local_rel: request.src_folder.clone(),
-                        names: request.names.clone(),
-                        local_pin,
-                        outgoing: false,
-                        skipped_symlinks,
-                        file_index: 0,
-                        done_bytes: 0,
-                        files_done: 0,
-                        resumed_files: 0,
-                        skipped_files: 0,
-                        waiting_file: None,
-                        landed: HashMap::new(),
-                        choices: HashMap::new(),
-                        apply_remaining: None,
-                        error: None,
-                        in_flight: 0,
-                        unsaved_landed: Vec::new(),
-                    },
-                );
-                Ok((id, manifest, skipped))
-            }
-        }
+        prepare_scan_hooks(shared),
+        stopped,
+    );
+    tokio::pin!(preparing);
+    let quick = tokio::select! {
+        prepared = &mut preparing => Some(prepared),
+        _ = tokio::time::sleep(PREPARE_ANSWER_WITHIN) => None,
     };
-    let _ = save_jobs(shared);
-    match outcome {
-        Ok((id, manifest, _)) => {
+    let Some(prepared) = quick else {
+        reply(send, respond(job::STATUS_OK, id, None).map_err(|_| ())?).await?;
+        let prepared = preparing.await;
+        let _ = finish_preparation(shared, &request, session_id, permission_epoch, id, prepared);
+        unfinished.id = 0;
+        return Ok(());
+    };
+    let finished = finish_preparation(shared, &request, session_id, permission_epoch, id, prepared);
+    unfinished.id = 0;
+    match finished {
+        Ok(manifest) => {
             reply(
                 send,
                 respond(job::STATUS_OK, id, Some(manifest)).map_err(|_| ())?,
@@ -4387,16 +4554,136 @@ pub(super) async fn handle_download_request(
     Ok(())
 }
 
+/// How long a download request waits for its preparation before it
+/// answers that the job is preparing.
+const PREPARE_ANSWER_WITHIN: Duration = Duration::from_secs(1);
+const PREPARE_FAILED: &str = "the other computer could not prepare the transfer";
+const PREPARE_STOPPED: &str = "the transfer stopped before it was prepared";
+
+/// A download job still Preparing when its request ends fails: nothing
+/// else would ever finish preparing it. `id` 0 once it finished.
+struct Unprepared<'a> {
+    shared: &'a Shared,
+    id: u64,
+}
+
+impl Drop for Unprepared<'_> {
+    fn drop(&mut self) {
+        if self.id == 0 {
+            return;
+        }
+        lock(&self.shared.job_cancel).remove(&self.id);
+        let stopped = lock(&self.shared.jobs)
+            .get_mut(&self.id)
+            .filter(|record| record.state == JobState::Preparing)
+            .map(|record| {
+                record.state = JobState::Failed;
+                record.error = Some(PREPARE_STOPPED.to_owned());
+            })
+            .is_some();
+        if stopped {
+            let _ = save_jobs(self.shared);
+        }
+    }
+}
+
+/// Settles a download job once its preparation ends: Serving with its
+/// manifest and offers, or Failed. A job cancelled, or whose owner went,
+/// meanwhile keeps that state; a permission or session that changed
+/// meanwhile fails it. Returns the manifest or the status to answer with.
+fn finish_preparation(
+    shared: &Shared,
+    request: &job::DownloadRequest,
+    session_id: u64,
+    permission_epoch: u64,
+    id: u64,
+    prepared: Result<(Manifest, u64), u8>,
+) -> Result<Manifest, u8> {
+    lock(&shared.job_cancel).remove(&id);
+    let settled = {
+        let mut jobs = lock(&shared.jobs);
+        let state = lock(&shared.state);
+        let record = jobs.get_mut(&id).ok_or(job::STATUS_ERROR)?;
+        if record.state != JobState::Preparing {
+            return Err(job::STATUS_ERROR);
+        }
+        let peer = record.peer_key;
+        let permitted = prepared_download_permitted(
+            &state,
+            &peer,
+            session_id,
+            request.generation,
+            permission_epoch,
+        ) && super::service_jobs::check_owner(&state, record.owner).is_ok();
+        match prepared {
+            Ok(_) if !permitted => {
+                record.state = JobState::Failed;
+                record.error = Some(PREPARE_FAILED.to_owned());
+                Err(job::STATUS_DENIED)
+            }
+            Ok((manifest, skipped)) => {
+                for entry in manifest.entries.iter().filter(|entry| !entry.is_dir) {
+                    lock(&shared.blob_job_offers).insert((peer, entry.hash));
+                }
+                record.manifest = Some(manifest.clone());
+                record.skipped_symlinks = skipped;
+                record.state = JobState::Serving;
+                Ok(manifest)
+            }
+            Err(status) => {
+                record.state = JobState::Failed;
+                record.error = Some(PREPARE_FAILED.to_owned());
+                Err(status)
+            }
+        }
+    };
+    let _ = save_jobs(shared);
+    settled
+}
+
+/// Scan probes for one engine's download preparations; production
+/// leaves them unset. Keyed by [`Core::prestage_key`].
+#[cfg(test)]
+pub(crate) static PREPARE_SCAN_HOOKS: std::sync::Mutex<Option<(usize, manifest::ScanHooks)>> =
+    std::sync::Mutex::new(None);
+
+fn prepare_scan_hooks(shared: &Shared) -> manifest::ScanHooks {
+    #[cfg(test)]
+    if let Some((engine, hooks)) = *lock(&PREPARE_SCAN_HOOKS) {
+        if engine == shared as *const Shared as usize {
+            return hooks;
+        }
+    }
+    let _ = shared;
+    manifest::ScanHooks::none()
+}
+
 /// Scans and imports every file of the chosen entries, returning the
-/// sender job id, the filled manifest and the symlinks left out. Runs on
-/// the host inside its runtime.
+/// filled manifest and the symlinks left out, until `stopped` says the
+/// job was cancelled or lost its owner. Runs on the host inside its
+/// runtime.
 async fn prepare_host_manifest(
     shared: &Shared,
     src_root: u64,
     src_folder: &str,
     names: &[String],
     scan_hooks: manifest::ScanHooks,
-) -> Result<(u64, Manifest, u64), u8> {
+    mut stopped: tokio::sync::watch::Receiver<bool>,
+) -> Result<(Manifest, u64), u8> {
+    tokio::select! {
+        biased;
+        _ = stopped.wait_for(|stop| *stop) => Err(job::STATUS_ERROR),
+        prepared = prepare_all(shared, src_root, src_folder, names, scan_hooks) => prepared,
+    }
+}
+
+async fn prepare_all(
+    shared: &Shared,
+    src_root: u64,
+    src_folder: &str,
+    names: &[String],
+    scan_hooks: manifest::ScanHooks,
+) -> Result<(Manifest, u64), u8> {
     let store = super::blob::open_store(shared)
         .await
         .map_err(|_| job::STATUS_ERROR)?;
@@ -4422,10 +4709,7 @@ async fn prepare_host_manifest(
         return Err(job::STATUS_ERROR);
     }
     manifest::validate(&manifest).map_err(|_| job::STATUS_ERROR)?;
-    // Sender job ids minted on the host share the local allocator, so
-    // adopted controller ids can never collide with a later mint.
-    let id = allocate_job_id(shared).map_err(|_| job::STATUS_ERROR)?;
-    Ok((id, manifest, skipped_symlinks))
+    Ok((manifest, skipped_symlinks))
 }
 
 /// Scans and imports one chosen entry `src_rel`, returning its part of

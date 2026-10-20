@@ -4540,3 +4540,116 @@ fn interrupted_transfers_leave_room_for_new_ones() {
         .count();
     assert_eq!(waiting, crate::core::MAX_ACTIVE_JOBS);
 }
+
+static PREPARE_PARKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static PREPARE_RELEASED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Parks a host's download preparation before it reads anything, until
+/// released or cancelled.
+fn prepare_park_probe(unit: u64, cancelled: &std::sync::atomic::AtomicBool) {
+    if unit != 0 {
+        return;
+    }
+    PREPARE_PARKED.store(true, Ordering::Release);
+    while !PREPARE_RELEASED.load(Ordering::Acquire) && !cancelled.load(Ordering::Acquire) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// A download whose preparation takes long is a Preparing job at once:
+/// the request is answered while the other computer has not read a byte,
+/// so the Files owner is neither held for the whole preparation nor closed
+/// when it outlasts the request's bound (60 seconds). Asking again changes
+/// nothing until it is prepared; then it finishes. A cancel while
+/// preparing stops the preparation on both sides.
+#[test]
+fn a_long_download_preparation_shows_and_finishes() {
+    let (host, controller, hs, cs) = setup("prepare");
+    let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &hs.join("root"));
+    let controller_files =
+        FilesystemLocation::new(controller.file_roots().unwrap(), &cs.join("root"));
+    let bytes = payload(4096, 801);
+    std::fs::write(hs.join("root/slow.bin"), &bytes).unwrap();
+    std::fs::write(hs.join("root/second.bin"), payload(4096, 802)).unwrap();
+    let (owner, _pipe) = owned_files(&controller, &host);
+    struct Unhook;
+    impl Drop for Unhook {
+        fn drop(&mut self) {
+            *crate::core::PREPARE_SCAN_HOOKS.lock().unwrap() = None;
+        }
+    }
+    let _unhook = Unhook;
+    *crate::core::PREPARE_SCAN_HOOKS.lock().unwrap() = Some((
+        host.prestage_key(),
+        manifest::ScanHooks {
+            dir_probe: Some(prepare_park_probe),
+            finish_probe: None,
+        },
+    ));
+    let download = |name: &str| {
+        controller.files_service_download(
+            owner.id,
+            owner.generation,
+            host_files.root,
+            &host_files.path(""),
+            &[name.to_owned()],
+            controller_files.root,
+            &controller_files.path(""),
+        )
+    };
+    let job = download("slow.bin").unwrap();
+    assert!(
+        PREPARE_PARKED.load(Ordering::Acquire),
+        "answered only once prepared"
+    );
+    assert_eq!(
+        controller.job_snapshot(job).unwrap().state,
+        JobState::Preparing
+    );
+    let preparing = |core: &Core| {
+        core.job_list()
+            .unwrap()
+            .into_iter()
+            .filter(|job| job.state == JobState::Preparing)
+            .map(|job| job.id)
+            .collect::<Vec<_>>()
+    };
+    let host_job = preparing(&host)[0];
+    std::thread::sleep(Duration::from_millis(1500));
+    let asked = controller.job_poll(job).unwrap();
+    assert_eq!(asked.state, JobState::Preparing);
+    assert_eq!(asked.files_total, 0);
+    assert_eq!(
+        controller.controller_service(owner.id).unwrap().phase,
+        crate::ServicePhase::Active
+    );
+    PREPARE_RELEASED.store(true, Ordering::Release);
+    await_jobs(|| controller.job_poll(job).unwrap().state != JobState::Preparing);
+    let (receiver, sender) = drive_to_end(&controller, job, &host, host_job);
+    assert_eq!(
+        (receiver.state, sender.state),
+        (JobState::Complete, JobState::Complete)
+    );
+    assert_eq!(std::fs::read(cs.join("root/slow.bin")).unwrap(), bytes);
+
+    PREPARE_PARKED.store(false, Ordering::Release);
+    PREPARE_RELEASED.store(false, Ordering::Release);
+    let second = download("second.bin").unwrap();
+    assert_eq!(
+        controller.job_snapshot(second).unwrap().state,
+        JobState::Preparing
+    );
+    let host_second = preparing(&host)[0];
+    assert_eq!(
+        controller.job_cancel(second).unwrap().state,
+        JobState::Cancelled
+    );
+    await_jobs(|| host.job_snapshot(host_second).unwrap().state == JobState::Cancelled);
+    // The cancelled preparation stopped: nothing is offered or lands.
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        host.job_snapshot(host_second).unwrap().state,
+        JobState::Cancelled
+    );
+    assert!(!cs.join("root/second.bin").exists());
+}
