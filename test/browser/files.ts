@@ -332,8 +332,13 @@ export async function verifyFiles(): Promise<void> {
 		// The selection is one transfer: each of its rows shows how far the transfer got.
 		assert(arriving?.querySelector('.files-ring') !== null && arriving?.querySelector('.files-cell-modified')?.textContent === '0 of 2 files', `An arriving row does not show its progress: ${arriving?.textContent ?? ''}`);
 		assert(view.element.querySelector('.files-status-transfers')?.textContent.startsWith('Copying to Sudosy') === true, 'The status bar does not sum up the copy');
-		// What lands shows on the receiving side without reloading it, tinted for a moment.
+		// A change the watch sees and a file landing, together, list the folder once; what follows waits a second.
 		const listed = remoteDisk.lists.length;
+		remoteDisk.watchers.get('2:Users/abass/Downloads')?.();
+		session.set(session.jobs.map(item => ({ ...item, files_done: '1' })));
+		await new Promise(resolve => setTimeout(resolve, 600));
+		assert(remoteDisk.lists.length === listed + 1, `The watch and a landing listed the folder ${String(remoteDisk.lists.length - listed)} times`);
+		// What lands shows on the receiving side without reloading it, tinted for a moment.
 		for (const item of session.copies[0].items) {
 			remoteDisk.land(session.copies[0].to, entry(item.name, 'file', 1000));
 		}

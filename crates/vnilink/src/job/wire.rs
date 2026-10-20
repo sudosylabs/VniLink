@@ -126,6 +126,11 @@ pub struct JobStateReply {
     /// Bytes the receiver holds, verified, including the file arriving now.
     #[serde(default)]
     pub done_bytes: u64,
+    /// Files landed, and files skipped, so far.
+    #[serde(default)]
+    pub files_done: u64,
+    #[serde(default)]
+    pub skipped_files: u64,
 }
 
 /// Sender forwards the owner's conflict decision to the receiver that owns

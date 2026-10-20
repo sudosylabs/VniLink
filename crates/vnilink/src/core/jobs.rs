@@ -223,10 +223,10 @@ impl JobRecord {
     }
 
     /// What a receiver's answer may change on its sender.
-    fn reported(&self) -> (JobState, u64, Option<String>, Option<usize>) {
+    fn reported(&self) -> (JobState, [u64; 3], Option<String>, Option<usize>) {
         (
             self.state,
-            self.done_bytes,
+            [self.done_bytes, self.files_done, self.skipped_files],
             self.error.clone(),
             self.waiting_file,
         )
@@ -1334,6 +1334,8 @@ impl Core {
             if record.state != JobState::Cancelled {
                 // The receiver is the one that knows what has arrived.
                 record.done_bytes = reply.done_bytes;
+                record.files_done = reply.files_done;
+                record.skipped_files = reply.skipped_files;
                 match state {
                     JobState::Complete => {
                         record.state = JobState::Complete;
@@ -3529,6 +3531,8 @@ pub(super) async fn handle_job_request(
             error: None,
             waiting_file: None,
             done_bytes: 0,
+            files_done: 0,
+            skipped_files: 0,
         };
         reply(send, job::encode(&denied).map_err(|_| ())?).await?;
         return Ok(());
@@ -3742,6 +3746,8 @@ async fn handle_status_query(
             error: None,
             waiting_file: None,
             done_bytes: 0,
+            files_done: 0,
+            skipped_files: 0,
         };
         reply(send, job::encode(&stale).map_err(|_| ())?).await?;
         return Ok(());
@@ -3772,6 +3778,8 @@ async fn handle_status_query(
                     error: record.error.clone(),
                     waiting_file,
                     done_bytes: record.done(),
+                    files_done: record.files_done,
+                    skipped_files: record.skipped_files,
                 }
             }
             _ => job::JobStateReply {
@@ -3782,6 +3790,8 @@ async fn handle_status_query(
                 error: None,
                 waiting_file: None,
                 done_bytes: 0,
+                files_done: 0,
+                skipped_files: 0,
             },
         }
     };

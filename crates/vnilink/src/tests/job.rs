@@ -4422,6 +4422,7 @@ fn a_selection_is_one_transfer_both_ways() {
         (JobState::Complete, JobState::Complete)
     );
     assert_eq!(receiver.files_done, 3);
+    assert_eq!(sender.files_done, 3, "the sender heard what landed");
     assert_eq!(
         std::fs::read(hs.join("root/a.txt")).unwrap(),
         payload(700, 501)

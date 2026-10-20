@@ -400,7 +400,9 @@ export class FilesPaneView extends Disposable {
 	private stateAct: (() => void) | undefined;
 	/** The open folder's watch: changes made outside VniLink list it again. */
 	private readonly watcher = this._register(new MutableDisposable());
-	private readonly changedLater = this._register(new MutableDisposable());
+	/** Set for a second after the folder is listed again; `relistWanted` asks for one more then. */
+	private readonly relisted = this._register(new MutableDisposable());
+	private relistWanted = false;
 
 	constructor(
 		public readonly side: FilesPane,
@@ -698,7 +700,7 @@ export class FilesPaneView extends Disposable {
 			const entering = !same(this.current, folder);
 			if (entering || !this.watcher.value) {
 				this.watcher.value = disk.watch(folder, () => {
-					this.folderChanged();
+					this.refreshSoon();
 				});
 			}
 			this.current = folder;
@@ -723,16 +725,29 @@ export class FilesPaneView extends Disposable {
 		}
 	}
 
-	/** Lists the folder again shortly after it changed, once for changes that come together. */
-	private folderChanged(): void {
+	/**
+	 * Lists the folder again now, then at most once a second while asked
+	 * again, with a last listing for what changed in between. The folder's
+	 * watch and the transfers landing in it both ask here, so a change both
+	 * see lists it once, however fast files arrive.
+	 */
+	public refreshSoon(): void {
+		if (this.relisted.value) {
+			this.relistWanted = true;
+			return;
+		}
+		// A name being typed is not taken away; the rename lists the folder when it ends.
+		if (this.editing === undefined) {
+			void this.refresh();
+		}
 		const timer = setTimeout(() => {
-			this.changedLater.clear();
-			// A name being typed is not taken away; the rename lists the folder when it ends.
-			if (this.editing === undefined) {
-				void this.refresh();
+			this.relisted.clear();
+			if (this.relistWanted) {
+				this.relistWanted = false;
+				this.refreshSoon();
 			}
-		}, 300);
-		this.changedLater.value = toDisposable(() => {
+		}, 1000);
+		this.relisted.value = toDisposable(() => {
 			clearTimeout(timer);
 		});
 	}
