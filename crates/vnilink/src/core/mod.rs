@@ -642,9 +642,11 @@ struct Shared {
     /// bytes. Watchers compare it to the last value they saw instead of
     /// polling every job.
     job_revision: AtomicU64,
-    /// Set and signalled with each job change, so the background driver
-    /// takes the next step at once instead of at its next tick.
-    job_wake: (Mutex<bool>, std::sync::Condvar),
+    /// Signalled with each job change, so the background driver and job
+    /// workers take the next step at once instead of at their next tick.
+    job_wake: (Mutex<()>, std::sync::Condvar),
+    /// Jobs a driver worker is taking steps for.
+    job_workers: Mutex<std::collections::HashSet<u64>>,
     file_resources: Arc<Mutex<file_resources::Resources>>,
     /// Last-known backend facts per capability, published by adapters and
     /// serve loops. Read by the availability query; never guessed.

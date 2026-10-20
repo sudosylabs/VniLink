@@ -4113,3 +4113,136 @@ fn the_other_computers_folder_says_when_it_changes() {
     host.shutdown();
     controller.shutdown();
 }
+
+/// A thousand files the receiver already has, skipped once asked, take
+/// no pass each: its worker skips one after another until the job is
+/// done, where the driver's 50 ms between passes needed 50 seconds.
+#[test]
+fn a_thousand_skipped_files_take_no_pass_each() {
+    const FILES: usize = 1000;
+    let _heavy = HEAVY_JOB
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let (host, controller, host_scratch, controller_scratch) = setup("skips");
+    let host = std::sync::Arc::new(host);
+    let controller = std::sync::Arc::new(controller);
+    for side in [&controller_scratch, &host_scratch] {
+        let folder = side.join("root/many");
+        std::fs::create_dir_all(&folder).unwrap();
+        for index in 0..FILES {
+            std::fs::write(folder.join(format!("f-{index:04}.txt")), b"x").unwrap();
+        }
+    }
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
+    let _session = controller.connect(&host.endpoint_id()).unwrap();
+    host.start_job_driver();
+    controller.start_job_driver();
+    let job = controller
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("many"),
+            host_files.root,
+            &host_files.path(""),
+        )
+        .unwrap();
+    let rx = receiver_id(&host, job);
+    let started = std::time::Instant::now();
+    while host.job_snapshot(rx).unwrap().state != JobState::WaitingDecision {
+        assert!(started.elapsed() < Duration::from_secs(5), "no question");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let started = std::time::Instant::now();
+    host.job_resolve(rx, ConflictChoice::Skip, true).unwrap();
+    while host.job_snapshot(rx).unwrap().state != JobState::Complete {
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "{} of {FILES} skipped after {:?}",
+            host.job_snapshot(rx).unwrap().skipped_files,
+            started.elapsed()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    eprintln!("{FILES} skipped in {:?}", started.elapsed());
+    assert!(
+        started.elapsed() < Duration::from_millis(FILES as u64 * 50 / 4),
+        "skipping took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(host.job_snapshot(rx).unwrap().skipped_files, FILES as u64);
+}
+
+/// A sender whose receiver waits on a question asks how far it got ever
+/// more seldom, and an answer that changes nothing is neither saved nor
+/// told: neither side's jobs change while the question stands.
+#[test]
+fn a_waiting_transfer_does_not_wake_itself() {
+    let (host, controller, host_scratch, controller_scratch) = setup("quiet");
+    let host = std::sync::Arc::new(host);
+    let controller = std::sync::Arc::new(controller);
+    std::fs::write(controller_scratch.join("root/same.txt"), b"theirs").unwrap();
+    std::fs::write(host_scratch.join("root/same.txt"), b"mine").unwrap();
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
+    let _session = controller.connect(&host.endpoint_id()).unwrap();
+    host.start_job_driver();
+    controller.start_job_driver();
+    let job = controller
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("same.txt"),
+            host_files.root,
+            &host_files.path(""),
+        )
+        .unwrap();
+    let started = std::time::Instant::now();
+    while controller.job_snapshot(job).unwrap().state != JobState::WaitingDecision {
+        assert!(started.elapsed() < Duration::from_secs(5), "no question");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // The save that told of the question may land just after it shows.
+    let mut revisions = (controller.job_revision(), host.job_revision());
+    loop {
+        std::thread::sleep(Duration::from_millis(300));
+        let now = (controller.job_revision(), host.job_revision());
+        if now == revisions {
+            break;
+        }
+        revisions = now;
+    }
+    let journal = controller_scratch.join(&format!("blobs/jobs/{job}.jsonl"));
+    let written = std::fs::metadata(&journal).unwrap().len();
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(
+        (controller.job_revision(), host.job_revision()),
+        revisions,
+        "a standing question changed the jobs"
+    );
+    assert_eq!(std::fs::metadata(&journal).unwrap().len(), written);
+    assert_eq!(
+        std::fs::read(host_scratch.join("root/same.txt")).unwrap(),
+        b"mine"
+    );
+    controller
+        .job_resolve(job, ConflictChoice::Replace, false)
+        .unwrap();
+    let started = std::time::Instant::now();
+    while controller.job_snapshot(job).unwrap().state != JobState::Complete {
+        assert!(started.elapsed() < Duration::from_secs(5), "not resumed");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        std::fs::read(host_scratch.join("root/same.txt")).unwrap(),
+        b"theirs"
+    );
+}

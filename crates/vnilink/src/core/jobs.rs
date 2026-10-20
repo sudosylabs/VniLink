@@ -192,6 +192,30 @@ impl JobRecord {
         &self.landed
     }
 
+    /// Whether the driver has a step to take for this job: neither ended
+    /// nor interrupted, and not a receiver waiting on a decision.
+    fn drivable(&self) -> bool {
+        !self.state.is_terminal()
+            && self.state != JobState::Interrupted
+            && (self.sender || self.state != JobState::WaitingDecision)
+    }
+
+    /// Whether its steps come on a timer rather than at every change: a
+    /// sender only asks its receiver how far it got.
+    fn paced(&self) -> bool {
+        self.sender
+    }
+
+    /// What a receiver's answer may change on its sender.
+    fn reported(&self) -> (JobState, u64, Option<String>, Option<usize>) {
+        (
+            self.state,
+            self.done_bytes,
+            self.error.clone(),
+            self.waiting_file,
+        )
+    }
+
     pub(super) fn has_manifest(&self) -> bool {
         self.manifest.is_some()
     }
@@ -261,16 +285,12 @@ impl JobRecord {
             .manifest
             .as_ref()
             .map(|manifest| {
-                let files: Vec<&str> = manifest
-                    .entries
-                    .iter()
-                    .filter(|entry| !entry.is_dir)
-                    .map(|entry| entry.path.as_str())
-                    .collect();
-                let label = match files.as_slice() {
-                    [] => "Transfer".to_owned(),
-                    [first] => (*first).to_owned(),
-                    [first, rest @ ..] => format!("{first} +{} more", rest.len()),
+                // A snapshot is taken at every step: no copy of the paths.
+                let mut files = manifest.entries.iter().filter(|entry| !entry.is_dir);
+                let label = match (files.next(), files.count()) {
+                    (None, _) => "Transfer".to_owned(),
+                    (Some(first), 0) => first.path.clone(),
+                    (Some(first), rest) => format!("{} +{rest} more", first.path),
                 };
                 (manifest.total_bytes(), manifest.file_count() as u64, label)
             })
@@ -289,9 +309,15 @@ impl JobRecord {
             resumed_files: self.resumed_files,
             skipped_files: self.skipped_files,
             skipped_symlinks: self.skipped_symlinks,
-            waiting_file: self
-                .waiting_file
-                .and_then(|index| self.files().get(index).map(|entry| entry.path.clone())),
+            waiting_file: self.waiting_file.and_then(|index| {
+                self.manifest
+                    .as_ref()?
+                    .entries
+                    .iter()
+                    .filter(|entry| !entry.is_dir)
+                    .nth(index)
+                    .map(|entry| entry.path.clone())
+            }),
             error: self.error.clone(),
             destination: self.destination.clone(),
         }
@@ -684,72 +710,72 @@ impl Core {
         Ok(out)
     }
 
-    /// Starts the background transfer driver: advances every active job by
-    /// one step per second on its own OS thread, independent of any Files
-    /// window. Closing all windows pauses window ticks but not this driver;
-    /// jobs keep their state and resume. Call once after `set_blob_directory`
-    /// from the owning `Arc<Core>`; each Core gets its own driver thread
-    /// that exits when the Core shuts down or drops.
+    /// Starts the background transfer driver, independent of any Files
+    /// window: closing every window pauses window ticks but not this
+    /// driver, and jobs keep their state and resume. Each active job gets a
+    /// worker of its own for as long as it has a step to take, so a large
+    /// file for one job never holds up another. A receiver takes file after
+    /// file until it is blocked, on a decision, on admission or on its peer,
+    /// then waits for any job to change. A sender asks its receiver how far
+    /// it got, soon again while that changes and ever more seldom while it
+    /// does not ([`SENDER_SOON`], [`SENDER_SELDOM`]); its own answers wake
+    /// nothing. The driver only starts workers, when a job changes and once
+    /// a second. Call once after `set_blob_directory` from the owning
+    /// `Arc<Core>`; the driver and its workers end when the Core shuts down
+    /// or drops.
     pub fn start_job_driver(self: &std::sync::Arc<Self>) {
-        const ACTIVE: std::time::Duration = std::time::Duration::from_millis(200);
-        const IDLE: std::time::Duration = std::time::Duration::from_secs(1);
-        const BETWEEN: std::time::Duration = std::time::Duration::from_millis(50);
+        const IDLE: Duration = Duration::from_secs(1);
         let weak = std::sync::Arc::downgrade(self);
         let shared = self.shared.clone();
         std::thread::spawn(move || {
-            let mut last = std::time::Instant::now();
+            let mut seen = shared.job_revision.load(Ordering::Acquire);
             loop {
-                // A job change wakes the driver at once; otherwise it looks
-                // again soon while work is active, and seldom when idle.
-                let pause = if any_active(&shared) { ACTIVE } else { IDLE };
-                {
-                    let (woken, wake) = &shared.job_wake;
-                    let mut flag = lock(woken);
-                    if !*flag {
-                        flag = wake
-                            .wait_timeout(flag, pause)
-                            .map(|(flag, _)| flag)
-                            .unwrap_or_else(|poison| poison.into_inner().0);
-                    }
-                    *flag = false;
-                }
-                // Changes come in bursts; one pass serves them all.
-                if let Some(rest) = BETWEEN.checked_sub(last.elapsed()) {
-                    std::thread::sleep(rest);
-                }
-                last = std::time::Instant::now();
                 let Some(core) = weak.upgrade() else {
                     break;
                 };
                 if lock(&core.shared.state).shut_down {
                     break;
                 }
-                core.drive_jobs_apart();
+                core.start_job_workers();
+                drop(core);
+                seen = wait_for_job_change(&shared, seen, IDLE);
             }
         });
     }
 
-    /// Advances each active job on a worker of its own, so a large file
-    /// arriving for one job never holds up the others. A job already being
-    /// advanced is left to its worker (`job_driving`).
-    fn drive_jobs_apart(self: &std::sync::Arc<Self>) {
+    /// Gives each job with a step to take a worker, unless it has one.
+    fn start_job_workers(self: &std::sync::Arc<Self>) {
         let ids: Vec<u64> = {
             let jobs = lock(&self.shared.jobs);
-            let driving = lock(&self.shared.job_driving);
+            let mut workers = lock(&self.shared.job_workers);
             jobs.values()
-                .filter(|record| {
-                    !record.state.is_terminal()
-                        && (record.sender || record.state != JobState::WaitingDecision)
-                        && !driving.contains(&record.id)
-                })
+                .filter(|record| record.drivable() && workers.insert(record.id))
                 .map(|record| record.id)
                 .collect()
         };
         for id in ids {
-            let core = self.clone();
-            std::thread::spawn(move || {
-                let _ = core.job_poll(id);
-            });
+            let weak = std::sync::Arc::downgrade(self);
+            let shared = self.shared.clone();
+            std::thread::spawn(move || work_job(weak, shared, id));
+        }
+    }
+
+    /// Takes a receiver's steps until one moves it no further: it waits on
+    /// a decision, on admission or on its peer, or it ended.
+    fn drive_receiver(&self, id: u64) {
+        let Ok(mut before) = self.job_snapshot(id) else {
+            return;
+        };
+        loop {
+            let Ok(after) = self.job_poll(id) else {
+                return;
+            };
+            let advanced =
+                after.files_done + after.skipped_files > before.files_done + before.skipped_files;
+            if after.state != JobState::Transferring || !advanced {
+                return;
+            }
+            before = after;
         }
     }
 
@@ -1095,14 +1121,13 @@ impl Core {
             return self.job_snapshot(id);
         }
         let state = job::JobState::from_name(&reply.state).ok_or(Error::Malformed)?;
-        {
+        let changed = {
             let mut jobs = lock(&self.shared.jobs);
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            let before = record.reported();
             // Do not overwrite a locally cancelled record with a stale
             // receiver state: cancellation wins.
-            if record.state == JobState::Cancelled {
-                drop(jobs);
-            } else {
+            if record.state != JobState::Cancelled {
                 // The receiver is the one that knows what has arrived.
                 record.done_bytes = reply.done_bytes;
                 match state {
@@ -1138,10 +1163,13 @@ impl Core {
                     }
                     _ => {}
                 }
-                drop(jobs);
             }
+            record.reported() != before
+        };
+        // An answer that changes nothing is not saved and wakes no one.
+        if changed {
+            save_jobs(&self.shared)?;
         }
-        save_jobs(&self.shared)?;
         self.job_snapshot(id)
     }
 
@@ -2041,7 +2069,7 @@ impl Core {
     fn finalize_receiver(&self, id: u64) -> Result<JobSnapshot, Error> {
         // Verify every manifest path landed before claiming completion.
         // Skipped files intentionally keep the destination as it was.
-        let (local_root, local_rel, manifest, choices) = {
+        let (local_root, local_rel, manifest, choices, apply_remaining) = {
             let jobs = lock(&self.shared.jobs);
             let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             (
@@ -2052,6 +2080,7 @@ impl Core {
                     .clone()
                     .ok_or(Error::InvalidSetting(NO_JOB))?,
                 record.choices.clone(),
+                record.apply_remaining,
             )
         };
         let landed = {
@@ -2065,10 +2094,15 @@ impl Core {
             .filter(|entry| !entry.is_dir)
             .enumerate()
         {
-            if choices.get(&index).copied() == Some(ConflictChoice::Skip) {
-                continue;
-            }
-            let name = landed.get(&index).ok_or(Error::InvalidSetting(NO_JOB))?;
+            // Every file before the end either landed or was skipped: by
+            // its own answer, or by one given for the rest.
+            let skipped = choices.get(&index).copied().or(apply_remaining);
+            let name = match landed.get(&index) {
+                None if skipped == Some(ConflictChoice::Skip) => continue,
+                None => return Err(Error::InvalidSetting(NO_JOB)),
+                Some(_) if choices.get(&index).copied() == Some(ConflictChoice::Skip) => continue,
+                Some(name) => name,
+            };
             let dest = self.receiver_dest(id, local_root, &local_rel, &entry.path)?;
             let dest = dest
                 .parent()
@@ -2967,19 +3001,106 @@ fn interrupt_jobs(shared: &Shared, peer: &[u8; 32], controller_only: bool) {
     let _ = save_jobs(shared);
 }
 
-/// Tells job watchers, and the background driver, that something changed.
+/// Tells job watchers, and the background driver and workers, that
+/// something changed.
 pub(super) fn jobs_changed(shared: &Shared) {
     shared.job_revision.fetch_add(1, Ordering::AcqRel);
-    let (woken, wake) = &shared.job_wake;
-    *lock(woken) = true;
+    let (gate, wake) = &shared.job_wake;
+    // Under the gate, so a worker that just found nothing changed is
+    // already waiting.
+    let _gate = lock(gate);
     wake.notify_all();
 }
 
-/// Whether any job still has a step to take.
-fn any_active(shared: &Shared) -> bool {
-    lock(&shared.jobs).values().any(|record| {
-        !record.state.is_terminal() && (record.sender || record.state != JobState::WaitingDecision)
-    })
+/// How soon a sender asks its receiver again after an answer that changed
+/// it, and the longest it waits while answers change nothing.
+const SENDER_SOON: Duration = Duration::from_millis(100);
+const SENDER_SELDOM: Duration = Duration::from_secs(1);
+/// The longest a blocked receiver waits for a change before it looks again.
+const RECEIVER_RETRY: Duration = Duration::from_millis(200);
+
+/// One job's worker: takes its steps until it has none left, then lets
+/// the driver give the job a worker again when it next has one.
+fn work_job(weak: std::sync::Weak<Core>, shared: Arc<Shared>, id: u64) {
+    struct Working<'a>(&'a Shared, u64);
+    impl Drop for Working<'_> {
+        fn drop(&mut self) {
+            lock(&self.0.job_workers).remove(&self.1);
+        }
+    }
+    let _working = Working(&shared, id);
+    let mut pause = SENDER_SOON;
+    loop {
+        let seen = shared.job_revision.load(Ordering::Acquire);
+        let Some(paced) = job_pace(&shared, id) else {
+            return;
+        };
+        {
+            let Some(core) = weak.upgrade() else {
+                return;
+            };
+            if lock(&shared.state).shut_down {
+                return;
+            }
+            if paced {
+                let before = core.job_snapshot(id).ok();
+                let after = core.job_poll(id).ok();
+                pause = if after.is_some() && after != before {
+                    SENDER_SOON
+                } else {
+                    (pause * 2).min(SENDER_SELDOM)
+                };
+            } else {
+                core.drive_receiver(id);
+            }
+        }
+        if paced {
+            // Changes meanwhile do not hurry it: only one that leaves it
+            // nothing to do ends the wait early.
+            let due = std::time::Instant::now() + pause;
+            let mut seen = shared.job_revision.load(Ordering::Acquire);
+            loop {
+                let left = due.saturating_duration_since(std::time::Instant::now());
+                if left.is_zero() {
+                    break;
+                }
+                seen = wait_for_job_change(&shared, seen, left);
+                if job_pace(&shared, id).is_none() {
+                    return;
+                }
+            }
+        } else {
+            wait_for_job_change(&shared, seen, RECEIVER_RETRY);
+        }
+    }
+}
+
+/// Whether job `id` has a step to take, and if so whether it is paced:
+/// a sender asks its peer on a timer instead of at every change.
+fn job_pace(shared: &Shared, id: u64) -> Option<bool> {
+    lock(&shared.jobs)
+        .get(&id)
+        .filter(|record| record.drivable())
+        .map(JobRecord::paced)
+}
+
+/// Waits until the job revision differs from `seen` or `timeout` passes,
+/// and returns the revision then.
+fn wait_for_job_change(shared: &Shared, seen: u64, timeout: Duration) -> u64 {
+    let deadline = std::time::Instant::now() + timeout;
+    let (gate, wake) = &shared.job_wake;
+    let mut guard = lock(gate);
+    loop {
+        let now = shared.job_revision.load(Ordering::Acquire);
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if now != seen || left.is_zero() {
+            return now;
+        }
+        guard = wake
+            .wait_timeout(guard, left)
+            .map(|(guard, _)| guard)
+            .unwrap_or_else(|poison| poison.into_inner().0);
+    }
 }
 
 /// Copies a file's arriving byte count onto its job, at most four times a
