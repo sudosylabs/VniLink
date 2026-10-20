@@ -95,6 +95,11 @@ impl<E: VideoEncoder> HostSession<E> {
         })
     }
 
+    /// Whether the next encoded picture must be a keyframe.
+    pub fn keyframe_pending(&self) -> bool {
+        self.video.keyframe_pending()
+    }
+
     /// How many times a quality change opened the encoder again.
     pub fn reopens(&self) -> u64 {
         self.reopens

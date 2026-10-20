@@ -87,6 +87,20 @@ impl PictureSlot {
             captured_at: picture.captured_at,
         })
     }
+    /// The newest picture, whether or not this consumer has seen it.
+    fn latest(&self) -> Option<Sample> {
+        let picture = self
+            .picture
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        Some(Sample {
+            generation: picture.generation,
+            frame: picture.frame.clone()?,
+            cursor: picture.cursor.clone(),
+            capture_us: picture.capture_us,
+            captured_at: picture.captured_at,
+        })
+    }
     fn poke(&self) {
         self.wake.notify_all();
     }
@@ -100,6 +114,10 @@ struct Sample {
     capture_us: u64,
     captured_at: Option<Instant>,
 }
+
+/// How often an unchanged picture is still handed on, so a viewer sees the
+/// stream is alive.
+const IDLE_KEEPALIVE: Duration = Duration::from_secs(1);
 
 struct Control {
     cancel: AtomicBool,
@@ -300,13 +318,18 @@ fn consume<E, F>(
         if target.service && session.reopens() != reopens {
             let _ = core.report_desktop_encoder_reopen(target.id, target.generation);
         }
+        // On an unchanged screen no new picture comes: a keyframe still
+        // owed is made from the last one.
+        let next = slot
+            .wait_newer(seen, Duration::from_millis(20))
+            .or_else(|| session.keyframe_pending().then(|| slot.latest()).flatten());
         let Some(Sample {
             generation,
             mut frame,
             cursor,
             capture_us,
             captured_at,
-        }) = slot.wait_newer(seen, Duration::from_millis(20))
+        }) = next
         else {
             continue;
         };
@@ -408,6 +431,9 @@ where
     let events = core.subscribe().ok();
     let started = Instant::now();
     let mut noted: Vec<VideoTarget> = Vec::new();
+    let mut last_attested = None;
+    let mut last_cursor = None;
+    let mut last_published: Option<Instant> = None;
     std::thread::scope(|scope| {
         let mut running: Vec<Running<'_>> = Vec::new();
         let mut draining: Vec<Running<'_>> = Vec::new();
@@ -549,16 +575,28 @@ where
                 );
             }
             let cursor = capture.cursor();
-            slot.publish(
-                frame,
-                cursor,
-                read_started.elapsed().as_micros().min(5_000_000) as u64,
-                read_started,
-            );
-            if read_started.elapsed() < Duration::from_millis(2) {
-                if let Some(remaining) = period.checked_sub(read_started.elapsed()) {
-                    std::thread::sleep(remaining);
-                }
+            // A source that attests its pixels says when nothing changed: the
+            // same picture is handed on once a second, not encoded and sent
+            // at the full frame rate. A consumer that owes a keyframe takes
+            // the last picture meanwhile.
+            let attested = capture.attested_at();
+            let unchanged =
+                attested.is_some() && attested == last_attested && cursor == last_cursor;
+            if !unchanged || last_published.is_none_or(|at| at.elapsed() >= IDLE_KEEPALIVE) {
+                last_attested = attested;
+                last_cursor.clone_from(&cursor);
+                last_published = Some(read_started);
+                slot.publish(
+                    frame,
+                    cursor,
+                    read_started.elapsed().as_micros().min(5_000_000) as u64,
+                    read_started,
+                );
+            }
+            // Always wait out the period: a slow read is no reason to read
+            // again at once.
+            if let Some(remaining) = period.checked_sub(read_started.elapsed()) {
+                std::thread::sleep(remaining);
             }
         };
         for worker in running.iter().chain(draining.iter()) {

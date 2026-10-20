@@ -712,3 +712,102 @@ fn lone_capture_serves_unselected_viewers_before_any_selection() {
     stop.store(true, Ordering::Relaxed);
     worker.join().unwrap().unwrap();
 }
+
+/// A source that attests its pixels and never changes them.
+struct Still {
+    at: Instant,
+}
+
+impl FrameSource for Still {
+    fn size(&self) -> (u16, u16) {
+        (64, 64)
+    }
+
+    fn poll_frame(&self, timestamp: u64) -> Result<Option<RawFrame>, Error> {
+        Ok(Some(solid(64, 64, timestamp)))
+    }
+
+    fn attested_at(&self) -> Option<Instant> {
+        Some(self.at)
+    }
+}
+
+/// An unchanged screen is encoded once a second, not at the frame rate;
+/// a keyframe asked for meanwhile is made from the last picture at once.
+#[test]
+fn an_unchanged_screen_is_sent_once_a_second_and_a_keyframe_still_comes() {
+    let host = Arc::new(boot());
+    let viewer = boot();
+    host.set_capture(Box::new(Source {
+        idle: false,
+        frames: Arc::new(AtomicUsize::new(0)),
+        thread: Mutex::new(None),
+        wrong_thread: Arc::new(AtomicBool::new(false)),
+    }))
+    .unwrap();
+    for core in [&host, &viewer] {
+        core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
+            .unwrap();
+    }
+    host.set_topology(9, &[twin(7, 0)]).unwrap();
+    pair(&host, &viewer);
+    host.start_hosting().unwrap();
+    let parent = viewer.begin_connect_services(&host.endpoint_id()).unwrap();
+    wait_active(&viewer, parent.id);
+    let parent = viewer.controller_session(parent.id).unwrap();
+    let owner = viewer
+        .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
+        .unwrap();
+    let handle = viewer
+        .open_desktop_service(owner.id, owner.generation)
+        .unwrap();
+    let frames = handle.subscribe_video().unwrap();
+    let encodes = Arc::new(AtomicUsize::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    let (worker_stop, worker_host, worker_encodes) =
+        (Arc::clone(&stop), Arc::clone(&host), Arc::clone(&encodes));
+    let worker = std::thread::spawn(move || {
+        crate::serve_shared_capture(
+            &Still { at: Instant::now() },
+            &worker_host,
+            &worker_stop,
+            false,
+            7,
+            |_| {},
+            move |_, _, _, _, _| {
+                Ok(Encoder {
+                    slow: false,
+                    encodes: Arc::clone(&worker_encodes),
+                    opens: Arc::new(AtomicUsize::new(0)),
+                })
+            },
+        )
+    });
+    let first = frames
+        .recv_timeout(Duration::from_secs(5))
+        .expect("first picture");
+    assert!(first.keyframe);
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(
+        encodes.load(Ordering::Relaxed),
+        1,
+        "an unchanged screen was encoded again within a second"
+    );
+    handle.request_keyframe().unwrap();
+    let asked = Instant::now();
+    let keyframe = loop {
+        let frame = frames
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the keyframe asked for");
+        if frame.keyframe {
+            break frame;
+        }
+    };
+    assert!(keyframe.keyframe);
+    assert!(
+        asked.elapsed() < Duration::from_millis(500),
+        "the keyframe waited for the screen to change"
+    );
+    stop.store(true, Ordering::Relaxed);
+    worker.join().unwrap().unwrap();
+}

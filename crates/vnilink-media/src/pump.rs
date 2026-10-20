@@ -147,6 +147,11 @@ impl FramePump {
         self.force_keyframe = true;
     }
 
+    /// Whether the next encoded picture must be a keyframe.
+    pub fn keyframe_pending(&self) -> bool {
+        self.force_keyframe || self.awaiting_keyframe
+    }
+
     pub fn push(
         &mut self,
         frame: &RawFrame,
@@ -225,6 +230,11 @@ impl<E: VideoEncoder> HostVideo<E> {
 
     pub fn request_keyframe(&mut self) {
         self.pump.request_keyframe();
+    }
+
+    /// Whether the next encoded picture must be a keyframe.
+    pub fn keyframe_pending(&self) -> bool {
+        self.pump.keyframe_pending()
     }
 
     pub fn set_quality(&mut self, quality: Quality) {
