@@ -83,6 +83,12 @@ impl VideoQueue {
         self.frames.pop_front().map(|(frame, _)| frame)
     }
 
+    /// A frame was lost on the way: the predicted frames after it decode
+    /// against a missing picture, so they are dropped until a keyframe.
+    pub(crate) fn lost(&mut self) {
+        self.needs_keyframe = true;
+    }
+
     pub(crate) fn drain(&mut self) -> Vec<EncodedFrame> {
         self.frames.drain(..).map(|(frame, _)| frame).collect()
     }
@@ -205,6 +211,11 @@ impl VideoInbox {
             self.wake.notify_one();
         }
         result
+    }
+
+    /// A frame was lost on the way; see [`VideoQueue::lost`].
+    pub(crate) fn lost(&self) {
+        lock(&self.queue).lost();
     }
 
     pub(crate) fn reset(&self) {
@@ -453,6 +464,25 @@ mod recording_tests {
         )
         .unwrap()
     }
+    /// After a frame is lost on the way, predicted frames decode against a
+    /// missing picture: they are dropped until the keyframe asked for.
+    #[test]
+    fn a_lost_frame_drops_predicted_frames_until_a_keyframe() {
+        let inbox = VideoInbox::new();
+        inbox.push(frame(true, 1));
+        assert_eq!(inbox.try_pop().unwrap().timestamp_us, 1);
+        inbox.lost();
+        assert!(matches!(
+            inbox.push(frame(false, 2)),
+            VideoPush::StillNeedsKeyframe
+        ));
+        assert!(inbox.try_pop().is_none());
+        assert!(matches!(inbox.push(frame(true, 3)), VideoPush::Queued));
+        inbox.push(frame(false, 4));
+        assert_eq!(inbox.try_pop().unwrap().timestamp_us, 3);
+        assert_eq!(inbox.try_pop().unwrap().timestamp_us, 4);
+    }
+
     #[test]
     fn recording_pressure_never_consumes_or_poison_viewer_frames() {
         let inbox = VideoInbox::new();

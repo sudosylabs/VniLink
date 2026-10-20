@@ -29,8 +29,10 @@ function fixture({ control = true, decodes = true } = {}) {
 	const codecs = [];
 	const decoded = [];
 	const closed = [];
-	const createDecoder = async (codec, output) => {
+	const failures = [];
+	const createDecoder = async (codec, output, error) => {
 		codecs.push(codec);
+		failures.push(error);
 		if (!decodes) {
 			return undefined;
 		}
@@ -45,13 +47,17 @@ function fixture({ control = true, decodes = true } = {}) {
 	};
 	const session = new EngineDesktopSession(control, { id: '4', generation: '2' }, createDecoder, () => Promise.resolve([]));
 	const inputs = [];
-	session.attach({ video: { close() { } }, input: control ? { input: command => inputs.push(command), close() { } } : undefined });
+	const keyframes = [];
+	session.attach({
+		video: { requestKeyframe: () => keyframes.push(true), close() { } },
+		input: control ? { input: command => inputs.push(command), close() { } } : undefined,
+	});
 	const pictures = [];
 	const ends = [];
 	session.onPicture(picture => pictures.push(picture));
 	session.onEnd(end => ends.push(end));
 	const packet = (fields, data = keyframe) => ({ type: 'data', sequence: 1, kind: 'video', data, metadata: JSON.stringify({ codec: 'h264', keyframe: true, timestampUs: '1000', displayId: '7', revision: '3', ...fields }) });
-	return { session, codecs, decoded, closed, inputs, pictures, ends, packet };
+	return { session, codecs, decoded, closed, inputs, pictures, ends, packet, failures, keyframes };
 }
 
 test('a picture is decoded with its own codec and keeps the display and revision it was taken on', async () => {
@@ -115,4 +121,20 @@ test('the input channel takes keys with their composing state and the display th
 	assert(!isInputCommand({ type: 'submitLocalKey', ...target, usage: 4, down: true, text: 'a' }), 'a key says whether it composes');
 	assert(isInputCommand({ type: 'selectDisplays', ...target, ids: ['7'] }));
 	assert(!isInputCommand({ type: 'updateSessionQuality', ...target, role: 'Controller', quality: { max_bitrate_kbps: 1, max_frame_rate: 1, max_width: 1, max_height: 1 } }), 'only input and display selection');
+});
+
+test('a decoder that loses the picture asks for a keyframe and starts again from it', async () => {
+	const { session, codecs, closed, ends, packet, failures, keyframes, pictures } = fixture();
+	await session.consume(packet({}));
+	failures.at(-1)();
+	await new Promise(resolve => setImmediate(resolve));
+	assert.deepEqual(ends, [], 'a lost picture ended the session');
+	assert.deepEqual(keyframes, [true]);
+	assert.deepEqual(closed, ['avc1.640028']);
+	// Predicted pictures wait; the next keyframe opens a new decoder.
+	await session.consume(packet({ keyframe: false, timestampUs: '2000' }));
+	assert.equal(codecs.length, 1);
+	await session.consume(packet({ timestampUs: '3000' }));
+	assert.equal(codecs.length, 2);
+	assert.deepEqual(pictures.map(picture => picture.frame.timestamp), [1000, 3000]);
 });

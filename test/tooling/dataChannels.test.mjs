@@ -91,15 +91,29 @@ test('binary output is ordered and a slow consumer cannot grow the IPC queue', (
 	const f = fixture();
 	try {
 		const bytes = Buffer.from([0, 255, 19]);
-		f.packets.push({ kind: 'video', data: bytes, metadata: '{}' }, { kind: 'video', data: Buffer.from([2]), metadata: '{}' });
+		f.packets.push({ kind: 'video', data: bytes, metadata: '{}' }, ...Array.from({ length: 5 }, (_, index) => ({ kind: 'video', data: Buffer.from([index]), metadata: '{}' })));
+		f.host.start(f.native);
+		// A desktop picture keeps four on the way, no more, in order.
+		const sent = () => f.messages.filter(m => m.type === 'data');
+		assert.deepEqual(sent().map(m => m.sequence), [1, 2, 3, 4]);
+		assert.deepEqual(sent()[0].data, bytes);
+		f.receive({ type: 'ack', sequence: 1 });
+		assert.deepEqual(sent().map(m => m.sequence), [1, 2, 3, 4, 5], 'an acknowledgement did not let the next one go');
+		f.receive({ type: 'ack', sequence: 3 });
+		assert.equal(f.closed, 1, 'acknowledging out of order terminates the channel');
+	} finally {
+		f.host.close();
+	}
+});
+
+test('other channels keep one packet on the way', () => {
+	const f = fixture('terminal');
+	try {
+		f.packets.push({ kind: 'data', data: Buffer.from([1]), metadata: '{}' }, { kind: 'data', data: Buffer.from([2]), metadata: '{}' });
 		f.host.start(f.native);
 		assert.equal(f.messages.filter(m => m.type === 'data').length, 1);
-		assert.deepEqual(f.messages[1].data, bytes);
 		f.receive({ type: 'ack', sequence: 1 });
 		assert.equal(f.messages.filter(m => m.type === 'data').length, 2);
-		assert.equal(f.messages[2].sequence, 2);
-		f.receive({ type: 'ack', sequence: 1 });
-		assert.equal(f.closed, 1, 'invalid acknowledgements terminate the channel');
 	} finally {
 		f.host.close();
 	}

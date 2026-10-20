@@ -613,6 +613,72 @@ impl DataChannel {
         }))
     }
 
+    /// How the picture is doing, as JSON, after reporting how long the
+    /// window took to decode it (microseconds on average, 0 when unknown):
+    /// the received frame rate and bitrate, queue times, loss, round trip,
+    /// the other computer's capture and encode times, and why the quality
+    /// is where it is.
+    #[napi]
+    pub fn media_status(&self, decode_us: u32) -> Result<String> {
+        self.check()?;
+        if self.kind != "video" {
+            return Err(Error::from_reason("Invalid media status target"));
+        }
+        let desktop = self
+            .desktop
+            .lock()
+            .map_err(|_| Error::from_reason("Desktop unavailable"))?;
+        let service = &desktop
+            .as_ref()
+            .ok_or_else(|| Error::from_reason("Desktop unavailable"))?
+            .service;
+        if decode_us > 0 {
+            let _ = service.report_decode_duration(u64::from(decode_us));
+        }
+        let status = service.media_status().map_err(core_error)?;
+        let reason = match status.reason {
+            vnilink_app::FfiAdaptationReason::WarmingUp => "warmingUp",
+            vnilink_app::FfiAdaptationReason::Stable => "stable",
+            vnilink_app::FfiAdaptationReason::ReceiverPressure => "receiverPressure",
+            vnilink_app::FfiAdaptationReason::EncoderPressure => "encoderPressure",
+            vnilink_app::FfiAdaptationReason::NetworkPressure => "networkPressure",
+            vnilink_app::FfiAdaptationReason::Recovering => "recovering",
+            vnilink_app::FfiAdaptationReason::Idle => "idle",
+        };
+        Ok(serde_json::json!({
+            "reason": reason,
+            "receivedKbps": status.received_kbps,
+            "receivedFps": status.received_fps,
+            "receiverQueueMs": status.receiver_queue_ms,
+            "hostQueueMs": status.host_queue_ms,
+            "lossPerMille": status.send_loss_per_mille,
+            "rttMs": status.rtt_ms,
+            "encodeUs": status.encode_us,
+            "captureUs": status.capture_us,
+        })
+        .to_string())
+    }
+
+    /// Asks the other computer for a keyframe: the window's decoder lost the
+    /// picture and needs one before anything else decodes.
+    #[napi]
+    pub fn request_keyframe(&self) -> Result<()> {
+        self.check()?;
+        if self.kind != "video" {
+            return Err(Error::from_reason("Invalid keyframe target"));
+        }
+        let desktop = self
+            .desktop
+            .lock()
+            .map_err(|_| Error::from_reason("Desktop unavailable"))?;
+        desktop
+            .as_ref()
+            .ok_or_else(|| Error::from_reason("Desktop unavailable"))?
+            .service
+            .request_keyframe()
+            .map_err(core_error)
+    }
+
     /// Control/status only; decoded desktop audio never crosses the renderer boundary.
     #[napi]
     pub fn desktop_audio(&self, operation: String) -> Result<String> {

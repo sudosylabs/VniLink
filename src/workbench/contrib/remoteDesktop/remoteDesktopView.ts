@@ -6,7 +6,7 @@ import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '..
 import type { DisplayInfo } from '../../../platform/engine/common/engine.js';
 import { hidUsage } from '../../../platform/engine/common/keyUsage.js';
 import type { DeviceSummary } from '../../services/devices/deviceService.js';
-import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type IDesktopSession } from '../../services/remoteDesktop/remoteDesktopService.js';
+import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopStats, type IDesktopSession } from '../../services/remoteDesktop/remoteDesktopService.js';
 import { ITabService, type WorkbenchTab } from '../../services/tabs/tabService.js';
 
 type DesktopProblem = DesktopFailure | DesktopEnd;
@@ -30,6 +30,30 @@ interface OverlayAction {
 	readonly label: string;
 	readonly primary?: boolean;
 	readonly run: () => void;
+}
+
+const codecNames: Readonly<Record<string, string>> = { h264: 'H.264', h265: 'HEVC', vp8: 'VP8', vp9: 'VP9', av1: 'AV1' };
+
+/** Frame rate, codec, bitrate and round trip, then why the quality is lowered when it is. */
+export function statsText(stats: DesktopStats, name: string): string {
+	const { status } = stats;
+	const rate = status.receivedKbps >= 1000
+		? nls.localize('desktop.megabits', '{0} Mb/s', (status.receivedKbps / 1000).toFixed(1))
+		: nls.localize('desktop.kilobits', '{0} kb/s', status.receivedKbps);
+	const parts = [
+		nls.localize('desktop.fps', '{0} fps', status.receivedFps),
+		codecNames[stats.codec] ?? stats.codec.toUpperCase(),
+		rate,
+		nls.localize('desktop.rtt', '{0} ms', status.rttMs),
+	];
+	switch (status.reason) {
+		case 'networkPressure': parts.push(nls.localize('desktop.lowNetwork', 'Lowered for the network')); break;
+		case 'receiverPressure': parts.push(nls.localize('desktop.lowHere', 'Lowered: this computer is behind')); break;
+		case 'encoderPressure': parts.push(nls.localize('desktop.lowThere', 'Lowered: {0} is behind', name)); break;
+		case 'recovering': parts.push(nls.localize('desktop.recovering', 'Improving')); break;
+		case 'warmingUp': case 'stable': case 'idle': break;
+	}
+	return parts.join(' · ');
 }
 
 function problemMessage(name: string, problem: DesktopProblem): string {
@@ -66,6 +90,8 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	private readonly overlayActions: HTMLElement;
 	private readonly statusRole: HTMLElement;
 	private readonly statusSize: HTMLElement;
+	private readonly statusStats: HTMLElement;
+	private readonly statsTimer = this._register(new MutableDisposable());
 	private readonly session = this._register(new MutableDisposable<IDesktopSession>());
 	private readonly sessionListeners = this._register(new DisposableStore());
 	private readonly overlayListeners = this._register(new DisposableStore());
@@ -125,6 +151,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		this.overlayActions = append(panel, $('.desktop-overlay-actions'));
 		const status = append(this.element, $('footer.desktop-status'));
 		this.statusRole = append(status, $('span.desktop-status-role'));
+		this.statusStats = append(status, $('span.desktop-status-stats'));
 		append(status, $('span.desktop-status-space'));
 		this.statusSize = append(status, $('span.desktop-status-size'));
 		if (control) {
@@ -450,6 +477,8 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	}
 
 	private setOverlay(state: string, title: string, body: string, actions: readonly OverlayAction[]): void {
+		this.statsTimer.clear();
+		this.statusStats.textContent = '';
 		this.overlay.dataset.state = state;
 		this.overlay.hidden = false;
 		this.stage.classList.toggle('desktop-dimmed', this.hasPicture);
@@ -470,7 +499,20 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		this.statusRole.dataset.state = state;
 	}
 
+	/** Reads how the picture is doing once a second while it shows. */
+	private watchStats(): void {
+		const timer = setInterval(() => {
+			void this.session.value?.stats().then(stats => {
+				this.statusStats.textContent = stats ? statsText(stats, this.device.name) : '';
+			});
+		}, 1000);
+		this.statsTimer.value = toDisposable(() => {
+			clearInterval(timer);
+		});
+	}
+
 	private hideState(): void {
+		this.watchStats();
 		delete this.overlay.dataset.state;
 		this.overlay.hidden = true;
 		this.overlayListeners.clear();

@@ -113,6 +113,26 @@ export interface DesktopAudioStatus {
 	error: { code: string; message: string } | null;
 }
 
+/** How a desktop picture is doing, from the engine's adaptation: what arrives, what waits, and why the quality is where it is. */
+export interface DesktopMediaStatus {
+	reason: 'warmingUp' | 'stable' | 'receiverPressure' | 'encoderPressure' | 'networkPressure' | 'recovering' | 'idle';
+	receivedKbps: number;
+	receivedFps: number;
+	receiverQueueMs: number;
+	hostQueueMs: number;
+	lossPerMille: number;
+	rttMs: number;
+	encodeUs: number;
+	captureUs: number;
+}
+
+export function isDesktopMediaStatus(value: unknown): value is DesktopMediaStatus {
+	const counts = ['receivedKbps', 'receivedFps', 'receiverQueueMs', 'hostQueueMs', 'lossPerMille', 'rttMs', 'encodeUs', 'captureUs'] as const;
+	return record(value) && Object.keys(value).length === 9
+		&& ['warmingUp', 'stable', 'receiverPressure', 'encoderPressure', 'networkPressure', 'recovering', 'idle'].includes(String(value.reason))
+		&& counts.every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0);
+}
+
 export function isDesktopAudioOperation(value: unknown): value is DesktopAudioOperation {
 	return record(value) && ((value.type === 'status' && Object.keys(value).length === 1)
 		|| (value.type === 'enabled' && typeof value.enabled === 'boolean' && Object.keys(value).length === 2)

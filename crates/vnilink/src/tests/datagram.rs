@@ -61,16 +61,37 @@ fn loss_never_completes_and_stragglers_are_ignored() {
             assert!(reasm.push(frag).is_none());
         }
     }
-    // The late fragment arrives after another frame completed: the original
-    // still completes since every part arrived. Loss only delays, and expiry
-    // bounds how long a partial frame is kept.
+    // The late fragment arrives after a newer frame completed: the old frame
+    // would reach the decoder out of order, so it is lost, and said so.
     let other = body(true, 12, &[8; 100]);
     for frag in fragment(&other, 22, 1200) {
         let _ = reasm.push(&frag);
     }
-    assert_eq!(reasm.push(&frags[frags.len() / 2]), Some(original));
+    assert!(!reasm.take_loss(), "the first complete frame is no loss");
+    assert_eq!(reasm.push(&frags[frags.len() / 2]), None);
+    assert!(
+        reasm.take_loss(),
+        "an out-of-order frame was not reported lost"
+    );
+    assert!(!reasm.take_loss(), "a loss is reported once");
     // ...while a true duplicate of a finished frame is ignored.
     assert!(reasm.push(&frags[0]).is_none());
+    assert!(!reasm.take_loss());
+}
+
+/// A frame completing past a missing one says the one between is lost, so
+/// the viewer asks for a keyframe instead of decoding against a gap.
+#[test]
+fn a_frame_after_a_gap_reports_the_loss() {
+    let mut reasm = Reassembler::new();
+    let first = body(true, 1, &[1; 10]);
+    assert!(reasm.push(&fragment(&first, 40, 1200)[0]).is_some());
+    let next = body(false, 2, &[2; 10]);
+    assert!(reasm.push(&fragment(&next, 41, 1200)[0]).is_some());
+    assert!(!reasm.take_loss(), "consecutive frames are no loss");
+    let after_gap = body(false, 4, &[4; 10]);
+    assert!(reasm.push(&fragment(&after_gap, 43, 1200)[0]).is_some());
+    assert!(reasm.take_loss(), "frame 42 went missing unnoticed");
 }
 
 #[test]

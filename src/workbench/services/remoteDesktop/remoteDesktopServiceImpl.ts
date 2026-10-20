@@ -6,14 +6,14 @@ import { DataChannelClient } from '../../../platform/engine/electron-browser/dat
 import { createWebCodecsDecoder } from '../camera/webCodecsDecoder.js';
 import { activeControllerSession } from '../devices/controllerSession.js';
 import { IDeviceService } from '../devices/deviceService.js';
-import { EngineDesktopSession } from './engineDesktopSession.js';
+import { EngineDesktopSession, type DesktopVideoChannel } from './engineDesktopSession.js';
 import { DesktopReadbackError, desktopTargetKey, isValidDesktopQuality, type DesktopFailure, type DesktopSession, type DesktopSettings, type DesktopTarget, type IDesktopSession, IRemoteDesktopService } from './remoteDesktopService.js';
 
 export type DesktopChannelOpener = (
 	request: Omit<DataChannelRequest, 'requestId'>,
 	consume: (packet: DataPacket) => Promise<void>,
 	onError: (error: Error) => void,
-) => Promise<{ input(command: EngineCommand): void; close(): void }>;
+) => Promise<DesktopVideoChannel & { input(command: EngineCommand): void }>;
 
 /** What the other computer reports about its screen, as a reason it can't be opened. */
 export function desktopRefusal(status: RemoteStatus | undefined): DesktopFailure | undefined {
@@ -77,7 +77,7 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 		const lost = (): void => {
 			session.lost();
 		};
-		let video: { close(): void } | undefined;
+		let video: DesktopVideoChannel | undefined;
 		try {
 			video = await this.openChannel({ kind: 'video', ...request }, packet => session.consume(packet), lost);
 			// Input shares the screen's owner, so it opens once the picture is admitted.

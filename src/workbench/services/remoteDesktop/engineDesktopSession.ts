@@ -1,10 +1,10 @@
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
-import type { DataPacket } from '../../../platform/engine/common/dataChannel.js';
+import type { DataPacket, DesktopMediaStatus } from '../../../platform/engine/common/dataChannel.js';
 import { record, type DisplayInfo, type EngineCommand } from '../../../platform/engine/common/engine.js';
 import type { CameraDecoder, CameraDecoderFactory } from '../camera/engineCameraStream.js';
 import { avcCodec } from '../camera/h264.js';
-import type { DesktopEnd, DesktopInput, DesktopPicture, IDesktopSession } from './remoteDesktopService.js';
+import type { DesktopEnd, DesktopInput, DesktopPicture, DesktopStats, IDesktopSession } from './remoteDesktopService.js';
 
 /** Pictures allowed to wait for the decoder before the channel stops acknowledging. */
 const decodeQueueLimit = 2;
@@ -25,9 +25,16 @@ export function desktopCodec(codec: string, keyframe: Uint8Array): string | unde
 	}
 }
 
+/** The picture's channel, as the session uses it. */
+export interface DesktopVideoChannel {
+	requestKeyframe(): void;
+	mediaStatus(decodeUs: number): Promise<DesktopMediaStatus | undefined>;
+	close(): void;
+}
+
 /** The two channels of a session: the picture, and for control the input. */
 export interface DesktopChannels {
-	video: { close(): void };
+	video: DesktopVideoChannel;
 	input: { input(command: EngineCommand): void; close(): void } | undefined;
 }
 
@@ -47,8 +54,12 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 	private decoder: Promise<CameraDecoder | undefined> | undefined;
 	private codec: string | undefined;
 	/** Where each picture waiting in the decoder was taken, by its timestamp. */
-	private readonly taken = new Map<number, { readonly display: string; readonly revision: string }>();
+	private readonly taken = new Map<number, { readonly display: string; readonly revision: string; readonly at: number }>();
+	/** Time from decode to picture since stats were last read, to tell the engine how this computer keeps up. */
+	private decodeTime = { total: 0, count: 0 };
 	private ended = false;
+	/** Whether a picture was decoded: after one, a decode error is a lost picture, not a codec this computer can't show. */
+	private decodedAny = false;
 
 	constructor(
 		public readonly control: boolean,
@@ -71,6 +82,18 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 
 	public displays(): Promise<readonly DisplayInfo[]> {
 		return this.readDisplays();
+	}
+
+	public async stats(): Promise<DesktopStats | undefined> {
+		const video = this.channels?.video;
+		const codec = this.codec;
+		if (!video || !codec || this.ended) {
+			return undefined;
+		}
+		const { total, count } = this.decodeTime;
+		this.decodeTime = { total: 0, count: 0 };
+		const status = await video.mediaStatus(count ? total / count * 1000 : 0);
+		return status && { status, codec };
 	}
 
 	public send(input: DesktopInput): void {
@@ -105,11 +128,13 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 			void this.decoder?.then(previous => previous?.close());
 			this.codec = fields.codec;
 			this.taken.clear();
-			this.decoder = this.createDecoder(codec, frame => {
+			const decoder = this.createDecoder(codec, frame => {
+				this.decodedAny = true;
 				this.deliver(frame);
 			}, () => {
-				this.end('cantShow');
+				this.decodeFailed(decoder);
 			});
+			this.decoder = decoder;
 		}
 		const decoder = await this.decoder;
 		if (this.isEnded()) {
@@ -120,9 +145,29 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 			return;
 		}
 		const timestamp = Number(fields.timestampUs);
-		this.taken.set(timestamp, { display: fields.displayId, revision: fields.revision });
+		this.taken.set(timestamp, { display: fields.displayId, revision: fields.revision, at: performance.now() });
 		decoder.decode({ key, timestamp, data: packet.data });
 		await decoder.drained(decodeQueueLimit);
+	}
+
+	/**
+	 * The decoder stopped: after a picture it lost its reference, so it
+	 * starts again from a keyframe it asks for; before any, this computer
+	 * can't show the picture.
+	 */
+	private decodeFailed(failed: Promise<CameraDecoder | undefined>): void {
+		if (this.decoder !== failed || this.ended) {
+			return;
+		}
+		if (!this.decodedAny) {
+			this.end('cantShow');
+			return;
+		}
+		void failed.then(decoder => decoder?.close());
+		this.decoder = undefined;
+		this.codec = undefined;
+		this.taken.clear();
+		this.channels?.video.requestKeyframe();
 	}
 
 	/** Read after an await: the session may have ended meanwhile. */
@@ -143,11 +188,14 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 				this.taken.delete(timestamp);
 			}
 		}
+		if (taken) {
+			this.decodeTime = { total: this.decodeTime.total + performance.now() - taken.at, count: this.decodeTime.count + 1 };
+		}
 		if (this.ended || !taken || !this.pictureEmitter.hasListeners()) {
 			frame.close();
 			return;
 		}
-		this.pictureEmitter.fire({ frame, ...taken });
+		this.pictureEmitter.fire({ frame, display: taken.display, revision: taken.revision });
 	}
 
 	private end(reason: DesktopEnd): void {

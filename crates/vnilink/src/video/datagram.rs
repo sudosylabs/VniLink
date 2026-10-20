@@ -2,10 +2,11 @@
 //!
 //! Each encoded body (codec header plus payload) is split into fragments that
 //! fit one datagram. Fragments may arrive out of order or not at all: the
-//! reassembler completes a frame only when every fragment arrived recently.
-//! Incomplete frames expire, and the existing keyframe-request path recovers
-//! the decoder, exactly as it does for queue drops. Wire bytes are screen
-//! content: do not log them.
+//! reassembler completes a frame only when every fragment arrived recently,
+//! and in order. A frame that never completes, or that would reach the
+//! decoder after a newer one, is lost: [`Reassembler::take_loss`] says so,
+//! and the caller asks for a keyframe, exactly as it does for queue drops.
+//! Wire bytes are screen content: do not log them.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
@@ -64,6 +65,10 @@ struct Partial {
 pub(crate) struct Reassembler {
     partial: BTreeMap<u32, Partial>,
     completed: VecDeque<u32>,
+    /// The newest frame handed on; an older one completing later is stale.
+    newest: Option<u32>,
+    /// A frame was lost since [`Self::take_loss`] was last asked.
+    lost: bool,
 }
 
 impl Reassembler {
@@ -71,7 +76,16 @@ impl Reassembler {
         Self {
             partial: BTreeMap::new(),
             completed: VecDeque::new(),
+            newest: None,
+            lost: false,
         }
+    }
+
+    /// Whether a frame was lost since the last call: one expired unfinished,
+    /// was evicted, was skipped by a newer frame, or arrived after one. The
+    /// decoder needs a keyframe before the frames that follow it.
+    pub(crate) fn take_loss(&mut self) -> bool {
+        std::mem::take(&mut self.lost)
     }
 
     /// Feed one datagram. Returns the complete body when this datagram
@@ -99,6 +113,7 @@ impl Reassembler {
         if self.partial.len() >= MAX_PARTIAL_FRAMES && !self.partial.contains_key(&seq) {
             if let Some(oldest) = self.partial.keys().next().copied() {
                 self.partial.remove(&oldest);
+                self.lost = true;
             }
         }
         let partial = self.partial.entry(seq).or_insert_with(|| Partial {
@@ -120,20 +135,40 @@ impl Reassembler {
             return None;
         }
         let partial = self.partial.remove(&seq).expect("present");
-        let mut body = Vec::with_capacity(partial.bytes);
-        for part in partial.parts {
-            body.extend_from_slice(&part.expect("counted"));
-        }
         self.completed.push_back(seq);
         while self.completed.len() > COMPLETED_MEMORY {
             self.completed.pop_front();
+        }
+        // Sequences only grow within a stream: a frame from before the newest
+        // would reach the decoder out of order, and one past a gap means the
+        // frames between are gone.
+        if let Some(newest) = self.newest {
+            let ahead = seq.wrapping_sub(newest);
+            if ahead == 0 || ahead > u32::MAX / 2 {
+                self.lost = true;
+                return None;
+            }
+            if ahead > 1 {
+                self.lost = true;
+                self.partial
+                    .retain(|&pending, _| pending.wrapping_sub(seq) <= u32::MAX / 2);
+            }
+        }
+        self.newest = Some(seq);
+        let mut body = Vec::with_capacity(partial.bytes);
+        for part in partial.parts {
+            body.extend_from_slice(&part.expect("counted"));
         }
         Some(body)
     }
 
     fn expire(&mut self) {
         let now = Instant::now();
+        let before = self.partial.len();
         self.partial
             .retain(|_, partial| now.duration_since(partial.since) < FRAG_TTL);
+        if self.partial.len() < before {
+            self.lost = true;
+        }
     }
 }

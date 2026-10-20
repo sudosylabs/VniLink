@@ -442,7 +442,14 @@ async fn route_desktop_datagrams(
         let reassembly = fragments
             .entry((stamp.id, stamp.generation))
             .or_insert_with(crate::video::Reassembler::new);
-        if let Some(body) = reassembly.push(fragment) {
+        let body = reassembly.push(fragment);
+        // A lost frame: what follows waits for a keyframe, which is asked for
+        // now rather than at the next periodic one.
+        if reassembly.take_loss() {
+            desktop.inbox.lost();
+            desktop.keyframe.request();
+        }
+        if let Some(body) = body {
             if let Ok(frame) = crate::video::decode_video_body(&body) {
                 if Some(frame.codec) != crate::VideoCodec::from_wire_id(desktop.info.codec) {
                     continue;

@@ -7,7 +7,7 @@ import '../../src/workbench/contrib/remoteDesktop/remoteDesktop.contribution.js'
 import { OpenRemoteDesktopAction, ViewScreenAction } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopActions.js';
 import { RemoteDesktopView } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopView.js';
 import { IDeviceService, type DeviceSummary } from '../../src/workbench/services/devices/deviceService.js';
-import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type IDesktopSession } from '../../src/workbench/services/remoteDesktop/remoteDesktopService.js';
+import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopStats, type IDesktopSession } from '../../src/workbench/services/remoteDesktop/remoteDesktopService.js';
 import { ITabService } from '../../src/workbench/services/tabs/tabService.js';
 import { TabService } from '../../src/workbench/services/tabs/tabServiceImpl.js';
 
@@ -43,6 +43,10 @@ class FakeSession implements IDesktopSession {
 
 	public displays(): Promise<readonly DisplayInfo[]> {
 		return Promise.resolve([display]);
+	}
+
+	public stats(): Promise<DesktopStats | undefined> {
+		return Promise.resolve({ codec: 'h264', status: { reason: 'networkPressure', receivedKbps: 9400, receivedFps: 60, receiverQueueMs: 4, hostQueueMs: 2, lossPerMille: 3, rttMs: 18, encodeUs: 4000, captureUs: 1000 } });
 	}
 
 	public send(input: DesktopInput): void {
@@ -118,6 +122,8 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		await until(() => view.element.querySelector('.desktop-status-size')?.textContent === '1920 × 1080', 'The display size is not shown');
 		assert(canvas.width === 1920 && canvas.height === 1080, 'The picture was not drawn at its size');
 		assert(document.activeElement === canvas, 'The screen did not take the keyboard');
+		// How the picture is doing, once a second.
+		await until(() => view.element.querySelector('.desktop-status-stats')?.textContent === '60 fps · H.264 · 9.4 Mb/s · 18 ms · Lowered for the network', `Wrong stats: ${view.element.querySelector('.desktop-status-stats')?.textContent ?? ''}`, 3000);
 
 		// The pointer's display is chosen once, before anything else is sent.
 		assert(JSON.stringify(sessions[0].sent[0]) === JSON.stringify({ type: 'selectDisplays', ids: ['7'] }), `The shown display was not selected: ${JSON.stringify(sessions[0].sent[0])}`);

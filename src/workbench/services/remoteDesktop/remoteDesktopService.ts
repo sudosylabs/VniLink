@@ -1,6 +1,7 @@
 import * as nls from '../../../nls.js';
 import type { Event } from '../../../base/common/event.js';
 import type { IDisposable } from '../../../base/common/lifecycle.js';
+import type { DesktopMediaStatus } from '../../../platform/engine/common/dataChannel.js';
 import { createDecorator } from '../../../platform/instantiation/common/instantiation.js';
 import type { DisplayInfo, QualityLimits, VideoCodecCaps } from '../../../platform/engine/common/engine.js';
 
@@ -66,6 +67,13 @@ export type DesktopInput =
 	/** The display the pointer lands on; the other computer takes the pointer only there. */
 	| { readonly type: 'selectDisplays'; readonly ids: string[] };
 
+/** How the picture is doing: the engine's view of it, and the codec it arrives in. */
+export interface DesktopStats {
+	readonly status: DesktopMediaStatus;
+	/** `h264`, `h265`, `vp8`, `vp9` or `av1`. */
+	readonly codec: string;
+}
+
 /** A running view, or control, of a paired computer's screen. */
 export interface IDesktopSession extends IDisposable {
 	/** Whether input reaches the other computer; a view-only session sends none. */
@@ -77,6 +85,8 @@ export interface IDesktopSession extends IDisposable {
 	displays(): Promise<readonly DisplayInfo[]>;
 	/** Sends input in order. Ignored in a view-only session or once ended. */
 	send(input: DesktopInput): void;
+	/** How the picture is doing now; `undefined` once ended or before the first picture. */
+	stats(): Promise<DesktopStats | undefined>;
 }
 
 export const IRemoteDesktopService = createDecorator<IRemoteDesktopService>('remoteDesktopService');

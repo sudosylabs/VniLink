@@ -1,11 +1,13 @@
 import { Buffer } from 'node:buffer';
-import { dimension, isInputCommand, isDesktopAudioOperation, isDesktopAudioStatus, MAX_FILE_OPERATIONS } from '../common/dataChannel.js';
+import { dimension, isInputCommand, isDesktopAudioOperation, isDesktopAudioStatus, isDesktopMediaStatus, MAX_FILE_OPERATIONS } from '../common/dataChannel.js';
 import type { DataChannelRequest } from '../common/dataChannel.js';
 import { isFileOperation } from '../common/files.js';
 import { record } from '../common/engine.js';
 
 export interface NativeDataChannel {
 	desktopAudio(operation: string): string;
+	requestKeyframe(): void;
+	mediaStatus(decodeUs: number): string;
 	read(): { kind: string; data?: Uint8Array | null; metadata: string } | null;
 	write(data: Uint8Array): void;
 	resize(rows: number, columns: number): void;
@@ -21,14 +23,22 @@ export interface DataPort {
 	start(): void;
 	close(): void;
 }
-/** One unacknowledged packet per channel. Native queues retain decode/terminal
- * order; the renderer acknowledges only after consuming each packet. */
+/**
+ * Packets the renderer may hold unacknowledged. A desktop picture keeps a few
+ * on the way, so the next is already there while one decodes; other channels
+ * keep one. The renderer takes packets in order and acknowledges each after
+ * consuming it, so a slow consumer still backs up the native queue.
+ */
+const VIDEO_WINDOW = 4;
+
 export class DataChannelHost {
 	private closed = false;
 	private native: NativeDataChannel | undefined;
 	private timer: ReturnType<typeof setTimeout> | undefined;
+	private readonly poll = { timer: undefined as ReturnType<typeof setTimeout> | undefined };
 	private sequence = 0;
-	private pending = 0;
+	/** The last packet the renderer acknowledged. */
+	private acknowledged = 0;
 	private ended = false;
 	private sentAt = 0;
 	private lastAckMs = 0;
@@ -77,14 +87,28 @@ export class DataChannelHost {
 			if (!this.native) {
 				throw new Error('Channel not ready');
 			}
-			if (message.type === 'ack' && message.sequence === this.pending && this.pending > 0) {
+			if (message.type === 'ack' && message.sequence === this.acknowledged + 1 && message.sequence <= this.sequence) {
 				this.lastAckMs = performance.now() - this.sentAt;
-				this.pending = 0;
-				if (this.ended) {
+				this.acknowledged = message.sequence;
+				this.armStall();
+				if (this.ended && this.acknowledged === this.sequence) {
 					this.close();
 				} else {
 					this.pump();
 				}
+				return;
+			}
+			if (message.type === 'mediaStatus' && this.request.kind === 'video' && Number.isSafeInteger(message.id) && Number(message.id) > 0
+				&& Number.isSafeInteger(message.decodeUs) && Number(message.decodeUs) >= 0 && Number(message.decodeUs) <= 0xffffffff) {
+				const status: unknown = JSON.parse(this.native.mediaStatus(Number(message.decodeUs)));
+				if (!isDesktopMediaStatus(status)) {
+					throw new Error('Invalid desktop media status');
+				}
+				this.port.postMessage({ type: 'mediaStatus', id: message.id, status });
+				return;
+			}
+			if (message.type === 'keyframe' && this.request.kind === 'video') {
+				this.native.requestKeyframe();
 				return;
 			}
 			if (message.type === 'desktopAudio' && (this.request.kind === 'video' || this.request.kind === 'input') && Number.isSafeInteger(message.id) && Number(message.id) > 0 && isDesktopAudioOperation(message.operation)) {
@@ -99,8 +123,8 @@ export class DataChannelHost {
 				this.port.postMessage({
 					type: 'metrics',
 					sent: this.sequence,
-					acknowledged: this.sequence - Number(this.pending > 0),
-					pending: Number(this.pending > 0),
+					acknowledged: this.acknowledged,
+					pending: this.sequence - this.acknowledged,
 					lastAckMs: this.lastAckMs,
 				});
 				return;
@@ -175,43 +199,54 @@ export class DataChannelHost {
 		}
 	}
 
+	/** Reads packets until the renderer holds as many as it may, or none is ready. */
 	private pump(): void {
-		if (
-			this.closed ||
-			this.pending ||
-			!this.native ||
-			this.request.kind === 'input'
-		) {
+		if (this.closed || this.ended || !this.native || this.request.kind === 'input') {
 			return;
 		}
-		if (this.timer) {
-			clearTimeout(this.timer);
-			this.timer = undefined;
+		if (this.poll.timer) {
+			clearTimeout(this.poll.timer);
+			this.poll.timer = undefined;
 		}
+		const window = this.request.kind === 'video' ? VIDEO_WINDOW : 1;
 		try {
-			const packet = this.native.read();
-			if (packet) {
+			while (this.sequence - this.acknowledged < window && !this.ended) {
+				const packet = this.native.read();
+				if (!packet) {
+					// Nothing ready: look again shortly; an acknowledgement also looks.
+					this.poll.timer = setTimeout(() => {
+						this.poll.timer = undefined;
+						this.pump();
+					}, 4);
+					return;
+				}
 				this.ended = packet.kind === 'exited' || packet.kind === 'failed';
-				this.pending = ++this.sequence;
+				this.sequence++;
 				this.sentAt = performance.now();
 				this.port.postMessage({
 					type: 'data',
-					sequence: this.pending,
+					sequence: this.sequence,
 					kind: packet.kind,
 					data: packet.data ?? undefined,
 					metadata: packet.metadata,
 				});
-				// A stalled renderer must not retain a session indefinitely.
-				this.timer = setTimeout(() => {
-					this.fail(undefined, 'the window did not take a packet within 10 seconds');
-				}, 10000);
-			} else {
-				this.timer = setTimeout(() => {
-					this.pump();
-				}, 4);
+				this.armStall();
 			}
 		} catch (error) {
 			this.fail(undefined, error instanceof Error ? error.message : undefined);
+		}
+	}
+
+	/** A stalled renderer must not retain a session indefinitely: the oldest unacknowledged packet has ten seconds. */
+	private armStall(): void {
+		if (this.timer) {
+			clearTimeout(this.timer);
+			this.timer = undefined;
+		}
+		if (this.sequence > this.acknowledged) {
+			this.timer = setTimeout(() => {
+				this.fail(undefined, 'the window did not take a packet within 10 seconds');
+			}, 10000);
 		}
 	}
 
@@ -237,6 +272,9 @@ export class DataChannelHost {
 		this.closed = true;
 		if (this.timer) {
 			clearTimeout(this.timer);
+		}
+		if (this.poll.timer) {
+			clearTimeout(this.poll.timer);
 		}
 		const closing = this.native?.close();
 		if (closing) {

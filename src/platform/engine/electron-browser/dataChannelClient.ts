@@ -1,5 +1,5 @@
-import { isDesktopAudioOperation, isDesktopAudioStatus, isDataPacket, isChannelRequest, MAX_FILE_OPERATIONS } from '../common/dataChannel.js';
-import type { DataChannelRequest, DataPacket, DataChannelMetrics, DesktopAudioOperation, DesktopAudioStatus } from '../common/dataChannel.js';
+import { isDesktopAudioOperation, isDesktopAudioStatus, isDesktopMediaStatus, isDataPacket, isChannelRequest, MAX_FILE_OPERATIONS } from '../common/dataChannel.js';
+import type { DataChannelRequest, DataPacket, DataChannelMetrics, DesktopAudioOperation, DesktopAudioStatus, DesktopMediaStatus } from '../common/dataChannel.js';
 import { isFileAnswer, type FileAnswer, type FileOperation } from '../common/files.js';
 import { ipcMessagePort } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { record } from '../common/engine.js';
@@ -13,6 +13,8 @@ export class DataChannelClient {
 	private inputFlight = false;
 	private pointerTimer: ReturnType<typeof setTimeout> | undefined;
 	private expectedSequence = 1;
+	/** The packet being consumed: the next waits for it, so packets are consumed in order. */
+	private consuming: Promise<void> = Promise.resolve();
 	private lastHeard = performance.now();
 	private lastTick = performance.now();
 	private readonly heartbeat: ReturnType<typeof setInterval>;
@@ -26,6 +28,7 @@ export class DataChannelClient {
 		timer: ReturnType<typeof setTimeout>;
 	} | undefined;
 	private readonly filePending = new Map<number, { resolve(value: FileAnswer): void; reject(error: Error): void }>();
+	private statusPending: { id: number; resolve(value: DesktopMediaStatus | undefined): void } | undefined;
 
 	constructor(
 		private readonly port: MessagePort,
@@ -141,6 +144,16 @@ export class DataChannelClient {
 				};
 				return;
 			}
+			if (record(message) && message.type === 'mediaStatus') {
+				if (typeof message.id !== 'number' || !isDesktopMediaStatus(message.status)) {
+					throw new Error('Invalid desktop media status');
+				}
+				if (this.statusPending?.id === message.id) {
+					this.statusPending.resolve(message.status);
+					this.statusPending = undefined;
+				}
+				return;
+			}
 			if (record(message) && message.type === 'desktopAudio') {
 				if (!Number.isSafeInteger(message.id) || typeof message.id !== 'number' || message.id <= 0 || !isDesktopAudioStatus(message.status)) {
 					throw new Error('Invalid desktop audio status');
@@ -183,7 +196,23 @@ export class DataChannelClient {
 			if (!isDataPacket(message) || message.sequence !== this.expectedSequence++) {
 				throw new Error('Invalid data sequence');
 			}
-			await this.consume(message);
+			// Several packets may be on the way: each is consumed after the one before.
+			const previous = this.consuming;
+			let done: () => void = () => undefined;
+			this.consuming = new Promise<void>(resolve => {
+				done = resolve;
+			});
+			try {
+				await previous;
+				// The channel may have closed while an earlier packet was consumed.
+				// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+				if (this.closed) {
+					return;
+				}
+				await this.consume(message);
+			} finally {
+				done();
+			}
 			// Consumers may close the channel while an asynchronous write is pending.
 			// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
 			if (!this.closed) {
@@ -284,6 +313,30 @@ export class DataChannelClient {
 		});
 	}
 
+	/**
+	 * How the picture is doing, after telling the engine how long this
+	 * window takes to decode it. One request at a time; a newer one stands
+	 * in for an older one that has not been answered.
+	 */
+	public mediaStatus(decodeUs: number): Promise<DesktopMediaStatus | undefined> {
+		if (this.closed || this.nextWrite >= Number.MAX_SAFE_INTEGER) {
+			return Promise.resolve(undefined);
+		}
+		this.statusPending?.resolve(undefined);
+		return new Promise(resolve => {
+			const id = ++this.nextWrite;
+			this.statusPending = { id, resolve };
+			this.port.postMessage({ type: 'mediaStatus', id, decodeUs: Math.max(0, Math.min(0xffffffff, Math.round(decodeUs))) });
+		});
+	}
+
+	/** Asks the other computer for a keyframe, after the picture can no longer be decoded. */
+	public requestKeyframe(): void {
+		if (!this.closed) {
+			this.port.postMessage({ type: 'keyframe' });
+		}
+	}
+
 	public resize(rows: number, columns: number): void {
 		if (!this.closed) {
 			this.port.postMessage({ type: 'resize', rows, columns });
@@ -309,6 +362,8 @@ export class DataChannelClient {
 			this.audioPending.reject(new Error('Data channel closed'));
 			this.audioPending = undefined;
 		}
+		this.statusPending?.resolve(undefined);
+		this.statusPending = undefined;
 		if (this.pointerTimer) {
 			clearTimeout(this.pointerTimer);
 		}
