@@ -17,7 +17,7 @@ use crate::clipboard::ClipboardPayload;
 use std::sync::Arc;
 use std::time::Duration;
 
-use iroh::endpoint::presets;
+use iroh::endpoint::{presets, QuicTransportConfig, VarInt};
 use iroh::{Endpoint, EndpointId, RelayMode, SecretKey};
 
 use crate::error::Error;
@@ -117,6 +117,28 @@ impl Core {
     }
 }
 
+/// Bytes one stream may have in flight unacknowledged. noq's default
+/// (1.25 MB) caps a single stream at about 12.5 MB/s at 100 ms; this is
+/// enough for a gigabit link at 130 ms.
+const STREAM_RECEIVE_WINDOW: u32 = 16 * 1024 * 1024;
+/// Bytes all streams of one connection may have in flight, which bounds
+/// the receive memory a peer can claim.
+const CONNECTION_RECEIVE_WINDOW: u32 = 64 * 1024 * 1024;
+/// Bytes sent and not yet acknowledged, across the connection.
+const SEND_WINDOW: u64 = 64 * 1024 * 1024;
+
+/// Flow-control windows sized for bulk transfers on long paths. Congestion
+/// control stays noq's default, Cubic: its BBRv3 is experimental, and a
+/// change is made only on measurement. Datagram buffering is left at the
+/// default too; the desktop sender bounds its own backlog.
+fn transport_config() -> QuicTransportConfig {
+    QuicTransportConfig::builder()
+        .stream_receive_window(VarInt::from_u32(STREAM_RECEIVE_WINDOW))
+        .receive_window(VarInt::from_u32(CONNECTION_RECEIVE_WINDOW))
+        .send_window(SEND_WINDOW)
+        .build()
+}
+
 pub(super) async fn bind_endpoint(
     secret: SecretKey,
     relay_mode: RelayMode,
@@ -126,7 +148,8 @@ pub(super) async fn bind_endpoint(
     let mut builder = Endpoint::builder(presets::N0)
         .secret_key(secret)
         .alpns(vec![ALPN.to_vec(), BLOB_ALPN.to_vec()])
-        .relay_mode(relay_mode);
+        .relay_mode(relay_mode)
+        .transport_config(transport_config());
     if clear_lookup {
         builder = builder.clear_address_lookup();
     }
@@ -808,4 +831,52 @@ pub(super) fn spawn_host_streams(
         super::fs::serve_aux_host(shared_fs, fs_connection, session_id, peer, fs_stop).await;
     });
     (Some(clipboard_task), fs_task)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stream may carry far more than noq's default 1.25 MB before its
+    /// reader reads: the bulk window, not a timer, paces a long path.
+    #[test]
+    fn one_stream_sends_beyond_the_default_window_unread() {
+        const PAYLOAD: usize = 8 * 1024 * 1024;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let bind = || {
+                bind_endpoint(
+                    SecretKey::generate(),
+                    RelayMode::Disabled,
+                    Listen::Loopback,
+                    true,
+                )
+            };
+            let host = bind().await.unwrap();
+            let dialer = bind().await.unwrap();
+            let address = host.addr();
+            let accepting = tokio::spawn(async move {
+                let connection = host.accept().await.unwrap().await.unwrap();
+                // Accepted but never read until the writer is done.
+                let (_send, recv) = connection.accept_bi().await.unwrap();
+                (host, connection, recv)
+            });
+            let connection = dialer.connect(address, ALPN).await.unwrap();
+            let (mut send, _recv) = connection.open_bi().await.unwrap();
+            let written =
+                tokio::time::timeout(Duration::from_secs(10), send.write_all(&vec![7u8; PAYLOAD]))
+                    .await;
+            assert!(
+                matches!(written, Ok(Ok(()))),
+                "an unread stream must take {PAYLOAD} bytes"
+            );
+            let (_host, _connection, mut recv) = accepting.await.unwrap();
+            send.finish().unwrap();
+            let received = recv.read_to_end(PAYLOAD).await.unwrap();
+            assert_eq!(received.len(), PAYLOAD);
+        });
+    }
 }
