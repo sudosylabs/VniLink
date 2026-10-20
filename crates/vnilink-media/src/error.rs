@@ -21,6 +21,16 @@ pub enum Error {
     CaptureRejected(&'static str),
 }
 
+/// Why an encoded frame was refused for its size: larger than one frame may be.
+pub const FRAME_TOO_LARGE: &str = "encoded frame is larger than 1 MiB";
+
+impl Error {
+    /// The encoder produced a frame larger than one frame may be.
+    pub fn is_too_large(&self) -> bool {
+        matches!(self, Self::InvalidFrame(message) if *message == FRAME_TOO_LARGE)
+    }
+}
+
 /// Publishing a paced frame failed in the pacer or in the session.
 #[derive(Debug)]
 pub enum PublishError {

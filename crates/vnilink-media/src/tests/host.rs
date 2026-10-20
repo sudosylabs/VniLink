@@ -388,6 +388,87 @@ fn a_new_rate_retunes_the_running_encoder_without_a_keyframe() {
     assert!(!sink.frames[1].keyframe, "a retune forced a keyframe");
 }
 
+/// An encoder whose next picture comes out larger than a frame may be.
+struct Swelling {
+    too_large: Arc<Mutex<bool>>,
+    retunes: Arc<Mutex<Vec<u32>>>,
+    keyframes: Arc<Mutex<Vec<bool>>>,
+}
+
+impl VideoEncoder for Swelling {
+    fn encode(&mut self, _frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
+        if std::mem::take(&mut *self.too_large.lock().unwrap()) {
+            return Err(Error::InvalidFrame(crate::error::FRAME_TOO_LARGE));
+        }
+        self.keyframes.lock().unwrap().push(params.force_keyframe);
+        sample(params.force_keyframe)
+    }
+
+    fn retune(&mut self, bitrate_bps: u32, _frame_rate: u8) -> Result<bool, Error> {
+        self.retunes.lock().unwrap().push(bitrate_bps);
+        Ok(true)
+    }
+}
+
+#[test]
+fn a_frame_too_large_is_dropped_and_the_encoder_aims_lower() {
+    let too_large = Arc::new(Mutex::new(false));
+    let retunes = Arc::new(Mutex::new(Vec::new()));
+    let keyframes = Arc::new(Mutex::new(Vec::new()));
+    let (swell, taken, made) = (
+        Arc::clone(&too_large),
+        Arc::clone(&retunes),
+        Arc::clone(&keyframes),
+    );
+    let mut session = HostSession::open(
+        64,
+        64,
+        Quality::new(500, 30, 64, 64).unwrap(),
+        move |_, _, _, _| {
+            Ok(Swelling {
+                too_large: Arc::clone(&swell),
+                retunes: Arc::clone(&taken),
+                keyframes: Arc::clone(&made),
+            })
+        },
+    )
+    .unwrap();
+    let mut sink = MemorySink::default();
+    session.publish(&solid(64, 64, 0), &mut sink, 7).unwrap();
+    *too_large.lock().unwrap() = true;
+    assert!(matches!(
+        session.publish(&solid(64, 64, 100_000), &mut sink, 7),
+        Ok(PumpOutput::Skipped)
+    ));
+    assert_eq!(*retunes.lock().unwrap(), vec![375_000]);
+    session
+        .publish(&solid(64, 64, 200_000), &mut sink, 7)
+        .unwrap();
+    assert_eq!(
+        *keyframes.lock().unwrap(),
+        vec![true, true],
+        "the next picture was not a keyframe"
+    );
+    assert_eq!(
+        sink.frames.len(),
+        2,
+        "the oversize frame reached the viewer"
+    );
+    // A second oversize frame aims lower again; a quality update restores it.
+    *too_large.lock().unwrap() = true;
+    session
+        .publish(&solid(64, 64, 300_000), &mut sink, 7)
+        .unwrap();
+    assert_eq!(*retunes.lock().unwrap(), vec![375_000, 281_250]);
+    session
+        .observe(&CoreEvent::QualityUpdated {
+            id: 7,
+            quality: Quality::new(600, 30, 64, 64).unwrap(),
+        })
+        .unwrap();
+    assert_eq!(retunes.lock().unwrap().last(), Some(&600_000));
+}
+
 #[test]
 fn an_encoder_that_cannot_retune_is_opened_again() {
     let opens = Arc::new(Mutex::new(0));

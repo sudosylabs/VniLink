@@ -32,7 +32,7 @@ impl EncodedSample {
             return Err(Error::InvalidFrame("encoded frame is empty"));
         }
         if annex_b.len() > MAX_VIDEO_FRAME {
-            return Err(Error::InvalidFrame("encoded frame is larger than 1 MiB"));
+            return Err(Error::InvalidFrame(crate::error::FRAME_TOO_LARGE));
         }
         let parsed = parse_annex_b(&annex_b)?;
         let keyframe = keyframe || parsed.has_idr();

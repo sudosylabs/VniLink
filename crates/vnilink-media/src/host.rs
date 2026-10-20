@@ -58,6 +58,9 @@ pub struct HostSession<E> {
     open_encoder: OpenEncoder<E>,
     video: HostVideo<E>,
     reopens: u64,
+    /// A bitrate below the quality's, after a frame came out too large;
+    /// cleared by the next quality update.
+    capped_bps: Option<u32>,
 }
 
 impl<E: VideoEncoder> HostSession<E> {
@@ -88,6 +91,7 @@ impl<E: VideoEncoder> HostSession<E> {
             open_encoder: Box::new(open_encoder),
             video,
             reopens: 0,
+            capped_bps: None,
         })
     }
 
@@ -110,6 +114,7 @@ impl<E: VideoEncoder> HostSession<E> {
     pub fn observe(&mut self, event: &CoreEvent) -> Result<(), Error> {
         match event {
             CoreEvent::QualityUpdated { quality, .. } => {
+                self.capped_bps = None;
                 let reopen = match self.control.observe(event)? {
                     RateChange::Same => false,
                     RateChange::Retune => {
@@ -157,7 +162,34 @@ impl<E: VideoEncoder> HostSession<E> {
         if frame.width() != width || frame.height() != height {
             return Err(Error::InvalidFrame("the frame size does not match the encoder").into());
         }
-        self.video.publish_to(sink, session_id, frame)
+        match self.video.publish_to(sink, session_id, frame) {
+            // A frame larger than one may be is dropped, not fatal: the next
+            // starts from a keyframe, at a quarter less bitrate.
+            Err(PublishError::Media(error)) if error.is_too_large() => {
+                self.shrink()?;
+                self.video.request_keyframe();
+                Ok(PumpOutput::Skipped)
+            }
+            other => other,
+        }
+    }
+
+    /// Aims the encoder a quarter lower, down to 100 kb/s, as it runs if it
+    /// can, else by opening it again.
+    fn shrink(&mut self) -> Result<(), Error> {
+        let settings = self.control.settings();
+        let current = self.capped_bps.unwrap_or(settings.bitrate_bps);
+        let lower = (current / 4 * 3).max(100_000);
+        self.capped_bps = Some(lower);
+        if !self.video.retune(lower, settings.frame_rate)? {
+            let quality = self.video.quality();
+            self.video = HostVideo::new(
+                quality,
+                (self.open_encoder)(settings.width, settings.height, settings.frame_rate, lower)?,
+            );
+            self.reopens += 1;
+        }
+        Ok(())
     }
 }
 

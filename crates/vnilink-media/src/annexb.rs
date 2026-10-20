@@ -87,7 +87,7 @@ pub fn to_annex_b(unit: &AvccAccessUnit<'_>) -> Result<Vec<u8>, Error> {
         return Err(Error::InvalidFrame("encoded frame is empty"));
     }
     if unit.avcc.len() > MAX_VIDEO_FRAME {
-        return Err(Error::InvalidFrame("encoded frame is larger than 1 MiB"));
+        return Err(Error::InvalidFrame(crate::error::FRAME_TOO_LARGE));
     }
     if unit.keyframe && unit.parameter_sets.is_empty() {
         return Err(Error::InvalidFrame("a keyframe needs its parameter sets"));
@@ -117,7 +117,7 @@ pub fn to_annex_b(unit: &AvccAccessUnit<'_>) -> Result<Vec<u8>, Error> {
         rest = &rest[nal_len..];
     }
     if out.len() > MAX_VIDEO_FRAME {
-        return Err(Error::InvalidFrame("encoded frame is larger than 1 MiB"));
+        return Err(Error::InvalidFrame(crate::error::FRAME_TOO_LARGE));
     }
     if out.is_empty() {
         return Err(Error::InvalidFrame("encoded frame is empty"));
@@ -131,7 +131,7 @@ pub fn parse_annex_b(data: &[u8]) -> Result<ParsedAccessUnit, Error> {
         return Err(Error::InvalidFrame(if data.is_empty() {
             "encoded frame is empty"
         } else {
-            "encoded frame is larger than 1 MiB"
+            crate::error::FRAME_TOO_LARGE
         }));
     }
     let mut units = Vec::new();
@@ -169,7 +169,7 @@ fn push_nal(out: &mut Vec<u8>, nal: &[u8]) -> Result<(), Error> {
         ));
     }
     if out.len().saturating_add(START_CODE.len() + nal.len()) > MAX_VIDEO_FRAME {
-        return Err(Error::InvalidFrame("encoded frame is larger than 1 MiB"));
+        return Err(Error::InvalidFrame(crate::error::FRAME_TOO_LARGE));
     }
     out.extend_from_slice(&START_CODE);
     out.extend_from_slice(nal);
