@@ -166,8 +166,8 @@ pub use system::{
     SystemAction, SystemOperation, SystemPolicy, SystemSupport, SYSTEM_ACTION_NOTICE,
 };
 pub use video::{
-    CodecSupport, EncodedFrame, HostCapture, RecordingVideoTap, VideoCodec, VideoSubscription,
-    MAX_VIDEO_FRAME,
+    CodecSupport, EncodedFrame, FrameTiming, HostCapture, RecordingVideoTap, VideoCodec,
+    VideoSubscription, MAX_VIDEO_FRAME,
 };
 pub use video_caps::{
     clamp_quality, negotiate as negotiate_video_codec, AgreedCodec, VideoCodecCaps,

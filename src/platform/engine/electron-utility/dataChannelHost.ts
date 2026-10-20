@@ -268,6 +268,7 @@ export class DataChannelHost {
 					kind: packet.kind,
 					data: packet.data ?? undefined,
 					metadata: packet.metadata,
+					readAt: performance.timeOrigin + performance.now(),
 				});
 				this.armStall();
 			}

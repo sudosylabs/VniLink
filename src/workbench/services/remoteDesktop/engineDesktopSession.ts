@@ -4,10 +4,16 @@ import type { DataPacket, DesktopCursor, DesktopCursorImage, DesktopMediaStatus 
 import { record, type DisplayInfo, type EngineCommand } from '../../../platform/engine/common/engine.js';
 import type { CameraDecoder, CameraDecoderFactory } from '../camera/engineCameraStream.js';
 import { avcCodec } from '../camera/h264.js';
+import { DesktopLatency } from './desktopLatency.js';
 import type { DesktopEnd, DesktopInput, DesktopPicture, DesktopPointerShape, DesktopPointer, DesktopStats, IDesktopSession } from './remoteDesktopService.js';
 
 /** Pictures allowed to wait for the decoder before the channel stops acknowledging. */
 const decodeQueueLimit = 2;
+
+/** A microsecond count the engine sends: a whole number from 0 to 2^32 − 1. */
+function micros(value: unknown): value is number {
+	return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= 0xffff_ffff;
+}
 
 /**
  * The WebCodecs codec string for a desktop picture: H.264 from the
@@ -78,6 +84,7 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 	private readonly taken = new Map<number, { readonly display: string; readonly revision: string; readonly at: number }>();
 	/** Time from decode to picture since stats were last read, to tell the engine how this computer keeps up. */
 	private decodeTime = { total: 0, count: 0 };
+	private readonly latency = new DesktopLatency();
 	private ended = false;
 	/** Whether a picture was decoded: after one, a decode error is a lost picture, not a codec this computer can't show. */
 	private decodedAny = false;
@@ -124,7 +131,7 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 		const { total, count } = this.decodeTime;
 		this.decodeTime = { total: 0, count: 0 };
 		const status = await video.mediaStatus(count ? total / count * 1000 : 0);
-		return status && { status, codec };
+		return status && { status, codec, latency: this.latency.take() };
 	}
 
 	public send(input: DesktopInput): void {
@@ -146,8 +153,17 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 		const fields: unknown = JSON.parse(packet.metadata);
 		if (packet.kind !== 'video' || !packet.data || !record(fields) || typeof fields.codec !== 'string' || typeof fields.keyframe !== 'boolean'
 			|| typeof fields.timestampUs !== 'string' || !/^\d{1,20}$/.test(fields.timestampUs)
-			|| typeof fields.displayId !== 'string' || typeof fields.revision !== 'string') {
+			|| typeof fields.displayId !== 'string' || typeof fields.revision !== 'string'
+			|| !micros(fields.hostUs) || !micros(fields.queuedUs)) {
 			throw new Error('Invalid desktop packet');
+		}
+		// Zero is a picture sent without its capture time.
+		if (fields.hostUs > 0) {
+			this.latency.record('host', fields.hostUs / 1000);
+		}
+		this.latency.record('queue', fields.queuedUs / 1000);
+		if (packet.readAt !== undefined) {
+			this.latency.record('bridge', performance.timeOrigin + performance.now() - packet.readAt);
 		}
 		const key = fields.keyframe;
 		// A new codec, as after a reconnect negotiates another, starts a new decoder at its keyframe.
@@ -219,14 +235,20 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 				this.taken.delete(timestamp);
 			}
 		}
+		const decodedAt = performance.now();
 		if (taken) {
-			this.decodeTime = { total: this.decodeTime.total + performance.now() - taken.at, count: this.decodeTime.count + 1 };
+			this.decodeTime = { total: this.decodeTime.total + decodedAt - taken.at, count: this.decodeTime.count + 1 };
+			this.latency.record('decode', decodedAt - taken.at);
 		}
 		if (this.ended || !taken || !this.pictureEmitter.hasListeners()) {
 			frame.close();
 			return;
 		}
-		this.pictureEmitter.fire({ frame, display: taken.display, revision: taken.revision });
+		this.pictureEmitter.fire({ frame, display: taken.display, revision: taken.revision, decodedAt });
+	}
+
+	public presented(picture: DesktopPicture): void {
+		this.latency.record('draw', performance.now() - picture.decodedAt);
 	}
 
 	private end(reason: DesktopEnd): void {

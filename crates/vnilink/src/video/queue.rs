@@ -80,7 +80,10 @@ impl VideoQueue {
     }
 
     pub(crate) fn pop(&mut self) -> Option<EncodedFrame> {
-        self.frames.pop_front().map(|(frame, _)| frame)
+        self.frames.pop_front().map(|(mut frame, at)| {
+            frame.timing.queued_us = super::micros_since(at);
+            frame
+        })
     }
 
     /// A frame was lost on the way: the predicted frames after it decode

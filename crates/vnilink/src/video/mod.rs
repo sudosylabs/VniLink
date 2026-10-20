@@ -11,14 +11,15 @@ mod frame;
 mod queue;
 
 pub(crate) use datagram::{fragment, Reassembler, FRAG_HEADER};
-pub use frame::EncodedFrame;
+pub(crate) use frame::micros_since;
 pub(crate) use frame::{check_video_len, decode_video_body, encode_video_body};
+pub use frame::{EncodedFrame, FrameTiming};
 pub(crate) use queue::{KeyframeFlag, QueueTelemetry, VideoInbox, VideoOutbox, VideoPush};
 pub use queue::{RecordingVideoTap, VideoSubscription};
 #[cfg(test)]
 pub(crate) use queue::{VideoQueue, VIDEO_QUEUE};
 
-/// Largest encoded payload, not counting the 10-byte video header.
+/// Largest encoded payload, not counting the video header before it.
 pub const MAX_VIDEO_FRAME: usize = 1_048_576;
 
 /// Monitor size advertised for capture.

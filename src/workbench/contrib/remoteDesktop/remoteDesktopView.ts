@@ -6,6 +6,7 @@ import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '..
 import type { DisplayInfo } from '../../../platform/engine/common/engine.js';
 import { hidUsage } from '../../../platform/engine/common/keyUsage.js';
 import type { DeviceSummary } from '../../services/devices/deviceService.js';
+import { latencyStages, type LatencyStage } from '../../services/remoteDesktop/desktopLatency.js';
 import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopPointer, type DesktopPointerShape, type DesktopStats, type IDesktopSession } from '../../services/remoteDesktop/remoteDesktopService.js';
 import { ITabService, type WorkbenchTab } from '../../services/tabs/tabService.js';
 
@@ -69,6 +70,22 @@ export function statsText(stats: DesktopStats, name: string): string {
 		case 'warmingUp': case 'stable': case 'idle': break;
 	}
 	return parts.join(' · ');
+}
+
+/** Each measured stage's typical time, then the time nineteen pictures in twenty beat. */
+export function latencyText(stats: DesktopStats, name: string): string {
+	const labels: Readonly<Record<LatencyStage, string>> = {
+		host: nls.localize('desktop.latency.host', 'On {0}', name),
+		queue: nls.localize('desktop.latency.queue', 'Waiting here'),
+		bridge: nls.localize('desktop.latency.bridge', 'To the window'),
+		decode: nls.localize('desktop.latency.decode', 'Decoding'),
+		draw: nls.localize('desktop.latency.draw', 'Drawing'),
+	};
+	const lines = latencyStages.flatMap(stage => {
+		const latency = stats.latency[stage];
+		return latency ? [nls.localize('desktop.latency.stage', '{0}: {1} ms, {2} ms at most for 95%', labels[stage], latency.p50.toFixed(1), latency.p95.toFixed(1))] : [];
+	});
+	return lines.length ? [nls.localize('desktop.latency.network', 'Network: about {0} ms each way', Math.round(stats.status.rttMs / 2)), ...lines].join('\n') : '';
 }
 
 function problemMessage(name: string, problem: DesktopProblem): string {
@@ -262,7 +279,8 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		});
 	}
 
-	private draw({ frame, display, revision }: DesktopPicture): void {
+	private draw(picture: DesktopPicture): void {
+		const { frame, display, revision } = picture;
 		try {
 			if (!this.hasPicture || this.overlay.dataset.state) {
 				this.hasPicture = true;
@@ -289,6 +307,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 				this.showPointer();
 			}
 			this.context.drawImage(frame, 0, 0);
+			this.session.value?.presented(picture);
 		} finally {
 			frame.close();
 		}
@@ -635,6 +654,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		const timer = setInterval(() => {
 			void this.session.value?.stats().then(stats => {
 				this.statusStats.textContent = stats ? statsText(stats, this.device.name) : '';
+				this.statusStats.title = stats ? latencyText(stats, this.device.name) : '';
 			});
 		}, 1000);
 		this.statsTimer.value = toDisposable(() => {

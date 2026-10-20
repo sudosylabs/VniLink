@@ -26,6 +26,7 @@ struct Picture {
     frame: Option<RawFrame>,
     cursor: Option<CursorState>,
     capture_us: u64,
+    captured_at: Option<Instant>,
 }
 struct PictureSlot {
     picture: Mutex<Picture>,
@@ -38,7 +39,13 @@ impl PictureSlot {
             wake: Condvar::new(),
         }
     }
-    fn publish(&self, frame: RawFrame, cursor: Option<CursorState>, capture_us: u64) {
+    fn publish(
+        &self,
+        frame: RawFrame,
+        cursor: Option<CursorState>,
+        capture_us: u64,
+        captured_at: Instant,
+    ) {
         let mut picture = self
             .picture
             .lock()
@@ -46,17 +53,14 @@ impl PictureSlot {
         picture.frame = Some(frame);
         picture.cursor = cursor;
         picture.capture_us = capture_us;
+        picture.captured_at = Some(captured_at);
         picture.generation = picture.generation.wrapping_add(1).max(1);
         drop(picture);
         self.wake.notify_all();
     }
     /// One coherent newest sample. The cursor cannot advance independently
     /// between cloning this picture and reading its generation.
-    fn wait_newer(
-        &self,
-        seen: u64,
-        timeout: Duration,
-    ) -> Option<(u64, RawFrame, Option<CursorState>, u64)> {
+    fn wait_newer(&self, seen: u64, timeout: Duration) -> Option<Sample> {
         let picture = self
             .picture
             .lock()
@@ -75,16 +79,26 @@ impl PictureSlot {
         if !ready(&picture) {
             return None;
         }
-        Some((
-            picture.generation,
-            picture.frame.clone()?,
-            picture.cursor.clone(),
-            picture.capture_us,
-        ))
+        Some(Sample {
+            generation: picture.generation,
+            frame: picture.frame.clone()?,
+            cursor: picture.cursor.clone(),
+            capture_us: picture.capture_us,
+            captured_at: picture.captured_at,
+        })
     }
     fn poke(&self) {
         self.wake.notify_all();
     }
+}
+
+/// The newest picture as one consumer takes it.
+struct Sample {
+    generation: u64,
+    frame: RawFrame,
+    cursor: Option<CursorState>,
+    capture_us: u64,
+    captured_at: Option<Instant>,
 }
 
 struct Control {
@@ -130,6 +144,8 @@ struct TargetSink<'a> {
     generation: u64,
     capture_display: u64,
     capture_revision: Arc<AtomicU64>,
+    /// When the picture being encoded was captured.
+    captured_at: Option<Instant>,
 }
 
 impl FrameSink for TargetSink<'_> {
@@ -144,6 +160,9 @@ impl FrameSink for TargetSink<'_> {
         // actually receives.
         if frame.display_id == 0 {
             frame.display_id = self.capture_display;
+        }
+        if frame.timing.captured_at.is_none() {
+            frame.timing.captured_at = self.captured_at;
         }
         // Attest the revision the pixels were captured for, read live:
         // a supervisor re-attesting an unchanged capture updates the
@@ -219,6 +238,7 @@ fn consume<E, F>(
         generation: target.generation,
         capture_display,
         capture_revision,
+        captured_at: None,
     };
     let mut applied_quality = target.quality;
     let mut seen = 0u64;
@@ -276,12 +296,18 @@ fn consume<E, F>(
                 .observe(&CoreEvent::KeyframeRequested { id: target.id })
                 .ok();
         }
-        let Some((generation, mut frame, cursor, capture_us)) =
-            slot.wait_newer(seen, Duration::from_millis(20))
+        let Some(Sample {
+            generation,
+            mut frame,
+            cursor,
+            capture_us,
+            captured_at,
+        }) = slot.wait_newer(seen, Duration::from_millis(20))
         else {
             continue;
         };
         seen = generation;
+        sink.captured_at = captured_at;
         if frame.width() != capture_size.0 || frame.height() != capture_size.1 {
             // The source changed size. Leave the target up so the supervisor
             // can open a fresh encoder; do not close the peer.
@@ -523,6 +549,7 @@ where
                 frame,
                 cursor,
                 read_started.elapsed().as_micros().min(5_000_000) as u64,
+                read_started,
             );
             if read_started.elapsed() < Duration::from_millis(2) {
                 if let Some(remaining) = period.checked_sub(read_started.elapsed()) {
@@ -587,6 +614,7 @@ mod coherent_slot_tests {
     fn concurrent_consumers_receive_matching_frame_cursor_and_generation() {
         let slot = Arc::new(PictureSlot::new());
         let producer = Arc::clone(&slot);
+        let origin = Instant::now();
         let thread = std::thread::spawn(move || {
             for sequence in 1..=10_000 {
                 producer.publish(
@@ -597,6 +625,7 @@ mod coherent_slot_tests {
                         image: None,
                     }),
                     sequence,
+                    origin + Duration::from_micros(sequence),
                 );
             }
         });
@@ -604,11 +633,20 @@ mod coherent_slot_tests {
         let until = Instant::now() + Duration::from_secs(5);
         while seen < 10_000 {
             assert!(Instant::now() < until, "newest sample did not arrive");
-            if let Some((generation, frame, cursor, capture_us)) =
-                slot.wait_newer(seen, Duration::from_millis(20))
+            if let Some(Sample {
+                generation,
+                frame,
+                cursor,
+                capture_us,
+                captured_at,
+            }) = slot.wait_newer(seen, Duration::from_millis(20))
             {
                 assert_eq!(generation, frame.timestamp_us());
                 assert_eq!(generation, capture_us);
+                assert_eq!(
+                    captured_at,
+                    Some(origin + Duration::from_micros(generation))
+                );
                 assert_eq!(cursor.unwrap().position.0 as u64, generation);
                 seen = generation;
             }

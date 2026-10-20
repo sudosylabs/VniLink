@@ -4,6 +4,7 @@ import type { IDisposable } from '../../../base/common/lifecycle.js';
 import type { DesktopMediaStatus } from '../../../platform/engine/common/dataChannel.js';
 import { createDecorator } from '../../../platform/instantiation/common/instantiation.js';
 import type { DisplayInfo, QualityLimits, VideoCodecCaps } from '../../../platform/engine/common/engine.js';
+import type { DesktopLatencySummary } from './desktopLatency.js';
 
 export interface DesktopTarget { readonly id: string; readonly generation: string; readonly role: 'Controller' | 'Host'; }
 
@@ -55,6 +56,8 @@ export interface DesktopPicture {
 	readonly frame: VideoFrame;
 	readonly display: string;
 	readonly revision: string;
+	/** When it came out of the decoder, on `performance.now()`. */
+	readonly decodedAt: number;
 }
 
 /** The other computer's pointer, where it is on the shown picture, in its pixels. */
@@ -90,6 +93,8 @@ export interface DesktopStats {
 	readonly status: DesktopMediaStatus;
 	/** `h264`, `h265`, `vp8`, `vp9` or `av1`. */
 	readonly codec: string;
+	/** Where the pictures' time went since the last read. */
+	readonly latency: DesktopLatencySummary;
 }
 
 /** A running view, or control, of a paired computer's screen. */
@@ -108,6 +113,8 @@ export interface IDesktopSession extends IDisposable {
 	displays(): Promise<readonly DisplayInfo[]>;
 	/** Sends input in order. Ignored in a view-only session or once ended. */
 	send(input: DesktopInput): void;
+	/** The picture is on screen, which ends its measured time. */
+	presented(picture: DesktopPicture): void;
 	/** How the picture is doing now; `undefined` once ended or before the first picture. */
 	stats(): Promise<DesktopStats | undefined>;
 }

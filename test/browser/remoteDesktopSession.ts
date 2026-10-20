@@ -39,6 +39,7 @@ class FakeSession implements IDesktopSession {
 	private readonly pointers = new Emitter<DesktopPointer>();
 	public readonly onPointer = this.pointers.event;
 	public readonly sent: DesktopInput[] = [];
+	public readonly presentedPictures: DesktopPicture[] = [];
 	public disposed = false;
 
 	constructor(public readonly control: boolean) { }
@@ -48,13 +49,17 @@ class FakeSession implements IDesktopSession {
 	}
 
 	public stats(): Promise<DesktopStats | undefined> {
-		return Promise.resolve({ codec: 'h264', status: { reason: 'networkPressure', receivedKbps: 9400, receivedFps: 60, receiverQueueMs: 4, hostQueueMs: 2, lossPerMille: 3, rttMs: 18, encodeUs: 4000, captureUs: 1000 } });
+		return Promise.resolve({ codec: 'h264', status: { reason: 'networkPressure', receivedKbps: 9400, receivedFps: 60, receiverQueueMs: 4, hostQueueMs: 2, lossPerMille: 3, rttMs: 18, encodeUs: 4000, captureUs: 1000 }, latency: { host: { p50: 9, p95: 14, count: 60 }, decode: { p50: 3, p95: 5, count: 60 } } });
 	}
 
 	public send(input: DesktopInput): void {
 		if (this.control) {
 			this.sent.push(input);
 		}
+	}
+
+	public presented(picture: DesktopPicture): void {
+		this.presentedPictures.push(picture);
 	}
 
 	/** A 1920 × 1080 picture of display 7 at revision 3. */
@@ -65,7 +70,7 @@ class FakeSession implements IDesktopSession {
 			context.fillStyle = '#1d4b6c';
 			context.fillRect(0, 0, 1920, 1080);
 		}
-		this.pictures.fire({ frame: new VideoFrame(canvas, { timestamp: 0 }), display: '7', revision: '3' });
+		this.pictures.fire({ frame: new VideoFrame(canvas, { timestamp: 0 }), display: '7', revision: '3', decodedAt: performance.now() });
 	}
 
 	/** The other computer's pointer at `x`, `y` in the picture: a white 4 × 4 square, its hot spot at the top left. */

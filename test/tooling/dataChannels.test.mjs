@@ -224,6 +224,27 @@ test('renderer acknowledges only after consumption and coalesces positions witho
 	}
 });
 
+test('a packet keeps when the engine read it, and a malformed read time fails the channel', async () => {
+	const { port1, port2 } = new MessageChannel();
+	const consumed = [];
+	const errors = [];
+	const client = new DataChannelClient(port1, packet => {
+		consumed.push(packet);
+		return Promise.resolve();
+	}, error => errors.push(error));
+	try {
+		port2.postMessage({ type: 'data', sequence: 1, kind: 'video', data: new Uint8Array([7]), metadata: '{}', readAt: 1234.5 });
+		await until(() => consumed.length === 1);
+		assert.equal(consumed[0].readAt, 1234.5);
+		port2.postMessage({ type: 'data', sequence: 2, kind: 'video', data: new Uint8Array([7]), metadata: '{}', readAt: 'now' });
+		await until(() => errors.length === 1);
+		assert.equal(consumed.length, 1);
+	} finally {
+		client.close();
+		port2.close();
+	}
+});
+
 test('intentional close with unacknowledged input does not report a failure', async () => {
 	const { port1, port2 } = new MessageChannel();
 	const messages = [];

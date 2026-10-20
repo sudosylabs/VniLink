@@ -347,6 +347,45 @@ fn predicted_frames_drop_until_the_next_keyframe() {
 }
 
 #[test]
+fn a_frame_carries_its_capture_to_send_time_and_its_queued_time() {
+    let captured = Instant::now() - Duration::from_millis(40);
+    let frame = EncodedFrame::h264(true, 1, vec![0x65])
+        .unwrap()
+        .with_captured_at(captured);
+    let sent = decode_video_body(&encode_video_body(&frame)).unwrap();
+    assert!(
+        (40_000..10_000_000).contains(&sent.timing.host_us),
+        "capture to send was {} µs",
+        sent.timing.host_us
+    );
+    assert_eq!(
+        sent.timing.captured_at, None,
+        "the capture instant stays on the host"
+    );
+    // A received frame passed on keeps the time it arrived with.
+    let passed = decode_video_body(&encode_video_body(&sent)).unwrap();
+    assert_eq!(passed.timing.host_us, sent.timing.host_us);
+    // Without a capture instant the time is unknown: zero.
+    let unknown = EncodedFrame::h264(true, 1, vec![0x65]).unwrap();
+    assert_eq!(
+        decode_video_body(&encode_video_body(&unknown))
+            .unwrap()
+            .timing
+            .host_us,
+        0
+    );
+
+    let mut queue = VideoQueue::new();
+    queue.push_at(sent, Instant::now() - Duration::from_millis(25));
+    let popped = queue.pop().unwrap();
+    assert!(
+        popped.timing.queued_us >= 25_000,
+        "queued {} µs",
+        popped.timing.queued_us
+    );
+}
+
+#[test]
 fn h264_frames_round_trip_and_reject_a_bad_payload() {
     assert!(matches!(
         EncodedFrame::h264(true, 1, Vec::new()),
@@ -376,7 +415,8 @@ fn h264_frames_round_trip_and_reject_a_bad_payload() {
 
     assert!(matches!(
         decode_video_body(&[
-            9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
+            9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 1
         ]),
         Err(Error::Unsupported("this video codec"))
     ));

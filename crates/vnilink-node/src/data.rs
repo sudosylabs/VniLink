@@ -323,7 +323,7 @@ impl DataChannel {
             return Ok(video.as_ref().and_then(VideoPoller::try_recv).map(|frame| DataEvent {
                 kind: "video".into(),
                 data: Some(frame.payload.into()),
-                metadata: serde_json::json!({"codec":frame.codec.label(),"keyframe":frame.keyframe,"timestampUs":frame.timestamp_us.to_string(),"displayId":frame.display_id.to_string(),"revision":frame.revision.to_string()}).to_string(),
+                metadata: serde_json::json!({"codec":frame.codec.label(),"keyframe":frame.keyframe,"timestampUs":frame.timestamp_us.to_string(),"displayId":frame.display_id.to_string(),"revision":frame.revision.to_string(),"hostUs":frame.timing.host_us,"queuedUs":frame.timing.queued_us}).to_string(),
             }));
         }
         if self.kind == "camera" {

@@ -1,14 +1,15 @@
 //! One encoded H.264 frame. The payload is screen content: do not log it.
 
 use std::fmt;
+use std::time::Instant;
 
 use crate::error::Error;
 
 use super::MAX_VIDEO_FRAME;
 
 /// Header before the payload: codec, flags, timestamp, source display id,
-/// source topology revision.
-pub(crate) const VIDEO_HEADER: usize = 26;
+/// source topology revision, and the host's capture-to-send time.
+pub(crate) const VIDEO_HEADER: usize = 30;
 use super::VideoCodec;
 
 /// One encoded H.264 frame. Construct it with [`EncodedFrame::h264`].
@@ -32,6 +33,34 @@ pub struct EncodedFrame {
     pub payload: Vec<u8>,
     pub display_id: u64,
     pub revision: u64,
+    /// How long the frame took to get here; telemetry, not content.
+    pub timing: FrameTiming,
+}
+
+/// Where a frame's time went, for the latency of each stage. Timing is not
+/// part of a frame's identity: frames with the same picture compare equal
+/// whatever their timing.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameTiming {
+    /// When the host captured the picture; on the host only.
+    pub captured_at: Option<Instant>,
+    /// Capture to send on the host, in microseconds, as received.
+    pub host_us: u32,
+    /// Time spent queued for the window on the viewer, in microseconds.
+    pub queued_us: u32,
+}
+
+impl PartialEq for FrameTiming {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for FrameTiming {}
+
+/// Microseconds since `at`, saturated to the header's 32 bits (71 minutes).
+pub(crate) fn micros_since(at: Instant) -> u32 {
+    u32::try_from(at.elapsed().as_micros()).unwrap_or(u32::MAX)
 }
 
 impl EncodedFrame {
@@ -53,7 +82,14 @@ impl EncodedFrame {
             payload,
             display_id: 0,
             revision: 0,
+            timing: FrameTiming::default(),
         })
+    }
+
+    /// Stamps when the host captured the picture this frame encodes.
+    pub fn with_captured_at(mut self, at: Instant) -> Self {
+        self.timing.captured_at = Some(at);
+        self
     }
 
     /// Stamps the captured source: topology display id and revision.
@@ -76,6 +112,7 @@ impl fmt::Debug for EncodedFrame {
             .field("timestamp_us", &self.timestamp_us)
             .field("display_id", &self.display_id)
             .field("revision", &self.revision)
+            .field("timing", &self.timing)
             .field("payload_len", &self.payload.len())
             .finish()
     }
@@ -105,6 +142,13 @@ pub(crate) fn encode_video_body(frame: &EncodedFrame) -> Vec<u8> {
     body.extend_from_slice(&frame.timestamp_us.to_be_bytes());
     body.extend_from_slice(&frame.display_id.to_be_bytes());
     body.extend_from_slice(&frame.revision.to_be_bytes());
+    // Measured as the frame is put on the wire; a frame passed on keeps
+    // the time it arrived with.
+    let host_us = frame
+        .timing
+        .captured_at
+        .map_or(frame.timing.host_us, micros_since);
+    body.extend_from_slice(&host_us.to_be_bytes());
     body.extend_from_slice(&frame.payload);
     body
 }
@@ -118,7 +162,15 @@ pub(crate) fn decode_video_body(body: &[u8]) -> Result<EncodedFrame, Error> {
     let timestamp_us = u64::from_be_bytes(body[2..10].try_into().expect("8 bytes"));
     let display_id = u64::from_be_bytes(body[10..18].try_into().expect("8 bytes"));
     let revision = u64::from_be_bytes(body[18..26].try_into().expect("8 bytes"));
-    EncodedFrame::new(codec, body[1] & 1 == 1, timestamp_us, body[26..].to_vec())
-        .map(|frame| frame.with_source(display_id, revision))
-        .map_err(|_| Error::Malformed)
+    let host_us = u32::from_be_bytes(body[26..30].try_into().expect("4 bytes"));
+    let mut frame = EncodedFrame::new(
+        codec,
+        body[1] & 1 == 1,
+        timestamp_us,
+        body[VIDEO_HEADER..].to_vec(),
+    )
+    .map(|frame| frame.with_source(display_id, revision))
+    .map_err(|_| Error::Malformed)?;
+    frame.timing.host_us = host_us;
+    Ok(frame)
 }

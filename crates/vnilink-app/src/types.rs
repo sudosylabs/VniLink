@@ -270,7 +270,27 @@ pub struct FfiEncodedFrame {
     pub payload: Vec<u8>,
     pub display_id: u64,
     pub revision: u64,
+    pub timing: FfiFrameTiming,
 }
+
+/// Where a received frame's time went; see [`vnilink::FrameTiming`].
+/// Telemetry, not content: it never makes two frames unequal.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FfiFrameTiming {
+    /// Capture to send on the host, in microseconds.
+    pub host_us: u32,
+    /// Time queued on this computer before it was read, in microseconds.
+    pub queued_us: u32,
+}
+
+impl PartialEq for FfiFrameTiming {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for FfiFrameTiming {}
+
 impl FfiEncodedFrame {
     pub fn new(
         codec: FfiVideoCodec,
@@ -310,6 +330,10 @@ impl From<vnilink::EncodedFrame> for FfiEncodedFrame {
             payload: value.payload,
             display_id: value.display_id,
             revision: value.revision,
+            timing: FfiFrameTiming {
+                host_us: value.timing.host_us,
+                queued_us: value.timing.queued_us,
+            },
         }
     }
 }

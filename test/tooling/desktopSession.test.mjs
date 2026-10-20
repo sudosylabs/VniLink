@@ -6,6 +6,7 @@ const result = await build({
 	stdin: {
 		contents: `
 			export { EngineDesktopSession, desktopCodec, pointerShape } from './src/workbench/services/remoteDesktop/engineDesktopSession.js';
+			export { DesktopLatency } from './src/workbench/services/remoteDesktop/desktopLatency.js';
 			export { Emitter } from './src/base/common/event.js';
 			export { isDesktopCursor } from './src/platform/engine/common/dataChannel.js';
 			export { hidUsage } from './src/platform/engine/common/keyUsage.js';
@@ -21,7 +22,7 @@ const result = await build({
 	tsconfig: 'tsconfig.json',
 });
 
-const { EngineDesktopSession, desktopCodec, pointerShape, Emitter, isDesktopCursor, hidUsage, isInputCommand } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+const { EngineDesktopSession, DesktopLatency, desktopCodec, pointerShape, Emitter, isDesktopCursor, hidUsage, isInputCommand } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 
 /** An H.264 keyframe's start: a start code, then an SPS with profile 0x64, flags 0x00, level 0x28. */
 const keyframe = new Uint8Array([0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28, 0xac]);
@@ -52,14 +53,14 @@ function fixture({ control = true, decodes = true } = {}) {
 	const keyframes = [];
 	const cursors = new Emitter();
 	session.attach({
-		video: { onCursor: cursors.event, requestKeyframe: () => keyframes.push(true), close() { } },
+		video: { onCursor: cursors.event, requestKeyframe: () => keyframes.push(true), mediaStatus: () => Promise.resolve({ reason: 'stable', receivedKbps: 1, receivedFps: 1, receiverQueueMs: 0, hostQueueMs: 0, lossPerMille: 0, rttMs: 20, encodeUs: 0, captureUs: 0 }), close() { } },
 		input: control ? { input: command => inputs.push(command), close() { } } : undefined,
 	});
 	const pictures = [];
 	const ends = [];
 	session.onPicture(picture => pictures.push(picture));
 	session.onEnd(end => ends.push(end));
-	const packet = (fields, data = keyframe) => ({ type: 'data', sequence: 1, kind: 'video', data, metadata: JSON.stringify({ codec: 'h264', keyframe: true, timestampUs: '1000', displayId: '7', revision: '3', ...fields }) });
+	const packet = (fields, data = keyframe) => ({ type: 'data', sequence: 1, kind: 'video', data, metadata: JSON.stringify({ codec: 'h264', keyframe: true, timestampUs: '1000', displayId: '7', revision: '3', hostUs: 0, queuedUs: 0, ...fields }) });
 	return { session, codecs, decoded, closed, inputs, pictures, ends, packet, failures, keyframes, cursors };
 }
 
@@ -159,4 +160,36 @@ test('the other pointer keeps its shape across moves, unpremultiplied for a canv
 	session.lost();
 	cursors.fire({ x: 9, y: 9, visible: true });
 	assert.equal(pointers.length, 2, 'an ended session still reports the pointer');
+});
+
+test('stage times summarise as the median and the time nineteen in twenty beat, then start afresh', () => {
+	const latency = new DesktopLatency();
+	for (let ms = 1; ms <= 100; ms++) {
+		latency.record('decode', ms);
+	}
+	latency.record('host', -3);
+	latency.record('host', Number.NaN);
+	assert.deepEqual(latency.take(), { decode: { p50: 50, p95: 95, count: 100 } }, 'clocks out of step are left out');
+	assert.deepEqual(latency.take(), {});
+	for (let at = 0; at < 300; at++) {
+		latency.record('draw', at < 60 ? 1000 : 1);
+	}
+	assert.deepEqual(latency.take(), { draw: { p50: 1, p95: 1, count: 240 } }, 'only the newest pictures count');
+});
+
+test('a picture reports where its time went, from the other computer to the screen', async () => {
+	const { session, packet, pictures } = fixture();
+	await session.consume({ ...packet({ hostUs: 12_000, queuedUs: 3_000 }), readAt: performance.timeOrigin + performance.now() });
+	assert.equal(pictures.length, 1);
+	session.presented(pictures[0]);
+	const { latency } = await session.stats();
+	assert.deepEqual(Object.keys(latency).sort(), ['bridge', 'decode', 'draw', 'host', 'queue']);
+	assert.equal(latency.host.p50, 12);
+	assert.equal(latency.queue.p50, 3);
+	assert(latency.bridge.p50 >= 0 && latency.decode.p50 >= 0 && latency.draw.p50 >= 0);
+	// A picture sent without its capture time measures no host stage.
+	await session.consume(packet({ timestampUs: '2000', keyframe: false }));
+	assert.equal((await session.stats()).latency.host, undefined);
+	await assert.rejects(fixture().session.consume(packet({ hostUs: -1 })), /Invalid desktop packet/);
+	await assert.rejects(fixture().session.consume(packet({ queuedUs: '5' })), /Invalid desktop packet/);
 });

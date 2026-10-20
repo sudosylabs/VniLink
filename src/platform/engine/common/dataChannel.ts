@@ -21,6 +21,8 @@ export interface DataPacket {
 	kind: string;
 	data?: Uint8Array;
 	metadata: string;
+	/** When the engine's process read the packet, on the shared high-resolution clock (`performance.timeOrigin + performance.now()`). */
+	readAt?: number;
 }
 
 export interface DataChannelMetrics {
@@ -81,7 +83,8 @@ export function isDataPacket(value: unknown): value is DataPacket {
 		typeof value.kind === 'string' &&
 		typeof value.metadata === 'string' &&
 		value.metadata.length <= 16384 &&
-		(value.data === undefined || (value.data instanceof Uint8Array && value.data.byteLength <= 2 * 1024 * 1024))
+		(value.data === undefined || (value.data instanceof Uint8Array && value.data.byteLength <= 2 * 1024 * 1024)) &&
+		(value.readAt === undefined || (typeof value.readAt === 'number' && Number.isFinite(value.readAt)))
 	);
 }
 
