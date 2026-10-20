@@ -1570,38 +1570,8 @@ fn system_actions_cross_ffi_with_policy_refusal_and_no_side_effects() {
 
 #[test]
 fn clipboard_files_cross_the_ffi_boundary() {
-    struct Source(std::path::PathBuf);
-    impl ClipboardFileSource for Source {
-        fn resolve_source(&self, path: String) -> Result<String, FfiError> {
-            Ok(self.0.join(path).to_string_lossy().into_owned())
-        }
-    }
-    struct Scratch(std::path::PathBuf);
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
     let host = core();
     let controller = core();
-    let scratch = Scratch(std::env::temp_dir().join(format!(
-        "vnilink-app-paste-{}-{}",
-        std::process::id(),
-        host.endpoint_id()
-    )));
-    let files = scratch.0.join("files");
-    std::fs::create_dir_all(&files).unwrap();
-    std::fs::write(files.join("note.txt"), b"ffi bytes").unwrap();
-    host.inner
-        .set_blob_directory(scratch.0.join("host-blobs"))
-        .unwrap();
-    controller
-        .inner
-        .set_blob_directory(scratch.0.join("controller-blobs"))
-        .unwrap();
-    controller
-        .install_clipboard_file_source(Some(Box::new(Source(files.clone()))))
-        .unwrap();
     pair(&host, &controller, true, true);
     controller
         .set_desktop_sharing(true, true, true, true)
@@ -1622,17 +1592,7 @@ fn clipboard_files_cross_the_ffi_boundary() {
     assert_eq!(stored.revision, 1);
     assert_eq!(stored.selection.entries.len(), 1);
     assert_eq!(stored.selection.entries[0].path, "note.txt");
-    let prepared = host.prepare_incoming_paste(incoming.id, 1).unwrap();
-    assert_eq!(prepared.files.len(), 1);
-    assert_eq!(prepared.files[0].hash.len(), 32);
-    // The prepared hash matches an independent offer of the same file.
-    let (hash, size) = controller
-        .inner
-        .blob_offer_file(&host.endpoint_id(), &files.join("note.txt"), 1024 * 1024)
-        .unwrap();
-    assert_eq!(prepared.files[0].hash, hash.as_bytes());
-    assert_eq!(prepared.files[0].size, size);
-    // Invalid selections map; uninstalling the source fails the next paste.
+    // Invalid selections map to a typed FFI error.
     let bad = FfiFileSelection {
         entries: vec![FfiClipboardFileEntry {
             path: "../escape".into(),
@@ -1643,11 +1603,6 @@ fn clipboard_files_cross_the_ffi_boundary() {
     assert!(matches!(
         controller.submit_clipboard_files(session.id, session.generation, bad),
         Err(FfiError::InvalidSetting { .. })
-    ));
-    controller.install_clipboard_file_source(None).unwrap();
-    assert!(matches!(
-        host.prepare_incoming_paste(incoming.id, 1),
-        Err(FfiError::Unsupported { .. })
     ));
 }
 

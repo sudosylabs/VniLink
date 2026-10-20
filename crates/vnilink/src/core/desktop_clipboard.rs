@@ -319,11 +319,9 @@ async fn exchange(
                     let _ = request.reply.send(clipboard::status_result(status));
                 }
                 Frame::Ready => return Err(Error::Malformed),
-                // File selections and paste preparation ride the session
-                // clipboard stream, never a per-Desktop-owner stream.
-                Frame::Files { .. } | Frame::Prepare { .. } | Frame::FilesReady { .. } => {
-                    return Err(Error::Malformed)
-                }
+                // File selections ride the session clipboard stream, never
+                // a per-Desktop-owner stream.
+                Frame::Files { .. } => return Err(Error::Malformed),
             }
         }
     }

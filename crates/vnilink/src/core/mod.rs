@@ -245,12 +245,12 @@ struct LiveSession {
     link: Option<iroh::endpoint::Connection>,
     clipboard: Option<ClipboardSender>,
     /// Latest file selection this session's peer offered. Revisioned so a
-    /// paste prepared earlier is stale, and cleared on revoke because a
+    /// paste names the offer it copies, and cleared on revoke because a
     /// selection is a live capability, unlike inert text.
     clipboard_files: Option<crate::clipboard::StoredFileSelection>,
-    /// This core's own file offers on this hosted session. Revisioned:
-    /// paste preparation serves only the revision it was asked for, so a
-    /// same-path re-offer cannot satisfy an older preparation. An empty
+    /// This core's own file offers on this hosted session. Revisioned: a
+    /// paste may copy only the revision it names, so a same-path re-offer
+    /// cannot satisfy an older paste. An empty
     /// offer stores an empty selection at a fresh revision instead of
     /// dropping the chain.
     published_files: Option<crate::clipboard::StoredFileSelection>,
@@ -269,9 +269,9 @@ struct ControllerState {
     clipboard: Mutex<Option<String>>,
     clipboard_files: Mutex<Option<crate::clipboard::StoredFileSelection>>,
     /// This core's own file offers on this session, for binding pastes to
-    /// offers. Revisioned: a prepare naming an older revision is refused
+    /// offers. Revisioned: a paste naming an older revision is refused
     /// even when its paths match, and the Transfer grant alone never
-    /// authorizes a fetch.
+    /// authorizes copying.
     published_files: Mutex<Option<crate::clipboard::StoredFileSelection>>,
     /// Next own-offer revision minus one. Monotonic across clears and
     /// revokes so a revision is never reused within the session.
@@ -529,18 +529,6 @@ struct Shared {
     input_cleanup: Arc<AtomicUsize>,
     capture: Mutex<Option<Box<dyn HostCapture>>>,
     clipboard: Mutex<Option<Box<dyn HostClipboard>>>,
-    clipboard_file_source: Mutex<Option<std::sync::Arc<dyn crate::clipboard::HostClipboardFiles>>>,
-    /// One in-flight paste preparation per session side, keyed
-    /// `(incoming, session id)`. A second concurrent prepare is Busy.
-    paste_waiters: Mutex<HashMap<(bool, u64), clipboard::PasteWaiter>>,
-    /// Serving-side twin of `paste_waiters`: one worker per session side
-    /// at a time, so repeated wire Prepares cannot spawn unbounded
-    /// detached threads. Released by RAII when the worker settles.
-    paste_preparing: Mutex<HashSet<(bool, u64)>>,
-    /// Request nonce source for paste preparation. Each prepare binds its
-    /// waiter and its wire answer to one value, so a late answer for a
-    /// replaced selection cannot satisfy the live waiter.
-    paste_nonce: AtomicU64,
     // A native write can wait for the UI thread while holding the adapter
     // lock. UI snapshots must never acquire that lock to query availability.
     clipboard_available: AtomicBool,

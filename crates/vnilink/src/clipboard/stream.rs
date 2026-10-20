@@ -10,23 +10,13 @@ use super::FileSelection;
 
 const DID_NOT_WRITE: &str = "the clipboard frame was not written";
 
-/// One paste: text, a file selection offer, or paste preparation traffic.
-/// Payload bytes never ride here.
+/// One paste: text or a file selection offer. Payload bytes never ride here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ClipboardPayload {
     Text(String),
     Files {
         revision: u64,
         selection: FileSelection,
-    },
-    Prepare {
-        nonce: u64,
-        revision: u64,
-        selection: FileSelection,
-    },
-    FilesReady {
-        nonce: u64,
-        outcome: super::PasteReadyOutcome,
     },
 }
 
@@ -128,19 +118,6 @@ pub(crate) async fn exchange<OnPayload, Allow>(
                         revision: *revision,
                         selection: selection.clone(),
                     },
-                    ClipboardPayload::Prepare {
-                        nonce,
-                        revision,
-                        selection,
-                    } => Frame::Prepare {
-                        nonce: *nonce,
-                        revision: *revision,
-                        selection: selection.clone(),
-                    },
-                    ClipboardPayload::FilesReady { nonce, outcome } => Frame::FilesReady {
-                        nonce: *nonce,
-                        outcome: outcome.clone(),
-                    },
                 };
                 if let Err(error) = write_frame(
                     &mut send,
@@ -161,23 +138,11 @@ pub(crate) async fn exchange<OnPayload, Allow>(
             }
             frame = frames_rx.recv() => {
                 match frame {
-                    Some(Ok(payload @ (Frame::Text(_) | Frame::Files { .. } | Frame::Prepare { .. } | Frame::FilesReady { .. }))) => {
+                    Some(Ok(payload @ (Frame::Text(_) | Frame::Files { .. }))) => {
                         let payload = match payload {
                             Frame::Text(text) => ClipboardPayload::Text(text),
                             Frame::Files { revision, selection } => {
                                 ClipboardPayload::Files { revision, selection }
-                            }
-                            Frame::Prepare {
-                                nonce,
-                                revision,
-                                selection,
-                            } => ClipboardPayload::Prepare {
-                                nonce,
-                                revision,
-                                selection,
-                            },
-                            Frame::FilesReady { nonce, outcome } => {
-                                ClipboardPayload::FilesReady { nonce, outcome }
                             }
                             _ => unreachable!("matched a payload frame"),
                         };

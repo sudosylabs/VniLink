@@ -14,10 +14,9 @@ mod files;
 mod frame;
 mod stream;
 
-pub(crate) use files::{decode_ready, encode_ready, PasteReadyOutcome};
 pub use files::{
-    ClipboardFileEntry, FileSelection, PreparedFile, PreparedPaste, StoredFileSelection,
-    MAX_CLIPBOARD_FILES, MAX_CLIPBOARD_FILES_BYTES,
+    ClipboardFileEntry, FileSelection, StoredFileSelection, MAX_CLIPBOARD_FILES,
+    MAX_CLIPBOARD_FILES_BYTES,
 };
 pub(crate) use frame::{check_len, decode, encode, Frame};
 pub(crate) use frame::{check_text, ClipboardRequest, ClipboardSender};
@@ -30,15 +29,4 @@ pub(crate) use stream::{attach, exchange, ClipboardPayload};
 /// call back into [`crate::Core`]. The text is private: do not log it.
 pub trait HostClipboard: Send {
     fn set_text(&mut self, text: &str) -> Result<(), Error>;
-}
-
-/// Resolves offered selection paths to absolute source files for paste
-/// preparation. The platform owns the file-manager selection scope: resolve
-/// only paths the user actually selected, and refuse anything else.
-/// Canonicalize the result and refuse symlinks escaping the selection; the
-/// core hashes whatever this returns. Shared across concurrent
-/// preparations; use interior mutability for caches. Must not call back
-/// into [`crate::Core`]. Resolved paths are private.
-pub trait HostClipboardFiles: Send + Sync {
-    fn resolve_source(&self, path: &str) -> Result<std::path::PathBuf, Error>;
 }

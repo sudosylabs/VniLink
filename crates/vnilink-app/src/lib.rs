@@ -43,8 +43,7 @@ pub use camera::{
 };
 mod clipboard;
 pub use clipboard::{
-    ClipboardFileSource, ClipboardWriter, FfiClipboardFileEntry, FfiFileSelection, FfiPreparedFile,
-    FfiPreparedPaste, FfiStoredFileSelection,
+    ClipboardWriter, FfiClipboardFileEntry, FfiFileSelection, FfiStoredFileSelection,
 };
 mod error;
 mod events;

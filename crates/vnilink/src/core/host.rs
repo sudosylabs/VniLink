@@ -3,10 +3,7 @@
 use super::*;
 
 use super::blob::{is_blob_connection, serve_blob_connection, BLOB_ALPN};
-use super::clipboard::{
-    apply_clipboard, apply_clipboard_files, clipboard_selected, deliver_paste_ready,
-    spawn_paste_preparation,
-};
+use super::clipboard::{apply_clipboard, apply_clipboard_files, clipboard_selected};
 use super::keys::host_input_loop;
 use super::link::{remember_link, write_addresses};
 use super::pairing::{wait_for_control_approval, ControlAnswer};
@@ -793,23 +790,6 @@ pub(super) fn spawn_host_streams(
                             *revision,
                             selection,
                         )
-                    }
-                    ClipboardPayload::Prepare {
-                        nonce,
-                        revision,
-                        selection,
-                    } => spawn_paste_preparation(
-                        &shared_apply,
-                        true,
-                        session_id,
-                        peer,
-                        *nonce,
-                        *revision,
-                        selection,
-                    ),
-                    ClipboardPayload::FilesReady { nonce, outcome } => {
-                        deliver_paste_ready(&shared_apply, true, session_id, *nonce, outcome);
-                        Ok(())
                     }
                 },
                 move || {

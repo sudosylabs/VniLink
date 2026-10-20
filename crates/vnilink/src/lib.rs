@@ -117,9 +117,8 @@ pub use availability::{
     BackendState, Capability, PolicyChangeScope, PolicyDescriptor, RemoteStatus, POLICIES,
 };
 pub use clipboard::{
-    ClipboardFileEntry, FileSelection, HostClipboard, HostClipboardFiles, PreparedFile,
-    PreparedPaste, StoredFileSelection, MAX_CLIPBOARD_FILES, MAX_CLIPBOARD_FILES_BYTES,
-    MAX_CLIPBOARD_TEXT,
+    ClipboardFileEntry, FileSelection, HostClipboard, StoredFileSelection, MAX_CLIPBOARD_FILES,
+    MAX_CLIPBOARD_FILES_BYTES, MAX_CLIPBOARD_TEXT,
 };
 pub use core::service_stream::RemoteFilesService;
 pub use core::RemoteDesktopService;

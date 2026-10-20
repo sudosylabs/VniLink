@@ -1,6 +1,5 @@
 //! Native pasteboard writes are acknowledged through the platform callback.
 use crate::{error::map_error, FfiError, VnilinkCore};
-use std::sync::Arc;
 
 pub trait ClipboardWriter: Send + Sync {
     /// Called on a core worker, never the UI thread. Do not call back into Core.
@@ -32,18 +31,6 @@ pub struct FfiFileSelection {
 pub struct FfiStoredFileSelection {
     pub revision: u64,
     pub selection: FfiFileSelection,
-}
-
-#[derive(Clone, Debug)]
-pub struct FfiPreparedFile {
-    pub path: String,
-    pub hash: Vec<u8>,
-    pub size: u64,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct FfiPreparedPaste {
-    pub files: Vec<FfiPreparedFile>,
 }
 
 fn to_selection(selection: FfiFileSelection) -> vnilink::FileSelection {
@@ -81,39 +68,6 @@ fn from_stored(stored: vnilink::StoredFileSelection) -> FfiStoredFileSelection {
     }
 }
 
-fn from_prepared(prepared: vnilink::PreparedPaste) -> FfiPreparedPaste {
-    FfiPreparedPaste {
-        files: prepared
-            .files
-            .into_iter()
-            .map(|file| FfiPreparedFile {
-                path: file.path,
-                hash: file.hash.to_vec(),
-                size: file.size,
-            })
-            .collect(),
-    }
-}
-
-/// Resolves offered selection paths to absolute source files, called on
-/// preparation workers, never the UI thread. Resolve only paths the user
-/// actually selected; canonicalize and refuse escapes. Do not call back
-/// into Core. See `vnilink::HostClipboardFiles` for the contract.
-
-pub trait ClipboardFileSource: Send + Sync {
-    fn resolve_source(&self, path: String) -> Result<String, FfiError>;
-}
-
-struct NativeFileSource(Box<dyn ClipboardFileSource>);
-impl vnilink::HostClipboardFiles for NativeFileSource {
-    fn resolve_source(&self, path: &str) -> Result<std::path::PathBuf, vnilink::Error> {
-        self.0
-            .resolve_source(path.to_owned())
-            .map(std::path::PathBuf::from)
-            .map_err(|_| vnilink::Error::Unsupported("paste source is unavailable"))
-    }
-}
-
 impl VnilinkCore {
     pub fn install_clipboard(&self, writer: Box<dyn ClipboardWriter>) -> Result<(), FfiError> {
         self.inner
@@ -123,14 +77,6 @@ impl VnilinkCore {
     pub fn publish_clipboard(&self, session_id: u64, text: String) -> Result<(), FfiError> {
         self.inner
             .publish_clipboard(session_id, &text)
-            .map_err(map_error)
-    }
-    pub fn install_clipboard_file_source(
-        &self,
-        source: Option<Box<dyn ClipboardFileSource>>,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .set_clipboard_file_source(source.map(|source| Arc::new(NativeFileSource(source)) as _))
             .map_err(map_error)
     }
     pub fn submit_clipboard_files(
@@ -175,32 +121,6 @@ impl VnilinkCore {
         self.inner
             .incoming_clipboard_files(session_id)
             .map(|stored| stored.map(from_stored))
-            .map_err(map_error)
-    }
-    /// Prepares a paste on a hosted session. Blocks until the source answers,
-    /// the session ends, or the preparation budget runs out: call on a
-    /// background thread.
-    pub fn prepare_incoming_paste(
-        &self,
-        session_id: u64,
-        revision: u64,
-    ) -> Result<FfiPreparedPaste, FfiError> {
-        self.inner
-            .prepare_incoming_paste(session_id, revision)
-            .map(from_prepared)
-            .map_err(map_error)
-    }
-    /// Prepares a paste on a controller session. Same blocking contract as
-    /// `prepare_incoming_paste`.
-    pub fn prepare_outgoing_paste(
-        &self,
-        session_id: u64,
-        generation: u64,
-        revision: u64,
-    ) -> Result<FfiPreparedPaste, FfiError> {
-        self.inner
-            .prepare_outgoing_paste(session_id, generation, revision)
-            .map(from_prepared)
             .map_err(map_error)
     }
 }

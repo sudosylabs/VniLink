@@ -1,7 +1,7 @@
 //! Clipboard file selections. Metadata only: names, sizes and directory
 //! markers cross the clipboard stream so a paste can be offered without
-//! downloading a single payload byte. Materialization revalidates the
-//! selection revision and fetches bytes through the Files engine.
+//! downloading a single payload byte. Pasting an offered selection moves
+//! its bytes through Files jobs, never through this stream.
 
 use crate::error::Error;
 
@@ -28,104 +28,18 @@ pub struct FileSelection {
 }
 
 /// A stored selection with its session-scoped revision. The source assigns
-/// a fresh revision per offer, so a paste prepared against an older
-/// revision is stale.
+/// a fresh revision per offer, so a paste pinned to an older revision is
+/// stale.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredFileSelection {
     pub revision: u64,
     pub selection: FileSelection,
 }
 
-/// One materialized paste entry. `hash` authenticates the fetched bytes;
-/// `size` is the source-measured length the fetch must reproduce exactly.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PreparedFile {
-    pub path: String,
-    pub hash: [u8; 32],
-    pub size: u64,
-}
-
-impl PreparedFile {
-    pub fn blob_hash(&self) -> iroh_blobs::Hash {
-        iroh_blobs::Hash::from_bytes(self.hash)
-    }
-}
-
-/// A preparation result, aligned with the requested selection by position.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct PreparedPaste {
-    pub files: Vec<PreparedFile>,
-}
-
-/// A preparation answer. Every prepare gets exactly one: hashes on success,
-/// or a refusal reason. Refusals ride the ready frame because the dial side
-/// of the stream writes no statuses, so a status alone could never carry a
-/// source-side denial back to a host-originated prepare.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PasteReadyOutcome {
-    Ready(Vec<([u8; 32], u64)>),
-    TransferDenied,
-    Unauthorized,
-    Unavailable,
-}
-
-/// Ready payload: per-entry content hash and source-measured size, in
-/// prepare-request order, or a one-byte refusal.
-pub(crate) fn encode_ready(outcome: &PasteReadyOutcome) -> Result<Vec<u8>, Error> {
-    match outcome {
-        PasteReadyOutcome::Ready(files) => {
-            if files.len() > MAX_CLIPBOARD_FILES {
-                return Err(Error::Malformed);
-            }
-            let mut bytes = Vec::with_capacity(3 + files.len() * 40);
-            bytes.push(0);
-            let count = u16::try_from(files.len()).map_err(|_| Error::Malformed)?;
-            bytes.extend_from_slice(&count.to_be_bytes());
-            for (hash, size) in files {
-                bytes.extend_from_slice(hash);
-                bytes.extend_from_slice(&size.to_be_bytes());
-            }
-            Ok(bytes)
-        }
-        PasteReadyOutcome::TransferDenied => Ok(vec![1]),
-        PasteReadyOutcome::Unauthorized => Ok(vec![2]),
-        PasteReadyOutcome::Unavailable => Ok(vec![3]),
-    }
-}
-
-pub(crate) fn decode_ready(bytes: &[u8]) -> Result<PasteReadyOutcome, Error> {
-    let Some((&outcome, rest)) = bytes.split_first() else {
-        return Err(Error::Malformed);
-    };
-    match outcome {
-        1 if rest.is_empty() => Ok(PasteReadyOutcome::TransferDenied),
-        2 if rest.is_empty() => Ok(PasteReadyOutcome::Unauthorized),
-        3 if rest.is_empty() => Ok(PasteReadyOutcome::Unavailable),
-        0 => {
-            if rest.len() < 2 || rest.len() > 2 + MAX_CLIPBOARD_FILES * 40 {
-                return Err(Error::Malformed);
-            }
-            let count = u16::from_be_bytes(rest[0..2].try_into().expect("2 bytes")) as usize;
-            if rest.len() != 2 + count * 40 {
-                return Err(Error::Malformed);
-            }
-            let mut files = Vec::with_capacity(count);
-            for n in 0..count {
-                let at = 2 + n * 40;
-                let hash: [u8; 32] = rest[at..at + 32].try_into().expect("32 bytes");
-                let size = u64::from_be_bytes(rest[at + 32..at + 40].try_into().expect("8 bytes"));
-                files.push((hash, size));
-            }
-            Ok(PasteReadyOutcome::Ready(files))
-        }
-        _ => Err(Error::Malformed),
-    }
-}
-
 impl FileSelection {
-    /// True when every requested path was offered. Paste preparation serves
-    /// only covered paths: the Transfer grant alone never authorizes a fetch
-    /// of unoffered files.
+    /// True when every requested path was offered. A paste serves only
+    /// covered paths: the Transfer grant alone never authorizes a fetch of
+    /// unoffered files.
     pub fn covers(&self, requested: &FileSelection) -> bool {
         requested
             .entries

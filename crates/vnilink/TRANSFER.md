@@ -55,6 +55,5 @@ transfer stream were removed; all movement goes through jobs.
    any other. Interrupted jobs do not count against the active-job
    limit until they resume. A download still being prepared has nothing
    to resume from, and fails instead.
-7. Clipboard file selections paste through the same engine: the receiver
-   prepares a paste, the source offers each file as a peer-scoped blob,
-   and bytes move only after preparation. The steps are in `CLIPBOARD.md`.
+7. Clipboard file selections are offers of names and sizes; pasting one
+   moves its bytes through Files jobs. The steps are in `CLIPBOARD.md`.
