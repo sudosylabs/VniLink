@@ -4515,6 +4515,7 @@ fn interrupted_transfers_leave_room_for_new_ones() {
             .iter()
             .all(|job| job.state == JobState::Interrupted)
     });
+    await_jobs(|| host.hosted_services().unwrap().is_empty());
     let (fresh, _pipe) = open();
     std::fs::write(cs.join("root/ninth.bin"), payload(512, 699)).unwrap();
     let ninth = controller
