@@ -140,30 +140,54 @@ impl Core {
             .ok_or(Error::InvalidSetting("the job is unknown"))?;
         check_owner(&lock(&self.shared.state), record.owner)
     }
-    /// Submit only after open_files_service has admitted the peer backend.
+    /// Copies the entries `names` of `src_folder` to `dst_rel` on the
+    /// other computer as one job. Submit only after open_files_service has
+    /// admitted the peer backend.
+    #[allow(clippy::too_many_arguments)]
     pub fn files_service_upload(
         &self,
         id: u64,
         generation: u64,
         src_root: u64,
-        src_rel: &str,
+        src_folder: &str,
+        names: &[String],
         dst_root: u64,
         dst_rel: &str,
     ) -> Result<u64, Error> {
         let (owner, peer) = self.files_job_owner(id, generation)?;
-        self.submit_upload(&peer, src_root, src_rel, dst_root, dst_rel, Some(owner))
+        self.submit_upload(
+            &peer,
+            src_root,
+            src_folder,
+            names,
+            dst_root,
+            dst_rel,
+            Some(owner),
+        )
     }
+    /// Copies the other computer's entries `names` of `src_folder` to
+    /// `dst_rel` here as one job.
+    #[allow(clippy::too_many_arguments)]
     pub fn files_service_download(
         &self,
         id: u64,
         generation: u64,
         src_root: u64,
-        src_rel: &str,
+        src_folder: &str,
+        names: &[String],
         dst_root: u64,
         dst_rel: &str,
     ) -> Result<u64, Error> {
         let (owner, peer) = self.files_job_owner(id, generation)?;
-        self.submit_download(&peer, src_root, src_rel, dst_root, dst_rel, Some(owner))
+        self.submit_download(
+            &peer,
+            src_root,
+            src_folder,
+            names,
+            dst_root,
+            dst_rel,
+            Some(owner),
+        )
     }
     pub fn files_service_jobs(&self, id: u64, generation: u64) -> Result<Vec<JobSnapshot>, Error> {
         // Retained records remain inspectable after their owner closes.

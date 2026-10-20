@@ -1223,12 +1223,14 @@ enum FileOperation {
         token: Option<crate::files::TransferToken>,
         trash: bool,
     },
+    /// One transfer for the entries `names` of the folder `srcPath`.
     Submit {
         direction: String,
         #[serde(rename = "srcRoot")]
         src_root: String,
         #[serde(rename = "srcPath")]
         src_path: String,
+        names: Vec<String>,
         #[serde(rename = "dstRoot")]
         dst_root: String,
         #[serde(rename = "dstPath")]
@@ -1386,6 +1388,7 @@ impl FileTask {
                 direction,
                 src_root,
                 src_path,
+                names,
                 dst_root,
                 dst_path,
             } => {
@@ -1394,29 +1397,24 @@ impl FileTask {
                     .lock()
                     .map_err(|_| Error::from_reason("Channel unavailable"))?
                     .clone();
-                // Bound both retained history and simultaneous active transfers.
-                if owned.len() >= 256
-                    || owned
-                        .iter()
-                        .filter_map(|id| files.job_snapshot(*id).ok())
-                        .filter(|job| {
-                            !matches!(
-                                job.state,
-                                vnilink_app::FfiJobState::Cancelled
-                                    | vnilink_app::FfiJobState::Failed
-                                    | vnilink_app::FfiJobState::Complete
-                            )
-                        })
-                        .count()
-                        >= 8
-                {
+                // Bound retained history. Transfers under way are bounded by
+                // the engine, which leaves out interrupted ones until they
+                // resume: one selection is one transfer, however many items.
+                if owned.len() >= 256 {
                     return Err(Refused("Busy: too many transfers at once".into()));
+                }
+                if names.is_empty() {
+                    return Err(Refused("InvalidSetting: nothing was chosen to copy".into()));
                 }
                 let src = parse_id(src_root, "Invalid root")?;
                 let dst = parse_id(dst_root, "Invalid root")?;
                 let job = match direction.as_str() {
-                    "upload" => files.upload(src, src_path.clone(), dst, dst_path.clone()),
-                    "download" => files.download(src, src_path.clone(), dst, dst_path.clone()),
+                    "upload" => {
+                        files.upload(src, src_path.clone(), names.clone(), dst, dst_path.clone())
+                    }
+                    "download" => {
+                        files.download(src, src_path.clone(), names.clone(), dst, dst_path.clone())
+                    }
                     _ => return Err(Refused("InvalidSetting: unknown direction".into())),
                 }?;
                 let mut jobs = self
@@ -1820,7 +1818,8 @@ mod tests {
             operation: FileOperation::Submit {
                 direction: "upload".into(),
                 src_root: controller.file_roots().unwrap()[0].id.to_string(),
-                src_path: "test.bin".into(),
+                src_path: String::new(),
+                names: vec!["test.bin".into()],
                 dst_root: host.file_roots().unwrap()[0].id.to_string(),
                 dst_path: "received.bin".into(),
             },
@@ -1935,7 +1934,8 @@ mod tests {
         file_task.operation = FileOperation::Submit {
             direction: "upload".into(),
             src_root: controller.file_roots().unwrap()[0].id.to_string(),
-            src_path: "test.bin".into(),
+            src_path: String::new(),
+            names: vec!["test.bin".into()],
             dst_root: host_root.clone(),
             dst_path: "completed.bin".into(),
         };

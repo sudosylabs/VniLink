@@ -49,10 +49,6 @@ export function filesOpenFailure(error: unknown): FilesFailure {
 	}
 }
 
-function joinPath(folder: string, name: string): string {
-	return folder ? `${folder}/${name}` : name;
-}
-
 /** Every page of a folder, one call per page, until the engine says there are no more. */
 async function listAll(page: (offset: string) => Promise<unknown>): Promise<FilesListing> {
 	const entries: FileEntry[] = [];
@@ -275,12 +271,21 @@ class FilesSession extends Disposable implements IFilesSession {
 	}
 
 	public async copy(from: FilesPane, items: readonly FilesItem[], to: FolderLocation): Promise<void> {
+		// Items dropped from Finder or Explorer may come from several folders; a pane's selection is of one.
+		const folders = new Map<string, { readonly folder: FolderLocation; readonly names: Set<string> }>();
 		for (const item of items) {
+			const key = `${item.folder.root}:${item.folder.path}`;
+			const group = folders.get(key) ?? { folder: item.folder, names: new Set<string>() };
+			group.names.add(item.name);
+			folders.set(key, group);
+		}
+		for (const { folder, names } of folders.values()) {
 			const job = await this.ask({
 				type: 'submit',
 				direction: from === 'local' ? 'upload' : 'download',
-				srcRoot: item.folder.root,
-				srcPath: joinPath(item.folder.path, item.name),
+				srcRoot: folder.root,
+				srcPath: folder.path,
+				names: [...names],
 				dstRoot: to.root,
 				dstPath: to.path,
 			});

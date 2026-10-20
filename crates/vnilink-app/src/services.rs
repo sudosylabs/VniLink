@@ -218,30 +218,52 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
+    /// One job for the entries `names` of `src_folder`.
+    #[allow(clippy::too_many_arguments)]
     pub fn files_service_upload(
         &self,
         id: u64,
         generation: u64,
         src_root: u64,
-        src_rel: String,
+        src_folder: String,
+        names: Vec<String>,
         dst_root: u64,
         dst_rel: String,
     ) -> Result<u64, FfiError> {
         self.inner
-            .files_service_upload(id, generation, src_root, &src_rel, dst_root, &dst_rel)
+            .files_service_upload(
+                id,
+                generation,
+                src_root,
+                &src_folder,
+                &names,
+                dst_root,
+                &dst_rel,
+            )
             .map_err(map_error)
     }
+    /// One job for the entries `names` of `src_folder`.
+    #[allow(clippy::too_many_arguments)]
     pub fn files_service_download(
         &self,
         id: u64,
         generation: u64,
         src_root: u64,
-        src_rel: String,
+        src_folder: String,
+        names: Vec<String>,
         dst_root: u64,
         dst_rel: String,
     ) -> Result<u64, FfiError> {
         self.inner
-            .files_service_download(id, generation, src_root, &src_rel, dst_root, &dst_rel)
+            .files_service_download(
+                id,
+                generation,
+                src_root,
+                &src_folder,
+                &names,
+                dst_root,
+                &dst_rel,
+            )
             .map_err(map_error)
     }
     pub fn files_service_jobs(
@@ -476,10 +498,12 @@ impl FilesService {
 }
 
 impl FilesService {
+    /// One job for the entries `names` of `src_folder`, however many.
     pub fn upload(
         &self,
         src_root: u64,
-        src_rel: String,
+        src_folder: String,
+        names: Vec<String>,
         dst_root: u64,
         dst_rel: String,
     ) -> Result<u64, FfiError> {
@@ -489,16 +513,19 @@ impl FilesService {
                 info.id,
                 info.generation,
                 src_root,
-                &src_rel,
+                &src_folder,
+                &names,
                 dst_root,
                 &dst_rel,
             )
             .map_err(map_error)
     }
+    /// One job for the entries `names` of `src_folder`, however many.
     pub fn download(
         &self,
         src_root: u64,
-        src_rel: String,
+        src_folder: String,
+        names: Vec<String>,
         dst_root: u64,
         dst_rel: String,
     ) -> Result<u64, FfiError> {
@@ -508,7 +535,8 @@ impl FilesService {
                 info.id,
                 info.generation,
                 src_root,
-                &src_rel,
+                &src_folder,
+                &names,
                 dst_root,
                 &dst_rel,
             )

@@ -73,7 +73,7 @@ pub(super) struct JobRecord {
     pub(super) owner: Option<super::service_jobs::JobOwner>,
     /// Set by the submitting side only.
     #[serde(default)]
-    destination: Option<crate::job::JobDestination>,
+    destination: Option<Landing>,
     pub(super) id: u64,
     /// Peer protocol job id; zero migrates older records whose ids matched.
     #[serde(default)]
@@ -87,7 +87,13 @@ pub(super) struct JobRecord {
     pub(super) state: JobState,
     manifest: Option<Manifest>,
     local_root: u64,
+    /// The leg's folder under `local_root`: where a receiver lands, or the
+    /// folder a sender's `names` are entries of.
     local_rel: String,
+    /// Sender only: the entries of `local_rel` it sends, by name; none when
+    /// it sends the whole root.
+    #[serde(default)]
+    names: Vec<String>,
     /// Pinned source/target root for this leg. None migrates records
     /// saved before pinning: the first use adopts the current root.
     #[serde(default)]
@@ -141,6 +147,7 @@ impl JobRecord {
             }),
             local_root: 0,
             local_rel: String::new(),
+            names: Vec::new(),
             local_pin: None,
             outgoing: false,
             skipped_symlinks: 0,
@@ -319,9 +326,88 @@ impl JobRecord {
                     .map(|entry| entry.path.clone())
             }),
             error: self.error.clone(),
-            destination: self.destination.clone(),
+            destination: self.destination.as_ref().map(|landing| {
+                // A chosen folder is what the manifest's paths lie under.
+                let folders: std::collections::HashSet<&str> = self
+                    .manifest
+                    .iter()
+                    .flat_map(|manifest| &manifest.entries)
+                    .filter_map(|entry| entry.path.split_once('/'))
+                    .map(|(top, _)| top)
+                    .collect();
+                crate::job::JobDestination {
+                    root: landing.root,
+                    folder: landing.folder.clone(),
+                    items: landing
+                        .names
+                        .iter()
+                        .map(|name| crate::job::JobItem {
+                            name: name.clone(),
+                            folder: folders.contains(name.as_str()),
+                        })
+                        .collect(),
+                }
+            }),
         }
     }
+}
+
+/// Where a transfer lands, as the side that submitted it keeps it: the
+/// folder on the receiving computer and the names arriving in it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Landing {
+    root: u64,
+    folder: String,
+    names: Vec<String>,
+}
+
+/// `name` under `folder`, as a root-relative path.
+fn join_rel(folder: &str, name: &str) -> String {
+    if folder.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{folder}/{name}")
+    }
+}
+
+/// The root-relative paths a sender scans: each chosen entry of `folder`,
+/// or with no names the folder itself, which is then the whole root.
+fn source_rels(folder: &str, names: &[String]) -> Vec<String> {
+    if names.is_empty() {
+        vec![folder.to_owned()]
+    } else {
+        names.iter().map(|name| join_rel(folder, name)).collect()
+    }
+}
+
+/// One root-relative source as its folder and its name; the whole root
+/// (empty) names nothing.
+fn split_source(rel: &str) -> (String, Vec<String>) {
+    match rel.rsplit_once('/') {
+        _ if rel.is_empty() => (String::new(), Vec::new()),
+        Some((folder, name)) => (folder.to_owned(), vec![name.to_owned()]),
+        None => (String::new(), vec![rel.to_owned()]),
+    }
+}
+
+/// What a sender may be asked to send: entries of one folder, each named
+/// once, or the whole root. A manifest holds no more entries than names.
+fn check_sources(folder: &str, names: &[String]) -> Result<(), Error> {
+    fs::check_rel(folder)?;
+    if names.is_empty() && !folder.is_empty() {
+        return Err(Error::InvalidSetting("nothing was chosen to copy"));
+    }
+    if names.len() > manifest::MAX_MANIFEST_FILES {
+        return Err(Error::InvalidSetting(manifest::MANIFEST_LIMIT));
+    }
+    let mut seen = std::collections::HashSet::with_capacity(names.len());
+    for name in names {
+        fs::check_name(name)?;
+        if !seen.insert(name.as_str()) {
+            return Err(Error::InvalidSetting("an item was chosen twice"));
+        }
+    }
+    Ok(())
 }
 
 /// Verify a job leg's pin against locked roots, adopting the current
@@ -351,20 +437,34 @@ impl Core {
         dst_root: u64,
         dst_rel: &str,
     ) -> Result<u64, Error> {
-        self.submit_upload(peer_endpoint_id, src_root, src_rel, dst_root, dst_rel, None)
+        let (folder, names) = split_source(src_rel);
+        self.submit_upload(
+            peer_endpoint_id,
+            src_root,
+            &folder,
+            &names,
+            dst_root,
+            dst_rel,
+            None,
+        )
     }
 
+    /// Uploads the entries `names` of `src_folder`, or with no names the
+    /// whole root, as one job.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn submit_upload(
         &self,
         peer_endpoint_id: &str,
         src_root: u64,
-        src_rel: &str,
+        src_folder: &str,
+        names: &[String],
         dst_root: u64,
         dst_rel: &str,
         owner: Option<super::service_jobs::JobOwner>,
     ) -> Result<u64, Error> {
         let peer = parse_endpoint_id(peer_endpoint_id)?;
         self.ensure_alive()?;
+        check_sources(src_folder, names)?;
         Self::check_job_capacity(&self.shared)?;
         {
             let state = lock(&self.shared.state);
@@ -377,46 +477,55 @@ impl Core {
         super::service_jobs::check_owner(&lock(&self.shared.state), owner)?;
         // Snapshot under a short lock; the recursive walk runs off every lock.
         let snapshot = lock(&self.shared.file_roots).clone();
-        let scan = manifest::scan(&snapshot, src_root, src_rel)?;
         // Pin the leg to the scanned generation: every file offer below
         // re-verifies it, so a rebind during admission fails the whole
         // offer instead of mixing generations.
         let mut pin = Some(snapshot.pin(src_root)?);
         let mut prepared =
             super::service_jobs::PreparedOffers::new(self.shared.clone(), peer, owner.is_some());
-        let mut manifest = manifest::skeleton(&scan);
-        // Import every file through anchored handles and authorize the peer
-        // before announcing. Hashes fill by scan path, so directory
-        // prefixing lands after.
-        for file in &scan.files {
-            super::service_jobs::check_owner(&lock(&self.shared.state), owner)?;
-            let (hash, size) = self.blob_offer_file_at(
-                peer_endpoint_id,
-                src_root,
-                file,
-                u64::MAX,
-                pin.as_ref().expect("leg pin just pinned"),
-            )?;
-            prepared.hashes.push(*hash.as_bytes());
-            if size != file.size {
-                return Err(Error::InvalidSetting(SOURCE_CHANGED));
+        let mut manifest = Manifest {
+            entries: Vec::new(),
+        };
+        let mut skipped_symlinks = 0;
+        for rel in source_rels(src_folder, names) {
+            let scan = manifest::scan(&snapshot, src_root, &rel)?;
+            skipped_symlinks += scan.skipped_symlinks;
+            let mut part = manifest::skeleton(&scan);
+            let at = entry_indices(&part);
+            // Import every file through anchored handles and authorize the
+            // peer before announcing. Hashes fill by scan path, so
+            // directory prefixing lands after.
+            for file in &scan.files {
+                super::service_jobs::check_owner(&lock(&self.shared.state), owner)?;
+                let (hash, size) = self.blob_offer_file_at(
+                    peer_endpoint_id,
+                    src_root,
+                    file,
+                    u64::MAX,
+                    pin.as_ref().expect("leg pin just pinned"),
+                )?;
+                prepared.hashes.push(*hash.as_bytes());
+                if size != file.size {
+                    return Err(Error::InvalidSetting(SOURCE_CHANGED));
+                }
+                if let Some(&index) = at.get(&file.rel) {
+                    part.entries[index].hash = *hash.as_bytes();
+                }
             }
-            manifest
-                .entries
-                .iter_mut()
-                .find(|entry| entry.path == file.rel)
-                .map(|entry| {
-                    entry.hash = *hash.as_bytes();
-                });
-        }
-        {
-            // A directory source keeps its top folder; files stay flat.
-            let roots = lock(&self.shared.file_roots);
-            verify_leg_pin(&roots, src_root, &mut pin)?;
-            if roots.resolve_dir(src_root, src_rel).is_ok() {
-                manifest::prefix_source_dir(src_rel, &mut manifest);
+            {
+                // A directory source keeps its top folder; files stay flat.
+                let roots = lock(&self.shared.file_roots);
+                verify_leg_pin(&roots, src_root, &mut pin)?;
+                if roots.resolve_dir(src_root, &rel).is_ok() {
+                    manifest::prefix_source_dir(&rel, &mut part);
+                }
+            }
+            manifest.entries.append(&mut part.entries);
+            if manifest.entries.len() > manifest::MAX_MANIFEST_FILES {
+                return Err(Error::InvalidSetting(manifest::MANIFEST_LIMIT));
             }
         }
+        manifest.entries.sort_by(|a, b| a.path.cmp(&b.path));
         if manifest
             .entries
             .iter()
@@ -429,10 +538,10 @@ impl Core {
         let id = allocate_job_id(&self.shared)?;
         let record = JobRecord {
             owner,
-            destination: Some(crate::job::JobDestination {
+            destination: Some(Landing {
                 root: dst_root,
                 folder: dst_rel.to_owned(),
-                name: src_rel.rsplit('/').next().unwrap_or(src_rel).to_owned(),
+                names: names.to_vec(),
             }),
             id,
             wire_id: id,
@@ -444,10 +553,11 @@ impl Core {
             state: JobState::Preparing,
             manifest: Some(manifest.clone()),
             local_root: src_root,
-            local_rel: src_rel.to_owned(),
+            local_rel: src_folder.to_owned(),
+            names: names.to_vec(),
             local_pin: pin,
             outgoing: true,
-            skipped_symlinks: scan.skipped_symlinks,
+            skipped_symlinks,
             file_index: 0,
             done_bytes: 0,
             files_done: 0,
@@ -516,20 +626,34 @@ impl Core {
         dst_root: u64,
         dst_rel: &str,
     ) -> Result<u64, Error> {
-        self.submit_download(peer_endpoint_id, src_root, src_rel, dst_root, dst_rel, None)
+        let (folder, names) = split_source(src_rel);
+        self.submit_download(
+            peer_endpoint_id,
+            src_root,
+            &folder,
+            &names,
+            dst_root,
+            dst_rel,
+            None,
+        )
     }
 
+    /// Downloads the peer's entries `names` of `src_folder`, or with no
+    /// names its whole root, as one job.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn submit_download(
         &self,
         peer_endpoint_id: &str,
         src_root: u64,
-        src_rel: &str,
+        src_folder: &str,
+        names: &[String],
         dst_root: u64,
         dst_rel: &str,
         owner: Option<super::service_jobs::JobOwner>,
     ) -> Result<u64, Error> {
         let peer = parse_endpoint_id(peer_endpoint_id)?;
         self.ensure_alive()?;
+        check_sources(src_folder, names)?;
         Self::check_job_capacity(&self.shared)?;
         {
             let state = lock(&self.shared.state);
@@ -552,7 +676,8 @@ impl Core {
             id: 1,
             generation,
             src_root,
-            src_rel: src_rel.to_owned(),
+            src_folder: src_folder.to_owned(),
+            names: names.to_vec(),
         };
         let reply_bytes = self.service_job_round_trip(
             owner,
@@ -589,10 +714,10 @@ impl Core {
                 id,
                 JobRecord {
                     owner,
-                    destination: Some(crate::job::JobDestination {
+                    destination: Some(Landing {
                         root: dst_root,
                         folder: dst_rel.to_owned(),
-                        name: src_rel.rsplit('/').next().unwrap_or(src_rel).to_owned(),
+                        names: names.to_vec(),
                     }),
                     id,
                     wire_id: reply.job_id,
@@ -605,6 +730,7 @@ impl Core {
                     manifest: Some(manifest),
                     local_root: dst_root,
                     local_rel: dst_rel.to_owned(),
+                    names: Vec::new(),
                     local_pin: pin,
                     outgoing: true,
                     landed: HashMap::new(),
@@ -2304,17 +2430,8 @@ impl Core {
         };
         for entry in manifest.entries.iter().filter(|entry| !entry.is_dir) {
             // Root-relative source path: the manifest entry already carries
-            // the top folder for directory sources, so prepend only the
-            // source parent (not the full `local_rel`, which would double
-            // the top folder for nested sources like `docs/pack`).
-            let root_rel = if local_rel.is_empty() {
-                entry.path.clone()
-            } else {
-                match local_rel.rfind('/') {
-                    Some(slash) => format!("{}/{}", &local_rel[..slash], entry.path),
-                    None => entry.path.clone(),
-                }
-            };
+            // its chosen name, so it lies under the source folder.
+            let root_rel = join_rel(&local_rel, &entry.path);
             // Anchored verification: re-open through handles, never the
             // retained absolute pathname. A swapped parent fails here.
             #[cfg(unix)]
@@ -2709,8 +2826,7 @@ pub(crate) static SERVE_SOURCE_PROBE: std::sync::Mutex<Option<fn([u8; 32])>> =
 
 /// Serve-time source re-verification for job blob requests (see blob.rs):
 /// finds the active sender entry for `hash`, reconstructs its root-relative
-/// source (parent of `local_rel` + manifest path, handling nested `docs/pack`
-/// correctly) and stats it through handles (NOFOLLOW, regular, size matches).
+/// source (the source folder `local_rel` + manifest path) and stats it through handles (NOFOLLOW, regular, size matches).
 /// Denies swapped parents/replaced files so TryReference absolute paths can
 /// never disclose outside bytes. The leg's pin is re-verified under the
 /// same roots hold: a rebound source fails the fetch instead of serving
@@ -2752,14 +2868,7 @@ pub(super) async fn verify_serve_source(
         }
         found.ok_or(Error::TransferDenied)?
     };
-    let root_rel = if local_rel.is_empty() {
-        entry_path.clone()
-    } else {
-        match local_rel.rfind('/') {
-            Some(slash) => format!("{}/{}", &local_rel[..slash], entry_path),
-            None => entry_path.clone(),
-        }
-    };
+    let root_rel = join_rel(&local_rel, &entry_path);
     let (parent_rel, name) = match root_rel.rfind('/') {
         Some(slash) => (&root_rel[..slash], &root_rel[slash + 1..]),
         None => ("", root_rel.as_str()),
@@ -2916,12 +3025,16 @@ pub(super) fn rename_blocked_with(
             _ => {}
         }
         if record.sender {
-            // Sender source: `local_rel` names the selected file, folder or
-            // whole root (empty). Any overlap blocks.
-            if record.local_rel.is_empty() {
+            // Sender source: the chosen entries of `local_rel`, or with
+            // none the whole root. Any overlap blocks.
+            if record.names.is_empty() {
                 return true;
             }
-            if paths_overlap(&record.local_rel, &target) {
+            if record
+                .names
+                .iter()
+                .any(|name| paths_overlap(&join_rel(&record.local_rel, name), &target))
+            {
                 return true;
             }
         } else {
@@ -3766,25 +3879,11 @@ async fn handle_resume(
                 return Ok(());
             }
         };
-        // Compute root-relative source paths (same reconstruction as
-        // `resume_sender`: parent of `local_rel` + manifest path).
-        let src_parent = if local_rel.is_empty() {
-            String::new()
-        } else {
-            match local_rel.rfind('/') {
-                Some(slash) => local_rel[..slash].to_owned(),
-                None => String::new(),
-            }
-        };
         let store = super::blob::open_store(shared).await.map_err(|_| ())?;
         for entry in manifest.entries.iter().filter(|e| !e.is_dir) {
-            let root_rel = if local_rel.is_empty() {
-                entry.path.clone()
-            } else if src_parent.is_empty() {
-                entry.path.clone()
-            } else {
-                format!("{src_parent}/{}", entry.path)
-            };
+            // Root-relative source path, as in `resume_sender`: the source
+            // folder `local_rel` + manifest path.
+            let root_rel = join_rel(&local_rel, &entry.path);
             let (parent_rel, name) = match root_rel.rfind('/') {
                 Some(slash) => (&root_rel[..slash], &root_rel[slash + 1..]),
                 None => ("", root_rel.as_str()),
@@ -4092,6 +4191,7 @@ pub(super) async fn handle_upload_offer(
                 manifest: Some(offer.manifest),
                 local_root: offer.dst_root,
                 local_rel: offer.dst_rel,
+                names: Vec::new(),
                 local_pin,
                 outgoing: false,
                 landed: HashMap::new(),
@@ -4194,10 +4294,15 @@ pub(super) async fn handle_download_request(
     };
     // Scan, hash and offer from this host's roots. Failures reject the
     // request; nothing is announced before every hash is served.
+    if check_sources(&request.src_folder, &request.names).is_err() {
+        reply(send, respond(job::STATUS_ERROR, 0, None).map_err(|_| ())?).await?;
+        return Ok(());
+    }
     let prepared = prepare_host_manifest(
         shared,
         request.src_root,
-        &request.src_rel,
+        &request.src_folder,
+        &request.names,
         manifest::ScanHooks::none(),
     )
     .await;
@@ -4243,7 +4348,8 @@ pub(super) async fn handle_download_request(
                         state: JobState::Serving,
                         manifest: Some(manifest.clone()),
                         local_root: request.src_root,
-                        local_rel: request.src_rel.clone(),
+                        local_rel: request.src_folder.clone(),
+                        names: request.names.clone(),
                         local_pin,
                         outgoing: false,
                         skipped_symlinks,
@@ -4281,14 +4387,56 @@ pub(super) async fn handle_download_request(
     Ok(())
 }
 
-/// Scans and imports every file, returning the sender job id and
-/// the filled manifest. Runs on the host inside its runtime.
+/// Scans and imports every file of the chosen entries, returning the
+/// sender job id, the filled manifest and the symlinks left out. Runs on
+/// the host inside its runtime.
 async fn prepare_host_manifest(
     shared: &Shared,
     src_root: u64,
-    src_rel: &str,
+    src_folder: &str,
+    names: &[String],
     scan_hooks: manifest::ScanHooks,
 ) -> Result<(u64, Manifest, u64), u8> {
+    let store = super::blob::open_store(shared)
+        .await
+        .map_err(|_| job::STATUS_ERROR)?;
+    let mut manifest = Manifest {
+        entries: Vec::new(),
+    };
+    let mut skipped_symlinks = 0;
+    for rel in source_rels(src_folder, names) {
+        let part = prepare_source(shared, &store, src_root, &rel, scan_hooks).await?;
+        skipped_symlinks += part.1;
+        manifest.entries.extend(part.0.entries);
+        if manifest.entries.len() > manifest::MAX_MANIFEST_FILES {
+            return Err(job::STATUS_ERROR);
+        }
+    }
+    manifest.entries.sort_by(|a, b| a.path.cmp(&b.path));
+    if manifest
+        .entries
+        .iter()
+        .filter(|entry| !entry.is_dir)
+        .any(|entry| entry.hash == [0; 32])
+    {
+        return Err(job::STATUS_ERROR);
+    }
+    manifest::validate(&manifest).map_err(|_| job::STATUS_ERROR)?;
+    // Sender job ids minted on the host share the local allocator, so
+    // adopted controller ids can never collide with a later mint.
+    let id = allocate_job_id(shared).map_err(|_| job::STATUS_ERROR)?;
+    Ok((id, manifest, skipped_symlinks))
+}
+
+/// Scans and imports one chosen entry `src_rel`, returning its part of
+/// the manifest and the symlinks left out.
+async fn prepare_source(
+    shared: &Shared,
+    store: &iroh_blobs::api::Store,
+    src_root: u64,
+    src_rel: &str,
+    scan_hooks: manifest::ScanHooks,
+) -> Result<(Manifest, u64), u8> {
     // Snapshot the approved roots under a short lock; the recursive walk
     // runs on a bounded worker with no locks held.
     let snapshot = lock(&shared.file_roots).clone();
@@ -4296,9 +4444,7 @@ async fn prepare_host_manifest(
         .await
         .map_err(|_| job::STATUS_ERROR)?;
     let mut manifest = manifest::skeleton(&scan);
-    let store = super::blob::open_store(shared)
-        .await
-        .map_err(|_| job::STATUS_ERROR)?;
+    let at = entry_indices(&manifest);
     for file in &scan.files {
         // Anchored import: re-open through handles, never the retained
         // absolute pathname.
@@ -4412,14 +4558,10 @@ async fn prepare_host_manifest(
         }
         let hash = *tag.hash().as_bytes();
         lock(&shared.blob_import_pins).insert(hash, (std::time::Instant::now(), tag));
-        manifest
-            .entries
-            .iter_mut()
-            .find(|entry| entry.path == file.rel)
-            .map(|entry| {
-                entry.hash = hash;
-                entry.size = file.size;
-            });
+        if let Some(&index) = at.get(&file.rel) {
+            manifest.entries[index].hash = hash;
+            manifest.entries[index].size = file.size;
+        }
     }
     // Directory sources keep their top folder; hash filling above matches
     // scan paths, so prefixing lands after.
@@ -4429,19 +4571,18 @@ async fn prepare_host_manifest(
             manifest::prefix_source_dir(src_rel, &mut manifest);
         }
     }
-    if manifest
+    Ok((manifest, scan.skipped_symlinks))
+}
+
+/// Each entry's place in `manifest` by path, to fill hashes as files are
+/// imported without searching for each.
+fn entry_indices(manifest: &Manifest) -> HashMap<String, usize> {
+    manifest
         .entries
         .iter()
-        .filter(|entry| !entry.is_dir)
-        .any(|entry| entry.hash == [0; 32])
-    {
-        return Err(job::STATUS_ERROR);
-    }
-    manifest::validate(&manifest).map_err(|_| job::STATUS_ERROR)?;
-    // Sender job ids minted on the host share the local allocator, so
-    // adopted controller ids can never collide with a later mint.
-    let id = allocate_job_id(shared).map_err(|_| job::STATUS_ERROR)?;
-    Ok((id, manifest, scan.skipped_symlinks))
+        .enumerate()
+        .map(|(index, entry)| (entry.path.clone(), index))
+        .collect()
 }
 
 fn endpoint_id_of(peer: &[u8; 32]) -> String {
@@ -4558,6 +4699,7 @@ mod lifecycle_tests {
             }),
             local_root: 0,
             local_rel: String::new(),
+            names: Vec::new(),
             local_pin: None,
             outgoing: false,
             file_index: 0,

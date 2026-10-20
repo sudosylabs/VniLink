@@ -103,13 +103,15 @@ test('a refusal from the other computer is an error naming its reason, and the c
 	const error = await session.remote.rename(folder, entry, 'b.txt').catch(failure => failure);
 	assert.equal(engineErrorCategory(error), 'FileExists');
 	assert(!session.ended);
-	await session.copy('local', [{ folder, name: 'a.txt' }, { folder, name: 'Photos' }], { root: '2', path: 'Users/hammed/Downloads' });
-	assert.deepEqual(asked.filter(operation => operation.type === 'submit').map(operation => [operation.direction, operation.srcPath, operation.dstPath]), [
-		['upload', 'Users/abass/a.txt', 'Users/hammed/Downloads'],
-		['upload', 'Users/abass/Photos', 'Users/hammed/Downloads'],
-	]);
+	await session.copy('local', [{ folder, name: 'a.txt' }, { folder, name: 'Photos' }, { folder, name: 'a.txt' }], { root: '2', path: 'Users/hammed/Downloads' });
+	assert.deepEqual(asked.filter(operation => operation.type === 'submit').map(operation => [operation.direction, operation.srcPath, operation.names, operation.dstPath]), [
+		['upload', 'Users/abass', ['a.txt', 'Photos'], 'Users/hammed/Downloads'],
+	], 'a selection is one transfer, each item once');
 	await session.copy('remote', [{ folder: { root: '2', path: '' }, name: 'x' }], folder);
-	assert.deepEqual(asked.at(-1), { type: 'submit', direction: 'download', srcRoot: '2', srcPath: 'x', dstRoot: '0', dstPath: 'Users/abass' });
+	assert.deepEqual(asked.at(-1), { type: 'submit', direction: 'download', srcRoot: '2', srcPath: '', names: ['x'], dstRoot: '0', dstPath: 'Users/abass' });
+	// Items dropped from two folders are a transfer each.
+	await session.copy('local', [{ folder, name: 'a.txt' }, { folder: { root: '0', path: 'Users/abass/Desktop' }, name: 'b.txt' }, { folder, name: 'c.txt' }], { root: '2', path: '' });
+	assert.deepEqual(asked.slice(-2).map(operation => [operation.srcPath, operation.names]), [['Users/abass', ['a.txt', 'c.txt']], ['Users/abass/Desktop', ['b.txt']]]);
 	session.release();
 });
 

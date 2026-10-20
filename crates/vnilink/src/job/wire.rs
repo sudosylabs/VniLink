@@ -54,14 +54,16 @@ pub struct UploadOffer {
     pub dst_rel: String,
 }
 
-/// Controller asks the host to prepare a download from its roots.
+/// Controller asks the host to prepare a download from its roots: the
+/// entries `names` of `src_folder`, or with no names the whole root.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadRequest {
     pub v: u8,
     pub id: u32,
     pub generation: u64,
     pub src_root: u64,
-    pub src_rel: String,
+    pub src_folder: String,
+    pub names: Vec<String>,
 }
 
 /// Host answers an upload offer, adopting the sender's job id.

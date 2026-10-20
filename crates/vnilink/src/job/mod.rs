@@ -105,13 +105,21 @@ pub struct JobSnapshot {
 }
 
 /// Where a transfer lands: the folder on the receiving computer and the
-/// name of the file or folder copied into it, so the Files tab can show it
+/// files and folders copied into it, so the Files tab can show each one
 /// arriving there.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobDestination {
     pub root: u64,
     pub folder: String,
+    pub items: Vec<JobItem>,
+}
+
+/// One file or folder a transfer copies, by the name it arrives under.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobItem {
     pub name: String,
+    /// Known once the sender has listed what it sends.
+    pub folder: bool,
 }
 
 /// Host-local cache retention. Active jobs/imports remain independently pinned.

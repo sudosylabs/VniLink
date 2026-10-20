@@ -26,7 +26,8 @@ export interface FilesArrival {
 	readonly jobId: string;
 	readonly name: string;
 	readonly folder: boolean;
-	readonly bytes: number;
+	/** Its size, when the transfer is of it alone. */
+	readonly bytes: number | undefined;
 	readonly progress: number;
 	readonly status: string;
 	readonly tone: ArrivalTone;
@@ -218,22 +219,27 @@ export class FilesActivity extends Disposable {
 			}
 			const waiting = job.waiting_file;
 			const many = Number(job.files_total) > 1;
-			arrivals.push({
-				jobId: job.id,
-				name: destination.name,
-				folder: many,
-				bytes: Number(job.total_bytes),
-				progress: jobProgress(job),
-				status: arrivalStatus(job, this.samples.get(job.id)?.rate),
-				tone: toneOf(job),
-				action: actionOf(job),
-				decision: job.state === 'WaitingDecision'
-					? {
-						text: nls.localize('files.sendingAnother', '{0} is sending another “{1}”', from, waiting ? waiting.slice(waiting.lastIndexOf('/') + 1) : destination.name),
-						many,
-					}
-					: undefined,
-			});
+			// The question sits at the item the waiting file belongs to.
+			const asking = waiting?.split('/')[0] ?? destination.items.at(0)?.name;
+			for (const item of destination.items) {
+				arrivals.push({
+					jobId: job.id,
+					name: item.name,
+					// Until the sender has listed what it sends, a transfer of many files is a folder.
+					folder: item.folder || (many && destination.items.length === 1),
+					bytes: destination.items.length === 1 ? Number(job.total_bytes) : undefined,
+					progress: jobProgress(job),
+					status: arrivalStatus(job, this.samples.get(job.id)?.rate),
+					tone: toneOf(job),
+					action: actionOf(job),
+					decision: job.state === 'WaitingDecision' && item.name === asking
+						? {
+							text: nls.localize('files.sendingAnother', '{0} is sending another “{1}”', from, waiting ? waiting.slice(waiting.lastIndexOf('/') + 1) : item.name),
+							many,
+						}
+						: undefined,
+				});
+			}
 		}
 		return arrivals;
 	}
@@ -288,9 +294,11 @@ export class FilesActivity extends Disposable {
 		});
 	}
 
+	/** Where a transfer lands, at the item it asks about or else its first. */
 	private placeOf(job: FileJob): TransferPlace | undefined {
 		const destination = job.destination;
-		return destination ? { side: job.direction === 'Upload' ? 'remote' : 'local', folder: { root: destination.root, path: destination.path }, name: destination.name } : undefined;
+		const name = job.waiting_file?.split('/')[0] ?? destination?.items.at(0)?.name;
+		return destination && name !== undefined ? { side: job.direction === 'Upload' ? 'remote' : 'local', folder: { root: destination.root, path: destination.path }, name } : undefined;
 	}
 
 	private show(job: FileJob): void {

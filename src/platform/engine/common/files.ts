@@ -43,9 +43,20 @@ export interface FileJob {
 	total_bytes: string; done_bytes: string; files_total: string; files_done: string;
 	resumed_files: string; skipped_files: string; skipped_symlinks: string;
 	waiting_file: string | null; error: string | null;
-	/** Where it lands, when this computer submitted it: the receiving folder and the name it arrives under. */
-	destination: FileTarget | null;
+	/** Where it lands, when this computer submitted it: the receiving folder and what arrives in it. */
+	destination: FileLanding | null;
 }
+
+/** The folder a transfer lands in, and each file or folder arriving there by the name it arrives under. */
+export interface FileLanding {
+	readonly root: string;
+	readonly path: string;
+	/** `folder` is known once the sending computer has listed what it sends. */
+	readonly items: readonly { readonly name: string; readonly folder: boolean }[];
+}
+
+/** The most items one transfer copies: as many as the engine lets one transfer hold. */
+export const MAX_TRANSFER_ITEMS = 50_000;
 
 export type FileConflictChoice = 'skip' | 'replace' | 'keepBoth';
 
@@ -64,11 +75,13 @@ export type FileOperation =
 	| ({ readonly type: 'rename'; readonly token: FileToken | null; readonly newName: string } & FileTarget)
 	/** To the other computer's Trash when `trash`, else permanently. */
 	| ({ readonly type: 'delete'; readonly token: FileToken | null; readonly trash: boolean } & FileTarget)
+	/** One transfer for the entries `names` of the folder `srcPath`. */
 	| {
 		readonly type: 'submit';
 		readonly direction: 'upload' | 'download';
 		readonly srcRoot: string;
 		readonly srcPath: string;
+		readonly names: readonly string[];
 		readonly dstRoot: string;
 		readonly dstPath: string;
 	}
@@ -153,7 +166,7 @@ export function isFileJob(value: unknown): value is FileJob {
 		&& decimal(value.files_total) && decimal(value.files_done) && decimal(value.resumed_files)
 		&& decimal(value.skipped_files) && decimal(value.skipped_symlinks)
 		&& (value.waiting_file === null || text(value.waiting_file, 4096)) && (value.error === null || text(value.error, 4096))
-		&& (value.destination === null || isFileTarget(value.destination))
+		&& (value.destination === null || isFileLanding(value.destination))
 		&& Object.keys(value).length === 16;
 }
 
@@ -168,6 +181,18 @@ function target(value: Record<string, unknown>): boolean {
 /** One item named by its root, its folder under the root, and its name. */
 export function isFileTarget(value: unknown): value is FileTarget {
 	return record(value) && keys(value, ['root', 'path', 'name']) && target(value);
+}
+
+/** Distinct names, at least one and at most a transfer's worth. */
+function itemNames(value: unknown): value is readonly string[] {
+	return Array.isArray(value) && value.length > 0 && value.length <= MAX_TRANSFER_ITEMS
+		&& value.every(isFileName) && new Set(value).size === value.length;
+}
+
+export function isFileLanding(value: unknown): value is FileLanding {
+	return record(value) && keys(value, ['root', 'path', 'items']) && decimal(value.root) && isFilePath(value.path)
+		&& Array.isArray(value.items) && value.items.length <= MAX_TRANSFER_ITEMS
+		&& value.items.every((item: unknown) => record(item) && keys(item, ['name', 'folder']) && isFileName(item.name) && typeof item.folder === 'boolean');
 }
 
 export function isFileOperation(value: unknown): value is FileOperation {
@@ -189,9 +214,9 @@ export function isFileOperation(value: unknown): value is FileOperation {
 		case 'delete':
 			return keys(value, ['type', 'root', 'path', 'name', 'token', 'trash']) && target(value) && (value.token === null || isFileToken(value.token)) && typeof value.trash === 'boolean';
 		case 'submit':
-			return keys(value, ['type', 'direction', 'srcRoot', 'srcPath', 'dstRoot', 'dstPath'])
+			return keys(value, ['type', 'direction', 'srcRoot', 'srcPath', 'names', 'dstRoot', 'dstPath'])
 				&& (value.direction === 'upload' || value.direction === 'download')
-				&& decimal(value.srcRoot) && isFilePath(value.srcPath) && value.srcPath !== '' && decimal(value.dstRoot) && isFilePath(value.dstPath);
+				&& decimal(value.srcRoot) && isFilePath(value.srcPath) && itemNames(value.names) && decimal(value.dstRoot) && isFilePath(value.dstPath);
 		case 'cancel': case 'resume': case 'forget':
 			return keys(value, ['type', 'jobId']) && decimal(value.jobId);
 		case 'resolve':

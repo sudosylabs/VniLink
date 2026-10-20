@@ -157,7 +157,23 @@ pub(crate) struct TransferDestination {
     root: String,
     #[serde(rename = "path")]
     folder: String,
+    items: Vec<TransferItem>,
+}
+
+/// A file or folder on this computer, by its root, its folder and its name.
+#[derive(Serialize)]
+pub(crate) struct TransferLocation {
+    root: String,
+    #[serde(rename = "path")]
+    folder: String,
     name: String,
+}
+
+/// One file or folder a transfer lands, by name.
+#[derive(Serialize)]
+pub(crate) struct TransferItem {
+    name: String,
+    folder: bool,
 }
 
 pub(crate) fn transfer_job(snapshot: &vnilink_app::FfiJobSnapshot) -> TransferJob {
@@ -201,7 +217,14 @@ pub(crate) fn transfer_job(snapshot: &vnilink_app::FfiJobSnapshot) -> TransferJo
             .map(|destination| TransferDestination {
                 root: destination.root.to_string(),
                 folder: destination.folder.clone(),
-                name: destination.name.clone(),
+                items: destination
+                    .items
+                    .iter()
+                    .map(|item| TransferItem {
+                        name: item.name.clone(),
+                        folder: item.folder,
+                    })
+                    .collect(),
             }),
     }
 }
@@ -1132,7 +1155,7 @@ enum Reply {
         places: files::TransferPlaces,
     },
     Location {
-        location: Option<TransferDestination>,
+        location: Option<TransferLocation>,
     },
     Watching {
         watch: String,
@@ -1728,7 +1751,7 @@ impl EngineBridge {
             }
             Command::LocateLocal { path } => Reply::Location {
                 location: core.locate(path.clone()).map_err(core_error)?.map(|found| {
-                    TransferDestination {
+                    TransferLocation {
                         root: found.root.to_string(),
                         folder: found.path,
                         name: found.name,

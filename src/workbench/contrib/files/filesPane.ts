@@ -170,7 +170,7 @@ class RowRenderer implements IListRenderer<PaneRow, RowTemplate> {
 		template.icon.replaceChildren(ring ? renderRing(arrival.progress, arrival.tone) : renderIcon(folder ? Icons.files : Icons.file, { variant: folder ? 'filled' : 'outlined' }));
 		template.modified.textContent = ring || !entry ? arrival?.status ?? '' : formatModified(Number(entry.mtimeMs), new Date());
 		template.modified.title = ring ? arrival.status : '';
-		template.size.textContent = entry ? entrySize(entry) : folder ? '—' : formatSize(arrival?.bytes ?? 0);
+		template.size.textContent = entry ? entrySize(entry) : folder || arrival?.bytes === undefined ? '—' : formatSize(arrival.bytes);
 		if (!entry) {
 			template.editing.clear();
 			template.name.textContent = arrival?.name ?? '';
@@ -818,7 +818,7 @@ export class FilesPaneView extends Disposable {
 		}
 		// Progress alone: only the transfers' own rows are drawn again.
 		this.rows.forEach((row, index) => {
-			const arrival = row.arrival && arrivals.find(candidate => candidate.jobId === row.arrival?.jobId);
+			const arrival = row.arrival && arrivals.find(candidate => candidate.jobId === row.arrival?.jobId && candidate.name === row.arrival.name);
 			if (arrival && arrival !== row.arrival) {
 				this.rows[index] = { ...row, arrival };
 				this.list.splice(index, 1, [this.rows[index]]);
@@ -870,7 +870,7 @@ export class FilesPaneView extends Disposable {
 			(names.has(arrival.name) ? decorating : arriving).set(arrival.name, arrival);
 		}
 		// Not there yet: placed as an entry of its size, modified now, would be.
-		const placeholders = [...arriving.values()].map((arrival): FileEntry => ({ name: arrival.name, kind: arrival.folder ? 'dir' : 'file', size: String(arrival.bytes), mtimeMs: String(Date.now()), token: { dev: null, ino: null } }));
+		const placeholders = [...arriving.values()].map((arrival): FileEntry => ({ name: arrival.name, kind: arrival.folder ? 'dir' : 'file', size: String(arrival.bytes ?? 0), mtimeMs: String(Date.now()), token: { dev: null, ino: null } }));
 		const placed = new Set(placeholders);
 		this.rows = sortEntries([...this.shown, ...placeholders], this.sort, this.descending).flatMap((entry): PaneRow[] => {
 			const arrival = placed.has(entry) ? arriving.get(entry.name) : decorating.get(entry.name);
