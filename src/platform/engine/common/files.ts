@@ -61,7 +61,8 @@ export type FileOperation =
 	| { readonly type: 'list'; readonly root: string; readonly path: string; readonly offset: string }
 	| ({ readonly type: 'mkdir' } & FileTarget)
 	| ({ readonly type: 'rename'; readonly token: FileToken | null; readonly newName: string } & FileTarget)
-	| ({ readonly type: 'delete'; readonly token: FileToken | null } & FileTarget)
+	/** To the other computer's Trash when `trash`, else permanently. */
+	| ({ readonly type: 'delete'; readonly token: FileToken | null; readonly trash: boolean } & FileTarget)
 	| {
 		readonly type: 'submit';
 		readonly direction: 'upload' | 'download';
@@ -180,7 +181,7 @@ export function isFileOperation(value: unknown): value is FileOperation {
 		case 'rename':
 			return keys(value, ['type', 'root', 'path', 'name', 'token', 'newName']) && target(value) && (value.token === null || isFileToken(value.token)) && isFileName(value.newName);
 		case 'delete':
-			return keys(value, ['type', 'root', 'path', 'name', 'token']) && target(value) && (value.token === null || isFileToken(value.token));
+			return keys(value, ['type', 'root', 'path', 'name', 'token', 'trash']) && target(value) && (value.token === null || isFileToken(value.token)) && typeof value.trash === 'boolean';
 		case 'submit':
 			return keys(value, ['type', 'direction', 'srcRoot', 'srcPath', 'dstRoot', 'dstPath'])
 				&& (value.direction === 'upload' || value.direction === 'download')

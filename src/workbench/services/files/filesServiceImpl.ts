@@ -99,8 +99,8 @@ class LocalDisk implements IFilesDisk {
 		await this.engine.execute({ type: 'renameLocal', root: folder.root, path: folder.path, name: entry.name, token: entry.token, newName });
 	}
 
-	public async delete(folder: FolderLocation, entry: FileEntry): Promise<void> {
-		await this.engine.execute({ type: 'deleteLocal', root: folder.root, path: folder.path, name: entry.name, token: entry.token });
+	public async delete(folder: FolderLocation, entry: FileEntry, trash: boolean): Promise<void> {
+		await this.engine.execute({ type: 'deleteLocal', root: folder.root, path: folder.path, name: entry.name, token: entry.token, trash });
 	}
 }
 
@@ -128,8 +128,8 @@ class RemoteDisk implements IFilesDisk {
 		await this.ask({ type: 'rename', root: folder.root, path: folder.path, name: entry.name, token: entry.token, newName });
 	}
 
-	public async delete(folder: FolderLocation, entry: FileEntry): Promise<void> {
-		await this.ask({ type: 'delete', root: folder.root, path: folder.path, name: entry.name, token: entry.token });
+	public async delete(folder: FolderLocation, entry: FileEntry, trash: boolean): Promise<void> {
+		await this.ask({ type: 'delete', root: folder.root, path: folder.path, name: entry.name, token: entry.token, trash });
 	}
 }
 

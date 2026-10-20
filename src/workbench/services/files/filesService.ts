@@ -29,8 +29,12 @@ export interface IFilesDisk {
 	mkdir(folder: FolderLocation, name: string): Promise<void>;
 	/** Refused when `entry` was replaced since it was listed. */
 	rename(folder: FolderLocation, entry: FileEntry, newName: string): Promise<void>;
-	/** Deletes `entry` permanently, a folder with everything in it. */
-	delete(folder: FolderLocation, entry: FileEntry): Promise<void>;
+	/**
+	 * Deletes `entry`, a folder with everything in it: to the computer's
+	 * Trash when `trash`, else permanently. A place with no Trash refuses
+	 * with `Unsupported`.
+	 */
+	delete(folder: FolderLocation, entry: FileEntry, trash: boolean): Promise<void>;
 }
 
 /** An entry to copy: its name in `folder`. */

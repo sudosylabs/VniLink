@@ -139,7 +139,8 @@ test('service commands validate kinds, policies, sessions and jobs exactly', () 
 	assert.equal(isEngineCommand({ type: 'createLocalDir', root: '0', path: '', name: 'New Folder' }), true);
 	assert.equal(isEngineCommand({ type: 'renameLocal', root: '0', path: 'Users', name: 'a', token: { dev: '1', ino: '2' }, newName: 'b' }), true);
 	assert.equal(isEngineCommand({ type: 'renameLocal', root: '0', path: 'Users', name: 'a', token: { dev: 1, ino: 2 }, newName: 'b' }), false, 'token parts are decimal strings');
-	assert.equal(isEngineCommand({ type: 'deleteLocal', root: '0', path: 'Users', name: 'a', token: null }), true);
+	assert.equal(isEngineCommand({ type: 'deleteLocal', root: '0', path: 'Users', name: 'a', token: null, trash: true }), true);
+	assert.equal(isEngineCommand({ type: 'deleteLocal', root: '0', path: 'Users', name: 'a', token: null }), false, 'a delete says whether it goes to the Trash');
 	assert.equal(isEngineCommand({ type: 'deleteLocal', root: '0', path: 'Users', name: 'a' }), false);
 	assert.equal(isEngineReply({ type: 'servicePermissions', permissions: { desktop: true, files: true, terminal: false, camera: false, system_audio: false, microphone: false, recording: false, system_actions: false } }), false);
 	assert.equal(isEngineReply({ type: 'terminalPolicy', policy }), true);

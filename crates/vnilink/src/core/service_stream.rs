@@ -189,12 +189,14 @@ impl RemoteFilesService {
         })
         .map(|_| ())
     }
+    /// Deletes an entry on the other computer: to its Trash when `trash`.
     pub fn delete(
         &self,
         root: u64,
         path: &str,
         name: &str,
         expected: Option<fs::EntryToken>,
+        trash: bool,
     ) -> Result<(), Error> {
         self.request(fs::Request::Delete {
             id: 1,
@@ -203,6 +205,7 @@ impl RemoteFilesService {
             path: path.into(),
             name: name.into(),
             expected,
+            trash,
         })
         .map(|_| ())
     }

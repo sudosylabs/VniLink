@@ -442,6 +442,7 @@ fn whole_filesystem_and_local_operations_cross_the_ffi() {
         files.path(""),
         "previous.txt".into(),
         Some(previous.token),
+        false,
     )
     .unwrap();
     assert!(!dir.join("root/previous.txt").exists());

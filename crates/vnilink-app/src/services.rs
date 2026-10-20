@@ -618,19 +618,21 @@ impl FilesService {
             .rename(root, &path, &name, expected, &new_name)
             .map_err(map_error)
     }
+    /// Deletes an entry on the other computer: to its Trash when `trash`.
     pub fn delete(
         &self,
         root: u64,
         path: String,
         name: String,
         expected: Option<crate::FfiEntryToken>,
+        trash: bool,
     ) -> Result<(), FfiError> {
         let expected = expected.map(|token| vnilink::EntryToken {
             dev: token.dev,
             ino: token.ino,
         });
         self.inner
-            .delete(root, &path, &name, expected)
+            .delete(root, &path, &name, expected, trash)
             .map_err(map_error)
     }
 }

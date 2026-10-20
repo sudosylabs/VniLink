@@ -403,7 +403,7 @@ export class FilesPaneView extends Disposable {
 		private readonly deviceId: string,
 		/** The computer this pane shows: "This Mac", or the paired computer's name. */
 		public readonly computer: string,
-		os: 'macos' | 'windows' | 'linux' | 'other',
+		private readonly os: 'macos' | 'windows' | 'linux' | 'other',
 		@IContextMenuService private readonly contextMenuService: IContextMenuService,
 		@IDialogService private readonly dialogService: IDialogService,
 		@IUIStateService private readonly uiState: IUIStateService,
@@ -1092,7 +1092,8 @@ export class FilesPaneView extends Disposable {
 					}
 				}));
 			}
-			actions.push(toAction({ id: 'files.delete', label: nls.localize('files.delete', 'Delete…'), run: () => void this.deleteSelection() }));
+			actions.push(toAction({ id: 'files.delete', label: this.trashLabel, run: () => void this.deleteSelection(false) }));
+			actions.push(toAction({ id: 'files.deletePermanently', label: nls.localize('files.deletePermanently', 'Delete Permanently…'), run: () => void this.deleteSelection(true) }));
 			actions.push(new Separator());
 		}
 		actions.push(toAction({ id: 'files.newFolder', label: nls.localize('files.newFolder', 'New Folder'), enabled: this.current !== undefined, run: () => void this.newFolder() }));
@@ -1167,49 +1168,84 @@ export class FilesPaneView extends Disposable {
 		}
 	}
 
-	private async deleteSelection(): Promise<void> {
-		// One confirmation at a time: a second request while one is open, or
-		// a key repeating, shows no other.
+	/** What the computer calls its Trash, and moving to it. */
+	private get trashName(): string {
+		return this.os === 'windows' ? nls.localize('files.recycleBin', 'Recycle Bin') : nls.localize('files.trash', 'Trash');
+	}
+
+	private get trashLabel(): string {
+		return this.os === 'windows' ? nls.localize('files.deleteToBin', 'Delete') : nls.localize('files.moveToTrash', 'Move to Trash');
+	}
+
+	/**
+	 * Deletes the selection: to the computer's Trash at once, as Finder and
+	 * Explorer do, or `permanently` once asked. One question at a time: a
+	 * second request while one is open, or a key repeating, asks nothing more.
+	 */
+	private async deleteSelection(permanently: boolean): Promise<void> {
 		if (this.confirming) {
 			return;
 		}
 		this.confirming = true;
 		try {
-			await this.confirmDelete();
+			await this.deleteEntries(permanently);
 		} finally {
 			this.confirming = false;
 		}
 	}
 
-	private async confirmDelete(): Promise<void> {
+	private async deleteEntries(permanently: boolean): Promise<void> {
 		const folder = this.current;
+		const disk = this.disk;
 		const entries = this.selectedEntries();
-		if (!folder || !this.disk || !entries.length) {
+		if (!folder || !disk || !entries.length || (permanently && !await this.confirmPermanent(entries, false))) {
 			return;
 		}
+		let trashed = 0;
+		for (const entry of entries) {
+			try {
+				await disk.delete(folder, entry, !permanently);
+				trashed += permanently ? 0 : 1;
+			} catch (refusal: unknown) {
+				let error = refusal;
+				// No Trash there: as Finder does, offer to delete it for good.
+				if (!permanently && engineErrorCategory(error) === 'Unsupported' && await this.confirmPermanent([entry], true)) {
+					try {
+						await disk.delete(folder, entry, false);
+						continue;
+					} catch (again: unknown) {
+						error = again;
+					}
+				}
+				this.say(engineErrorCategory(error) === 'InvalidSetting' ? nls.localize('files.deleteFailed', '“{0}” couldn’t be deleted.', entry.name) : this.failureText(error));
+				break;
+			}
+		}
+		// The Trash on the other computer is out of sight: say where things went.
+		if (trashed && this.side === 'remote') {
+			this.say(trashed === 1
+				? nls.localize('files.trashedOne', 'Moved “{0}” to the {1} on {2}.', entries[0].name, this.trashName, this.computer)
+				: nls.localize('files.trashedMany', 'Moved {0} items to the {1} on {2}.', trashed, this.trashName, this.computer));
+		}
+		await this.refresh();
+	}
+
+	/** Asks before deleting for good; `noTrash` when the place has no Trash to move to. */
+	private async confirmPermanent(entries: readonly FileEntry[], noTrash: boolean): Promise<boolean> {
 		const { button } = await this.dialogService.show({
 			type: 'warning',
-			message: entries.length === 1
-				? nls.localize('files.deleteOne', 'Permanently delete “{0}” from {1}?', entries[0].name, this.computer)
-				: nls.localize('files.deleteMany', 'Permanently delete {0} items from {1}?', entries.length, this.computer),
+			message: noTrash
+				? nls.localize('files.noTrash', '“{0}” can’t be moved to the {1}. Delete it permanently?', entries[0].name, this.trashName)
+				: entries.length === 1
+					? nls.localize('files.deleteOne', 'Permanently delete “{0}” from {1}?', entries[0].name, this.computer)
+					: nls.localize('files.deleteMany', 'Permanently delete {0} items from {1}?', entries.length, this.computer),
 			detail: entries.some(entry => entry.kind === 'dir')
 				? nls.localize('files.deleteFolderDetail', 'Folders are deleted with everything in them. This can’t be undone.')
 				: nls.localize('files.deleteDetail', 'This can’t be undone.'),
 			buttons: [nls.localize('files.deleteButton', 'Delete'), nls.localize('files.cancel', 'Cancel')],
 			cancelId: 1,
 		});
-		if (button !== 0) {
-			return;
-		}
-		for (const entry of entries) {
-			try {
-				await this.disk.delete(folder, entry);
-			} catch (error) {
-				this.say(engineErrorCategory(error) === 'InvalidSetting' ? nls.localize('files.deleteFailed', '“{0}” couldn’t be deleted.', entry.name) : this.failureText(error));
-				break;
-			}
-		}
-		await this.refresh();
+		return button === 0;
 	}
 
 	private onKey(event: StandardKeyboardEvent): void {
@@ -1248,9 +1284,13 @@ export class FilesPaneView extends Disposable {
 		} else if (event.equals(command | (this.side === 'local' ? KeyCode.RightArrow : KeyCode.LeftArrow))) {
 			handled();
 			this.requestedCopy.fire();
+		} else if (event.equals(KeyMod.Shift | KeyCode.Delete) || event.equals(command | KeyMod.Alt | KeyCode.Backspace)) {
+			// Shift+Delete, as Explorer; Option-Command-Delete, as Finder.
+			handled();
+			void this.deleteSelection(true);
 		} else if (event.equals(KeyCode.Delete) || event.equals(command | KeyCode.Backspace)) {
 			handled();
-			void this.deleteSelection();
+			void this.deleteSelection(false);
 		} else if (event.equals(command | KeyMod.Shift | KeyCode.KeyN)) {
 			handled();
 			void this.newFolder();

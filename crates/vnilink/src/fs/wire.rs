@@ -35,6 +35,8 @@ pub(crate) const STATUS_EXISTS: u8 = 1;
 pub(crate) const STATUS_DENIED: u8 = 2;
 pub(crate) const STATUS_STALE: u8 = 3;
 pub(crate) const STATUS_ERROR: u8 = 4;
+/// A delete to the Trash that the place has no Trash for.
+pub(crate) const STATUS_NO_TRASH: u8 = 5;
 
 /// A decoded request. Response payloads are rendered by the transport into
 /// [`Response`]; only the status line is decoded here.
@@ -64,6 +66,7 @@ pub enum Request {
         expected: Option<EntryToken>,
         new_name: String,
     },
+    /// Deletes an entry: to the Trash when `trash`, else permanently.
     Delete {
         id: u32,
         generation: u64,
@@ -71,6 +74,7 @@ pub enum Request {
         path: String,
         name: String,
         expected: Option<EntryToken>,
+        trash: bool,
     },
     /// The host's roots, home folder and usual folders.
     Places { id: u32, generation: u64 },
@@ -173,6 +177,7 @@ pub(crate) fn encode_request(request: &Request) -> Result<Vec<u8>, Error> {
             path,
             name,
             expected,
+            trash,
         } => {
             push_u32(&mut bytes, *id);
             push_u64(&mut bytes, *generation);
@@ -181,6 +186,7 @@ pub(crate) fn encode_request(request: &Request) -> Result<Vec<u8>, Error> {
             push_text(&mut bytes, path, MAX_REL_BYTES)?;
             push_text(&mut bytes, name, MAX_COMPONENT_BYTES)?;
             push_expected(&mut bytes, *expected);
+            bytes.push(u8::from(*trash));
         }
         Request::Places { id, generation } => {
             // The common root and path fields stay, empty, so every request
@@ -274,6 +280,11 @@ pub(crate) fn decode_request(bytes: &[u8]) -> Result<Request, WireError> {
             let name = take_text(&mut cursor, MAX_COMPONENT_BYTES)
                 .ok_or(error("the filesystem frame is malformed"))?;
             let expected = take_expected(&mut cursor)?;
+            let trash = match take_byte(&mut cursor) {
+                Some(0) => false,
+                Some(1) => true,
+                _ => return Err(error("the filesystem frame is malformed")),
+            };
             if !cursor.is_empty() {
                 return Err(error("the filesystem frame is malformed"));
             }
@@ -284,6 +295,7 @@ pub(crate) fn decode_request(bytes: &[u8]) -> Result<Request, WireError> {
                 path,
                 name,
                 expected,
+                trash,
             })
         }
         TAG_PLACES => {

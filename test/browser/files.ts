@@ -79,8 +79,14 @@ class MemoryDisk implements IFilesDisk {
 		this.folders.get(`${folder.root}:${folder.path}`)?.push(item);
 	}
 
-	public delete(folder: FolderLocation, item: FileEntry): Promise<void> {
-		this.deletes.push(item.name);
+	/** Names whose place has no Trash, as a network share has none. */
+	public readonly noTrash = new Set<string>();
+
+	public delete(folder: FolderLocation, item: FileEntry, trash: boolean): Promise<void> {
+		if (trash && this.noTrash.has(item.name)) {
+			return Promise.reject(new Error('Unsupported: the entry can’t be moved to the Trash'));
+		}
+		this.deletes.push(`${item.name}:${trash ? 'trash' : 'gone'}`);
 		const entries = this.folders.get(`${folder.root}:${folder.path}`) ?? [];
 		entries.splice(entries.findIndex(candidate => candidate.name === item.name), 1);
 		return Promise.resolve();
@@ -344,13 +350,13 @@ export async function verifyFiles(): Promise<void> {
 		await until(() => !(local.querySelector<HTMLElement>('.files-notice')?.hidden ?? true), 'A taken name was not reported');
 		assert(local.querySelector('.files-notice')?.textContent === 'That name is already taken here.' && names(local).includes('invoice.pdf'), 'A refused rename lost the item or its reason');
 
-		// Delete asks first, says it is permanent, and Cancel keeps everything.
+		// Deleting for good asks first, says it is permanent, and Cancel keeps everything.
 		list(local).focus();
-		press(list(local), 'Delete', 46);
-		await until(() => dialogs.length === 2, 'Delete did not ask');
-		assert(dialogs[1].message === 'Permanently delete “invoice.pdf” from This Mac?' || dialogs[1].message.startsWith('Permanently delete “invoice.pdf” from'), `Wrong delete question: ${dialogs[1].message}`);
-		assert(localDisk.deletes.length === 0, 'Delete ran without confirmation');
-		// The cancelled question settles before Delete is pressed again.
+		press(list(local), 'Delete', 46, true);
+		await until(() => dialogs.length === 2, 'Deleting for good did not ask');
+		assert(dialogs[1].message.startsWith('Permanently delete “invoice.pdf” from'), `Wrong delete question: ${dialogs[1].message}`);
+		assert(localDisk.deletes.length === 0, 'A permanent delete ran without confirmation');
+		// The cancelled question settles before it is asked for again.
 		await new Promise(resolve => setTimeout(resolve, 0));
 		// Asking twice while the question is open asks once.
 		const asked = dialogs.length;
@@ -358,14 +364,37 @@ export async function verifyFiles(): Promise<void> {
 		answers.push(new Promise<IDialogResult>(resolve => {
 			answer = resolve;
 		}));
-		press(list(local), 'Delete', 46);
-		press(list(local), 'Delete', 46);
-		await until(() => dialogs.length === asked + 1, 'Delete did not ask again');
+		press(list(local), 'Delete', 46, true);
+		press(list(local), 'Delete', 46, true);
+		await until(() => dialogs.length === asked + 1, 'Deleting for good did not ask again');
 		await new Promise(resolve => setTimeout(resolve, 50));
 		assert(dialogs.length === asked + 1, `Delete asked ${String(dialogs.length - asked)} times at once`);
 		answer({ button: 0, checked: false });
-		await until(() => localDisk.deletes.join() === 'invoice.pdf', 'Confirmed delete did not run');
+		await until(() => localDisk.deletes.join() === 'invoice.pdf:gone', 'The confirmed delete did not run');
 		await until(() => !names(local).includes('invoice.pdf'), 'The deleted item stayed listed');
+
+		// Delete moves to the Trash at once, as Finder and Explorer do; the menu offers both.
+		press(list(local), 'Home', 36);
+		press(list(local), 'ArrowDown', 40);
+		press(list(local), 'Delete', 46);
+		await until(() => localDisk.deletes.at(-1) === 'notes.md:trash', 'Delete did not move the item to the Trash');
+		assert(dialogs.length === asked + 1, 'Moving to the Trash asked first');
+		await until(() => !names(local).includes('notes.md'), 'The item moved to the Trash stayed listed');
+		// Where there is no Trash, it offers to delete for good, in the other computer's words.
+		remoteDisk.noTrash.add('report-q3.xlsx');
+		const sheet = names(remote).indexOf('report-q3.xlsx');
+		list(remote).focus();
+		press(list(remote), 'Home', 36);
+		for (let step = 0; step < sheet; step++) {
+			press(list(remote), 'ArrowDown', 40);
+		}
+		answers.push({ button: 0, checked: false });
+		press(list(remote), 'Delete', 46);
+		await until(() => remoteDisk.deletes.at(-1) === 'report-q3.xlsx:gone', 'A place with no Trash did not offer to delete for good');
+		assert(dialogs.at(-1)?.message === '“report-q3.xlsx” can’t be moved to the Recycle Bin. Delete it permanently?', `Wrong question: ${dialogs.at(-1)?.message ?? ''}`);
+		remote.querySelector<HTMLElement>('.monaco-list-row')?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, button: 2 }));
+		await until(() => shown.menu.some(action => action.id === 'files.delete'), 'The menu did not open on a row');
+		assert(shown.menu.find(action => action.id === 'files.delete')?.label === 'Delete' && shown.menu.some(action => action.id === 'files.deletePermanently'), 'The menu does not offer the Recycle Bin and deleting for good');
 
 		// Hidden files, from the pane's menu, are remembered.
 		local.querySelector<HTMLButtonElement>('.files-icon-button[aria-label="More Actions"]')?.click();

@@ -744,6 +744,7 @@ fn wire_codec_round_trips_and_rejects() {
                 dev: Some(3),
                 ino: Some(9),
             }),
+            trash: false,
         },
         WireRequest::Delete {
             id: 12,
@@ -752,6 +753,7 @@ fn wire_codec_round_trips_and_rejects() {
             path: "".to_string(),
             name: "a.txt".to_string(),
             expected: None,
+            trash: true,
         },
         WireRequest::Places {
             id: 13,
@@ -1667,4 +1669,34 @@ fn a_dropped_path_is_named_by_its_folder_and_its_own_name() {
     std::fs::create_dir(&shared).unwrap();
     core.set_file_roots(vec![shared]).unwrap();
     assert_eq!(core.locate(&folder.join("note.txt")).unwrap(), None);
+}
+
+/// Moving to the Trash checks the entry as deleting does: one replaced
+/// since it was listed is refused before anything reaches the Trash, and
+/// so is a name that is not there. (The move itself would use this
+/// account's real Trash, so it is left to manual checks.)
+#[test]
+fn moving_to_the_trash_refuses_what_changed_since_it_was_listed() {
+    let scratch = Scratch::new();
+    let folder = scratch.join("trash");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("a.txt"), b"first").unwrap();
+    let core = start_direct();
+    core.enable_filesystem_access().unwrap();
+    let location = FilesystemLocation::new(core.file_roots().unwrap(), &folder);
+    let listed = core
+        .list_dir(location.root, &location.path(""), 0, 10)
+        .unwrap()
+        .entries[0]
+        .token;
+    std::fs::remove_file(folder.join("a.txt")).unwrap();
+    std::fs::write(folder.join("a.txt"), b"replacement").unwrap();
+    assert!(matches!(
+        core.trash_entry(location.root, &location.path(""), "a.txt", Some(listed)),
+        Err(Error::InvalidSetting(message)) if message.contains("changed")
+    ));
+    assert_eq!(std::fs::read(folder.join("a.txt")).unwrap(), b"replacement");
+    assert!(core
+        .trash_entry(location.root, &location.path(""), "missing.txt", None)
+        .is_err());
 }

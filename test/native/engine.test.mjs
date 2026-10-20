@@ -166,7 +166,7 @@ test('this computer\'s disk lists, makes, renames and deletes through its own en
 		const made = (await list()).entries.find(entry => entry.name === 'made');
 		assert.equal((await execute(engine, { type: 'renameLocal', root: root.id, path, name: 'made', token: made.token, newName: 'renamed' })).type, 'done');
 		assert(existsSync(join(folder, 'renamed')));
-		assert.equal((await execute(engine, { type: 'deleteLocal', root: root.id, path, name: 'renamed', token: null })).type, 'done');
+		assert.equal((await execute(engine, { type: 'deleteLocal', root: root.id, path, name: 'renamed', token: null, trash: false })).type, 'done');
 		assert(!existsSync(join(folder, 'renamed')));
 	} finally {
 		await execute(engine, { type: 'shutdown' });

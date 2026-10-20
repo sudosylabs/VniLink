@@ -389,19 +389,24 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
-    /// Deletes one local entry inside its parent folder. `expected`
-    /// carries the listing token; a replaced source is refused instead of
-    /// deleting a different object.
+    /// Deletes one local entry inside its parent folder: to the Trash when
+    /// `trash`, else permanently. `expected` carries the listing token; a
+    /// replaced source is refused instead of deleting a different object.
     pub fn delete_entry(
         &self,
         root: u64,
         path: String,
         name: String,
         expected: Option<FfiEntryToken>,
+        trash: bool,
     ) -> Result<(), FfiError> {
-        self.inner
-            .delete_entry(root, &path, &name, expected.map(to_entry_token))
-            .map_err(map_error)
+        let expected = expected.map(to_entry_token);
+        if trash {
+            self.inner.trash_entry(root, &path, &name, expected)
+        } else {
+            self.inner.delete_entry(root, &path, &name, expected)
+        }
+        .map_err(map_error)
     }
 
     /// Lists a directory on the controlled computer. Needs the live

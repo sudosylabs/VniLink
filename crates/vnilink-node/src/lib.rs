@@ -853,11 +853,13 @@ enum Command {
         #[serde(rename = "newName")]
         new_name: String,
     },
+    /// To this computer's Trash when `trash`, else permanently.
     DeleteLocal {
         root: String,
         path: String,
         name: String,
         token: Option<files::TransferToken>,
+        trash: bool,
     },
     KeyboardMode,
     SetKeyboardMode {
@@ -1744,12 +1746,14 @@ impl EngineBridge {
                 path,
                 name,
                 token,
+                trash,
             } => {
                 core.delete_entry(
                     parse_id(root, "Invalid root")?,
                     path.clone(),
                     name.clone(),
                     token.as_ref().map(files::entry_token).transpose()?,
+                    *trash,
                 )
                 .map_err(core_error)?;
                 Reply::Done
@@ -2582,7 +2586,7 @@ impl CommandShape {
             "listLocal" => &["type", "root", "path", "offset"],
             "createLocalDir" => &["type", "root", "path", "name"],
             "renameLocal" => &["type", "root", "path", "name", "token", "newName"],
-            "deleteLocal" => &["type", "root", "path", "name", "token"],
+            "deleteLocal" => &["type", "root", "path", "name", "token", "trash"],
             "setKeyboardMode" => &["type", "mode"],
             "setSwapControlAndCommand" => &["type", "enabled"],
             "setSessionPointerSettings" => &["type", "sessionId", "generation", "settings"],

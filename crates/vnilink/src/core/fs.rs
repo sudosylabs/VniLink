@@ -184,6 +184,29 @@ impl Core {
         fs::finish_delete(work)
     }
 
+    /// Moves one entry to this computer's Trash, checked as `delete_entry`
+    /// checks it. A place with no Trash refuses with `Unsupported`, so the
+    /// caller can offer to delete it permanently instead.
+    pub fn trash_entry(
+        &self,
+        root: u64,
+        path: &str,
+        name: &str,
+        expected: Option<crate::fs::EntryToken>,
+    ) -> Result<(), Error> {
+        self.ensure_alive()?;
+        if super::jobs::rename_blocked(&self.shared, root, path, name) {
+            return Err(Error::InvalidSetting(
+                "the entry is used by an active transfer",
+            ));
+        }
+        let target = {
+            let roots = lock(&self.shared.file_roots);
+            fs::stage_trash(&roots, root, path, name, expected)?
+        };
+        fs::finish_trash(target)
+    }
+
     /// Stats one entry for test identity proofs without listing.
     #[cfg(test)]
     pub(crate) fn stat_entry(
@@ -306,6 +329,7 @@ impl Core {
                 path: path.to_owned(),
                 name: name.to_owned(),
                 expected,
+                trash: false,
             },
         )? {
             FsOutcome::Done => Ok(()),
@@ -625,6 +649,7 @@ pub(super) async fn handle_fs_request(
             path,
             name,
             expected,
+            trash,
             ..
         } => {
             // Same admission as rename, but the tree walk happens after the
@@ -645,7 +670,11 @@ pub(super) async fn handle_fs_request(
                     Err(fs::Response::coded(id, fs::STATUS_ERROR))
                 } else {
                     let roots = lock(&shared.file_roots);
-                    let outcome = fs::stage_delete(&roots, root, &path, &name, expected);
+                    let outcome = if trash {
+                        fs::stage_trash(&roots, root, &path, &name, expected).map(Staged::Trash)
+                    } else {
+                        fs::stage_delete(&roots, root, &path, &name, expected).map(Staged::Delete)
+                    };
                     drop(roots);
                     outcome.map_err(|error| map_fs_error(id, &error))
                 }
@@ -653,7 +682,12 @@ pub(super) async fn handle_fs_request(
             match staged {
                 Err(response) => (response, None),
                 Ok(work) => {
-                    match tokio::task::spawn_blocking(move || fs::finish_delete(work)).await {
+                    match tokio::task::spawn_blocking(move || match work {
+                        Staged::Delete(work) => fs::finish_delete(work),
+                        Staged::Trash(path) => fs::finish_trash(path),
+                    })
+                    .await
+                    {
                         Ok(Ok(())) => (fs::Response::ok(id), None),
                         Ok(Err(error)) => (map_fs_error(id, &error), None),
                         Err(_) => (fs::Response::coded(id, fs::STATUS_ERROR), None),
@@ -837,12 +871,22 @@ pub(super) fn status_error(status: u8, message: &str) -> Result<(), Error> {
         status if status == fs::STATUS_EXISTS => Err(Error::FileExists),
         status if status == fs::STATUS_DENIED => Err(Error::TransferDenied),
         status if status == fs::STATUS_STALE => Err(Error::StaleSession),
+        status if status == fs::STATUS_NO_TRASH => Err(Error::Unsupported(fs::NO_TRASH)),
         _ => Err(Error::InvalidSetting(fs::failure_message(message))),
     }
 }
 
+/// A delete ready to run once the handler's locks are dropped.
+enum Staged {
+    Delete(fs::DeleteWork),
+    Trash(std::path::PathBuf),
+}
+
 fn map_fs_error(id: u32, error: &Error) -> fs::Response {
     match error {
+        Error::Unsupported(message) if *message == fs::NO_TRASH => {
+            fs::Response::coded(id, fs::STATUS_NO_TRASH)
+        }
         Error::FileExists => fs::Response::coded(id, fs::STATUS_EXISTS),
         Error::TransferDenied => fs::Response::coded(id, fs::STATUS_DENIED),
         Error::StaleSession => fs::Response::coded(id, fs::STATUS_STALE),

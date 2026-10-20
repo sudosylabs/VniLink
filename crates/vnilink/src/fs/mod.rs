@@ -20,10 +20,11 @@ mod path;
 mod places;
 mod rename;
 mod roots;
+mod trash;
 mod wire;
 
 pub(crate) use delete::{
-    failure_message, finish_delete, stage_delete, DELETE_FAILED, DELETE_INCOMPLETE,
+    failure_message, finish_delete, stage_delete, DeleteWork, DELETE_FAILED, DELETE_INCOMPLETE,
 };
 pub(crate) use list::{list_page, list_page_async, ListHooks};
 pub(crate) use mkdir::create_dir;
@@ -34,11 +35,12 @@ pub(crate) use rename::rename_entry;
 #[cfg(test)]
 pub(crate) use rename::STALE_ENTRY;
 pub(crate) use roots::{PinnedRoot, RootSet, ROOTS_REBOUND};
+pub(crate) use trash::{finish_trash, stage_trash, NO_TRASH};
 pub use wire::RevisionGate;
 pub(crate) use wire::{
     decode_list_body, decode_places_body, decode_request, decode_response, encode_list_body,
     encode_places_body, encode_request, encode_response, Request, Response, STATUS_DENIED,
-    STATUS_ERROR, STATUS_EXISTS, STATUS_STALE,
+    STATUS_ERROR, STATUS_EXISTS, STATUS_NO_TRASH, STATUS_STALE,
 };
 
 #[cfg(test)]

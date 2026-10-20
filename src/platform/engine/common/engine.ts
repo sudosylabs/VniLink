@@ -218,7 +218,7 @@ export type EngineCommand =
 	| { type: 'listLocal'; root: string; path: string; offset: string }
 	| { type: 'createLocalDir'; root: string; path: string; name: string }
 	| { type: 'renameLocal'; root: string; path: string; name: string; token: FileToken | null; newName: string }
-	| { type: 'deleteLocal'; root: string; path: string; name: string; token: FileToken | null }
+	| { type: 'deleteLocal'; root: string; path: string; name: string; token: FileToken | null; trash: boolean }
 	| { type: 'startNativeScreenSharing'; displayId: number; width: number; height: number; pixelWidth: number; pixelHeight: number }
 	| { type: 'stopNativeScreenSharing' | 'nativeSharingStatus' }
 	| { type: 'startRecording'; sessionId: string; generation: string; destination: string; maxBytes: string; maxDurationMs: string; retention?: RecordingRetention; source?: 'desktop' | 'camera' }
@@ -652,7 +652,10 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'listLocal': keys = ['root', 'path', 'offset']; valid = decimal(value.root) && isFilePath(value.path) && decimal(value.offset); break;
 		case 'createLocalDir': keys = ['root', 'path', 'name']; valid = decimal(value.root) && isFilePath(value.path) && isFileName(value.name); break;
 		case 'renameLocal': keys = ['root', 'path', 'name', 'token', 'newName']; valid = decimal(value.root) && isFilePath(value.path) && isFileName(value.name) && (value.token === null || isFileToken(value.token)) && isFileName(value.newName); break;
-		case 'deleteLocal': keys = ['root', 'path', 'name', 'token']; valid = decimal(value.root) && isFilePath(value.path) && isFileName(value.name) && (value.token === null || isFileToken(value.token)); break;
+		case 'deleteLocal':
+			keys = ['root', 'path', 'name', 'token', 'trash'];
+			valid = decimal(value.root) && isFilePath(value.path) && isFileName(value.name) && (value.token === null || isFileToken(value.token)) && typeof value.trash === 'boolean';
+			break;
 		case 'startNativeScreenSharing': keys = ['displayId', 'width', 'height', 'pixelWidth', 'pixelHeight']; valid = isNativeScreenSource({ displayId: value.displayId, width: value.width, height: value.height, pixelWidth: value.pixelWidth, pixelHeight: value.pixelHeight }); break;
 		case 'nativeSharingStatus': case 'stopNativeScreenSharing': keys = []; valid = true; break;
 		case 'remoteCameraDevices': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;

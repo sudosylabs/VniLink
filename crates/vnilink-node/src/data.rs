@@ -1024,11 +1024,13 @@ enum FileOperation {
         #[serde(rename = "newName")]
         new_name: String,
     },
+    /// To the other computer's Trash when `trash`, else permanently.
     Delete {
         root: String,
         path: String,
         name: String,
         token: Option<crate::files::TransferToken>,
+        trash: bool,
     },
     Submit {
         direction: String,
@@ -1174,12 +1176,14 @@ impl FileTask {
                 path,
                 name,
                 token,
+                trash,
             } => {
                 files.delete(
                     parse_id(root, "Invalid root")?,
                     path.clone(),
                     name.clone(),
                     token.as_ref().map(crate::files::entry_token).transpose()?,
+                    *trash,
                 )?;
                 Ok(serde_json::Value::Null)
             }
@@ -1683,6 +1687,7 @@ mod tests {
             path: "".into(),
             name: "renamed".into(),
             token: None,
+            trash: false,
         };
         assert_eq!(answer(&mut file_task)["ok"], serde_json::Value::Null);
         assert!(!destination.join("renamed").exists());
