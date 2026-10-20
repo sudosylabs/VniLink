@@ -45,8 +45,6 @@ export class FilesView extends Disposable implements WorkbenchTab {
 	private readonly retry = this._register(new MutableDisposable());
 	/** Each transfer's last state and files done, to see what newly landed. */
 	private readonly landed = new Map<string, { readonly state: string; readonly files: number }>();
-	private readonly refreshTimers = new Map<FilesPane, ReturnType<typeof setTimeout>>();
-	private readonly refreshAgain = new Set<FilesPane>();
 
 	constructor(
 		private readonly device: DeviceSummary,
@@ -111,9 +109,6 @@ export class FilesView extends Disposable implements WorkbenchTab {
 		this._register({
 			dispose: () => {
 				this.session?.release();
-				for (const timer of this.refreshTimers.values()) {
-					clearTimeout(timer);
-				}
 			},
 		});
 		this.activate('local');
@@ -191,7 +186,8 @@ export class FilesView extends Disposable implements WorkbenchTab {
 	/**
 	 * Shows what a transfer brought: the pane on the receiving side lists
 	 * its folder again as files land and when the transfer completes, while
-	 * it shows that folder or one inside it.
+	 * it shows that folder or one inside it, on the same schedule as its
+	 * watch ([`FilesPaneView.refreshSoon`]).
 	 */
 	private refreshDestinations(session: IFilesSession): void {
 		for (const job of session.jobs) {
@@ -208,7 +204,7 @@ export class FilesView extends Disposable implements WorkbenchTab {
 			if (destination && folder && (folder.root !== destination.root || !(folder.path === destination.path || folder.path.startsWith(destination.path ? `${destination.path}/` : '')))) {
 				continue;
 			}
-			this.scheduleRefresh(pane);
+			pane.refreshSoon();
 		}
 	}
 
@@ -229,21 +225,6 @@ export class FilesView extends Disposable implements WorkbenchTab {
 		}
 		this.activate(place.side);
 		pane.reveal(place.name);
-	}
-
-	/** Lists `pane`'s folder again now, then at most once a second, with a last listing for what landed in between. */
-	private scheduleRefresh(pane: FilesPaneView): void {
-		if (this.refreshTimers.has(pane.side)) {
-			this.refreshAgain.add(pane.side);
-			return;
-		}
-		void pane.refresh();
-		this.refreshTimers.set(pane.side, setTimeout(() => {
-			this.refreshTimers.delete(pane.side);
-			if (this.refreshAgain.delete(pane.side)) {
-				this.scheduleRefresh(pane);
-			}
-		}, 1000));
 	}
 
 	private showFailure(failure: FilesFailure): void {

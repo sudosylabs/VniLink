@@ -28,6 +28,21 @@ pub(crate) fn check_name(name: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// Prefixes of the names VniLink gives what it is still writing into, or
+/// moving out of, a folder: a copy staged beside its destination
+/// (`.vnlpub.`), a file arriving in place (`.vnlpart.`), a name changing
+/// only its case (`.vnlcase.`) and a folder being deleted (`.vnldelete.`).
+const ENGINE_TEMP_PREFIXES: [&str; 4] = [".vnlpub.", ".vnlpart.", ".vnlcase.", ".vnldelete."];
+
+/// Whether `name` is one of VniLink's own temporary entries. They are not
+/// the user's: listings, folder fingerprints and watches leave them out,
+/// so a pane never shows them or lists its folder again because of them.
+pub(crate) fn is_engine_temp(name: &str) -> bool {
+    ENGINE_TEMP_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
+
 /// Validates a relative directory path. Empty names the root itself.
 pub(crate) fn check_rel(path: &str) -> Result<(), Error> {
     if path.is_empty() {

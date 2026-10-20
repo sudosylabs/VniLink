@@ -170,7 +170,7 @@ class RowRenderer implements IListRenderer<PaneRow, RowTemplate> {
 		template.icon.replaceChildren(ring ? renderRing(arrival.progress, arrival.tone) : renderIcon(folder ? Icons.files : Icons.file, { variant: folder ? 'filled' : 'outlined' }));
 		template.modified.textContent = ring || !entry ? arrival?.status ?? '' : formatModified(Number(entry.mtimeMs), new Date());
 		template.modified.title = ring ? arrival.status : '';
-		template.size.textContent = entry ? entrySize(entry) : folder ? '—' : formatSize(arrival?.bytes ?? 0);
+		template.size.textContent = entry ? entrySize(entry) : folder || arrival?.bytes === undefined ? '—' : formatSize(arrival.bytes);
 		if (!entry) {
 			template.editing.clear();
 			template.name.textContent = arrival?.name ?? '';
@@ -400,7 +400,9 @@ export class FilesPaneView extends Disposable {
 	private stateAct: (() => void) | undefined;
 	/** The open folder's watch: changes made outside VniLink list it again. */
 	private readonly watcher = this._register(new MutableDisposable());
-	private readonly changedLater = this._register(new MutableDisposable());
+	/** Set for a second after the folder is listed again; `relistWanted` asks for one more then. */
+	private readonly relisted = this._register(new MutableDisposable());
+	private relistWanted = false;
 
 	constructor(
 		public readonly side: FilesPane,
@@ -698,7 +700,7 @@ export class FilesPaneView extends Disposable {
 			const entering = !same(this.current, folder);
 			if (entering || !this.watcher.value) {
 				this.watcher.value = disk.watch(folder, () => {
-					this.folderChanged();
+					this.refreshSoon();
 				});
 			}
 			this.current = folder;
@@ -723,16 +725,29 @@ export class FilesPaneView extends Disposable {
 		}
 	}
 
-	/** Lists the folder again shortly after it changed, once for changes that come together. */
-	private folderChanged(): void {
+	/**
+	 * Lists the folder again now, then at most once a second while asked
+	 * again, with a last listing for what changed in between. The folder's
+	 * watch and the transfers landing in it both ask here, so a change both
+	 * see lists it once, however fast files arrive.
+	 */
+	public refreshSoon(): void {
+		if (this.relisted.value) {
+			this.relistWanted = true;
+			return;
+		}
+		// A name being typed is not taken away; the rename lists the folder when it ends.
+		if (this.editing === undefined) {
+			void this.refresh();
+		}
 		const timer = setTimeout(() => {
-			this.changedLater.clear();
-			// A name being typed is not taken away; the rename lists the folder when it ends.
-			if (this.editing === undefined) {
-				void this.refresh();
+			this.relisted.clear();
+			if (this.relistWanted) {
+				this.relistWanted = false;
+				this.refreshSoon();
 			}
-		}, 300);
-		this.changedLater.value = toDisposable(() => {
+		}, 1000);
+		this.relisted.value = toDisposable(() => {
 			clearTimeout(timer);
 		});
 	}
@@ -818,7 +833,7 @@ export class FilesPaneView extends Disposable {
 		}
 		// Progress alone: only the transfers' own rows are drawn again.
 		this.rows.forEach((row, index) => {
-			const arrival = row.arrival && arrivals.find(candidate => candidate.jobId === row.arrival?.jobId);
+			const arrival = row.arrival && arrivals.find(candidate => candidate.jobId === row.arrival?.jobId && candidate.name === row.arrival.name);
 			if (arrival && arrival !== row.arrival) {
 				this.rows[index] = { ...row, arrival };
 				this.list.splice(index, 1, [this.rows[index]]);
@@ -870,7 +885,7 @@ export class FilesPaneView extends Disposable {
 			(names.has(arrival.name) ? decorating : arriving).set(arrival.name, arrival);
 		}
 		// Not there yet: placed as an entry of its size, modified now, would be.
-		const placeholders = [...arriving.values()].map((arrival): FileEntry => ({ name: arrival.name, kind: arrival.folder ? 'dir' : 'file', size: String(arrival.bytes), mtimeMs: String(Date.now()), token: { dev: null, ino: null } }));
+		const placeholders = [...arriving.values()].map((arrival): FileEntry => ({ name: arrival.name, kind: arrival.folder ? 'dir' : 'file', size: String(arrival.bytes ?? 0), mtimeMs: String(Date.now()), token: { dev: null, ino: null } }));
 		const placed = new Set(placeholders);
 		this.rows = sortEntries([...this.shown, ...placeholders], this.sort, this.descending).flatMap((entry): PaneRow[] => {
 			const arrival = placed.has(entry) ? arriving.get(entry.name) : decorating.get(entry.name);

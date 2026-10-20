@@ -139,12 +139,13 @@ class FakeSession implements IFilesSession {
 
 	constructor(public readonly local: IFilesDisk, public readonly remote: IFilesDisk) { }
 
-	/** One transfer per item, each naming where it lands, as the engine's do. */
+	/** One transfer for the selection, naming each item where it lands, as the engine's does. */
 	public copy(from: FilesPane, items: readonly FilesItem[], to: FolderLocation): Promise<void> {
 		this.copies.push({ from, items, to });
-		this.set([...this.jobs, ...items.map((item, index) => job(String(this.jobs.length + index + 10), 'Transferring', {
-			label: item.name, direction: from === 'local' ? 'Upload' : 'Download', files_total: '1', destination: { root: to.root, path: to.path, name: item.name },
-		}))]);
+		this.set([...this.jobs, job(String(this.jobs.length + 10), 'Transferring', {
+			label: items.length > 1 ? `${items[0].name} +${String(items.length - 1)} more` : items[0].name, direction: from === 'local' ? 'Upload' : 'Download', files_total: String(items.length),
+			destination: { root: to.root, path: to.path, items: items.map(item => ({ name: item.name, folder: false })) },
+		})]);
 		return Promise.resolve();
 	}
 
@@ -328,10 +329,16 @@ export async function verifyFiles(): Promise<void> {
 		await until(() => remote.querySelectorAll('.files-row.arriving').length === 2, 'The copies did not show in the folder they land in');
 		assert(names(remote).join(',') === 'Installers,invoice.pdf,notes.md,report-q3.xlsx', `Arriving rows are out of place: ${names(remote).join(',')}`);
 		const arriving = remote.querySelector('.files-row.arriving');
-		assert(arriving?.querySelector('.files-ring') !== null && arriving?.querySelector('.files-cell-modified')?.textContent === '25%', `An arriving row does not show its progress: ${arriving?.textContent ?? ''}`);
+		// The selection is one transfer: each of its rows shows how far the transfer got.
+		assert(arriving?.querySelector('.files-ring') !== null && arriving?.querySelector('.files-cell-modified')?.textContent === '0 of 2 files', `An arriving row does not show its progress: ${arriving?.textContent ?? ''}`);
 		assert(view.element.querySelector('.files-status-transfers')?.textContent.startsWith('Copying to Sudosy') === true, 'The status bar does not sum up the copy');
-		// What lands shows on the receiving side without reloading it, tinted for a moment.
+		// A change the watch sees and a file landing, together, list the folder once; what follows waits a second.
 		const listed = remoteDisk.lists.length;
+		remoteDisk.watchers.get('2:Users/abass/Downloads')?.();
+		session.set(session.jobs.map(item => ({ ...item, files_done: '1' })));
+		await new Promise(resolve => setTimeout(resolve, 600));
+		assert(remoteDisk.lists.length === listed + 1, `The watch and a landing listed the folder ${String(remoteDisk.lists.length - listed)} times`);
+		// What lands shows on the receiving side without reloading it, tinted for a moment.
 		for (const item of session.copies[0].items) {
 			remoteDisk.land(session.copies[0].to, entry(item.name, 'file', 1000));
 		}
@@ -341,7 +348,7 @@ export async function verifyFiles(): Promise<void> {
 
 		// A name already there asks under that name: answered in place, or with Enter.
 		const downloads = { root: '0', path: 'Users/hammed/Downloads' };
-		session.set([job('21', 'WaitingDecision', { direction: 'Download', label: 'notes.md', waiting_file: 'notes.md', files_total: '1', destination: { ...downloads, name: 'notes.md' } })]);
+		session.set([job('21', 'WaitingDecision', { direction: 'Download', label: 'notes.md', waiting_file: 'notes.md', files_total: '1', destination: { ...downloads, items: [{ name: 'notes.md', folder: false }] } })]);
 		await until(() => local.querySelector('.files-decision') !== null, 'The clash did not ask under the name');
 		assert(local.querySelector('.files-decision-text')?.textContent === 'Sudosy is sending another “notes.md”', `Wrong question: ${local.querySelector('.files-decision-text')?.textContent ?? ''}`);
 		assert(local.querySelector('.files-decision-same')?.hasAttribute('hidden') === true, 'One file offers the same answer for others');
@@ -360,7 +367,7 @@ export async function verifyFiles(): Promise<void> {
 		assert(session.resolutions[1][1] === 'keepBoth', `Wrong answer from the dialog: ${JSON.stringify(session.resolutions[1])}`);
 
 		// The status bar opens every transfer, the finished ones too; Escape closes it where it opened.
-		session.set([job('20', 'Interrupted', { files_total: '1', destination: { root: '2', path: 'Users/abass/Downloads', name: 'big.iso' } }), job('22', 'Complete', { label: 'Screenshots', done_bytes: '1000000' })]);
+		session.set([job('20', 'Interrupted', { files_total: '1', destination: { root: '2', path: 'Users/abass/Downloads', items: [{ name: 'big.iso', folder: false }] } }), job('22', 'Complete', { label: 'Screenshots', done_bytes: '1000000' })]);
 		const summary = view.element.querySelector<HTMLButtonElement>('.files-status-transfers');
 		assert(summary?.textContent === '1 stopped', `A stopped transfer is not said: ${summary?.textContent ?? ''}`);
 		summary.click();
@@ -515,9 +522,9 @@ export async function showFilesFixture(width: number, height: number): Promise<{
 	press(localList ?? local, 'ArrowDown', 40, true);
 	const into = { root: '2', path: 'Users/abass/Downloads' };
 	session.set([
-		job('20', 'Transferring', { label: 'vnilink-demo.mov', files_total: '1', done_bytes: '412000', total_bytes: '1500000', destination: { ...into, name: 'vnilink-demo.mov' } }),
-		job('21', 'WaitingDecision', { direction: 'Download', waiting_file: 'notes.md', label: 'notes.md', files_total: '1', destination: { root: '0', path: 'Users/hammed/Downloads', name: 'notes.md' } }),
-		job('22', 'Complete', { label: 'Screenshots', done_bytes: '1000000', destination: { ...into, name: 'Screenshots' } }),
+		job('20', 'Transferring', { label: 'vnilink-demo.mov', files_total: '1', done_bytes: '412000', total_bytes: '1500000', destination: { ...into, items: [{ name: 'vnilink-demo.mov', folder: false }] } }),
+		job('21', 'WaitingDecision', { direction: 'Download', waiting_file: 'notes.md', label: 'notes.md', files_total: '1', destination: { root: '0', path: 'Users/hammed/Downloads', items: [{ name: 'notes.md', folder: false }] } }),
+		job('22', 'Complete', { label: 'Screenshots', done_bytes: '1000000', destination: { ...into, items: [{ name: 'Screenshots', folder: true }] } }),
 	]);
 	view.element.querySelector<HTMLButtonElement>('.files-status-transfers')?.click();
 	return {

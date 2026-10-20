@@ -28,7 +28,7 @@ pub(crate) use delete::{
 };
 pub(crate) use list::{list_page, list_page_async, ListHooks};
 pub(crate) use mkdir::create_dir;
-pub(crate) use path::{check_name, check_rel};
+pub(crate) use path::{check_name, check_rel, is_engine_temp};
 pub(crate) use places::places;
 pub use places::{FolderKind, Place, PlaceRoot, Places};
 pub(crate) use rename::rename_entry;

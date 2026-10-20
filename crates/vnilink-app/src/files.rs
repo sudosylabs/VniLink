@@ -158,12 +158,19 @@ pub struct FfiJobSnapshot {
     pub destination: Option<FfiJobDestination>,
 }
 
-/// The folder a transfer lands in and the name it lands under.
+/// The folder a transfer lands in and what lands in it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct FfiJobDestination {
     pub root: u64,
     pub folder: String,
+    pub items: Vec<FfiJobItem>,
+}
+
+/// One file or folder a transfer copies, by the name it lands under.
+#[derive(Clone, PartialEq, Eq)]
+pub struct FfiJobItem {
     pub name: String,
+    pub folder: bool,
 }
 
 impl std::fmt::Debug for FfiJobSnapshot {
@@ -298,7 +305,14 @@ pub(crate) fn job_snapshot(snapshot: vnilink::JobSnapshot) -> FfiJobSnapshot {
         destination: snapshot.destination.map(|destination| FfiJobDestination {
             root: destination.root,
             folder: destination.folder,
-            name: destination.name,
+            items: destination
+                .items
+                .into_iter()
+                .map(|item| FfiJobItem {
+                    name: item.name,
+                    folder: item.folder,
+                })
+                .collect(),
         }),
     }
 }

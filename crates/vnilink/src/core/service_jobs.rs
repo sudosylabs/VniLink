@@ -45,6 +45,41 @@ pub(super) fn check_owner(state: &State, owner: Option<JobOwner>) -> Result<(), 
     Ok(())
 }
 
+/// The session job control with `peer` rides, the same one each time:
+/// for a job a Files service owns, that service's own connection; for
+/// any other, the peer's control session, since a services-only link
+/// refuses jobs no service owns. `outgoing` is the side this computer
+/// controls; a hosted owner lives on the other.
+pub(super) fn job_session<'a>(
+    state: &'a State,
+    peer: &[u8; 32],
+    outgoing: bool,
+    owner: Option<JobOwner>,
+) -> Option<&'a LiveSession> {
+    let sessions = if outgoing {
+        &state.outgoing
+    } else {
+        &state.incoming
+    };
+    let live = |session: &&LiveSession| session.peer_key == *peer && !finished(&session.phase);
+    match owner {
+        Some(owner) => {
+            let records = if owner.hosted {
+                &state.hosted_services
+            } else {
+                &state.services
+            };
+            let record = records.get(&owner.id)?;
+            sessions.get(&record.info.connection_id).filter(live)
+        }
+        None => sessions
+            .values()
+            .filter(live)
+            .filter(|session| !session.services_only)
+            .max_by_key(|session| session.id),
+    }
+}
+
 /// Stops the jobs whose Files owner is gone and leaves them Interrupted,
 /// keeping what has arrived: an owner ends with its connection or pipe as
 /// well as with its window, and a new owner adopts and resumes them
@@ -60,9 +95,15 @@ pub(super) fn interrupt_orphaned(shared: &Shared) {
                     && !r.state.is_terminal()
                     && check_owner(&state, r.owner).is_err()
                 {
-                    r.state = JobState::Interrupted;
+                    // A download still being prepared has nothing to resume.
+                    if r.preparing_here() {
+                        r.state = JobState::Failed;
+                        r.error = Some("the transfer stopped before it was prepared".to_owned());
+                    } else {
+                        r.state = JobState::Interrupted;
+                        r.error = None;
+                    }
                     r.waiting_file = None;
-                    r.error = None;
                     Some((r.id, r.peer_key, r.sender))
                 } else {
                     None
@@ -105,30 +146,54 @@ impl Core {
             .ok_or(Error::InvalidSetting("the job is unknown"))?;
         check_owner(&lock(&self.shared.state), record.owner)
     }
-    /// Submit only after open_files_service has admitted the peer backend.
+    /// Copies the entries `names` of `src_folder` to `dst_rel` on the
+    /// other computer as one job. Submit only after open_files_service has
+    /// admitted the peer backend.
+    #[allow(clippy::too_many_arguments)]
     pub fn files_service_upload(
         &self,
         id: u64,
         generation: u64,
         src_root: u64,
-        src_rel: &str,
+        src_folder: &str,
+        names: &[String],
         dst_root: u64,
         dst_rel: &str,
     ) -> Result<u64, Error> {
         let (owner, peer) = self.files_job_owner(id, generation)?;
-        self.submit_upload(&peer, src_root, src_rel, dst_root, dst_rel, Some(owner))
+        self.submit_upload(
+            &peer,
+            src_root,
+            src_folder,
+            names,
+            dst_root,
+            dst_rel,
+            Some(owner),
+        )
     }
+    /// Copies the other computer's entries `names` of `src_folder` to
+    /// `dst_rel` here as one job.
+    #[allow(clippy::too_many_arguments)]
     pub fn files_service_download(
         &self,
         id: u64,
         generation: u64,
         src_root: u64,
-        src_rel: &str,
+        src_folder: &str,
+        names: &[String],
         dst_root: u64,
         dst_rel: &str,
     ) -> Result<u64, Error> {
         let (owner, peer) = self.files_job_owner(id, generation)?;
-        self.submit_download(&peer, src_root, src_rel, dst_root, dst_rel, Some(owner))
+        self.submit_download(
+            &peer,
+            src_root,
+            src_folder,
+            names,
+            dst_root,
+            dst_rel,
+            Some(owner),
+        )
     }
     pub fn files_service_jobs(&self, id: u64, generation: u64) -> Result<Vec<JobSnapshot>, Error> {
         // Retained records remain inspectable after their owner closes.
@@ -254,14 +319,14 @@ impl Core {
         payload: &[u8],
     ) -> Result<Vec<u8>, Error> {
         let Some(owner) = owner else {
-            return self.job_round_trip_side(peer, true, tag, payload);
+            return self.job_round_trip_side(peer, true, None, tag, payload);
         };
         check_owner(&lock(&self.shared.state), Some(owner))?;
         let mut body = vec![1];
         body.extend_from_slice(&owner.id.to_be_bytes());
         body.push(tag);
         body.extend_from_slice(payload);
-        let result = self.job_round_trip_side_owned(peer, true, TAG, &body, Some(owner));
+        let result = self.job_round_trip_side_owned(peer, true, TAG, &body, Some(owner), true);
         // An ambiguous submission may already have created a peer job. Closing
         // its owner settles that job even when we never received its wire id.
         if matches!(

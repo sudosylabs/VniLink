@@ -326,7 +326,11 @@ test('a file operation outside its shape never reaches the engine', async () => 
 	assert(!isFileOperation({ type: 'mkdir', root: '0', path: '', name: 'a/b' }), 'a name with a separator');
 	assert(!isFileOperation({ type: 'rename', root: '0', path: '', name: 'a', newName: 'b' }), 'no token field');
 	assert(isFileOperation({ type: 'rename', root: '0', path: '', name: 'a', token: { dev: '1', ino: null }, newName: 'b' }));
-	assert(!isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: '', dstRoot: '0', dstPath: 'x' }), 'copying a whole root');
+	assert(isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: '', names: ['a.txt', 'Photos'], dstRoot: '0', dstPath: 'x' }), 'entries of a whole disk');
+	assert(!isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: '', names: [], dstRoot: '0', dstPath: 'x' }), 'copying a whole root');
+	assert(!isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: 'Users', names: ['a', 'a'], dstRoot: '0', dstPath: 'x' }), 'an item twice');
+	assert(!isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: 'Users', names: ['a/b'], dstRoot: '0', dstPath: 'x' }), 'a path for a name');
+	assert(!isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: 'Users/a.txt', dstRoot: '0', dstPath: 'x' }), 'no names');
 	assert(isFileOperation({ type: 'resolve', jobId: '3', choice: 'keepBoth', applyToRemaining: true }));
 	assert(!isFileOperation({ type: 'resolve', jobId: '3', choice: 'overwrite', applyToRemaining: true }));
 	assert(!isFileOperation({ type: 'poll', jobId: '3' }), 'progress is pushed, never polled');

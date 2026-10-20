@@ -52,9 +52,12 @@ mod fs;
 #[cfg(test)]
 pub(crate) use fs::LIST_DELAY;
 mod host;
+mod job_journal;
 mod jobs;
 #[cfg(unix)]
 pub(crate) use jobs::PrestageHooks;
+#[cfg(test)]
+pub(crate) use jobs::{MAX_ACTIVE_JOBS, PREPARE_SCAN_HOOKS};
 mod input_cleanup;
 mod keys;
 mod lifecycle;
@@ -318,13 +321,6 @@ impl State {
     }
     fn outgoing_peer(&self, peer: &[u8; 32]) -> Option<&LiveSession> {
         self.outgoing
-            .values()
-            .find(|s| s.peer_key == *peer && !finished(&s.phase))
-    }
-    /// Live hosted session for one peer, if any. Peers are looked up by
-    /// identity, never by assuming a single hosted connection.
-    fn incoming_peer(&self, peer: &[u8; 32]) -> Option<&LiveSession> {
-        self.incoming
             .values()
             .find(|s| s.peer_key == *peer && !finished(&s.phase))
     }
@@ -629,7 +625,8 @@ struct Shared {
     jobs: Arc<Mutex<HashMap<u64, jobs::JobRecord>>>,
     /// Next local job id. Adopted peer ids bump it past collisions.
     job_next: AtomicU64,
-    job_save: Mutex<()>,
+    /// What each job's journal holds; its lock orders the writers.
+    job_journal: Mutex<job_journal::JobJournal>,
     job_owner_gate: Mutex<()>,
     /// Cancel watches for in-flight job fetches, one per active poll.
     job_cancel: Mutex<HashMap<u64, tokio::sync::watch::Sender<bool>>>,
@@ -640,9 +637,14 @@ struct Shared {
     /// bytes. Watchers compare it to the last value they saw instead of
     /// polling every job.
     job_revision: AtomicU64,
-    /// Set and signalled with each job change, so the background driver
-    /// takes the next step at once instead of at its next tick.
-    job_wake: (Mutex<bool>, std::sync::Condvar),
+    /// Signalled with each job change, so the background driver and job
+    /// workers take the next step at once instead of at their next tick.
+    job_wake: (Mutex<()>, std::sync::Condvar),
+    /// Jobs a driver worker is taking steps for.
+    job_workers: Mutex<std::collections::HashSet<u64>>,
+    /// Which sender jobs, and which of their entries, hold each hash a peer
+    /// may fetch. Taken after `jobs`, never before.
+    serve_index: Mutex<jobs::ServeIndex>,
     file_resources: Arc<Mutex<file_resources::Resources>>,
     /// Last-known backend facts per capability, published by adapters and
     /// serve loops. Read by the availability query; never guessed.

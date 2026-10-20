@@ -430,7 +430,8 @@ fn service_jobs_cross_the_ffi_boundary() {
             owner.id,
             owner.generation,
             controller_files.root,
-            controller_files.path("up.txt"),
+            controller_files.path(""),
+            vec!["up.txt".to_owned()],
             host_files.root,
             host_files.path("uploaded"),
         )
@@ -453,7 +454,8 @@ fn service_jobs_cross_the_ffi_boundary() {
             owner.id,
             owner.generation,
             host_files.root,
-            host_files.path("down.txt"),
+            host_files.path(""),
+            vec!["down.txt".to_owned()],
             controller_files.root,
             controller_files.path("cancelled"),
         )
@@ -477,7 +479,8 @@ fn service_jobs_cross_the_ffi_boundary() {
             owner.id,
             owner.generation,
             host_files.root,
-            host_files.path("down.txt"),
+            host_files.path(""),
+            vec!["down.txt".to_owned()],
             controller_files.root,
             controller_files.path("later")
         )
@@ -1030,7 +1033,8 @@ fn files_handle_owns_submission_queue_and_cleanup() {
     let job = files
         .upload(
             controller_files.root,
-            controller_files.path("source.txt"),
+            controller_files.path(""),
+            vec!["source.txt".to_owned()],
             host_files.root,
             host_files.path("upload"),
         )
@@ -1055,7 +1059,8 @@ fn files_handle_owns_submission_queue_and_cleanup() {
     assert!(files
         .upload(
             controller_files.root,
-            controller_files.path("source.txt"),
+            controller_files.path(""),
+            vec!["source.txt".to_owned()],
             host_files.root,
             host_files.path("refused")
         )
@@ -1078,7 +1083,8 @@ fn files_handle_owns_submission_queue_and_cleanup() {
     let download = replacement
         .download(
             host_files.root,
-            host_files.path("return.txt"),
+            host_files.path(""),
+            vec!["return.txt".to_owned()],
             controller_files.root,
             controller_files.path("download"),
         )

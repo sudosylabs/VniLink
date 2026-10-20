@@ -147,7 +147,7 @@ pub use input::{
     MAX_DISPLAYS, MAX_DISPLAY_EDGE, MAX_KEY_TEXT, MAX_PRECISE_WHEEL, WHEEL_DETENT,
 };
 pub use installation::{InstallationStore, MemoryStore};
-pub use job::{ConflictChoice, JobDirection, JobSnapshot, JobState};
+pub use job::{ConflictChoice, JobDestination, JobDirection, JobItem, JobSnapshot, JobState};
 pub use keyboard::{KeyboardMode, LocalKey};
 pub use manifest::{
     keep_both_name, Manifest, ManifestEntry, MAX_MANIFEST_DEPTH, MAX_MANIFEST_FILES,

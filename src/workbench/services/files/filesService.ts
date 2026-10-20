@@ -64,7 +64,7 @@ export interface IFilesSession {
 	/** Whether the connection to the other computer has ended. */
 	readonly ended: boolean;
 	readonly onDidEnd: Event<void>;
-	/** Copies each item from `from`'s disk into `to` on the other one, one transfer per item. */
+	/** Copies the items from `from`'s disk into `to` on the other one: one transfer for the items of each folder, so a selection is one. */
 	copy(from: FilesPane, items: readonly FilesItem[], to: FolderLocation): Promise<void>;
 	cancel(jobId: string): Promise<void>;
 	resume(jobId: string): Promise<void>;

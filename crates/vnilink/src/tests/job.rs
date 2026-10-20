@@ -2193,7 +2193,8 @@ fn service_jobs_complete_both_directions(neutral: bool) {
             owner.id,
             owner.generation,
             controller_files.root,
-            &controller_files.path("up.bin"),
+            &controller_files.path(""),
+            &["up.bin".to_owned()],
             host_files.root,
             &host_files.path("uploads"),
         )
@@ -2222,7 +2223,8 @@ fn service_jobs_complete_both_directions(neutral: bool) {
             owner.id,
             owner.generation,
             host_files.root,
-            &host_files.path("down.bin"),
+            &host_files.path(""),
+            &["down.bin".to_owned()],
             controller_files.root,
             &controller_files.path("downloads"),
         )
@@ -2282,7 +2284,8 @@ fn service_jobs_close_preserves_legacy_job_sharing_the_same_hash() {
             owner.id,
             owner.generation,
             controller_files.root,
-            &controller_files.path("same.bin"),
+            &controller_files.path(""),
+            &["same.bin".to_owned()],
             host_files.root,
             &host_files.path("cancelled"),
         )
@@ -2351,7 +2354,8 @@ fn service_jobs_host_close_stops_download_and_rejects_new_work() {
             owner.id,
             owner.generation,
             host_files.root,
-            &host_files.path("a.bin"),
+            &host_files.path(""),
+            &["a.bin".to_owned()],
             controller_files.root,
             &controller_files.path("cancelled"),
         )
@@ -2368,7 +2372,8 @@ fn service_jobs_host_close_stops_download_and_rejects_new_work() {
             owner.id,
             owner.generation,
             host_files.root,
-            &host_files.path("a.bin"),
+            &host_files.path(""),
+            &["a.bin".to_owned()],
             controller_files.root,
             &controller_files.path("later")
         ),
@@ -2400,7 +2405,8 @@ fn service_jobs_require_peer_admission_and_explicit_adoption_after_restart() {
             owner.id,
             owner.generation,
             controller_files.root,
-            &controller_files.path("a.bin"),
+            &controller_files.path(""),
+            &["a.bin".to_owned()],
             host_files.root,
             &host_files.path("refused")
         )
@@ -2430,7 +2436,8 @@ fn service_jobs_require_peer_admission_and_explicit_adoption_after_restart() {
             owner.id,
             owner.generation,
             controller_files.root,
-            &controller_files.path("a.bin"),
+            &controller_files.path(""),
+            &["a.bin".to_owned()],
             host_files.root,
             &host_files.path("cancelled"),
         )
@@ -2482,7 +2489,8 @@ fn service_jobs_closing_one_computer_keeps_another_transfer_active() {
             one.id,
             one.generation,
             controller_files.root,
-            &controller_files.path("shared.bin"),
+            &controller_files.path(""),
+            &["shared.bin".to_owned()],
             host_files.root,
             &host_files.path("cancelled"),
         )
@@ -2492,7 +2500,8 @@ fn service_jobs_closing_one_computer_keeps_another_transfer_active() {
             two.id,
             two.generation,
             controller_files.root,
-            &controller_files.path("shared.bin"),
+            &controller_files.path(""),
+            &["shared.bin".to_owned()],
             second_files.root,
             &second_files.path("kept"),
         )
@@ -2617,7 +2626,8 @@ fn files_job_explicit_adoption_rebinds_both_sides_and_fences_old_handle() {
             old.id,
             old.generation,
             controller_files.root,
-            &controller_files.path("adopt.bin"),
+            &controller_files.path(""),
+            &["adopt.bin".to_owned()],
             host_files.root,
             &host_files.path("adopted"),
         )
@@ -2706,7 +2716,8 @@ fn files_download_adoption_after_parent_replacement_preserves_verified_progress(
             old.id,
             old.generation,
             host_files.root,
-            &host_files.path("source"),
+            &host_files.path(""),
+            &["source".to_owned()],
             controller_files.root,
             &controller_files.path("received"),
         )
@@ -2824,7 +2835,8 @@ fn files_adoption_survives_both_core_restarts_with_verified_download() {
             old.id,
             old.generation,
             host_files.root,
-            &host_files.path("pack"),
+            &host_files.path(""),
+            &["pack".to_owned()],
             controller_files.root,
             &controller_files.path("received"),
         )
@@ -2935,7 +2947,8 @@ fn files_adoption_local_save_failure_can_retry_remote_acknowledged_binding() {
             old.id,
             old.generation,
             controller_files.root,
-            &controller_files.path("source.bin"),
+            &controller_files.path(""),
+            &["source.bin".to_owned()],
             host_files.root,
             &host_files.path("received"),
         )
@@ -2949,8 +2962,8 @@ fn files_adoption_local_save_failure_can_retry_remote_acknowledged_binding() {
     let (fresh, _pipe) = open();
     // An existing directory refuses atomic replacement on every target without
     // relying on permissions (the Docker validation account may be root).
-    let index = cs.join("blobs/jobs.json");
-    let saved = cs.join("blobs/jobs.saved");
+    let index = cs.join(&format!("blobs/jobs/{job}.jsonl"));
+    let saved = cs.join("blobs/journal.saved");
     std::fs::rename(&index, &saved).unwrap();
     std::fs::create_dir(&index).unwrap();
     assert!(controller
@@ -3094,7 +3107,8 @@ fn restart_reconciles_managed_orphans_but_keeps_interrupted_staging() {
     let orphan = hs.join("blobs/staging/job-18446744073709551615");
     std::fs::create_dir_all(&orphan).unwrap();
     std::fs::write(orphan.join("unused"), b"orphan").unwrap();
-    std::fs::write(hs.join("blobs/jobs.json.tmp"), b"incomplete atomic save").unwrap();
+    let torn = hs.join(&format!("blobs/jobs/{rx}.jsonl.tmp"));
+    std::fs::write(&torn, b"incomplete rewrite").unwrap();
     let reopened = start_direct();
     reopened.set_blob_directory(hs.join("blobs")).unwrap();
     assert_eq!(
@@ -3106,7 +3120,7 @@ fn restart_reconciles_managed_orphans_but_keeps_interrupted_staging() {
         b"resume data"
     );
     assert!(!orphan.exists());
-    assert!(!hs.join("blobs/jobs.json.tmp").exists());
+    assert!(!torn.exists());
     assert_eq!(
         std::fs::read(cs.join("root/source.bin")).unwrap(),
         b"source survives crash"
@@ -4032,7 +4046,8 @@ fn a_new_files_owner_resumes_what_a_lost_one_left() {
             lost.id,
             lost.generation,
             controller_files.root,
-            &controller_files.path("carry.bin"),
+            &controller_files.path(""),
+            &["carry.bin".to_owned()],
             host_files.root,
             &host_files.path("inbox"),
         )
@@ -4042,7 +4057,10 @@ fn a_new_files_owner_resumes_what_a_lost_one_left() {
         Some(crate::job::JobDestination {
             root: host_files.root,
             folder: host_files.path("inbox"),
-            name: "carry.bin".into(),
+            items: vec![crate::JobItem {
+                name: "carry.bin".into(),
+                folder: false,
+            }],
         })
     );
     let receiver = host.job_list().unwrap()[0].id;
@@ -4111,4 +4129,529 @@ fn the_other_computers_folder_says_when_it_changes() {
     );
     host.shutdown();
     controller.shutdown();
+}
+
+/// A thousand files the receiver already has, skipped once asked, take
+/// no pass each: its worker skips one after another until the job is
+/// done, where the driver's 50 ms between passes needed 50 seconds.
+#[test]
+fn a_thousand_skipped_files_take_no_pass_each() {
+    const FILES: usize = 1000;
+    let _heavy = HEAVY_JOB
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let (host, controller, host_scratch, controller_scratch) = setup("skips");
+    let host = std::sync::Arc::new(host);
+    let controller = std::sync::Arc::new(controller);
+    for side in [&controller_scratch, &host_scratch] {
+        let folder = side.join("root/many");
+        std::fs::create_dir_all(&folder).unwrap();
+        for index in 0..FILES {
+            std::fs::write(folder.join(format!("f-{index:04}.txt")), b"x").unwrap();
+        }
+    }
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
+    let _session = controller.connect(&host.endpoint_id()).unwrap();
+    host.start_job_driver();
+    controller.start_job_driver();
+    let job = controller
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("many"),
+            host_files.root,
+            &host_files.path(""),
+        )
+        .unwrap();
+    let rx = receiver_id(&host, job);
+    let started = std::time::Instant::now();
+    while host.job_snapshot(rx).unwrap().state != JobState::WaitingDecision {
+        assert!(started.elapsed() < Duration::from_secs(5), "no question");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let started = std::time::Instant::now();
+    host.job_resolve(rx, ConflictChoice::Skip, true).unwrap();
+    while host.job_snapshot(rx).unwrap().state != JobState::Complete {
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "{} of {FILES} skipped after {:?}",
+            host.job_snapshot(rx).unwrap().skipped_files,
+            started.elapsed()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    eprintln!("{FILES} skipped in {:?}", started.elapsed());
+    assert!(
+        started.elapsed() < Duration::from_millis(FILES as u64 * 50 / 4),
+        "skipping took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(host.job_snapshot(rx).unwrap().skipped_files, FILES as u64);
+}
+
+/// A sender whose receiver waits on a question asks how far it got ever
+/// more seldom, and an answer that changes nothing is neither saved nor
+/// told: neither side's jobs change while the question stands.
+#[test]
+fn a_waiting_transfer_does_not_wake_itself() {
+    let (host, controller, host_scratch, controller_scratch) = setup("quiet");
+    let host = std::sync::Arc::new(host);
+    let controller = std::sync::Arc::new(controller);
+    std::fs::write(controller_scratch.join("root/same.txt"), b"theirs").unwrap();
+    std::fs::write(host_scratch.join("root/same.txt"), b"mine").unwrap();
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
+    let _session = controller.connect(&host.endpoint_id()).unwrap();
+    host.start_job_driver();
+    controller.start_job_driver();
+    let job = controller
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("same.txt"),
+            host_files.root,
+            &host_files.path(""),
+        )
+        .unwrap();
+    let started = std::time::Instant::now();
+    while controller.job_snapshot(job).unwrap().state != JobState::WaitingDecision {
+        assert!(started.elapsed() < Duration::from_secs(5), "no question");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // The save that told of the question may land just after it shows.
+    let mut revisions = (controller.job_revision(), host.job_revision());
+    loop {
+        std::thread::sleep(Duration::from_millis(300));
+        let now = (controller.job_revision(), host.job_revision());
+        if now == revisions {
+            break;
+        }
+        revisions = now;
+    }
+    let journal = controller_scratch.join(&format!("blobs/jobs/{job}.jsonl"));
+    let written = std::fs::metadata(&journal).unwrap().len();
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(
+        (controller.job_revision(), host.job_revision()),
+        revisions,
+        "a standing question changed the jobs"
+    );
+    assert_eq!(std::fs::metadata(&journal).unwrap().len(), written);
+    assert_eq!(
+        std::fs::read(host_scratch.join("root/same.txt")).unwrap(),
+        b"mine"
+    );
+    controller
+        .job_resolve(job, ConflictChoice::Replace, false)
+        .unwrap();
+    let started = std::time::Instant::now();
+    while controller.job_snapshot(job).unwrap().state != JobState::Complete {
+        assert!(started.elapsed() < Duration::from_secs(5), "not resumed");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        std::fs::read(host_scratch.join("root/same.txt")).unwrap(),
+        b"theirs"
+    );
+}
+
+/// A controller may hold both a control session and a services-only link
+/// with one peer. Control of a job no Files service owns rides the control
+/// session every time, the only one that accepts it, and a Files job rides
+/// its own service's link, whichever the sessions were stored first.
+#[test]
+fn job_control_rides_the_session_that_carries_the_job() {
+    let (host, controller, hs, cs) = setup("both-links");
+    let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &hs.join("root"));
+    let controller_files =
+        FilesystemLocation::new(controller.file_roots().unwrap(), &cs.join("root"));
+    controller.connect(&host.endpoint_id()).unwrap();
+    let link = controller
+        .begin_connect_services(&host.endpoint_id())
+        .unwrap();
+    await_jobs(|| {
+        controller.controller_session(link.id).unwrap().phase == crate::SessionPhase::Active
+    });
+    let link = controller.controller_session(link.id).unwrap();
+    let owner = controller
+        .attach_controller_service(link.id, link.generation, crate::ServiceKind::Files)
+        .unwrap();
+    let _pipe = controller
+        .open_files_service(owner.id, owner.generation)
+        .unwrap();
+    for index in 0..4u64 {
+        let name = format!("plain-{index}.bin");
+        let bytes = payload(2048, 300 + index);
+        std::fs::write(cs.join("root").join(&name), &bytes).unwrap();
+        let job = controller
+            .job_submit_upload(
+                &host.endpoint_id(),
+                controller_files.root,
+                &controller_files.path(&name),
+                host_files.root,
+                &host_files.path(""),
+            )
+            .unwrap();
+        let rx = host
+            .job_list()
+            .unwrap()
+            .into_iter()
+            .find(|record| record.label == name)
+            .unwrap()
+            .id;
+        let (sender, receiver) = drive_to_end(&controller, job, &host, rx);
+        assert_eq!(
+            (sender.state, receiver.state),
+            (JobState::Complete, JobState::Complete)
+        );
+        assert_eq!(std::fs::read(hs.join("root").join(&name)).unwrap(), bytes);
+    }
+    let bytes = payload(2048, 399);
+    std::fs::write(cs.join("root/owned.bin"), &bytes).unwrap();
+    let job = controller
+        .files_service_upload(
+            owner.id,
+            owner.generation,
+            controller_files.root,
+            &controller_files.path(""),
+            &["owned.bin".to_owned()],
+            host_files.root,
+            &host_files.path(""),
+        )
+        .unwrap();
+    let rx = host
+        .job_list()
+        .unwrap()
+        .into_iter()
+        .find(|record| record.label == "owned.bin")
+        .unwrap()
+        .id;
+    let (sender, receiver) = drive_to_end(&controller, job, &host, rx);
+    assert_eq!(
+        (sender.state, receiver.state),
+        (JobState::Complete, JobState::Complete)
+    );
+    assert_eq!(std::fs::read(hs.join("root/owned.bin")).unwrap(), bytes);
+}
+
+/// Several files and folders chosen in one folder are one transfer: one
+/// manifest holding each at its own name, landing side by side, both ways.
+/// Its destination names each item and whether it is a folder; only the
+/// chosen entries, not their siblings, are held against renaming; and an
+/// item chosen twice is refused.
+#[test]
+fn a_selection_is_one_transfer_both_ways() {
+    let (host, controller, hs, cs) = setup("selection");
+    let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &hs.join("root"));
+    let controller_files =
+        FilesystemLocation::new(controller.file_roots().unwrap(), &cs.join("root"));
+    let pick = cs.join("root/pick");
+    std::fs::create_dir_all(pick.join("Photos")).unwrap();
+    std::fs::write(pick.join("a.txt"), payload(700, 501)).unwrap();
+    std::fs::write(pick.join("Photos/one.jpg"), payload(900, 502)).unwrap();
+    std::fs::write(pick.join("Photos/two.jpg"), payload(1100, 503)).unwrap();
+    std::fs::write(pick.join("left.txt"), b"not chosen").unwrap();
+    let (owner, _pipe) = owned_files(&controller, &host);
+    let names = ["a.txt".to_owned(), "Photos".to_owned()];
+    assert!(controller
+        .files_service_upload(
+            owner.id,
+            owner.generation,
+            controller_files.root,
+            &controller_files.path("pick"),
+            &["a.txt".to_owned(), "a.txt".to_owned()],
+            host_files.root,
+            &host_files.path(""),
+        )
+        .is_err());
+    let up = controller
+        .files_service_upload(
+            owner.id,
+            owner.generation,
+            controller_files.root,
+            &controller_files.path("pick"),
+            &names,
+            host_files.root,
+            &host_files.path(""),
+        )
+        .unwrap();
+    let sent = controller.job_snapshot(up).unwrap();
+    assert_eq!(sent.files_total, 3);
+    assert_eq!(sent.label, "Photos/one.jpg +2 more");
+    assert_eq!(
+        sent.destination.unwrap().items,
+        [
+            crate::JobItem {
+                name: "a.txt".into(),
+                folder: false
+            },
+            crate::JobItem {
+                name: "Photos".into(),
+                folder: true
+            },
+        ]
+    );
+    let rename = |name: &str, to: &str| {
+        controller.rename_entry(
+            controller_files.root,
+            &controller_files.path("pick"),
+            name,
+            None,
+            to,
+        )
+    };
+    assert!(rename("a.txt", "b.txt").is_err(), "a chosen file moved");
+    assert!(
+        rename("Photos", "Pictures").is_err(),
+        "a chosen folder moved"
+    );
+    rename("left.txt", "still-left.txt").unwrap();
+    let rx = receiver_id(&host, up);
+    let (sender, receiver) = drive_to_end(&controller, up, &host, rx);
+    assert_eq!(
+        (sender.state, receiver.state),
+        (JobState::Complete, JobState::Complete)
+    );
+    assert_eq!(receiver.files_done, 3);
+    assert_eq!(sender.files_done, 3, "the sender heard what landed");
+    assert_eq!(
+        std::fs::read(hs.join("root/a.txt")).unwrap(),
+        payload(700, 501)
+    );
+    manifest::assert_trees_equal(&pick.join("Photos"), &hs.join("root/Photos"));
+    assert!(!hs.join("root/still-left.txt").exists());
+
+    std::fs::create_dir_all(cs.join("root/back")).unwrap();
+    let down = controller
+        .files_service_download(
+            owner.id,
+            owner.generation,
+            host_files.root,
+            &host_files.path(""),
+            &names,
+            controller_files.root,
+            &controller_files.path("back"),
+        )
+        .unwrap();
+    let host_job = host
+        .job_list()
+        .unwrap()
+        .into_iter()
+        .find(|job| job.sender)
+        .unwrap()
+        .id;
+    let (receiver, sender) = drive_to_end(&controller, down, &host, host_job);
+    assert_eq!(
+        (receiver.state, sender.state),
+        (JobState::Complete, JobState::Complete)
+    );
+    assert_eq!(receiver.files_done, 3);
+    assert_eq!(
+        std::fs::read(cs.join("root/back/a.txt")).unwrap(),
+        payload(700, 501)
+    );
+    manifest::assert_trees_equal(&pick.join("Photos"), &cs.join("root/back/Photos"));
+}
+
+/// Transfers left interrupted when their Files owner went wait to resume
+/// and hold back nothing: with eight of them, a ninth is accepted, and the
+/// eight stay there to be taken over.
+#[test]
+fn interrupted_transfers_leave_room_for_new_ones() {
+    let (host, controller, hs, cs) = setup("room");
+    let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &hs.join("root"));
+    let controller_files =
+        FilesystemLocation::new(controller.file_roots().unwrap(), &cs.join("root"));
+    let pending = controller.begin_connect(&host.endpoint_id()).unwrap();
+    await_jobs(|| {
+        controller.controller_session(pending.id).unwrap().phase == crate::SessionPhase::Active
+    });
+    let session = controller.controller_session(pending.id).unwrap();
+    let open = || {
+        let owner = controller
+            .attach_controller_service(session.id, session.generation, crate::ServiceKind::Files)
+            .unwrap();
+        let pipe = controller
+            .open_files_service(owner.id, owner.generation)
+            .unwrap();
+        (owner, pipe)
+    };
+    let (lost, pipe) = open();
+    for index in 0..crate::core::MAX_ACTIVE_JOBS {
+        let name = format!("waiting-{index}.bin");
+        std::fs::write(
+            cs.join("root").join(&name),
+            payload(512, 600 + index as u64),
+        )
+        .unwrap();
+        controller
+            .files_service_upload(
+                lost.id,
+                lost.generation,
+                controller_files.root,
+                &controller_files.path(""),
+                &[name],
+                host_files.root,
+                &host_files.path(""),
+            )
+            .unwrap();
+    }
+    controller
+        .close_controller_service(lost.id, lost.generation)
+        .unwrap();
+    drop(pipe);
+    await_jobs(|| {
+        controller
+            .job_list()
+            .unwrap()
+            .iter()
+            .all(|job| job.state == JobState::Interrupted)
+    });
+    await_jobs(|| host.hosted_services().unwrap().is_empty());
+    let (fresh, _pipe) = open();
+    std::fs::write(cs.join("root/ninth.bin"), payload(512, 699)).unwrap();
+    let ninth = controller
+        .files_service_upload(
+            fresh.id,
+            fresh.generation,
+            controller_files.root,
+            &controller_files.path(""),
+            &["ninth.bin".to_owned()],
+            host_files.root,
+            &host_files.path(""),
+        )
+        .unwrap();
+    assert_eq!(
+        controller.job_snapshot(ninth).unwrap().state,
+        JobState::Serving
+    );
+    let waiting = controller
+        .job_list()
+        .unwrap()
+        .into_iter()
+        .filter(|job| job.state == JobState::Interrupted)
+        .count();
+    assert_eq!(waiting, crate::core::MAX_ACTIVE_JOBS);
+}
+
+static PREPARE_PARKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static PREPARE_RELEASED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Parks a host's download preparation before it reads anything, until
+/// released or cancelled.
+fn prepare_park_probe(unit: u64, cancelled: &std::sync::atomic::AtomicBool) {
+    if unit != 0 {
+        return;
+    }
+    PREPARE_PARKED.store(true, Ordering::Release);
+    while !PREPARE_RELEASED.load(Ordering::Acquire) && !cancelled.load(Ordering::Acquire) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// A download whose preparation takes long is a Preparing job at once:
+/// the request is answered while the other computer has not read a byte,
+/// so the Files owner is neither held for the whole preparation nor closed
+/// when it outlasts the request's bound (60 seconds). Asking again changes
+/// nothing until it is prepared; then it finishes. A cancel while
+/// preparing stops the preparation on both sides.
+#[test]
+fn a_long_download_preparation_shows_and_finishes() {
+    let (host, controller, hs, cs) = setup("prepare");
+    let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &hs.join("root"));
+    let controller_files =
+        FilesystemLocation::new(controller.file_roots().unwrap(), &cs.join("root"));
+    let bytes = payload(4096, 801);
+    std::fs::write(hs.join("root/slow.bin"), &bytes).unwrap();
+    std::fs::write(hs.join("root/second.bin"), payload(4096, 802)).unwrap();
+    let (owner, _pipe) = owned_files(&controller, &host);
+    struct Unhook;
+    impl Drop for Unhook {
+        fn drop(&mut self) {
+            *crate::core::PREPARE_SCAN_HOOKS.lock().unwrap() = None;
+        }
+    }
+    let _unhook = Unhook;
+    *crate::core::PREPARE_SCAN_HOOKS.lock().unwrap() = Some((
+        host.prestage_key(),
+        manifest::ScanHooks {
+            dir_probe: Some(prepare_park_probe),
+            finish_probe: None,
+        },
+    ));
+    let download = |name: &str| {
+        controller.files_service_download(
+            owner.id,
+            owner.generation,
+            host_files.root,
+            &host_files.path(""),
+            &[name.to_owned()],
+            controller_files.root,
+            &controller_files.path(""),
+        )
+    };
+    let job = download("slow.bin").unwrap();
+    assert!(
+        PREPARE_PARKED.load(Ordering::Acquire),
+        "answered only once prepared"
+    );
+    assert_eq!(
+        controller.job_snapshot(job).unwrap().state,
+        JobState::Preparing
+    );
+    let preparing = |core: &Core| {
+        core.job_list()
+            .unwrap()
+            .into_iter()
+            .filter(|job| job.state == JobState::Preparing)
+            .map(|job| job.id)
+            .collect::<Vec<_>>()
+    };
+    let host_job = preparing(&host)[0];
+    std::thread::sleep(Duration::from_millis(1500));
+    let asked = controller.job_poll(job).unwrap();
+    assert_eq!(asked.state, JobState::Preparing);
+    assert_eq!(asked.files_total, 0);
+    assert_eq!(
+        controller.controller_service(owner.id).unwrap().phase,
+        crate::ServicePhase::Active
+    );
+    PREPARE_RELEASED.store(true, Ordering::Release);
+    await_jobs(|| controller.job_poll(job).unwrap().state != JobState::Preparing);
+    let (receiver, sender) = drive_to_end(&controller, job, &host, host_job);
+    assert_eq!(
+        (receiver.state, sender.state),
+        (JobState::Complete, JobState::Complete)
+    );
+    assert_eq!(std::fs::read(cs.join("root/slow.bin")).unwrap(), bytes);
+
+    PREPARE_PARKED.store(false, Ordering::Release);
+    PREPARE_RELEASED.store(false, Ordering::Release);
+    let second = download("second.bin").unwrap();
+    assert_eq!(
+        controller.job_snapshot(second).unwrap().state,
+        JobState::Preparing
+    );
+    let host_second = preparing(&host)[0];
+    assert_eq!(
+        controller.job_cancel(second).unwrap().state,
+        JobState::Cancelled
+    );
+    await_jobs(|| host.job_snapshot(host_second).unwrap().state == JobState::Cancelled);
+    // The cancelled preparation stopped: nothing is offered or lands.
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        host.job_snapshot(host_second).unwrap().state,
+        JobState::Cancelled
+    );
+    assert!(!cs.join("root/second.bin").exists());
 }

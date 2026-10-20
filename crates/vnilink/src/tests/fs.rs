@@ -1749,3 +1749,83 @@ fn a_watched_folder_says_when_it_changes() {
         "an unwatched folder still reported changes"
     );
 }
+
+/// VniLink's own temporary entries are never listed, and writing them is
+/// not a change to the folder: a pane neither shows `.vnlpub.0.tmp` while
+/// a copy is staged beside its destination, nor lists its folder again for
+/// it. The rename that lands the file is a change.
+#[test]
+fn temporary_entries_are_never_listed_or_watched() {
+    let scratch = Scratch::new();
+    let folder = scratch.join("landing");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("kept.txt"), b"kept").unwrap();
+    for name in [
+        ".vnlpub.0.tmp",
+        ".vnlpart.7.3",
+        ".vnlcase.1.tmp",
+        ".vnldelete.0f",
+    ] {
+        std::fs::write(folder.join(name), b"temp").unwrap();
+    }
+    // Names that only resemble them are the user's.
+    std::fs::write(folder.join(".vnlrc"), b"mine").unwrap();
+    std::fs::write(folder.join("pairing.vnl"), b"mine").unwrap();
+    let core = start_direct();
+    core.enable_filesystem_access().unwrap();
+    let location = FilesystemLocation::new(core.file_roots().unwrap(), &folder);
+    let page = core
+        .list_dir(location.root, &location.path(""), 0, 50)
+        .unwrap();
+    let names: Vec<&str> = page.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, [".vnlrc", "kept.txt", "pairing.vnl"]);
+    assert_eq!(page.total, 3);
+    assert_eq!(page.non_utf8_skipped, 0);
+
+    let events = core.subscribe().unwrap();
+    let watch = core
+        .watch_folder(location.root, &location.path(""))
+        .unwrap();
+    let changed = |seconds: f32| {
+        let until = std::time::Instant::now() + Duration::from_secs_f32(seconds);
+        while std::time::Instant::now() < until {
+            if let Some(crate::CoreEvent::FolderChanged { watch: seen }) =
+                events.recv_timeout(Duration::from_millis(100))
+            {
+                if seen == watch {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+    // The watch may report its own start; let it settle first.
+    std::thread::sleep(Duration::from_millis(300));
+    while events.try_recv().is_some() {}
+    let staged = folder.join(".vnlpub.1.tmp");
+    std::fs::write(&staged, vec![7u8; 64 * 1024]).unwrap();
+    // kqueue on macOS names no entry reliably, so only where the watch
+    // names what changed are writes to a temporary entry left out.
+    #[cfg(not(target_os = "macos"))]
+    {
+        std::thread::sleep(Duration::from_millis(500));
+        while events.try_recv().is_some() {}
+        for _ in 0..4 {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&staged)
+                .and_then(|mut file| std::io::Write::write_all(&mut file, b"more"))
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(
+            !changed(1.5),
+            "writing a temporary entry was reported as a change"
+        );
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    while events.try_recv().is_some() {}
+    std::fs::rename(&staged, folder.join("landed.bin")).unwrap();
+    assert!(changed(5.0), "landing the file was not reported");
+    core.unwatch_folder(watch);
+}

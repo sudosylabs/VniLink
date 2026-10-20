@@ -4,12 +4,13 @@
 //! cancellation and restartable progress. Each side polls its own
 //! records; senders learn completion by asking the receiver over the
 //! auxiliary stream, so both directions complete honestly. Records
-//! persist as JSON beside the blob store; validated blob ranges persist
-//! in the store itself.
+//! persist in journals beside the blob store; validated blob ranges
+//! persist in the store itself.
 //!
 //! Threading follows the core rule: call from outside the runtime,
 //! preferably off the UI thread. One `job_poll` advances at most one
-//! file; progress is exact between polls.
+//! file; progress is exact between polls. Records persist in per-job
+//! journals (`job_journal`).
 
 use super::*;
 
@@ -27,7 +28,6 @@ use iroh_blobs::api::blobs::AddPathOptions;
 use iroh_blobs::api::proto::ImportMode;
 use iroh_blobs::BlobFormat;
 
-const JOBS_FILE: &str = "jobs.json";
 const STAGING_DIR: &str = "staging";
 
 /// Test hooks for cross-volume pre-staging. Production leaves them unset:
@@ -60,7 +60,6 @@ pub(crate) static PRESTAGE_HOOKS: std::sync::Mutex<PrestageHooks> =
     });
 
 const NO_JOB: &str = "the job is unknown";
-const JOB_STORE_FAILED: &str = "the job record could not be saved";
 const SOURCE_CHANGED: &str = "the source changed since preparation";
 const VERIFY_FAILED: &str = "the destination could not be verified";
 const PUBLISH_FAILED: &str = "the file could not be published";
@@ -74,7 +73,7 @@ pub(super) struct JobRecord {
     pub(super) owner: Option<super::service_jobs::JobOwner>,
     /// Set by the submitting side only.
     #[serde(default)]
-    destination: Option<crate::job::JobDestination>,
+    destination: Option<Landing>,
     pub(super) id: u64,
     /// Peer protocol job id; zero migrates older records whose ids matched.
     #[serde(default)]
@@ -88,7 +87,13 @@ pub(super) struct JobRecord {
     pub(super) state: JobState,
     manifest: Option<Manifest>,
     local_root: u64,
+    /// The leg's folder under `local_root`: where a receiver lands, or the
+    /// folder a sender's `names` are entries of.
     local_rel: String,
+    /// Sender only: the entries of `local_rel` it sends, by name; none when
+    /// it sends the whole root.
+    #[serde(default)]
+    names: Vec<String>,
     /// Pinned source/target root for this leg. None migrates records
     /// saved before pinning: the first use adopts the current root.
     #[serde(default)]
@@ -111,12 +116,15 @@ pub(super) struct JobRecord {
     /// resumes that file from the store's own record.
     #[serde(skip)]
     in_flight: u64,
+    /// Files landed since the journal last heard, oldest first.
+    #[serde(skip)]
+    unsaved_landed: Vec<(usize, String)>,
 }
 
 impl JobRecord {
     /// A download of one `size`-byte file, as a receiver holds it.
     #[cfg(test)]
-    fn test_receiver(id: u64, size: u64) -> Self {
+    pub(super) fn test_receiver(id: u64, size: u64) -> Self {
         Self {
             owner: None,
             destination: None,
@@ -139,6 +147,7 @@ impl JobRecord {
             }),
             local_root: 0,
             local_rel: String::new(),
+            names: Vec::new(),
             local_pin: None,
             outgoing: false,
             skipped_symlinks: 0,
@@ -153,7 +162,120 @@ impl JobRecord {
             apply_remaining: None,
             error: None,
             in_flight: 0,
+            unsaved_landed: Vec::new(),
         }
+    }
+
+    /// A download of `files` files, as a receiver holds it.
+    #[cfg(test)]
+    pub(super) fn test_receiver_of(id: u64, files: usize) -> Self {
+        let mut record = Self::test_receiver(id, 0);
+        record.manifest = Some(Manifest {
+            entries: (0..files)
+                .map(|index| ManifestEntry {
+                    path: format!("file-{index:05}.bin"),
+                    is_dir: false,
+                    hash: [1; 32],
+                    size: 1,
+                    source_mtime_ms: 0,
+                })
+                .collect(),
+        });
+        record
+    }
+
+    /// Lands the next file, as a receiver does.
+    #[cfg(test)]
+    pub(super) fn test_land_next(&mut self) {
+        let index = self.file_index;
+        self.land(index, format!("file-{index:05}.bin"));
+        self.file_index += 1;
+        self.files_done += 1;
+        self.done_bytes += 1;
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_landed(&self) -> &HashMap<usize, String> {
+        &self.landed
+    }
+
+    /// Whether the driver has a step to take for this job: neither ended
+    /// nor interrupted, not a receiver waiting on a decision, and not a
+    /// sender being prepared, which its request owns.
+    fn drivable(&self) -> bool {
+        !self.state.is_terminal()
+            && self.state != JobState::Interrupted
+            && (self.sender || self.state != JobState::WaitingDecision)
+            && !(self.sender && self.state == JobState::Preparing)
+    }
+
+    /// Whether its steps come on a timer rather than at every change: a
+    /// sender only asks its receiver how far it got, and a receiver whose
+    /// sender is still preparing asks for its manifest.
+    fn paced(&self) -> bool {
+        self.sender || self.manifest.is_none()
+    }
+
+    /// Whether this is a sender still being prepared here: it has nothing
+    /// to send yet, so nothing to resume.
+    pub(super) fn preparing_here(&self) -> bool {
+        self.sender && self.manifest.is_none()
+    }
+
+    /// What a receiver's answer may change on its sender.
+    fn reported(&self) -> (JobState, [u64; 3], Option<String>, Option<usize>) {
+        (
+            self.state,
+            [self.done_bytes, self.files_done, self.skipped_files],
+            self.error.clone(),
+            self.waiting_file,
+        )
+    }
+
+    pub(super) fn has_manifest(&self) -> bool {
+        self.manifest.is_some()
+    }
+
+    /// Records that file `index` landed as `name`, for the journal too.
+    fn land(&mut self, index: usize, name: String) {
+        self.unsaved_landed.push((index, name.clone()));
+        self.landed.insert(index, name);
+    }
+
+    /// Replays a landed file from the journal.
+    pub(super) fn land_saved(&mut self, index: usize, name: String) {
+        self.landed.insert(index, name);
+    }
+
+    pub(super) fn unsaved_landed(&self) -> &[(usize, String)] {
+        &self.unsaved_landed
+    }
+
+    /// The journal now holds the oldest `count` unsaved landed files.
+    pub(super) fn saved_landed(&mut self, count: usize) {
+        self.unsaved_landed
+            .drain(..count.min(self.unsaved_landed.len()));
+    }
+
+    /// The record as a journal progress line: everything but its manifest
+    /// and landed files, which the journal holds apart.
+    pub(super) fn progress_line(&mut self) -> String {
+        let manifest = self.manifest.take();
+        let landed = std::mem::take(&mut self.landed);
+        let line = serde_json::to_string(&*self).unwrap_or_default();
+        self.manifest = manifest;
+        self.landed = landed;
+        line
+    }
+
+    /// Takes a progress line read from the journal, keeping this record's
+    /// manifest and landed files.
+    pub(super) fn take_progress(&mut self, progress: JobRecord) {
+        let manifest = self.manifest.take();
+        let landed = std::mem::take(&mut self.landed);
+        *self = progress;
+        self.manifest = manifest;
+        self.landed = landed;
     }
 
     /// Bytes done, including the file arriving now.
@@ -179,16 +301,12 @@ impl JobRecord {
             .manifest
             .as_ref()
             .map(|manifest| {
-                let files: Vec<&str> = manifest
-                    .entries
-                    .iter()
-                    .filter(|entry| !entry.is_dir)
-                    .map(|entry| entry.path.as_str())
-                    .collect();
-                let label = match files.as_slice() {
-                    [] => "Transfer".to_owned(),
-                    [first] => (*first).to_owned(),
-                    [first, rest @ ..] => format!("{first} +{} more", rest.len()),
+                // A snapshot is taken at every step: no copy of the paths.
+                let mut files = manifest.entries.iter().filter(|entry| !entry.is_dir);
+                let label = match (files.next(), files.count()) {
+                    (None, _) => "Transfer".to_owned(),
+                    (Some(first), 0) => first.path.clone(),
+                    (Some(first), rest) => format!("{} +{rest} more", first.path),
                 };
                 (manifest.total_bytes(), manifest.file_count() as u64, label)
             })
@@ -207,13 +325,152 @@ impl JobRecord {
             resumed_files: self.resumed_files,
             skipped_files: self.skipped_files,
             skipped_symlinks: self.skipped_symlinks,
-            waiting_file: self
-                .waiting_file
-                .and_then(|index| self.files().get(index).map(|entry| entry.path.clone())),
+            waiting_file: self.waiting_file.and_then(|index| {
+                self.manifest
+                    .as_ref()?
+                    .entries
+                    .iter()
+                    .filter(|entry| !entry.is_dir)
+                    .nth(index)
+                    .map(|entry| entry.path.clone())
+            }),
             error: self.error.clone(),
-            destination: self.destination.clone(),
+            destination: self.destination.as_ref().map(|landing| {
+                // A chosen folder is what the manifest's paths lie under.
+                let folders: std::collections::HashSet<&str> = self
+                    .manifest
+                    .iter()
+                    .flat_map(|manifest| &manifest.entries)
+                    .filter_map(|entry| entry.path.split_once('/'))
+                    .map(|(top, _)| top)
+                    .collect();
+                crate::job::JobDestination {
+                    root: landing.root,
+                    folder: landing.folder.clone(),
+                    items: landing
+                        .names
+                        .iter()
+                        .map(|name| crate::job::JobItem {
+                            name: name.clone(),
+                            folder: folders.contains(name.as_str()),
+                        })
+                        .collect(),
+                }
+            }),
         }
     }
+}
+
+/// Each hash a peer may fetch, by the sender jobs whose manifests hold it
+/// and the entry it is in each, so a served request finds its job without
+/// reading every manifest. A sender job is indexed once it has a manifest
+/// and until it is forgotten; whether it may still serve is its state's
+/// to say.
+#[derive(Default)]
+pub(super) struct ServeIndex {
+    entries: HashMap<([u8; 32], [u8; 32]), Vec<(u64, usize)>>,
+}
+
+impl ServeIndex {
+    /// Indexes `record` if it is a sender with a manifest.
+    fn add(&mut self, record: &JobRecord) {
+        let Some(manifest) = record.manifest.as_ref().filter(|_| record.sender) else {
+            return;
+        };
+        for (index, entry) in manifest.entries.iter().enumerate() {
+            if entry.is_dir {
+                continue;
+            }
+            let holders = self
+                .entries
+                .entry((record.peer_key, entry.hash))
+                .or_default();
+            if !holders.contains(&(record.id, index)) {
+                holders.push((record.id, index));
+            }
+        }
+    }
+
+    fn remove(&mut self, record: &JobRecord) {
+        let Some(manifest) = record.manifest.as_ref().filter(|_| record.sender) else {
+            return;
+        };
+        for entry in manifest.entries.iter().filter(|entry| !entry.is_dir) {
+            let key = (record.peer_key, entry.hash);
+            if let Some(holders) = self.entries.get_mut(&key) {
+                holders.retain(|(id, _)| *id != record.id);
+                if holders.is_empty() {
+                    self.entries.remove(&key);
+                }
+            }
+        }
+    }
+
+    /// The sender jobs and entries holding `hash` for `peer`.
+    fn holders(&self, peer: &[u8; 32], hash: &[u8; 32]) -> Vec<(u64, usize)> {
+        self.entries
+            .get(&(*peer, *hash))
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
+/// Where a transfer lands, as the side that submitted it keeps it: the
+/// folder on the receiving computer and the names arriving in it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Landing {
+    root: u64,
+    folder: String,
+    names: Vec<String>,
+}
+
+/// `name` under `folder`, as a root-relative path.
+fn join_rel(folder: &str, name: &str) -> String {
+    if folder.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{folder}/{name}")
+    }
+}
+
+/// The root-relative paths a sender scans: each chosen entry of `folder`,
+/// or with no names the folder itself, which is then the whole root.
+fn source_rels(folder: &str, names: &[String]) -> Vec<String> {
+    if names.is_empty() {
+        vec![folder.to_owned()]
+    } else {
+        names.iter().map(|name| join_rel(folder, name)).collect()
+    }
+}
+
+/// One root-relative source as its folder and its name; the whole root
+/// (empty) names nothing.
+fn split_source(rel: &str) -> (String, Vec<String>) {
+    match rel.rsplit_once('/') {
+        _ if rel.is_empty() => (String::new(), Vec::new()),
+        Some((folder, name)) => (folder.to_owned(), vec![name.to_owned()]),
+        None => (String::new(), vec![rel.to_owned()]),
+    }
+}
+
+/// What a sender may be asked to send: entries of one folder, each named
+/// once, or the whole root. A manifest holds no more entries than names.
+fn check_sources(folder: &str, names: &[String]) -> Result<(), Error> {
+    fs::check_rel(folder)?;
+    if names.is_empty() && !folder.is_empty() {
+        return Err(Error::InvalidSetting("nothing was chosen to copy"));
+    }
+    if names.len() > manifest::MAX_MANIFEST_FILES {
+        return Err(Error::InvalidSetting(manifest::MANIFEST_LIMIT));
+    }
+    let mut seen = std::collections::HashSet::with_capacity(names.len());
+    for name in names {
+        fs::check_name(name)?;
+        if !seen.insert(name.as_str()) {
+            return Err(Error::InvalidSetting("an item was chosen twice"));
+        }
+    }
+    Ok(())
 }
 
 /// Verify a job leg's pin against locked roots, adopting the current
@@ -243,20 +500,34 @@ impl Core {
         dst_root: u64,
         dst_rel: &str,
     ) -> Result<u64, Error> {
-        self.submit_upload(peer_endpoint_id, src_root, src_rel, dst_root, dst_rel, None)
+        let (folder, names) = split_source(src_rel);
+        self.submit_upload(
+            peer_endpoint_id,
+            src_root,
+            &folder,
+            &names,
+            dst_root,
+            dst_rel,
+            None,
+        )
     }
 
+    /// Uploads the entries `names` of `src_folder`, or with no names the
+    /// whole root, as one job.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn submit_upload(
         &self,
         peer_endpoint_id: &str,
         src_root: u64,
-        src_rel: &str,
+        src_folder: &str,
+        names: &[String],
         dst_root: u64,
         dst_rel: &str,
         owner: Option<super::service_jobs::JobOwner>,
     ) -> Result<u64, Error> {
         let peer = parse_endpoint_id(peer_endpoint_id)?;
         self.ensure_alive()?;
+        check_sources(src_folder, names)?;
         Self::check_job_capacity(&self.shared)?;
         {
             let state = lock(&self.shared.state);
@@ -265,50 +536,59 @@ impl Core {
         fs::check_rel(dst_rel)?;
         // The live session first: no hashing work happens without one.
         // The host re-fences the generation on arrival.
-        let generation = self.outgoing_generation_for(&peer)?;
+        let generation = self.generation_for(&peer, true, owner)?;
         super::service_jobs::check_owner(&lock(&self.shared.state), owner)?;
         // Snapshot under a short lock; the recursive walk runs off every lock.
         let snapshot = lock(&self.shared.file_roots).clone();
-        let scan = manifest::scan(&snapshot, src_root, src_rel)?;
         // Pin the leg to the scanned generation: every file offer below
         // re-verifies it, so a rebind during admission fails the whole
         // offer instead of mixing generations.
         let mut pin = Some(snapshot.pin(src_root)?);
         let mut prepared =
             super::service_jobs::PreparedOffers::new(self.shared.clone(), peer, owner.is_some());
-        let mut manifest = manifest::skeleton(&scan);
-        // Import every file through anchored handles and authorize the peer
-        // before announcing. Hashes fill by scan path, so directory
-        // prefixing lands after.
-        for file in &scan.files {
-            super::service_jobs::check_owner(&lock(&self.shared.state), owner)?;
-            let (hash, size) = self.blob_offer_file_at(
-                peer_endpoint_id,
-                src_root,
-                file,
-                u64::MAX,
-                pin.as_ref().expect("leg pin just pinned"),
-            )?;
-            prepared.hashes.push(*hash.as_bytes());
-            if size != file.size {
-                return Err(Error::InvalidSetting(SOURCE_CHANGED));
+        let mut manifest = Manifest {
+            entries: Vec::new(),
+        };
+        let mut skipped_symlinks = 0;
+        for rel in source_rels(src_folder, names) {
+            let scan = manifest::scan(&snapshot, src_root, &rel)?;
+            skipped_symlinks += scan.skipped_symlinks;
+            let mut part = manifest::skeleton(&scan);
+            let at = entry_indices(&part);
+            // Import every file through anchored handles and authorize the
+            // peer before announcing. Hashes fill by scan path, so
+            // directory prefixing lands after.
+            for file in &scan.files {
+                super::service_jobs::check_owner(&lock(&self.shared.state), owner)?;
+                let (hash, size) = self.blob_offer_file_at(
+                    peer_endpoint_id,
+                    src_root,
+                    file,
+                    u64::MAX,
+                    pin.as_ref().expect("leg pin just pinned"),
+                )?;
+                prepared.hashes.push(*hash.as_bytes());
+                if size != file.size {
+                    return Err(Error::InvalidSetting(SOURCE_CHANGED));
+                }
+                if let Some(&index) = at.get(&file.rel) {
+                    part.entries[index].hash = *hash.as_bytes();
+                }
             }
-            manifest
-                .entries
-                .iter_mut()
-                .find(|entry| entry.path == file.rel)
-                .map(|entry| {
-                    entry.hash = *hash.as_bytes();
-                });
-        }
-        {
-            // A directory source keeps its top folder; files stay flat.
-            let roots = lock(&self.shared.file_roots);
-            verify_leg_pin(&roots, src_root, &mut pin)?;
-            if roots.resolve_dir(src_root, src_rel).is_ok() {
-                manifest::prefix_source_dir(src_rel, &mut manifest);
+            {
+                // A directory source keeps its top folder; files stay flat.
+                let roots = lock(&self.shared.file_roots);
+                verify_leg_pin(&roots, src_root, &mut pin)?;
+                if roots.resolve_dir(src_root, &rel).is_ok() {
+                    manifest::prefix_source_dir(&rel, &mut part);
+                }
+            }
+            manifest.entries.append(&mut part.entries);
+            if manifest.entries.len() > manifest::MAX_MANIFEST_FILES {
+                return Err(Error::InvalidSetting(manifest::MANIFEST_LIMIT));
             }
         }
+        manifest.entries.sort_by(|a, b| a.path.cmp(&b.path));
         if manifest
             .entries
             .iter()
@@ -321,10 +601,10 @@ impl Core {
         let id = allocate_job_id(&self.shared)?;
         let record = JobRecord {
             owner,
-            destination: Some(crate::job::JobDestination {
+            destination: Some(Landing {
                 root: dst_root,
                 folder: dst_rel.to_owned(),
-                name: src_rel.rsplit('/').next().unwrap_or(src_rel).to_owned(),
+                names: names.to_vec(),
             }),
             id,
             wire_id: id,
@@ -336,10 +616,11 @@ impl Core {
             state: JobState::Preparing,
             manifest: Some(manifest.clone()),
             local_root: src_root,
-            local_rel: src_rel.to_owned(),
+            local_rel: src_folder.to_owned(),
+            names: names.to_vec(),
             local_pin: pin,
             outgoing: true,
-            skipped_symlinks: scan.skipped_symlinks,
+            skipped_symlinks,
             file_index: 0,
             done_bytes: 0,
             files_done: 0,
@@ -351,6 +632,7 @@ impl Core {
             apply_remaining: None,
             error: None,
             in_flight: 0,
+            unsaved_landed: Vec::new(),
         };
         // Announce over the auxiliary stream on the live control session.
         let offer = job::UploadOffer {
@@ -389,6 +671,7 @@ impl Core {
             for hash in record_hashes(&record) {
                 lock(&self.shared.blob_job_offers).insert((peer, hash));
             }
+            lock(&self.shared.serve_index).add(&record);
             jobs.insert(id, record);
             prepared.committed = true;
         }
@@ -407,20 +690,34 @@ impl Core {
         dst_root: u64,
         dst_rel: &str,
     ) -> Result<u64, Error> {
-        self.submit_download(peer_endpoint_id, src_root, src_rel, dst_root, dst_rel, None)
+        let (folder, names) = split_source(src_rel);
+        self.submit_download(
+            peer_endpoint_id,
+            src_root,
+            &folder,
+            &names,
+            dst_root,
+            dst_rel,
+            None,
+        )
     }
 
+    /// Downloads the peer's entries `names` of `src_folder`, or with no
+    /// names its whole root, as one job.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn submit_download(
         &self,
         peer_endpoint_id: &str,
         src_root: u64,
-        src_rel: &str,
+        src_folder: &str,
+        names: &[String],
         dst_root: u64,
         dst_rel: &str,
         owner: Option<super::service_jobs::JobOwner>,
     ) -> Result<u64, Error> {
         let peer = parse_endpoint_id(peer_endpoint_id)?;
         self.ensure_alive()?;
+        check_sources(src_folder, names)?;
         Self::check_job_capacity(&self.shared)?;
         {
             let state = lock(&self.shared.state);
@@ -437,13 +734,14 @@ impl Core {
             Some(roots.pin(dst_root)?)
         };
         // The live session first, as in uploads.
-        let generation = self.outgoing_generation_for(&peer)?;
+        let generation = self.generation_for(&peer, true, owner)?;
         let request = job::DownloadRequest {
             v: job::JOB_VERSION,
             id: 1,
             generation,
             src_root,
-            src_rel: src_rel.to_owned(),
+            src_folder: src_folder.to_owned(),
+            names: names.to_vec(),
         };
         let reply_bytes = self.service_job_round_trip(
             owner,
@@ -459,8 +757,11 @@ impl Core {
             status if status == job::STATUS_OK => {}
             status => return Err(job::error_for_status(status)),
         }
-        let manifest = reply.manifest.ok_or(Error::Malformed)?;
-        manifest::validate(&manifest)?;
+        // A preparation still under way leaves the job Preparing; its
+        // manifest is asked for until ready (`poll_receiver`).
+        if let Some(manifest) = &reply.manifest {
+            manifest::validate(manifest)?;
+        }
         let id;
         {
             let mut jobs = lock(&self.shared.jobs);
@@ -480,10 +781,10 @@ impl Core {
                 id,
                 JobRecord {
                     owner,
-                    destination: Some(crate::job::JobDestination {
+                    destination: Some(Landing {
                         root: dst_root,
                         folder: dst_rel.to_owned(),
-                        name: src_rel.rsplit('/').next().unwrap_or(src_rel).to_owned(),
+                        names: names.to_vec(),
                     }),
                     id,
                     wire_id: reply.job_id,
@@ -492,10 +793,15 @@ impl Core {
                     peer_id: peer_endpoint_id.to_owned(),
                     direction: JobDirection::Download,
                     sender: false,
-                    state: JobState::Transferring,
-                    manifest: Some(manifest),
+                    state: if reply.manifest.is_some() {
+                        JobState::Transferring
+                    } else {
+                        JobState::Preparing
+                    },
+                    manifest: reply.manifest,
                     local_root: dst_root,
                     local_rel: dst_rel.to_owned(),
+                    names: Vec::new(),
                     local_pin: pin,
                     outgoing: true,
                     landed: HashMap::new(),
@@ -510,6 +816,7 @@ impl Core {
                     apply_remaining: None,
                     error: None,
                     in_flight: 0,
+                    unsaved_landed: Vec::new(),
                 },
             );
         }
@@ -600,72 +907,72 @@ impl Core {
         Ok(out)
     }
 
-    /// Starts the background transfer driver: advances every active job by
-    /// one step per second on its own OS thread, independent of any Files
-    /// window. Closing all windows pauses window ticks but not this driver;
-    /// jobs keep their state and resume. Call once after `set_blob_directory`
-    /// from the owning `Arc<Core>`; each Core gets its own driver thread
-    /// that exits when the Core shuts down or drops.
+    /// Starts the background transfer driver, independent of any Files
+    /// window: closing every window pauses window ticks but not this
+    /// driver, and jobs keep their state and resume. Each active job gets a
+    /// worker of its own for as long as it has a step to take, so a large
+    /// file for one job never holds up another. A receiver takes file after
+    /// file until it is blocked, on a decision, on admission or on its peer,
+    /// then waits for any job to change. A sender asks its receiver how far
+    /// it got, soon again while that changes and ever more seldom while it
+    /// does not ([`SENDER_SOON`], [`SENDER_SELDOM`]); its own answers wake
+    /// nothing. The driver only starts workers, when a job changes and once
+    /// a second. Call once after `set_blob_directory` from the owning
+    /// `Arc<Core>`; the driver and its workers end when the Core shuts down
+    /// or drops.
     pub fn start_job_driver(self: &std::sync::Arc<Self>) {
-        const ACTIVE: std::time::Duration = std::time::Duration::from_millis(200);
-        const IDLE: std::time::Duration = std::time::Duration::from_secs(1);
-        const BETWEEN: std::time::Duration = std::time::Duration::from_millis(50);
+        const IDLE: Duration = Duration::from_secs(1);
         let weak = std::sync::Arc::downgrade(self);
         let shared = self.shared.clone();
         std::thread::spawn(move || {
-            let mut last = std::time::Instant::now();
+            let mut seen = shared.job_revision.load(Ordering::Acquire);
             loop {
-                // A job change wakes the driver at once; otherwise it looks
-                // again soon while work is active, and seldom when idle.
-                let pause = if any_active(&shared) { ACTIVE } else { IDLE };
-                {
-                    let (woken, wake) = &shared.job_wake;
-                    let mut flag = lock(woken);
-                    if !*flag {
-                        flag = wake
-                            .wait_timeout(flag, pause)
-                            .map(|(flag, _)| flag)
-                            .unwrap_or_else(|poison| poison.into_inner().0);
-                    }
-                    *flag = false;
-                }
-                // Changes come in bursts; one pass serves them all.
-                if let Some(rest) = BETWEEN.checked_sub(last.elapsed()) {
-                    std::thread::sleep(rest);
-                }
-                last = std::time::Instant::now();
                 let Some(core) = weak.upgrade() else {
                     break;
                 };
                 if lock(&core.shared.state).shut_down {
                     break;
                 }
-                core.drive_jobs_apart();
+                core.start_job_workers();
+                drop(core);
+                seen = wait_for_job_change(&shared, seen, IDLE);
             }
         });
     }
 
-    /// Advances each active job on a worker of its own, so a large file
-    /// arriving for one job never holds up the others. A job already being
-    /// advanced is left to its worker (`job_driving`).
-    fn drive_jobs_apart(self: &std::sync::Arc<Self>) {
+    /// Gives each job with a step to take a worker, unless it has one.
+    fn start_job_workers(self: &std::sync::Arc<Self>) {
         let ids: Vec<u64> = {
             let jobs = lock(&self.shared.jobs);
-            let driving = lock(&self.shared.job_driving);
+            let mut workers = lock(&self.shared.job_workers);
             jobs.values()
-                .filter(|record| {
-                    !record.state.is_terminal()
-                        && (record.sender || record.state != JobState::WaitingDecision)
-                        && !driving.contains(&record.id)
-                })
+                .filter(|record| record.drivable() && workers.insert(record.id))
                 .map(|record| record.id)
                 .collect()
         };
         for id in ids {
-            let core = self.clone();
-            std::thread::spawn(move || {
-                let _ = core.job_poll(id);
-            });
+            let weak = std::sync::Arc::downgrade(self);
+            let shared = self.shared.clone();
+            std::thread::spawn(move || work_job(weak, shared, id));
+        }
+    }
+
+    /// Takes a receiver's steps until one moves it no further: it waits on
+    /// a decision, on admission or on its peer, or it ended.
+    fn drive_receiver(&self, id: u64) {
+        let Ok(mut before) = self.job_snapshot(id) else {
+            return;
+        };
+        loop {
+            let Ok(after) = self.job_poll(id) else {
+                return;
+            };
+            let advanced =
+                after.files_done + after.skipped_files > before.files_done + before.skipped_files;
+            if after.state != JobState::Transferring || !advanced {
+                return;
+            }
+            before = after;
         }
     }
 
@@ -770,12 +1077,12 @@ impl Core {
         outgoing: bool,
         job_id: u64,
     ) -> Result<(), Error> {
-        let job_id = wire_job_id(
-            lock(&self.shared.jobs)
-                .get(&job_id)
-                .ok_or(Error::InvalidSetting(NO_JOB))?,
-        );
-        let generation = self.generation_for(peer, outgoing)?;
+        let (job_id, owner) = {
+            let jobs = lock(&self.shared.jobs);
+            let record = jobs.get(&job_id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            (wire_job_id(record), record.owner)
+        };
+        let generation = self.generation_for(peer, outgoing, owner)?;
         let cancel = job::JobCancel {
             v: job::JOB_VERSION,
             id: 1,
@@ -785,7 +1092,7 @@ impl Core {
         let payload = job::encode(&cancel)?;
         // The reply is an ack; any failure (no session, stale generation,
         // denied) still leaves the local cancellation in place.
-        let _ = self.job_round_trip_side(peer, outgoing, job::TAG_JOB_CANCEL, &payload);
+        let _ = self.job_round_trip_side(peer, outgoing, owner, job::TAG_JOB_CANCEL, &payload);
         Ok(())
     }
 
@@ -816,7 +1123,11 @@ impl Core {
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             let state = lock(&self.shared.state);
             super::service_jobs::check_owner(&state, record.owner)?;
-            record.state = JobState::Transferring;
+            record.state = if record.manifest.is_some() {
+                JobState::Transferring
+            } else {
+                JobState::Preparing
+            };
             record.waiting_file = None;
             record.error = None;
             drop(state);
@@ -836,12 +1147,12 @@ impl Core {
         outgoing: bool,
         job_id: u64,
     ) -> Result<(), Error> {
-        let job_id = wire_job_id(
-            lock(&self.shared.jobs)
-                .get(&job_id)
-                .ok_or(Error::InvalidSetting(NO_JOB))?,
-        );
-        let generation = self.generation_for(peer, outgoing)?;
+        let (job_id, owner) = {
+            let jobs = lock(&self.shared.jobs);
+            let record = jobs.get(&job_id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            (wire_job_id(record), record.owner)
+        };
+        let generation = self.generation_for(peer, outgoing, owner)?;
         let resume = job::JobResume {
             v: job::JOB_VERSION,
             id: 1,
@@ -849,7 +1160,7 @@ impl Core {
             job_id,
         };
         let payload = job::encode(&resume)?;
-        let _ = self.job_round_trip_side(peer, outgoing, job::TAG_JOB_RESUME, &payload);
+        let _ = self.job_round_trip_side(peer, outgoing, owner, job::TAG_JOB_RESUME, &payload);
         Ok(())
     }
 
@@ -933,7 +1244,9 @@ impl Core {
         }
         {
             let mut jobs = lock(&self.shared.jobs);
-            jobs.remove(&id);
+            if let Some(record) = jobs.remove(&id) {
+                lock(&self.shared.serve_index).remove(&record);
+            }
         }
         Self::drop_orphaned_offers(&self.shared, &peer_key, &hashes, id);
         save_jobs(&self.shared)?;
@@ -948,12 +1261,12 @@ impl Core {
         choice: ConflictChoice,
         apply_to_remaining: bool,
     ) -> Result<(), Error> {
-        let job_id = wire_job_id(
-            lock(&self.shared.jobs)
-                .get(&job_id)
-                .ok_or(Error::InvalidSetting(NO_JOB))?,
-        );
-        let generation = self.generation_for(peer, outgoing)?;
+        let (job_id, owner) = {
+            let jobs = lock(&self.shared.jobs);
+            let record = jobs.get(&job_id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            (wire_job_id(record), record.owner)
+        };
+        let generation = self.generation_for(peer, outgoing, owner)?;
         let choice_name = match choice {
             ConflictChoice::Skip => "skip",
             ConflictChoice::Replace => "replace",
@@ -969,17 +1282,17 @@ impl Core {
             apply_to_remaining,
         };
         let payload = job::encode(&resolve)?;
-        let _ = self.job_round_trip_side(peer, outgoing, job::TAG_JOB_RESOLVE, &payload);
+        let _ = self.job_round_trip_side(peer, outgoing, owner, job::TAG_JOB_RESOLVE, &payload);
         Ok(())
     }
 
     fn poll_sender(&self, id: u64) -> Result<JobSnapshot, Error> {
-        let (peer_key, outgoing) = {
+        let (peer_key, outgoing, owner) = {
             let jobs = lock(&self.shared.jobs);
             let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
-            (record.peer_key, record.outgoing)
+            (record.peer_key, record.outgoing, record.owner)
         };
-        let generation = match self.generation_for(&peer_key, outgoing) {
+        let generation = match self.generation_for(&peer_key, outgoing, owner) {
             Ok(generation) => generation,
             Err(Error::NoSession | Error::StaleSession) => return self.mark_interrupted(id),
             Err(error) => return Err(error),
@@ -997,6 +1310,7 @@ impl Core {
         let reply_bytes = match self.job_round_trip_side(
             &peer_key,
             outgoing,
+            owner,
             job::TAG_JOB_STATUS,
             &job::encode(&query)?,
         ) {
@@ -1011,16 +1325,17 @@ impl Core {
             return self.job_snapshot(id);
         }
         let state = job::JobState::from_name(&reply.state).ok_or(Error::Malformed)?;
-        {
+        let changed = {
             let mut jobs = lock(&self.shared.jobs);
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            let before = record.reported();
             // Do not overwrite a locally cancelled record with a stale
             // receiver state: cancellation wins.
-            if record.state == JobState::Cancelled {
-                drop(jobs);
-            } else {
+            if record.state != JobState::Cancelled {
                 // The receiver is the one that knows what has arrived.
                 record.done_bytes = reply.done_bytes;
+                record.files_done = reply.files_done;
+                record.skipped_files = reply.skipped_files;
                 match state {
                     JobState::Complete => {
                         record.state = JobState::Complete;
@@ -1054,10 +1369,13 @@ impl Core {
                     }
                     _ => {}
                 }
-                drop(jobs);
             }
+            record.reported() != before
+        };
+        // An answer that changes nothing is not saved and wakes no one.
+        if changed {
+            save_jobs(&self.shared)?;
         }
-        save_jobs(&self.shared)?;
         self.job_snapshot(id)
     }
 
@@ -1068,6 +1386,10 @@ impl Core {
             let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             if matches!(record.state, JobState::Cancelled | JobState::Interrupted) {
                 return Ok(record.snapshot());
+            }
+            if record.manifest.is_none() {
+                drop(jobs);
+                return self.ask_prepared_manifest(id);
             }
         }
         let (peer_id, peer_bytes, file_index, file_count) = {
@@ -1239,7 +1561,7 @@ impl Core {
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             let at = record.file_index;
             if choice != ConflictChoice::Skip {
-                record.landed.insert(at, landed);
+                record.land(at, landed);
             }
         }
         {
@@ -1258,6 +1580,68 @@ impl Core {
             record.in_flight = 0;
             record.file_index += 1;
             drop(jobs);
+        }
+        save_jobs(&self.shared)?;
+        self.job_snapshot(id)
+    }
+
+    /// Asks the host whether a download it is preparing is ready, and
+    /// takes its manifest once it is. Still preparing leaves the job as it
+    /// is; a refusal fails it.
+    fn ask_prepared_manifest(&self, id: u64) -> Result<JobSnapshot, Error> {
+        let (peer, outgoing, owner, job_id) = {
+            let jobs = lock(&self.shared.jobs);
+            let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            (
+                record.peer_key,
+                record.outgoing,
+                record.owner,
+                wire_job_id(record),
+            )
+        };
+        let generation = match self.generation_for(&peer, outgoing, owner) {
+            Ok(generation) => generation,
+            Err(Error::NoSession | Error::StaleSession) => return self.mark_interrupted(id),
+            Err(error) => return Err(error),
+        };
+        let query = job::JobStatus {
+            v: job::JOB_VERSION,
+            id: 1,
+            generation,
+            job_id,
+        };
+        let Ok(bytes) = self.job_round_trip_side(
+            &peer,
+            outgoing,
+            owner,
+            job::TAG_JOB_MANIFEST,
+            &job::encode(&query)?,
+        ) else {
+            return self.job_snapshot(id);
+        };
+        let reply: job::ManifestReply = job::decode(&bytes)?;
+        if reply.id != query.id || reply.job_id != job_id {
+            return Err(Error::Malformed);
+        }
+        let manifest = match (reply.status, reply.manifest) {
+            (job::STATUS_OK, None) => return self.job_snapshot(id),
+            (job::STATUS_OK, Some(manifest)) => manifest,
+            (job::STATUS_STALE, _) => return self.mark_interrupted(id),
+            _ => return self.mark_failed(id, PREPARE_FAILED),
+        };
+        if manifest::validate(&manifest).is_err() {
+            return self.mark_failed(id, PREPARE_FAILED);
+        }
+        {
+            let mut jobs = lock(&self.shared.jobs);
+            let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            if record.manifest.is_some() || record.state.is_terminal() {
+                return Ok(record.snapshot());
+            }
+            record.manifest = Some(manifest);
+            if record.state == JobState::Preparing {
+                record.state = JobState::Transferring;
+            }
         }
         save_jobs(&self.shared)?;
         self.job_snapshot(id)
@@ -1957,7 +2341,7 @@ impl Core {
     fn finalize_receiver(&self, id: u64) -> Result<JobSnapshot, Error> {
         // Verify every manifest path landed before claiming completion.
         // Skipped files intentionally keep the destination as it was.
-        let (local_root, local_rel, manifest, choices) = {
+        let (local_root, local_rel, manifest, choices, apply_remaining) = {
             let jobs = lock(&self.shared.jobs);
             let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             (
@@ -1968,6 +2352,7 @@ impl Core {
                     .clone()
                     .ok_or(Error::InvalidSetting(NO_JOB))?,
                 record.choices.clone(),
+                record.apply_remaining,
             )
         };
         let landed = {
@@ -1981,10 +2366,15 @@ impl Core {
             .filter(|entry| !entry.is_dir)
             .enumerate()
         {
-            if choices.get(&index).copied() == Some(ConflictChoice::Skip) {
-                continue;
-            }
-            let name = landed.get(&index).ok_or(Error::InvalidSetting(NO_JOB))?;
+            // Every file before the end either landed or was skipped: by
+            // its own answer, or by one given for the rest.
+            let skipped = choices.get(&index).copied().or(apply_remaining);
+            let name = match landed.get(&index) {
+                None if skipped == Some(ConflictChoice::Skip) => continue,
+                None => return Err(Error::InvalidSetting(NO_JOB)),
+                Some(_) if choices.get(&index).copied() == Some(ConflictChoice::Skip) => continue,
+                Some(name) => name,
+            };
             let dest = self.receiver_dest(id, local_root, &local_rel, &entry.path)?;
             let dest = dest
                 .parent()
@@ -2185,17 +2575,8 @@ impl Core {
         };
         for entry in manifest.entries.iter().filter(|entry| !entry.is_dir) {
             // Root-relative source path: the manifest entry already carries
-            // the top folder for directory sources, so prepend only the
-            // source parent (not the full `local_rel`, which would double
-            // the top folder for nested sources like `docs/pack`).
-            let root_rel = if local_rel.is_empty() {
-                entry.path.clone()
-            } else {
-                match local_rel.rfind('/') {
-                    Some(slash) => format!("{}/{}", &local_rel[..slash], entry.path),
-                    None => entry.path.clone(),
-                }
-            };
+            // its chosen name, so it lies under the source folder.
+            let root_rel = join_rel(&local_rel, &entry.path);
             // Anchored verification: re-open through handles, never the
             // retained absolute pathname. A swapped parent fails here.
             #[cfg(unix)]
@@ -2297,39 +2678,37 @@ impl Core {
         self.job_snapshot(id)
     }
 
-    fn outgoing_generation_for(&self, peer: &[u8; 32]) -> Result<u64, Error> {
+    /// The wire generation of the session a job with `peer` and `owner`
+    /// rides on this side ([`super::service_jobs::job_session`]).
+    fn generation_for(
+        &self,
+        peer: &[u8; 32],
+        outgoing: bool,
+        owner: Option<super::service_jobs::JobOwner>,
+    ) -> Result<u64, Error> {
         let state = self.alive_state()?;
-        let session = state.outgoing_peer(peer).ok_or(Error::NoSession)?;
-        if session.phase != crate::session::SessionPhase::Active || session.peer_key != *peer {
+        let session = super::service_jobs::job_session(&state, peer, outgoing, owner)
+            .ok_or(Error::NoSession)?;
+        if session.phase != crate::session::SessionPhase::Active {
             return Err(Error::NoSession);
         }
         Ok(session.wire_stamp.generation)
     }
 
-    fn generation_for(&self, peer: &[u8; 32], outgoing: bool) -> Result<u64, Error> {
-        let state = self.alive_state()?;
-        let session = if outgoing {
-            state.outgoing_peer(peer)
-        } else {
-            state.incoming_peer(peer)
-        }
-        .ok_or(Error::NoSession)?;
-        if session.phase != crate::session::SessionPhase::Active || session.peer_key != *peer {
-            return Err(Error::NoSession);
-        }
-        Ok(session.wire_stamp.generation)
-    }
-
+    /// One job-control round trip on the session the job rides.
     pub(super) fn job_round_trip_side(
         &self,
         peer: &[u8; 32],
         outgoing: bool,
+        owner: Option<super::service_jobs::JobOwner>,
         tag: u8,
         payload: &[u8],
     ) -> Result<Vec<u8>, Error> {
-        self.job_round_trip_side_owned(peer, outgoing, tag, payload, None)
+        self.job_round_trip_side_owned(peer, outgoing, tag, payload, owner, false)
     }
 
+    /// As [`Core::job_round_trip_side`]; `leased` also holds the owning
+    /// service's lease across it, bounded in time, as a submission does.
     pub(super) fn job_round_trip_side_owned(
         &self,
         peer: &[u8; 32],
@@ -2337,25 +2716,20 @@ impl Core {
         tag: u8,
         payload: &[u8],
         owner: Option<super::service_jobs::JobOwner>,
+        leased: bool,
     ) -> Result<Vec<u8>, Error> {
         let mut lease = owner
+            .filter(|_| leased)
             .map(|owner| self.service_lease(owner.id, owner.generation))
             .transpose()?;
-        // Senders poll over whichever session faces the peer: outgoing
-        // for controller senders, incoming for host senders. Both ride
-        // the live control connection.
+        // Senders poll over the session facing the peer: outgoing for
+        // controller senders, incoming for host senders, the one the job
+        // rides each time.
         let connection = {
             let state = self.alive_state()?;
-            let session = if outgoing {
-                state.outgoing_peer(peer)
-            } else {
-                state.incoming_peer(peer)
-            }
-            .ok_or(Error::NoSession)?;
+            let session = super::service_jobs::job_session(&state, peer, outgoing, owner)
+                .ok_or(Error::NoSession)?;
             if session.phase != crate::session::SessionPhase::Active {
-                return Err(Error::NoSession);
-            }
-            if session.peer_key != *peer {
                 return Err(Error::NoSession);
             }
             session.link.clone().ok_or(Error::NoSession)?
@@ -2480,7 +2854,7 @@ pub(super) fn wire_job_mut<'a>(
 }
 
 /// Neutral links accept lifecycle messages only for live service-owned jobs.
-/// All four control requests share the status request's identity fields.
+/// Every control request shares the status request's identity fields.
 pub(super) fn neutral_job_control_allowed(
     shared: &Shared,
     peer: &[u8; 32],
@@ -2489,7 +2863,11 @@ pub(super) fn neutral_job_control_allowed(
 ) -> bool {
     if !matches!(
         tag,
-        job::TAG_JOB_STATUS | job::TAG_JOB_CANCEL | job::TAG_JOB_RESOLVE | job::TAG_JOB_RESUME
+        job::TAG_JOB_STATUS
+            | job::TAG_JOB_CANCEL
+            | job::TAG_JOB_RESOLVE
+            | job::TAG_JOB_RESUME
+            | job::TAG_JOB_MANIFEST
     ) {
         return false;
     }
@@ -2568,24 +2946,27 @@ pub(super) fn retained_job_ids(
 /// requires this in addition to pairing + offer set membership, so completed
 /// or cancelled jobs never authorize even when their offers linger.
 pub(super) fn is_active_serve(shared: &Shared, peer: &[u8; 32], hash: &[u8; 32]) -> bool {
+    let holders = lock(&shared.serve_index).holders(peer, hash);
+    if holders.is_empty() {
+        return false;
+    }
     let jobs = lock(&shared.jobs);
     let state = lock(&shared.state);
-    jobs.values().any(|record| {
-        super::service_jobs::check_owner(&state, record.owner).is_ok()
-            && record.peer_key == *peer
-            && record.sender
-            && matches!(
-                record.state,
-                JobState::Serving | JobState::Transferring | JobState::WaitingDecision
-            )
-            && record.manifest.as_ref().is_some_and(|manifest| {
-                manifest
-                    .entries
-                    .iter()
-                    .filter(|entry| !entry.is_dir)
-                    .any(|entry| entry.hash == *hash)
-            })
+    holders.iter().any(|(id, _)| {
+        jobs.get(id).is_some_and(|record| {
+            serving(record, peer) && super::service_jobs::check_owner(&state, record.owner).is_ok()
+        })
     })
+}
+
+/// Whether `record` is a sender job that may serve `peer` now.
+fn serving(record: &JobRecord, peer: &[u8; 32]) -> bool {
+    record.peer_key == *peer
+        && record.sender
+        && matches!(
+            record.state,
+            JobState::Serving | JobState::Transferring | JobState::WaitingDecision
+        )
 }
 
 /// Test probe parked by the rebind regression: called with the served
@@ -2596,9 +2977,9 @@ pub(crate) static SERVE_SOURCE_PROBE: std::sync::Mutex<Option<fn([u8; 32])>> =
     std::sync::Mutex::new(None);
 
 /// Serve-time source re-verification for job blob requests (see blob.rs):
-/// finds the active sender entry for `hash`, reconstructs its root-relative
-/// source (parent of `local_rel` + manifest path, handling nested `docs/pack`
-/// correctly) and stats it through handles (NOFOLLOW, regular, size matches).
+/// finds the active sender entry for `hash` through the serve index,
+/// reconstructs its root-relative
+/// source (the source folder `local_rel` + manifest path) and stats it through handles (NOFOLLOW, regular, size matches).
 /// Denies swapped parents/replaced files so TryReference absolute paths can
 /// never disclose outside bytes. The leg's pin is re-verified under the
 /// same roots hold: a rebound source fails the fetch instead of serving
@@ -2608,46 +2989,28 @@ pub(super) async fn verify_serve_source(
     peer: &[u8; 32],
     hash: &[u8; 32],
 ) -> Result<ServeSource, Error> {
+    let holders = lock(&shared.serve_index).holders(peer, hash);
     let (job_id, local_root, local_rel, entry_size, entry_path, mut pin) = {
         let jobs = lock(&shared.jobs);
-        let mut found = None;
-        for record in jobs.values() {
-            if record.peer_key != *peer || !record.sender {
-                continue;
-            }
-            match record.state {
-                JobState::Serving | JobState::Transferring | JobState::WaitingDecision => {}
-                _ => continue,
-            }
-            if let Some(manifest) = &record.manifest {
-                if let Some(entry) = manifest
-                    .entries
-                    .iter()
-                    .filter(|e| !e.is_dir)
-                    .find(|e| e.hash == *hash)
-                {
-                    found = Some((
+        holders
+            .iter()
+            .find_map(|(id, index)| {
+                let record = jobs.get(id).filter(|record| serving(record, peer))?;
+                let entry = record.manifest.as_ref()?.entries.get(*index)?;
+                (!entry.is_dir && entry.hash == *hash).then(|| {
+                    (
                         record.id,
                         record.local_root,
                         record.local_rel.clone(),
                         entry.size,
                         entry.path.clone(),
                         record.local_pin.clone(),
-                    ));
-                    break;
-                }
-            }
-        }
-        found.ok_or(Error::TransferDenied)?
+                    )
+                })
+            })
+            .ok_or(Error::TransferDenied)?
     };
-    let root_rel = if local_rel.is_empty() {
-        entry_path.clone()
-    } else {
-        match local_rel.rfind('/') {
-            Some(slash) => format!("{}/{}", &local_rel[..slash], entry_path),
-            None => entry_path.clone(),
-        }
-    };
+    let root_rel = join_rel(&local_rel, &entry_path);
     let (parent_rel, name) = match root_rel.rfind('/') {
         Some(slash) => (&root_rel[..slash], &root_rel[slash + 1..]),
         None => ("", root_rel.as_str()),
@@ -2804,12 +3167,16 @@ pub(super) fn rename_blocked_with(
             _ => {}
         }
         if record.sender {
-            // Sender source: `local_rel` names the selected file, folder or
-            // whole root (empty). Any overlap blocks.
-            if record.local_rel.is_empty() {
+            // Sender source: the chosen entries of `local_rel`, or with
+            // none the whole root. Any overlap blocks.
+            if record.names.is_empty() {
                 return true;
             }
-            if paths_overlap(&record.local_rel, &target) {
+            if record
+                .names
+                .iter()
+                .any(|name| paths_overlap(&join_rel(&record.local_rel, name), &target))
+            {
                 return true;
             }
         } else {
@@ -2883,19 +3250,106 @@ fn interrupt_jobs(shared: &Shared, peer: &[u8; 32], controller_only: bool) {
     let _ = save_jobs(shared);
 }
 
-/// Tells job watchers, and the background driver, that something changed.
+/// Tells job watchers, and the background driver and workers, that
+/// something changed.
 pub(super) fn jobs_changed(shared: &Shared) {
     shared.job_revision.fetch_add(1, Ordering::AcqRel);
-    let (woken, wake) = &shared.job_wake;
-    *lock(woken) = true;
+    let (gate, wake) = &shared.job_wake;
+    // Under the gate, so a worker that just found nothing changed is
+    // already waiting.
+    let _gate = lock(gate);
     wake.notify_all();
 }
 
-/// Whether any job still has a step to take.
-fn any_active(shared: &Shared) -> bool {
-    lock(&shared.jobs).values().any(|record| {
-        !record.state.is_terminal() && (record.sender || record.state != JobState::WaitingDecision)
-    })
+/// How soon a sender asks its receiver again after an answer that changed
+/// it, and the longest it waits while answers change nothing.
+const SENDER_SOON: Duration = Duration::from_millis(100);
+const SENDER_SELDOM: Duration = Duration::from_secs(1);
+/// The longest a blocked receiver waits for a change before it looks again.
+const RECEIVER_RETRY: Duration = Duration::from_millis(200);
+
+/// One job's worker: takes its steps until it has none left, then lets
+/// the driver give the job a worker again when it next has one.
+fn work_job(weak: std::sync::Weak<Core>, shared: Arc<Shared>, id: u64) {
+    struct Working<'a>(&'a Shared, u64);
+    impl Drop for Working<'_> {
+        fn drop(&mut self) {
+            lock(&self.0.job_workers).remove(&self.1);
+        }
+    }
+    let _working = Working(&shared, id);
+    let mut pause = SENDER_SOON;
+    loop {
+        let seen = shared.job_revision.load(Ordering::Acquire);
+        let Some(paced) = job_pace(&shared, id) else {
+            return;
+        };
+        {
+            let Some(core) = weak.upgrade() else {
+                return;
+            };
+            if lock(&shared.state).shut_down {
+                return;
+            }
+            if paced {
+                let before = core.job_snapshot(id).ok();
+                let after = core.job_poll(id).ok();
+                pause = if after.is_some() && after != before {
+                    SENDER_SOON
+                } else {
+                    (pause * 2).min(SENDER_SELDOM)
+                };
+            } else {
+                core.drive_receiver(id);
+            }
+        }
+        if paced {
+            // Changes meanwhile do not hurry it: only one that leaves it
+            // nothing to do ends the wait early.
+            let due = std::time::Instant::now() + pause;
+            let mut seen = shared.job_revision.load(Ordering::Acquire);
+            loop {
+                let left = due.saturating_duration_since(std::time::Instant::now());
+                if left.is_zero() {
+                    break;
+                }
+                seen = wait_for_job_change(&shared, seen, left);
+                if job_pace(&shared, id).is_none() {
+                    return;
+                }
+            }
+        } else {
+            wait_for_job_change(&shared, seen, RECEIVER_RETRY);
+        }
+    }
+}
+
+/// Whether job `id` has a step to take, and if so whether it is paced:
+/// a sender asks its peer on a timer instead of at every change.
+fn job_pace(shared: &Shared, id: u64) -> Option<bool> {
+    lock(&shared.jobs)
+        .get(&id)
+        .filter(|record| record.drivable())
+        .map(JobRecord::paced)
+}
+
+/// Waits until the job revision differs from `seen` or `timeout` passes,
+/// and returns the revision then.
+fn wait_for_job_change(shared: &Shared, seen: u64, timeout: Duration) -> u64 {
+    let deadline = std::time::Instant::now() + timeout;
+    let (gate, wake) = &shared.job_wake;
+    let mut guard = lock(gate);
+    loop {
+        let now = shared.job_revision.load(Ordering::Acquire);
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if now != seen || left.is_zero() {
+            return now;
+        }
+        guard = wake
+            .wait_timeout(guard, left)
+            .map(|(guard, _)| guard)
+            .unwrap_or_else(|poison| poison.into_inner().0);
+    }
 }
 
 /// Copies a file's arriving byte count onto its job, at most four times a
@@ -2929,39 +3383,20 @@ fn follow_arrival(
     })
 }
 
-/// Saves every job, and tells watchers: each change to a job ends here.
+/// Saves the jobs that changed and tells watchers: each change to a job
+/// ends here. A save that changes nothing writes and tells nothing.
 pub(super) fn save_jobs(shared: &Shared) -> Result<(), Error> {
-    jobs_changed(shared);
-    let _writer = lock(&shared.job_save);
-    if lock(&shared.blob_dir).is_none() {
-        return Ok(());
-    }
-    let dir = super::blob::blob_directory(shared)?;
-    let jobs = lock(&shared.jobs);
-    let mut records: Vec<&JobRecord> = jobs.values().collect();
-    records.sort_by_key(|record| record.id);
-    let owned: Vec<JobRecord> = records.into_iter().cloned().collect();
-    drop(jobs);
-    let text =
-        serde_json::to_string(&owned).map_err(|_| Error::InvalidSetting(JOB_STORE_FAILED))?;
-    let tmp = dir.join(format!("{}.tmp", JOBS_FILE));
-    std::fs::write(&tmp, text).map_err(|_| Error::InvalidSetting(JOB_STORE_FAILED))?;
-    std::fs::rename(&tmp, dir.join(JOBS_FILE))
-        .map_err(|_| Error::InvalidSetting(JOB_STORE_FAILED))?;
-    Ok(())
+    super::job_journal::save_jobs(shared)
 }
 
 pub(super) fn load_jobs(shared: &Shared) {
+    // Each record is written afresh at its next save.
+    lock(&shared.job_journal).reset();
     let Some(dir) = lock(&shared.blob_dir).clone() else {
         return;
     };
-    let text = match std::fs::read_to_string(dir.join(JOBS_FILE)) {
-        Ok(text) => text,
-        Err(_) => return,
-    };
-    let mut records: Vec<JobRecord> = match serde_json::from_str(&text) {
-        Ok(records) => records,
-        Err(_) => return,
+    let Some((mut records, clean)) = super::job_journal::read_journals(&dir) else {
+        return;
     };
     let mut max = 0u64;
     {
@@ -2974,18 +3409,26 @@ pub(super) fn load_jobs(shared: &Shared) {
             if !record.sender && record.direction == JobDirection::Download {
                 record.outgoing = true;
             }
-            // Anything in flight died with the process.
+            // Anything in flight died with the process; a preparation has
+            // nothing to resume from.
             match record.state {
+                _ if record.preparing_here() && !record.state.is_terminal() => {
+                    record.state = JobState::Failed;
+                    record.error = Some(PREPARE_STOPPED.to_owned());
+                }
                 JobState::Preparing | JobState::Serving | JobState::Transferring => {
                     record.state = JobState::Interrupted;
                 }
                 _ => {}
             }
             max = max.max(record.id).max(wire_job_id(&record));
+            lock(&shared.serve_index).add(&record);
             jobs.insert(record.id, record);
         }
     }
-    reconcile_staging(shared, &dir);
+    if clean {
+        reconcile_staging(shared, &dir);
+    }
     let next = shared.job_next.load(Ordering::Relaxed);
     if max.saturating_add(1) > next {
         shared
@@ -2994,10 +3437,11 @@ pub(super) fn load_jobs(shared: &Shared) {
     }
 }
 
-/// Only reconcile after a valid durable index was loaded. Missing/corrupt
-/// indexes retain payloads for diagnosis rather than interpreting corruption
-/// as permission to delete all previously owned data. Only canonical managed
-/// names are candidates; unexpected entries remain untouched.
+/// Only reconcile after every journal was read. Missing or unreadable
+/// journals retain payloads for diagnosis rather than interpreting
+/// corruption as permission to delete all previously owned data. Only
+/// canonical managed names are candidates; unexpected entries remain
+/// untouched.
 fn reconcile_staging(shared: &Shared, dir: &std::path::Path) {
     let keep: std::collections::HashSet<u64> = lock(&shared.jobs)
         .values()
@@ -3032,11 +3476,6 @@ fn reconcile_staging_at(dir: &std::path::Path, keep: &std::collections::HashSet<
                 let _ = anchored::remove_tree_at(staging.as_fd(), name);
             }
         }
-    }
-    // Incomplete atomic-save temporary records are not authoritative. Only
-    // unlink a file/symlink; an unexpected directory is not our record.
-    if anchored::stat_at(root.as_fd(), "jobs.json.tmp").is_ok_and(|m| m.is_file || m.is_symlink) {
-        let _ = anchored::remove_tree_at(root.as_fd(), "jobs.json.tmp");
     }
 }
 
@@ -3092,6 +3531,8 @@ pub(super) async fn handle_job_request(
             error: None,
             waiting_file: None,
             done_bytes: 0,
+            files_done: 0,
+            skipped_files: 0,
         };
         reply(send, job::encode(&denied).map_err(|_| ())?).await?;
         return Ok(());
@@ -3106,6 +3547,7 @@ pub(super) async fn handle_job_request(
         t if t == job::TAG_JOB_STATUS => {
             handle_status_query(shared, peer, true, send, payload).await
         }
+        t if t == job::TAG_JOB_MANIFEST => handle_manifest_query(shared, peer, send, payload).await,
         t if t == job::TAG_JOB_CANCEL => handle_cancel(shared, peer, true, send, payload).await,
         t if t == job::TAG_JOB_RESOLVE => handle_resolve(shared, peer, true, send, payload).await,
         t if t == job::TAG_JOB_RESUME => handle_resume(shared, peer, true, send, payload).await,
@@ -3137,6 +3579,72 @@ pub(super) async fn handle_controller_job(
     Err(())
 }
 
+/// Whether `generation` names a live session with `peer`: one it hosts on
+/// the incoming side, else one this side controls. A peer may hold both a
+/// control session and a services-only link; the message's generation
+/// says which it came over.
+fn peer_session_live(state: &State, peer: &[u8; 32], incoming_side: bool, generation: u64) -> bool {
+    let sessions = if incoming_side {
+        &state.incoming
+    } else {
+        &state.outgoing
+    };
+    sessions.values().any(|session| {
+        session.peer_key == *peer
+            && session.wire_stamp.generation == generation
+            && session.phase == crate::session::SessionPhase::Active
+    })
+}
+
+/// The host answers a controller asking for a prepared download's
+/// manifest: still preparing (no manifest), the manifest, or a refusal
+/// once preparation failed or the job ended.
+async fn handle_manifest_query(
+    shared: &Shared,
+    peer: &[u8; 32],
+    send: &mut iroh::endpoint::SendStream,
+    payload: &[u8],
+) -> Result<(), ()> {
+    let query: job::JobStatus = job::decode(payload).map_err(|_| ())?;
+    job::check_version(query.v).map_err(|_| ())?;
+    let answer = |status: u8, manifest: Option<Manifest>| job::ManifestReply {
+        v: job::JOB_VERSION,
+        id: query.id,
+        status,
+        job_id: query.job_id,
+        manifest,
+    };
+    let reply = if !peer_session_live(&lock(&shared.state), peer, true, query.generation) {
+        answer(job::STATUS_STALE, None)
+    } else {
+        let jobs = lock(&shared.jobs);
+        match wire_job(&jobs, peer, query.job_id).filter(|record| record.sender) {
+            Some(record) if record.state == JobState::Preparing => answer(job::STATUS_OK, None),
+            Some(record)
+                if matches!(
+                    record.state,
+                    JobState::Serving | JobState::Transferring | JobState::WaitingDecision
+                ) =>
+            {
+                answer(job::STATUS_OK, record.manifest.clone())
+            }
+            _ => answer(job::STATUS_ERROR, None),
+        }
+    };
+    let bytes = job::encode(&reply).map_err(|_| ())?;
+    let mut out = Vec::with_capacity(4 + bytes.len());
+    out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    out.extend_from_slice(&bytes);
+    crate::sidestream::write_frame(
+        send,
+        &out,
+        |framed: &Vec<u8>| Ok(framed.clone()),
+        "the job frame was not written",
+    )
+    .await
+    .map_err(|_| ())
+}
+
 /// Symmetric cancellation: either side tells the peer one job is cancelled.
 /// Generation is fenced like status queries; the peer marks its record
 /// cancelled and signals its in-flight fetch so publication stops.
@@ -3162,18 +3670,7 @@ async fn handle_cancel(
     }
     let cancel: job::JobCancel = job::decode(payload).map_err(|_| ())?;
     job::check_version(cancel.v).map_err(|_| ())?;
-    let live = {
-        let state = lock(&shared.state);
-        let session = if incoming_side {
-            state.incoming.values().find(|s| s.peer_key == *peer)
-        } else {
-            state.outgoing_peer(peer)
-        };
-        matches!(session, Some(session)
-            if session.wire_stamp.generation == cancel.generation
-                && session.phase == crate::session::SessionPhase::Active
-                && session.peer_key == *peer)
-    };
+    let live = peer_session_live(&lock(&shared.state), peer, incoming_side, cancel.generation);
     if !live {
         let stale = job::JobReply {
             v: job::JOB_VERSION,
@@ -3239,18 +3736,7 @@ async fn handle_status_query(
     let query: job::JobStatus = job::decode(payload).map_err(|_| ())?;
     job::check_version(query.v).map_err(|_| ())?;
     // The querying peer must own the other end of the live session.
-    let live = {
-        let state = lock(&shared.state);
-        let session = if incoming_side {
-            state.incoming.values().find(|s| s.peer_key == *peer)
-        } else {
-            state.outgoing_peer(peer)
-        };
-        matches!(session, Some(session)
-            if session.wire_stamp.generation == query.generation
-                && session.phase == crate::session::SessionPhase::Active
-                && session.peer_key == *peer)
-    };
+    let live = peer_session_live(&lock(&shared.state), peer, incoming_side, query.generation);
     if !live {
         let stale = job::JobStateReply {
             v: job::JOB_VERSION,
@@ -3260,6 +3746,8 @@ async fn handle_status_query(
             error: None,
             waiting_file: None,
             done_bytes: 0,
+            files_done: 0,
+            skipped_files: 0,
         };
         reply(send, job::encode(&stale).map_err(|_| ())?).await?;
         return Ok(());
@@ -3290,6 +3778,8 @@ async fn handle_status_query(
                     error: record.error.clone(),
                     waiting_file,
                     done_bytes: record.done(),
+                    files_done: record.files_done,
+                    skipped_files: record.skipped_files,
                 }
             }
             _ => job::JobStateReply {
@@ -3300,6 +3790,8 @@ async fn handle_status_query(
                 error: None,
                 waiting_file: None,
                 done_bytes: 0,
+                files_done: 0,
+                skipped_files: 0,
             },
         }
     };
@@ -3333,18 +3825,12 @@ async fn handle_resolve(
     }
     let resolve: job::JobResolve = job::decode(payload).map_err(|_| ())?;
     job::check_version(resolve.v).map_err(|_| ())?;
-    let live = {
-        let state = lock(&shared.state);
-        let session = if incoming_side {
-            state.incoming.values().find(|s| s.peer_key == *peer)
-        } else {
-            state.outgoing_peer(peer)
-        };
-        matches!(session, Some(session)
-            if session.wire_stamp.generation == resolve.generation
-                && session.phase == crate::session::SessionPhase::Active
-                && session.peer_key == *peer)
-    };
+    let live = peer_session_live(
+        &lock(&shared.state),
+        peer,
+        incoming_side,
+        resolve.generation,
+    );
     if !live {
         let stale = job::JobReply {
             v: job::JOB_VERSION,
@@ -3449,18 +3935,7 @@ async fn handle_resume(
     }
     let resume: job::JobResume = job::decode(payload).map_err(|_| ())?;
     job::check_version(resume.v).map_err(|_| ())?;
-    let live = {
-        let state = lock(&shared.state);
-        let session = if incoming_side {
-            state.incoming.values().find(|s| s.peer_key == *peer)
-        } else {
-            state.outgoing_peer(peer)
-        };
-        matches!(session, Some(session)
-            if session.wire_stamp.generation == resume.generation
-                && session.phase == crate::session::SessionPhase::Active
-                && session.peer_key == *peer)
-    };
+    let live = peer_session_live(&lock(&shared.state), peer, incoming_side, resume.generation);
     if !live {
         let stale = job::JobReply {
             v: job::JOB_VERSION,
@@ -3610,25 +4085,11 @@ async fn handle_resume(
                 return Ok(());
             }
         };
-        // Compute root-relative source paths (same reconstruction as
-        // `resume_sender`: parent of `local_rel` + manifest path).
-        let src_parent = if local_rel.is_empty() {
-            String::new()
-        } else {
-            match local_rel.rfind('/') {
-                Some(slash) => local_rel[..slash].to_owned(),
-                None => String::new(),
-            }
-        };
         let store = super::blob::open_store(shared).await.map_err(|_| ())?;
         for entry in manifest.entries.iter().filter(|e| !e.is_dir) {
-            let root_rel = if local_rel.is_empty() {
-                entry.path.clone()
-            } else if src_parent.is_empty() {
-                entry.path.clone()
-            } else {
-                format!("{src_parent}/{}", entry.path)
-            };
+            // Root-relative source path, as in `resume_sender`: the source
+            // folder `local_rel` + manifest path.
+            let root_rel = join_rel(&local_rel, &entry.path);
             let (parent_rel, name) = match root_rel.rfind('/') {
                 Some(slash) => (&root_rel[..slash], &root_rel[slash + 1..]),
                 None => ("", root_rel.as_str()),
@@ -3936,6 +4397,7 @@ pub(super) async fn handle_upload_offer(
                 manifest: Some(offer.manifest),
                 local_root: offer.dst_root,
                 local_rel: offer.dst_rel,
+                names: Vec::new(),
                 local_pin,
                 outgoing: false,
                 landed: HashMap::new(),
@@ -3950,6 +4412,7 @@ pub(super) async fn handle_upload_offer(
                 apply_remaining: None,
                 error: None,
                 in_flight: 0,
+                unsaved_landed: Vec::new(),
             },
         );
         Ok(())
@@ -4035,81 +4498,110 @@ pub(super) async fn handle_download_request(
         reply(send, respond(job::STATUS_DENIED, 0, None).map_err(|_| ())?).await?;
         return Ok(());
     };
-    // Scan, hash and offer from this host's roots. Failures reject the
-    // request; nothing is announced before every hash is served.
-    let prepared = prepare_host_manifest(
-        shared,
-        request.src_root,
-        &request.src_rel,
-        manifest::ScanHooks::none(),
-    )
-    .await;
-    let outcome: Result<(u64, Manifest, u64), u8> = match prepared {
-        Err(status) => Err(status),
-        Ok((id, manifest, skipped)) => {
-            // Same order as publication/rename: jobs -> state. Activation
-            // and permission changes cannot interleave between this check
-            // and insertion. A new session cannot inherit prepared work.
-            // Pin the source leg before insertion: a rebind between here
-            // and first serve fails the leg instead of serving moved bytes.
-            let local_pin = lock(&shared.file_roots).pin(request.src_root).ok();
-            let mut jobs = lock(&shared.jobs);
-            let state = lock(&shared.state);
-            let permitted = prepared_download_permitted(
-                &state,
-                peer,
-                session_id,
-                request.generation,
-                permission_epoch,
-            );
-            if !permitted || super::service_jobs::check_owner(&state, owner).is_err() {
-                Err(job::STATUS_DENIED)
-            } else if jobs.contains_key(&id) {
-                Err(job::STATUS_ERROR)
-            } else {
-                let skipped_symlinks = skipped;
-                for entry in manifest.entries.iter().filter(|entry| !entry.is_dir) {
-                    lock(&shared.blob_job_offers).insert((*peer, entry.hash));
-                }
-                jobs.insert(
-                    id,
-                    JobRecord {
-                        owner,
-                        destination: None,
-                        id,
-                        wire_id: id,
-                        created_at: retention_now(),
-                        peer_key: *peer,
-                        peer_id: endpoint_id_of(peer),
-                        direction: JobDirection::Upload,
-                        sender: true,
-                        state: JobState::Serving,
-                        manifest: Some(manifest.clone()),
-                        local_root: request.src_root,
-                        local_rel: request.src_rel.clone(),
-                        local_pin,
-                        outgoing: false,
-                        skipped_symlinks,
-                        file_index: 0,
-                        done_bytes: 0,
-                        files_done: 0,
-                        resumed_files: 0,
-                        skipped_files: 0,
-                        waiting_file: None,
-                        landed: HashMap::new(),
-                        choices: HashMap::new(),
-                        apply_remaining: None,
-                        error: None,
-                        in_flight: 0,
-                    },
-                );
-                Ok((id, manifest, skipped))
-            }
+    if check_sources(&request.src_folder, &request.names).is_err() {
+        reply(send, respond(job::STATUS_ERROR, 0, None).map_err(|_| ())?).await?;
+        return Ok(());
+    }
+    // The preparation is a job from the start: the controller sees it as
+    // Preparing, can cancel it, and loses it with its owner. Same order as
+    // publication/rename: jobs -> state, so activation and permission
+    // changes cannot interleave between the check and the insert. The
+    // source leg is pinned now: a rebind before the first serve fails the
+    // leg instead of serving moved bytes.
+    let local_pin = lock(&shared.file_roots).pin(request.src_root).ok();
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    let admitted: Result<u64, u8> = (|| {
+        let mut jobs = lock(&shared.jobs);
+        let state = lock(&shared.state);
+        if !prepared_download_permitted(
+            &state,
+            peer,
+            session_id,
+            request.generation,
+            permission_epoch,
+        ) || super::service_jobs::check_owner(&state, owner).is_err()
+        {
+            return Err(job::STATUS_DENIED);
+        }
+        // Sender job ids minted on the host share the local allocator, so
+        // adopted controller ids can never collide with a later mint.
+        let id = allocate_job_id(shared).map_err(|_| job::STATUS_ERROR)?;
+        jobs.insert(
+            id,
+            JobRecord {
+                owner,
+                destination: None,
+                id,
+                wire_id: id,
+                created_at: retention_now(),
+                peer_key: *peer,
+                peer_id: endpoint_id_of(peer),
+                direction: JobDirection::Upload,
+                sender: true,
+                state: JobState::Preparing,
+                manifest: None,
+                local_root: request.src_root,
+                local_rel: request.src_folder.clone(),
+                names: request.names.clone(),
+                local_pin,
+                outgoing: false,
+                skipped_symlinks: 0,
+                file_index: 0,
+                done_bytes: 0,
+                files_done: 0,
+                resumed_files: 0,
+                skipped_files: 0,
+                waiting_file: None,
+                landed: HashMap::new(),
+                choices: HashMap::new(),
+                apply_remaining: None,
+                error: None,
+                in_flight: 0,
+                unsaved_landed: Vec::new(),
+            },
+        );
+        lock(&shared.job_cancel).insert(id, stop);
+        Ok(id)
+    })();
+    let id = match admitted {
+        Ok(id) => id,
+        Err(status) => {
+            reply(send, respond(status, 0, None).map_err(|_| ())?).await?;
+            return Ok(());
         }
     };
     let _ = save_jobs(shared);
-    match outcome {
-        Ok((id, manifest, _)) => {
+    // Whatever ends this request before preparation does, the job does
+    // not stay Preparing.
+    let mut unfinished = Unprepared { shared, id };
+    // Scan, hash and offer from this host's roots; nothing is announced
+    // before every hash is served. A quick preparation answers with its
+    // manifest; a longer one answers at once that it is preparing, and the
+    // controller asks for the manifest until it is ready.
+    let preparing = prepare_host_manifest(
+        shared,
+        request.src_root,
+        &request.src_folder,
+        &request.names,
+        prepare_scan_hooks(shared),
+        stopped,
+    );
+    tokio::pin!(preparing);
+    let quick = tokio::select! {
+        prepared = &mut preparing => Some(prepared),
+        _ = tokio::time::sleep(PREPARE_ANSWER_WITHIN) => None,
+    };
+    let Some(prepared) = quick else {
+        reply(send, respond(job::STATUS_OK, id, None).map_err(|_| ())?).await?;
+        let prepared = preparing.await;
+        let _ = finish_preparation(shared, &request, session_id, permission_epoch, id, prepared);
+        unfinished.id = 0;
+        return Ok(());
+    };
+    let finished = finish_preparation(shared, &request, session_id, permission_epoch, id, prepared);
+    unfinished.id = 0;
+    match finished {
+        Ok(manifest) => {
             reply(
                 send,
                 respond(job::STATUS_OK, id, Some(manifest)).map_err(|_| ())?,
@@ -4123,14 +4615,174 @@ pub(super) async fn handle_download_request(
     Ok(())
 }
 
-/// Scans and imports every file, returning the sender job id and
-/// the filled manifest. Runs on the host inside its runtime.
+/// How long a download request waits for its preparation before it
+/// answers that the job is preparing.
+const PREPARE_ANSWER_WITHIN: Duration = Duration::from_secs(1);
+const PREPARE_FAILED: &str = "the other computer could not prepare the transfer";
+const PREPARE_STOPPED: &str = "the transfer stopped before it was prepared";
+
+/// A download job still Preparing when its request ends fails: nothing
+/// else would ever finish preparing it. `id` 0 once it finished.
+struct Unprepared<'a> {
+    shared: &'a Shared,
+    id: u64,
+}
+
+impl Drop for Unprepared<'_> {
+    fn drop(&mut self) {
+        if self.id == 0 {
+            return;
+        }
+        lock(&self.shared.job_cancel).remove(&self.id);
+        let stopped = lock(&self.shared.jobs)
+            .get_mut(&self.id)
+            .filter(|record| record.state == JobState::Preparing)
+            .map(|record| {
+                record.state = JobState::Failed;
+                record.error = Some(PREPARE_STOPPED.to_owned());
+            })
+            .is_some();
+        if stopped {
+            let _ = save_jobs(self.shared);
+        }
+    }
+}
+
+/// Settles a download job once its preparation ends: Serving with its
+/// manifest and offers, or Failed. A job cancelled, or whose owner went,
+/// meanwhile keeps that state; a permission or session that changed
+/// meanwhile fails it. Returns the manifest or the status to answer with.
+fn finish_preparation(
+    shared: &Shared,
+    request: &job::DownloadRequest,
+    session_id: u64,
+    permission_epoch: u64,
+    id: u64,
+    prepared: Result<(Manifest, u64), u8>,
+) -> Result<Manifest, u8> {
+    lock(&shared.job_cancel).remove(&id);
+    let settled = {
+        let mut jobs = lock(&shared.jobs);
+        let state = lock(&shared.state);
+        let record = jobs.get_mut(&id).ok_or(job::STATUS_ERROR)?;
+        if record.state != JobState::Preparing {
+            return Err(job::STATUS_ERROR);
+        }
+        let peer = record.peer_key;
+        let permitted = prepared_download_permitted(
+            &state,
+            &peer,
+            session_id,
+            request.generation,
+            permission_epoch,
+        ) && super::service_jobs::check_owner(&state, record.owner).is_ok();
+        match prepared {
+            Ok(_) if !permitted => {
+                record.state = JobState::Failed;
+                record.error = Some(PREPARE_FAILED.to_owned());
+                Err(job::STATUS_DENIED)
+            }
+            Ok((manifest, skipped)) => {
+                for entry in manifest.entries.iter().filter(|entry| !entry.is_dir) {
+                    lock(&shared.blob_job_offers).insert((peer, entry.hash));
+                }
+                record.manifest = Some(manifest.clone());
+                record.skipped_symlinks = skipped;
+                record.state = JobState::Serving;
+                lock(&shared.serve_index).add(record);
+                Ok(manifest)
+            }
+            Err(status) => {
+                record.state = JobState::Failed;
+                record.error = Some(PREPARE_FAILED.to_owned());
+                Err(status)
+            }
+        }
+    };
+    let _ = save_jobs(shared);
+    settled
+}
+
+/// Scan probes for one engine's download preparations; production
+/// leaves them unset. Keyed by [`Core::prestage_key`].
+#[cfg(test)]
+pub(crate) static PREPARE_SCAN_HOOKS: std::sync::Mutex<Option<(usize, manifest::ScanHooks)>> =
+    std::sync::Mutex::new(None);
+
+fn prepare_scan_hooks(shared: &Shared) -> manifest::ScanHooks {
+    #[cfg(test)]
+    if let Some((engine, hooks)) = *lock(&PREPARE_SCAN_HOOKS) {
+        if engine == shared as *const Shared as usize {
+            return hooks;
+        }
+    }
+    let _ = shared;
+    manifest::ScanHooks::none()
+}
+
+/// Scans and imports every file of the chosen entries, returning the
+/// filled manifest and the symlinks left out, until `stopped` says the
+/// job was cancelled or lost its owner. Runs on the host inside its
+/// runtime.
 async fn prepare_host_manifest(
     shared: &Shared,
     src_root: u64,
+    src_folder: &str,
+    names: &[String],
+    scan_hooks: manifest::ScanHooks,
+    mut stopped: tokio::sync::watch::Receiver<bool>,
+) -> Result<(Manifest, u64), u8> {
+    tokio::select! {
+        biased;
+        _ = stopped.wait_for(|stop| *stop) => Err(job::STATUS_ERROR),
+        prepared = prepare_all(shared, src_root, src_folder, names, scan_hooks) => prepared,
+    }
+}
+
+async fn prepare_all(
+    shared: &Shared,
+    src_root: u64,
+    src_folder: &str,
+    names: &[String],
+    scan_hooks: manifest::ScanHooks,
+) -> Result<(Manifest, u64), u8> {
+    let store = super::blob::open_store(shared)
+        .await
+        .map_err(|_| job::STATUS_ERROR)?;
+    let mut manifest = Manifest {
+        entries: Vec::new(),
+    };
+    let mut skipped_symlinks = 0;
+    for rel in source_rels(src_folder, names) {
+        let part = prepare_source(shared, &store, src_root, &rel, scan_hooks).await?;
+        skipped_symlinks += part.1;
+        manifest.entries.extend(part.0.entries);
+        if manifest.entries.len() > manifest::MAX_MANIFEST_FILES {
+            return Err(job::STATUS_ERROR);
+        }
+    }
+    manifest.entries.sort_by(|a, b| a.path.cmp(&b.path));
+    if manifest
+        .entries
+        .iter()
+        .filter(|entry| !entry.is_dir)
+        .any(|entry| entry.hash == [0; 32])
+    {
+        return Err(job::STATUS_ERROR);
+    }
+    manifest::validate(&manifest).map_err(|_| job::STATUS_ERROR)?;
+    Ok((manifest, skipped_symlinks))
+}
+
+/// Scans and imports one chosen entry `src_rel`, returning its part of
+/// the manifest and the symlinks left out.
+async fn prepare_source(
+    shared: &Shared,
+    store: &iroh_blobs::api::Store,
+    src_root: u64,
     src_rel: &str,
     scan_hooks: manifest::ScanHooks,
-) -> Result<(u64, Manifest, u64), u8> {
+) -> Result<(Manifest, u64), u8> {
     // Snapshot the approved roots under a short lock; the recursive walk
     // runs on a bounded worker with no locks held.
     let snapshot = lock(&shared.file_roots).clone();
@@ -4138,9 +4790,7 @@ async fn prepare_host_manifest(
         .await
         .map_err(|_| job::STATUS_ERROR)?;
     let mut manifest = manifest::skeleton(&scan);
-    let store = super::blob::open_store(shared)
-        .await
-        .map_err(|_| job::STATUS_ERROR)?;
+    let at = entry_indices(&manifest);
     for file in &scan.files {
         // Anchored import: re-open through handles, never the retained
         // absolute pathname.
@@ -4254,14 +4904,10 @@ async fn prepare_host_manifest(
         }
         let hash = *tag.hash().as_bytes();
         lock(&shared.blob_import_pins).insert(hash, (std::time::Instant::now(), tag));
-        manifest
-            .entries
-            .iter_mut()
-            .find(|entry| entry.path == file.rel)
-            .map(|entry| {
-                entry.hash = hash;
-                entry.size = file.size;
-            });
+        if let Some(&index) = at.get(&file.rel) {
+            manifest.entries[index].hash = hash;
+            manifest.entries[index].size = file.size;
+        }
     }
     // Directory sources keep their top folder; hash filling above matches
     // scan paths, so prefixing lands after.
@@ -4271,19 +4917,18 @@ async fn prepare_host_manifest(
             manifest::prefix_source_dir(src_rel, &mut manifest);
         }
     }
-    if manifest
+    Ok((manifest, scan.skipped_symlinks))
+}
+
+/// Each entry's place in `manifest` by path, to fill hashes as files are
+/// imported without searching for each.
+fn entry_indices(manifest: &Manifest) -> HashMap<String, usize> {
+    manifest
         .entries
         .iter()
-        .filter(|entry| !entry.is_dir)
-        .any(|entry| entry.hash == [0; 32])
-    {
-        return Err(job::STATUS_ERROR);
-    }
-    manifest::validate(&manifest).map_err(|_| job::STATUS_ERROR)?;
-    // Sender job ids minted on the host share the local allocator, so
-    // adopted controller ids can never collide with a later mint.
-    let id = allocate_job_id(shared).map_err(|_| job::STATUS_ERROR)?;
-    Ok((id, manifest, scan.skipped_symlinks))
+        .enumerate()
+        .map(|(index, entry)| (entry.path.clone(), index))
+        .collect()
 }
 
 fn endpoint_id_of(peer: &[u8; 32]) -> String {
@@ -4400,6 +5045,7 @@ mod lifecycle_tests {
             }),
             local_root: 0,
             local_rel: String::new(),
+            names: Vec::new(),
             local_pin: None,
             outgoing: false,
             file_index: 0,
@@ -4414,6 +5060,7 @@ mod lifecycle_tests {
             apply_remaining: None,
             error: None,
             in_flight: 0,
+            unsaved_landed: Vec::new(),
         }
     }
 
@@ -4649,8 +5296,6 @@ mod crash_staging_tests {
             std::fs::create_dir_all(base.join(STAGING_DIR).join(name)).unwrap();
             std::fs::write(base.join(STAGING_DIR).join(name).join("bytes"), name).unwrap();
         }
-        std::fs::write(base.join("jobs.json.tmp"), "incomplete save").unwrap();
-        std::fs::write(base.join("jobs.json"), "authoritative index").unwrap();
         reconcile_staging_at(&base, &std::collections::HashSet::from([1]));
         assert_eq!(
             std::fs::read(base.join("staging/job-1/bytes")).unwrap(),
@@ -4660,11 +5305,6 @@ mod crash_staging_tests {
         assert!(!base.join("staging/job-3").exists());
         assert!(base.join("staging/job-02/bytes").exists());
         assert!(base.join("staging/unrelated/bytes").exists());
-        assert!(!base.join("jobs.json.tmp").exists());
-        assert_eq!(
-            std::fs::read(base.join("jobs.json")).unwrap(),
-            b"authoritative index"
-        );
         #[cfg(unix)]
         {
             std::fs::create_dir(base.join("external")).unwrap();
@@ -4713,5 +5353,44 @@ mod arrival_tests {
         assert!(core.job_revision() > before);
         drop(progress);
         watcher.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod serve_index_tests {
+    use super::*;
+
+    fn sender(id: u64, peer: u8, hashes: &[u8]) -> JobRecord {
+        let mut record = JobRecord::test_receiver_of(id, hashes.len());
+        record.sender = true;
+        record.peer_key = [peer; 32];
+        let entries = &mut record.manifest.as_mut().unwrap().entries;
+        for (entry, hash) in entries.iter_mut().zip(hashes) {
+            entry.hash = [*hash; 32];
+        }
+        record
+    }
+
+    /// A served hash leads straight to the sender jobs holding it for that
+    /// peer, and to the entry it is in each, without reading manifests; a
+    /// forgotten job no longer holds it, and receivers hold nothing.
+    #[test]
+    fn a_hash_leads_to_the_entries_holding_it() {
+        let mut index = ServeIndex::default();
+        let first = sender(1, 9, &[1, 2, 3]);
+        let second = sender(2, 9, &[3, 4]);
+        let elsewhere = sender(3, 8, &[3]);
+        let receiver = JobRecord::test_receiver_of(4, 1);
+        for record in [&first, &first, &second, &elsewhere, &receiver] {
+            index.add(record);
+        }
+        assert_eq!(index.holders(&[9; 32], &[3; 32]), [(1, 2), (2, 0)]);
+        assert_eq!(index.holders(&[9; 32], &[1; 32]), [(1, 0)]);
+        assert_eq!(index.holders(&[8; 32], &[3; 32]), [(3, 0)]);
+        assert!(index.holders(&[0; 32], &[1; 32]).is_empty(), "a receiver");
+        index.remove(&first);
+        assert_eq!(index.holders(&[9; 32], &[3; 32]), [(2, 0)]);
+        assert!(index.holders(&[9; 32], &[1; 32]).is_empty());
+        assert!(!index.entries.contains_key(&([9; 32], [1; 32])));
     }
 }
