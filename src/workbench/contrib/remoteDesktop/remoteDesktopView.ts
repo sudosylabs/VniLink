@@ -33,6 +33,50 @@ interface OverlayAction {
 	readonly run: () => void;
 }
 
+/**
+ * Holds the newest decoded picture until the screen's next frame, then
+ * draws it: pictures that arrive faster than the screen refreshes replace
+ * the one waiting, so the shown picture is never behind the decoder.
+ */
+class NextFramePresenter extends Disposable {
+	private pending: DesktopPicture | undefined;
+	private handle: number | undefined;
+
+	constructor(
+		private readonly targetWindow: Window,
+		private readonly present: (picture: DesktopPicture) => void,
+		private readonly skip: (picture: DesktopPicture) => void,
+	) {
+		super();
+	}
+
+	public show(picture: DesktopPicture): void {
+		if (this.pending) {
+			this.pending.frame.close();
+			this.skip(this.pending);
+		}
+		this.pending = picture;
+		this.handle ??= this.targetWindow.requestAnimationFrame(() => {
+			this.handle = undefined;
+			const next = this.pending;
+			this.pending = undefined;
+			if (next) {
+				this.present(next);
+			}
+		});
+	}
+
+	public override dispose(): void {
+		if (this.handle !== undefined) {
+			this.targetWindow.cancelAnimationFrame(this.handle);
+			this.handle = undefined;
+		}
+		this.pending?.frame.close();
+		this.pending = undefined;
+		super.dispose();
+	}
+}
+
 /** Chromium ignores a CSS cursor image larger than this, in CSS pixels. */
 const MAX_CSS_CURSOR = 128;
 
@@ -85,6 +129,9 @@ export function latencyText(stats: DesktopStats, name: string): string {
 		const latency = stats.latency[stage];
 		return latency ? [nls.localize('desktop.latency.stage', '{0}: {1} ms, {2} ms at most for 95%', labels[stage], latency.p50.toFixed(1), latency.p95.toFixed(1))] : [];
 	});
+	if (stats.skipped > 0) {
+		lines.push(nls.localize('desktop.latency.skipped', '{0} pictures replaced by newer ones before drawing', stats.skipped));
+	}
 	return lines.length ? [nls.localize('desktop.latency.network', 'Network: about {0} ms each way', Math.round(stats.status.rttMs / 2)), ...lines].join('\n') : '';
 }
 
@@ -245,8 +292,13 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		}
 		this.sessionListeners.clear();
 		const session = result.session;
-		this.sessionListeners.add(session.onPicture(picture => {
+		const presenter = this.sessionListeners.add(new NextFramePresenter(getWindow(this.element), picture => {
 			this.draw(picture);
+		}, picture => {
+			session.skipped(picture);
+		}));
+		this.sessionListeners.add(session.onPicture(picture => {
+			presenter.show(picture);
 		}));
 		this.sessionListeners.add(session.onPointer(pointer => {
 			this.remotePointer = pointer;

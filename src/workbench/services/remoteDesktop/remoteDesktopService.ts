@@ -95,6 +95,8 @@ export interface DesktopStats {
 	readonly codec: string;
 	/** Where the pictures' time went since the last read. */
 	readonly latency: DesktopLatencySummary;
+	/** Pictures replaced by newer ones before they were drawn, since the last read. */
+	readonly skipped: number;
 }
 
 /** A running view, or control, of a paired computer's screen. */
@@ -115,6 +117,8 @@ export interface IDesktopSession extends IDisposable {
 	send(input: DesktopInput): void;
 	/** The picture is on screen, which ends its measured time. */
 	presented(picture: DesktopPicture): void;
+	/** A newer picture replaced this one before it was drawn. */
+	skipped(picture: DesktopPicture): void;
 	/** How the picture is doing now; `undefined` once ended or before the first picture. */
 	stats(): Promise<DesktopStats | undefined>;
 }

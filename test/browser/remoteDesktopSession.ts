@@ -40,6 +40,7 @@ class FakeSession implements IDesktopSession {
 	public readonly onPointer = this.pointers.event;
 	public readonly sent: DesktopInput[] = [];
 	public readonly presentedPictures: DesktopPicture[] = [];
+	public readonly skippedPictures: DesktopPicture[] = [];
 	public disposed = false;
 
 	constructor(public readonly control: boolean) { }
@@ -49,7 +50,7 @@ class FakeSession implements IDesktopSession {
 	}
 
 	public stats(): Promise<DesktopStats | undefined> {
-		return Promise.resolve({ codec: 'h264', status: { reason: 'networkPressure', receivedKbps: 9400, receivedFps: 60, receiverQueueMs: 4, hostQueueMs: 2, lossPerMille: 3, rttMs: 18, encodeUs: 4000, captureUs: 1000 }, latency: { host: { p50: 9, p95: 14, count: 60 }, decode: { p50: 3, p95: 5, count: 60 } } });
+		return Promise.resolve({ codec: 'h264', status: { reason: 'networkPressure', receivedKbps: 9400, receivedFps: 60, receiverQueueMs: 4, hostQueueMs: 2, lossPerMille: 3, rttMs: 18, encodeUs: 4000, captureUs: 1000 }, latency: { host: { p50: 9, p95: 14, count: 60 }, decode: { p50: 3, p95: 5, count: 60 } }, skipped: 0 });
 	}
 
 	public send(input: DesktopInput): void {
@@ -60,6 +61,10 @@ class FakeSession implements IDesktopSession {
 
 	public presented(picture: DesktopPicture): void {
 		this.presentedPictures.push(picture);
+	}
+
+	public skipped(picture: DesktopPicture): void {
+		this.skippedPictures.push(picture);
 	}
 
 	/** A 1920 × 1080 picture of display 7 at revision 3. */
@@ -135,6 +140,14 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		await until(() => view.element.querySelector('.desktop-status-size')?.textContent === '1920 × 1080', 'The display size is not shown');
 		assert(canvas.width === 1920 && canvas.height === 1080, 'The picture was not drawn at its size');
 		assert(document.activeElement === canvas, 'The screen did not take the keyboard');
+		// Pictures decoded within one frame of the screen: only the newest is drawn.
+		const presented = sessions[0].presentedPictures.length;
+		sessions[0].picture();
+		sessions[0].picture();
+		sessions[0].picture();
+		await until(() => sessions[0].presentedPictures.length === presented + 1, 'The newest picture was not drawn');
+		await new Promise(resolve => requestAnimationFrame(resolve));
+		assert(sessions[0].presentedPictures.length === presented + 1 && sessions[0].skippedPictures.length === 2, `Pictures behind the newest were drawn: ${String(sessions[0].presentedPictures.length - presented)} drawn, ${String(sessions[0].skippedPictures.length)} skipped`);
 		// How the picture is doing, once a second.
 		await until(() => view.element.querySelector('.desktop-status-stats')?.textContent === '60 fps · H.264 · 9.4 Mb/s · 18 ms · Lowered for the network', `Wrong stats: ${view.element.querySelector('.desktop-status-stats')?.textContent ?? ''}`, 3000);
 

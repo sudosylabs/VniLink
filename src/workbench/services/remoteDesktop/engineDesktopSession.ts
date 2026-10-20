@@ -85,6 +85,7 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 	/** Time from decode to picture since stats were last read, to tell the engine how this computer keeps up. */
 	private decodeTime = { total: 0, count: 0 };
 	private readonly latency = new DesktopLatency();
+	private skippedPictures = 0;
 	private ended = false;
 	/** Whether a picture was decoded: after one, a decode error is a lost picture, not a codec this computer can't show. */
 	private decodedAny = false;
@@ -131,7 +132,9 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 		const { total, count } = this.decodeTime;
 		this.decodeTime = { total: 0, count: 0 };
 		const status = await video.mediaStatus(count ? total / count * 1000 : 0);
-		return status && { status, codec, latency: this.latency.take() };
+		const skipped = this.skippedPictures;
+		this.skippedPictures = 0;
+		return status && { status, codec, latency: this.latency.take(), skipped };
 	}
 
 	public send(input: DesktopInput): void {
@@ -249,6 +252,10 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 
 	public presented(picture: DesktopPicture): void {
 		this.latency.record('draw', performance.now() - picture.decodedAt);
+	}
+
+	public skipped(): void {
+		this.skippedPictures++;
 	}
 
 	private end(reason: DesktopEnd): void {
