@@ -12,7 +12,7 @@ async function load(path) {
 const { DataChannelHost } = await load('../../src/platform/engine/electron-utility/dataChannelHost.ts');
 
 // The client reads the preload's sandbox globals when it loads.
-globalThis.vscode = { ipcRenderer: {}, ipcMessagePort: { acquire() { } }, webFrame: {}, process: {}, context: {}, webUtils: {} };
+globalThis.vscode = { ipcRenderer: {}, ipcMessagePort: { acquire() { } }, webFrame: {}, process: { env: {} }, context: {}, webUtils: {} };
 
 const { DataChannelClient } = await load('../../src/platform/engine/electron-browser/dataChannelClient.ts');
 
@@ -29,10 +29,11 @@ function fixture(kind = 'video') {
 	const port = { on: (name, fn) => listeners.set(name, fn), start() { }, close() { }, postMessage: packet => messages.push(packet) };
 	const packets = [];
 	const inputs = [];
-	const native = { read: () => packets.shift() ?? null, close: () => closed++, input: command => inputs.push(JSON.parse(command)), write() { }, resize() { }, fileOperation: async () => '{}' };
+	const cursors = [];
+	const native = { read: () => packets.shift() ?? null, cursor: () => cursors.shift() ?? null, close: () => closed++, input: command => inputs.push(JSON.parse(command)), write() { }, resize() { }, fileOperation: async () => '{}' };
 	const host = new DataChannelHost(port, { ...request, kind }, () => { });
 	return {
-		host, messages, packets, inputs, native, receive: data => listeners.get('message')({ data }), get closed() {
+		host, messages, packets, inputs, native, cursors, receive: data => listeners.get('message')({ data }), get closed() {
 			return closed;
 		}
 	};
@@ -103,6 +104,35 @@ test('binary output is ordered and a slow consumer cannot grow the IPC queue', (
 		assert.equal(f.closed, 1, 'acknowledging out of order terminates the channel');
 	} finally {
 		f.host.close();
+	}
+});
+
+test('the other pointer travels beside the picture, checked, and only on a picture channel', async () => {
+	const f = fixture();
+	try {
+		f.cursors.push(
+			{ x: 3, y: 4, visible: true, image: { width: 1, height: 1, hotspotX: 0, hotspotY: 0, pixels: Buffer.from([1, 2, 3, 4]) } },
+			{ x: 5, y: 6, visible: true, image: null },
+		);
+		f.host.start(f.native);
+		await new Promise(resolve => setTimeout(resolve, 40));
+		const cursors = f.messages.filter(m => m.type === 'cursor').map(m => m.cursor);
+		assert.deepEqual(cursors.map(c => [c.x, c.y, 'image' in c]), [[3, 4, true], [5, 6, false]]);
+		assert.ok(cursors[0].image.pixels instanceof Uint8Array && !Buffer.isBuffer(cursors[0].image.pixels), 'the image crosses as plain bytes');
+		f.cursors.push({ x: 1, y: 1, visible: true, image: { width: 2, height: 1, hotspotX: 0, hotspotY: 0, pixels: Buffer.from([1]) } });
+		await new Promise(resolve => setTimeout(resolve, 40));
+		assert.equal(f.closed, 1, 'an image that does not fill its size reached the window');
+	} finally {
+		f.host.close();
+	}
+	const terminal = fixture('terminal');
+	try {
+		terminal.cursors.push({ x: 1, y: 1, visible: true });
+		terminal.host.start(terminal.native);
+		await new Promise(resolve => setTimeout(resolve, 40));
+		assert.equal(terminal.cursors.length, 1, 'a terminal asked for a pointer');
+	} finally {
+		terminal.host.close();
 	}
 });
 

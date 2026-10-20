@@ -1,5 +1,11 @@
-//! Bounded DXGI pointer shapes composited against original desktop pixels.
-//! XOR cursors cannot be represented as one ordinary transparent RGBA image.
+//! Bounded DXGI pointer shapes, composited against original desktop pixels
+//! or sent as an image for a viewer that draws the pointer itself.
+//! XOR cursors cannot be represented as one ordinary transparent RGBA image:
+//! as an image, a pixel that inverts the screen is drawn black with a white
+//! outline, which stays visible on any background.
+use std::sync::Arc;
+
+use vnilink::{CursorImage, CursorState};
 use vnilink_media::{Error, RawFrame};
 const EDGE: usize = 512;
 pub(crate) const MAX_SHAPE_BYTES: usize = EDGE * EDGE * 4;
@@ -64,6 +70,82 @@ impl Shape {
             pitch,
             bytes,
         })
+    }
+    /// Premultiplied BGRA, with inverting pixels drawn black and outlined.
+    pub(crate) fn image(&self, hotspot: (u32, u32)) -> Result<CursorImage, Error> {
+        const TRANSPARENT: [u8; 4] = [0, 0, 0, 0];
+        const BLACK: [u8; 4] = [0, 0, 0, 255];
+        const WHITE: [u8; 4] = [255, 255, 255, 255];
+        let mut pixels = vec![0u8; self.width * self.height * 4];
+        let mut inverted = vec![false; self.width * self.height];
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let at = y * self.width + x;
+                let pixel = match self.kind {
+                    Kind::Monochrome => {
+                        let bit = 0x80 >> (x % 8);
+                        let and = self.bytes[y * self.pitch + x / 8] & bit != 0;
+                        let xor = self.bytes[(y + self.height) * self.pitch + x / 8] & bit != 0;
+                        match (and, xor) {
+                            (false, false) => BLACK,
+                            (false, true) => WHITE,
+                            (true, false) => TRANSPARENT,
+                            (true, true) => {
+                                inverted[at] = true;
+                                BLACK
+                            }
+                        }
+                    }
+                    Kind::MaskedColor => {
+                        let source = &self.bytes[y * self.pitch + x * 4..][..4];
+                        if source[3] == 0 {
+                            [source[0], source[1], source[2], 255]
+                        } else if source[..3] == [0, 0, 0] {
+                            TRANSPARENT
+                        } else {
+                            inverted[at] = true;
+                            BLACK
+                        }
+                    }
+                    Kind::Color => {
+                        let source = &self.bytes[y * self.pitch + x * 4..][..4];
+                        let alpha = u32::from(source[3]);
+                        let premultiply =
+                            |value: u8| ((u32::from(value) * alpha + 127) / 255) as u8;
+                        [
+                            premultiply(source[0]),
+                            premultiply(source[1]),
+                            premultiply(source[2]),
+                            source[3],
+                        ]
+                    }
+                };
+                pixels[at * 4..at * 4 + 4].copy_from_slice(&pixel);
+            }
+        }
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let at = y * self.width + x;
+                if pixels[at * 4 + 3] != 0 {
+                    continue;
+                }
+                let near = (y.saturating_sub(1)..=(y + 1).min(self.height - 1)).any(|ny| {
+                    (x.saturating_sub(1)..=(x + 1).min(self.width - 1))
+                        .any(|nx| inverted[ny * self.width + nx])
+                });
+                if near {
+                    pixels[at * 4..at * 4 + 4].copy_from_slice(&WHITE);
+                }
+            }
+        }
+        let clamp = |value: u32, size: usize| value.min(size as u32 - 1) as u16;
+        CursorImage::new(
+            self.width as u16,
+            self.height as u16,
+            (clamp(hotspot.0, self.width), clamp(hotspot.1, self.height)),
+            pixels,
+        )
+        .map_err(|_| Error::InvalidFrame("DXGI cursor image was rejected"))
     }
     pub(crate) fn composite(
         &self,
@@ -140,10 +222,33 @@ impl Shape {
 #[derive(Default)]
 pub(crate) struct Pointer {
     pub(crate) visible: bool,
+    /// Where the shape's top-left corner is, as Desktop Duplication reports it.
     pub(crate) position: (i32, i32),
     pub(crate) shape: Option<Shape>,
+    /// The shape as an image, made once when the shape changes.
+    pub(crate) image: Option<Arc<CursorImage>>,
 }
 impl Pointer {
+    /// Sets the shape and its image; `hotspot` is the point under the mouse.
+    pub(crate) fn set_shape(&mut self, shape: Shape, hotspot: (u32, u32)) -> Result<(), Error> {
+        self.image = Some(Arc::new(shape.image(hotspot)?));
+        self.shape = Some(shape);
+        Ok(())
+    }
+    /// The pointer for a viewer that draws it: the point under the mouse,
+    /// in capture pixels. `None` until the first shape arrives.
+    pub(crate) fn state(&self) -> Option<CursorState> {
+        let image = self.image.clone()?;
+        let hotspot = image.hotspot();
+        Some(CursorState {
+            position: (
+                self.position.0.saturating_add(i32::from(hotspot.0)),
+                self.position.1.saturating_add(i32::from(hotspot.1)),
+            ),
+            visible: self.visible,
+            image: Some(image),
+        })
+    }
     pub(crate) fn composite(&self, frame: RawFrame) -> Result<RawFrame, Error> {
         match self.shape.as_ref().filter(|_| self.visible) {
             Some(shape) => shape.composite(&frame, self.position),
@@ -210,6 +315,7 @@ mod tests {
             visible: true,
             position: (0, 0),
             shape: Some(Shape::new(Kind::Color, 1, 1, 4, vec![255; 4]).unwrap()),
+            image: None,
         };
         let first = pointer.composite(base.clone()).unwrap();
         assert_eq!(&first.pixels()[..4], &[255; 4]);
@@ -224,6 +330,28 @@ mod tests {
         );
     }
     #[test]
+    fn as_an_image_inverting_pixels_are_black_and_outlined_and_colour_is_premultiplied() {
+        // AND: 0011, XOR: 0110 -> black, white, inverted, transparent beside it.
+        let shape = Shape::new(Kind::Monochrome, 4, 2, 1, vec![0x30, 0x60]).unwrap();
+        let image = shape.image((1, 0)).unwrap();
+        assert_eq!(image.hotspot(), (1, 0));
+        assert_eq!(
+            image.pixels(),
+            &[0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255]
+        );
+        let color = Shape::new(Kind::Color, 1, 1, 4, vec![200, 100, 50, 128]).unwrap();
+        assert_eq!(color.image((9, 9)).unwrap().pixels(), &[100, 50, 25, 128]);
+        let mut pointer = Pointer {
+            visible: true,
+            position: (10, 20),
+            ..Pointer::default()
+        };
+        assert!(pointer.state().is_none(), "no shape yet");
+        pointer.set_shape(shape, (1, 0)).unwrap();
+        let state = pointer.state().unwrap();
+        assert_eq!((state.position, state.visible), ((11, 20), true));
+    }
+    #[test]
     fn shapes_bound_allocation_and_mask_pitch_and_hidden_cursor_keeps_original_pixels() {
         assert!(Shape::new(Kind::Monochrome, 1, 3, 1, vec![0; 3]).is_err());
         assert!(Shape::new(Kind::Color, 513, 1, 2052, vec![0; 2052]).is_err());
@@ -233,6 +361,7 @@ mod tests {
             visible: false,
             position: (0, 0),
             shape: Some(Shape::new(Kind::Color, 1, 1, 4, vec![255; 4]).unwrap()),
+            image: None,
         };
         assert_eq!(
             pointer.composite(frame()).unwrap().pixels(),

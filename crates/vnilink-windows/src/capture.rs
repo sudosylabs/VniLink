@@ -4,6 +4,7 @@
 //! and this module reports that instead of pretending the picture is available.
 
 use std::slice;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use vnilink_media::{Error, RawFrame};
@@ -34,6 +35,9 @@ pub struct WindowsCapture {
     origin: (i32, i32),
     last: Mutex<Option<RawFrame>>,
     pointer: Mutex<crate::cursor::Pointer>,
+    /// Whether pictures carry the pointer. Off while every viewer draws the
+    /// pointer itself from [`WindowsCapture::cursor`].
+    embeds_cursor: AtomicBool,
     /// Last successful acquire or timeout. An error clears it.
     attested: Mutex<Option<std::time::Instant>>,
 }
@@ -64,6 +68,7 @@ impl WindowsCapture {
             origin: desktop.origin,
             last: Mutex::new(None),
             pointer: Mutex::new(crate::cursor::Pointer::default()),
+            embeds_cursor: AtomicBool::new(true),
             attested: Mutex::new(None),
         })
     }
@@ -110,6 +115,9 @@ impl WindowsCapture {
                 .unwrap_or_else(|poison| poison.into_inner()) = None;
         }
         let frame = crate::idle::picture(acquired, &mut last, timestamp_us)?;
+        if !self.embeds_cursor.load(Ordering::Acquire) {
+            return Ok(frame);
+        }
         frame
             .map(|frame| {
                 self.pointer
@@ -118,6 +126,22 @@ impl WindowsCapture {
                     .composite(frame)
             })
             .transpose()
+    }
+
+    /// Whether pictures carry the pointer; on until every viewer draws it.
+    pub fn set_embeds_cursor(&self, embeds: bool) {
+        self.embeds_cursor.store(embeds, Ordering::Release);
+    }
+
+    /// The pointer, in capture pixels, while pictures leave it out.
+    pub fn cursor(&self) -> Option<vnilink::CursorState> {
+        if self.embeds_cursor.load(Ordering::Acquire) {
+            return None;
+        }
+        self.pointer
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .state()
     }
 
     unsafe fn open_desktop(startup: &vnilink::BackendStartup) -> Result<UnvalidatedDesktop, Error> {
@@ -201,13 +225,13 @@ impl WindowsCapture {
                 4 => crate::cursor::Kind::MaskedColor,
                 _ => return Err(Error::Unsupported("DXGI cursor shape type")),
             };
-            pointer.shape = Some(crate::cursor::Shape::new(
-                kind,
-                shape.Width,
-                shape.Height,
-                shape.Pitch,
-                bytes,
-            )?);
+            pointer.set_shape(
+                crate::cursor::Shape::new(kind, shape.Width, shape.Height, shape.Pitch, bytes)?,
+                (
+                    u32::try_from(shape.HotSpot.x).unwrap_or(0),
+                    u32::try_from(shape.HotSpot.y).unwrap_or(0),
+                ),
+            )?;
         }
         Ok(())
     }

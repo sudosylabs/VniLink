@@ -5,7 +5,9 @@ import { build } from 'esbuild';
 const result = await build({
 	stdin: {
 		contents: `
-			export { EngineDesktopSession, desktopCodec } from './src/workbench/services/remoteDesktop/engineDesktopSession.js';
+			export { EngineDesktopSession, desktopCodec, pointerShape } from './src/workbench/services/remoteDesktop/engineDesktopSession.js';
+			export { Emitter } from './src/base/common/event.js';
+			export { isDesktopCursor } from './src/platform/engine/common/dataChannel.js';
 			export { hidUsage } from './src/platform/engine/common/keyUsage.js';
 			export { isInputCommand } from './src/platform/engine/common/dataChannel.js';
 		`,
@@ -19,7 +21,7 @@ const result = await build({
 	tsconfig: 'tsconfig.json',
 });
 
-const { EngineDesktopSession, desktopCodec, hidUsage, isInputCommand } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+const { EngineDesktopSession, desktopCodec, pointerShape, Emitter, isDesktopCursor, hidUsage, isInputCommand } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 
 /** An H.264 keyframe's start: a start code, then an SPS with profile 0x64, flags 0x00, level 0x28. */
 const keyframe = new Uint8Array([0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28, 0xac]);
@@ -48,8 +50,9 @@ function fixture({ control = true, decodes = true } = {}) {
 	const session = new EngineDesktopSession(control, { id: '4', generation: '2' }, createDecoder, () => Promise.resolve([]));
 	const inputs = [];
 	const keyframes = [];
+	const cursors = new Emitter();
 	session.attach({
-		video: { requestKeyframe: () => keyframes.push(true), close() { } },
+		video: { onCursor: cursors.event, requestKeyframe: () => keyframes.push(true), close() { } },
 		input: control ? { input: command => inputs.push(command), close() { } } : undefined,
 	});
 	const pictures = [];
@@ -57,7 +60,7 @@ function fixture({ control = true, decodes = true } = {}) {
 	session.onPicture(picture => pictures.push(picture));
 	session.onEnd(end => ends.push(end));
 	const packet = (fields, data = keyframe) => ({ type: 'data', sequence: 1, kind: 'video', data, metadata: JSON.stringify({ codec: 'h264', keyframe: true, timestampUs: '1000', displayId: '7', revision: '3', ...fields }) });
-	return { session, codecs, decoded, closed, inputs, pictures, ends, packet, failures, keyframes };
+	return { session, codecs, decoded, closed, inputs, pictures, ends, packet, failures, keyframes, cursors };
 }
 
 test('a picture is decoded with its own codec and keeps the display and revision it was taken on', async () => {
@@ -137,4 +140,23 @@ test('a decoder that loses the picture asks for a keyframe and starts again from
 	await session.consume(packet({ timestampUs: '3000' }));
 	assert.equal(codecs.length, 2);
 	assert.deepEqual(pictures.map(picture => picture.frame.timestamp), [1000, 3000]);
+});
+
+test('the other pointer keeps its shape across moves, unpremultiplied for a canvas', () => {
+	const { session, cursors } = fixture();
+	const pointers = [];
+	session.onPointer(pointer => pointers.push(pointer));
+	// Premultiplied BGRA: a half-transparent red, and a clear pixel.
+	const image = { width: 2, height: 1, hotspotX: 1, hotspotY: 0, pixels: new Uint8Array([0, 0, 128, 128, 0, 0, 0, 0]) };
+	assert(isDesktopCursor({ x: 5, y: 6, visible: true, image }));
+	assert(!isDesktopCursor({ x: 5, y: 6, visible: true, image: { ...image, hotspotX: 2 } }), 'a hot spot outside the image');
+	assert(!isDesktopCursor({ x: 5, y: 6, visible: true, image: { ...image, pixels: new Uint8Array(4) } }), 'pixels that do not fill it');
+	assert.deepEqual([...pointerShape(image).rgba], [255, 0, 0, 128, 0, 0, 0, 0]);
+	cursors.fire({ x: 5, y: 6, visible: true, image });
+	cursors.fire({ x: 7, y: 8, visible: false });
+	assert.deepEqual(pointers.map(pointer => [pointer.x, pointer.y, pointer.visible, pointer.shape?.hotspotX]), [[5, 6, true, 1], [7, 8, false, 1]]);
+	assert.equal(pointers[0].shape, pointers[1].shape, 'a move made the shape again');
+	session.lost();
+	cursors.fire({ x: 9, y: 9, visible: true });
+	assert.equal(pointers.length, 2, 'an ended session still reports the pointer');
 });

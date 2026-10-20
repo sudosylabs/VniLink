@@ -569,46 +569,14 @@ impl MacHost {
         if self.stop.load(Ordering::Acquire) {
             return Ok(());
         }
-        let routing = match self.core.video_routing() {
-            Ok(targets) => targets,
-            Err(vnilink::Error::ShutDown) => return Ok(()),
-            Err(error) => return Err(crate::error::map_error(error)),
-        };
-        let topology = self.core.topology().map_err(crate::error::map_error)?;
-        let Some(display) = topology.displays.iter().find(|d| d.id == self.display_id) else {
-            return Ok(());
-        };
-        let default_id = routing.default_source;
-        let targets = routing.targets;
-        let mut cache = self.cursor.lock().unwrap_or_else(|e| e.into_inner());
-        let current = merge_host_cursor(cache.state.as_ref(), update)?;
-        cache.state = Some(current.clone());
-        drop(cache);
-        // Every consumer uses the same source as its frame producer. A host
-        // for another display must never overwrite this consumer's cursor.
-        for target in targets.iter().filter(|target| {
-            target.separate_cursor && cursor_serves_source(target, self.display_id, default_id)
-        }) {
-            let mapped = map_source_cursor(
-                &current,
-                display,
-                self.capture_size,
-                self.logical_size,
-                target.quality,
-            )?;
-            let result = if target.service {
-                self.core
-                    .publish_desktop_cursor(target.id, target.generation, mapped)
-            } else {
-                self.core
-                    .publish_cursor(target.id, target.generation, mapped)
-            };
-            match result {
-                Ok(()) | Err(vnilink::Error::NoSession | vnilink::Error::StaleSession) => {}
-                Err(error) => return Err(crate::error::map_error(error)),
-            }
-        }
-        Ok(())
+        publish_host_cursor(
+            &self.core,
+            self.display_id,
+            self.capture_size,
+            self.logical_size,
+            &self.cursor,
+            update,
+        )
     }
     pub fn error(&self) -> Option<String> {
         self.error.lock().unwrap_or_else(|e| e.into_inner()).clone()
@@ -672,6 +640,9 @@ impl VnilinkCore {
                 message: "No main display is available".into(),
             });
         }
+        // Viewers draw the pointer only while macOS still names its shape;
+        // otherwise it stays in the picture.
+        let cursor_supported = cursor_supported && vnilink_macos::system_pointer().image.is_some();
         let core = Arc::clone(&self.inner);
         let stop = Arc::new(AtomicBool::new(false));
         let started = Arc::new(AtomicBool::new(false));
@@ -792,13 +763,29 @@ impl VnilinkCore {
                         &startup,
                     )?;
                     worker_started.store(true, Ordering::Release);
-                    vnilink_macos::serve_shared(
-                        &capture,
-                        &worker_core,
-                        &worker_stop,
-                        true,
-                        u64::from(display_id),
-                    )
+                    let served = AtomicBool::new(false);
+                    std::thread::scope(|scope| {
+                        if cursor_supported {
+                            scope.spawn(|| {
+                                follow_pointer(
+                                    &worker_core,
+                                    u64::from(display_id),
+                                    (pixel_width, pixel_height),
+                                    (width, height),
+                                    &served,
+                                );
+                            });
+                        }
+                        let result = vnilink_macos::serve_shared(
+                            &capture,
+                            &worker_core,
+                            &worker_stop,
+                            true,
+                            u64::from(display_id),
+                        );
+                        served.store(true, Ordering::Release);
+                        result
+                    })
                 })();
                 worker_started.store(false, Ordering::Release);
                 if let Err(error) = result {
@@ -1786,6 +1773,107 @@ fn map_source_cursor(
         visible,
         image,
     })
+}
+
+/// Sends `update` to every viewer of `display_id` that draws the pointer
+/// itself, in its own picture's pixels; `cache` keeps the last shape.
+fn publish_host_cursor(
+    core: &Core,
+    display_id: u64,
+    capture_size: (u16, u16),
+    logical_size: (u16, u16),
+    cache: &Mutex<HostCursorState>,
+    update: MacCursorUpdate,
+) -> Result<(), FfiError> {
+    let routing = match core.video_routing() {
+        Ok(targets) => targets,
+        Err(vnilink::Error::ShutDown) => return Ok(()),
+        Err(error) => return Err(crate::error::map_error(error)),
+    };
+    let topology = core.topology().map_err(crate::error::map_error)?;
+    let Some(display) = topology.displays.iter().find(|d| d.id == display_id) else {
+        return Ok(());
+    };
+    let default_id = routing.default_source;
+    let targets = routing.targets;
+    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+    let current = merge_host_cursor(cache.state.as_ref(), update)?;
+    cache.state = Some(current.clone());
+    drop(cache);
+    // Every consumer uses the same source as its frame producer. A host
+    // for another display must never overwrite this consumer's cursor.
+    for target in targets.iter().filter(|target| {
+        target.separate_cursor && cursor_serves_source(target, display_id, default_id)
+    }) {
+        let mapped = map_source_cursor(
+            &current,
+            display,
+            capture_size,
+            logical_size,
+            target.quality,
+        )?;
+        let result = if target.service {
+            core.publish_desktop_cursor(target.id, target.generation, mapped)
+        } else {
+            core.publish_cursor(target.id, target.generation, mapped)
+        };
+        match result {
+            Ok(()) | Err(vnilink::Error::NoSession | vnilink::Error::StaleSession) => {}
+            Err(error) => return Err(crate::error::map_error(error)),
+        }
+    }
+    Ok(())
+}
+
+/// Reads the system pointer for viewers that draw it, until `done`: on each
+/// move or new shape, and twice a second regardless, so a viewer that just
+/// joined receives it without waiting for the mouse to move.
+fn follow_pointer(
+    core: &Core,
+    display_id: u64,
+    capture_size: (u16, u16),
+    logical_size: (u16, u16),
+    done: &AtomicBool,
+) {
+    const EVERY: Duration = Duration::from_millis(8);
+    const REFRESH: Duration = Duration::from_millis(500);
+    let cache = Mutex::new(HostCursorState::default());
+    let mut shape: Option<vnilink_macos::PointerImage> = None;
+    let mut position = None;
+    let mut sent = std::time::Instant::now() - REFRESH;
+    while !done.load(Ordering::Acquire) {
+        let pointer = vnilink_macos::system_pointer();
+        let at = (pointer.x.round() as i32, pointer.y.round() as i32);
+        let image = pointer.image.filter(|image| {
+            shape.as_ref().is_none_or(|old| {
+                (old.width, old.height, old.hotspot, &old.bgra)
+                    != (image.width, image.height, image.hotspot, &image.bgra)
+            })
+        });
+        if image.is_some() || position != Some(at) || sent.elapsed() >= REFRESH {
+            let update = MacCursorUpdate {
+                x: at.0,
+                y: at.1,
+                visible: true,
+                image: image.as_ref().map(|image| MacCursorImage {
+                    width: image.width,
+                    height: image.height,
+                    hotspot_x: image.hotspot.0,
+                    hotspot_y: image.hotspot.1,
+                    bgra: image.bgra.clone(),
+                }),
+            };
+            // A shape the engine refuses is skipped; the next one may fit.
+            let _ =
+                publish_host_cursor(core, display_id, capture_size, logical_size, &cache, update);
+            position = Some(at);
+            sent = std::time::Instant::now();
+            if image.is_some() {
+                shape = image;
+            }
+        }
+        std::thread::sleep(EVERY);
+    }
 }
 
 fn merge_host_cursor(

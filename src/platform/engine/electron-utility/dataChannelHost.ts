@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { dimension, isInputCommand, isDesktopAudioOperation, isDesktopAudioStatus, isDesktopMediaStatus, MAX_FILE_OPERATIONS } from '../common/dataChannel.js';
+import { dimension, isInputCommand, isDesktopAudioOperation, isDesktopAudioStatus, isDesktopCursor, isDesktopMediaStatus, MAX_FILE_OPERATIONS } from '../common/dataChannel.js';
 import type { DataChannelRequest } from '../common/dataChannel.js';
 import { isFileOperation } from '../common/files.js';
 import { record } from '../common/engine.js';
@@ -8,12 +8,22 @@ export interface NativeDataChannel {
 	desktopAudio(operation: string): string;
 	requestKeyframe(): void;
 	mediaStatus(decodeUs: number): string;
+	/** The pointer when it moved or changed shape since the last call, or null. */
+	cursor(): NativeCursor | null;
 	read(): { kind: string; data?: Uint8Array | null; metadata: string } | null;
 	write(data: Uint8Array): void;
 	resize(rows: number, columns: number): void;
 	input(command: string): void;
 	close(): void | Promise<void>;
 	fileOperation(command: string): Promise<string>;
+}
+
+/** The engine's pointer as napi hands it over; the image only when the shape changed. */
+export interface NativeCursor {
+	x: number;
+	y: number;
+	visible: boolean;
+	image?: { width: number; height: number; hotspotX: number; hotspotY: number; pixels: Uint8Array } | null;
 }
 
 export interface DataPort {
@@ -30,12 +40,15 @@ export interface DataPort {
  * consuming it, so a slow consumer still backs up the native queue.
  */
 const VIDEO_WINDOW = 4;
+/** How often the other computer's pointer is looked at: faster than a screen refreshes. */
+const CURSOR_POLL_MS = 8;
 
 export class DataChannelHost {
 	private closed = false;
 	private native: NativeDataChannel | undefined;
 	private timer: ReturnType<typeof setTimeout> | undefined;
 	private readonly poll = { timer: undefined as ReturnType<typeof setTimeout> | undefined };
+	private cursorTimer: ReturnType<typeof setInterval> | undefined;
 	private sequence = 0;
 	/** The last packet the renderer acknowledged. */
 	private acknowledged = 0;
@@ -72,6 +85,32 @@ export class DataChannelHost {
 		// A files channel reads too: the engine pushes its job changes.
 		if (this.request.kind !== 'input') {
 			this.pump();
+		}
+		// The pointer travels beside the picture, so a move never waits behind frames.
+		if (this.request.kind === 'video') {
+			this.cursorTimer = setInterval(() => {
+				this.sendCursor();
+			}, CURSOR_POLL_MS);
+		}
+	}
+
+	private sendCursor(): void {
+		if (this.closed || !this.native) {
+			return;
+		}
+		try {
+			const read = this.native.cursor();
+			if (!read) {
+				return;
+			}
+			const { image, ...position } = read;
+			const cursor = image ? { ...position, image: { ...image, pixels: new Uint8Array(image.pixels) } } : position;
+			if (!isDesktopCursor(cursor)) {
+				throw new Error('Invalid desktop cursor');
+			}
+			this.port.postMessage({ type: 'cursor', cursor });
+		} catch (error) {
+			this.fail(undefined, error instanceof Error ? error.message : undefined);
 		}
 	}
 
@@ -272,6 +311,9 @@ export class DataChannelHost {
 		this.closed = true;
 		if (this.timer) {
 			clearTimeout(this.timer);
+		}
+		if (this.cursorTimer) {
+			clearInterval(this.cursorTimer);
 		}
 		if (this.poll.timer) {
 			clearTimeout(this.poll.timer);

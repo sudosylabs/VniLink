@@ -12,9 +12,10 @@ use std::time::{Duration, Instant};
 
 use vnilink::{Core, CoreEvent, CursorState, VideoTarget};
 
-use crate::cursor::composite;
+use crate::cursor::{composite, for_picture};
+
 use crate::error::{Error, PublishError};
-use crate::frame::RawFrame;
+use crate::frame::{encoded_size, RawFrame};
 use crate::host::HostSession;
 use crate::pump::{FrameSink, VideoEncoder};
 use crate::FrameSource;
@@ -238,6 +239,7 @@ fn consume<E, F>(
                 close_target(core, &target);
                 return;
             }
+            applied_quality = quality;
         }
         if target.service {
             match core.hosted_desktop_info(target.id, target.generation) {
@@ -287,6 +289,19 @@ fn consume<E, F>(
         }
         if target.separate_cursor {
             if let Some(cursor) = cursor {
+                // The viewer places the cursor on the picture it decodes.
+                let picture = encoded_size(
+                    capture_size.0,
+                    capture_size.1,
+                    applied_quality.max_width,
+                    applied_quality.max_height,
+                );
+                let Ok(cursor) =
+                    picture.and_then(|picture| for_picture(&cursor, capture_size, picture))
+                else {
+                    close_target(core, &target);
+                    return;
+                };
                 let published = if target.service {
                     core.publish_desktop_cursor(target.id, target.generation, cursor)
                 } else {

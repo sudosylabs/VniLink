@@ -22,7 +22,9 @@ objc2-av-foundation = { version = "=0.3.2", default-features = false, features =
 objc2-core-media = { version = "=0.3.2", default-features = false, features = ["std", "CMSampleBuffer", "CMFormatDescription", "CMTime", "objc2-core-video"] }
 objc2-core-video = { version = "=0.3.2", default-features = false, features = ["std", "CVPixelBuffer", "CVBuffer", "CVImageBuffer", "CVReturn", "CVBase"] }
 dispatch2 = "=0.3.1"
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSCursor", "NSImage", "NSImageRep", "NSGraphicsContext", "objc2-core-graphics"] }
+objc2-core-graphics = { version = "=0.3.2", default-features = false, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGEvent", "CGEventTypes", "CGImage"] }
+objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 opus = "=0.4.0"
-objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["std"] }

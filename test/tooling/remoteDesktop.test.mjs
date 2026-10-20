@@ -139,6 +139,7 @@ test('a screen opens only where it is shared: the picture first, then the input 
 			throw new Error('Unauthorized: control is not allowed');
 		}
 		return {
+			onCursor: () => ({ dispose() { } }),
 			input() { }, close() {
 				opened.push(`closed ${request.kind}`);
 			}

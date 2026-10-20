@@ -102,6 +102,26 @@ pub struct DataEvent {
     pub metadata: String,
 }
 
+/// The other computer's pointer, in the pixels of the picture it is shown on.
+#[napi(object)]
+pub struct DesktopCursor {
+    pub x: i32,
+    pub y: i32,
+    pub visible: bool,
+    /// Only when the shape changed since the last one read.
+    pub image: Option<DesktopCursorImage>,
+}
+
+/// Premultiplied BGRA, and the point in it under the mouse.
+#[napi(object)]
+pub struct DesktopCursorImage {
+    pub width: u32,
+    pub height: u32,
+    pub hotspot_x: u32,
+    pub hotspot_y: u32,
+    pub pixels: Buffer,
+}
+
 #[napi]
 pub struct DataChannel {
     core: Arc<VnilinkCore>,
@@ -117,6 +137,8 @@ pub struct DataChannel {
     /// The watched folder's change count last reported to the window.
     folder_seen: std::sync::atomic::AtomicU64,
     video: Mutex<Option<VideoPoller>>,
+    /// The pointer last read by the window.
+    cursor_seen: Mutex<Option<vnilink_app::FfiDesktopCursor>>,
     desktop: Mutex<Option<Arc<DesktopOwner>>>,
     terminal: Mutex<Option<Arc<TerminalService>>>,
     camera: Mutex<Option<Arc<CameraService>>>,
@@ -659,6 +681,57 @@ impl DataChannel {
         .to_string())
     }
 
+    /// The other computer's pointer when it moved or changed shape since the
+    /// last read, for a window that draws it over the picture; `None` while
+    /// it is unchanged, or while the pointer is part of the picture.
+    #[napi]
+    pub fn cursor(&self) -> Result<Option<DesktopCursor>> {
+        self.check()?;
+        if self.kind != "video" {
+            return Err(Error::from_reason("Invalid cursor target"));
+        }
+        let current = {
+            let desktop = self
+                .desktop
+                .lock()
+                .map_err(|_| Error::from_reason("Desktop unavailable"))?;
+            let Some(desktop) = desktop.as_ref() else {
+                return Ok(None);
+            };
+            match desktop.service.cursor() {
+                Ok(Some(cursor)) => cursor,
+                Ok(None) => return Ok(None),
+                Err(error) => return Err(core_error(error)),
+            }
+        };
+        let mut seen = self
+            .cursor_seen
+            .lock()
+            .map_err(|_| Error::from_reason("Channel unavailable"))?;
+        if seen.as_ref() == Some(&current) {
+            return Ok(None);
+        }
+        let shape_changed = seen.as_ref().map(|seen| &seen.image) != Some(&current.image);
+        let cursor = DesktopCursor {
+            x: current.x,
+            y: current.y,
+            visible: current.visible,
+            image: current
+                .image
+                .as_ref()
+                .filter(|_| shape_changed)
+                .map(|image| DesktopCursorImage {
+                    width: u32::from(image.width),
+                    height: u32::from(image.height),
+                    hotspot_x: u32::from(image.hotspot_x),
+                    hotspot_y: u32::from(image.hotspot_y),
+                    pixels: image.pixels.clone().into(),
+                }),
+        };
+        *seen = Some(current);
+        Ok(Some(cursor))
+    }
+
     /// Asks the other computer for a keyframe: the window's decoder lost the
     /// picture and needs one before anything else decodes.
     #[napi]
@@ -1047,6 +1120,7 @@ impl Task for OpenChannelTask {
             job_view: Mutex::new(JobView::default()),
             folder_seen: std::sync::atomic::AtomicU64::new(0),
             video: Mutex::new(video),
+            cursor_seen: Mutex::new(None),
             desktop: Mutex::new(desktop),
             terminal: Mutex::new(terminal),
             camera: Mutex::new(camera),

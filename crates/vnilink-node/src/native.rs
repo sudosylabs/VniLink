@@ -147,7 +147,8 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                         *height,
                         *pixel_width,
                         *pixel_height,
-                        false,
+                        // The window draws the pointer itself.
+                        true,
                     )
                     .map_err(core_error)?;
                 // The host idles until a viewer connects; capture starts for

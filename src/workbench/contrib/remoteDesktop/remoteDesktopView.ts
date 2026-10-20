@@ -1,12 +1,12 @@
 import * as nls from '../../../nls.js';
-import { $, addDisposableListener, append, EventType } from '../../../base/browser/dom.js';
+import { $, addDisposableListener, append, DisposableResizeObserver, EventType, getWindow } from '../../../base/browser/dom.js';
 import { Icons } from '../../../base/common/icons.js';
 import { isMacintosh, isWindows } from '../../../base/common/platform.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import type { DisplayInfo } from '../../../platform/engine/common/engine.js';
 import { hidUsage } from '../../../platform/engine/common/keyUsage.js';
 import type { DeviceSummary } from '../../services/devices/deviceService.js';
-import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopStats, type IDesktopSession } from '../../services/remoteDesktop/remoteDesktopService.js';
+import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopPointer, type DesktopPointerShape, type DesktopStats, type IDesktopSession } from '../../services/remoteDesktop/remoteDesktopService.js';
 import { ITabService, type WorkbenchTab } from '../../services/tabs/tabService.js';
 
 type DesktopProblem = DesktopFailure | DesktopEnd;
@@ -30,6 +30,21 @@ interface OverlayAction {
 	readonly label: string;
 	readonly primary?: boolean;
 	readonly run: () => void;
+}
+
+/** Chromium ignores a CSS cursor image larger than this, in CSS pixels. */
+const MAX_CSS_CURSOR = 128;
+
+/** A pointer shape drawn at the size the picture is shown at. */
+interface PointerLook {
+	readonly shape: DesktopPointerShape;
+	readonly scale: number;
+	readonly ratio: number;
+	readonly url: string;
+	readonly width: number;
+	readonly height: number;
+	readonly hotspotX: number;
+	readonly hotspotY: number;
 }
 
 const codecNames: Readonly<Record<string, string>> = { h264: 'H.264', h265: 'HEVC', vp8: 'VP8', vp9: 'VP9', av1: 'AV1' };
@@ -84,6 +99,12 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	private readonly stage: HTMLElement;
 	private readonly canvas: HTMLCanvasElement;
 	private readonly context: CanvasRenderingContext2D | null;
+	/** The other computer's pointer, drawn over the picture while this computer's pointer isn't standing in for it. */
+	private readonly pointerMark: HTMLElement;
+	private remotePointer: DesktopPointer | undefined;
+	private pointerLook: PointerLook | undefined;
+	/** Whether this computer's pointer is over the picture. */
+	private pointerInside = false;
 	private readonly overlay: HTMLElement;
 	private readonly overlayTitle: HTMLElement;
 	private readonly overlayBody: HTMLElement;
@@ -143,6 +164,20 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			? nls.localize('desktop.screenControl', 'The screen of {0}. While it has focus, keys and the pointer go to {0}.', device.name)
 			: nls.localize('desktop.screenView', 'The screen of {0}, to view only.', device.name));
 		this.context = this.canvas.getContext('2d');
+		this.pointerMark = append(this.stage, $('.desktop-pointer', { 'aria-hidden': 'true' }));
+		this.pointerMark.hidden = true;
+		const resize = this._register(new DisposableResizeObserver('remoteDesktopPointer', () => {
+			this.showPointer();
+		}, getWindow(this.element)));
+		this._register(resize.observe(this.canvas));
+		this._register(addDisposableListener(this.canvas, EventType.MOUSE_ENTER, () => {
+			this.pointerInside = true;
+			this.showPointer();
+		}));
+		this._register(addDisposableListener(this.canvas, EventType.MOUSE_LEAVE, () => {
+			this.pointerInside = false;
+			this.showPointer();
+		}));
 		this.overlay = append(this.stage, $('.desktop-overlay', { role: 'status' }));
 		const panel = append(this.overlay, $('.desktop-overlay-panel'));
 		append(panel, $('span.desktop-spinner', { 'aria-hidden': 'true' }));
@@ -196,11 +231,17 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		this.sessionListeners.add(session.onPicture(picture => {
 			this.draw(picture);
 		}));
+		this.sessionListeners.add(session.onPointer(pointer => {
+			this.remotePointer = pointer;
+			this.showPointer();
+		}));
 		this.sessionListeners.add(session.onEnd(end => {
 			this.releaseInput();
 			this.showProblem(end, true);
 		}));
 		this.session.value = session;
+		this.remotePointer = undefined;
+		this.showPointer();
 		this.selected = undefined;
 		this.display = undefined;
 		this.shown = undefined;
@@ -245,6 +286,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			if (this.canvas.width !== frame.displayWidth || this.canvas.height !== frame.displayHeight) {
 				this.canvas.width = frame.displayWidth;
 				this.canvas.height = frame.displayHeight;
+				this.showPointer();
 			}
 			this.context.drawImage(frame, 0, 0);
 		} finally {
@@ -403,19 +445,108 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		}
 	}
 
+	/**
+	 * Where the picture is drawn inside the canvas, which fits it with
+	 * margins: its top-left corner in the viewport, and CSS pixels per
+	 * picture pixel.
+	 */
+	private fitted(): { readonly left: number; readonly top: number; readonly scale: number } | undefined {
+		if (!this.canvas.width || !this.canvas.height) {
+			return undefined;
+		}
+		const box = this.canvas.getBoundingClientRect();
+		const scale = Math.min(box.width / this.canvas.width, box.height / this.canvas.height);
+		if (!(scale > 0)) {
+			return undefined;
+		}
+		return {
+			left: box.left + (box.width - this.canvas.width * scale) / 2,
+			top: box.top + (box.height - this.canvas.height * scale) / 2,
+			scale,
+		};
+	}
+
+	/**
+	 * Shows the other computer's pointer, when it reports it apart from the
+	 * picture. While this computer controls it and its own pointer is over
+	 * the picture, that pointer takes the other one's shape, so it moves
+	 * without waiting for the network; otherwise the other pointer is drawn
+	 * where it is.
+	 */
+	private showPointer(): void {
+		const remote = this.remotePointer;
+		const fit = this.fitted();
+		const look = remote?.shape && fit && this.hasPicture ? this.lookFor(remote.shape, fit.scale) : undefined;
+		if (!remote || !fit || !look) {
+			this.canvas.style.cursor = '';
+			this.pointerMark.hidden = true;
+			return;
+		}
+		if (this.control) {
+			this.canvas.style.cursor = remote.visible
+				? `image-set(url("${look.url}") ${String(look.ratio)}x) ${String(look.hotspotX)} ${String(look.hotspotY)}, default`
+				: 'none';
+		}
+		const drawn = remote.visible && (!this.control || !this.pointerInside);
+		this.pointerMark.hidden = !drawn;
+		if (drawn) {
+			const stage = this.stage.getBoundingClientRect();
+			const x = fit.left - stage.left + remote.x * fit.scale - look.hotspotX;
+			const y = fit.top - stage.top + remote.y * fit.scale - look.hotspotY;
+			this.pointerMark.style.width = `${String(look.width)}px`;
+			this.pointerMark.style.height = `${String(look.height)}px`;
+			this.pointerMark.style.backgroundImage = `url("${look.url}")`;
+			this.pointerMark.style.transform = `translate(${String(x)}px, ${String(y)}px)`;
+		}
+	}
+
+	/** The shape as an image at the picture's shown scale and this screen's density, made once per change. */
+	private lookFor(shape: DesktopPointerShape, scale: number): PointerLook | undefined {
+		const ratio = getWindow(this.element).devicePixelRatio || 1;
+		const previous = this.pointerLook;
+		if (previous?.shape === shape && previous.scale === scale && previous.ratio === ratio) {
+			return previous;
+		}
+		const fit = Math.min(scale, MAX_CSS_CURSOR / shape.width, MAX_CSS_CURSOR / shape.height);
+		const width = Math.max(1, Math.round(shape.width * fit));
+		const height = Math.max(1, Math.round(shape.height * fit));
+		const source = $<HTMLCanvasElement>('canvas');
+		source.width = shape.width;
+		source.height = shape.height;
+		const target = $<HTMLCanvasElement>('canvas');
+		target.width = Math.max(1, Math.round(width * ratio));
+		target.height = Math.max(1, Math.round(height * ratio));
+		const sourceContext = source.getContext('2d');
+		const targetContext = target.getContext('2d');
+		if (!sourceContext || !targetContext) {
+			return undefined;
+		}
+		sourceContext.putImageData(new ImageData(shape.rgba, shape.width, shape.height), 0, 0);
+		targetContext.imageSmoothingQuality = 'high';
+		targetContext.drawImage(source, 0, 0, target.width, target.height);
+		this.pointerLook = {
+			shape,
+			scale,
+			ratio,
+			url: target.toDataURL('image/png'),
+			width,
+			height,
+			hotspotX: Math.min(width - 1, Math.round(shape.hotspotX * fit)),
+			hotspotY: Math.min(height - 1, Math.round(shape.hotspotY * fit)),
+		};
+		return this.pointerLook;
+	}
+
 	/** Where the pointer is on the other computer's display, through the picture as it is fitted on screen. */
 	private pointer(event: PointerEvent): void {
 		const display = this.currentDisplay();
 		const shown = this.shown;
-		if (!display || !shown || !this.canvas.width || !this.canvas.height) {
+		const fit = this.fitted();
+		if (!display || !shown || !fit) {
 			return;
 		}
-		const box = this.canvas.getBoundingClientRect();
-		const scale = Math.min(box.width / this.canvas.width, box.height / this.canvas.height);
-		const width = this.canvas.width * scale;
-		const height = this.canvas.height * scale;
-		const u = (event.clientX - box.left - (box.width - width) / 2) / width;
-		const v = (event.clientY - box.top - (box.height - height) / 2) / height;
+		const u = (event.clientX - fit.left) / (this.canvas.width * fit.scale);
+		const v = (event.clientY - fit.top) / (this.canvas.height * fit.scale);
 		if (u < 0 || u > 1 || v < 0 || v > 1) {
 			return;
 		}

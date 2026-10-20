@@ -33,6 +33,10 @@ impl FrameSource for crate::capture::WindowsCapture {
     fn attested_display(&self) -> &str {
         "0"
     }
+
+    fn cursor(&self) -> Option<vnilink::CursorState> {
+        crate::capture::WindowsCapture::cursor(self)
+    }
 }
 
 /// Copy Desktop Duplication frames into `core` until `stop` is set or the

@@ -133,6 +133,47 @@ export function isDesktopMediaStatus(value: unknown): value is DesktopMediaStatu
 		&& counts.every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0);
 }
 
+/** The other computer's pointer, in the pixels of the picture it is shown on. */
+export interface DesktopCursor {
+	readonly x: number;
+	readonly y: number;
+	readonly visible: boolean;
+	/** Only when the shape changed: premultiplied BGRA, and the point under the mouse. */
+	readonly image?: DesktopCursorImage;
+}
+
+export interface DesktopCursorImage {
+	readonly width: number;
+	readonly height: number;
+	readonly hotspotX: number;
+	readonly hotspotY: number;
+	readonly pixels: Uint8Array;
+}
+
+/** The largest pointer side the engine carries. */
+export const MAX_CURSOR_EDGE = 512;
+
+function isCursorImage(value: unknown): value is DesktopCursorImage {
+	if (!record(value) || Object.keys(value).length !== 5 || !(value.pixels instanceof Uint8Array)) {
+		return false;
+	}
+	const { width, height, hotspotX, hotspotY } = value;
+	return Number.isInteger(width) && Number.isInteger(height) && Number(width) >= 1 && Number(height) >= 1
+		&& Number(width) <= MAX_CURSOR_EDGE && Number(height) <= MAX_CURSOR_EDGE
+		&& Number.isInteger(hotspotX) && Number.isInteger(hotspotY) && Number(hotspotX) >= 0 && Number(hotspotY) >= 0
+		&& Number(hotspotX) < Number(width) && Number(hotspotY) < Number(height)
+		&& value.pixels.length === Number(width) * Number(height) * 4;
+}
+
+export function isDesktopCursor(value: unknown): value is DesktopCursor {
+	if (!record(value) || typeof value.visible !== 'boolean' || !Number.isSafeInteger(value.x) || !Number.isSafeInteger(value.y)) {
+		return false;
+	}
+	return 'image' in value
+		? Object.keys(value).length === 4 && isCursorImage(value.image)
+		: Object.keys(value).length === 3;
+}
+
 export function isDesktopAudioOperation(value: unknown): value is DesktopAudioOperation {
 	return record(value) && ((value.type === 'status' && Object.keys(value).length === 1)
 		|| (value.type === 'enabled' && typeof value.enabled === 'boolean' && Object.keys(value).length === 2)

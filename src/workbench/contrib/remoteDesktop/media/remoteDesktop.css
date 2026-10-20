@@ -28,6 +28,17 @@
 	transition: opacity 0.2s;
 }
 
+/* The other computer's pointer, placed by the view in the stage's pixels. */
+.desktop-pointer {
+	position: absolute;
+	top: 0;
+	left: 0;
+	background-repeat: no-repeat;
+	background-size: 100% 100%;
+	pointer-events: none;
+	will-change: transform;
+}
+
 .desktop-stage.desktop-dimmed .desktop-screen {
 	opacity: 0.35;
 }

@@ -57,6 +57,24 @@ export interface DesktopPicture {
 	readonly revision: string;
 }
 
+/** The other computer's pointer, where it is on the shown picture, in its pixels. */
+export interface DesktopPointer {
+	readonly x: number;
+	readonly y: number;
+	readonly visible: boolean;
+	/** Its current shape; `undefined` until the first one arrives. */
+	readonly shape: DesktopPointerShape | undefined;
+}
+
+/** A pointer shape in the picture's pixels: straight-alpha RGBA, and the point under the mouse. */
+export interface DesktopPointerShape {
+	readonly width: number;
+	readonly height: number;
+	readonly hotspotX: number;
+	readonly hotspotY: number;
+	readonly rgba: Uint8ClampedArray<ArrayBuffer>;
+}
+
 /** Input for the other computer, as the engine's input commands carry it without their session. */
 export type DesktopInput =
 	| { readonly type: 'submitLocalKey'; readonly usage: number; readonly down: boolean; readonly text: string; readonly composing: boolean }
@@ -79,6 +97,11 @@ export interface IDesktopSession extends IDisposable {
 	/** Whether input reaches the other computer; a view-only session sends none. */
 	readonly control: boolean;
 	readonly onPicture: Event<DesktopPicture>;
+	/**
+	 * The other computer's pointer moved or changed shape. Only when it is
+	 * left out of the picture, for this computer to draw.
+	 */
+	readonly onPointer: Event<DesktopPointer>;
 	/** Fires once; disposing the session first fires nothing. */
 	readonly onEnd: Event<DesktopEnd>;
 	/** The other computer's displays, where its pictures and pointer positions lie. */

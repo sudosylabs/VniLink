@@ -1,5 +1,6 @@
-import { isDesktopAudioOperation, isDesktopAudioStatus, isDesktopMediaStatus, isDataPacket, isChannelRequest, MAX_FILE_OPERATIONS } from '../common/dataChannel.js';
-import type { DataChannelRequest, DataPacket, DataChannelMetrics, DesktopAudioOperation, DesktopAudioStatus, DesktopMediaStatus } from '../common/dataChannel.js';
+import { isDesktopAudioOperation, isDesktopAudioStatus, isDesktopCursor, isDesktopMediaStatus, isDataPacket, isChannelRequest, MAX_FILE_OPERATIONS } from '../common/dataChannel.js';
+import type { DataChannelRequest, DataPacket, DataChannelMetrics, DesktopAudioOperation, DesktopAudioStatus, DesktopCursor, DesktopMediaStatus } from '../common/dataChannel.js';
+import { Emitter } from '../../../base/common/event.js';
 import { isFileAnswer, type FileAnswer, type FileOperation } from '../common/files.js';
 import { ipcMessagePort } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { record } from '../common/engine.js';
@@ -29,6 +30,9 @@ export class DataChannelClient {
 	} | undefined;
 	private readonly filePending = new Map<number, { resolve(value: FileAnswer): void; reject(error: Error): void }>();
 	private statusPending: { id: number; resolve(value: DesktopMediaStatus | undefined): void } | undefined;
+	private readonly _onCursor = new Emitter<DesktopCursor>();
+	/** The other computer's pointer moved or changed shape, on a desktop picture channel. */
+	public readonly onCursor = this._onCursor.event;
 
 	constructor(
 		private readonly port: MessagePort,
@@ -152,6 +156,13 @@ export class DataChannelClient {
 					this.statusPending.resolve(message.status);
 					this.statusPending = undefined;
 				}
+				return;
+			}
+			if (record(message) && message.type === 'cursor') {
+				if (!isDesktopCursor(message.cursor)) {
+					throw new Error('Invalid desktop cursor');
+				}
+				this._onCursor.fire(message.cursor);
 				return;
 			}
 			if (record(message) && message.type === 'desktopAudio') {
@@ -357,6 +368,7 @@ export class DataChannelClient {
 		}
 		this.closed = true;
 		clearInterval(this.heartbeat);
+		this._onCursor.dispose();
 		if (this.audioPending) {
 			clearTimeout(this.audioPending.timer);
 			this.audioPending.reject(new Error('Data channel closed'));

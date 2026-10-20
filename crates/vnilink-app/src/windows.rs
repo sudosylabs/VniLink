@@ -22,6 +22,10 @@ impl vnilink::HostCapture for WindowsCaptureDescriptor {
     fn monitor(&self) -> (u16, u16) {
         (self.width, self.height)
     }
+    /// Desktop Duplication reports the pointer apart from the picture.
+    fn separate_cursor(&self) -> bool {
+        true
+    }
 }
 
 /// A running Windows screen host. Dropping it stops the worker.
@@ -157,7 +161,10 @@ fn serve(core: &Arc<Core>, stop: &Arc<AtomicBool>, error: &Mutex<Option<String>>
                 stop,
                 true,
                 DISPLAY,
-                |_| {},
+                // Pictures carry the pointer while any viewer cannot draw it.
+                |targets| {
+                    capture.set_embeds_cursor(targets.iter().any(|target| !target.separate_cursor));
+                },
                 |target, width, height, fps, bps| {
                     vnilink_windows::WindowsEncoder::open_codec(
                         width,

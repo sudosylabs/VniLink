@@ -35,11 +35,12 @@ impl VnilinkCore {
         self.install_clipboard(Box::new(crate::native_clipboard::NativeClipboard::open()?))
     }
     pub fn prepare_native_video(&self) -> Result<(), FfiError> {
+        // The window draws the other computer's pointer itself, so a host
+        // that can report it leaves it out of the picture.
+        self.inner.set_cursor_receiver(true).map_err(map_error)?;
         #[cfg(target_os = "macos")]
         {
-            self.prepare_mac_video()?;
-            // Electron currently consumes video frames without a separate cursor channel.
-            self.inner.set_cursor_receiver(false).map_err(map_error)
+            self.prepare_mac_video()
         }
         #[cfg(target_os = "linux")]
         {

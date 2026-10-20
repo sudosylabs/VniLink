@@ -21,6 +21,10 @@ mod decode;
 mod encode;
 mod host;
 mod pixels;
+#[cfg(target_os = "macos")]
+mod pointer;
+#[cfg(target_os = "macos")]
+pub use pointer::{system_pointer, PointerImage, SystemPointer};
 
 pub use capture::{display_scale, ScreenPlan, FILEVAULT_PREBOOT_SUPPORTED};
 #[cfg(target_os = "macos")]

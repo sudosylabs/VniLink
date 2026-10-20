@@ -7,7 +7,7 @@ import '../../src/workbench/contrib/remoteDesktop/remoteDesktop.contribution.js'
 import { OpenRemoteDesktopAction, ViewScreenAction } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopActions.js';
 import { RemoteDesktopView } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopView.js';
 import { IDeviceService, type DeviceSummary } from '../../src/workbench/services/devices/deviceService.js';
-import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopStats, type IDesktopSession } from '../../src/workbench/services/remoteDesktop/remoteDesktopService.js';
+import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopPointer, type DesktopStats, type IDesktopSession } from '../../src/workbench/services/remoteDesktop/remoteDesktopService.js';
 import { ITabService } from '../../src/workbench/services/tabs/tabService.js';
 import { TabService } from '../../src/workbench/services/tabs/tabServiceImpl.js';
 
@@ -36,6 +36,8 @@ class FakeSession implements IDesktopSession {
 	public readonly onPicture = this.pictures.event;
 	private readonly ends = new Emitter<DesktopEnd>();
 	public readonly onEnd = this.ends.event;
+	private readonly pointers = new Emitter<DesktopPointer>();
+	public readonly onPointer = this.pointers.event;
 	public readonly sent: DesktopInput[] = [];
 	public disposed = false;
 
@@ -64,6 +66,12 @@ class FakeSession implements IDesktopSession {
 			context.fillRect(0, 0, 1920, 1080);
 		}
 		this.pictures.fire({ frame: new VideoFrame(canvas, { timestamp: 0 }), display: '7', revision: '3' });
+	}
+
+	/** The other computer's pointer at `x`, `y` in the picture: a white 4 × 4 square, its hot spot at the top left. */
+	public pointer(x: number, y: number, visible = true): void {
+		const shape = { width: 4, height: 4, hotspotX: 0, hotspotY: 0, rgba: new Uint8ClampedArray(64).fill(255) };
+		this.pointers.fire({ x, y, visible, shape });
 	}
 
 	public end(reason: DesktopEnd): void {
@@ -167,6 +175,22 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		// A notch of the wheel is 120 of the engine's units.
 		canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, bubbles: true, cancelable: true }));
 		assert(JSON.stringify(sessions[0].sent.at(-1)) === JSON.stringify({ type: 'submitPreciseWheel', dx: 0, dy: 120 }), `Wrong wheel: ${JSON.stringify(sessions[0].sent.at(-1))}`);
+		// The other computer's pointer: while this one is over the picture, it takes that pointer's shape;
+		// away from the picture, the other pointer is drawn where it is.
+		const mark = view.element.querySelector<HTMLElement>('.desktop-pointer');
+		assert(mark !== null, 'The tab has no place for the other pointer');
+		canvas.dispatchEvent(new MouseEvent('mouseenter'));
+		sessions[0].pointer(960, 540);
+		assert(canvas.style.cursor.includes('image-set') && mark.hidden === true, `This computer's pointer did not take the other's shape: ${canvas.style.cursor}`);
+		canvas.dispatchEvent(new MouseEvent('mouseleave'));
+		const drawn = (): boolean => mark.hidden !== true;
+		assert(drawn(), 'The other pointer was not drawn while this one is away');
+		const scale = Math.min(box.width / 1920, box.height / 1080);
+		const placed = mark.getBoundingClientRect();
+		assert(Math.abs(placed.left - (box.left + (box.width - 1920 * scale) / 2 + 960 * scale)) < 1.5
+			&& Math.abs(placed.top - (box.top + (box.height - 1080 * scale) / 2 + 540 * scale)) < 1.5, `The other pointer is in the wrong place: ${String(placed.left)}, ${String(placed.top)}`);
+		sessions[0].pointer(960, 540, false);
+		assert(!drawn() && canvas.style.cursor === 'none', 'A hidden pointer still shows');
 		// Leaving the screen lets go of everything held there.
 		// A test window has no focus of its own to lose, so the blur is dispatched as the system would.
 		canvas.dispatchEvent(new FocusEvent('blur'));
@@ -205,6 +229,11 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		assert(screen !== null, 'The view-only tab has no screen');
 		press(screen, 'keydown', 'KeyA', 'a');
 		assert(sessions[3].sent.length === 0, 'A view-only tab sent input');
+		// Viewing, the other pointer is drawn even under this one, which keeps its own shape.
+		screen.dispatchEvent(new MouseEvent('mouseenter'));
+		sessions[3].pointer(100, 100);
+		const viewed = viewer.element.querySelector<HTMLElement>('.desktop-pointer');
+		assert(viewed?.hidden === false && screen.style.cursor === '', 'Viewing did not draw the other pointer');
 	} finally {
 		host.remove();
 		disposables.dispose();
