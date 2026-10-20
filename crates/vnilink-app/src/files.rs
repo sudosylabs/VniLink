@@ -23,6 +23,7 @@ pub enum FfiFolderKind {
     Documents,
     Downloads,
     Pictures,
+    Volume,
 }
 
 /// One shared root: its id and name (`/` or a drive such as `C:`).
@@ -230,6 +231,7 @@ pub(crate) fn places(places: vnilink::Places) -> FfiPlaces {
                     vnilink::FolderKind::Documents => FfiFolderKind::Documents,
                     vnilink::FolderKind::Downloads => FfiFolderKind::Downloads,
                     vnilink::FolderKind::Pictures => FfiFolderKind::Pictures,
+                    vnilink::FolderKind::Volume => FfiFolderKind::Volume,
                 },
                 root: folder.root,
                 path: folder.path,

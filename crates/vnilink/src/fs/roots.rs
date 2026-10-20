@@ -195,6 +195,31 @@ impl RootSet {
         Ok(())
     }
 
+    /// Reads the drives again while the whole disk is shared, so one
+    /// plugged in since appears and one taken out goes. Ids follow drive
+    /// letters, so every other root keeps its id; a transfer pinned to a
+    /// drive that went fails on its next step rather than reaching another.
+    /// Unix shares `/`, whose drives are folders under it.
+    pub(crate) fn refresh_drives(&mut self) -> Result<(), Error> {
+        #[cfg(windows)]
+        if self.whole_filesystem {
+            let available: Vec<_> = vnilink_rename::windows::drive_roots()
+                .map_err(|_| Error::Unsupported("Windows mounted drives"))?
+                .into_iter()
+                .filter(|p| vnilink_rename::windows::open_directory(p).is_ok())
+                .collect();
+            let current: Vec<_> = self.roots.iter().map(|root| root.path.clone()).collect();
+            let same = available.len() == current.len()
+                && available.iter().all(|path| {
+                    std::fs::canonicalize(path).is_ok_and(|path| current.contains(&path))
+                });
+            if !same && !available.is_empty() {
+                self.set_mode(&available, true)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Whole-filesystem browsing is a distinct owner choice. It never grants
     /// a peer Files permission or elevates the process's OS access.
     pub(crate) fn set_filesystem(&mut self) -> Result<(), Error> {

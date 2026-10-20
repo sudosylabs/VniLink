@@ -1009,3 +1009,29 @@ mod delete_candidate_tests {
         std::fs::remove_dir_all(path).unwrap();
     }
 }
+
+/// Whether the system's file manager shows the volume mounted at `path`.
+/// macOS mounts system volumes such as Recovery with `MNT_DONTBROWSE`, and
+/// Finder leaves them out; elsewhere every mounted volume is shown.
+pub fn browsable_volume(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
+        // SAFETY: `statfs` reads a borrowed NUL-terminated path and fills
+        // the buffer it is given, which is only read after it succeeds.
+        if unsafe { libc::statfs(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
+            return false;
+        }
+        // SAFETY: `statfs` returned 0, so it initialized the whole struct.
+        let stat = unsafe { stat.assume_init() };
+        stat.f_flags & (libc::MNT_DONTBROWSE as u32) == 0
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        true
+    }
+}

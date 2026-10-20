@@ -4,7 +4,8 @@
  * `files` channel. 64-bit counts and ids are decimal strings.
  */
 
-export type FileFolderKind = 'home' | 'desktop' | 'documents' | 'downloads' | 'pictures';
+/** A usual folder of this account, or `volume`: a drive mounted under the whole disk, named by its folder. */
+export type FileFolderKind = 'home' | 'desktop' | 'documents' | 'downloads' | 'pictures' | 'volume';
 
 /** Where a file manager starts on one computer: its roots, then the folders that exist there, home first. */
 export interface FilePlaces {
@@ -109,7 +110,7 @@ export function isFileName(value: unknown): value is string {
 }
 
 function folderKind(value: unknown): value is FileFolderKind {
-	return value === 'home' || value === 'desktop' || value === 'documents' || value === 'downloads' || value === 'pictures';
+	return value === 'home' || value === 'desktop' || value === 'documents' || value === 'downloads' || value === 'pictures' || value === 'volume';
 }
 
 export function isFilePlaces(value: unknown): value is FilePlaces {

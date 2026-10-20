@@ -88,13 +88,14 @@ export function freshName(base: string, taken: readonly string[]): string {
 	return `${base} ${String(index)}`;
 }
 
-function folderLabel(kind: FileFolderKind): string {
+function folderLabel(kind: FileFolderKind, path: string): string {
 	switch (kind) {
 		case 'home': return nls.localize('files.home', 'Home');
 		case 'desktop': return nls.localize('files.desktop', 'Desktop');
 		case 'documents': return nls.localize('files.documents', 'Documents');
 		case 'downloads': return nls.localize('files.downloads', 'Downloads');
 		case 'pictures': return nls.localize('files.pictures', 'Pictures');
+		case 'volume': return path.slice(path.lastIndexOf('/') + 1);
 	}
 }
 
@@ -500,7 +501,7 @@ export class FilesPaneView extends Disposable {
 			this.goUp();
 		}));
 		this._register(addDisposableListener(this.nameButton, EventType.CLICK, () => {
-			this.showPlaces();
+			void this.showPlaces();
 		}));
 		this._register(addDisposableListener(refresh, EventType.CLICK, () => {
 			void this.refresh();
@@ -1035,17 +1036,24 @@ export class FilesPaneView extends Disposable {
 		}
 	}
 
-	private showPlaces(): void {
-		const places = this.places;
-		if (!places) {
+	/** The usual folders, then the disk and drives, read again each time so a drive plugged in since shows. */
+	private async showPlaces(): Promise<void> {
+		const disk = this.disk;
+		if (!disk) {
 			return;
 		}
-		const actions: IAction[] = places.folders.map(folder => toAction({
-			id: `files.place.${folder.kind}`,
-			label: folderLabel(folder.kind),
+		const places = await disk.places().catch(() => this.places);
+		if (!places || disk !== this.disk) {
+			return;
+		}
+		this.places = places;
+		const place = (folder: FilePlaces['folders'][number]) => toAction({
+			id: `files.place.${folder.kind}${folder.kind === 'volume' ? `.${folder.path}` : ''}`,
+			label: folderLabel(folder.kind, folder.path),
 			checked: same(this.current, folder),
 			run: () => void this.navigate({ root: folder.root, path: folder.path }),
-		}));
+		});
+		const actions: IAction[] = places.folders.filter(folder => folder.kind !== 'volume').map(place);
 		if (actions.length && places.roots.length) {
 			actions.push(new Separator());
 		}
@@ -1057,6 +1065,7 @@ export class FilesPaneView extends Disposable {
 				run: () => void this.navigate({ root: root.id, path: '' }),
 			}));
 		}
+		actions.push(...places.folders.filter(folder => folder.kind === 'volume').map(place));
 		this.contextMenuService.showContextMenu({
 			getAnchor: () => this.nameButton,
 			getActions: () => actions,

@@ -14,6 +14,9 @@ pub enum FolderKind {
     Documents,
     Downloads,
     Pictures,
+    /// A drive mounted under the whole disk, such as a USB stick in
+    /// `/Volumes` or `/media`; its name is its folder's.
+    Volume,
 }
 
 impl FolderKind {
@@ -24,6 +27,7 @@ impl FolderKind {
             Self::Documents => 2,
             Self::Downloads => 3,
             Self::Pictures => 4,
+            Self::Volume => 5,
         }
     }
 
@@ -34,6 +38,7 @@ impl FolderKind {
             2 => Some(Self::Documents),
             3 => Some(Self::Downloads),
             4 => Some(Self::Pictures),
+            5 => Some(Self::Volume),
             _ => None,
         }
     }
@@ -54,7 +59,8 @@ pub struct Place {
     pub path: String,
 }
 
-/// The roots, then the folders that exist, home first.
+/// The roots, then the folders that exist, home first, then the drives
+/// mounted under the whole disk.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Places {
     pub roots: Vec<PlaceRoot>,
@@ -76,7 +82,16 @@ pub(crate) fn places(roots: &RootSet) -> Places {
             .collect(),
         folders: Vec::new(),
     };
+    let volumes = mounted_volumes()
+        .into_iter()
+        .filter_map(|path| roots.locate(&path))
+        .map(|(root, path)| Place {
+            kind: FolderKind::Volume,
+            root,
+            path,
+        });
     let Some(home) = home_dir() else {
+        places.folders.extend(volumes);
         return places;
     };
     let candidates = [
@@ -94,7 +109,67 @@ pub(crate) fn places(roots: &RootSet) -> Places {
             places.folders.push(Place { kind, root, path });
         }
     }
+    places.folders.extend(volumes);
     places
+}
+
+/// At most this many drives are offered; more are still reachable by path.
+const MAX_VOLUMES: usize = 32;
+
+/// Drives mounted where macOS and Linux put them, read afresh each time so
+/// one plugged in later appears. A volume is a directory mounted over its
+/// parent, so it sits on another device. As in Finder, the link macOS
+/// keeps in `/Volumes` to the startup disk is left out, and so are system
+/// volumes such as Recovery that are mounted not to be browsed.
+#[cfg(unix)]
+fn mounted_volumes() -> Vec<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let mut bases = vec![
+        PathBuf::from("/Volumes"),
+        PathBuf::from("/mnt"),
+        PathBuf::from("/media"),
+    ];
+    if let Some(user) = nix::unistd::User::from_uid(nix::unistd::Uid::effective())
+        .ok()
+        .flatten()
+    {
+        bases.push(Path::new("/media").join(&user.name));
+        bases.push(Path::new("/run/media").join(&user.name));
+    }
+    let mut volumes = Vec::new();
+    for base in bases {
+        let (Ok(parent), Ok(entries)) =
+            (std::fs::symlink_metadata(&base), std::fs::read_dir(&base))
+        else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if meta.is_dir()
+                && !meta.file_type().is_symlink()
+                && meta.dev() != parent.dev()
+                && vnilink_rename::anchored::browsable_volume(&path)
+                && !volumes.contains(&path)
+            {
+                volumes.push(path);
+            }
+        }
+    }
+    volumes.sort_by_key(|path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().to_lowercase())
+    });
+    volumes.truncate(MAX_VOLUMES);
+    volumes
+}
+
+/// Windows drives are roots of their own, read again with each Places.
+#[cfg(not(unix))]
+fn mounted_volumes() -> Vec<PathBuf> {
+    Vec::new()
 }
 
 /// A drive's letter and colon, or the root's own path (`/`).

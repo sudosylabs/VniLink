@@ -474,7 +474,8 @@ pub(crate) fn decode_places_body(bytes: &[u8]) -> Result<Places, WireError> {
         roots.push(PlaceRoot { id, name });
     }
     let count = take_u16(&mut cursor).ok_or_else(error)?;
-    if count > 16 {
+    // The usual folders, then up to 32 mounted drives.
+    if count > 48 {
         return Err(error());
     }
     let mut folders = Vec::with_capacity(usize::from(count));

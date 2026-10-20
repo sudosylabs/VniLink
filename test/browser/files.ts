@@ -44,10 +44,16 @@ class MemoryDisk implements IFilesDisk {
 	public readonly renames: [string, string][] = [];
 	public readonly deletes: string[] = [];
 
-	constructor(private readonly placeList: FilePlaces, private readonly folders: Map<string, FileEntry[]>) { }
+	constructor(private placeList: FilePlaces, private readonly folders: Map<string, FileEntry[]>) { }
 
 	public places(): Promise<FilePlaces> {
 		return Promise.resolve(this.placeList);
+	}
+
+	/** A drive plugged in: the disk names it as a volume from now on. */
+	public plug(root: string, path: string): void {
+		this.placeList = { ...this.placeList, folders: [...this.placeList.folders, { kind: 'volume', root, path }] };
+		this.folders.set(`${root}:${path}`, []);
 	}
 
 	public list(folder: FolderLocation): Promise<FilesListing> {
@@ -263,9 +269,20 @@ export async function verifyFiles(): Promise<void> {
 		assert(copyButton.disabled, 'Copy is offered with nothing selected');
 
 		// The places menu goes to the other computer's drives.
-		remote.querySelector<HTMLButtonElement>('.files-computer')?.click();
-		menu = shown.menu;
-		assert(menu.map(action => action.label).join(',') === 'Home,,C:,D:', `Wrong places: ${menu.map(action => action.label).join(',')}`);
+		const placesNow = async (pane: HTMLElement): Promise<string> => {
+			shown.menu = [];
+			pane.querySelector<HTMLButtonElement>('.files-computer')?.click();
+			await until(() => shown.menu.length > 0, 'The places menu did not open');
+			menu = shown.menu;
+			return menu.map(action => action.label).join(',');
+		};
+		const placeList = await placesNow(remote);
+		assert(placeList === 'Home,,C:,D:', `Wrong places: ${placeList}`);
+		// A drive plugged in after Files opened shows the next time, after the disk and drives.
+		localDisk.plug('0', 'Volumes/Backup');
+		const withDrive = await placesNow(local);
+		assert(withDrive === 'Home,Downloads,,Whole Disk,Backup', `A drive plugged in later is missing: ${withDrive}`);
+		await placesNow(remote);
 		run('files.root.2');
 		await until(() => crumbs(remote).join('/') === 'C:', 'The drive did not open');
 		remote.querySelector<HTMLButtonElement>('.files-icon-button[aria-label="Back"]')?.click();

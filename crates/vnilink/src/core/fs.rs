@@ -88,8 +88,7 @@ impl Core {
     /// This computer's roots, home folder and usual folders.
     pub fn places(&self) -> Result<fs::Places, Error> {
         self.ensure_alive()?;
-        let snapshot = lock(&self.shared.file_roots).clone();
-        Ok(fs::places(&snapshot))
+        Ok(fs::places(&current_roots(&self.shared)))
     }
 
     /// Where `path` lies under the shared roots, as the panes name an
@@ -768,7 +767,7 @@ pub(super) async fn handle_fs_request(
             match gate {
                 Some(status) => (fs::Response::coded(id, status), None),
                 None => {
-                    let snapshot = lock(&shared.file_roots).clone();
+                    let snapshot = current_roots(shared);
                     match tokio::task::spawn_blocking(move || fs::places(&snapshot)).await {
                         Ok(places) => match fs::encode_places_body(&places) {
                             Ok(body) => (fs::Response::ok(id), Some(body)),
@@ -874,6 +873,14 @@ pub(super) fn status_error(status: u8, message: &str) -> Result<(), Error> {
         status if status == fs::STATUS_NO_TRASH => Err(Error::Unsupported(fs::NO_TRASH)),
         _ => Err(Error::InvalidSetting(fs::failure_message(message))),
     }
+}
+
+/// The shared roots as they are now: the drives are read again first, so
+/// Places offers one plugged in since VniLink started.
+fn current_roots(shared: &Shared) -> fs::RootSet {
+    let mut roots = lock(&shared.file_roots);
+    let _ = roots.refresh_drives();
+    roots.clone()
 }
 
 /// A delete ready to run once the handler's locks are dropped.

@@ -833,6 +833,11 @@ fn places_body_round_trips_and_refuses_unsafe_folders() {
                 root: 2,
                 path: "Users/abass/Downloads".to_owned(),
             },
+            crate::fs::Place {
+                kind: crate::fs::FolderKind::Volume,
+                root: 2,
+                path: "Volumes/Backup".to_owned(),
+            },
         ],
     };
     let body = crate::fs::encode_places_body(&places).unwrap();

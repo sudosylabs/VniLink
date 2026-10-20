@@ -73,6 +73,7 @@ pub(crate) fn transfer_places(places: vnilink_app::FfiPlaces) -> TransferPlaces 
                     vnilink_app::FfiFolderKind::Documents => "documents",
                     vnilink_app::FfiFolderKind::Downloads => "downloads",
                     vnilink_app::FfiFolderKind::Pictures => "pictures",
+                    vnilink_app::FfiFolderKind::Volume => "volume",
                 },
                 root: folder.root.to_string(),
                 path: folder.path,
