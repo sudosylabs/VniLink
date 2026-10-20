@@ -104,19 +104,16 @@ pub(super) fn interrupt_orphaned(shared: &Shared) {
                         r.error = None;
                     }
                     r.waiting_file = None;
-                    Some((r.id, r.peer_key, r.sender))
+                    Some(r.id)
                 } else {
                     None
                 }
             })
             .collect::<Vec<_>>()
     };
-    for (id, peer, sender) in &interrupted {
+    for id in &interrupted {
         if let Some(stop) = lock(&shared.job_cancel).remove(id) {
             stop.send_replace(true);
-        }
-        if *sender {
-            Core::withdraw_job_offers(shared, peer, *id);
         }
     }
     if !interrupted.is_empty() {
@@ -395,32 +392,6 @@ pub(super) async fn serve(
         }
         TAG_ADOPT => handle_adopt(shared, peer, send, payload, owner).await,
         _ => Err(()),
-    }
-}
-
-/// A rejected or cancelled preparation must not leave temporary offers behind.
-pub(super) struct PreparedOffers {
-    shared: Arc<Shared>,
-    peer: [u8; 32],
-    pub(super) hashes: Vec<[u8; 32]>,
-    pub(super) committed: bool,
-}
-impl PreparedOffers {
-    pub(super) fn new(shared: Arc<Shared>, peer: [u8; 32], scoped: bool) -> Self {
-        Self {
-            shared,
-            peer,
-            hashes: Vec::new(),
-            committed: !scoped,
-        }
-    }
-}
-impl Drop for PreparedOffers {
-    fn drop(&mut self) {
-        if self.committed {
-            return;
-        }
-        super::jobs::release_prepared_offers(&self.shared, &self.peer, &self.hashes);
     }
 }
 

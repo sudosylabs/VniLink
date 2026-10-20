@@ -81,8 +81,8 @@ impl Drop for Scratch {
     }
 }
 
-/// Serializes the multi-megabyte job tests. Each `Core` plus each blob
-/// store brings its own multi-threaded runtimes; running several bulk
+/// Serializes the multi-megabyte job tests. Each `Core` brings its own
+/// multi-threaded runtimes; running several bulk
 /// transfers at once oversubscribes the machine and turns timing bounds
 /// into noise. Light tests stay parallel.
 static HEAVY_JOB: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -149,7 +149,7 @@ fn setup_with_access(
     let controller_scratch = Scratch::tagged(&format!("{tag}-controller"));
     for (core, scratch) in [(&host, &host_scratch), (&controller, &controller_scratch)] {
         std::fs::create_dir_all(scratch.join("root")).unwrap();
-        core.set_blob_directory(scratch.join("blobs")).unwrap();
+        core.set_transfer_directory(scratch.join("blobs")).unwrap();
         configure(core, &scratch.join("root"));
     }
     pair_with_transfer(&host, &controller);
@@ -275,14 +275,12 @@ fn manifest_validation_rejects_bad_shapes() {
     let file = |path: &str| ManifestEntry {
         path: path.to_owned(),
         is_dir: false,
-        hash: [7; 32],
         size: 10,
         source_mtime_ms: 0,
     };
     let dir = |path: &str| ManifestEntry {
         path: path.to_owned(),
         is_dir: true,
-        hash: [0; 32],
         size: 0,
         source_mtime_ms: 0,
     };
@@ -482,109 +480,76 @@ fn conflicts_follow_explicit_choices() {
     );
 }
 
+/// A partial resumes after its last journaled segment, without the sender
+/// reading that segment again; bytes no journal vouches for are fetched
+/// afresh. Either way the file lands exactly.
 #[test]
-fn interrupted_download_resumes_with_byte_reuse() {
+fn a_partial_resumes_after_its_journaled_segments() {
+    use crate::transfer::{SegmentHasher, SEGMENT_LEN};
     let _heavy = HEAVY_JOB
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
-    let host = start_direct();
-    let receiver_a = start_direct();
-    // RAM-backed scratch where available: store open/close does
-    // synchronous file IO whose latency spikes on overlay filesystems
-    // under suite load. The 9 MiB fixture plus store overhead fits
-    // easily in /dev/shm; elsewhere this falls back to the temp dir.
-    let scratch = Scratch::tagged_fast("blob-resume");
-    host.set_blob_directory(scratch.join("host-blobs")).unwrap();
-    receiver_a
-        .set_blob_directory(scratch.join("rx-blobs"))
+    let (host, controller, host_scratch, controller_scratch) = setup("partial");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
+    let segment = SEGMENT_LEN as usize;
+    let journaled = payload(segment + 1024 * 1024 + 11, 21);
+    let unjournaled = payload(2 * 1024 * 1024 + 5, 22);
+    std::fs::write(host_scratch.join("root/journaled.bin"), &journaled).unwrap();
+    std::fs::write(host_scratch.join("root/unjournaled.bin"), &unjournaled).unwrap();
+    controller.connect(&host.endpoint_id()).unwrap();
+    controller
+        .create_dir(controller_files.root, &controller_files.path(""), "got")
         .unwrap();
-    // Blob transfers need pairing plus the transfer grant, not a control
-    // session or hosting.
-    receiver_a
-        .accept_invitation(&host.create_invitation(Duration::from_secs(60)).unwrap())
+    let job = controller
+        .job_submit_download(
+            &host.endpoint_id(),
+            host_files.root,
+            &host_files.path(""),
+            controller_files.root,
+            &controller_files.path("got"),
+        )
         .unwrap();
-    host.accept_invitation(
-        &receiver_a
-            .create_invitation(Duration::from_secs(60))
-            .unwrap(),
+    // What an interrupted attempt left: one checked segment and part of the
+    // next, and bytes of another file with no journal at all.
+    let staging = controller_scratch.join(&format!("blobs/staging/job-{job}"));
+    std::fs::create_dir_all(staging.join("files/root")).unwrap();
+    std::fs::create_dir_all(staging.join("segments/root")).unwrap();
+    std::fs::write(
+        staging.join("files/root/journaled.bin"),
+        &journaled[..segment + 4096],
     )
     .unwrap();
-    host.set_desktop_sharing(crate::session::Grants {
-        view: false,
-        control: false,
-        clipboard: false,
-        transfer: true,
-    })
+    let mut first = SegmentHasher::at(0);
+    first.update(&journaled[..segment]);
+    std::fs::write(
+        staging.join("segments/root/journaled.bin"),
+        first.finalize(),
+    )
+    .unwrap();
+    std::fs::write(
+        staging.join("files/root/unjournaled.bin"),
+        &unjournaled[..1024 * 1024],
+    )
     .unwrap();
 
-    // 9 MiB clears the legacy cap with room to spare: it must stream.
-    // Smaller keeps the suite fast; the reuse proof needs only a
-    // multi-megabyte verified prefix, gated below.
-    let data = payload(9 * 1024 * 1024, 77);
-    let (hash, size) = host.blob_offer(&receiver_a.endpoint_id(), &data).unwrap();
-
-    // Fetch in a thread. The main thread waits until eight verified
-    // megabytes are present (or the fetch wins the race outright), then
-    // cancels or joins: either branch leaves verified ranges behind and
-    // the byte count below distinguishes reuse from a full re-download.
-    // No sleeps anywhere; every wait has a 30 s bound.
-    let (progress_tx, progress_rx) = std::sync::mpsc::channel();
-    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-    let host_id = host.endpoint_id();
-    let worker_host = host_id.clone();
-    let shared = std::sync::Arc::new(receiver_a);
-    let worker_shared = std::sync::Arc::clone(&shared);
-    let worker = std::thread::spawn(move || {
-        worker_shared.blob_fetch_streamed(&worker_host, hash, Some(progress_tx), Some(cancel_rx))
-    });
-    loop {
-        // Cancel once a megabyte is verified: early enough to land
-        // mid-flight, large enough to prove reuse on resume.
-        match shared.blob_verified(hash).unwrap_or(None) {
-            Some(n) if n >= 1 * 1024 * 1024 => {
-                // The fetch may complete in the same instant; a
-                // disconnected cancel means everything is verified.
-                let _ = cancel_tx.send(true);
-                break;
-            }
-            _ => {}
-        }
-        // Bound every wait; progress proves the fetch is alive.
-        if progress_rx.recv_timeout(Duration::from_secs(30)).is_err() {
-            break;
-        }
-        // A completed fetch needs no cancel: everything is verified.
-        if shared.blob_has(hash).unwrap_or(false) {
-            break;
-        }
-    }
-    // Either outcome leaves verified ranges behind: a cancelled fetch
-    // stopped past the gate, a finished fetch verified everything (and
-    // the resume below then reads nothing at all).
-    match worker.join().expect("worker joins") {
-        Ok(_) => {}
-        Err(error) => panic!("interrupted fetch must not fail hard: {error}"),
-    }
-    // Resume on the same store: verified ranges persist without any
-    // reopen, so the resumed fetch must read fewer bytes than the full
-    // size. Restart across processes is covered by
-    // `job_restart_resumes_unfinished_files`; reopening one directory
-    // twice in a single process races the store's asynchronous teardown
-    // and is not a supported pattern.
-    let resumed = shared
-        .blob_fetch_streamed(&host_id, hash, None, None)
-        .unwrap();
-    match resumed {
-        crate::core::blob::FetchResult::Done { downloaded } => {
-            assert!(
-                downloaded < size,
-                "resumed fetch must reuse verified ranges"
-            );
-        }
-        crate::core::blob::FetchResult::Cancelled => panic!("resume must complete"),
-    }
-    let got = shared.blob_fetch(&host_id, hash, size).unwrap();
-    assert_eq!(got, data);
+    let host_job = host.job_list().unwrap()[0].id;
+    let (receiver, sender) = drive_to_end(&controller, job, &host, host_job);
+    assert_eq!(receiver.state, JobState::Complete);
+    assert_eq!(sender.state, JobState::Complete);
+    assert_eq!(
+        receiver.resumed_files, 1,
+        "only the journaled partial resumes"
+    );
+    manifest::assert_trees_equal(
+        &host_scratch.join("root"),
+        &controller_scratch.join("root/got/root"),
+    );
+    assert!(!staging.exists());
 }
 
 #[test]
@@ -624,12 +589,12 @@ fn job_restart_resumes_unfinished_files() {
     let mid = controller.job_snapshot(job).unwrap();
     assert_eq!(mid.files_done, 2);
     let secret = controller.export_identity();
-    let blob_dir = controller_scratch.join("blobs");
+    let transfer_dir = controller_scratch.join("blobs");
     controller.shutdown();
     drop(controller);
 
-    // Same installation, reopened: durable records and verified store
-    // bytes survive; the control session is re-established by dialing.
+    // Same installation, reopened: durable records survive; the control
+    // session is re-established by dialing.
     let controller = Core::boot(
         CoreConfig {
             listen: Listen::Loopback,
@@ -642,7 +607,7 @@ fn job_restart_resumes_unfinished_files() {
     controller
         .set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
         .unwrap();
-    controller.set_blob_directory(&blob_dir).unwrap();
+    controller.set_transfer_directory(&transfer_dir).unwrap();
     controller.enable_filesystem_access().unwrap();
     let jobs = controller.job_list().unwrap();
     assert_eq!(jobs.len(), 1);
@@ -901,7 +866,7 @@ fn submit_needs_a_session_dirs_and_known_roots() {
         controller.file_roots().unwrap(),
         &_controller_scratch.join("root"),
     );
-    // No control session yet: submission is refused before any hashing.
+    // No control session yet: submission is refused before any scanning.
     assert!(matches!(
         controller.job_submit_upload(
             &host.endpoint_id(),
@@ -1449,10 +1414,10 @@ fn nested_sender_resume_resolves_correct_file() {
         .unwrap();
     let rx = receiver_id(&host, job);
     // One file lands, then kill the sender process here (receiver keeps its
-    // record; sender restarts with same identity and blob dir).
+    // record; sender restarts with same identity and transfer directory).
     host.job_poll(rx).unwrap();
     let secret = controller.export_identity();
-    let blob_dir = controller_scratch.join("blobs");
+    let transfer_dir = controller_scratch.join("blobs");
     controller.shutdown();
     drop(controller);
 
@@ -1468,7 +1433,7 @@ fn nested_sender_resume_resolves_correct_file() {
     controller
         .set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
         .unwrap();
-    controller.set_blob_directory(&blob_dir).unwrap();
+    controller.set_transfer_directory(&transfer_dir).unwrap();
     controller.enable_filesystem_access().unwrap();
     controller
         .accept_invitation(&host.create_invitation(Duration::from_secs(60)).unwrap())
@@ -1501,47 +1466,35 @@ fn nested_sender_resume_resolves_correct_file() {
 
 #[test]
 #[cfg(unix)]
-fn anchored_import_refuses_swapped_parent() {
-    let (host, controller, host_scratch, controller_scratch) = setup_confined("import-swap");
+fn serving_refuses_a_parent_swapped_for_a_link() {
+    let (host, controller, host_scratch, controller_scratch) = setup_confined("serve-swap");
     std::fs::create_dir_all(controller_scratch.join("root/docs")).unwrap();
     std::fs::write(controller_scratch.join("root/docs/public.txt"), b"public").unwrap();
     let outside = controller_scratch.join("outside");
     std::fs::create_dir(&outside).unwrap();
-    std::fs::write(outside.join("secret.txt"), b"secret").unwrap();
+    std::fs::write(outside.join("public.txt"), b"secret").unwrap();
 
     controller.connect(&host.endpoint_id()).unwrap();
-    // Swap `docs` for a symlink to outside (equal sizes bypass size guards:
-    // `public` and `secret` are both 6 bytes).
+    let job = controller
+        .job_submit_upload(&host.endpoint_id(), 0, "docs/public.txt", 0, "got")
+        .unwrap();
+    // Swap `docs` for a link to outside after the scan. The name and size
+    // match, so only the anchored open can refuse it.
     std::fs::remove_dir_all(controller_scratch.join("root/docs")).unwrap();
     std::os::unix::fs::symlink(&outside, controller_scratch.join("root/docs")).unwrap();
-    // Anchored import of `docs/public.txt` must fail, never import outside.
-    // Dummy scan identity (open fails on symlink parent before dev/ino checks).
-    let dummy = crate::manifest::ScannedFile {
-        rel: "public.txt".to_owned(),
-        absolute: controller_scratch.join("root/docs/public.txt"),
-        root_rel: "docs/public.txt".to_owned(),
-        size: 6,
-        mtime_ms: 0,
-        dev: 0,
-        ino: 0,
-    };
-    let pin = controller.pin_file_root(0).unwrap();
-    let err = controller.blob_offer_file_at(&host.endpoint_id(), 0, &dummy, u64::MAX, &pin);
-    assert!(err.is_err());
-    // Restore honest dir so temp cleanup works.
-    std::fs::remove_file(controller_scratch.join("root/docs")).unwrap();
-    std::fs::create_dir_all(controller_scratch.join("root/docs")).unwrap();
-    std::fs::write(controller_scratch.join("root/docs/public.txt"), b"public").unwrap();
-    let _ = &host_scratch;
-    let _ = &host;
+    let rx = receiver_id(&host, job);
+    let (_sender, receiver) = drive_to_end(&controller, job, &host, rx);
+    assert_ne!(receiver.state, JobState::Complete);
+    assert!(
+        files_with_bytes(&host_scratch.join("root"), b"secret").is_empty(),
+        "bytes outside the root reached the receiver"
+    );
 }
 
 #[test]
-fn sender_store_retention_matches_platform_import_mode() {
-    // Senders reference their sources (TryReference) on every platform, so a
-    // sender's store holds the entry's outboard but no payload copy. Checked
-    // while each serve is parked: a terminal job releases its blobs to garbage
-    // collection, after which a copy would be gone too and prove nothing.
+fn senders_keep_no_copy_of_their_sources() {
+    // A sender reads its source where it is: while a serve holds it open,
+    // the sender's transfer directory holds no copy of its bytes.
     let (host, controller, host_scratch, controller_scratch) = setup("no-copy");
     let host_files =
         FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
@@ -1554,28 +1507,6 @@ fn sender_store_retention_matches_platform_import_mode() {
     let down_bytes = payload(2 * 1024 * 1024, 202);
     std::fs::write(controller_scratch.join("root/up.bin"), &up_bytes).unwrap();
     std::fs::write(host_scratch.join("root/down.bin"), &down_bytes).unwrap();
-    // (the store has the entry, a payload copy exists) for one hash. A
-    // referenced entry keeps only metadata and its outboard, inline in
-    // blobs.db; an owned copy would be data/<hash>.data, as receivers keep.
-    let store_files = |core: &Core, blobs: &Path, bytes: &[u8]| {
-        let hash = iroh_blobs::Hash::new(bytes);
-        (
-            core.blob_has(hash).unwrap(),
-            blobs
-                .join("data")
-                .join(format!("{}.data", hash.to_hex()))
-                .exists(),
-        )
-    };
-    // Observed while the serve is parked; the serve is released before any
-    // assertion, so a failure reports instead of leaving the transfer parked.
-    let assert_referenced = |(entry, copy): (bool, bool), leg: &str| {
-        assert!(entry, "{leg} sender has no store entry for its source");
-        assert!(
-            !copy,
-            "{leg} sender must reference its source, not keep a payload copy"
-        );
-    };
 
     controller.connect(&host.endpoint_id()).unwrap();
     // Controller upload: the controller sends, the host receives.
@@ -1589,17 +1520,17 @@ fn sender_store_retention_matches_platform_import_mode() {
         )
         .unwrap();
     let up_rx = receiver_id(&host, up);
-    let probe = arm_serve_probe(*blake3::hash(&up_bytes).as_bytes());
-    let (up_files, (up_sender, up_receiver)) = std::thread::scope(|scope| {
+    let probe = arm_serve_probe(&controller, up);
+    let (up_copies, (up_sender, up_receiver)) = std::thread::scope(|scope| {
         let drive = scope.spawn(|| drive_to_end(&controller, up, &host, up_rx));
         let parked = probe.parked();
-        let files = store_files(&controller, &controller_scratch.join("blobs"), &up_bytes);
+        let copies = files_with_bytes(&controller_scratch.join("blobs"), &up_bytes);
         probe.release();
         assert!(parked, "the upload serve never parked");
-        (files, drive.join().unwrap())
+        (copies, drive.join().unwrap())
     });
     drop(probe);
-    assert_referenced(up_files, "upload");
+    assert!(up_copies.is_empty(), "the upload sender copied its source");
     assert_eq!(up_sender.state, JobState::Complete);
     assert_eq!(up_receiver.state, JobState::Complete);
 
@@ -1628,17 +1559,20 @@ fn sender_store_retention_matches_platform_import_mode() {
         .find(|j| j.id != up_rx && j.sender)
         .expect("host download sender")
         .id;
-    let probe = arm_serve_probe(*blake3::hash(&down_bytes).as_bytes());
-    let (down_files, (down_receiver, down_sender)) = std::thread::scope(|scope| {
+    let probe = arm_serve_probe(&host, host_down);
+    let (down_copies, (down_receiver, down_sender)) = std::thread::scope(|scope| {
         let drive = scope.spawn(|| drive_to_end(&controller, down, &host, host_down));
         let parked = probe.parked();
-        let files = store_files(&host, &host_scratch.join("blobs"), &down_bytes);
+        let copies = files_with_bytes(&host_scratch.join("blobs"), &down_bytes);
         probe.release();
         assert!(parked, "the download serve never parked");
-        (files, drive.join().unwrap())
+        (copies, drive.join().unwrap())
     });
     drop(probe);
-    assert_referenced(down_files, "download");
+    assert!(
+        down_copies.is_empty(),
+        "the download sender copied its source"
+    );
     assert_eq!(down_receiver.state, JobState::Complete);
     assert_eq!(down_sender.state, JobState::Complete);
 
@@ -1726,7 +1660,6 @@ fn windows_serve_holds_its_source_against_replacement() {
     let original = payload(64 * 1024, 1711);
     let source = folder.join("held.bin");
     std::fs::write(&source, &original).unwrap();
-    let hash = *blake3::hash(&original).as_bytes();
 
     controller.connect(&host.endpoint_id()).unwrap();
     let job = controller
@@ -1740,7 +1673,7 @@ fn windows_serve_holds_its_source_against_replacement() {
         .unwrap();
     let rx = receiver_id(&host, job);
 
-    let probe = arm_serve_probe(hash);
+    let probe = arm_serve_probe(&controller, job);
     std::thread::scope(|scope| {
         let poll = scope.spawn(|| drive_to_end(&controller, job, &host, rx));
         probe.wait_until_parked();
@@ -1779,62 +1712,6 @@ fn windows_serve_holds_its_source_against_replacement() {
         );
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-}
-
-#[test]
-fn source_reoffer_rejects_changed_bytes_before_authorizing_the_hash() {
-    let (host, controller, _host_scratch, controller_scratch) = setup("reoffer-changed");
-    let files = FilesystemLocation::new(
-        controller.file_roots().unwrap(),
-        &controller_scratch.join("root"),
-    );
-    let original = b"original";
-    let replacement = b"replaced";
-    assert_eq!(original.len(), replacement.len());
-    let path = controller_scratch.join("root/source.bin");
-    let mtime_ms = |path: &std::path::Path| {
-        std::fs::symlink_metadata(path)
-            .unwrap()
-            .modified()
-            .unwrap()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64
-    };
-    std::fs::write(&path, replacement).unwrap();
-    let pin = controller.pin_file_root(files.root).unwrap();
-    let expected = *blake3::hash(original).as_bytes();
-    // Same size and the replacement's own mtime: only the recorded hash can
-    // refuse the swapped bytes.
-    assert!(controller
-        .blob_reoffer_file_at(
-            &host.endpoint_id(),
-            files.root,
-            &files.path("source.bin"),
-            expected,
-            original.len() as u64,
-            mtime_ms(&path),
-            original.len() as u64,
-            &pin,
-        )
-        .is_err());
-    assert!(!controller
-        .blob_job_offer_contains(&host.endpoint_id(), blake3::hash(replacement).as_bytes(),));
-    std::fs::write(&path, original).unwrap();
-    let (hash, size) = controller
-        .blob_reoffer_file_at(
-            &host.endpoint_id(),
-            files.root,
-            &files.path("source.bin"),
-            expected,
-            original.len() as u64,
-            mtime_ms(&path),
-            original.len() as u64,
-            &pin,
-        )
-        .unwrap();
-    assert_eq!(hash.as_bytes(), &expected);
-    assert_eq!(size, original.len() as u64);
 }
 
 #[test]
@@ -1914,7 +1791,7 @@ fn cross_filesystem_publication_succeeds() {
     // host root stays on temp dir (different filesystems on Linux Docker).
     for (core, scratch) in [(&host, &host_scratch), (&controller, &controller_scratch)] {
         std::fs::create_dir_all(scratch.join("root")).unwrap();
-        core.set_blob_directory(scratch.join("blobs")).unwrap();
+        core.set_transfer_directory(scratch.join("blobs")).unwrap();
         core.enable_filesystem_access().unwrap();
     }
     let host_files =
@@ -1937,7 +1814,7 @@ fn cross_filesystem_publication_succeeds() {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&shm_blobs).unwrap();
-        host.set_blob_directory(&shm_blobs).unwrap();
+        host.set_transfer_directory(&shm_blobs).unwrap();
         // Remember to clean shm dir on drop via scratch? Host scratch drop removes
         // its own temp blobs dir, not shm_blobs. Clean manually at end.
         std::fs::write(controller_scratch.join("root/a.txt"), payload(2048, 404)).unwrap();
@@ -1998,10 +1875,7 @@ fn cross_filesystem_publication_succeeds() {
 }
 
 #[test]
-fn completed_and_forgotten_receivers_reclaim_payloads_without_deleting_destinations() {
-    let _heavy = HEAVY_JOB
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+fn finished_and_forgotten_receivers_release_partials_without_touching_destinations() {
     let (host, controller, host_disk, controller_disk) = setup("reclaim");
     let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &host_disk.join("root"));
     let controller_files = FilesystemLocation::new(
@@ -2020,23 +1894,18 @@ fn completed_and_forgotten_receivers_reclaim_payloads_without_deleting_destinati
             &host_files.path(""),
         )
         .unwrap();
-    let hash = iroh_blobs::Hash::new(&bytes);
-    let (_, received) = drive_to_end(&controller, id, &host, id);
+    let rx = receiver_id(&host, id);
+    let (_, received) = drive_to_end(&controller, id, &host, rx);
     assert_eq!(received.state, JobState::Complete);
-    let deadline = std::time::Instant::now() + Duration::from_secs(12);
-    while host.blob_verified(hash).unwrap().is_some() && std::time::Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert_eq!(host.blob_verified(hash).unwrap(), None);
+    // A finished file leaves no partial behind.
+    assert!(!host_disk.join(&format!("blobs/staging/job-{rx}")).exists());
+    host.job_forget(rx).unwrap();
     assert_eq!(
         std::fs::read(host_disk.join("root/payload.bin")).unwrap(),
         bytes
     );
-    assert_eq!(
-        std::fs::read(controller_disk.join("root/payload.bin")).unwrap(),
-        bytes
-    );
-    host.job_forget(id).unwrap();
+
+    // A cancelled job keeps its partial for resume until it is forgotten.
     let second = payload(64 * 1024, 708);
     std::fs::write(controller_disk.join("root/partial.bin"), &second).unwrap();
     let id = controller
@@ -2048,33 +1917,19 @@ fn completed_and_forgotten_receivers_reclaim_payloads_without_deleting_destinati
             &host_files.path(""),
         )
         .unwrap();
-    let hash = iroh_blobs::Hash::new(&second);
-    host.blob_fetch_streamed(&controller.endpoint_id(), hash, None, None)
-        .unwrap();
-    host.job_cancel(id).unwrap();
-    assert!(host.blob_has(hash).unwrap());
-    host.job_forget(id).unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(12);
-    while host.blob_verified(hash).unwrap().is_some() && std::time::Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert_eq!(host.blob_verified(hash).unwrap(), None);
+    let rx = receiver_id(&host, id);
+    let staging = host_disk.join(&format!("blobs/staging/job-{rx}"));
+    std::fs::create_dir_all(staging.join("files")).unwrap();
+    std::fs::write(staging.join("files/partial.bin"), &second[..1024]).unwrap();
+    host.job_cancel(rx).unwrap();
+    assert!(staging.join("files/partial.bin").exists());
+    host.job_forget(rx).unwrap();
+    assert!(!staging.exists());
     assert!(!host_disk.join("root/partial.bin").exists());
-    host.shutdown();
-    controller.shutdown();
-    let reopened = start_direct();
-    reopened
-        .set_blob_directory(host_disk.join("blobs"))
-        .unwrap();
-    assert!(reopened
-        .blob_export(hash, &host_disk.join("unexpected.bin"))
-        .is_err());
-    assert!(!host_disk.join("unexpected.bin").exists());
     assert_eq!(
         std::fs::read(host_disk.join("root/payload.bin")).unwrap(),
         bytes
     );
-    reopened.shutdown();
 }
 
 #[test]
@@ -2448,7 +2303,7 @@ fn service_jobs_require_peer_admission_and_explicit_adoption_after_restart() {
     controller.shutdown();
     drop(controller);
     let restarted = start_direct();
-    restarted.set_blob_directory(cs.join("blobs")).unwrap();
+    restarted.set_transfer_directory(cs.join("blobs")).unwrap();
     assert_eq!(
         restarted.job_snapshot(job).unwrap().state,
         JobState::Interrupted
@@ -2466,7 +2321,7 @@ fn service_jobs_closing_one_computer_keeps_another_transfer_active() {
     let second_disk = Scratch::tagged("owned-second-host");
     std::fs::create_dir(second_disk.join("root")).unwrap();
     second
-        .set_blob_directory(second_disk.join("blobs"))
+        .set_transfer_directory(second_disk.join("blobs"))
         .unwrap();
     second.enable_filesystem_access().unwrap();
     let second_files =
@@ -2874,7 +2729,7 @@ fn files_adoption_survives_both_core_restarts_with_verified_download() {
         .unwrap();
         core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
             .unwrap();
-        core.set_blob_directory(scratch.join("blobs")).unwrap();
+        core.set_transfer_directory(scratch.join("blobs")).unwrap();
         core.enable_filesystem_access().unwrap();
         core
     };
@@ -2997,54 +2852,6 @@ fn files_adoption_local_save_failure_can_retry_remote_acknowledged_binding() {
 }
 
 #[test]
-#[cfg(unix)]
-fn resume_reoffer_enforces_size_limit_before_import_and_accepts_exact_boundary() {
-    let (host, controller, _host_scratch, controller_scratch) = setup_confined("resume-limit");
-    let bytes = payload(64 * 1024, 99);
-    let path = controller_scratch.join("root/resume.bin");
-    std::fs::write(&path, &bytes).unwrap();
-    let metadata = std::fs::metadata(&path).unwrap();
-    let mtime = metadata
-        .modified()
-        .unwrap()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64;
-    let hash = *blake3::hash(&bytes).as_bytes();
-    let pin = controller.pin_file_root(0).unwrap();
-    assert!(matches!(
-        controller.blob_reoffer_file_at(
-            &host.endpoint_id(),
-            0,
-            "resume.bin",
-            hash,
-            bytes.len() as u64,
-            mtime,
-            bytes.len() as u64 - 1,
-            &pin,
-        ),
-        Err(Error::InvalidSetting("the source file is too large"))
-    ));
-    // Rejection does not mutate the source, and a limit equal to the actual
-    // verified size can still import a reference and return the expected hash.
-    assert_eq!(std::fs::read(&path).unwrap(), bytes);
-    let (offered, size) = controller
-        .blob_reoffer_file_at(
-            &host.endpoint_id(),
-            0,
-            "resume.bin",
-            hash,
-            bytes.len() as u64,
-            mtime,
-            bytes.len() as u64,
-            &pin,
-        )
-        .unwrap();
-    assert_eq!(offered.as_bytes(), &hash);
-    assert_eq!(size, bytes.len() as u64);
-}
-
-#[test]
 fn receiver_resource_budget_refuses_before_fetch_and_preserves_source_and_destination() {
     let (host, controller, hs, cs) = setup("resource-admission");
     let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &hs.join("root"));
@@ -3052,7 +2859,6 @@ fn receiver_resource_budget_refuses_before_fetch_and_preserves_source_and_destin
         FilesystemLocation::new(controller.file_roots().unwrap(), &cs.join("root"));
     let bytes = payload(64 * 1024, 314);
     std::fs::write(cs.join("root/send.bin"), &bytes).unwrap();
-    let hash = iroh_blobs::Hash::new(&bytes);
     host.set_file_resource_policy(crate::job::FileResourcePolicy {
         max_concurrent_receivers: 1,
         max_reserved_bytes: 3 * bytes.len() as u64 - 1,
@@ -3077,14 +2883,11 @@ fn receiver_resource_budget_refuses_before_fetch_and_preserves_source_and_destin
         Some("file exceeds the receiver resource budget")
     );
     assert_eq!(failed.done_bytes, 0);
-    assert!(!host.blob_has(hash).unwrap());
+    assert!(!hs.join(&format!("blobs/staging/job-{rx}")).exists());
     assert!(!hs.join("root/arrived/root/send.bin").exists());
     assert_eq!(std::fs::read(cs.join("root/send.bin")).unwrap(), bytes);
     let sender = controller.job_poll(sent).unwrap();
     assert_eq!(sender.state, JobState::Failed);
-    assert!(host
-        .blob_fetch_streamed(&controller.endpoint_id(), hash, None, None)
-        .is_err());
 }
 
 #[test]
@@ -3110,7 +2913,7 @@ fn restart_reconciles_managed_orphans_but_keeps_interrupted_staging() {
     let torn = hs.join(&format!("blobs/jobs/{rx}.jsonl.tmp"));
     std::fs::write(&torn, b"incomplete rewrite").unwrap();
     let reopened = start_direct();
-    reopened.set_blob_directory(hs.join("blobs")).unwrap();
+    reopened.set_transfer_directory(hs.join("blobs")).unwrap();
     assert_eq!(
         reopened.job_snapshot(rx).unwrap().state,
         JobState::Interrupted
@@ -3737,7 +3540,7 @@ fn persisted_replace_refuses_replaced_root_at_same_path() {
     )
     .unwrap();
     controller
-        .set_blob_directory(controller_scratch.join("blobs"))
+        .set_transfer_directory(controller_scratch.join("blobs"))
         .unwrap();
     controller.set_file_roots(vec![root.clone()]).unwrap();
     pair_with_transfer(&host, &controller);
@@ -3801,7 +3604,7 @@ fn resume_after_source_rebind_fails_with_rebound_cause() {
         RelayMode::Disabled,
     )
     .unwrap();
-    host.set_blob_directory(&blob_dir).unwrap();
+    host.set_transfer_directory(&blob_dir).unwrap();
     host.set_file_roots(vec![rebound]).unwrap();
 
     let jobs = host.job_list().unwrap();
@@ -3816,17 +3619,17 @@ fn resume_after_source_rebind_fails_with_rebound_cause() {
     let _ = job;
 }
 
-/// Target hash plus hit/release barriers for the in-flight serve probe.
-/// The probe parks only the armed hash; every other serve passes
-/// straight through, so parallel suites are unaffected.
-static REBIND_TARGET: std::sync::Mutex<Option<[u8; 32]>> = std::sync::Mutex::new(None);
+/// Target engine and job plus hit/release barriers for the in-flight
+/// serve probe. The probe parks only the armed job; every other serve
+/// passes straight through, so parallel suites are unaffected.
+static REBIND_TARGET: std::sync::Mutex<Option<(usize, u64)>> = std::sync::Mutex::new(None);
 static REBIND_HIT: (std::sync::Mutex<bool>, std::sync::Condvar) =
     (std::sync::Mutex::new(false), std::sync::Condvar::new());
 static REBIND_RELEASE: (std::sync::Mutex<bool>, std::sync::Condvar) =
     (std::sync::Mutex::new(false), std::sync::Condvar::new());
 
-fn rebind_serve_probe(hash: [u8; 32]) {
-    if *REBIND_TARGET.lock().unwrap() != Some(hash) {
+fn rebind_serve_probe(engine: usize, job: u64) {
+    if *REBIND_TARGET.lock().unwrap() != Some((engine, job)) {
         return;
     }
     *REBIND_HIT.0.lock().unwrap() = true;
@@ -3841,18 +3644,18 @@ fn rebind_serve_probe(hash: [u8; 32]) {
 /// The serve probe is process-wide; tests that park a serve take turns.
 static SERVE_PROBE_OWNER: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Parks serves of one hash until released, and disarms the probe even when
-/// the test panics. Payload seeds are unique per test, so a leaked arm could
-/// never match another test's content hash anyway.
+/// Parks serves of one engine's job until released, and disarms the probe
+/// even when the test panics. Engines are distinct per test, so a leaked arm
+/// could never match another test's job anyway.
 struct RebindProbeGuard {
     _owner: std::sync::MutexGuard<'static, ()>,
 }
 
-fn arm_serve_probe(hash: [u8; 32]) -> RebindProbeGuard {
+fn arm_serve_probe(sender: &Core, job: u64) -> RebindProbeGuard {
     let owner = SERVE_PROBE_OWNER
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    *REBIND_TARGET.lock().unwrap() = Some(hash);
+    *REBIND_TARGET.lock().unwrap() = Some((sender.engine_key(), job));
     *REBIND_HIT.0.lock().unwrap() = false;
     *REBIND_RELEASE.0.lock().unwrap() = false;
     Core::set_serve_source_probe(Some(rebind_serve_probe));
@@ -3860,7 +3663,7 @@ fn arm_serve_probe(hash: [u8; 32]) -> RebindProbeGuard {
 }
 
 impl RebindProbeGuard {
-    /// Waits up to 30 s for the armed hash's serve to open its verified
+    /// Waits up to 30 s for the armed job's serve to open its verified
     /// source, and reports whether it did. Callers release before asserting.
     fn parked(&self) -> bool {
         let guard = REBIND_HIT.0.lock().unwrap();
@@ -3905,7 +3708,6 @@ fn open_handle_completes_across_source_rebind() {
     let two = payload(512, 1602);
     std::fs::write(controller_root.join("one.txt"), &one).unwrap();
     std::fs::write(controller_root.join("two.txt"), &two).unwrap();
-    let two_hash = *blake3::hash(&two).as_bytes();
 
     controller.connect(&host.endpoint_id()).unwrap();
     let job = controller
@@ -3922,7 +3724,7 @@ fn open_handle_completes_across_source_rebind() {
     std::fs::write(rebound.join("one.txt"), &one).unwrap();
     std::fs::write(rebound.join("two.txt"), payload(512, 1609)).unwrap();
 
-    let probe = arm_serve_probe(two_hash);
+    let probe = arm_serve_probe(&controller, job);
     std::thread::scope(|scope| {
         let poll = scope.spawn(|| host.job_poll(rx));
         // Wait for file-2's serve to open its handle, then rebind under it.
@@ -3961,7 +3763,7 @@ fn a_small_file_completes_promptly_on_its_own() {
         &controller_scratch.join("root"),
     );
     let _session = controller.connect(&host.endpoint_id()).unwrap();
-    // The second file reuses the first one's blob connection.
+    // The second file reuses the first one's files connection.
     for name in ["first.bin", "second.bin"] {
         std::fs::write(controller_scratch.join("root").join(name), vec![7u8; 2500]).unwrap();
         let started = std::time::Instant::now();

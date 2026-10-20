@@ -2,9 +2,9 @@
 
 use super::*;
 
-use super::blob::drop_blob_offers;
 use super::clipboard::open_controller_clipboard;
 use super::link::{remember_peer_addresses, write_addresses};
+use super::transfer::close_peer_files;
 use super::video::{video_inbox, video_recv_loop};
 use super::wire::{read_frame_within, read_session_frame, write_frame};
 
@@ -98,7 +98,7 @@ impl Core {
         if let Some(stop) = outgoing_stop {
             let _ = stop.send(true);
         }
-        drop_blob_offers(&self.shared, &key);
+        close_peer_files(&self.shared, &key);
         super::jobs::interrupt_peer_jobs(&self.shared, &key);
         self.shared.events.publish(CoreEvent::DeviceUnpaired {
             endpoint_id: endpoint_id.to_owned(),

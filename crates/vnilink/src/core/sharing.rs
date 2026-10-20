@@ -84,7 +84,7 @@ impl Core {
         }
         for peer in peers {
             if !policy.files {
-                super::blob::drop_blob_offers(&self.shared, &peer);
+                super::transfer::close_peer_files(&self.shared, &peer);
                 super::jobs::interrupt_peer_jobs(&self.shared, &peer);
             }
             if !policy.clipboard {

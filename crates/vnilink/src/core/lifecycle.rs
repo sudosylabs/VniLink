@@ -244,8 +244,6 @@ impl Core {
             #[cfg(test)]
             teardown_budget_ms: AtomicU64::new(0),
             #[cfg(test)]
-            block_blob_shutdown: AtomicBool::new(false),
-            #[cfg(test)]
             block_endpoint_close: AtomicBool::new(false),
             events: EventHub::new(event_capacity),
             state: Mutex::new(State {
@@ -323,15 +321,9 @@ impl Core {
             pointer_defaults: Mutex::new(crate::PointerSettings::default()),
             cursor_receiver: AtomicBool::new(false),
             file_roots: Mutex::new(crate::fs::RootSet::default()),
-            blob_dir: Mutex::new(None),
-            blob_store: Mutex::new(None),
-            blob_open: tokio::sync::Mutex::new(()),
-            blob_offers: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            blob_recent_fetches: Arc::new(Mutex::new(HashMap::new())),
-            blob_import_pins: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            blob_job_offers: Mutex::new(std::collections::HashSet::new()),
-            blob_serving: Mutex::new(std::collections::HashMap::new()),
-            blob_fetching: Mutex::new(std::collections::HashMap::new()),
+            transfer_dir: Mutex::new(None),
+            files_serving: Mutex::new(std::collections::HashMap::new()),
+            files_fetching: Mutex::new(std::collections::HashMap::new()),
             folder_watches: Mutex::new(std::collections::HashMap::new()),
             watch_next: std::sync::atomic::AtomicU64::new(1),
             jobs: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -343,7 +335,6 @@ impl Core {
             job_revision: AtomicU64::new(0),
             job_wake: (Mutex::new(()), std::sync::Condvar::new()),
             job_workers: Mutex::new(std::collections::HashSet::new()),
-            serve_index: Mutex::new(Default::default()),
             file_resources: Arc::new(Mutex::new(file_resources::Resources::default())),
             backend_state: Mutex::new(std::collections::HashMap::new()),
             presence_wake: Mutex::new(HashMap::new()),
@@ -358,9 +349,6 @@ impl Core {
     }
 
     pub fn shutdown(&self) {
-        // Settle the blob store first so its directory reopens cleanly.
-        // A storage fence may already have scheduled the same close.
-        self.blob_close_store();
         {
             let mut state = lock(&self.shared.state);
             if !state.shut_down {
@@ -559,24 +547,16 @@ impl Core {
         self.shared.teardown_phase.load(Ordering::Acquire)
     }
 
-    /// Shortens only a blocked blob shutdown or endpoint close. A real close
-    /// keeps the production budget.
+    /// Shortens only a blocked endpoint close. A real close keeps the
+    /// production budget.
     #[cfg(test)]
-    pub(crate) fn arm_blocked_teardown(
-        &self,
-        budget: Duration,
-        block_blob: bool,
-        block_close: bool,
-    ) {
+    pub(crate) fn arm_blocked_teardown(&self, budget: Duration) {
         let millis = u64::try_from(budget.as_millis()).unwrap_or(0);
         self.shared
             .teardown_budget_ms
             .store(millis, Ordering::Release);
         self.shared
-            .block_blob_shutdown
-            .store(block_blob, Ordering::Release);
-        self.shared
             .block_endpoint_close
-            .store(block_close, Ordering::Release);
+            .store(true, Ordering::Release);
     }
 }

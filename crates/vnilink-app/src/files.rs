@@ -326,10 +326,10 @@ impl VnilinkCore {
         self.inner.start_job_driver();
     }
 
-    /// Chooses the managed directory for blob storage. Refused while a
+    /// Chooses the managed transfer directory. Refused while a
     /// controlling session is active.
-    pub fn set_blob_directory(&self, path: String) -> Result<(), FfiError> {
-        self.inner.set_blob_directory(path).map_err(map_error)
+    pub fn set_transfer_directory(&self, path: String) -> Result<(), FfiError> {
+        self.inner.set_transfer_directory(path).map_err(map_error)
     }
 
     /// Confines browsing to `paths`. The application always shares the

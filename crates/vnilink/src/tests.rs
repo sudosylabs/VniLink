@@ -4,8 +4,6 @@ mod admission_tests;
 mod apply_tests;
 #[path = "tests/availability.rs"]
 mod availability_tests;
-#[path = "tests/blob.rs"]
-mod blob_tests;
 #[path = "tests/clipboard_files.rs"]
 mod clipboard_files_tests;
 #[path = "tests/clipboard.rs"]

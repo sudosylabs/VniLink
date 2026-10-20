@@ -9,8 +9,8 @@ file and the control confirmation do not turn it on. `Core::authorize` does.
 The rules live in `src/core/jobs.rs` (scheduling, resume, peer binding),
 `src/core/service_jobs.rs` (Files ownership and adoption),
 `src/core/fs.rs` (remote browsing and auxiliary streams),
-`src/core/blob.rs` (content-addressed offers) and `src/manifest.rs`
-(staging and publish). The single-file byte-buffer API and its dedicated
+`src/transfer/` (the `vnilink/files/1` protocol), `src/core/transfer.rs` (its connections) and
+`src/manifest.rs` (scanning and publish). The single-file byte-buffer API and its dedicated
 transfer stream were removed; all movement goes through jobs.
 
 ## What happens
@@ -21,8 +21,9 @@ transfer stream were removed; all movement goes through jobs.
    stream.
 2. Each side shares its whole filesystem with
    `Core::enable_filesystem_access` (`/` on Unix, every mounted drive on
-   Windows) and names a job store with `Core::set_blob_directory`, created
-   the first time a transfer needs it. `Capabilities::file_transfer` is true
+   Windows) and names a transfer directory with
+   `Core::set_transfer_directory`, created the first time a job needs it:
+   it holds the job journals and the partial files of arriving jobs. `Capabilities::file_transfer` is true
    once the filesystem is shared. `Core::set_file_roots` confines browsing
    to chosen folders; only tests use it.
 3. The peer browses with `fs_list`/`fs_mkdir`/`fs_rename` against a live
@@ -32,8 +33,8 @@ transfer stream were removed; all movement goes through jobs.
    `files_service_upload` / `files_service_download` name a folder and
    the entries of it to copy, and one manifest holds them all
    (`job_submit_upload` / `job_submit_download` take a single path).
-   Imports go through anchored, symlink-refusing handles; content is
-   verified by hash before it lands under a root. A download the other
+   The sender scans its sources into a manifest of paths, sizes and
+   modification times and reads nothing more ahead of time. A download the other
    computer takes long to prepare is a `Preparing` job at once: the host
    answers within a second, and the receiver asks for the manifest
    (`TAG_JOB_MANIFEST`) until it is ready.
@@ -57,3 +58,42 @@ transfer stream were removed; all movement goes through jobs.
    to resume from, and fails instead.
 7. Clipboard file selections are offers of names and sizes; pasting one
    moves its bytes through Files jobs. The steps are in `CLIPBOARD.md`.
+
+## Moving the bytes
+
+The receiver dials its own connection to the sender under
+`vnilink/files/1` and keeps it for the files that follow, one stream per
+file. Control stays on `vnilink/1`, so a large file never queues job
+control or the desktop behind it.
+
+1. A request names the sender's job, the file's place among the
+   manifest's files and the offset to start from. The sender serves only
+   its own sending job for that peer, while the job is active, its owner
+   is live and the peer holds the Transfer grant. Anything else is
+   refused before a byte is read.
+2. The sender opens the file through the leg's pinned root by handles,
+   never a retained absolute path, refusing links. It must still be the
+   file scanned: the same file id (inode or Windows file index), size and
+   modification time. A file renamed over it, even with the same size, is
+   refused as changed.
+3. A file moves in 16 MiB segments, each a subtree of the file's BLAKE3
+   tree (`transfer/hash.rs`). The sender reads the held file once from the
+   requested segment, hashing as it reads, and follows each segment with
+   its chaining value. It re-checks the job and grant every few megabytes,
+   so a cancel or revoke stops a file mid-way, and checks the source's
+   size and time as each segment ends; a source that changed is reset
+   instead of carried on.
+4. The receiver appends to the file's partial in the transfer directory
+   and checks each segment as it lands. A checked segment before the last
+   is synced and then journaled beside the partial, so a resume, after a
+   cancel or a restart, asks for the file from the segment after the last
+   journaled one and neither side reads earlier bytes again; unjournaled
+   bytes are dropped. A segment that fails its check is fetched once more,
+   then fails the job. The last segment is checked but not journaled: the
+   file publishes as soon as it checks.
+5. Publication then follows the conflict choice, re-checking cancel,
+   grant and owner under the commit (see `publish_staged`). Cancelled
+   and interrupted jobs keep their partials for resume, within the
+   resume retention policy; finished, failed and forgotten jobs remove
+   them.
+

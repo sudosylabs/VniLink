@@ -125,14 +125,13 @@ impl Core {
             retained_operations: state.system_operations.len() as u32,
             privacy_held: state.privacy.is_some(),
             active_jobs: lock(&self.shared.jobs).len() as u32,
-            blob_offers: lock(&self.shared.blob_offers).len() as u32,
             paired_devices: state.trust.devices().count() as u32,
             control_connection: state.input_holder(),
         };
         let queues = QueueDepths {
             input_queued: u32::try_from(input_queued).unwrap_or(u32::MAX),
             terminal_startups_pending: state.terminal_pending.values().sum::<usize>() as u32,
-            blob_serving: lock(&self.shared.blob_serving).len() as u32,
+            files_serving: lock(&self.shared.files_serving).len() as u32,
         };
         let hosting = state.hosting;
         drop(state);

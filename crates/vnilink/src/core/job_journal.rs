@@ -8,7 +8,7 @@
 //! no one. Once a journal has grown past twice its first line, the next
 //! change rewrites it as one record again.
 //!
-//! Journals live in `jobs/<id>.jsonl` beside the blob store. Nothing is
+//! Journals live in `jobs/<id>.jsonl` in the transfer directory. Nothing is
 //! synced: a crash loses at most the last lines, and a torn last line is
 //! ignored when the journals are read again.
 
@@ -71,7 +71,7 @@ enum Write {
 }
 
 /// Saves the jobs that changed since they were last saved and, when any
-/// did, tells watchers and the driver. Without a blob directory nothing
+/// did, tells watchers and the driver. Without a transfer directory nothing
 /// reaches disk, but changes are still told.
 pub(super) fn save_jobs(shared: &Shared) -> Result<(), Error> {
     let mut journal = lock(&shared.job_journal);
@@ -125,7 +125,7 @@ pub(super) fn save_jobs(shared: &Shared) -> Result<(), Error> {
     // Whatever lands on disk below changed: watchers hear of it even when
     // the disk refuses it.
     super::jobs::jobs_changed(shared);
-    let dir = match lock(&shared.blob_dir).clone() {
+    let dir = match lock(&shared.transfer_dir).clone() {
         Some(dir) => Some(dir.join(JOURNAL_DIR)),
         None => None,
     };
@@ -260,7 +260,7 @@ fn replay(text: &str) -> Option<JobRecord> {
 }
 
 impl JobJournal {
-    /// Forgets what was written: the journals of another blob directory
+    /// Forgets what was written: the journals of another transfer directory
     /// are about to be read, and each job's next save writes it afresh.
     pub(super) fn reset(&mut self) {
         self.written.clear();
@@ -278,7 +278,7 @@ mod tests {
         }
     }
 
-    fn core_with_blobs() -> (Core, Scratch) {
+    fn core_with_transfer_dir() -> (Core, Scratch) {
         let scratch = Scratch(std::env::temp_dir().join(format!(
             "vnilink-journal-{}-{}",
             std::process::id(),
@@ -293,7 +293,8 @@ mod tests {
             iroh::RelayMode::Disabled,
         )
         .unwrap();
-        core.set_blob_directory(scratch.0.join("blobs")).unwrap();
+        core.set_transfer_directory(scratch.0.join("blobs"))
+            .unwrap();
         (core, scratch)
     }
 
@@ -312,14 +313,14 @@ mod tests {
     #[test]
     fn journals_hold_what_changed_and_read_back_as_the_record() {
         const FILES: usize = 2000;
-        let (core, scratch) = core_with_blobs();
+        let (core, scratch) = core_with_transfer_dir();
         let id = 7;
         lock(&core.shared.jobs).insert(id, JobRecord::test_receiver_of(id, FILES));
         save_jobs(&core.shared).unwrap();
         let path = journal_of(&scratch, id);
         let first = std::fs::metadata(&path).unwrap().len();
         assert!(
-            first > 100 * FILES as u64,
+            first > 40 * FILES as u64,
             "the first line holds the manifest"
         );
 
@@ -341,9 +342,10 @@ mod tests {
             save_jobs(&core.shared).unwrap();
             largest = largest.max(std::fs::metadata(&path).unwrap().len());
         }
-        // Rewritten once it outgrows its first line twice over, never more.
+        // Rewritten once it outgrows its record twice over, never more; the
+        // record itself grows by each landed name, under 32 bytes here.
         assert!(
-            largest < 3 * first + 4096,
+            largest < 3 * (first + 32 * FILES as u64) + 4096,
             "the journal grew to {largest} bytes from {first}"
         );
         assert!(core.job_revision() > revision);

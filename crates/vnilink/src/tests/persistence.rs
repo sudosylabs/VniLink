@@ -935,31 +935,10 @@ fn a_panicking_save_fences_the_core_and_leaves_terminal_consent_unsaved() {
 }
 
 #[test]
-fn a_blocked_blob_shutdown_still_closes_the_endpoint() {
-    let store = MemoryStore::empty();
-    let host = open_loop(&store, RelaySettings::public_n0());
-    host.arm_blocked_teardown(Duration::from_millis(40), true, false);
-    store.fail_next_save(Error::StoreRecoveryRequired);
-    assert!(matches!(
-        host.set_desktop_sharing(all_grants()),
-        Err(Error::StoreRecoveryRequired)
-    ));
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    while !host.endpoint_is_closed() && std::time::Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert!(host.endpoint_is_closed());
-    assert_eq!(host.teardown_phase(), 2);
-    assert!(matches!(host.start_hosting(), Err(Error::ShutDown)));
-    host.shutdown();
-    assert_eq!(host.endpoint_close_count(), 1);
-}
-
-#[test]
 fn a_timed_out_endpoint_close_can_be_retried() {
     let store = MemoryStore::empty();
     let host = open_loop(&store, RelaySettings::public_n0());
-    host.arm_blocked_teardown(Duration::from_millis(40), true, true);
+    host.arm_blocked_teardown(Duration::from_millis(40));
     store.fail_next_save(Error::StoreRecoveryRequired);
     assert!(matches!(
         host.set_desktop_sharing(all_grants()),

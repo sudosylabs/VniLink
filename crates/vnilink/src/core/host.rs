@@ -2,14 +2,15 @@
 
 use super::*;
 
-use super::blob::{is_blob_connection, serve_blob_connection, BLOB_ALPN};
 use super::clipboard::{apply_clipboard, apply_clipboard_files, clipboard_selected};
 use super::keys::host_input_loop;
 use super::link::{remember_link, write_addresses};
 use super::pairing::{wait_for_control_approval, ControlAnswer};
+use super::transfer::{is_files_connection, serve_files_connection};
 use super::video::host_video_loop;
 use super::wire::{read_frame, write_frame};
 use crate::clipboard::ClipboardPayload;
+use crate::transfer::FILES_ALPN;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -148,7 +149,7 @@ pub(super) async fn bind_endpoint(
 ) -> Result<Endpoint, Error> {
     let mut builder = Endpoint::builder(presets::N0)
         .secret_key(secret)
-        .alpns(vec![ALPN.to_vec(), BLOB_ALPN.to_vec()])
+        .alpns(vec![ALPN.to_vec(), FILES_ALPN.to_vec()])
         .relay_mode(relay_mode)
         .transport_config(transport_config());
     if clear_lookup {
@@ -176,8 +177,8 @@ pub(super) async fn accept_loop(shared: Arc<Shared>) {
         tokio::spawn(async move {
             match incoming.await {
                 Ok(connection) => {
-                    if is_blob_connection(&connection) {
-                        serve_blob_connection(shared, connection).await;
+                    if is_files_connection(&connection) {
+                        serve_files_connection(shared, connection).await;
                     } else {
                         host_connection(shared, connection).await;
                     }

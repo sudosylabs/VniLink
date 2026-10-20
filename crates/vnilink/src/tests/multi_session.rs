@@ -370,7 +370,7 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() {
     for (core, name) in [(&controller, "controller"), (&a, "a"), (&b, "b")] {
         std::fs::create_dir_all(dir.join(name).join("root")).unwrap();
         core.enable_filesystem_access().unwrap();
-        core.set_blob_directory(dir.join(name).join("blobs"))
+        core.set_transfer_directory(dir.join(name).join("blobs"))
             .unwrap();
     }
     let controller_files = FilesystemLocation::new(
@@ -639,7 +639,7 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() {
     for (core, name) in [(&host, "host"), (&files, "files")] {
         let root = base.join(name).join("root");
         std::fs::create_dir_all(&root).unwrap();
-        core.set_blob_directory(base.join(name).join("blobs"))
+        core.set_transfer_directory(base.join(name).join("blobs"))
             .unwrap();
         core.set_file_roots(vec![root]).unwrap();
         core.set_file_resource_policy(crate::job::FileResourcePolicy {

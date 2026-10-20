@@ -38,7 +38,6 @@ use crate::video::{HostCapture, VideoInbox, VideoOutbox};
 mod activity;
 mod audio_stream;
 mod availability;
-pub(crate) mod blob;
 mod camera_stream;
 mod clipboard;
 mod connect;
@@ -78,11 +77,11 @@ mod system_stream;
 mod terminal_runtime;
 mod terminal_stream;
 mod topology;
+mod transfer;
 mod video;
 mod watch;
 mod wire;
 
-pub use blob::{BLOB_ALPN, BLOB_MAX_BYTES};
 pub use desktop_service::RemoteDesktopService;
 pub use desktop_stream::{DesktopControlState, DesktopInfo};
 pub use terminal_stream::RemoteTerminalService;
@@ -511,12 +510,10 @@ struct Shared {
     teardown_cv: Condvar,
     #[cfg(any(test, feature = "test-probes"))]
     close_count: AtomicUsize,
-    /// Non-zero test budget, in milliseconds, for a blocked blob or endpoint
+    /// Non-zero test budget, in milliseconds, for a blocked endpoint
     /// close. A real close keeps the production limit.
     #[cfg(test)]
     teardown_budget_ms: AtomicU64,
-    #[cfg(test)]
-    block_blob_shutdown: AtomicBool,
     #[cfg(test)]
     block_endpoint_close: AtomicBool,
     events: EventHub,
@@ -579,34 +576,18 @@ struct Shared {
     keyboard_mode: AtomicU8,
     pointer_defaults: Mutex<crate::PointerSettings>,
     cursor_receiver: AtomicBool,
-    /// Managed blob directory for the transfer manager. Empty until set.
-    blob_dir: Mutex<Option<PathBuf>>,
+    /// Managed transfer directory: job journals and the partial files of
+    /// arriving jobs. Empty until set.
+    transfer_dir: Mutex<Option<PathBuf>>,
     /// Owner-approved filesystem roots for the file manager. Empty until
     /// the owner sets them; pairing and grants never populate this.
     file_roots: Mutex<crate::fs::RootSet>,
-    /// Persistent blob store shared by serving and fetching. Opened lazily
-    /// inside the core runtime once the directory is set.
-    blob_store: Mutex<Option<iroh_blobs::store::fs::FsStore>>,
-    /// Serializes store opens: concurrent loads of one directory hang.
-    blob_open: tokio::sync::Mutex<()>,
-    /// Fetch authorizations: (peer, hash) pairs this installation serves.
-    /// Legacy (non-job) blob API (`blob_offer`): pairing only, no active-job
-    /// check (used by spike tests and legacy single-file paths).
-    /// Job blob API uses `blob_job_offers` plus an active `Serving` job
-    /// needing the hash, so completed/cancelled jobs never authorize.
-    /// A hash is content, not capability; the grant is re-checked per
-    /// connection on the receiver side.
-    blob_offers: Arc<Mutex<blob::OfferSet>>,
-    blob_job_offers: Mutex<blob::OfferSet>,
-    /// Temporary import pins bridge preparation until durable job ownership.
-    blob_recent_fetches: Arc<Mutex<HashMap<[u8; 32], (std::time::Instant, u64)>>>,
-    blob_import_pins: Arc<Mutex<HashMap<[u8; 32], (std::time::Instant, iroh_blobs::api::TempTag)>>>,
-    /// In-flight blob serving connections by peer, closed on revoke/unpair
-    /// so an accepted request cannot finish after its offers are removed.
-    blob_serving: Mutex<HashMap<[u8; 32], Vec<iroh::endpoint::Connection>>>,
-    /// One fetching connection per peer, reused by later fetches so a
-    /// small file does not pay for a new handshake; dropped on revoke/unpair.
-    blob_fetching: Mutex<HashMap<[u8; 32], iroh::endpoint::Connection>>,
+    /// Incoming files connections by peer, closed on revoke and unpair so
+    /// a file being served stops mid-way.
+    files_serving: Mutex<HashMap<[u8; 32], Vec<iroh::endpoint::Connection>>>,
+    /// One files connection per peer, kept for the files that follow so a
+    /// small file does not pay for a handshake; dropped on revoke/unpair.
+    files_fetching: Mutex<HashMap<[u8; 32], iroh::endpoint::Connection>>,
     /// This computer's folders watched for the window, by watch id.
     folder_watches: Mutex<HashMap<u64, notify::RecommendedWatcher>>,
     watch_next: AtomicU64,
@@ -632,9 +613,6 @@ struct Shared {
     job_wake: (Mutex<()>, std::sync::Condvar),
     /// Jobs a driver worker is taking steps for.
     job_workers: Mutex<std::collections::HashSet<u64>>,
-    /// Which sender jobs, and which of their entries, hold each hash a peer
-    /// may fetch. Taken after `jobs`, never before.
-    serve_index: Mutex<jobs::ServeIndex>,
     file_resources: Arc<Mutex<file_resources::Resources>>,
     /// Last-known backend facts per capability, published by adapters and
     /// serve loops. Read by the availability query; never guessed.
@@ -907,9 +885,8 @@ fn fence_unrecoverable(shared: &Shared, state: &mut State) {
 /// Claims endpoint close and runs it after `state` is free. Safe to call
 /// while the caller still holds `state`: the task waits for that lock.
 ///
-/// Blob shutdown and endpoint close each get the teardown budget. A blob
-/// timeout still closes the endpoint. A close that does not finish releases
-/// the claim so a later shutdown can retry. The core stays fenced.
+/// Endpoint close gets the teardown budget. A close that does not finish
+/// releases the claim so a later shutdown can retry. The core stays fenced.
 fn schedule_endpoint_close(shared: &Shared) {
     if !claim_endpoint_close(shared) {
         return;
@@ -923,27 +900,6 @@ fn schedule_endpoint_close(shared: &Shared) {
         if !wait_until_state_unlocked(&arc).await {
             release_teardown_claim(&arc);
             return;
-        }
-        let blob = {
-            let mut blobs = lock(&arc.blob_store);
-            blobs.take()
-        };
-        let block_blob = take_blob_block(&arc);
-        if blob.is_some() || block_blob {
-            let limit = teardown_limit(&arc, block_blob);
-            let stalled = tokio::time::timeout(limit, async move {
-                if let Some(blob) = blob {
-                    let _ = blob.shutdown().await;
-                }
-                if block_blob {
-                    std::future::pending::<()>().await;
-                }
-            })
-            .await
-            .is_err();
-            if stalled {
-                eprintln!("vnilink: installation blob close exceeded 5s; restart required");
-            }
         }
         if close_endpoint(&arc).await {
             mark_teardown_finished(&arc);
@@ -977,18 +933,6 @@ fn teardown_limit(shared: &Shared, shortened: bool) -> Duration {
     }
     let _ = (shared, shortened);
     Duration::from_secs(5)
-}
-
-fn take_blob_block(shared: &Shared) -> bool {
-    #[cfg(test)]
-    {
-        shared.block_blob_shutdown.swap(false, Ordering::AcqRel)
-    }
-    #[cfg(not(test))]
-    {
-        let _ = shared;
-        false
-    }
 }
 
 fn take_close_block(shared: &Shared) -> bool {

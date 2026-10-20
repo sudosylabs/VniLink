@@ -86,7 +86,6 @@ pub struct ResourceCounts {
     pub retained_operations: u32,
     pub privacy_held: bool,
     pub active_jobs: u32,
-    pub blob_offers: u32,
     pub paired_devices: u32,
     /// Connection id holding the input lease, if any live control exists.
     pub control_connection: Option<u64>,
@@ -141,7 +140,8 @@ pub struct QueueDepths {
     /// Bounded depths only; payload bytes are never included.
     pub input_queued: u32,
     pub terminal_startups_pending: u32,
-    pub blob_serving: u32,
+    /// Peers whose files connections this computer serves.
+    pub files_serving: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]

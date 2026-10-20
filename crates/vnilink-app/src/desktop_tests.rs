@@ -221,11 +221,11 @@ fn native_desktop_contract_covers_shortcuts_clipboard_and_bidirectional_files() 
     std::fs::create_dir_all(&host_dir).unwrap();
     std::fs::create_dir_all(&controller_dir).unwrap();
     host.inner
-        .set_blob_directory(root.join("host-blobs"))
+        .set_transfer_directory(root.join("host-blobs"))
         .unwrap();
     controller
         .inner
-        .set_blob_directory(root.join("controller-blobs"))
+        .set_transfer_directory(root.join("controller-blobs"))
         .unwrap();
     host.inner.enable_filesystem_access().unwrap();
     let host_files = FilesystemLocation::new(host.inner.file_roots().unwrap(), &host_dir);
@@ -401,11 +401,11 @@ fn service_jobs_cross_the_ffi_boundary() {
     std::fs::create_dir_all(&host_root).unwrap();
     std::fs::create_dir_all(&controller_root).unwrap();
     host.inner
-        .set_blob_directory(scratch.0.join("host-blobs"))
+        .set_transfer_directory(scratch.0.join("host-blobs"))
         .unwrap();
     controller
         .inner
-        .set_blob_directory(scratch.0.join("controller-blobs"))
+        .set_transfer_directory(scratch.0.join("controller-blobs"))
         .unwrap();
     host.inner.enable_filesystem_access().unwrap();
     let host_files = FilesystemLocation::new(host.inner.file_roots().unwrap(), &host_root);
@@ -999,7 +999,7 @@ fn files_handle_owns_submission_queue_and_cleanup() {
         std::fs::create_dir_all(directory.join(name).join("root")).unwrap();
         core.inner.enable_filesystem_access().unwrap();
         core.inner
-            .set_blob_directory(directory.join(name).join("blobs"))
+            .set_transfer_directory(directory.join(name).join("blobs"))
             .unwrap();
     }
     let host_files = FilesystemLocation::new(

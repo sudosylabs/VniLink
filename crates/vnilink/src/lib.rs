@@ -108,6 +108,7 @@ mod session;
 mod sidestream;
 pub mod system;
 pub mod terminal;
+mod transfer;
 mod trust;
 mod video;
 pub mod video_caps;
@@ -125,7 +126,7 @@ pub use core::RemoteDesktopService;
 pub use core::TopologySnapshot;
 pub use core::{
     ControlRequest, Core, CoreConfig, DeviceInfo, Listen, OpenConfig, SessionPath, Snapshot,
-    VideoRouting, VideoTarget, BLOB_ALPN, BLOB_MAX_BYTES,
+    VideoRouting, VideoTarget,
 };
 pub use core::{DesktopControlState, DesktopInfo};
 pub use diagnostics::{

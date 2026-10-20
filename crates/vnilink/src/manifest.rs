@@ -1,7 +1,7 @@
 //! Transfer manifests: bounded file/folder descriptions for jobs.
 //!
-//! A manifest maps relative paths to content hashes, sizes and directory
-//! entries. It is built by scanning the sender's approved roots, validated
+//! A manifest maps relative paths to sizes, modification times and
+//! directory entries. It is built by scanning the sender's approved roots, validated
 //! before anything is written on the receiver, and published path by path
 //! so folder merges preserve unrelated destination entries.
 //!
@@ -40,10 +40,8 @@ pub(crate) const MANIFEST_COLLISION: &str = "the transfer collides on the destin
 pub struct ManifestEntry {
     /// Relative path with `/` separators, UTF-8.
     pub path: String,
-    /// True for directories (hash is then nil).
+    /// True for directories.
     pub is_dir: bool,
-    /// Content hash bytes for files; `[0; 32]` for directories.
-    pub hash: [u8; 32],
     /// File size in bytes; 0 for directories.
     pub size: u64,
     /// Source mtime in ms for change detection; 0 when unknown.
@@ -67,20 +65,17 @@ impl Manifest {
     }
 }
 
-/// A scanned source tree before hashing: paths, sizes and mtimes.
+/// A scanned source tree: paths, sizes and mtimes.
 /// `root_rel` is the root-relative path (e.g. `docs/sub/a.txt`) used to
-/// re-open the file through directory handles at import time; `absolute`
-/// is retained for compatible diagnostics but must never be reopened for
-/// bytes (handles protect listing/stat, `root_rel` + `O_NOFOLLOW` protects
-/// the read).
+/// re-open the file through directory handles when it is sent; `ino` (the
+/// Windows file index there) identifies it so a file renamed over it is
+/// refused.
 #[derive(Debug, Clone)]
 pub struct ScannedFile {
     pub rel: String,
-    pub absolute: PathBuf,
     pub root_rel: String,
     pub size: u64,
     pub mtime_ms: u64,
-    pub dev: u64,
     pub ino: u64,
 }
 
@@ -227,19 +222,15 @@ fn scan_anchored(
         }
         Err(Error::NoSession)
     };
-    // Base is verified through handles; its absolute path is for blob imports
-    // that still take paths (verified again at offer time).
-    let base = roots.resolve_dir(id, rel)?;
     let mut files = Vec::new();
     let mut dirs = Vec::new();
     let mut skipped_symlinks = 0u64;
-    // (absolute dir, root-relative rel, dir fd)
+    // (root-relative rel, dir fd); the base is verified through handles.
     let base_fd = roots.open_dir_fd(id, rel)?;
-    let mut stack: Vec<(std::path::PathBuf, String, std::os::unix::io::OwnedFd)> =
-        vec![(base, rel.to_owned(), base_fd)];
+    let mut stack: Vec<(String, std::os::unix::io::OwnedFd)> = vec![(rel.to_owned(), base_fd)];
     // Probe indices continue the scan sequence: 0 fired before any access.
     let mut unit: u64 = 1;
-    while let Some((dir, dir_rel, dir_fd)) = stack.pop() {
+    while let Some((dir_rel, dir_fd)) = stack.pop() {
         if scan_probe(unit, cancelled, hooks) {
             return aborted();
         }
@@ -281,7 +272,6 @@ fn scan_anchored(
                 skipped_symlinks += 1;
                 continue;
             }
-            let full = dir.join(&name);
             if st.is_dir {
                 // Re-resolve through the jail: a parent swapped by a symlink
                 // after listing refuses here (handle-verified).
@@ -289,15 +279,13 @@ fn scan_anchored(
                 let child_fd = vnilink_rename::anchored::open_child(dir_fd.as_fd(), &name)
                     .map_err(|_| Error::InvalidSetting("the source folder cannot be read"))?;
                 dirs.push(manifest_rel.clone());
-                stack.push((full, child_rel, child_fd));
+                stack.push((child_rel, child_fd));
             } else if st.is_file {
                 files.push(ScannedFile {
                     rel: manifest_rel,
-                    absolute: full,
                     root_rel: child_rel,
                     size: st.size,
                     mtime_ms: st.mtime_ms,
-                    dev: st.dev,
                     ino: st.ino,
                 });
             }
@@ -316,19 +304,21 @@ fn scan_anchored(
     })
 }
 
-/// The scanned object's identity, so preparation can refuse a file replaced
-/// after the scan: volume serial and file index on Windows, matching what
-/// `vnilink_rename::windows::open_source_verified` reports for the same file.
+/// The scanned file's index on its volume, so sending can refuse a file
+/// renamed over it after the scan: the Windows file index, matching what
+/// `vnilink_rename::windows::open_source_verified` reports for the file.
 #[cfg(not(unix))]
-fn scan_identity(path: &Path, unreadable: &'static str) -> Result<(u64, u64), Error> {
+fn scan_file_id(path: &Path, unreadable: &'static str) -> Result<u64, Error> {
     #[cfg(windows)]
     {
-        vnilink_rename::windows::entry_identity(path).map_err(|_| Error::InvalidSetting(unreadable))
+        vnilink_rename::windows::entry_identity(path)
+            .map(|(_, index)| index)
+            .map_err(|_| Error::InvalidSetting(unreadable))
     }
     #[cfg(not(windows))]
     {
         let _ = (path, unreadable);
-        Ok((0, 0))
+        Ok(0)
     }
 }
 
@@ -407,25 +397,17 @@ fn scan_pathname(
             } else if meta.is_file() {
                 let size = meta.len();
                 #[cfg(not(unix))]
-                let (dev, ino) = scan_identity(&full, "the source folder cannot be read")?;
+                let ino = scan_file_id(&full, "the source folder cannot be read")?;
                 files.push(ScannedFile {
                     rel: manifest_rel,
-                    absolute: full,
                     root_rel: child_rel,
                     size,
                     mtime_ms: mtime_ms(&meta),
-                    #[cfg(unix)]
-                    dev: {
-                        use std::os::unix::fs::MetadataExt;
-                        meta.dev()
-                    },
                     #[cfg(unix)]
                     ino: {
                         use std::os::unix::fs::MetadataExt;
                         meta.ino()
                     },
-                    #[cfg(not(unix))]
-                    dev,
                     #[cfg(not(unix))]
                     ino,
                 });
@@ -480,18 +462,12 @@ fn scan_single_file(roots: &RootSet, id: u64, rel: &str) -> Result<Scan, Error> 
         if !st.is_file || st.is_symlink {
             return Err(Error::InvalidSetting(NOT_A_SCAN_DIR));
         }
-        let parent = roots
-            .resolve_dir(id, parent_rel)
-            .map_err(|_| Error::InvalidSetting(NOT_A_SCAN_DIR))?;
-        let full = parent.join(name);
         Ok(Scan {
             files: vec![ScannedFile {
                 rel: name.to_owned(),
-                absolute: full,
                 root_rel: rel.to_owned(),
                 size: st.size,
                 mtime_ms: st.mtime_ms,
-                dev: st.dev,
                 ino: st.ino,
             }],
             dirs: Vec::new(),
@@ -510,15 +486,13 @@ fn scan_single_file(roots: &RootSet, id: u64, rel: &str) -> Result<Scan, Error> 
             return Err(Error::InvalidSetting(NOT_A_SCAN_DIR));
         }
         let size = meta.len();
-        let (dev, ino) = scan_identity(&full, NOT_A_SCAN_DIR)?;
+        let ino = scan_file_id(&full, NOT_A_SCAN_DIR)?;
         Ok(Scan {
             files: vec![ScannedFile {
                 rel: name.to_owned(),
-                absolute: full,
                 root_rel: rel.to_owned(),
                 size,
                 mtime_ms: mtime_ms(&meta),
-                dev,
                 ino,
             }],
             dirs: Vec::new(),
@@ -545,15 +519,13 @@ pub(crate) fn prefix_source_dir(source_rel: &str, manifest: &mut Manifest) {
     }
 }
 
-/// Builds a manifest skeleton from a scan with nil hashes; the manager
-/// fills hashes as files are imported.
+/// Builds a manifest from a scan.
 pub(crate) fn skeleton(scan: &Scan) -> Manifest {
     let mut entries = Vec::with_capacity(scan.files.len() + scan.dirs.len());
     for dir in &scan.dirs {
         entries.push(ManifestEntry {
             path: dir.clone(),
             is_dir: true,
-            hash: [0; 32],
             size: 0,
             source_mtime_ms: 0,
         });
@@ -562,7 +534,6 @@ pub(crate) fn skeleton(scan: &Scan) -> Manifest {
         entries.push(ManifestEntry {
             path: file.rel.clone(),
             is_dir: false,
-            hash: [0; 32],
             size: file.size,
             source_mtime_ms: file.mtime_ms,
         });
@@ -591,7 +562,7 @@ pub(crate) fn validate(manifest: &Manifest) -> Result<(), Error> {
         }
         // Folders carry no payload; a manifest of folders alone is allowed,
         // since empty folders are real content of a folder transfer.
-        if entry.is_dir && (entry.size != 0 || entry.hash != [0; 32]) {
+        if entry.is_dir && entry.size != 0 {
             return Err(Error::InvalidSetting(MANIFEST_UNSAFE));
         }
     }

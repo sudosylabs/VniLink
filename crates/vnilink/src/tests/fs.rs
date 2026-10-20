@@ -1503,9 +1503,10 @@ fn delete_during_active_transfer_is_refused() {
     let controller = start_direct();
     host.enable_filesystem_access().unwrap();
     controller.enable_filesystem_access().unwrap();
-    host.set_blob_directory(scratch.join("host-blobs")).unwrap();
+    host.set_transfer_directory(scratch.join("host-blobs"))
+        .unwrap();
     controller
-        .set_blob_directory(scratch.join("controller-blobs"))
+        .set_transfer_directory(scratch.join("controller-blobs"))
         .unwrap();
     let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &host_root);
     let controller_files =

@@ -1741,9 +1741,9 @@ mod tests {
         std::fs::create_dir_all(root.join("controller-blobs")).unwrap();
         std::fs::create_dir_all(root.join("host-blobs")).unwrap();
         controller
-            .set_blob_directory(root.join("controller-blobs").to_string_lossy().into())
+            .set_transfer_directory(root.join("controller-blobs").to_string_lossy().into())
             .unwrap();
-        host.set_blob_directory(root.join("host-blobs").to_string_lossy().into())
+        host.set_transfer_directory(root.join("host-blobs").to_string_lossy().into())
             .unwrap();
         pair(&host, &controller);
         pair(&controller, &host);

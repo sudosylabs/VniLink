@@ -384,7 +384,7 @@ fn whole_filesystem_and_local_operations_cross_the_ffi() {
     std::fs::create_dir_all(dir.join("root")).unwrap();
     std::fs::write(dir.join("root/notes.txt"), b"ffi-bytes").unwrap();
     let core = open_core();
-    core.set_blob_directory(dir.join("blobs").to_string_lossy().into_owned())
+    core.set_transfer_directory(dir.join("blobs").to_string_lossy().into_owned())
         .unwrap();
     assert!(core.file_roots().unwrap().is_empty());
     assert!(core.list_dir(0, "".into(), 0, 50).is_err());

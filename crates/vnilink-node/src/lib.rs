@@ -1772,7 +1772,8 @@ impl EngineBridge {
                 Reply::Done
             }
             Command::SetTransferDirectory { path } => {
-                core.set_blob_directory(path.clone()).map_err(core_error)?;
+                core.set_transfer_directory(path.clone())
+                    .map_err(core_error)?;
                 Reply::Done
             }
             Command::LocalPlaces => Reply::Places {
