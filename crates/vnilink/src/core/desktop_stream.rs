@@ -91,6 +91,9 @@ pub(super) struct DesktopRuntime {
     release: KeyframeFlag,
     /// Losses, keyframes and encoder reopens, for diagnostics.
     pub(super) counters: crate::video::VideoCounters,
+    /// The viewer's outstanding keyframe request, so losses while one is
+    /// coming do not ask again.
+    keyframe_requests: Mutex<crate::video::KeyframeRequests>,
     control_state: tokio::sync::watch::Sender<(DesktopControlState, u64)>,
     control_commands: Mutex<std::collections::VecDeque<(u8, u64)>>,
     control_notify: tokio::sync::Notify,
@@ -166,6 +169,7 @@ impl DesktopRuntime {
             keyframe: KeyframeFlag::new(),
             release: KeyframeFlag::new(),
             counters: crate::video::VideoCounters::default(),
+            keyframe_requests: Mutex::new(crate::video::KeyframeRequests::default()),
             control_state: tokio::sync::watch::channel((DesktopControlState::Viewing, 0)).0,
             control_commands: Mutex::new(std::collections::VecDeque::new()),
             control_notify: tokio::sync::Notify::new(),
@@ -265,6 +269,17 @@ impl DesktopRuntime {
         info.quality = *lock(&self.quality);
         info
     }
+    /// A frame arrived for the viewer. A keyframe answers the outstanding
+    /// request; a full queue asks for one.
+    fn receive_video(&self, frame: EncodedFrame) {
+        let keyframe = frame.keyframe;
+        if matches!(self.inbox.push(frame), VideoPush::KeyframeNeeded) {
+            self.keyframe.request();
+        }
+        if keyframe {
+            lock(&self.keyframe_requests).keyframe_arrived();
+        }
+    }
     /// Point-in-time pipeline facts for diagnostics: labels, stage
     /// durations, queue depths and drops. Never frame bytes. Durations
     /// older than [`PIPELINE_FRESH_SECS`](crate::diagnostics::PIPELINE_FRESH_SECS)
@@ -323,6 +338,7 @@ impl DesktopRuntime {
             keyframes_sent: counts.keyframes_sent,
             keyframe_bytes: counts.keyframe_bytes,
             encoder_reopens: counts.encoder_reopens,
+            send_dropped: counts.send_dropped,
             selected_display: lock(&self.selected).first().copied(),
             fault: lock(&self.display_fault).map(str::to_string),
         }
@@ -468,9 +484,7 @@ async fn route_desktop_datagrams(
                 if Some(frame.codec) != crate::VideoCodec::from_wire_id(desktop.info.codec) {
                     continue;
                 }
-                if matches!(desktop.inbox.push(frame), VideoPush::KeyframeNeeded) {
-                    desktop.keyframe.request();
-                }
+                desktop.receive_video(frame);
             }
         }
     }
@@ -1224,6 +1238,22 @@ async fn client_send(
             write(send, &bytes).await?;
         }
         if desktop.keyframe.take() {
+            lock(&desktop.keyframe_requests).want();
+        }
+        let path_rtt = link
+            .paths()
+            .iter()
+            .find(|path| path.is_selected())
+            .map_or(Duration::ZERO, |path| path.rtt());
+        let frame_period =
+            Duration::from_secs(1) / u32::from(lock(&desktop.quality).max_frame_rate.max(1));
+        let ask = lock(&desktop.keyframe_requests).should_send(
+            std::time::Instant::now(),
+            path_rtt,
+            frame_period,
+        );
+        let retry = lock(&desktop.keyframe_requests).retry_at(path_rtt, frame_period);
+        if ask {
             desktop.counters.keyframe_requested();
             let mut bytes = vec![COMMAND];
             bytes.extend_from_slice(&lease_epoch.to_be_bytes());
@@ -1267,6 +1297,13 @@ async fn client_send(
         }
         tokio::select! {
             _ = &mut notified => {}, _ = desktop.keyframe.notified() => {}, _ = desktop.release.notified() => {}, _ = desktop.control_notify.notified() => {},
+            // An unanswered keyframe request is asked again when its patience runs out.
+            _ = async {
+                match retry {
+                    Some(at) => tokio::time::sleep_until(at.into()).await,
+                    None => std::future::pending().await,
+                }
+            } => {},
             _ = interval.tick() => {
                 if let Some(path) = link.paths().iter().find(|p| p.is_selected()) {
                     let now = std::time::Instant::now();
@@ -1335,9 +1372,7 @@ async fn client_receive(
                     if Some(frame.codec) != crate::VideoCodec::from_wire_id(desktop.info.codec) {
                         return Err(Error::Malformed);
                     }
-                    if matches!(desktop.inbox.push(frame), VideoPush::KeyframeNeeded) {
-                        desktop.keyframe.request();
-                    }
+                    desktop.receive_video(frame);
                 }
                 TOPOLOGY => {
                     let ControlMessage::Topology {
@@ -2091,6 +2126,25 @@ async fn write_control_state(
     write(send, &bytes).await
 }
 
+/// Bytes of video a desktop may have waiting in the transport: three
+/// frames at the agreed bitrate, and never under 64 KiB. Beyond it a new
+/// frame would only add latency.
+fn backlog_budget(bitrate_kbps: u32, frame_rate: u8) -> usize {
+    let per_frame = u64::from(bitrate_kbps) * 1000 / 8 / u64::from(frame_rate.max(1));
+    usize::try_from(per_frame * 3)
+        .unwrap_or(usize::MAX)
+        .max(64 * 1024)
+}
+
+/// Whether a frame of `wire` bytes goes out now. It must fit the space the
+/// transport has without dropping older datagrams, and, unless nothing is
+/// waiting, keep the backlog within `budget`: a keyframe larger than the
+/// budget still goes once the link has caught up.
+fn admits_frame(space: usize, wire: usize, budget: usize) -> bool {
+    let queued = super::host::DATAGRAM_SEND_BUFFER.saturating_sub(space);
+    wire <= space && (queued == 0 || queued + wire <= budget)
+}
+
 async fn host_send(
     shared: &Shared,
     desktop: &DesktopRuntime,
@@ -2102,6 +2156,7 @@ async fn host_send(
         .and_then(|s| s.link.clone())
         .ok_or(Error::NoSession)?;
     let mut seq = 0u32;
+    let mut awaiting_keyframe = false;
     let mut metrics = tokio::time::interval(Duration::from_secs(1));
     metrics.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut cursor = desktop.cursor.subscribe();
@@ -2118,8 +2173,11 @@ async fn host_send(
         let notified = desktop.video.notified();
         tokio::pin!(notified);
         for frame in desktop.video.drain() {
-            if frame.keyframe {
-                desktop.counters.keyframe_sent(frame.payload.len());
+            // After a frame was dropped, the predicted frames that follow
+            // reference it: they go too, until the keyframe owed for it.
+            if awaiting_keyframe && !frame.keyframe {
+                desktop.counters.send_dropped();
+                continue;
             }
             let body = crate::video::encode_video_body(&frame);
             let max = link.max_datagram_size();
@@ -2142,13 +2200,37 @@ async fn host_send(
                         bytes::Bytes::from(bytes)
                     })
                     .collect::<Vec<_>>();
+                let wire: usize = datagrams.iter().map(bytes::Bytes::len).sum();
+                let quality = *lock(&desktop.quality);
+                if !admits_frame(
+                    link.datagram_send_buffer_space(),
+                    wire,
+                    backlog_budget(quality.max_bitrate_kbps, quality.max_frame_rate),
+                ) {
+                    // The link is behind: sending would queue stale video, or
+                    // make the transport drop older fragments and so split
+                    // frames. Drop this one whole and start again from a
+                    // keyframe once the backlog drains.
+                    desktop.counters.send_dropped();
+                    awaiting_keyframe = true;
+                    desktop.keyframe.request();
+                    continue;
+                }
                 link.send_many_datagrams(&datagrams)
                     .map_err(Error::network_debug)?;
                 seq = seq.wrapping_add(1);
+                awaiting_keyframe &= !frame.keyframe;
+                if frame.keyframe {
+                    desktop.counters.keyframe_sent(frame.payload.len());
+                }
             } else {
                 let mut bytes = vec![VIDEO];
                 bytes.extend_from_slice(&body);
                 write(send, &bytes).await?;
+                awaiting_keyframe &= !frame.keyframe;
+                if frame.keyframe {
+                    desktop.counters.keyframe_sent(frame.payload.len());
+                }
             }
         }
         let current = cursor.borrow_and_update().clone();
@@ -2236,6 +2318,23 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_frame_waits_behind_at_most_three_frames_of_video() {
+        // 8 Mb/s at 50 fps is 20 kB a frame: the floor of 64 KiB applies.
+        assert_eq!(backlog_budget(8_000, 50), 64 * 1024);
+        // 24 Mb/s at 30 fps is 100 kB a frame.
+        assert_eq!(backlog_budget(24_000, 30), 300_000);
+        let buffer = crate::core::host::DATAGRAM_SEND_BUFFER;
+        // Nothing waiting: any frame that fits goes, a large keyframe too.
+        assert!(admits_frame(buffer, 500_000, 64 * 1024));
+        // Something waiting: only while the backlog stays within budget.
+        assert!(admits_frame(buffer - 40_000, 20_000, 64 * 1024));
+        assert!(!admits_frame(buffer - 60_000, 20_000, 64 * 1024));
+        // Never a frame the transport would make room for by dropping.
+        assert!(!admits_frame(10_000, 20_000, usize::MAX));
+    }
+
     fn desktop() -> Arc<DesktopRuntime> {
         DesktopRuntime::new(
             DesktopInfo {

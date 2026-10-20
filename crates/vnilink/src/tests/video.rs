@@ -347,6 +347,37 @@ fn predicted_frames_drop_until_the_next_keyframe() {
 }
 
 #[test]
+fn a_viewer_queue_older_than_its_budget_starts_again_from_a_keyframe() {
+    let start = Instant::now();
+    let frame = |keyframe| EncodedFrame::h264(keyframe, 1, vec![0x41]).unwrap();
+    let mut queue = VideoQueue::new().with_max_age(crate::video::INBOX_MAX_AGE);
+    assert_eq!(queue.push_at(frame(true), start), VideoPush::Queued);
+    assert_eq!(
+        queue.push_at(frame(false), start + Duration::from_millis(100)),
+        VideoPush::Queued,
+        "two frames within the budget are jitter, not delay"
+    );
+    // The window has not taken the first frame for longer than the budget:
+    // the predicted frames go, and a keyframe is wanted.
+    assert_eq!(
+        queue.push_at(frame(false), start + Duration::from_millis(151)),
+        VideoPush::KeyframeNeeded
+    );
+    assert_eq!(queue.len(), 1, "the buffered keyframe stays");
+    assert_eq!(
+        queue.push_at(frame(true), start + Duration::from_millis(160)),
+        VideoPush::Queued
+    );
+    // A queue without a budget is bounded by depth only.
+    let mut deep = VideoQueue::new();
+    deep.push_at(frame(true), start);
+    assert_eq!(
+        deep.push_at(frame(false), start + Duration::from_secs(5)),
+        VideoPush::Queued
+    );
+}
+
+#[test]
 fn a_frame_carries_its_capture_to_send_time_and_its_queued_time() {
     let captured = Instant::now() - Duration::from_millis(40);
     let frame = EncodedFrame::h264(true, 1, vec![0x65])

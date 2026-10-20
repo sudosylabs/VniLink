@@ -16,6 +16,7 @@ pub(crate) struct VideoCounters {
     keyframes_sent: AtomicU64,
     keyframe_bytes: AtomicU64,
     encoder_reopens: AtomicU64,
+    send_dropped: AtomicU64,
 }
 
 /// One reading of [`VideoCounters`].
@@ -26,6 +27,7 @@ pub(crate) struct VideoCounts {
     pub(crate) keyframes_sent: u64,
     pub(crate) keyframe_bytes: u64,
     pub(crate) encoder_reopens: u64,
+    pub(crate) send_dropped: u64,
 }
 
 fn add(counter: &AtomicU64, value: u64) {
@@ -57,6 +59,11 @@ impl VideoCounters {
         add(&self.encoder_reopens, 1);
     }
 
+    /// The host dropped a frame rather than queue it behind a slow link.
+    pub(crate) fn send_dropped(&self) {
+        add(&self.send_dropped, 1);
+    }
+
     pub(crate) fn read(&self) -> VideoCounts {
         let read = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
         VideoCounts {
@@ -70,6 +77,7 @@ impl VideoCounters {
             keyframes_sent: read(&self.keyframes_sent),
             keyframe_bytes: read(&self.keyframe_bytes),
             encoder_reopens: read(&self.encoder_reopens),
+            send_dropped: read(&self.send_dropped),
         }
     }
 }

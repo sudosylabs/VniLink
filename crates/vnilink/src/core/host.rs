@@ -126,16 +126,20 @@ const STREAM_RECEIVE_WINDOW: u32 = 16 * 1024 * 1024;
 const CONNECTION_RECEIVE_WINDOW: u32 = 64 * 1024 * 1024;
 /// Bytes sent and not yet acknowledged, across the connection.
 const SEND_WINDOW: u64 = 64 * 1024 * 1024;
+/// Datagram bytes the transport may hold before sending. noq's default,
+/// stated so the desktop sender can tell how much video is waiting.
+pub(super) const DATAGRAM_SEND_BUFFER: usize = 1024 * 1024;
 
 /// Flow-control windows sized for bulk transfers on long paths. Congestion
 /// control stays noq's default, Cubic: its BBRv3 is experimental, and a
-/// change is made only on measurement. Datagram buffering is left at the
-/// default too; the desktop sender bounds its own backlog.
+/// change is made only on measurement. Datagram buffering keeps noq's
+/// default size; the desktop sender bounds its own backlog within it.
 fn transport_config() -> QuicTransportConfig {
     QuicTransportConfig::builder()
         .stream_receive_window(VarInt::from_u32(STREAM_RECEIVE_WINDOW))
         .receive_window(VarInt::from_u32(CONNECTION_RECEIVE_WINDOW))
         .send_window(SEND_WINDOW)
+        .datagram_send_buffer_size(DATAGRAM_SEND_BUFFER)
         .build()
 }
 

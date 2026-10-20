@@ -15,6 +15,11 @@ use super::frame::EncodedFrame;
 /// P-frames until the next keyframe to bound latency.
 pub(crate) const VIDEO_QUEUE: usize = 8;
 
+/// The viewer's frames may wait this long for the window. Past it, the
+/// queue is a standing delay rather than jitter: it drops predicted frames
+/// and starts again from a keyframe, whatever its depth.
+pub(crate) const INBOX_MAX_AGE: Duration = Duration::from_millis(150);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VideoPush {
     Queued,
@@ -29,6 +34,8 @@ pub(crate) struct VideoQueue {
     received_bytes: u64,
     needs_keyframe: bool,
     dropped: u64,
+    /// Oldest a waiting frame may be before the queue drops to a keyframe.
+    max_age: Option<Duration>,
 }
 
 impl VideoQueue {
@@ -39,7 +46,14 @@ impl VideoQueue {
             received_bytes: 0,
             needs_keyframe: false,
             dropped: 0,
+            max_age: None,
         }
+    }
+
+    /// Bounds the queue by the age of its oldest frame as well as its depth.
+    pub(crate) fn with_max_age(mut self, max_age: Duration) -> Self {
+        self.max_age = Some(max_age);
+        self
     }
 
     pub(crate) fn push(&mut self, frame: EncodedFrame) -> VideoPush {
@@ -61,7 +75,12 @@ impl VideoQueue {
             self.dropped = self.dropped.saturating_add(1);
             return VideoPush::StillNeedsKeyframe;
         }
-        if self.frames.len() >= VIDEO_QUEUE {
+        let stale = self.max_age.is_some_and(|max_age| {
+            self.frames
+                .front()
+                .is_some_and(|(_, at)| now.saturating_duration_since(*at) > max_age)
+        });
+        if self.frames.len() >= VIDEO_QUEUE || stale {
             // A full queue drops predicted frames until the next keyframe. A
             // buffered keyframe stays: the network task may not have sent it,
             // and it is what the decoder restarts from.
@@ -184,10 +203,14 @@ pub(crate) struct VideoInbox {
     taps: Mutex<Vec<std::sync::Weak<RecordingInbox>>>,
 }
 
+fn inbox_queue() -> VideoQueue {
+    VideoQueue::new().with_max_age(INBOX_MAX_AGE)
+}
+
 impl VideoInbox {
     pub(crate) fn new() -> Self {
         Self {
-            queue: Mutex::new(VideoQueue::new()),
+            queue: Mutex::new(inbox_queue()),
             wake: Condvar::new(),
             closed: AtomicBool::new(false),
             taps: Mutex::new(Vec::new()),
@@ -225,7 +248,7 @@ impl VideoInbox {
         self.closed.store(true, Ordering::Release);
         self.close_taps();
         let mut queue = lock(&self.queue);
-        *queue = VideoQueue::new();
+        *queue = inbox_queue();
         self.closed.store(false, Ordering::Release);
     }
 
@@ -233,7 +256,7 @@ impl VideoInbox {
         self.closed.store(true, Ordering::Release);
         self.close_taps();
         let mut queue = lock(&self.queue);
-        *queue = VideoQueue::new();
+        *queue = inbox_queue();
         self.closed.store(true, Ordering::Release);
         self.wake.notify_all();
     }

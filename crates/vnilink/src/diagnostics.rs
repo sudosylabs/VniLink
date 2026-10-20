@@ -129,6 +129,8 @@ pub struct PipelineSummary {
     pub keyframe_bytes: u64,
     /// Times the host opened its encoder again for new settings.
     pub encoder_reopens: u64,
+    /// Frames the host dropped rather than queue behind a slow link.
+    pub send_dropped: u64,
     pub selected_display: Option<u64>,
     /// Fixed display-fault label, if the selected source failed.
     pub fault: Option<String>,

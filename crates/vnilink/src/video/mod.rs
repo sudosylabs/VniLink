@@ -10,6 +10,7 @@ mod counters;
 mod datagram;
 mod frame;
 mod queue;
+mod recovery;
 
 pub(crate) use counters::{VideoCounters, VideoCounts};
 pub(crate) use datagram::{fragment, Losses, Reassembler, FRAG_HEADER};
@@ -19,7 +20,8 @@ pub use frame::{EncodedFrame, FrameTiming};
 pub(crate) use queue::{KeyframeFlag, QueueTelemetry, VideoInbox, VideoOutbox, VideoPush};
 pub use queue::{RecordingVideoTap, VideoSubscription};
 #[cfg(test)]
-pub(crate) use queue::{VideoQueue, VIDEO_QUEUE};
+pub(crate) use queue::{VideoQueue, INBOX_MAX_AGE, VIDEO_QUEUE};
+pub(crate) use recovery::KeyframeRequests;
 
 /// Largest encoded payload, not counting the video header before it.
 pub const MAX_VIDEO_FRAME: usize = 1_048_576;
