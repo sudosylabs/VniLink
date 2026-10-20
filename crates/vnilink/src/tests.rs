@@ -44,6 +44,8 @@ mod keyboard_support;
 mod keyboard_tests;
 #[path = "tests/keyboard_text.rs"]
 mod keyboard_text_tests;
+#[path = "tests/keyframe_recovery.rs"]
+mod keyframe_recovery_tests;
 #[path = "tests/link.rs"]
 mod link_tests;
 #[path = "tests/multi_session.rs"]
