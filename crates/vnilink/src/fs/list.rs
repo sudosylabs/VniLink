@@ -5,7 +5,8 @@
 //! [`MAX_LISTED`] set `truncated` instead of growing the response without
 //! bound. Names that are not valid UTF-8 are skipped and counted: the name
 //! API is UTF-8, so such entries are unreachable until a byte-path policy
-//! exists.
+//! exists. VniLink's own temporary entries ([`super::is_engine_temp`]) are
+//! left out without being counted: they are not the user's.
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -190,6 +191,7 @@ fn list_page_anchored(
     let mut utf8_overflow = false;
     for os in raw {
         match os.into_string() {
+            Ok(name) if super::is_engine_temp(&name) => {}
             Ok(name) => {
                 if names.len() >= MAX_LISTED {
                     utf8_overflow = true;
@@ -254,6 +256,7 @@ fn list_page_pathname(
     for entry in read {
         let entry = entry.map_err(|_| Error::InvalidSetting("the folder cannot be listed"))?;
         match entry.file_name().into_string() {
+            Ok(name) if super::is_engine_temp(&name) => {}
             Ok(name) => names.push(name),
             Err(_) => non_utf8_skipped += 1,
         }
