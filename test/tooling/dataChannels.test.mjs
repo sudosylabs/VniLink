@@ -115,13 +115,14 @@ test('the other pointer travels beside the picture, checked, and only on a pictu
 			{ x: 5, y: 6, visible: true, image: null },
 		);
 		f.host.start(f.native);
-		await new Promise(resolve => setTimeout(resolve, 40));
-		const cursors = f.messages.filter(m => m.type === 'cursor').map(m => m.cursor);
+		const posted = () => f.messages.filter(m => m.type === 'cursor').map(m => m.cursor);
+		await until(() => posted().length === 2);
+		const cursors = posted();
 		assert.deepEqual(cursors.map(c => [c.x, c.y, 'image' in c]), [[3, 4, true], [5, 6, false]]);
 		assert.ok(cursors[0].image.pixels instanceof Uint8Array && !Buffer.isBuffer(cursors[0].image.pixels), 'the image crosses as plain bytes');
 		f.cursors.push({ x: 1, y: 1, visible: true, image: { width: 2, height: 1, hotspotX: 0, hotspotY: 0, pixels: Buffer.from([1]) } });
-		await new Promise(resolve => setTimeout(resolve, 40));
-		assert.equal(f.closed, 1, 'an image that does not fill its size reached the window');
+		await until(() => f.closed === 1);
+		assert.equal(posted().length, 2, 'an image that does not fill its size reached the window');
 	} finally {
 		f.host.close();
 	}
