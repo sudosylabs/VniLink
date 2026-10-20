@@ -11,7 +11,7 @@ import { OpenFilesAction } from '../../src/workbench/contrib/files/filesActions.
 import { FilesView } from '../../src/workbench/contrib/files/filesView.js';
 import { IDeviceService, type DeviceSummary } from '../../src/workbench/services/devices/deviceService.js';
 import { IDialogService, type IDialogOptions, type IDialogResult } from '../../src/workbench/services/dialogs/dialogService.js';
-import { IFilesService, type FilesFailure, type FilesItem, type FilesListing, type FilesRoute, type IFilesDisk, type IFilesSession } from '../../src/workbench/services/files/filesService.js';
+import { IFilesService, type FilesFailure, type FilesItem, type FilesListing, type IFilesDisk, type IFilesSession } from '../../src/workbench/services/files/filesService.js';
 import { ITabService } from '../../src/workbench/services/tabs/tabService.js';
 import { TabService } from '../../src/workbench/services/tabs/tabServiceImpl.js';
 import { IUIStateService } from '../../src/workbench/services/uiState/uiStateService.js';
@@ -74,6 +74,11 @@ class MemoryDisk implements IFilesDisk {
 		return Promise.resolve();
 	}
 
+	/** What a transfer leaves in `folder`. */
+	public land(folder: FolderLocation, item: FileEntry): void {
+		this.folders.get(`${folder.root}:${folder.path}`)?.push(item);
+	}
+
 	public delete(folder: FolderLocation, item: FileEntry): Promise<void> {
 		this.deletes.push(item.name);
 		const entries = this.folders.get(`${folder.root}:${folder.path}`) ?? [];
@@ -101,13 +106,12 @@ class FakeSession implements IFilesSession {
 
 	constructor(public readonly local: IFilesDisk, public readonly remote: IFilesDisk) { }
 
-	public routeOf(): FilesRoute | undefined {
-		return { from: 'local', source: { root: '0', path: 'Users/hammed/Downloads' }, destination: { root: '2', path: 'Users/abass/Downloads' } };
-	}
-
+	/** One transfer per item, each naming where it lands, as the engine's do. */
 	public copy(from: FilesPane, items: readonly FilesItem[], to: FolderLocation): Promise<void> {
 		this.copies.push({ from, items, to });
-		this.set([...this.jobs, job(String(this.jobs.length + 10), 'Transferring')]);
+		this.set([...this.jobs, ...items.map((item, index) => job(String(this.jobs.length + index + 10), 'Transferring', {
+			label: item.name, direction: from === 'local' ? 'Upload' : 'Download', files_total: '1', destination: { root: to.root, path: to.path, name: item.name },
+		}))]);
 		return Promise.resolve();
 	}
 
@@ -276,29 +280,60 @@ export async function verifyFiles(): Promise<void> {
 		copyButton.click();
 		await until(() => session.copies.length === 1, 'Copy did not start');
 		assert(session.copies[0].from === 'local' && session.copies[0].items.map(item => item.name).join(',') === 'invoice.pdf,notes.md' && session.copies[0].to.path === 'Users/abass/Downloads', `Wrong copy: ${JSON.stringify(session.copies[0])}`);
-		// What lands shows on the receiving side without reloading it.
+		// What is copied shows where it lands, at its place in that folder, before it has arrived.
+		await until(() => remote.querySelectorAll('.files-row.arriving').length === 2, 'The copies did not show in the folder they land in');
+		assert(names(remote).join(',') === 'Installers,invoice.pdf,notes.md,report-q3.xlsx', `Arriving rows are out of place: ${names(remote).join(',')}`);
+		const arriving = remote.querySelector('.files-row.arriving');
+		assert(arriving?.querySelector('.files-ring') !== null && arriving?.querySelector('.files-cell-modified')?.textContent === '25%', `An arriving row does not show its progress: ${arriving?.textContent ?? ''}`);
+		assert(view.element.querySelector('.files-status-transfers')?.textContent.startsWith('Copying to Sudosy') === true, 'The status bar does not sum up the copy');
+		// What lands shows on the receiving side without reloading it, tinted for a moment.
 		const listed = remoteDisk.lists.length;
-		session.set(session.jobs.map(item => ({ ...item, state: 'Complete', files_done: item.files_total })));
+		for (const item of session.copies[0].items) {
+			remoteDisk.land(session.copies[0].to, entry(item.name, 'file', 1000));
+		}
+		session.set(session.jobs.map(item => ({ ...item, state: 'Complete', done_bytes: item.total_bytes, files_done: item.files_total })));
 		await until(() => remoteDisk.lists.length > listed, 'The receiving pane did not list again when the copy completed');
-		const panel = view.element.querySelector<HTMLElement>('.files-transfers');
-		assert(panel !== null && !panel.hidden, 'Copying did not show the transfers');
+		await until(() => remote.querySelectorAll('.files-row.arriving').length === 0 && remote.querySelectorAll('.files-row[data-tone="landed"]').length === 2, 'What arrived did not become ordinary rows, tinted for a moment');
 
-		// Transfers say where each goes and what fits it; a clash asks once for the rest.
-		session.set([job('20', 'Transferring'), job('21', 'WaitingDecision', { direction: 'Download', waiting_file: 'report-q3.xlsx' }), job('22', 'Complete', { done_bytes: '1000000' })]);
-		const rows = [...view.element.querySelectorAll('.files-transfer')];
-		assert(rows.length === 3, `Wrong transfer rows: ${String(rows.length)}`);
-		assert(rows[0].querySelector('.files-transfer-route')?.textContent === 'Downloads on This Mac → Downloads on Sudosy' || (rows[0].querySelector('.files-transfer-route')?.textContent ?? '').endsWith('→ Downloads on Sudosy'), `Wrong route: ${rows[0].querySelector('.files-transfer-route')?.textContent ?? ''}`);
-		assert(rows[1].querySelector('.files-transfer-status')?.textContent === '“report-q3.xlsx” is already there', `Wrong waiting text: ${rows[1].querySelector('.files-transfer-status')?.textContent ?? ''}`);
-		assert(view.element.querySelector('.files-status-decision')?.textContent === '1 needs your decision', 'The status bar does not ask for the decision');
-		answers.push({ button: 2, checked: true });
-		rows[1].querySelector<HTMLButtonElement>('.files-transfer-action button')?.click();
-		await until(() => session.resolutions.length === 1, 'Choosing did not resolve');
-		assert(JSON.stringify(session.resolutions[0]) === JSON.stringify(['21', 'keepBoth', true]), `Wrong resolution: ${JSON.stringify(session.resolutions[0])}`);
-		assert(dialogs.at(-1)?.checkbox?.label === 'Same answer for the other names that clash', 'The conflict did not offer the same answer for the rest');
-		assert(rows[2].querySelector('.files-transfer-action button') === null, 'A finished transfer offers an action');
+		// A name already there asks under that name: answered in place, or with Enter.
+		const downloads = { root: '0', path: 'Users/hammed/Downloads' };
+		session.set([job('21', 'WaitingDecision', { direction: 'Download', label: 'notes.md', waiting_file: 'notes.md', files_total: '1', destination: { ...downloads, name: 'notes.md' } })]);
+		await until(() => local.querySelector('.files-decision') !== null, 'The clash did not ask under the name');
+		assert(local.querySelector('.files-decision-text')?.textContent === 'Sudosy is sending another “notes.md”', `Wrong question: ${local.querySelector('.files-decision-text')?.textContent ?? ''}`);
+		assert(local.querySelector('.files-decision-same')?.hasAttribute('hidden') === true, 'One file offers the same answer for others');
+		const namesake = [...local.querySelectorAll('.files-row')].find(row => row.querySelector('.files-row-name')?.textContent === 'notes.md');
+		assert(namesake?.querySelector('.files-ring') === null, 'The file already there looks like it is being replaced');
+		[...local.querySelectorAll<HTMLButtonElement>('.files-decision button')].find(button => button.textContent === 'Replace')?.click();
+		await until(() => session.resolutions.length === 1, 'Replace did not answer');
+		assert(JSON.stringify(session.resolutions[0]) === JSON.stringify(['21', 'replace', false]), `Wrong answer: ${JSON.stringify(session.resolutions[0])}`);
+		const decisionButton = view.element.querySelector<HTMLButtonElement>('.files-status-decision');
+		assert(decisionButton?.textContent === '1 needs your decision', 'The status bar does not ask for the decision');
+		decisionButton.click();
+		await until(() => document.activeElement === list(local) && local.querySelector('.monaco-list-row.focused .files-decision') !== null, 'The status bar did not go to the question');
+		answers.push({ button: 2, checked: false });
+		press(list(local), 'Enter', 13);
+		await until(() => session.resolutions.length === 2, 'Enter on the question did not ask');
+		assert(session.resolutions[1][1] === 'keepBoth', `Wrong answer from the dialog: ${JSON.stringify(session.resolutions[1])}`);
+
+		// The status bar opens every transfer, the finished ones too; Escape closes it where it opened.
+		session.set([job('20', 'Interrupted', { files_total: '1', destination: { root: '2', path: 'Users/abass/Downloads', name: 'big.iso' } }), job('22', 'Complete', { label: 'Screenshots', done_bytes: '1000000' })]);
+		const summary = view.element.querySelector<HTMLButtonElement>('.files-status-transfers');
+		assert(summary?.textContent === '1 stopped', `A stopped transfer is not said: ${summary?.textContent ?? ''}`);
+		summary.click();
+		const activity = view.element.querySelector<HTMLElement>('.files-activity');
+		assert(activity !== null && !activity.hidden && document.activeElement === activity, 'The list of transfers did not open');
+		const headings = [...activity.querySelectorAll('.files-activity-heading')].map(node => node.textContent);
+		assert(headings.join(',') === 'Now,Earlier', `Wrong groups: ${headings.join(',')}`);
+		const actions = [...activity.querySelectorAll('.files-activity-item button')].map(node => node.textContent).join(',');
+		assert(actions === 'Resume', `Wrong actions: ${actions}`);
+		press(activity, 'Escape', 27);
+		assert(view.element.querySelector<HTMLElement>('.files-activity')?.hidden === true && document.activeElement === summary, 'Escape did not close the list and return to the status bar');
+		session.set([]);
 
 		// Rename in place: a taken name is refused and said, the item kept.
-		press(list(local), 'ArrowUp', 38);
+		list(local).focus();
+		press(list(local), 'Home', 36);
+		press(list(local), 'ArrowDown', 40);
 		press(list(local), 'F2', 113);
 		await until(() => local.querySelector('.files-row-name input') !== null, 'Rename did not open in the row');
 		const input = local.querySelector<HTMLInputElement>('.files-row-name input');
@@ -402,7 +437,12 @@ export async function showFilesFixture(width: number, height: number): Promise<{
 	localList?.focus();
 	press(localList ?? local, 'ArrowDown', 40);
 	press(localList ?? local, 'ArrowDown', 40, true);
-	session.set([job('20', 'Transferring', { done_bytes: '412000', total_bytes: '1500000' }), job('21', 'WaitingDecision', { direction: 'Download', waiting_file: 'report-q3.xlsx', label: 'report-q3.xlsx' }), job('22', 'Complete', { label: 'Screenshots', done_bytes: '1000000' })]);
+	const into = { root: '2', path: 'Users/abass/Downloads' };
+	session.set([
+		job('20', 'Transferring', { label: 'vnilink-demo.mov', files_total: '1', done_bytes: '412000', total_bytes: '1500000', destination: { ...into, name: 'vnilink-demo.mov' } }),
+		job('21', 'WaitingDecision', { direction: 'Download', waiting_file: 'notes.md', label: 'notes.md', files_total: '1', destination: { root: '0', path: 'Users/hammed/Downloads', name: 'notes.md' } }),
+		job('22', 'Complete', { label: 'Screenshots', done_bytes: '1000000', destination: { ...into, name: 'Screenshots' } }),
+	]);
 	view.element.querySelector<HTMLButtonElement>('.files-status-transfers')?.click();
 	return {
 		dispose: () => {

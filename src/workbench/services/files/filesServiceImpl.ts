@@ -10,7 +10,7 @@ import { ILogService } from '../../../platform/log/common/log.js';
 import type { FilesPane, FolderLocation } from '../../../platform/state/common/uiState.js';
 import { activeControllerSession } from '../devices/controllerSession.js';
 import { IDeviceService } from '../devices/deviceService.js';
-import { IFilesService, isUnfinished, type FilesFailure, type FilesItem, type FilesListing, type FilesRoute, type IFilesDisk, type IFilesSession } from './filesService.js';
+import { IFilesService, isUnfinished, type FilesFailure, type FilesItem, type FilesListing, type IFilesDisk, type IFilesSession } from './filesService.js';
 
 /** The engine's largest listing; past it a folder reports `truncated`. */
 const MAX_LISTED = 20_000;
@@ -139,7 +139,6 @@ class FilesSession extends Disposable implements IFilesSession {
 	private readonly endedEmitter = this._register(new Emitter<void>());
 	public readonly onDidEnd = this.endedEmitter.event;
 	private readonly byId = new Map<string, FileJob>();
-	private readonly routes = new Map<string, FilesRoute>();
 	private channel: FilesChannel | undefined;
 	private holders = 1;
 	private endedValue = false;
@@ -157,10 +156,6 @@ class FilesSession extends Disposable implements IFilesSession {
 
 	public get jobs(): readonly FileJob[] {
 		return [...this.byId.values()].sort((a, b) => Number(BigInt(a.id) - BigInt(b.id)));
-	}
-
-	public routeOf(jobId: string): FilesRoute | undefined {
-		return this.routes.get(jobId);
 	}
 
 	public get ended(): boolean {
@@ -235,9 +230,6 @@ class FilesSession extends Disposable implements IFilesSession {
 				dstRoot: to.root,
 				dstPath: to.path,
 			});
-			if (isFileJob(job)) {
-				this.routes.set(job.id, { from, source: item.folder, destination: to });
-			}
 			this.adopt(job);
 		}
 	}
@@ -257,7 +249,6 @@ class FilesSession extends Disposable implements IFilesSession {
 	public async forget(jobId: string): Promise<void> {
 		await this.ask({ type: 'forget', jobId });
 		this.byId.delete(jobId);
-		this.routes.delete(jobId);
 		this.jobsChanged.fire();
 	}
 

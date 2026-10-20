@@ -10,7 +10,7 @@ import type { DeviceSummary } from '../../services/devices/deviceService.js';
 import { IFilesService, type FilesFailure, type FilesItem, type IFilesSession } from '../../services/files/filesService.js';
 import type { WorkbenchTab } from '../../services/tabs/tabService.js';
 import { FilesPaneView } from './filesPane.js';
-import { FilesTransfers } from './filesTransfers.js';
+import { FilesActivity, type TransferPlace } from './filesActivity.js';
 import { folderName, formatSize } from './filesText.js';
 
 /** This computer, as file managers call it. */
@@ -21,7 +21,8 @@ function thisComputer(): string {
 /**
  * Files with one paired computer: this computer's disk and the other's side
  * by side, a copy button between them that names what it will copy and
- * where, and the transfers below. One tab per computer.
+ * where. A transfer shows in the folder it lands in; the status bar sums
+ * them up and opens the list of them all. One tab per computer.
  */
 export class FilesView extends Disposable implements WorkbenchTab {
 	public static readonly PREFIX = 'files:';
@@ -33,7 +34,7 @@ export class FilesView extends Disposable implements WorkbenchTab {
 	private readonly remote: FilesPaneView;
 	private readonly copyButton: HTMLButtonElement;
 	private readonly copyText: HTMLElement;
-	private readonly transfers: FilesTransfers;
+	private readonly activity: FilesActivity;
 	private readonly selection: HTMLElement;
 	private readonly sessionListeners = this._register(new DisposableStore());
 	private session: IFilesSession | undefined;
@@ -65,14 +66,20 @@ export class FilesView extends Disposable implements WorkbenchTab {
 		this.copyButton = append(column, $<HTMLButtonElement>('button.files-copy-button', { type: 'button' }));
 		this.copyText = append(column, $('p.files-copy-text', { 'aria-hidden': 'true' }));
 		append(panes, this.local.element, column, this.remote.element);
-		this.transfers = this._register(instantiationService.createInstance(FilesTransfers, () => ({
+		this.activity = this._register(instantiationService.createInstance(FilesActivity, () => ({
 			local: { computer: this.local.computer, places: this.local.knownPlaces },
 			remote: { computer: this.remote.computer, places: this.remote.knownPlaces },
 		})));
-		append(this.element, this.transfers.panel);
 		const status = append(this.element, $('footer.files-status'));
 		this.selection = append(status, $('span.files-status-selection', { role: 'status' }));
-		append(status, $('span.files-status-space'), this.transfers.summary, this.transfers.decision);
+		append(status, $('span.files-status-space'), this.activity.decision, this.activity.summary);
+		append(this.element, this.activity.list);
+		this._register(this.activity.onDidChange(() => {
+			this.showArrivals();
+		}));
+		this._register(this.activity.onDidRequestShow(place => {
+			void this.showPlace(place);
+		}));
 		for (const pane of [this.local, this.remote]) {
 			this._register(pane.onDidActivate(() => {
 				this.activate(pane.side);
@@ -81,7 +88,11 @@ export class FilesView extends Disposable implements WorkbenchTab {
 				this.update();
 			}));
 			this._register(pane.onDidNavigate(() => {
+				pane.setArrivals(this.activity.arrivals(pane.side, pane.folder));
 				this.update();
+			}));
+			this._register(pane.onDidRequestTransfer(request => {
+				void this.activity.act(request);
 			}));
 			this._register(pane.onDidRequestCopy(() => {
 				this.activate(pane.side);
@@ -159,7 +170,7 @@ export class FilesView extends Disposable implements WorkbenchTab {
 		this.sessionListeners.clear();
 		this.session?.release();
 		this.session = session;
-		this.transfers.setSession(session);
+		this.activity.setSession(session);
 		this.landed.clear();
 		for (const job of session.jobs) {
 			this.landed.set(job.id, { state: job.state, files: Number(job.files_done) });
@@ -189,13 +200,32 @@ export class FilesView extends Disposable implements WorkbenchTab {
 				continue;
 			}
 			const pane = job.direction === 'Upload' ? this.remote : this.local;
-			const destination = session.routeOf(job.id)?.destination;
+			const destination = job.destination;
 			const folder = pane.folder;
 			if (destination && folder && (folder.root !== destination.root || !(folder.path === destination.path || folder.path.startsWith(destination.path ? `${destination.path}/` : '')))) {
 				continue;
 			}
 			this.scheduleRefresh(pane);
 		}
+	}
+
+	/** Each pane shows the transfers landing in its folder. */
+	private showArrivals(): void {
+		for (const pane of [this.local, this.remote]) {
+			pane.setArrivals(this.activity.arrivals(pane.side, pane.folder));
+		}
+	}
+
+	/** Opens the folder a transfer lands in, at its row. */
+	private async showPlace(place: TransferPlace): Promise<void> {
+		const pane = place.side === 'local' ? this.local : this.remote;
+		const folder = pane.folder;
+		const there = folder?.root === place.folder.root && folder.path === place.folder.path;
+		if (!there && !await pane.navigate(place.folder)) {
+			return;
+		}
+		this.activate(place.side);
+		pane.reveal(place.name);
 	}
 
 	/** Lists `pane`'s folder again now, then at most once a second, with a last listing for what landed in between. */
@@ -260,11 +290,10 @@ export class FilesView extends Disposable implements WorkbenchTab {
 		if (!session || session.ended || !items.length) {
 			return;
 		}
-		this.transfers.setOpen(true);
 		try {
 			await session.copy(from, items, into);
 		} catch {
-			// The transfers list shows what was refused; a lost connection shows in the pane.
+			// The status bar's list shows what was refused; a lost connection shows in the pane.
 		}
 	}
 
@@ -296,6 +325,5 @@ export class FilesView extends Disposable implements WorkbenchTab {
 			: truncated
 				? nls.localize('files.truncatedSummary', '{0}: showing the first {1} items', source.computer, shown)
 				: nls.localize('files.shownSummary', '{0}: {1} items', source.computer, shown);
-		this.transfers.render();
 	}
 }

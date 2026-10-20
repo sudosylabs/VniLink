@@ -39,13 +39,6 @@ export interface FilesItem {
 	readonly name: string;
 }
 
-/** Where a transfer this session started goes: from a folder on one side to a folder on the other. */
-export interface FilesRoute {
-	readonly from: FilesPane;
-	readonly source: FolderLocation;
-	readonly destination: FolderLocation;
-}
-
 /**
  * Files with one paired computer: both disks and the transfers between
  * them. Shared by every Files tab for that computer.
@@ -54,11 +47,9 @@ export interface IFilesSession {
 	readonly deviceId: string;
 	readonly local: IFilesDisk;
 	readonly remote: IFilesDisk;
-	/** This connection's transfers, oldest first. */
+	/** This connection's transfers, oldest first. Each names where it lands. */
 	readonly jobs: readonly FileJob[];
 	readonly onDidChangeJobs: Event<void>;
-	/** Where a transfer goes, when this session started it. */
-	routeOf(jobId: string): FilesRoute | undefined;
 	/** Whether the connection to the other computer has ended. */
 	readonly ended: boolean;
 	readonly onDidEnd: Event<void>;

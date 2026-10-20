@@ -16,13 +16,14 @@ import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '..
 import { isMacintosh } from '../../../base/common/platform.js';
 import { IContextMenuService } from '../../../platform/contextview/browser/contextView.js';
 import { engineErrorCategory } from '../../../platform/engine/common/engine.js';
-import type { FileEntry, FileFolderKind, FilePlaces } from '../../../platform/engine/common/files.js';
+import type { FileConflictChoice, FileEntry, FileFolderKind, FilePlaces } from '../../../platform/engine/common/files.js';
 import { filesLastFolderKey, type FilesPane, type FolderLocation } from '../../../platform/state/common/uiState.js';
 import { defaultInputBoxStyles, defaultListStyles } from '../../../platform/theme/browser/defaultStyles.js';
 import { IDialogService } from '../../services/dialogs/dialogService.js';
 import type { FilesItem, IFilesDisk } from '../../services/files/filesService.js';
 import { IUIStateService } from '../../services/uiState/uiStateService.js';
-import { entrySize, folderName, formatModified, itemCount } from './filesText.js';
+import { renderRing, type FilesArrival, type TransferRequest } from './filesActivity.js';
+import { entrySize, folderName, formatModified, formatSize, itemCount } from './filesText.js';
 
 /** Rows draw their own focus and selection from files.css; the list generates no style rules the CSP would refuse. */
 const cssStyleController: IStyleController = {
@@ -32,6 +33,28 @@ const cssStyleController: IStyleController = {
 };
 
 const ROW_HEIGHT = 26;
+
+const DECISION_HEIGHT = 40;
+
+/**
+ * One row of a pane: an entry of the folder; a transfer arriving under a
+ * name the folder doesn't have yet; or, under either, the question a name
+ * already there raises. Only entries are selected, renamed or dragged.
+ */
+interface PaneRow {
+	readonly entry: FileEntry | undefined;
+	readonly arrival: FilesArrival | undefined;
+	readonly decision: boolean;
+}
+
+/** Names never hold NUL, so these ids can't meet an entry's. */
+function rowId(row: PaneRow): string {
+	return row.entry?.name ?? `\0${row.decision ? 'decision' : 'arriving'}:${row.arrival?.jobId ?? ''}`;
+}
+
+function rowName(row: PaneRow): string {
+	return row.entry?.name ?? row.arrival?.name ?? '';
+}
 
 type SortColumn = 'name' | 'modified' | 'size';
 
@@ -100,17 +123,17 @@ interface RowTemplate {
 	readonly editing: MutableDisposable<InputBox>;
 }
 
-class RowDelegate implements IListVirtualDelegate<FileEntry> {
-	public getHeight(): number {
-		return ROW_HEIGHT;
+class RowDelegate implements IListVirtualDelegate<PaneRow> {
+	public getHeight(row: PaneRow): number {
+		return row.decision ? DECISION_HEIGHT : ROW_HEIGHT;
 	}
 
-	public getTemplateId(): string {
-		return 'file';
+	public getTemplateId(row: PaneRow): string {
+		return row.decision ? 'decision' : 'file';
 	}
 }
 
-class RowRenderer implements IListRenderer<FileEntry, RowTemplate> {
+class RowRenderer implements IListRenderer<PaneRow, RowTemplate> {
 	public readonly templateId = 'file';
 
 	constructor(private readonly pane: FilesPaneView) { }
@@ -125,12 +148,26 @@ class RowRenderer implements IListRenderer<FileEntry, RowTemplate> {
 		return { row: row.root, icon: row.icon, name: row.name, modified: row.modified, size: row.size, editing: new MutableDisposable() };
 	}
 
-	public renderElement(entry: FileEntry, _index: number, template: RowTemplate): void {
-		template.icon.replaceChildren(renderIcon(entry.kind === 'dir' ? Icons.files : Icons.file, { variant: entry.kind === 'dir' ? 'filled' : 'outlined' }));
-		template.modified.textContent = formatModified(Number(entry.mtimeMs), new Date());
-		template.size.textContent = entrySize(entry);
-		template.row.dataset.kind = entry.kind;
-		if (this.pane.editing === entry.name) {
+	public renderElement(row: PaneRow, _index: number, template: RowTemplate): void {
+		const { entry, arrival } = row;
+		const ring = arrival && arrival.tone !== 'landed';
+		template.row.classList.toggle('arriving', !entry);
+		if (arrival) {
+			template.row.dataset.tone = arrival.tone;
+		} else {
+			delete template.row.dataset.tone;
+		}
+		template.row.dataset.kind = entry?.kind ?? (arrival?.folder ? 'dir' : 'file');
+		const folder = template.row.dataset.kind === 'dir';
+		template.icon.replaceChildren(ring ? renderRing(arrival.progress, arrival.tone) : renderIcon(folder ? Icons.files : Icons.file, { variant: folder ? 'filled' : 'outlined' }));
+		template.modified.textContent = ring || !entry ? arrival?.status ?? '' : formatModified(Number(entry.mtimeMs), new Date());
+		template.modified.title = ring ? arrival.status : '';
+		template.size.textContent = entry ? entrySize(entry) : folder ? '—' : formatSize(arrival?.bytes ?? 0);
+		if (!entry) {
+			template.editing.clear();
+			template.name.textContent = arrival?.name ?? '';
+			template.name.title = arrival?.name ?? '';
+		} else if (this.pane.editing === entry.name) {
 			template.name.replaceChildren();
 			template.editing.value = this.pane.renameBox(template.name, entry);
 		} else {
@@ -140,7 +177,7 @@ class RowRenderer implements IListRenderer<FileEntry, RowTemplate> {
 		}
 	}
 
-	public disposeElement(_entry: FileEntry, _index: number, template: RowTemplate): void {
+	public disposeElement(_row: PaneRow, _index: number, template: RowTemplate): void {
 		template.editing.clear();
 	}
 
@@ -149,27 +186,93 @@ class RowRenderer implements IListRenderer<FileEntry, RowTemplate> {
 	}
 }
 
-class PaneDragAndDrop implements IListDragAndDrop<FileEntry> {
+interface DecisionTemplate {
+	readonly text: HTMLElement;
+	readonly same: HTMLInputElement;
+	readonly sameLabel: HTMLElement;
+	readonly buttons: readonly (readonly [HTMLButtonElement, FileConflictChoice])[];
+	readonly listeners: DisposableStore;
+}
+
+/** The question under a name already there, answered in place. */
+class DecisionRenderer implements IListRenderer<PaneRow, DecisionTemplate> {
+	public readonly templateId = 'decision';
+
 	constructor(private readonly pane: FilesPaneView) { }
 
-	public getDragURI(entry: FileEntry): string | null {
-		return entry.name;
+	public renderTemplate(container: HTMLElement): DecisionTemplate {
+		const root = append(container, $('.files-decision', { role: 'group' }));
+		const text = append(root, $('span.files-decision-text'));
+		const sameLabel = append(root, $('label.files-decision-same'));
+		const same = append(sameLabel, $<HTMLInputElement>('input', { type: 'checkbox' }));
+		append(sameLabel, $('span', undefined, nls.localize('files.sameForAll', 'Same for the others')));
+		const buttons = ([['skip', nls.localize('files.skip', 'Skip')], ['keepBoth', nls.localize('files.keepBoth', 'Keep Both')], ['replace', nls.localize('files.replace', 'Replace')]] as const).map(([choice, label]) => {
+			const button = append(root, $<HTMLButtonElement>('button.files-text-button', { type: 'button' }));
+			button.textContent = label;
+			button.classList.toggle('primary', choice === 'replace');
+			return [button, choice] as const;
+		});
+		return { text, same, sameLabel, buttons, listeners: new DisposableStore() };
 	}
 
-	public getDragLabel(entries: FileEntry[]): string | undefined {
+	public renderElement(row: PaneRow, _index: number, template: DecisionTemplate): void {
+		template.listeners.clear();
+		const arrival = row.arrival;
+		const decision = arrival?.decision;
+		if (!arrival || !decision) {
+			return;
+		}
+		template.text.textContent = decision.text;
+		template.text.title = decision.text;
+		template.text.parentElement?.setAttribute('aria-label', decision.text);
+		template.sameLabel.hidden = !decision.many;
+		template.same.checked = false;
+		for (const [button, choice] of template.buttons) {
+			// The list must not take the press as choosing the row.
+			template.listeners.add(addDisposableListener(button, EventType.MOUSE_DOWN, event => {
+				event.stopPropagation();
+			}));
+			template.listeners.add(addDisposableListener(button, EventType.CLICK, () => {
+				this.pane.requestTransfer({ jobId: arrival.jobId, choice, applyToRemaining: decision.many && template.same.checked });
+			}));
+		}
+		template.listeners.add(addDisposableListener(template.sameLabel, EventType.MOUSE_DOWN, event => {
+			event.stopPropagation();
+		}));
+	}
+
+	public disposeElement(_row: PaneRow, _index: number, template: DecisionTemplate): void {
+		template.listeners.clear();
+	}
+
+	public disposeTemplate(template: DecisionTemplate): void {
+		template.listeners.dispose();
+	}
+}
+
+class PaneDragAndDrop implements IListDragAndDrop<PaneRow> {
+	constructor(private readonly pane: FilesPaneView) { }
+
+	public getDragURI(row: PaneRow): string | null {
+		return row.entry?.name ?? null;
+	}
+
+	public getDragLabel(rows: PaneRow[]): string | undefined {
+		const entries = rows.flatMap(row => row.entry ? [row.entry] : []);
 		return entries.length === 1 ? entries[0].name : itemCount(entries.length);
 	}
 
 	public onDragStart(data: IDragAndDropData): void {
-		const entries = data.getData() as FileEntry[];
+		const entries = (data.getData() as PaneRow[]).flatMap(row => row.entry ? [row.entry] : []);
 		const folder = this.pane.folder;
-		dragging = folder ? { pane: this.pane, items: entries.map(entry => ({ folder, name: entry.name })) } : undefined;
+		dragging = folder && entries.length ? { pane: this.pane, items: entries.map(entry => ({ folder, name: entry.name })) } : undefined;
 	}
 
-	public onDragOver(_data: IDragAndDropData, target: FileEntry | undefined, targetIndex: number | undefined): boolean | IListDragOverReaction {
+	public onDragOver(_data: IDragAndDropData, row: PaneRow | undefined, targetIndex: number | undefined): boolean | IListDragOverReaction {
 		if (!dragging || dragging.pane === this.pane || !this.pane.folder) {
 			return false;
 		}
+		const target = row?.entry;
 		const into = target?.kind === 'dir' ? target : undefined;
 		this.pane.showDrop(dragging.items.length, into?.name);
 		return { accept: true, effect: { type: ListDragOverEffectType.Copy }, feedback: into && targetIndex !== undefined ? [targetIndex] : [-1] };
@@ -179,10 +282,11 @@ class PaneDragAndDrop implements IListDragAndDrop<FileEntry> {
 		this.pane.showDrop(0, undefined);
 	}
 
-	public drop(_data: IDragAndDropData, target: FileEntry | undefined): void {
+	public drop(_data: IDragAndDropData, row: PaneRow | undefined): void {
 		const source = dragging;
 		this.pane.showDrop(0, undefined);
 		const folder = this.pane.folder;
+		const target = row?.entry;
 		if (source && source.pane !== this.pane && folder) {
 			this.pane.dropped(source.items, target?.kind === 'dir' ? child(folder, target.name) : folder);
 		}
@@ -218,6 +322,9 @@ export class FilesPaneView extends Disposable {
 	public readonly onDidDrop = this.droppedItems.event;
 	private readonly navigated = this._register(new Emitter<void>());
 	public readonly onDidNavigate = this.navigated.event;
+	private readonly transferRequested = this._register(new Emitter<TransferRequest>());
+	/** Fires for something done to a transfer from its row. */
+	public readonly onDidRequestTransfer = this.transferRequested.event;
 	private readonly nameButton: HTMLButtonElement;
 	private readonly crumbs: HTMLElement;
 	private readonly crumbScroll: DomScrollableElement;
@@ -230,7 +337,7 @@ export class FilesPaneView extends Disposable {
 	private readonly filterButton: HTMLButtonElement;
 	private readonly sortButtons = new Map<SortColumn, HTMLButtonElement>();
 	private readonly listContainer: HTMLElement;
-	private readonly list: List<FileEntry>;
+	private readonly list: List<PaneRow>;
 	private readonly state: HTMLElement;
 	private readonly stateTitle: HTMLElement;
 	private readonly stateBody: HTMLElement;
@@ -241,7 +348,10 @@ export class FilesPaneView extends Disposable {
 	private places: FilePlaces | undefined;
 	private current: FolderLocation | undefined;
 	private entries: readonly FileEntry[] = [];
+	/** The entries shown, sorted, without the transfers among them. */
 	private shown: FileEntry[] = [];
+	private rows: PaneRow[] = [];
+	private arrivals: readonly FilesArrival[] = [];
 	private readonly back: FolderLocation[] = [];
 	private readonly forward: FolderLocation[] = [];
 	private revision = 0;
@@ -309,21 +419,33 @@ export class FilesPaneView extends Disposable {
 			}));
 		}
 		this.listContainer = append(this.element, $('.files-list'));
-		this.list = this._register(new List('Files', this.listContainer, new RowDelegate(), [new RowRenderer(this)], {
+		this.list = this._register(new List('Files', this.listContainer, new RowDelegate(), [new RowRenderer(this), new DecisionRenderer(this)], {
 			...defaultListStyles,
 			styleController: () => cssStyleController,
 			setRowLineHeight: false,
 			paddingTop: 4,
 			paddingBottom: 8,
 			multipleSelectionSupport: true,
-			identityProvider: { getId: entry => entry.name },
-			keyboardNavigationLabelProvider: { getKeyboardNavigationLabel: entry => this.editing === undefined ? entry.name : undefined },
+			identityProvider: { getId: rowId },
+			keyboardNavigationLabelProvider: { getKeyboardNavigationLabel: row => this.editing === undefined && !row.decision ? rowName(row) : undefined },
 			typeNavigationEnabled: true,
 			dnd: new PaneDragAndDrop(this),
 			accessibilityProvider: {
-				getAriaLabel: entry => entry.kind === 'dir'
-					? nls.localize('files.folderRow', '{0}, folder, modified {1}', entry.name, formatModified(Number(entry.mtimeMs), new Date()))
-					: nls.localize('files.fileRow', '{0}, {1}, modified {2}', entry.name, entrySize(entry), formatModified(Number(entry.mtimeMs), new Date())),
+				getAriaLabel: row => {
+					const { entry, arrival } = row;
+					if (row.decision && arrival?.decision) {
+						return nls.localize('files.decisionRow', '{0}. Press Enter to choose.', arrival.decision.text);
+					}
+					if (arrival && arrival.tone !== 'landed') {
+						return nls.localize('files.arrivingRow', '{0}, arriving, {1}', arrival.name, arrival.status);
+					}
+					if (!entry) {
+						return arrival?.name ?? '';
+					}
+					return entry.kind === 'dir'
+						? nls.localize('files.folderRow', '{0}, folder, modified {1}', entry.name, formatModified(Number(entry.mtimeMs), new Date()))
+						: nls.localize('files.fileRow', '{0}, {1}, modified {2}', entry.name, entrySize(entry), formatModified(Number(entry.mtimeMs), new Date()));
+				},
 				getWidgetAriaLabel: () => nls.localize('files.listLabel', 'Files on {0}', computer),
 			},
 		}));
@@ -376,7 +498,13 @@ export class FilesPaneView extends Disposable {
 		this._register(addDisposableListener(this.element, EventType.MOUSE_DOWN, () => {
 			this.activated.fire();
 		}));
-		this._register(this.list.onDidChangeSelection(() => {
+		this._register(this.list.onDidChangeSelection(event => {
+			// A transfer's rows are not things in the folder to select.
+			const entries = event.indexes.filter(index => this.rows[index]?.entry !== undefined);
+			if (entries.length !== event.indexes.length) {
+				this.list.setSelection(entries, event.browserEvent);
+				return;
+			}
 			this.changedSelection.fire();
 		}));
 		// As in the system's file lists, the selection follows the arrow
@@ -403,10 +531,15 @@ export class FilesPaneView extends Disposable {
 		}));
 		this._register(this.list.onContextMenu(event => {
 			event.browserEvent.preventDefault();
+			const anchor = event.anchor instanceof HTMLElement ? event.anchor : { x: event.anchor.posx, y: event.anchor.posy };
+			if (event.element && !event.element.entry) {
+				this.showTransferMenu(anchor, event.element);
+				return;
+			}
 			if (event.element && event.index !== undefined && !this.list.getSelection().includes(event.index)) {
 				this.list.setSelection([event.index]);
 			}
-			this.showMenu(event.anchor instanceof HTMLElement ? event.anchor : { x: event.anchor.posx, y: event.anchor.posy }, event.element);
+			this.showMenu(anchor, event.element?.entry);
 		}));
 		this._register(this.list.onKeyDown(event => {
 			this.onKey(new StandardKeyboardEvent(event));
@@ -435,12 +568,12 @@ export class FilesPaneView extends Disposable {
 	/** Selected entries, as items to copy. */
 	public selectedItems(): FilesItem[] {
 		const folder = this.current;
-		return folder ? this.list.getSelectedElements().map(entry => ({ folder, name: entry.name })) : [];
+		return folder ? this.selectedEntries().map(entry => ({ folder, name: entry.name })) : [];
 	}
 
 	/** Entries shown, and the selection's count and file bytes. */
 	public summary(): { readonly shown: number; readonly selected: number; readonly bytes: number; readonly truncated: boolean } {
-		const selected = this.list.getSelectedElements();
+		const selected = this.selectedEntries();
 		return { shown: this.shown.length, selected: selected.length, bytes: selected.reduce((sum, entry) => sum + (entry.kind === 'file' ? Number(entry.size) : 0), 0), truncated: this.truncated };
 	}
 
@@ -607,15 +740,83 @@ export class FilesPaneView extends Disposable {
 		return button;
 	}
 
-	/** Paints the visible entries: hidden files and the filter applied, sorted. */
+	/** Transfers landing here, by the name each lands under; the pane shows them among its entries. */
+	public setArrivals(arrivals: readonly FilesArrival[]): void {
+		const shape = (list: readonly FilesArrival[]) => list.map(arrival => `${arrival.jobId}:${arrival.name}:${arrival.tone}:${String(arrival.decision !== undefined)}`).join('\n');
+		const moved = shape(arrivals) !== shape(this.arrivals);
+		this.arrivals = arrivals;
+		if (moved) {
+			this.show();
+			return;
+		}
+		// Progress alone: only the transfers' own rows are drawn again.
+		this.rows.forEach((row, index) => {
+			const arrival = row.arrival && arrivals.find(candidate => candidate.jobId === row.arrival?.jobId);
+			if (arrival && arrival !== row.arrival) {
+				this.rows[index] = { ...row, arrival };
+				this.list.splice(index, 1, [this.rows[index]]);
+			}
+		});
+	}
+
+	/** Goes to the row named `name`: selects an entry, or focuses a transfer's question. */
+	public reveal(name: string): void {
+		const index = this.rows.findIndex(row => rowName(row) === name && !row.decision);
+		if (index < 0) {
+			return;
+		}
+		const question = this.rows[index + 1]?.decision ? index + 1 : index;
+		this.list.setFocus([question]);
+		this.list.setSelection(this.rows[index].entry ? [index] : []);
+		this.list.reveal(question);
+		this.list.domFocus();
+	}
+
+	/** Passes on what was done to a transfer from its row. */
+	public requestTransfer(request: TransferRequest): void {
+		this.transferRequested.fire(request);
+	}
+
+	private selectedEntries(): FileEntry[] {
+		return this.list.getSelectedElements().flatMap(row => row.entry ? [row.entry] : []);
+	}
+
+	private matches(name: string): boolean {
+		return (this.showHidden || !name.startsWith('.')) && (!this.filter || name.toLocaleLowerCase().includes(this.filter));
+	}
+
+	/**
+	 * Paints the visible entries, hidden files and the filter applied,
+	 * sorted, with the transfers landing here among them: one arriving
+	 * under a name not here yet takes its sorted place, and a question
+	 * about a name already here sits under it.
+	 */
 	private show(entering = false): void {
-		const visible = this.entries.filter(entry => (this.showHidden || !entry.name.startsWith('.')) && (!this.filter || entry.name.toLocaleLowerCase().includes(this.filter)));
-		this.shown = sortEntries(visible, this.sort, this.descending);
-		const selected = new Set(entering ? [] : this.list.getSelectedElements().map(entry => entry.name));
-		this.list.splice(0, this.list.length, this.shown);
-		this.list.setSelection(this.shown.flatMap((entry, index) => selected.has(entry.name) ? [index] : []));
+		this.shown = sortEntries(this.entries.filter(entry => this.matches(entry.name)), this.sort, this.descending);
+		const names = new Set(this.entries.map(entry => entry.name));
+		const arriving = new Map<string, FilesArrival>();
+		const decorating = new Map<string, FilesArrival>();
+		for (const arrival of this.arrivals) {
+			if (!this.matches(arrival.name)) {
+				continue;
+			}
+			(names.has(arrival.name) ? decorating : arriving).set(arrival.name, arrival);
+		}
+		// Not there yet: placed as an entry of its size, modified now, would be.
+		const placeholders = [...arriving.values()].map((arrival): FileEntry => ({ name: arrival.name, kind: arrival.folder ? 'dir' : 'file', size: String(arrival.bytes), mtimeMs: String(Date.now()), token: { dev: null, ino: null } }));
+		const placed = new Set(placeholders);
+		this.rows = sortEntries([...this.shown, ...placeholders], this.sort, this.descending).flatMap((entry): PaneRow[] => {
+			const arrival = placed.has(entry) ? arriving.get(entry.name) : decorating.get(entry.name);
+			// A single file meeting its namesake leaves that file as it is: only the question is new.
+			const decorate = arrival && !(arrival.decision && !arrival.folder && !placed.has(entry));
+			const row: PaneRow = { entry: placed.has(entry) ? undefined : entry, arrival: decorate ? arrival : undefined, decision: false };
+			return arrival?.decision ? [row, { entry: undefined, arrival, decision: true }] : [row];
+		});
+		const selected = new Set(entering ? [] : this.selectedEntries().map(entry => entry.name));
+		this.list.splice(0, this.list.length, this.rows);
+		this.list.setSelection(this.rows.flatMap((row, index) => row.entry && selected.has(row.entry.name) ? [index] : []));
 		if (entering) {
-			this.list.setFocus(this.shown.length ? [0] : []);
+			this.list.setFocus(this.rows.length ? [0] : []);
 			this.list.scrollTop = 0;
 		}
 		for (const [column, button] of this.sortButtons) {
@@ -623,9 +824,9 @@ export class FilesPaneView extends Disposable {
 			button.classList.toggle('sorted', column === this.sort);
 			button.classList.toggle('descending', column === this.sort && this.descending);
 		}
-		if (this.current && !this.shown.length && this.state.hidden) {
+		if (this.current && !this.rows.length && this.state.hidden) {
 			this.showState(this.filter ? nls.localize('files.noMatch', 'Nothing here matches “{0}”.', this.filterBox.value) : nls.localize('files.empty', 'This folder is empty.'), '');
-		} else if (this.shown.length && this.disk) {
+		} else if (this.rows.length && this.disk) {
 			this.state.hidden = true;
 		}
 		this.listContainer.dataset.truncated = String(this.truncated);
@@ -743,9 +944,51 @@ export class FilesPaneView extends Disposable {
 		}
 	}
 
-	private open(entry: FileEntry): void {
-		if (entry.kind === 'dir' && this.current) {
+	/** Opens a folder; on a transfer's row, does what it needs, such as answering its question. */
+	private open(row: PaneRow): void {
+		const entry = row.entry;
+		if (entry?.kind === 'dir' && this.current) {
 			void this.navigate(child(this.current, entry.name));
+			return;
+		}
+		const arrival = row.arrival;
+		if (!entry && arrival?.action && (row.decision || arrival.action !== 'cancel')) {
+			this.requestTransfer({ jobId: arrival.jobId, action: arrival.action });
+		} else if (entry && row.arrival?.decision) {
+			this.requestTransfer({ jobId: row.arrival.jobId, action: 'choose' });
+		}
+	}
+
+	/** A transfer's row offers what can be done about the transfer. */
+	private showTransferMenu(anchor: HTMLElement | { x: number; y: number }, row: PaneRow): void {
+		const arrival = row.arrival;
+		if (!arrival) {
+			return;
+		}
+		const labels = {
+			choose: nls.localize('files.chooseAction', 'Choose…'),
+			cancel: nls.localize('files.cancelTransferAction', 'Cancel Transfer'),
+			resume: nls.localize('files.resume', 'Resume'),
+			retry: nls.localize('files.tryAgainTransfer', 'Try Again'),
+		};
+		const actions: IAction[] = [];
+		if (arrival.action) {
+			const action = arrival.action;
+			actions.push(toAction({
+				id: `files.transfer.${action}`, label: labels[action], run: () => {
+					this.requestTransfer({ jobId: arrival.jobId, action });
+				}
+			}));
+		}
+		if (arrival.action === 'choose' || arrival.action === 'resume' || arrival.action === 'retry') {
+			actions.push(toAction({
+				id: 'files.transfer.cancel', label: labels.cancel, run: () => {
+					this.requestTransfer({ jobId: arrival.jobId, action: 'cancel' });
+				}
+			}));
+		}
+		if (actions.length) {
+			this.contextMenuService.showContextMenu({ getAnchor: () => anchor, getActions: () => actions });
 		}
 	}
 
@@ -783,13 +1026,13 @@ export class FilesPaneView extends Disposable {
 	}
 
 	private showMenu(anchor: HTMLElement | { x: number; y: number }, entry: FileEntry | undefined): void {
-		const selection = this.list.getSelectedElements();
+		const selection = this.selectedEntries();
 		const actions: IAction[] = [];
 		if (entry) {
 			if (entry.kind === 'dir' && selection.length === 1) {
 				actions.push(toAction({
 					id: 'files.open', label: nls.localize('files.openFolder', 'Open'), run: () => {
-						this.open(entry);
+						this.open({ entry, arrival: undefined, decision: false });
 					}
 				}));
 			}
@@ -829,13 +1072,13 @@ export class FilesPaneView extends Disposable {
 	}
 
 	private startRename(): void {
-		const entry = this.list.getSelectedElements().at(0);
-		if (!entry) {
+		const entry = this.selectedEntries().at(0);
+		const index = this.rows.findIndex(row => row.entry === entry);
+		if (!entry || index < 0) {
 			return;
 		}
 		this.editing = entry.name;
-		const index = this.shown.indexOf(entry);
-		this.list.splice(index, 1, [entry]);
+		this.list.splice(index, 1, [this.rows[index]]);
 		this.list.reveal(index);
 	}
 
@@ -853,7 +1096,7 @@ export class FilesPaneView extends Disposable {
 		}
 		await this.refresh();
 		// The item keeps the selection under whichever name it now has.
-		const index = this.shown.findIndex(candidate => candidate.name === renamed);
+		const index = this.rows.findIndex(row => row.entry?.name === renamed);
 		if (index >= 0) {
 			this.list.setSelection([index]);
 			this.list.setFocus([index]);
@@ -874,7 +1117,7 @@ export class FilesPaneView extends Disposable {
 			return;
 		}
 		await this.refresh();
-		const index = this.shown.findIndex(entry => entry.name === name);
+		const index = this.rows.findIndex(row => row.entry?.name === name);
 		if (index >= 0) {
 			this.list.setSelection([index]);
 			this.startRename();
@@ -897,7 +1140,7 @@ export class FilesPaneView extends Disposable {
 
 	private async confirmDelete(): Promise<void> {
 		const folder = this.current;
-		const entries = this.list.getSelectedElements();
+		const entries = this.selectedEntries();
 		if (!folder || !this.disk || !entries.length) {
 			return;
 		}

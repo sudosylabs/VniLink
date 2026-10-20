@@ -95,9 +95,60 @@ function progress(done: number, total: number, rate: number | undefined): string
 	if (!rate || rate <= 0 || done >= total) {
 		return amount;
 	}
-	const seconds = Math.ceil((total - done) / rate);
-	const left = seconds < 60
+	return nls.localize('files.progressRate', '{0} · {1}/s · {2}', amount, formatSize(rate), timeLeft(total - done, rate) ?? '');
+}
+
+/** "1 min left", "20 s left". */
+function timeLeft(remaining: number, rate: number | undefined): string | undefined {
+	if (!rate || rate <= 0 || remaining <= 0) {
+		return undefined;
+	}
+	const seconds = Math.ceil(remaining / rate);
+	return seconds < 60
 		? nls.localize('files.secondsLeft', '{0} s left', seconds)
 		: nls.localize('files.minutesLeft', '{0} min left', Math.ceil(seconds / 60));
-	return nls.localize('files.progressRate', '{0} · {1}/s · {2}', amount, formatSize(rate), left);
+}
+
+/** How far a transfer is, 0 to 1. */
+export function jobProgress(job: FileJob): number {
+	const total = Number(job.total_bytes);
+	if (job.state === 'Complete') {
+		return 1;
+	}
+	return total > 0 ? Math.min(1, Number(job.done_bytes) / total) : 0;
+}
+
+/**
+ * A transfer in the few words its row in the destination folder has room
+ * for: "34% · 1 min left", "12 of 86 files", "Stopped at 61%".
+ */
+export function arrivalStatus(job: FileJob, rate: number | undefined): string {
+	const done = Number(job.done_bytes);
+	const percent = Math.floor(jobProgress(job) * 100);
+	const left = timeLeft(Number(job.total_bytes) - done, rate);
+	const files = Number(job.files_total);
+	switch (job.state) {
+		case 'Preparing':
+			return nls.localize('files.preparing', 'Checking files…');
+		case 'Serving':
+		case 'Transferring': {
+			if (done === 0) {
+				return nls.localize('files.waiting', 'Waiting to start');
+			}
+			const amount = files > 1
+				? nls.localize('files.filesOf', '{0} of {1} files', job.files_done, files)
+				: nls.localize('files.percent', '{0}%', percent);
+			return left ? nls.localize('files.amountLeft', '{0} · {1}', amount, left) : amount;
+		}
+		case 'WaitingDecision':
+			return nls.localize('files.decide', 'Needs your decision');
+		case 'Interrupted':
+			return done > 0 ? nls.localize('files.stoppedAt', 'Stopped at {0}%', percent) : nls.localize('files.stopped', 'Stopped');
+		case 'Cancelled':
+			return nls.localize('files.cancelled', 'Cancelled');
+		case 'Failed':
+			return job.error ?? nls.localize('files.failed', 'Couldn’t copy');
+		case 'Complete':
+			return nls.localize('files.justNow', 'Just now');
+	}
 }
