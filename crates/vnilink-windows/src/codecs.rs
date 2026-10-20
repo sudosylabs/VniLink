@@ -22,7 +22,8 @@ pub fn probe_video_codecs() -> vnilink::VideoCodecCaps {
             decode_high: encode,
             max_width: 4096,
             max_height: 4096,
-            hardware: encode,
+            // The Microsoft H.264 transform is a software encoder.
+            hardware: false,
             device: "mediafoundation".into(),
             chroma444: false,
             additional: Vec::new(),

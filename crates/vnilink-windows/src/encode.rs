@@ -15,13 +15,17 @@ use vnilink_media::{EncodeParams, EncodedSample, Error, RawFrame, VideoEncoder};
 use windows::core::Interface;
 #[cfg(windows)]
 use windows::Win32::Media::MediaFoundation::{
-    CODECAPI_AVEncVideoForceKeyFrame, ICodecAPI, IMFMediaType, IMFSample, IMFTransform,
-    MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Video, MFStartup,
-    MFVideoFormat_H264, MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFSTARTUP_NOSOCKET,
-    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER,
-    MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MF_E_TRANSFORM_NEED_MORE_INPUT, MF_LOW_LATENCY,
-    MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
-    MF_MT_MAX_KEYFRAME_SPACING, MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_SUBTYPE, MF_VERSION,
+    eAVEncCommonRateControlMode_CBR, eAVScenarioInfo_DisplayRemoting,
+    CODECAPI_AVEncCommonBufferSize, CODECAPI_AVEncCommonMeanBitRate,
+    CODECAPI_AVEncCommonRateControlMode, CODECAPI_AVEncVideoForceKeyFrame, CODECAPI_AVScenarioInfo,
+    ICodecAPI, IMFMediaType, IMFSample, IMFTransform, MFCreateMediaType, MFCreateMemoryBuffer,
+    MFCreateSample, MFMediaType_Video, MFNominalRange_16_235, MFStartup, MFVideoFormat_H264,
+    MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFVideoTransferMatrix_BT601,
+    MFSTARTUP_NOSOCKET, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
+    MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MF_E_TRANSFORM_NEED_MORE_INPUT,
+    MF_LOW_LATENCY, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
+    MF_MT_MAJOR_TYPE, MF_MT_MAX_KEYFRAME_SPACING, MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_SUBTYPE,
+    MF_MT_VIDEO_NOMINAL_RANGE, MF_MT_YUV_MATRIX, MF_VERSION,
 };
 #[cfg(windows)]
 use windows::Win32::System::Com::{
@@ -46,6 +50,9 @@ pub struct WindowsEncoder {
     provides_samples: bool,
     #[cfg(windows)]
     output_size: u32,
+    /// The frame rate the transform was opened for; it cannot change.
+    #[cfg(windows)]
+    frame_rate: u8,
 }
 
 // The transform is a COM pointer used through `&mut self` only, from the
@@ -113,9 +120,33 @@ impl WindowsEncoder {
             let _ = attributes.SetUINT32(&MF_LOW_LATENCY, 1);
         }
         let rate = u32::from(frame_rate.max(1));
+        if !camera {
+            // Constant bitrate with one picture of buffer, so no picture,
+            // a keyframe included, outruns the link; and the scenario this
+            // transform tunes for screens. Settings it does not know are
+            // left at its defaults.
+            let _ = set_codec_u32(
+                &transform,
+                &CODECAPI_AVEncCommonRateControlMode,
+                eAVEncCommonRateControlMode_CBR.0 as u32,
+            );
+            let _ = set_codec_u32(
+                &transform,
+                &CODECAPI_AVEncCommonBufferSize,
+                bitrate_bps / rate,
+            );
+            let _ = set_codec_u32(
+                &transform,
+                &CODECAPI_AVScenarioInfo,
+                eAVScenarioInfo_DisplayRemoting.0 as u32,
+            );
+        }
         let output = video_type(MFVideoFormat_H264, width, height, rate)?;
         output.SetUINT32(&MF_MT_AVG_BITRATE, bitrate_bps)?;
-        output.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, rate)?;
+        // A desktop viewer asks for a keyframe when it needs one; the
+        // periodic one is only a backstop, every ten seconds.
+        let spacing = if camera { rate } else { rate * 10 };
+        output.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, spacing)?;
         if camera {
             // Baseline excludes B pictures. Prefer the explicit constrained
             // profile; older transforms accept Baseline only. The camera
@@ -151,11 +182,50 @@ impl WindowsEncoder {
             height: u32::from(height),
             provides_samples,
             output_size,
+            frame_rate,
         })
     }
 }
 
 impl VideoEncoder for WindowsEncoder {
+    /// The mean bitrate changes while encoding; a new frame rate needs a
+    /// new transform.
+    fn retune(&mut self, bitrate_bps: u32, frame_rate: u8) -> Result<bool, Error> {
+        #[cfg(windows)]
+        {
+            if frame_rate != self.frame_rate || bitrate_bps == 0 {
+                return Ok(false);
+            }
+            let rate = u32::from(frame_rate.max(1));
+            // SAFETY: `transform` is this encoder's live transform, used from
+            // the thread that owns it, as every other call here.
+            let taken = unsafe {
+                set_codec_u32(
+                    &self.transform,
+                    &CODECAPI_AVEncCommonMeanBitRate,
+                    bitrate_bps,
+                )
+            }
+            .is_ok();
+            if taken {
+                // SAFETY: as above.
+                let _ = unsafe {
+                    set_codec_u32(
+                        &self.transform,
+                        &CODECAPI_AVEncCommonBufferSize,
+                        bitrate_bps / rate,
+                    )
+                };
+            }
+            Ok(taken)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (bitrate_bps, frame_rate);
+            Ok(false)
+        }
+    }
+
     fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
         if frame.width() as u32 != self.width || frame.height() as u32 != self.height {
             return Err(Error::InvalidFrame(
@@ -273,11 +343,21 @@ fn rejected(err: windows::core::Error) -> Error {
 /// (VT_UI4); a boolean variant is rejected by the Microsoft encoder.
 #[cfg(windows)]
 unsafe fn force_idr(transform: &IMFTransform) -> windows::core::Result<()> {
+    set_codec_u32(transform, &CODECAPI_AVEncVideoForceKeyFrame, 1)
+}
+
+/// Sets one `ICodecAPI` value of type ULONG (VT_UI4) on the transform.
+#[cfg(windows)]
+unsafe fn set_codec_u32(
+    transform: &IMFTransform,
+    key: &windows::core::GUID,
+    value: u32,
+) -> windows::core::Result<()> {
     let api: ICodecAPI = transform.cast()?;
-    let mut value = VARIANT::default();
-    (*value.Anonymous.Anonymous).vt = VT_UI4;
-    (*value.Anonymous.Anonymous).Anonymous.ulVal = 1;
-    api.SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &value)
+    let mut variant = VARIANT::default();
+    (*variant.Anonymous.Anonymous).vt = VT_UI4;
+    (*variant.Anonymous.Anonymous).Anonymous.ulVal = value;
+    api.SetValue(key, &variant)
 }
 
 #[cfg(windows)]
@@ -333,6 +413,10 @@ pub(crate) unsafe fn video_type(
         // Numerator travels in the high word, denominator in the low word.
         pack_hi_lo(frame_rate, 1),
     )?;
+    // Pictures are converted to NV12 with BT.601 in limited range; say so,
+    // so the bitstream does not leave decoders to guess.
+    media_type.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT601.0 as u32)?;
+    media_type.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)?;
     Ok(media_type)
 }
 

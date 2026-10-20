@@ -256,6 +256,36 @@ fn auto_negotiates_only_common_probed_codecs_and_prefers_hardware() {
     assert!(host.validate().is_err());
 }
 
+/// A host with no hardware encoder sends what is cheapest to encode in
+/// real time: its platform H.264 before software HEVC or AV1.
+#[test]
+fn a_software_host_prefers_the_cheapest_codec_to_encode() {
+    use crate::{CodecSupport, VideoCodec as C};
+    let mut host = VideoCodecCaps::h264_full(4096, 4096, "test");
+    host.hardware = false;
+    host.additional = [C::H265, C::Vp9, C::Vp8, C::Av1]
+        .into_iter()
+        .map(|codec| CodecSupport {
+            codec,
+            encode: true,
+            decode: true,
+            hardware: false,
+        })
+        .collect();
+    let viewer = host.clone();
+    assert_eq!(
+        negotiate(viewer.decoder_offer(), &host).unwrap().codec,
+        CODEC_H264_HIGH
+    );
+    host.encode_baseline = false;
+    host.encode_high = false;
+    assert_eq!(
+        negotiate(viewer.decoder_offer(), &host).unwrap().codec,
+        C::Vp8.wire_id(),
+        "software HEVC was preferred to VP8"
+    );
+}
+
 #[test]
 fn auto_and_explicit_codec_survive_owned_desktop_transport_and_reject_mismatched_publisher() {
     use crate::{CodecSupport, ServiceKind, VideoCodec};

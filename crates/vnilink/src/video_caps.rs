@@ -213,26 +213,37 @@ pub fn negotiate(offered: u8, host: &VideoCodecCaps) -> Option<AgreedCodec> {
     }
     let codec = {
         let mut candidates = crate::video::VideoCodec::ALL.to_vec();
-        // Prefer validated native hardware; avoid expensive software AV1 when
-        // a realtime VP9 fallback is available. Choice is per Desktop owner.
+        // Prefer validated native hardware, the most efficient codec first.
+        // In software, prefer the cheapest to encode in real time: the
+        // platform's H.264, then VP8 and VP9, with software HEVC and AV1
+        // last. Choice is per Desktop owner.
         candidates.sort_by_key(|codec| {
-            let hardware = if *codec == crate::video::VideoCodec::H264 {
+            use crate::video::VideoCodec as C;
+            let hardware = if *codec == C::H264 {
                 host.hardware
             } else {
                 host.additional
                     .iter()
                     .any(|c| c.codec == *codec && c.hardware)
             };
-            (
-                !hardware,
+            let order = if hardware {
                 match codec {
-                    crate::video::VideoCodec::H265 => 0,
-                    crate::video::VideoCodec::H264 => 1,
-                    crate::video::VideoCodec::Vp9 => 2,
-                    crate::video::VideoCodec::Vp8 => 3,
-                    crate::video::VideoCodec::Av1 => 4,
-                },
-            )
+                    C::H265 => 0,
+                    C::H264 => 1,
+                    C::Vp9 => 2,
+                    C::Vp8 => 3,
+                    C::Av1 => 4,
+                }
+            } else {
+                match codec {
+                    C::H264 => 0,
+                    C::Vp8 => 1,
+                    C::Vp9 => 2,
+                    C::H265 => 3,
+                    C::Av1 => 4,
+                }
+            };
+            (!hardware, order)
         });
         let selected = candidates.into_iter().find(|codec| {
             if *codec == crate::VideoCodec::H264 {
