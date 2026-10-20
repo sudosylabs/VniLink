@@ -342,6 +342,16 @@ export async function verifyFiles(): Promise<void> {
 		press(list(remote), 'Home', 36);
 		press(list(remote), 'Enter', 13);
 		await until(() => crumbs(remote).at(-1) === 'Installers', 'Installers did not open');
+		// A path longer than its bar scrolls, keeping whole names and the open folder in view.
+		remote.style.maxWidth = '380px';
+		await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+		const area = remote.querySelector<HTMLElement>('.files-crumb-area')?.getBoundingClientRect();
+		const steps = [...remote.querySelectorAll<HTMLElement>('.files-crumb')];
+		const end = steps.at(-1)?.getBoundingClientRect();
+		assert(steps.every(step => step.scrollWidth <= step.clientWidth), 'A long path squeezed its folder names');
+		assert(area !== undefined && end !== undefined && end.right <= area.right + 1 && end.left >= area.left, 'The open folder is not in view at the end of a long path');
+		assert((steps[0]?.getBoundingClientRect().left ?? 0) < area.left, 'A long path did not scroll');
+		remote.style.maxWidth = '';
 		press(list(remote), 'End', 35);
 		await until(() => names(remote).includes('setup-59.exe'), 'The end of a long folder is not reachable');
 		await new Promise(resolve => requestAnimationFrame(resolve));

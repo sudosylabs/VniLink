@@ -89,12 +89,17 @@
 	color: var(--muted);
 }
 
+.files-crumb-area {
+	flex: 1 1 auto;
+	min-width: 0;
+	height: 100%;
+}
+
 .files-crumbs {
 	display: flex;
 	align-items: center;
 	gap: 2px;
-	min-width: 0;
-	overflow: hidden;
+	height: 100%;
 }
 
 .files-crumbs > .vnilink-icon {
@@ -106,18 +111,14 @@
 }
 
 .files-crumb {
-	flex: 0 1 auto;
-	min-width: 0;
+	flex: none;
 	height: 26px;
 	padding: 0 5px;
-	overflow: hidden;
 	color: var(--muted);
-	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
 .files-crumb[aria-current='location'] {
-	flex-shrink: 0;
 	color: var(--text);
 }
 

@@ -4,12 +4,14 @@ import { StandardKeyboardEvent } from '../../../base/browser/keyboardEvent.js';
 import type { IDragAndDropData } from '../../../base/browser/dnd.js';
 import { renderIcon } from '../../../base/browser/ui/icon/icon.js';
 import { InputBox } from '../../../base/browser/ui/inputbox/inputBox.js';
+import { DomScrollableElement } from '../../../base/browser/ui/scrollbar/scrollableElement.js';
 import { ListDragOverEffectType, type IListDragAndDrop, type IListDragOverReaction, type IListRenderer, type IListVirtualDelegate } from '../../../base/browser/ui/list/list.js';
 import { List, type IStyleController } from '../../../base/browser/ui/list/listWidget.js';
 import { Separator, toAction, type IAction } from '../../../base/common/actions.js';
 import { Emitter } from '../../../base/common/event.js';
 import { Icons, type IconId } from '../../../base/common/icons.js';
 import { KeyCode, KeyMod } from '../../../base/common/keyCodes.js';
+import { ScrollbarVisibility } from '../../../base/common/scrollable.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { isMacintosh } from '../../../base/common/platform.js';
 import { IContextMenuService } from '../../../platform/contextview/browser/contextView.js';
@@ -218,6 +220,7 @@ export class FilesPaneView extends Disposable {
 	public readonly onDidNavigate = this.navigated.event;
 	private readonly nameButton: HTMLButtonElement;
 	private readonly crumbs: HTMLElement;
+	private readonly crumbScroll: DomScrollableElement;
 	private readonly crumbListeners = this._register(new DisposableStore());
 	private readonly backButton: HTMLButtonElement;
 	private readonly forwardButton: HTMLButtonElement;
@@ -275,7 +278,17 @@ export class FilesPaneView extends Disposable {
 		chevron.classList.add('files-computer-chevron');
 		append(this.nameButton, renderIcon(os === 'windows' ? Icons.windows : os === 'linux' ? Icons.linux : os === 'macos' ? Icons.apple : Icons.computers), $('span', undefined, computer), chevron);
 		this.nameButton.title = nls.localize('files.places', 'Go to a place on {0}', computer);
-		this.crumbs = append(bar, $('nav.files-crumbs', { 'aria-label': nls.localize('files.path', 'Location') }));
+		this.crumbs = $('nav.files-crumbs', { 'aria-label': nls.localize('files.path', 'Location') });
+		// As VS Code's breadcrumbs: a long path scrolls sideways, with the wheel too, and never squeezes its names.
+		this.crumbScroll = this._register(new DomScrollableElement(this.crumbs, {
+			vertical: ScrollbarVisibility.Hidden,
+			horizontal: ScrollbarVisibility.Auto,
+			horizontalScrollbarSize: 3,
+			useShadows: false,
+			scrollYToX: true,
+		}));
+		const crumbArea = append(bar, this.crumbScroll.getDomNode());
+		crumbArea.classList.add('files-crumb-area');
 		const tools = append(bar, $('.files-tools'));
 		this.filterButton = this.iconButton(tools, Icons.search, nls.localize('files.filter', 'Filter'));
 		this.filterSlot = append(tools, $('.files-filter'));
@@ -400,8 +413,10 @@ export class FilesPaneView extends Disposable {
 		}));
 		const resize = new ResizeObserver(() => {
 			this.list.layout(this.listContainer.clientHeight, this.listContainer.clientWidth);
+			this.revealLastCrumb();
 		});
 		resize.observe(this.listContainer);
+		resize.observe(crumbArea);
 		this._register(toDisposable(() => {
 			resize.disconnect();
 		}));
@@ -686,6 +701,13 @@ export class FilesPaneView extends Disposable {
 				void this.navigate(step.target);
 			}));
 		});
+		this.revealLastCrumb();
+	}
+
+	/** Keeps the open folder, the path's end, in view. */
+	private revealLastCrumb(): void {
+		this.crumbScroll.scanDomNode();
+		this.crumbScroll.setScrollPosition({ scrollLeft: this.crumbScroll.getScrollDimensions().scrollWidth });
 	}
 
 	private updateButtons(): void {
