@@ -354,6 +354,15 @@ fn a_size_change_reopens_the_encoder_through_the_session() {
         .unwrap();
     assert_eq!(*opens.lock().unwrap(), 2);
     assert_eq!(session.encoded_size(), (16, 16));
+    assert_eq!(session.reopens(), 1, "a reopen is counted for diagnostics");
+    // The same settings again open nothing.
+    session
+        .observe(&CoreEvent::QualityUpdated {
+            id: 7,
+            quality: Quality::new(500, 30, 16, 16).unwrap(),
+        })
+        .unwrap();
+    assert_eq!(session.reopens(), 1);
 }
 
 #[derive(Default)]

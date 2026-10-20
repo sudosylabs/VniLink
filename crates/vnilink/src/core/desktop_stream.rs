@@ -89,6 +89,8 @@ pub(super) struct DesktopRuntime {
     cursor: tokio::sync::watch::Sender<Option<Arc<CursorState>>>,
     pub(super) keyframe: KeyframeFlag,
     release: KeyframeFlag,
+    /// Losses, keyframes and encoder reopens, for diagnostics.
+    pub(super) counters: crate::video::VideoCounters,
     control_state: tokio::sync::watch::Sender<(DesktopControlState, u64)>,
     control_commands: Mutex<std::collections::VecDeque<(u8, u64)>>,
     control_notify: tokio::sync::Notify,
@@ -163,6 +165,7 @@ impl DesktopRuntime {
             cursor: tokio::sync::watch::channel(None).0,
             keyframe: KeyframeFlag::new(),
             release: KeyframeFlag::new(),
+            counters: crate::video::VideoCounters::default(),
             control_state: tokio::sync::watch::channel((DesktopControlState::Viewing, 0)).0,
             control_commands: Mutex::new(std::collections::VecDeque::new()),
             control_notify: tokio::sync::Notify::new(),
@@ -287,6 +290,7 @@ impl DesktopRuntime {
             .map(|(us, _)| *us);
         let out = self.video.telemetry();
         let inbound = self.inbox.telemetry();
+        let counts = self.counters.read();
         crate::diagnostics::PipelineSummary {
             service_id,
             hosted,
@@ -311,6 +315,14 @@ impl DesktopRuntime {
             in_dropped: inbound.dropped,
             in_oldest_ms: inbound.oldest_ms,
             keyframe_pending: self.keyframe.pending(),
+            lost_expired: counts.lost.expired,
+            lost_evicted: counts.lost.evicted,
+            lost_gap: counts.lost.gap,
+            lost_stale: counts.lost.stale,
+            keyframes_requested: counts.keyframes_requested,
+            keyframes_sent: counts.keyframes_sent,
+            keyframe_bytes: counts.keyframe_bytes,
+            encoder_reopens: counts.encoder_reopens,
             selected_display: lock(&self.selected).first().copied(),
             fault: lock(&self.display_fault).map(str::to_string),
         }
@@ -445,7 +457,9 @@ async fn route_desktop_datagrams(
         let body = reassembly.push(fragment);
         // A lost frame: what follows waits for a keyframe, which is asked for
         // now rather than at the next periodic one.
-        if reassembly.take_loss() {
+        let losses = reassembly.take_loss();
+        if losses.any() {
+            desktop.counters.lost(losses);
             desktop.inbox.lost();
             desktop.keyframe.request();
         }
@@ -574,6 +588,13 @@ impl Core {
                 ((capture * 7 + capture_us) / 8, (encode * 7 + encode_us) / 8)
             });
         *measured = Some((average.0, average.1, now));
+        Ok(())
+    }
+    /// The host opened its encoder again for this viewer's new settings.
+    pub fn report_desktop_encoder_reopen(&self, id: u64, generation: u64) -> Result<(), Error> {
+        runtime(&*self.alive_state()?, id, generation, true)?
+            .counters
+            .encoder_reopened();
         Ok(())
     }
     pub fn publish_desktop_video(
@@ -1203,6 +1224,7 @@ async fn client_send(
             write(send, &bytes).await?;
         }
         if desktop.keyframe.take() {
+            desktop.counters.keyframe_requested();
             let mut bytes = vec![COMMAND];
             bytes.extend_from_slice(&lease_epoch.to_be_bytes());
             bytes.extend_from_slice(
@@ -2096,6 +2118,9 @@ async fn host_send(
         let notified = desktop.video.notified();
         tokio::pin!(notified);
         for frame in desktop.video.drain() {
+            if frame.keyframe {
+                desktop.counters.keyframe_sent(frame.payload.len());
+            }
             let body = crate::video::encode_video_body(&frame);
             let max = link.max_datagram_size();
             #[cfg(test)]

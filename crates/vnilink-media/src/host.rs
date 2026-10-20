@@ -57,6 +57,7 @@ pub struct HostSession<E> {
     control: RateController,
     open_encoder: OpenEncoder<E>,
     video: HostVideo<E>,
+    reopens: u64,
 }
 
 impl<E: VideoEncoder> HostSession<E> {
@@ -86,7 +87,13 @@ impl<E: VideoEncoder> HostSession<E> {
             control,
             open_encoder: Box::new(open_encoder),
             video,
+            reopens: 0,
         })
+    }
+
+    /// How many times a quality change opened the encoder again.
+    pub fn reopens(&self) -> u64 {
+        self.reopens
     }
 
     pub fn capture_size(&self) -> (u16, u16) {
@@ -113,6 +120,7 @@ impl<E: VideoEncoder> HostSession<E> {
                             settings.bitrate_bps,
                         )?,
                     );
+                    self.reopens += 1;
                 } else {
                     self.video.set_quality(*quality);
                 }

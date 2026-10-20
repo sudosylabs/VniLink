@@ -6,11 +6,13 @@
 
 mod codec;
 pub use codec::{CodecSupport, VideoCodec};
+mod counters;
 mod datagram;
 mod frame;
 mod queue;
 
-pub(crate) use datagram::{fragment, Reassembler, FRAG_HEADER};
+pub(crate) use counters::{VideoCounters, VideoCounts};
+pub(crate) use datagram::{fragment, Losses, Reassembler, FRAG_HEADER};
 pub(crate) use frame::micros_since;
 pub(crate) use frame::{check_video_len, decode_video_body, encode_video_body};
 pub use frame::{EncodedFrame, FrameTiming};

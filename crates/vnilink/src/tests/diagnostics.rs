@@ -265,5 +265,31 @@ fn live_snapshot_reports_pipeline_path_and_lease() {
     let export = export_json(&snapshot).unwrap();
     assert!(export.contains("\"pipelines\""));
     assert!(!export.contains(&host.endpoint_id()));
+    // The keyframe sent is counted with its bytes on the host; a keyframe
+    // the viewer asks for is counted on the viewer.
+    wait(|| {
+        let pipeline = &host.diagnostic_snapshot().unwrap().pipelines[0];
+        pipeline.keyframes_sent == 1 && pipeline.keyframe_bytes == 64
+    });
+    desktop.request_keyframe().unwrap();
+    wait(|| {
+        controller
+            .diagnostic_snapshot()
+            .unwrap()
+            .pipelines
+            .first()
+            .is_some_and(|pipeline| pipeline.keyframes_requested >= 1)
+    });
+    let viewer = &controller.diagnostic_snapshot().unwrap().pipelines[0];
+    assert_eq!(
+        (
+            viewer.lost_expired,
+            viewer.lost_evicted,
+            viewer.lost_gap,
+            viewer.lost_stale
+        ),
+        (0, 0, 0, 0),
+        "a clean loopback loses nothing"
+    );
     desktop.close();
 }

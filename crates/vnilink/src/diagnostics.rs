@@ -117,6 +117,18 @@ pub struct PipelineSummary {
     pub in_dropped: u64,
     pub in_oldest_ms: u64,
     pub keyframe_pending: bool,
+    /// Frames the viewer lost on the way, by how: unfinished too long,
+    /// pushed out by newer frames, skipped, or completed too late.
+    pub lost_expired: u64,
+    pub lost_evicted: u64,
+    pub lost_gap: u64,
+    pub lost_stale: u64,
+    /// Keyframes the viewer asked for; keyframes the host sent, and their bytes.
+    pub keyframes_requested: u64,
+    pub keyframes_sent: u64,
+    pub keyframe_bytes: u64,
+    /// Times the host opened its encoder again for new settings.
+    pub encoder_reopens: u64,
     pub selected_display: Option<u64>,
     /// Fixed display-fault label, if the selected source failed.
     pub fault: Option<String>,

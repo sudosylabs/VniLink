@@ -1,5 +1,5 @@
 use crate::video::{
-    decode_video_body, encode_video_body, fragment, EncodedFrame, Reassembler, FRAG_HEADER,
+    decode_video_body, encode_video_body, fragment, EncodedFrame, Losses, Reassembler, FRAG_HEADER,
 };
 
 fn body(keyframe: bool, stamp: u64, payload: &[u8]) -> Vec<u8> {
@@ -67,16 +67,23 @@ fn loss_never_completes_and_stragglers_are_ignored() {
     for frag in fragment(&other, 22, 1200) {
         let _ = reasm.push(&frag);
     }
-    assert!(!reasm.take_loss(), "the first complete frame is no loss");
-    assert_eq!(reasm.push(&frags[frags.len() / 2]), None);
     assert!(
+        !reasm.take_loss().any(),
+        "the first complete frame is no loss"
+    );
+    assert_eq!(reasm.push(&frags[frags.len() / 2]), None);
+    assert_eq!(
         reasm.take_loss(),
+        Losses {
+            stale: 1,
+            ..Losses::default()
+        },
         "an out-of-order frame was not reported lost"
     );
-    assert!(!reasm.take_loss(), "a loss is reported once");
+    assert!(!reasm.take_loss().any(), "a loss is reported once");
     // ...while a true duplicate of a finished frame is ignored.
     assert!(reasm.push(&frags[0]).is_none());
-    assert!(!reasm.take_loss());
+    assert!(!reasm.take_loss().any());
 }
 
 /// A frame completing past a missing one says the one between is lost, so
@@ -88,10 +95,50 @@ fn a_frame_after_a_gap_reports_the_loss() {
     assert!(reasm.push(&fragment(&first, 40, 1200)[0]).is_some());
     let next = body(false, 2, &[2; 10]);
     assert!(reasm.push(&fragment(&next, 41, 1200)[0]).is_some());
-    assert!(!reasm.take_loss(), "consecutive frames are no loss");
+    assert!(!reasm.take_loss().any(), "consecutive frames are no loss");
     let after_gap = body(false, 4, &[4; 10]);
     assert!(reasm.push(&fragment(&after_gap, 43, 1200)[0]).is_some());
-    assert!(reasm.take_loss(), "frame 42 went missing unnoticed");
+    assert_eq!(
+        reasm.take_loss(),
+        Losses {
+            gap: 1,
+            ..Losses::default()
+        },
+        "frame 42 went missing unnoticed"
+    );
+}
+
+/// A frame evicted unfinished counts once, even when a later frame skips
+/// past it, so diagnostics count frames, not ways of noticing them.
+#[test]
+fn a_lost_frame_is_counted_once_by_how_it_was_lost() {
+    let mut reasm = Reassembler::new();
+    let first = body(true, 1, &[1; 10]);
+    assert!(reasm.push(&fragment(&first, 10, 1200)[0]).is_some());
+    // Nine unfinished frames: the oldest is pushed out by the ninth.
+    for seq in 11..20 {
+        let big = body(false, u64::from(seq), &[2; 3000]);
+        assert!(reasm.push(&fragment(&big, seq, 1200)[0]).is_none());
+    }
+    assert_eq!(
+        reasm.take_loss(),
+        Losses {
+            evicted: 1,
+            ..Losses::default()
+        }
+    );
+    // Frame 21 pushes out 12 as it arrives, then completes, skipping 11 to
+    // 20: ten frames lost in all, 11 and 12 not counted again.
+    let next = body(false, 21, &[3; 10]);
+    assert!(reasm.push(&fragment(&next, 21, 1200)[0]).is_some());
+    assert_eq!(
+        reasm.take_loss(),
+        Losses {
+            evicted: 1,
+            gap: 8,
+            ..Losses::default()
+        }
+    );
 }
 
 #[test]

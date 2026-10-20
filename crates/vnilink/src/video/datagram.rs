@@ -61,14 +61,36 @@ struct Partial {
     since: Instant,
 }
 
+/// Frames lost since the last ask, by how each was lost.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Losses {
+    /// Unfinished when its fragments grew too old.
+    pub(crate) expired: u64,
+    /// Unfinished when newer frames needed its place.
+    pub(crate) evicted: u64,
+    /// Skipped: a newer frame completed first.
+    pub(crate) gap: u64,
+    /// Completed after a newer frame, too late to decode.
+    pub(crate) stale: u64,
+}
+
+impl Losses {
+    pub(crate) fn any(&self) -> bool {
+        self.expired + self.evicted + self.gap + self.stale > 0
+    }
+}
+
 /// Reassembles frames from fragments in arrival order.
 pub(crate) struct Reassembler {
     partial: BTreeMap<u32, Partial>,
     completed: VecDeque<u32>,
     /// The newest frame handed on; an older one completing later is stale.
     newest: Option<u32>,
-    /// A frame was lost since [`Self::take_loss`] was last asked.
-    lost: bool,
+    /// Frames lost since [`Self::take_loss`] was last asked.
+    lost: Losses,
+    /// Recent sequences already counted lost unfinished, so a later gap
+    /// over them does not count them twice.
+    gone: VecDeque<u32>,
 }
 
 impl Reassembler {
@@ -77,14 +99,15 @@ impl Reassembler {
             partial: BTreeMap::new(),
             completed: VecDeque::new(),
             newest: None,
-            lost: false,
+            lost: Losses::default(),
+            gone: VecDeque::new(),
         }
     }
 
-    /// Whether a frame was lost since the last call: one expired unfinished,
-    /// was evicted, was skipped by a newer frame, or arrived after one. The
-    /// decoder needs a keyframe before the frames that follow it.
-    pub(crate) fn take_loss(&mut self) -> bool {
+    /// Frames lost since the last call: ones that expired unfinished, were
+    /// evicted, were skipped by a newer frame, or arrived after one. After
+    /// any, the decoder needs a keyframe before the frames that follow.
+    pub(crate) fn take_loss(&mut self) -> Losses {
         std::mem::take(&mut self.lost)
     }
 
@@ -113,7 +136,8 @@ impl Reassembler {
         if self.partial.len() >= MAX_PARTIAL_FRAMES && !self.partial.contains_key(&seq) {
             if let Some(oldest) = self.partial.keys().next().copied() {
                 self.partial.remove(&oldest);
-                self.lost = true;
+                self.lost.evicted += 1;
+                self.remember_gone(oldest);
             }
         }
         let partial = self.partial.entry(seq).or_insert_with(|| Partial {
@@ -145,11 +169,21 @@ impl Reassembler {
         if let Some(newest) = self.newest {
             let ahead = seq.wrapping_sub(newest);
             if ahead == 0 || ahead > u32::MAX / 2 {
-                self.lost = true;
+                self.lost.stale += 1;
                 return None;
             }
             if ahead > 1 {
-                self.lost = true;
+                // Each skipped frame counts once: not again when it already
+                // expired or was evicted unfinished.
+                let counted = self
+                    .gone
+                    .iter()
+                    .filter(|&&gone| {
+                        let after = gone.wrapping_sub(newest);
+                        after > 0 && after < ahead
+                    })
+                    .count() as u64;
+                self.lost.gap += u64::from(ahead - 1).saturating_sub(counted);
                 self.partial
                     .retain(|&pending, _| pending.wrapping_sub(seq) <= u32::MAX / 2);
             }
@@ -164,11 +198,23 @@ impl Reassembler {
 
     fn expire(&mut self) {
         let now = Instant::now();
-        let before = self.partial.len();
-        self.partial
-            .retain(|_, partial| now.duration_since(partial.since) < FRAG_TTL);
-        if self.partial.len() < before {
-            self.lost = true;
+        let expired: Vec<u32> = self
+            .partial
+            .iter()
+            .filter(|(_, partial)| now.duration_since(partial.since) >= FRAG_TTL)
+            .map(|(&seq, _)| seq)
+            .collect();
+        for seq in expired {
+            self.partial.remove(&seq);
+            self.lost.expired += 1;
+            self.remember_gone(seq);
+        }
+    }
+
+    fn remember_gone(&mut self, seq: u32) {
+        self.gone.push_back(seq);
+        while self.gone.len() > COMPLETED_MEMORY {
+            self.gone.pop_front();
         }
     }
 }

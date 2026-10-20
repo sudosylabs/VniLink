@@ -243,6 +243,7 @@ fn consume<E, F>(
     let mut applied_quality = target.quality;
     let mut seen = 0u64;
     while !control.cancel.load(Ordering::Acquire) {
+        let reopens = session.reopens();
         if let Some(quality) = control
             .quality
             .lock()
@@ -295,6 +296,9 @@ fn consume<E, F>(
             session
                 .observe(&CoreEvent::KeyframeRequested { id: target.id })
                 .ok();
+        }
+        if target.service && session.reopens() != reopens {
+            let _ = core.report_desktop_encoder_reopen(target.id, target.generation);
         }
         let Some(Sample {
             generation,
