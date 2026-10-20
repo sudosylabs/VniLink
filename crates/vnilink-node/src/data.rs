@@ -636,7 +636,8 @@ impl DataChannel {
     }
 
     /// How the picture is doing, as JSON, after reporting how long the
-    /// window took to decode it (microseconds on average, 0 when unknown):
+    /// window's decoder spends on a picture while others wait for it
+    /// (microseconds on average, 0 when unknown):
     /// the received frame rate and bitrate, queue times, loss, round trip,
     /// the other computer's capture and encode times, and why the quality
     /// is where it is.

@@ -82,8 +82,15 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 	private codec: string | undefined;
 	/** Where each picture waiting in the decoder was taken, by its timestamp. */
 	private readonly taken = new Map<number, { readonly display: string; readonly revision: string; readonly at: number }>();
-	/** Time from decode to picture since stats were last read, to tell the engine how this computer keeps up. */
-	private decodeTime = { total: 0, count: 0 };
+	/**
+	 * The decoder's time per picture while others wait behind it, since
+	 * stats were last read: how fast this computer can decode, which the
+	 * engine weighs against the frame rate. A picture's own wait in the
+	 * decoder is latency, not load, and is left to the timing stages.
+	 */
+	private decodeService = { total: 0, count: 0 };
+	/** When the decoder last put out a picture. */
+	private lastOutputAt: number | undefined;
 	private readonly latency = new DesktopLatency();
 	private skippedPictures = 0;
 	private ended = false;
@@ -129,8 +136,8 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 		if (!video || !codec || this.ended) {
 			return undefined;
 		}
-		const { total, count } = this.decodeTime;
-		this.decodeTime = { total: 0, count: 0 };
+		const { total, count } = this.decodeService;
+		this.decodeService = { total: 0, count: 0 };
 		const status = await video.mediaStatus(count ? total / count * 1000 : 0);
 		const skipped = this.skippedPictures;
 		this.skippedPictures = 0;
@@ -178,6 +185,7 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 			void this.decoder?.then(previous => previous?.close());
 			this.codec = fields.codec;
 			this.taken.clear();
+			this.lastOutputAt = undefined;
 			const decoder = this.createDecoder(codec, frame => {
 				this.decodedAny = true;
 				this.deliver(frame);
@@ -217,6 +225,7 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 		this.decoder = undefined;
 		this.codec = undefined;
 		this.taken.clear();
+		this.lastOutputAt = undefined;
 		this.channels?.video.requestKeyframe();
 	}
 
@@ -232,15 +241,24 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 
 	private deliver(frame: VideoFrame): void {
 		const taken = this.taken.get(frame.timestamp);
+		let behind = 0;
 		// Pictures the decoder dropped before this one are not coming.
 		for (const timestamp of this.taken.keys()) {
 			if (timestamp <= frame.timestamp) {
 				this.taken.delete(timestamp);
+			} else {
+				behind++;
 			}
 		}
 		const decodedAt = performance.now();
+		// With pictures waiting, this one had the decoder from when it went
+		// in or the previous one came out, whichever was later, until now.
+		if (behind > 0 && taken && this.lastOutputAt !== undefined) {
+			const started = Math.max(this.lastOutputAt, taken.at);
+			this.decodeService = { total: this.decodeService.total + decodedAt - started, count: this.decodeService.count + 1 };
+		}
+		this.lastOutputAt = decodedAt;
 		if (taken) {
-			this.decodeTime = { total: this.decodeTime.total + decodedAt - taken.at, count: this.decodeTime.count + 1 };
 			this.latency.record('decode', decodedAt - taken.at);
 		}
 		if (this.ended || !taken || !this.pictureEmitter.hasListeners()) {

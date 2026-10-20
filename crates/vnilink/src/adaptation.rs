@@ -78,6 +78,8 @@ pub(crate) struct Feedback {
     pub host: Option<HostFeedback>,
     pub rtt_ms: u64,
     pub path_changed: bool,
+    /// The viewer decoder's time per picture while others wait for it: its
+    /// throughput, not how long one picture takes to come out.
     pub decode_us: Option<u64>,
 }
 #[derive(Default)]

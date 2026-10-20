@@ -193,3 +193,38 @@ test('a picture reports where its time went, from the other computer to the scre
 	await assert.rejects(fixture().session.consume(packet({ hostUs: -1 })), /Invalid desktop packet/);
 	await assert.rejects(fixture().session.consume(packet({ queuedUs: '5' })), /Invalid desktop packet/);
 });
+
+test('the engine hears how fast the decoder works, not how long a picture waits in it', async () => {
+	const held = [];
+	let output;
+	const createDecoder = async (_codec, emit) => {
+		output = emit;
+		return { decode: chunk => held.push(chunk), drained: () => Promise.resolve(), close() { } };
+	};
+	const reported = [];
+	const session = new EngineDesktopSession(true, { id: '4', generation: '2' }, createDecoder, () => Promise.resolve([]));
+	const status = { reason: 'stable', receivedKbps: 1, receivedFps: 1, receiverQueueMs: 0, hostQueueMs: 0, lossPerMille: 0, rttMs: 20, encodeUs: 0, captureUs: 0 };
+	const mediaStatus = decodeUs => {
+		reported.push(decodeUs);
+		return Promise.resolve(status);
+	};
+	session.attach({ video: { onCursor: () => ({ dispose() { } }), requestKeyframe() { }, mediaStatus, close() { } }, input: undefined });
+	const packet = (timestampUs, keyframe) => ({ type: 'data', sequence: 1, kind: 'video', data: keyframe ? new Uint8Array([0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28, 0xac]) : new Uint8Array([1]), metadata: JSON.stringify({ codec: 'h264', keyframe, timestampUs: String(timestampUs), displayId: '7', revision: '3', hostUs: 0, queuedUs: 0 }) });
+	const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+	// One picture at a time, each out long after it went in: latency, not load.
+	await session.consume(packet(1, true));
+	await sleep(30);
+	output({ timestamp: held.shift().timestamp, close() { } });
+	await session.stats();
+	assert.deepEqual(reported, [0], 'a picture alone in the decoder was taken for load');
+	// Three waiting at once, put out 10 ms apart: 10 ms a picture.
+	for (const timestamp of [2, 3, 4]) {
+		await session.consume(packet(timestamp, false));
+	}
+	for (const chunk of held.splice(0)) {
+		await sleep(10);
+		output({ timestamp: chunk.timestamp, close() { } });
+	}
+	await session.stats();
+	assert(reported[1] >= 8_000 && reported[1] < 40_000, `decoder time per picture: ${String(reported[1])} µs`);
+});
