@@ -90,6 +90,13 @@ impl std::fmt::Debug for EncodedSample {
 /// Platform H.264 encoder. Implementations must not capture the screen themselves.
 pub trait VideoEncoder: Send {
     fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error>;
+
+    /// Takes a new bitrate and frame rate while running, with no keyframe.
+    /// `Ok(false)` means this encoder cannot, and is opened again instead.
+    fn retune(&mut self, bitrate_bps: u32, frame_rate: u8) -> Result<bool, Error> {
+        let _ = (bitrate_bps, frame_rate);
+        Ok(false)
+    }
 }
 
 /// Platform H.264 decoder. The returned picture is what the UI paints.
@@ -240,6 +247,12 @@ impl<E: VideoEncoder> HostVideo<E> {
 
     pub fn push(&mut self, frame: &RawFrame) -> Result<PumpOutput, Error> {
         self.pump.push(frame, &mut self.encoder)
+    }
+
+    /// The running encoder takes a new bitrate and frame rate; see
+    /// [`VideoEncoder::retune`].
+    pub fn retune(&mut self, bitrate_bps: u32, frame_rate: u8) -> Result<bool, Error> {
+        self.encoder.retune(bitrate_bps, frame_rate)
     }
 
     pub fn publish_to(

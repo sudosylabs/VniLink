@@ -55,7 +55,7 @@ pub use pump::{
     CoreSink, EncodeParams, EncodedSample, FramePump, FrameSink, HostVideo, PumpOutput,
     VideoDecoder, VideoEncoder,
 };
-pub use rate::{EncoderSettings, RateController};
+pub use rate::{EncoderSettings, RateChange, RateController};
 pub use vnilink::Quality;
 
 #[cfg(test)]

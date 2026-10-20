@@ -2109,12 +2109,13 @@ fn process_host_command(
         ControlMessage::Keyframe { stamp } if stamp == desktop.stamp => desktop.keyframe.request(),
         ControlMessage::Quality { stamp, quality } if stamp == desktop.stamp => {
             let caps = lock(&shared.video_caps).clone();
+            // No keyframe here: the encoder takes a new rate as it runs, and
+            // a new size opens it again, which starts from a keyframe.
             *lock(&desktop.quality) = crate::session::agree_quality(
                 &quality,
                 (desktop.info.monitor_width, desktop.info.monitor_height),
                 &caps,
             );
-            desktop.keyframe.request();
         }
         _ => return Err(Error::StaleSession),
     }

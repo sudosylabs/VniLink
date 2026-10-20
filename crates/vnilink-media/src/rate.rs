@@ -3,7 +3,8 @@
 //! [`RateController`] owns the session quality and derives the encoder
 //! settings from it: the even size that fits the quality limit, the bitrate,
 //! and the frame rate. A quality change reopens the encoder only when the
-//! size, frame rate, or bitrate it was opened with no longer matches.
+//! size it was opened with no longer matches; a new bitrate or frame rate
+//! is applied to the running encoder where it can take one.
 //! Congestion signals (send-queue depth, round-trip time, relay versus direct
 //! path) plug in here when the transport reports them; the pacing modules
 //! keep reading the decided settings through this interface.
@@ -21,6 +22,17 @@ pub struct EncoderSettings {
     pub height: u16,
     pub bitrate_bps: u32,
     pub frame_rate: u8,
+}
+
+/// What a quality change asks of the encoder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RateChange {
+    /// The encoder settings are unchanged.
+    Same,
+    /// Same size; a new bitrate or frame rate the encoder may take as it runs.
+    Retune,
+    /// A new size: the encoder is opened again.
+    Reopen,
 }
 
 /// Quality state and the reopen rule for one hosted monitor.
@@ -60,19 +72,22 @@ impl RateController {
         (self.settings.width, self.settings.height)
     }
 
-    /// Apply a core event. Returns true when the encoder must be reopened at
-    /// [`Self::settings`]. Events other than a quality update never reopen.
-    pub fn observe(&mut self, event: &CoreEvent) -> Result<bool, Error> {
+    /// Apply a core event, and say what the encoder must do to follow
+    /// [`Self::settings`]. Events other than a quality update change nothing.
+    pub fn observe(&mut self, event: &CoreEvent) -> Result<RateChange, Error> {
         let CoreEvent::QualityUpdated { quality, .. } = event else {
-            return Ok(false);
+            return Ok(RateChange::Same);
         };
         let settings = settings_for(self.capture_width, self.capture_height, *quality)?;
         self.quality = *quality;
-        if settings == self.settings {
-            return Ok(false);
-        }
-        self.settings = settings;
-        Ok(true)
+        let previous = std::mem::replace(&mut self.settings, settings);
+        Ok(if settings == previous {
+            RateChange::Same
+        } else if (settings.width, settings.height) == (previous.width, previous.height) {
+            RateChange::Retune
+        } else {
+            RateChange::Reopen
+        })
     }
 }
 

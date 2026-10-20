@@ -16,7 +16,7 @@ use vnilink::CoreEvent;
 use crate::error::{Error, PublishError};
 use crate::frame::RawFrame;
 use crate::pump::{CoreSink, FrameSink, HostVideo, PumpOutput, VideoEncoder};
-use crate::rate::RateController;
+use crate::rate::{RateChange, RateController};
 use crate::Quality;
 
 /// Where paced pictures come from. Both portal and ScreenCaptureKit captures satisfy it.
@@ -104,12 +104,21 @@ impl<E: VideoEncoder> HostSession<E> {
         self.control.encoded_size()
     }
 
-    /// A keyframe request forces the next picture. A quality change reopens
-    /// the encoder when the controller decides the settings no longer match.
+    /// A keyframe request forces the next picture. A quality change at the
+    /// same size retunes the running encoder, without a keyframe; a new size,
+    /// or an encoder that cannot retune, opens it again.
     pub fn observe(&mut self, event: &CoreEvent) -> Result<(), Error> {
         match event {
             CoreEvent::QualityUpdated { quality, .. } => {
-                if self.control.observe(event)? {
+                let reopen = match self.control.observe(event)? {
+                    RateChange::Same => false,
+                    RateChange::Retune => {
+                        let next = self.control.settings();
+                        !self.video.retune(next.bitrate_bps, next.frame_rate)?
+                    }
+                    RateChange::Reopen => true,
+                };
+                if reopen {
                     let settings = self.control.settings();
                     self.video = HostVideo::new(
                         *quality,
