@@ -763,25 +763,8 @@ pub(super) async fn handle_fs_request(
             )
             .await
         }
-        fs::Request::Watch {
-            root, path, since, ..
-        } => {
-            // Admitted like a listing, which is what it leads to.
-            let gate = list_gate(&lock(&shared.state), session_id, peer, generation);
-            match gate {
-                Some(status) => (fs::Response::coded(id, status), None),
-                None => {
-                    let roots = lock(&shared.file_roots).clone();
-                    match super::watch::answer_wait(roots, root, path, since).await {
-                        Ok(fingerprint) => (
-                            fs::Response::ok(id),
-                            Some(fingerprint.to_be_bytes().to_vec()),
-                        ),
-                        Err(error) => (map_fs_error(id, &error), None),
-                    }
-                }
-            }
-        }
+        // A wait belongs to an open Files service: see `service_stream`.
+        fs::Request::Watch { .. } => (fs::Response::coded(id, fs::STATUS_ERROR), None),
         fs::Request::Places { .. } => {
             // Admitted like a listing: it names folders, never their contents.
             let gate = list_gate(&lock(&shared.state), session_id, peer, generation);
@@ -894,56 +877,6 @@ pub(super) fn status_error(status: u8, message: &str) -> Result<(), Error> {
         status if status == fs::STATUS_NO_TRASH => Err(Error::Unsupported(fs::NO_TRASH)),
         _ => Err(Error::InvalidSetting(fs::failure_message(message))),
     }
-}
-
-/// Waits, on a stream of its own, for the other computer's folder to differ
-/// from `since`, and returns its fingerprint then. The host answers when it
-/// changes, or after a while unchanged.
-pub(super) async fn wait_for_change(
-    connection: &iroh::endpoint::Connection,
-    generation: u64,
-    root: u64,
-    path: &str,
-    since: u64,
-) -> Result<u64, Error> {
-    let request = fs::Request::Watch {
-        id: 1,
-        generation,
-        root,
-        path: path.to_owned(),
-        since,
-    };
-    let payload = fs::encode_request(&request)?;
-    let mut frame = Vec::with_capacity(1 + payload.len());
-    frame.push(crate::job::TAG_FS);
-    frame.extend_from_slice(&payload);
-    let (mut send, mut recv) = connection.open_bi().await.map_err(Error::network_debug)?;
-    crate::sidestream::write_frame(
-        &mut send,
-        &frame,
-        |bytes: &Vec<u8>| encode_raw(bytes),
-        FS_DID_NOT_WRITE,
-    )
-    .await?;
-    let limit = |len| {
-        if len > MAX_FS_FRAME {
-            Err(Error::Malformed)
-        } else {
-            Ok(())
-        }
-    };
-    let header: Vec<u8> =
-        crate::sidestream::read_frame(&mut recv, limit, |bytes| Ok(bytes.to_vec())).await?;
-    let response = fs::decode_response(&header).map_err(|error| error.to_error())?;
-    if response.id != 1 {
-        return Err(Error::Malformed);
-    }
-    status_error(response.status, &response.message)?;
-    let body: Vec<u8> =
-        crate::sidestream::read_frame(&mut recv, limit, |bytes| Ok(bytes.to_vec())).await?;
-    Ok(u64::from_be_bytes(
-        body.try_into().map_err(|_| Error::Malformed)?,
-    ))
 }
 
 /// The shared roots as they are now: the drives are read again first, so

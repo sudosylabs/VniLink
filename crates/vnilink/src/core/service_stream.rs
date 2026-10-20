@@ -8,6 +8,8 @@ pub(super) const TAG_SERVICE: u8 = 8;
 pub(super) const VERSION: u8 = 1;
 const OPEN: u8 = 1;
 const PROBE: u8 = 0;
+/// One wait on an open Files service's folder, on a stream of its own.
+const WAIT: u8 = 5;
 const MAX_FRAME: usize = super::fs::MAX_FS_FRAME;
 const TIMEOUT: Duration = Duration::from_secs(5);
 /// How long a Files caller waits for its answer, queue included. A slow
@@ -95,9 +97,9 @@ pub struct RemoteFilesService {
     tx: tokio::sync::mpsc::Sender<Work>,
     lease: ServiceLease,
     stop: tokio::sync::watch::Sender<bool>,
-    /// The connection and wire generation waits are made on, beside the pipe.
+    /// The connection and wire stamp waits are made on, beside the pipe.
     link: Connection,
-    generation: u64,
+    stamp: SessionStamp,
     runtime: tokio::runtime::Handle,
     /// Which watch is current; a new one, or none, ends the one before.
     watching: Arc<AtomicU64>,
@@ -150,7 +152,8 @@ impl RemoteFilesService {
             return;
         };
         let link = self.link.clone();
-        let generation = self.generation;
+        let stamp = self.stamp;
+        let id = self.lease.info().id;
         let watching = self.watching.clone();
         let changes = self.folder_changes.clone();
         let stop = self.stop.subscribe();
@@ -160,9 +163,7 @@ impl RemoteFilesService {
                 && !*stop.borrow()
                 && link.close_reason().is_none()
             {
-                match super::fs::wait_for_change(&link, generation, root, &path, since.unwrap_or(0))
-                    .await
-                {
+                match wait_for_change(&link, stamp, id, root, &path, since.unwrap_or(0)).await {
                     Ok(now) => {
                         if since.is_some_and(|before| before != now)
                             && watching.load(Ordering::Acquire) == token
@@ -361,7 +362,7 @@ impl Core {
             return Err(Error::InvalidSetting("this is not a Files service"));
         }
         let (link, stamp) = self.service_link(lease.info().connection_id, generation)?;
-        let (watch_link, watch_generation) = (link.clone(), stamp.generation);
+        let (watch_link, watch_stamp) = (link.clone(), stamp);
         let stop = self
             .alive_state()?
             .services
@@ -476,7 +477,7 @@ impl Core {
             lease: self.service_lease(id, generation)?,
             stop,
             link: watch_link,
-            generation: watch_generation,
+            stamp: watch_stamp,
             runtime: self.runtime.handle().clone(),
             watching: Arc::new(AtomicU64::new(0)),
             folder_changes: Arc::new(AtomicU64::new(0)),
@@ -653,6 +654,113 @@ async fn exchange(
     }
 }
 
+/// Waits, on a stream of its own beside the Files pipe, for the other
+/// computer's folder to differ from `since`, and returns its fingerprint
+/// then. The host answers when it changes, or after a while unchanged.
+async fn wait_for_change(
+    link: &Connection,
+    stamp: SessionStamp,
+    id: u64,
+    root: u64,
+    path: &str,
+    since: u64,
+) -> Result<u64, Error> {
+    let (mut send, mut recv) = link.open_bi().await.map_err(Error::network_debug)?;
+    write(&mut send, preamble(stamp, id, WAIT, 2)).await?;
+    status(&read(&mut recv).await?)?;
+    let request = fs::Request::Watch {
+        id: 1,
+        generation: stamp.generation,
+        root,
+        path: path.to_owned(),
+        since,
+    };
+    write(&mut send, fs::encode_request(&request)?).await?;
+    let response = fs::decode_response(&read(&mut recv).await?).map_err(|e| e.to_error())?;
+    if response.id != 1 {
+        return Err(Error::Malformed);
+    }
+    super::fs::status_error(response.status, &response.message)?;
+    let body = read(&mut recv).await?;
+    let _ = send.finish();
+    Ok(u64::from_be_bytes(
+        body.try_into().map_err(|_| Error::Malformed)?,
+    ))
+}
+
+/// The host's side of one wait. Admitted only while the Files service it
+/// names is open on this connection and Files is still allowed, as the
+/// Files pipe is; it ends with that service.
+async fn serve_files_wait(
+    shared: Arc<Shared>,
+    connection_id: u64,
+    peer: [u8; 32],
+    stamp: SessionStamp,
+    remote_id: u64,
+    mut send: SendStream,
+    mut recv: RecvStream,
+) -> Result<(), Error> {
+    let admitted = {
+        let state = lock(&shared.state);
+        let session = live_session(&state, true, connection_id)?;
+        if session.wire_stamp != stamp || session.peer_key != peer {
+            Err(3)
+        } else if !super::service_permissions::admitted(&state, &peer, ServiceKind::Files) {
+            Err(2)
+        } else {
+            state
+                .hosted_services
+                .values()
+                .find(|record| {
+                    record.info.connection_id == connection_id
+                        && record.remote_id == Some(remote_id)
+                        && record.info.kind == ServiceKind::Files
+                        && record.info.phase == ServicePhase::Active
+                })
+                .map(|record| record.stop.subscribe())
+                .ok_or(7)
+        }
+    };
+    let mut stop = match admitted {
+        Ok(stop) => stop,
+        Err(code) => {
+            write(&mut send, vec![VERSION, code, 2]).await?;
+            return Ok(());
+        }
+    };
+    write(&mut send, vec![VERSION, 0, 2]).await?;
+    let request = tokio::time::timeout(TIMEOUT, read(&mut recv))
+        .await
+        .map_err(|_| Error::Timeout)??;
+    let fs::Request::Watch {
+        id,
+        root,
+        path,
+        since,
+        ..
+    } = fs::decode_request(&request).map_err(|e| e.to_error())?
+    else {
+        return Err(Error::Malformed);
+    };
+    let roots = lock(&shared.file_roots).clone();
+    let answer = tokio::select! {
+        answer = super::watch::answer_wait(roots, root, path, since) => answer,
+        _ = stop.changed() => return Ok(()),
+    };
+    match answer {
+        Ok(fingerprint) => {
+            write(&mut send, fs::encode_response(&fs::Response::ok(id))).await?;
+            write(&mut send, fingerprint.to_be_bytes().to_vec()).await?;
+        }
+        Err(_) => {
+            let refused = fs::Response::coded(id, fs::STATUS_ERROR);
+            write(&mut send, fs::encode_response(&refused)).await?;
+        }
+    }
+    let _ = send.finish();
+    Ok(())
+}
+
 pub(super) struct HostedGuard {
     pub(super) shared: Arc<Shared>,
     pub(super) id: u64,
@@ -741,6 +849,9 @@ pub(super) async fn serve(
             parent_stop,
         )
         .await;
+    }
+    if body[1] == WAIT && kind == 2 && remote_id != 0 {
+        return serve_files_wait(shared, connection_id, peer, stamp, remote_id, send, recv).await;
     }
     if body[1] == PROBE && remote_id == 0 && kind == crate::snapshot::WIRE_KIND {
         return super::snapshot::probe(shared, connection_id, peer, send, stamp).await;

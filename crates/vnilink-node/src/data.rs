@@ -1749,6 +1749,34 @@ mod tests {
         };
         assert_eq!(answer(&mut file_task)["ok"], serde_json::Value::Null);
         assert!(!destination.join("renamed").exists());
+        // The folder the window shows over there is watched: a file made
+        // there by anything is said by the channel without being asked.
+        file_task.operation = FileOperation::Watch {
+            folder: Some(WatchFolder {
+                root: host_root.clone(),
+                path: "".into(),
+            }),
+        };
+        assert_eq!(answer(&mut file_task)["ok"], serde_json::Value::Null);
+        std::thread::sleep(Duration::from_millis(500));
+        std::fs::write(destination.join("outside.txt"), b"outside").unwrap();
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if files
+                .read()
+                .unwrap()
+                .is_some_and(|event| event.kind == "folderChanged")
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "a change on the other computer was never pushed"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        file_task.operation = FileOperation::Watch { folder: None };
+        assert_eq!(answer(&mut file_task)["ok"], serde_json::Value::Null);
         // Both cores' drivers finish the transfer; the channel reports it
         // without being asked.
         controller.start_file_job_driver();
