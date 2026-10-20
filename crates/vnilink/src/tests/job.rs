@@ -4246,3 +4246,81 @@ fn a_waiting_transfer_does_not_wake_itself() {
         b"theirs"
     );
 }
+
+/// A controller may hold both a control session and a services-only link
+/// with one peer. Control of a job no Files service owns rides the control
+/// session every time, the only one that accepts it, and a Files job rides
+/// its own service's link, whichever the sessions were stored first.
+#[test]
+fn job_control_rides_the_session_that_carries_the_job() {
+    let (host, controller, hs, cs) = setup("both-links");
+    let host_files = FilesystemLocation::new(host.file_roots().unwrap(), &hs.join("root"));
+    let controller_files =
+        FilesystemLocation::new(controller.file_roots().unwrap(), &cs.join("root"));
+    controller.connect(&host.endpoint_id()).unwrap();
+    let link = controller
+        .begin_connect_services(&host.endpoint_id())
+        .unwrap();
+    await_jobs(|| {
+        controller.controller_session(link.id).unwrap().phase == crate::SessionPhase::Active
+    });
+    let link = controller.controller_session(link.id).unwrap();
+    let owner = controller
+        .attach_controller_service(link.id, link.generation, crate::ServiceKind::Files)
+        .unwrap();
+    let _pipe = controller
+        .open_files_service(owner.id, owner.generation)
+        .unwrap();
+    for index in 0..4u64 {
+        let name = format!("plain-{index}.bin");
+        let bytes = payload(2048, 300 + index);
+        std::fs::write(cs.join("root").join(&name), &bytes).unwrap();
+        let job = controller
+            .job_submit_upload(
+                &host.endpoint_id(),
+                controller_files.root,
+                &controller_files.path(&name),
+                host_files.root,
+                &host_files.path(""),
+            )
+            .unwrap();
+        let rx = host
+            .job_list()
+            .unwrap()
+            .into_iter()
+            .find(|record| record.label == name)
+            .unwrap()
+            .id;
+        let (sender, receiver) = drive_to_end(&controller, job, &host, rx);
+        assert_eq!(
+            (sender.state, receiver.state),
+            (JobState::Complete, JobState::Complete)
+        );
+        assert_eq!(std::fs::read(hs.join("root").join(&name)).unwrap(), bytes);
+    }
+    let bytes = payload(2048, 399);
+    std::fs::write(cs.join("root/owned.bin"), &bytes).unwrap();
+    let job = controller
+        .files_service_upload(
+            owner.id,
+            owner.generation,
+            controller_files.root,
+            &controller_files.path("owned.bin"),
+            host_files.root,
+            &host_files.path(""),
+        )
+        .unwrap();
+    let rx = host
+        .job_list()
+        .unwrap()
+        .into_iter()
+        .find(|record| record.label == "owned.bin")
+        .unwrap()
+        .id;
+    let (sender, receiver) = drive_to_end(&controller, job, &host, rx);
+    assert_eq!(
+        (sender.state, receiver.state),
+        (JobState::Complete, JobState::Complete)
+    );
+    assert_eq!(std::fs::read(hs.join("root/owned.bin")).unwrap(), bytes);
+}

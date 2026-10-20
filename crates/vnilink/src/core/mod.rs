@@ -322,13 +322,6 @@ impl State {
             .values()
             .find(|s| s.peer_key == *peer && !finished(&s.phase))
     }
-    /// Live hosted session for one peer, if any. Peers are looked up by
-    /// identity, never by assuming a single hosted connection.
-    fn incoming_peer(&self, peer: &[u8; 32]) -> Option<&LiveSession> {
-        self.incoming
-            .values()
-            .find(|s| s.peer_key == *peer && !finished(&s.phase))
-    }
     /// Live hosted session for one peer and wire generation. Job control
     /// frames carry no host session id, so they fence on peer identity plus
     /// the generation inside the message.

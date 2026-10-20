@@ -45,6 +45,41 @@ pub(super) fn check_owner(state: &State, owner: Option<JobOwner>) -> Result<(), 
     Ok(())
 }
 
+/// The session job control with `peer` rides, the same one each time:
+/// for a job a Files service owns, that service's own connection; for
+/// any other, the peer's control session, since a services-only link
+/// refuses jobs no service owns. `outgoing` is the side this computer
+/// controls; a hosted owner lives on the other.
+pub(super) fn job_session<'a>(
+    state: &'a State,
+    peer: &[u8; 32],
+    outgoing: bool,
+    owner: Option<JobOwner>,
+) -> Option<&'a LiveSession> {
+    let sessions = if outgoing {
+        &state.outgoing
+    } else {
+        &state.incoming
+    };
+    let live = |session: &&LiveSession| session.peer_key == *peer && !finished(&session.phase);
+    match owner {
+        Some(owner) => {
+            let records = if owner.hosted {
+                &state.hosted_services
+            } else {
+                &state.services
+            };
+            let record = records.get(&owner.id)?;
+            sessions.get(&record.info.connection_id).filter(live)
+        }
+        None => sessions
+            .values()
+            .filter(live)
+            .filter(|session| !session.services_only)
+            .max_by_key(|session| session.id),
+    }
+}
+
 /// Stops the jobs whose Files owner is gone and leaves them Interrupted,
 /// keeping what has arrived: an owner ends with its connection or pipe as
 /// well as with its window, and a new owner adopts and resumes them
@@ -254,14 +289,14 @@ impl Core {
         payload: &[u8],
     ) -> Result<Vec<u8>, Error> {
         let Some(owner) = owner else {
-            return self.job_round_trip_side(peer, true, tag, payload);
+            return self.job_round_trip_side(peer, true, None, tag, payload);
         };
         check_owner(&lock(&self.shared.state), Some(owner))?;
         let mut body = vec![1];
         body.extend_from_slice(&owner.id.to_be_bytes());
         body.push(tag);
         body.extend_from_slice(payload);
-        let result = self.job_round_trip_side_owned(peer, true, TAG, &body, Some(owner));
+        let result = self.job_round_trip_side_owned(peer, true, TAG, &body, Some(owner), true);
         // An ambiguous submission may already have created a peer job. Closing
         // its owner settles that job even when we never received its wire id.
         if matches!(

@@ -373,7 +373,7 @@ impl Core {
         fs::check_rel(dst_rel)?;
         // The live session first: no hashing work happens without one.
         // The host re-fences the generation on arrival.
-        let generation = self.outgoing_generation_for(&peer)?;
+        let generation = self.generation_for(&peer, true, owner)?;
         super::service_jobs::check_owner(&lock(&self.shared.state), owner)?;
         // Snapshot under a short lock; the recursive walk runs off every lock.
         let snapshot = lock(&self.shared.file_roots).clone();
@@ -546,7 +546,7 @@ impl Core {
             Some(roots.pin(dst_root)?)
         };
         // The live session first, as in uploads.
-        let generation = self.outgoing_generation_for(&peer)?;
+        let generation = self.generation_for(&peer, true, owner)?;
         let request = job::DownloadRequest {
             v: job::JOB_VERSION,
             id: 1,
@@ -880,12 +880,12 @@ impl Core {
         outgoing: bool,
         job_id: u64,
     ) -> Result<(), Error> {
-        let job_id = wire_job_id(
-            lock(&self.shared.jobs)
-                .get(&job_id)
-                .ok_or(Error::InvalidSetting(NO_JOB))?,
-        );
-        let generation = self.generation_for(peer, outgoing)?;
+        let (job_id, owner) = {
+            let jobs = lock(&self.shared.jobs);
+            let record = jobs.get(&job_id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            (wire_job_id(record), record.owner)
+        };
+        let generation = self.generation_for(peer, outgoing, owner)?;
         let cancel = job::JobCancel {
             v: job::JOB_VERSION,
             id: 1,
@@ -895,7 +895,7 @@ impl Core {
         let payload = job::encode(&cancel)?;
         // The reply is an ack; any failure (no session, stale generation,
         // denied) still leaves the local cancellation in place.
-        let _ = self.job_round_trip_side(peer, outgoing, job::TAG_JOB_CANCEL, &payload);
+        let _ = self.job_round_trip_side(peer, outgoing, owner, job::TAG_JOB_CANCEL, &payload);
         Ok(())
     }
 
@@ -946,12 +946,12 @@ impl Core {
         outgoing: bool,
         job_id: u64,
     ) -> Result<(), Error> {
-        let job_id = wire_job_id(
-            lock(&self.shared.jobs)
-                .get(&job_id)
-                .ok_or(Error::InvalidSetting(NO_JOB))?,
-        );
-        let generation = self.generation_for(peer, outgoing)?;
+        let (job_id, owner) = {
+            let jobs = lock(&self.shared.jobs);
+            let record = jobs.get(&job_id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            (wire_job_id(record), record.owner)
+        };
+        let generation = self.generation_for(peer, outgoing, owner)?;
         let resume = job::JobResume {
             v: job::JOB_VERSION,
             id: 1,
@@ -959,7 +959,7 @@ impl Core {
             job_id,
         };
         let payload = job::encode(&resume)?;
-        let _ = self.job_round_trip_side(peer, outgoing, job::TAG_JOB_RESUME, &payload);
+        let _ = self.job_round_trip_side(peer, outgoing, owner, job::TAG_JOB_RESUME, &payload);
         Ok(())
     }
 
@@ -1058,12 +1058,12 @@ impl Core {
         choice: ConflictChoice,
         apply_to_remaining: bool,
     ) -> Result<(), Error> {
-        let job_id = wire_job_id(
-            lock(&self.shared.jobs)
-                .get(&job_id)
-                .ok_or(Error::InvalidSetting(NO_JOB))?,
-        );
-        let generation = self.generation_for(peer, outgoing)?;
+        let (job_id, owner) = {
+            let jobs = lock(&self.shared.jobs);
+            let record = jobs.get(&job_id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            (wire_job_id(record), record.owner)
+        };
+        let generation = self.generation_for(peer, outgoing, owner)?;
         let choice_name = match choice {
             ConflictChoice::Skip => "skip",
             ConflictChoice::Replace => "replace",
@@ -1079,17 +1079,17 @@ impl Core {
             apply_to_remaining,
         };
         let payload = job::encode(&resolve)?;
-        let _ = self.job_round_trip_side(peer, outgoing, job::TAG_JOB_RESOLVE, &payload);
+        let _ = self.job_round_trip_side(peer, outgoing, owner, job::TAG_JOB_RESOLVE, &payload);
         Ok(())
     }
 
     fn poll_sender(&self, id: u64) -> Result<JobSnapshot, Error> {
-        let (peer_key, outgoing) = {
+        let (peer_key, outgoing, owner) = {
             let jobs = lock(&self.shared.jobs);
             let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
-            (record.peer_key, record.outgoing)
+            (record.peer_key, record.outgoing, record.owner)
         };
-        let generation = match self.generation_for(&peer_key, outgoing) {
+        let generation = match self.generation_for(&peer_key, outgoing, owner) {
             Ok(generation) => generation,
             Err(Error::NoSession | Error::StaleSession) => return self.mark_interrupted(id),
             Err(error) => return Err(error),
@@ -1107,6 +1107,7 @@ impl Core {
         let reply_bytes = match self.job_round_trip_side(
             &peer_key,
             outgoing,
+            owner,
             job::TAG_JOB_STATUS,
             &job::encode(&query)?,
         ) {
@@ -2415,39 +2416,37 @@ impl Core {
         self.job_snapshot(id)
     }
 
-    fn outgoing_generation_for(&self, peer: &[u8; 32]) -> Result<u64, Error> {
+    /// The wire generation of the session a job with `peer` and `owner`
+    /// rides on this side ([`super::service_jobs::job_session`]).
+    fn generation_for(
+        &self,
+        peer: &[u8; 32],
+        outgoing: bool,
+        owner: Option<super::service_jobs::JobOwner>,
+    ) -> Result<u64, Error> {
         let state = self.alive_state()?;
-        let session = state.outgoing_peer(peer).ok_or(Error::NoSession)?;
-        if session.phase != crate::session::SessionPhase::Active || session.peer_key != *peer {
+        let session = super::service_jobs::job_session(&state, peer, outgoing, owner)
+            .ok_or(Error::NoSession)?;
+        if session.phase != crate::session::SessionPhase::Active {
             return Err(Error::NoSession);
         }
         Ok(session.wire_stamp.generation)
     }
 
-    fn generation_for(&self, peer: &[u8; 32], outgoing: bool) -> Result<u64, Error> {
-        let state = self.alive_state()?;
-        let session = if outgoing {
-            state.outgoing_peer(peer)
-        } else {
-            state.incoming_peer(peer)
-        }
-        .ok_or(Error::NoSession)?;
-        if session.phase != crate::session::SessionPhase::Active || session.peer_key != *peer {
-            return Err(Error::NoSession);
-        }
-        Ok(session.wire_stamp.generation)
-    }
-
+    /// One job-control round trip on the session the job rides.
     pub(super) fn job_round_trip_side(
         &self,
         peer: &[u8; 32],
         outgoing: bool,
+        owner: Option<super::service_jobs::JobOwner>,
         tag: u8,
         payload: &[u8],
     ) -> Result<Vec<u8>, Error> {
-        self.job_round_trip_side_owned(peer, outgoing, tag, payload, None)
+        self.job_round_trip_side_owned(peer, outgoing, tag, payload, owner, false)
     }
 
+    /// As [`Core::job_round_trip_side`]; `leased` also holds the owning
+    /// service's lease across it, bounded in time, as a submission does.
     pub(super) fn job_round_trip_side_owned(
         &self,
         peer: &[u8; 32],
@@ -2455,25 +2454,20 @@ impl Core {
         tag: u8,
         payload: &[u8],
         owner: Option<super::service_jobs::JobOwner>,
+        leased: bool,
     ) -> Result<Vec<u8>, Error> {
         let mut lease = owner
+            .filter(|_| leased)
             .map(|owner| self.service_lease(owner.id, owner.generation))
             .transpose()?;
-        // Senders poll over whichever session faces the peer: outgoing
-        // for controller senders, incoming for host senders. Both ride
-        // the live control connection.
+        // Senders poll over the session facing the peer: outgoing for
+        // controller senders, incoming for host senders, the one the job
+        // rides each time.
         let connection = {
             let state = self.alive_state()?;
-            let session = if outgoing {
-                state.outgoing_peer(peer)
-            } else {
-                state.incoming_peer(peer)
-            }
-            .ok_or(Error::NoSession)?;
+            let session = super::service_jobs::job_session(&state, peer, outgoing, owner)
+                .ok_or(Error::NoSession)?;
             if session.phase != crate::session::SessionPhase::Active {
-                return Err(Error::NoSession);
-            }
-            if session.peer_key != *peer {
                 return Err(Error::NoSession);
             }
             session.link.clone().ok_or(Error::NoSession)?
@@ -3321,6 +3315,23 @@ pub(super) async fn handle_controller_job(
     Err(())
 }
 
+/// Whether `generation` names a live session with `peer`: one it hosts on
+/// the incoming side, else one this side controls. A peer may hold both a
+/// control session and a services-only link; the message's generation
+/// says which it came over.
+fn peer_session_live(state: &State, peer: &[u8; 32], incoming_side: bool, generation: u64) -> bool {
+    let sessions = if incoming_side {
+        &state.incoming
+    } else {
+        &state.outgoing
+    };
+    sessions.values().any(|session| {
+        session.peer_key == *peer
+            && session.wire_stamp.generation == generation
+            && session.phase == crate::session::SessionPhase::Active
+    })
+}
+
 /// Symmetric cancellation: either side tells the peer one job is cancelled.
 /// Generation is fenced like status queries; the peer marks its record
 /// cancelled and signals its in-flight fetch so publication stops.
@@ -3346,18 +3357,7 @@ async fn handle_cancel(
     }
     let cancel: job::JobCancel = job::decode(payload).map_err(|_| ())?;
     job::check_version(cancel.v).map_err(|_| ())?;
-    let live = {
-        let state = lock(&shared.state);
-        let session = if incoming_side {
-            state.incoming.values().find(|s| s.peer_key == *peer)
-        } else {
-            state.outgoing_peer(peer)
-        };
-        matches!(session, Some(session)
-            if session.wire_stamp.generation == cancel.generation
-                && session.phase == crate::session::SessionPhase::Active
-                && session.peer_key == *peer)
-    };
+    let live = peer_session_live(&lock(&shared.state), peer, incoming_side, cancel.generation);
     if !live {
         let stale = job::JobReply {
             v: job::JOB_VERSION,
@@ -3423,18 +3423,7 @@ async fn handle_status_query(
     let query: job::JobStatus = job::decode(payload).map_err(|_| ())?;
     job::check_version(query.v).map_err(|_| ())?;
     // The querying peer must own the other end of the live session.
-    let live = {
-        let state = lock(&shared.state);
-        let session = if incoming_side {
-            state.incoming.values().find(|s| s.peer_key == *peer)
-        } else {
-            state.outgoing_peer(peer)
-        };
-        matches!(session, Some(session)
-            if session.wire_stamp.generation == query.generation
-                && session.phase == crate::session::SessionPhase::Active
-                && session.peer_key == *peer)
-    };
+    let live = peer_session_live(&lock(&shared.state), peer, incoming_side, query.generation);
     if !live {
         let stale = job::JobStateReply {
             v: job::JOB_VERSION,
@@ -3517,18 +3506,12 @@ async fn handle_resolve(
     }
     let resolve: job::JobResolve = job::decode(payload).map_err(|_| ())?;
     job::check_version(resolve.v).map_err(|_| ())?;
-    let live = {
-        let state = lock(&shared.state);
-        let session = if incoming_side {
-            state.incoming.values().find(|s| s.peer_key == *peer)
-        } else {
-            state.outgoing_peer(peer)
-        };
-        matches!(session, Some(session)
-            if session.wire_stamp.generation == resolve.generation
-                && session.phase == crate::session::SessionPhase::Active
-                && session.peer_key == *peer)
-    };
+    let live = peer_session_live(
+        &lock(&shared.state),
+        peer,
+        incoming_side,
+        resolve.generation,
+    );
     if !live {
         let stale = job::JobReply {
             v: job::JOB_VERSION,
@@ -3633,18 +3616,7 @@ async fn handle_resume(
     }
     let resume: job::JobResume = job::decode(payload).map_err(|_| ())?;
     job::check_version(resume.v).map_err(|_| ())?;
-    let live = {
-        let state = lock(&shared.state);
-        let session = if incoming_side {
-            state.incoming.values().find(|s| s.peer_key == *peer)
-        } else {
-            state.outgoing_peer(peer)
-        };
-        matches!(session, Some(session)
-            if session.wire_stamp.generation == resume.generation
-                && session.phase == crate::session::SessionPhase::Active
-                && session.peer_key == *peer)
-    };
+    let live = peer_session_live(&lock(&shared.state), peer, incoming_side, resume.generation);
     if !live {
         let stale = job::JobReply {
             v: job::JOB_VERSION,
