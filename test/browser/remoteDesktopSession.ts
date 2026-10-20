@@ -1,0 +1,194 @@
+import { Emitter } from '../../src/base/common/event.js';
+import { DisposableStore } from '../../src/base/common/lifecycle.js';
+import type { DisplayInfo } from '../../src/platform/engine/common/engine.js';
+import { InstantiationService } from '../../src/platform/instantiation/common/instantiationService.js';
+import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
+import '../../src/workbench/contrib/remoteDesktop/remoteDesktop.contribution.js';
+import { OpenRemoteDesktopAction, ViewScreenAction } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopActions.js';
+import { RemoteDesktopView } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopView.js';
+import { IDeviceService, type DeviceSummary } from '../../src/workbench/services/devices/deviceService.js';
+import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type IDesktopSession } from '../../src/workbench/services/remoteDesktop/remoteDesktopService.js';
+import { ITabService } from '../../src/workbench/services/tabs/tabService.js';
+import { TabService } from '../../src/workbench/services/tabs/tabServiceImpl.js';
+
+function assert(condition: boolean, message: string): asserts condition {
+	if (!condition) {
+		throw new Error(message);
+	}
+}
+
+async function until(condition: () => boolean, message: string, timeout = 5000): Promise<void> {
+	const deadline = performance.now() + timeout;
+	while (!condition()) {
+		if (performance.now() > deadline) {
+			throw new Error(message);
+		}
+		await new Promise(resolve => setTimeout(resolve, 10));
+	}
+}
+
+/** A display as the other computer arranges it: the second one, right of the first. */
+const display: DisplayInfo = { id: '7', origin_x: 1920, origin_y: 0, width: 1920, height: 1080, rotation_deg: 0, scale_percent: 100, revision: '3' };
+
+/** A session whose pictures, end and input the test plays and reads. */
+class FakeSession implements IDesktopSession {
+	private readonly pictures = new Emitter<DesktopPicture>();
+	public readonly onPicture = this.pictures.event;
+	private readonly ends = new Emitter<DesktopEnd>();
+	public readonly onEnd = this.ends.event;
+	public readonly sent: DesktopInput[] = [];
+	public disposed = false;
+
+	constructor(public readonly control: boolean) { }
+
+	public displays(): Promise<readonly DisplayInfo[]> {
+		return Promise.resolve([display]);
+	}
+
+	public send(input: DesktopInput): void {
+		if (this.control) {
+			this.sent.push(input);
+		}
+	}
+
+	/** A 1920 × 1080 picture of display 7 at revision 3. */
+	public picture(): void {
+		const canvas = new OffscreenCanvas(1920, 1080);
+		const context = canvas.getContext('2d');
+		if (context) {
+			context.fillStyle = '#1d4b6c';
+			context.fillRect(0, 0, 1920, 1080);
+		}
+		this.pictures.fire({ frame: new VideoFrame(canvas, { timestamp: 0 }), display: '7', revision: '3' });
+	}
+
+	public end(reason: DesktopEnd): void {
+		this.ends.fire(reason);
+	}
+
+	public dispose(): void {
+		this.disposed = true;
+	}
+}
+
+export async function verifyRemoteDesktopSession(): Promise<void> {
+	const disposables = new DisposableStore();
+	const device: DeviceSummary = { id: 'studio', name: 'Sudosy', os: 'windows', presence: 'connected', hostname: 'sudosy', direct: 1, relays: 0 };
+	const sessions: FakeSession[] = [];
+	const answers: (DesktopFailure | undefined)[] = [];
+	const tabService = disposables.add(new TabService());
+	const services = disposables.add(new InstantiationService(new ServiceCollection(
+		[ITabService, tabService],
+		[IDeviceService, { _serviceBrand: undefined, devices: [device] }],
+		[IRemoteDesktopService, {
+			_serviceBrand: undefined,
+			open: (_deviceId: string, control: boolean) => {
+				const failure = answers.shift();
+				if (failure) {
+					return Promise.resolve({ failure });
+				}
+				const session = new FakeSession(control);
+				sessions.push(session);
+				return Promise.resolve({ session });
+			},
+		}],
+	), true));
+	const host = document.createElement('div');
+	host.style.cssText = 'position:fixed;left:0;top:40px;width:1280px;height:720px;z-index:99;display:flex;';
+	document.body.append(host);
+	const press = (target: HTMLElement, type: 'keydown' | 'keyup', code: string, key: string, init: KeyboardEventInit = {}): void => {
+		target.dispatchEvent(new KeyboardEvent(type, { code, key, bubbles: true, cancelable: true, ...init }));
+	};
+	try {
+		services.invokeFunction(accessor => {
+			new OpenRemoteDesktopAction().run(accessor, device.id);
+		});
+		const view = tabService.activeTab;
+		assert(view instanceof RemoteDesktopView && view.id === 'desktop:studio' && view.label === 'Sudosy' && view.control, 'Remote desktop did not open a tab for the computer');
+		host.append(view.element);
+		const overlay = view.element.querySelector<HTMLElement>('.desktop-overlay');
+		const canvas = view.element.querySelector<HTMLCanvasElement>('.desktop-screen');
+		const role = (): string => view.element.querySelector('.desktop-status-role')?.textContent ?? '';
+		assert(overlay !== null && canvas !== null, 'The tab has no screen');
+		// Connecting until the first picture, which then fills the tab and takes the keyboard.
+		await until(() => sessions.length === 1, 'The tab did not open the screen');
+		assert(!overlay.hidden && overlay.textContent.includes('Connecting to Sudosy'), 'Connecting is not said');
+		sessions[0].picture();
+		await until(() => overlay.hidden === true && role() === 'Controlling Sudosy', 'The first picture did not show');
+		await until(() => view.element.querySelector('.desktop-status-size')?.textContent === '1920 × 1080', 'The display size is not shown');
+		assert(canvas.width === 1920 && canvas.height === 1080, 'The picture was not drawn at its size');
+		assert(document.activeElement === canvas, 'The screen did not take the keyboard');
+
+		// Keys go by where they are; text only without a shortcut modifier, and a held key is not repeated.
+		press(canvas, 'keydown', 'KeyA', 'a');
+		press(canvas, 'keydown', 'KeyA', 'a', { repeat: true });
+		press(canvas, 'keyup', 'KeyA', 'a');
+		press(canvas, 'keydown', 'KeyC', 'c', { metaKey: true });
+		const keys = sessions[0].sent.filter(input => input.type === 'submitLocalKey');
+		assert(JSON.stringify(keys) === JSON.stringify([
+			{ type: 'submitLocalKey', usage: 4, down: true, text: 'a' },
+			{ type: 'submitLocalKey', usage: 4, down: false, text: '' },
+			{ type: 'submitLocalKey', usage: 6, down: true, text: '' },
+		]), `Wrong keys: ${JSON.stringify(keys)}`);
+
+		// The pointer lands on the other computer's display, through the fitted picture.
+		const box = canvas.getBoundingClientRect();
+		const center = { clientX: box.left + box.width / 2, clientY: box.top + box.height / 2, bubbles: true, cancelable: true, pointerId: 1 };
+		canvas.dispatchEvent(new PointerEvent('pointermove', center));
+		canvas.dispatchEvent(new PointerEvent('pointerdown', { ...center, button: 0 }));
+		canvas.dispatchEvent(new PointerEvent('pointerup', { ...center, button: 0 }));
+		const pointer = sessions[0].sent.find(input => input.type === 'submitPointer');
+		assert(pointer?.type === 'submitPointer' && pointer.x === 1920 + 960 && pointer.y === 540 && pointer.display === '7' && pointer.revision === '3', `Wrong pointer: ${JSON.stringify(pointer)}`);
+		assert(sessions[0].sent.filter(input => input.type === 'submitButton').map(input => JSON.stringify(input)).join() === [
+			JSON.stringify({ type: 'submitButton', button: 'Left', down: true }), JSON.stringify({ type: 'submitButton', button: 'Left', down: false }),
+		].join(), 'The click did not reach the other computer');
+		// Above the picture, in the margin, the pointer goes nowhere.
+		const before = sessions[0].sent.length;
+		canvas.dispatchEvent(new PointerEvent('pointermove', { ...center, clientY: box.top + 1 }));
+		assert(sessions[0].sent.length === before || box.height <= box.width * 1080 / 1920, 'The pointer was sent from outside the picture');
+		// A notch of the wheel is 120 of the engine's units.
+		canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, bubbles: true, cancelable: true }));
+		assert(JSON.stringify(sessions[0].sent.at(-1)) === JSON.stringify({ type: 'submitPreciseWheel', dx: 0, dy: 120 }), `Wrong wheel: ${JSON.stringify(sessions[0].sent.at(-1))}`);
+		// Leaving the screen lets go of everything held there.
+		// A test window has no focus of its own to lose, so the blur is dispatched as the system would.
+		canvas.dispatchEvent(new FocusEvent('blur'));
+		assert(sessions[0].sent.at(-1)?.type === 'releaseSessionInput', 'Leaving the screen did not let go of the keys');
+
+		// A dropped connection is tried again by itself, over the last picture, dimmed.
+		sessions[0].end('lost');
+		await until(() => !overlay.hidden && overlay.textContent.includes('Reconnecting to Sudosy'), 'A lost connection did not say it reconnects');
+		assert(view.element.querySelector('.desktop-stage')?.classList.contains('desktop-dimmed') === true, 'The last picture was not dimmed');
+		await until(() => sessions.length === 2, 'The tab did not reconnect by itself', 4000);
+		sessions[1].picture();
+		await until(() => overlay.hidden === true, 'The reconnected picture did not show');
+		// Refused for good: it says why, and offers to try again or close.
+		answers.push('turnedOff');
+		sessions[1].end('lost');
+		await until(() => overlay.textContent.includes('Sudosy doesn’t share its screen with this computer.'), 'A refusal is not said', 4000);
+		const buttons = [...overlay.querySelectorAll('button')].map(button => button.textContent);
+		assert(buttons.join() === 'Try Again,Close Tab', `Wrong actions: ${buttons.join()}`);
+		assert(role() === 'Not connected', 'The status bar does not say it is not connected');
+		overlay.querySelector<HTMLButtonElement>('button.primary')?.click();
+		await until(() => sessions.length === 3, 'Try Again did not open the screen');
+		assert(await tabService.close(view.id), 'The tab did not close');
+		assert(sessions[2].disposed, 'Closing the tab did not end the session');
+
+		// Viewing only sends nothing.
+		services.invokeFunction(accessor => {
+			new ViewScreenAction().run(accessor, device.id);
+		});
+		const viewer = tabService.activeTab;
+		assert(viewer instanceof RemoteDesktopView && !viewer.control, 'View Screen did not open a view-only tab');
+		host.replaceChildren(viewer.element);
+		await until(() => sessions.length === 4, 'The view-only tab did not open the screen');
+		sessions[3].picture();
+		await until(() => viewer.element.querySelector('.desktop-status-role')?.textContent === 'Viewing Sudosy', 'Viewing is not said');
+		const screen = viewer.element.querySelector<HTMLCanvasElement>('.desktop-screen');
+		assert(screen !== null, 'The view-only tab has no screen');
+		press(screen, 'keydown', 'KeyA', 'a');
+		assert(sessions[3].sent.length === 0, 'A view-only tab sent input');
+	} finally {
+		host.remove();
+		disposables.dispose();
+	}
+}

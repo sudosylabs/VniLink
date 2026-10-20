@@ -1,0 +1,178 @@
+/* The other computer's screen fills the tab, fitted with dark margins, and
+ * a status bar in the Files tab's form says what the session is doing. */
+
+.desktop-view {
+	display: grid;
+	flex: 1;
+	grid-template-rows: minmax(0, 1fr) auto;
+	min-width: 0;
+	min-height: 0;
+	background: var(--canvas);
+	color: var(--text);
+	font-size: 13px;
+}
+
+.desktop-stage {
+	position: relative;
+	min-height: 0;
+	overflow: hidden;
+	background: var(--camera-stage);
+}
+
+.desktop-screen {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
+	outline: none;
+	transition: opacity 0.2s;
+}
+
+.desktop-stage.desktop-dimmed .desktop-screen {
+	opacity: 0.35;
+}
+
+.desktop-overlay {
+	position: absolute;
+	inset: 0;
+	display: grid;
+	place-items: center;
+	padding: 24px;
+}
+
+.desktop-overlay-panel {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 10px;
+	max-width: 400px;
+	padding: 20px 24px;
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--canvas) 92%, transparent);
+	color: var(--text);
+	text-align: center;
+}
+
+.desktop-overlay-title {
+	margin: 0;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.desktop-overlay-body {
+	margin: 0;
+	color: var(--muted);
+	line-height: 1.45;
+}
+
+.desktop-overlay-actions {
+	display: flex;
+	gap: 8px;
+	margin-top: 4px;
+}
+
+.desktop-overlay-button {
+	height: 28px;
+	padding: 0 12px;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background: transparent;
+	color: var(--text);
+	font: inherit;
+}
+
+.desktop-overlay-button.primary {
+	border-color: var(--accent);
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+.desktop-overlay-button:hover:not(.primary) {
+	background: var(--surface-hover);
+}
+
+.desktop-spinner {
+	width: 18px;
+	height: 18px;
+	border: 2px solid var(--line);
+	border-top-color: var(--accent);
+	border-radius: 50%;
+	animation: desktop-spin 0.9s linear infinite;
+}
+
+.desktop-overlay[data-state='ended'] .desktop-spinner {
+	display: none;
+}
+
+@keyframes desktop-spin {
+	to {
+		transform: rotate(1turn);
+	}
+}
+
+.desktop-status {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	height: 26px;
+	padding: 0 12px;
+	border-top: 1px solid var(--line);
+	background: var(--chrome);
+	color: var(--muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+
+.desktop-status-role {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--text);
+}
+
+.desktop-status-role::before {
+	width: 6px;
+	height: 6px;
+	border-radius: 3px;
+	background: var(--status-pending);
+	content: '';
+}
+
+.desktop-status-role[data-state='live']::before {
+	background: var(--status-connected);
+}
+
+.desktop-status-role[data-state='ended']::before {
+	background: var(--muted);
+}
+
+.desktop-status-space {
+	flex: 1;
+}
+
+.desktop-view :is(button, .desktop-screen):focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+/* Elements with a display of their own still honour `hidden`. */
+.desktop-overlay[hidden],
+.desktop-overlay-body[hidden] {
+	display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.desktop-spinner {
+		animation: none;
+	}
+
+	.desktop-screen {
+		transition: none;
+	}
+}
+
+@media (forced-colors: active) {
+	.desktop-overlay-panel {
+		border: 1px solid CanvasText;
+	}
+}

@@ -32,8 +32,8 @@ interface ServiceRow {
 }
 
 const serviceRows: readonly ServiceRow[] = [
-	{ label: nls.localize('devices.serviceDesktop', 'Remote desktop'), icon: Icons.remoteDesktop, capabilities: ['desktopControl'] },
-	{ label: nls.localize('devices.serviceView', 'View screen only'), icon: Icons.view, capabilities: ['desktopView'] },
+	{ label: nls.localize('devices.serviceDesktop', 'Remote desktop'), icon: Icons.remoteDesktop, capabilities: ['desktopControl'], command: 'vnilink.desktop.open' },
+	{ label: nls.localize('devices.serviceView', 'View screen only'), icon: Icons.view, capabilities: ['desktopView'], command: 'vnilink.desktop.view' },
 	{ label: nls.localize('devices.serviceTerminal', 'Terminal'), icon: Icons.terminal, capabilities: ['terminal'], command: 'vnilink.terminal.open' },
 	{ label: nls.localize('devices.serviceFiles', 'Files'), icon: Icons.files, capabilities: ['files'], command: 'vnilink.files.open' },
 	{ label: nls.localize('devices.serviceCamera', 'Camera'), icon: Icons.camera, capabilities: ['camera'], command: 'vnilink.camera.open' },

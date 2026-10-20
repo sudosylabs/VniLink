@@ -3,7 +3,20 @@ import test from 'node:test';
 import { fakeEngine } from './fixtures.mjs';
 import { build } from 'esbuild';
 
-const result = await build({ stdin: { contents: `export { RemoteDesktopService } from './src/workbench/services/remoteDesktop/remoteDesktopServiceImpl.js'; export { DesktopReadbackError, isValidDesktopQuality } from './src/workbench/services/remoteDesktop/remoteDesktopService.js'; export { isEngineCommand, isEngineReply } from './src/platform/engine/common/engine.js';`, loader: 'ts', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node', tsconfig: 'tsconfig.json' });
+const result = await build({
+	stdin: { contents: `export { RemoteDesktopService } from './src/workbench/services/remoteDesktop/remoteDesktopServiceImpl.js'; export { DesktopReadbackError, isValidDesktopQuality } from './src/workbench/services/remoteDesktop/remoteDesktopService.js'; export { isEngineCommand, isEngineReply } from './src/platform/engine/common/engine.js';`, loader: 'ts', resolveDir: process.cwd() },
+	bundle: true, write: false, format: 'esm', platform: 'node', tsconfig: 'tsconfig.json',
+	// The window's channel client and decoder need a renderer; the tests give the service their own.
+	plugins: [{
+		name: 'stubs', setup(builder) {
+			builder.onResolve({ filter: /(dataChannelClient|webCodecsDecoder|extensions)\.js$/ }, args => ({ path: args.path, namespace: 'stub' }));
+			builder.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({
+				contents: 'export const DataChannelClient = { open() { throw new Error("no channel in tests"); } }; export const createWebCodecsDecoder = async () => undefined; export const registerSingleton = () => {}; export const InstantiationType = {};',
+				loader: 'js',
+			}));
+		},
+	}],
+});
 
 const { RemoteDesktopService, DesktopReadbackError, isValidDesktopQuality, isEngineCommand, isEngineReply } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 
@@ -108,4 +121,43 @@ test('codec preferences reject malformed or extra fields', () => {
 	for (const command of [{ type: 'setDesktopCodecDefault', codec: 'bogus' }, { type: 'setDesktopCodecDefault' }, { type: 'setDesktopCodecDefault', codec: 'vp9', sessionId: '1' }]) {
 		assert(!isEngineCommand(command));
 	}
+});
+
+test('a screen opens only where it is shared: the picture first, then the input when controlling', async () => {
+	const engine = fakeEngine({
+		engineCommand: async command => command.type === 'controllerSessions'
+			? { type: 'sessions', sessions: [{ id: '4', generation: '2', role: 'Controller', peer_id: 'peer', phase: 'Active', quality: null }] }
+			: { type: 'done' }
+	}, true);
+	const statuses = { desktopControl: 'turnedOff', desktopView: 'available' };
+	const devices = { availability: async () => Object.entries(statuses).map(([capability, status]) => ({ capability, status })) };
+	const service = new RemoteDesktopService(engine, devices);
+	const opened = [];
+	service.openChannel = async request => {
+		opened.push(request.kind);
+		if (request.kind === 'input' && statuses.refuseInput) {
+			throw new Error('Unauthorized: control is not allowed');
+		}
+		return {
+			input() { }, close() {
+				opened.push(`closed ${request.kind}`);
+			}
+		};
+	};
+	assert.deepEqual(await service.open('peer', true), { failure: 'turnedOff' });
+	assert.deepEqual(opened, [], 'a refused screen opened a channel');
+	const viewing = await service.open('peer', false);
+	assert(viewing.session && !viewing.session.control);
+	assert.deepEqual(opened, ['video'], 'viewing opened input');
+	viewing.session.dispose();
+	opened.length = 0;
+	statuses.desktopControl = 'available';
+	const controlling = await service.open('peer', true);
+	assert(controlling.session?.control);
+	assert.deepEqual(opened, ['video', 'input']);
+	controlling.session.dispose();
+	opened.length = 0;
+	statuses.refuseInput = true;
+	assert.deepEqual(await service.open('peer', true), { failure: 'turnedOff' });
+	assert.deepEqual(opened, ['video', 'input', 'closed video'], 'a refused input left the picture open');
 });
