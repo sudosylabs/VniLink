@@ -19,6 +19,12 @@ export class TestApplication {
 	}
 
 	constructor() {
+		// The scenarios wait on animation frames and timers. Chromium stops
+		// both for a window macOS reports as covered or off screen, as when
+		// the display sleeps during a run, so a test window renders as if seen.
+		for (const flag of ['disable-backgrounding-occluded-windows', 'disable-renderer-backgrounding', 'disable-background-timer-throttling']) {
+			app.commandLine.appendSwitch(flag);
+		}
 		app.setPath('userData', this.profile);
 		mkdirSync(this.output, { recursive: true });
 		writeFileSync(join(this.output, 'environment.json'), JSON.stringify({ platform: process.platform, architecture: process.arch, versions: process.versions, chromiumSandbox: !this.container }, null, 2));
@@ -26,6 +32,10 @@ export class TestApplication {
 
 	public async run(verify: (window: BrowserWindow, driver: WindowDriver) => Promise<void>): Promise<void> {
 		this.timer = setTimeout(() => {
+			// Said, so a hang is not mistaken for a crash.
+			const message = 'The scenarios did not finish within 120 s; the last screenshot shows how far they got.';
+			appendFileSync(join(this.output, 'failure.log'), message);
+			console.error(message);
 			this.cleanup();
 			app.exit(1);
 		}, 120000);

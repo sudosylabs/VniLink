@@ -17,6 +17,21 @@ import { registerDevelopmentWindow } from '../../src/code/electron-main/developm
 import { NOTICE_URL } from '../../src/platform/systemActions/common/notice.js';
 import { windowPrompt } from '../../src/platform/systemActions/electron-main/noticeWindow.js';
 
+/** Resolves when `window` emits `event`, or fails after ten seconds. */
+function windowEvent(window: BrowserWindow, event: 'minimize' | 'restore'): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const timer = setTimeout(() => {
+			window.removeListener(event as 'minimize', done);
+			reject(new Error(`The window did not ${event}`));
+		}, 10000);
+		function done(): void {
+			clearTimeout(timer);
+			resolve();
+		}
+		window.once(event as 'minimize', done);
+	});
+}
+
 class SmokeSuite {
 	private readonly application = new TestApplication();
 	private readonly selection = new ScenarioSelection(this.application.args);
@@ -684,8 +699,16 @@ class SmokeSuite {
     return { label: tab.querySelector('.tab-label').textContent, permanent: document.body.contains(panel), draggable: tab.draggable };
   })()`);
 		assert.deepEqual(homeView, { label: 'Home', permanent: true, draggable: false });
+		// Minimizing and restoring animate on macOS. Each is awaited: focusing
+		// a window still minimizing restores nothing, and the scenarios after
+		// would run in a minimized window, which gets no animation frames.
+		const minimized = windowEvent(window, 'minimize');
 		await call('minimizeWindow');
+		await minimized;
+		const restored = windowEvent(window, 'restore');
 		await call('focusWindow');
+		await restored;
+		assert.equal(window.isMinimized(), false, 'Focus left the window minimized');
 		const state: unknown = await call('getWindowState');
 		assert.ok(
 			record(state) && state.windowId === window.id && state.fullscreen === false && state.alwaysOnTop === false,
