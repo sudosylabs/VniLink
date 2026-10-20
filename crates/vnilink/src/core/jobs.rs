@@ -4,12 +4,13 @@
 //! cancellation and restartable progress. Each side polls its own
 //! records; senders learn completion by asking the receiver over the
 //! auxiliary stream, so both directions complete honestly. Records
-//! persist as JSON beside the blob store; validated blob ranges persist
-//! in the store itself.
+//! persist in journals beside the blob store; validated blob ranges
+//! persist in the store itself.
 //!
 //! Threading follows the core rule: call from outside the runtime,
 //! preferably off the UI thread. One `job_poll` advances at most one
-//! file; progress is exact between polls.
+//! file; progress is exact between polls. Records persist in per-job
+//! journals (`job_journal`).
 
 use super::*;
 
@@ -27,7 +28,6 @@ use iroh_blobs::api::blobs::AddPathOptions;
 use iroh_blobs::api::proto::ImportMode;
 use iroh_blobs::BlobFormat;
 
-const JOBS_FILE: &str = "jobs.json";
 const STAGING_DIR: &str = "staging";
 
 /// Test hooks for cross-volume pre-staging. Production leaves them unset:
@@ -60,7 +60,6 @@ pub(crate) static PRESTAGE_HOOKS: std::sync::Mutex<PrestageHooks> =
     });
 
 const NO_JOB: &str = "the job is unknown";
-const JOB_STORE_FAILED: &str = "the job record could not be saved";
 const SOURCE_CHANGED: &str = "the source changed since preparation";
 const VERIFY_FAILED: &str = "the destination could not be verified";
 const PUBLISH_FAILED: &str = "the file could not be published";
@@ -111,12 +110,15 @@ pub(super) struct JobRecord {
     /// resumes that file from the store's own record.
     #[serde(skip)]
     in_flight: u64,
+    /// Files landed since the journal last heard, oldest first.
+    #[serde(skip)]
+    unsaved_landed: Vec<(usize, String)>,
 }
 
 impl JobRecord {
     /// A download of one `size`-byte file, as a receiver holds it.
     #[cfg(test)]
-    fn test_receiver(id: u64, size: u64) -> Self {
+    pub(super) fn test_receiver(id: u64, size: u64) -> Self {
         Self {
             owner: None,
             destination: None,
@@ -153,7 +155,87 @@ impl JobRecord {
             apply_remaining: None,
             error: None,
             in_flight: 0,
+            unsaved_landed: Vec::new(),
         }
+    }
+
+    /// A download of `files` files, as a receiver holds it.
+    #[cfg(test)]
+    pub(super) fn test_receiver_of(id: u64, files: usize) -> Self {
+        let mut record = Self::test_receiver(id, 0);
+        record.manifest = Some(Manifest {
+            entries: (0..files)
+                .map(|index| ManifestEntry {
+                    path: format!("file-{index:05}.bin"),
+                    is_dir: false,
+                    hash: [1; 32],
+                    size: 1,
+                    source_mtime_ms: 0,
+                })
+                .collect(),
+        });
+        record
+    }
+
+    /// Lands the next file, as a receiver does.
+    #[cfg(test)]
+    pub(super) fn test_land_next(&mut self) {
+        let index = self.file_index;
+        self.land(index, format!("file-{index:05}.bin"));
+        self.file_index += 1;
+        self.files_done += 1;
+        self.done_bytes += 1;
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_landed(&self) -> &HashMap<usize, String> {
+        &self.landed
+    }
+
+    pub(super) fn has_manifest(&self) -> bool {
+        self.manifest.is_some()
+    }
+
+    /// Records that file `index` landed as `name`, for the journal too.
+    fn land(&mut self, index: usize, name: String) {
+        self.unsaved_landed.push((index, name.clone()));
+        self.landed.insert(index, name);
+    }
+
+    /// Replays a landed file from the journal.
+    pub(super) fn land_saved(&mut self, index: usize, name: String) {
+        self.landed.insert(index, name);
+    }
+
+    pub(super) fn unsaved_landed(&self) -> &[(usize, String)] {
+        &self.unsaved_landed
+    }
+
+    /// The journal now holds the oldest `count` unsaved landed files.
+    pub(super) fn saved_landed(&mut self, count: usize) {
+        self.unsaved_landed
+            .drain(..count.min(self.unsaved_landed.len()));
+    }
+
+    /// The record as a journal progress line: everything but its manifest
+    /// and landed files, which the journal holds apart.
+    pub(super) fn progress_line(&mut self) -> String {
+        let manifest = self.manifest.take();
+        let landed = std::mem::take(&mut self.landed);
+        let line = serde_json::to_string(&*self).unwrap_or_default();
+        self.manifest = manifest;
+        self.landed = landed;
+        line
+    }
+
+    /// Takes a progress line read from the journal, keeping this record's
+    /// manifest and landed files.
+    pub(super) fn take_progress(&mut self, progress: JobRecord) {
+        let manifest = self.manifest.take();
+        let landed = std::mem::take(&mut self.landed);
+        *self = progress;
+        self.manifest = manifest;
+        self.landed = landed;
     }
 
     /// Bytes done, including the file arriving now.
@@ -351,6 +433,7 @@ impl Core {
             apply_remaining: None,
             error: None,
             in_flight: 0,
+            unsaved_landed: Vec::new(),
         };
         // Announce over the auxiliary stream on the live control session.
         let offer = job::UploadOffer {
@@ -510,6 +593,7 @@ impl Core {
                     apply_remaining: None,
                     error: None,
                     in_flight: 0,
+                    unsaved_landed: Vec::new(),
                 },
             );
         }
@@ -1239,7 +1323,7 @@ impl Core {
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             let at = record.file_index;
             if choice != ConflictChoice::Skip {
-                record.landed.insert(at, landed);
+                record.land(at, landed);
             }
         }
         {
@@ -2929,39 +3013,20 @@ fn follow_arrival(
     })
 }
 
-/// Saves every job, and tells watchers: each change to a job ends here.
+/// Saves the jobs that changed and tells watchers: each change to a job
+/// ends here. A save that changes nothing writes and tells nothing.
 pub(super) fn save_jobs(shared: &Shared) -> Result<(), Error> {
-    jobs_changed(shared);
-    let _writer = lock(&shared.job_save);
-    if lock(&shared.blob_dir).is_none() {
-        return Ok(());
-    }
-    let dir = super::blob::blob_directory(shared)?;
-    let jobs = lock(&shared.jobs);
-    let mut records: Vec<&JobRecord> = jobs.values().collect();
-    records.sort_by_key(|record| record.id);
-    let owned: Vec<JobRecord> = records.into_iter().cloned().collect();
-    drop(jobs);
-    let text =
-        serde_json::to_string(&owned).map_err(|_| Error::InvalidSetting(JOB_STORE_FAILED))?;
-    let tmp = dir.join(format!("{}.tmp", JOBS_FILE));
-    std::fs::write(&tmp, text).map_err(|_| Error::InvalidSetting(JOB_STORE_FAILED))?;
-    std::fs::rename(&tmp, dir.join(JOBS_FILE))
-        .map_err(|_| Error::InvalidSetting(JOB_STORE_FAILED))?;
-    Ok(())
+    super::job_journal::save_jobs(shared)
 }
 
 pub(super) fn load_jobs(shared: &Shared) {
+    // Each record is written afresh at its next save.
+    lock(&shared.job_journal).reset();
     let Some(dir) = lock(&shared.blob_dir).clone() else {
         return;
     };
-    let text = match std::fs::read_to_string(dir.join(JOBS_FILE)) {
-        Ok(text) => text,
-        Err(_) => return,
-    };
-    let mut records: Vec<JobRecord> = match serde_json::from_str(&text) {
-        Ok(records) => records,
-        Err(_) => return,
+    let Some((mut records, clean)) = super::job_journal::read_journals(&dir) else {
+        return;
     };
     let mut max = 0u64;
     {
@@ -2985,7 +3050,9 @@ pub(super) fn load_jobs(shared: &Shared) {
             jobs.insert(record.id, record);
         }
     }
-    reconcile_staging(shared, &dir);
+    if clean {
+        reconcile_staging(shared, &dir);
+    }
     let next = shared.job_next.load(Ordering::Relaxed);
     if max.saturating_add(1) > next {
         shared
@@ -2994,10 +3061,11 @@ pub(super) fn load_jobs(shared: &Shared) {
     }
 }
 
-/// Only reconcile after a valid durable index was loaded. Missing/corrupt
-/// indexes retain payloads for diagnosis rather than interpreting corruption
-/// as permission to delete all previously owned data. Only canonical managed
-/// names are candidates; unexpected entries remain untouched.
+/// Only reconcile after every journal was read. Missing or unreadable
+/// journals retain payloads for diagnosis rather than interpreting
+/// corruption as permission to delete all previously owned data. Only
+/// canonical managed names are candidates; unexpected entries remain
+/// untouched.
 fn reconcile_staging(shared: &Shared, dir: &std::path::Path) {
     let keep: std::collections::HashSet<u64> = lock(&shared.jobs)
         .values()
@@ -3032,11 +3100,6 @@ fn reconcile_staging_at(dir: &std::path::Path, keep: &std::collections::HashSet<
                 let _ = anchored::remove_tree_at(staging.as_fd(), name);
             }
         }
-    }
-    // Incomplete atomic-save temporary records are not authoritative. Only
-    // unlink a file/symlink; an unexpected directory is not our record.
-    if anchored::stat_at(root.as_fd(), "jobs.json.tmp").is_ok_and(|m| m.is_file || m.is_symlink) {
-        let _ = anchored::remove_tree_at(root.as_fd(), "jobs.json.tmp");
     }
 }
 
@@ -3950,6 +4013,7 @@ pub(super) async fn handle_upload_offer(
                 apply_remaining: None,
                 error: None,
                 in_flight: 0,
+                unsaved_landed: Vec::new(),
             },
         );
         Ok(())
@@ -4101,6 +4165,7 @@ pub(super) async fn handle_download_request(
                         apply_remaining: None,
                         error: None,
                         in_flight: 0,
+                        unsaved_landed: Vec::new(),
                     },
                 );
                 Ok((id, manifest, skipped))
@@ -4414,6 +4479,7 @@ mod lifecycle_tests {
             apply_remaining: None,
             error: None,
             in_flight: 0,
+            unsaved_landed: Vec::new(),
         }
     }
 
@@ -4649,8 +4715,6 @@ mod crash_staging_tests {
             std::fs::create_dir_all(base.join(STAGING_DIR).join(name)).unwrap();
             std::fs::write(base.join(STAGING_DIR).join(name).join("bytes"), name).unwrap();
         }
-        std::fs::write(base.join("jobs.json.tmp"), "incomplete save").unwrap();
-        std::fs::write(base.join("jobs.json"), "authoritative index").unwrap();
         reconcile_staging_at(&base, &std::collections::HashSet::from([1]));
         assert_eq!(
             std::fs::read(base.join("staging/job-1/bytes")).unwrap(),
@@ -4660,11 +4724,6 @@ mod crash_staging_tests {
         assert!(!base.join("staging/job-3").exists());
         assert!(base.join("staging/job-02/bytes").exists());
         assert!(base.join("staging/unrelated/bytes").exists());
-        assert!(!base.join("jobs.json.tmp").exists());
-        assert_eq!(
-            std::fs::read(base.join("jobs.json")).unwrap(),
-            b"authoritative index"
-        );
         #[cfg(unix)]
         {
             std::fs::create_dir(base.join("external")).unwrap();

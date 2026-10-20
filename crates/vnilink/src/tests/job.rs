@@ -2949,8 +2949,8 @@ fn files_adoption_local_save_failure_can_retry_remote_acknowledged_binding() {
     let (fresh, _pipe) = open();
     // An existing directory refuses atomic replacement on every target without
     // relying on permissions (the Docker validation account may be root).
-    let index = cs.join("blobs/jobs.json");
-    let saved = cs.join("blobs/jobs.saved");
+    let index = cs.join(&format!("blobs/jobs/{job}.jsonl"));
+    let saved = cs.join("blobs/journal.saved");
     std::fs::rename(&index, &saved).unwrap();
     std::fs::create_dir(&index).unwrap();
     assert!(controller
@@ -3094,7 +3094,8 @@ fn restart_reconciles_managed_orphans_but_keeps_interrupted_staging() {
     let orphan = hs.join("blobs/staging/job-18446744073709551615");
     std::fs::create_dir_all(&orphan).unwrap();
     std::fs::write(orphan.join("unused"), b"orphan").unwrap();
-    std::fs::write(hs.join("blobs/jobs.json.tmp"), b"incomplete atomic save").unwrap();
+    let torn = hs.join(&format!("blobs/jobs/{rx}.jsonl.tmp"));
+    std::fs::write(&torn, b"incomplete rewrite").unwrap();
     let reopened = start_direct();
     reopened.set_blob_directory(hs.join("blobs")).unwrap();
     assert_eq!(
@@ -3106,7 +3107,7 @@ fn restart_reconciles_managed_orphans_but_keeps_interrupted_staging() {
         b"resume data"
     );
     assert!(!orphan.exists());
-    assert!(!hs.join("blobs/jobs.json.tmp").exists());
+    assert!(!torn.exists());
     assert_eq!(
         std::fs::read(cs.join("root/source.bin")).unwrap(),
         b"source survives crash"

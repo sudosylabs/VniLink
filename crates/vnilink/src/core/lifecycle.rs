@@ -339,7 +339,7 @@ impl Core {
             watch_next: std::sync::atomic::AtomicU64::new(1),
             jobs: Arc::new(Mutex::new(std::collections::HashMap::new())),
             job_next: std::sync::atomic::AtomicU64::new(1),
-            job_save: Mutex::new(()),
+            job_journal: Mutex::new(Default::default()),
             job_owner_gate: Mutex::new(()),
             job_cancel: Mutex::new(std::collections::HashMap::new()),
             job_driving: Mutex::new(std::collections::HashSet::new()),

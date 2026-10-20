@@ -52,6 +52,7 @@ mod fs;
 #[cfg(test)]
 pub(crate) use fs::LIST_DELAY;
 mod host;
+mod job_journal;
 mod jobs;
 #[cfg(unix)]
 pub(crate) use jobs::PrestageHooks;
@@ -629,7 +630,8 @@ struct Shared {
     jobs: Arc<Mutex<HashMap<u64, jobs::JobRecord>>>,
     /// Next local job id. Adopted peer ids bump it past collisions.
     job_next: AtomicU64,
-    job_save: Mutex<()>,
+    /// What each job's journal holds; its lock orders the writers.
+    job_journal: Mutex<job_journal::JobJournal>,
     job_owner_gate: Mutex<()>,
     /// Cancel watches for in-flight job fetches, one per active poll.
     job_cancel: Mutex<HashMap<u64, tokio::sync::watch::Sender<bool>>>,
