@@ -1,7 +1,8 @@
 //! Session-scoped binary data plane. Never takes the JSON bridge's State mutex.
 use super::{core_error, parse_id, Command, CommandShape, Engine};
 use napi::{
-    bindgen_prelude::{AsyncTask, Buffer},
+    bindgen_prelude::{AsyncTask, Buffer, Function},
+    threadsafe_function::ThreadsafeFunctionCallMode,
     Env, Error, Result, Task,
 };
 use napi_derive::napi;
@@ -310,6 +311,36 @@ impl DataChannel {
 
 #[napi]
 impl DataChannel {
+    /// Calls `callback`, with no arguments, when a picture is ready to
+    /// [`Self::read`], so the reader need not poll. A call waiting to run
+    /// merges with the next; the callback keeps no process alive and stops
+    /// with the channel. Video channels only; another call replaces it.
+    #[napi]
+    pub fn on_ready(&self, callback: Function<(), ()>) -> Result<()> {
+        self.check()?;
+        if self.kind != "video" {
+            return Err(Error::from_reason("Invalid ready target"));
+        }
+        let ready = callback
+            .build_threadsafe_function::<()>()
+            .callee_handled::<false>()
+            .weak::<true>()
+            .max_queue_size::<1>()
+            .build()?;
+        let video = self
+            .video
+            .lock()
+            .map_err(|_| Error::from_reason("Channel unavailable"))?;
+        video
+            .as_ref()
+            .ok_or_else(|| Error::from_reason("Channel unavailable"))?
+            .on_ready(move || {
+                // Full means a wake is already waiting: this frame is read then.
+                let _ = ready.call((), ThreadsafeFunctionCallMode::NonBlocking);
+            });
+        Ok(())
+    }
+
     /// Nonblocking bounded drain; JS pushes the resulting bytes and waits for
     /// acknowledgement before pulling again. No libuv worker per frame.
     #[napi]

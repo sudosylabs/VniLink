@@ -201,7 +201,13 @@ pub(crate) struct VideoInbox {
     wake: Condvar,
     closed: AtomicBool,
     taps: Mutex<Vec<std::sync::Weak<RecordingInbox>>>,
+    /// Told when a frame is queued, so a reader need not poll.
+    ready: Mutex<Option<Arc<ReadyWaker>>>,
 }
+
+/// Called, on the network task, each time a frame is queued for the reader.
+/// It must return at once.
+pub type ReadyWaker = dyn Fn() + Send + Sync;
 
 fn inbox_queue() -> VideoQueue {
     VideoQueue::new().with_max_age(INBOX_MAX_AGE)
@@ -214,7 +220,15 @@ impl VideoInbox {
             wake: Condvar::new(),
             closed: AtomicBool::new(false),
             taps: Mutex::new(Vec::new()),
+            ready: Mutex::new(None),
         }
+    }
+
+    pub(crate) fn set_ready(&self, waker: Option<Arc<ReadyWaker>>) {
+        *self
+            .ready
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = waker;
     }
 
     pub(crate) fn push(&self, frame: EncodedFrame) -> VideoPush {
@@ -233,8 +247,17 @@ impl VideoInbox {
             return VideoPush::StillNeedsKeyframe;
         }
         let result = queue.push(frame);
+        drop(queue);
         if matches!(result, VideoPush::Queued) {
             self.wake.notify_one();
+            let ready = self
+                .ready
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clone();
+            if let Some(ready) = ready {
+                ready();
+            }
         }
         result
     }
@@ -253,6 +276,7 @@ impl VideoInbox {
     }
 
     pub(crate) fn close(&self) {
+        self.set_ready(None);
         self.closed.store(true, Ordering::Release);
         self.close_taps();
         let mut queue = lock(&self.queue);
@@ -350,6 +374,14 @@ impl VideoSubscription {
         self.inbox.try_pop()
     }
 
+    /// Calls `waker` each time a frame is queued for this subscription,
+    /// until the subscription is dropped, the stream closes or another
+    /// waker replaces it. It runs on the network task and must return at
+    /// once, typically by waking the reader.
+    pub fn on_ready(&self, waker: impl Fn() + Send + Sync + 'static) {
+        self.inbox.set_ready(Some(Arc::new(waker)));
+    }
+
     pub fn recv_timeout(&self, timeout: Duration) -> Option<EncodedFrame> {
         self.inbox.pop_timeout(timeout)
     }
@@ -357,6 +389,13 @@ impl VideoSubscription {
     /// Frames dropped because the queue was full or a keyframe replaced them.
     pub fn lagged(&self) -> u64 {
         self.inbox.dropped()
+    }
+}
+
+impl Drop for VideoSubscription {
+    fn drop(&mut self) {
+        // Its reader is gone: nothing is left to wake.
+        self.inbox.set_ready(None);
     }
 }
 

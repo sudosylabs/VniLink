@@ -11,6 +11,8 @@ export interface NativeDataChannel {
 	/** The pointer when it moved or changed shape since the last call, or null. */
 	cursor(): NativeCursor | null;
 	read(): { kind: string; data?: Uint8Array | null; metadata: string } | null;
+	/** Video only: calls `callback` when a picture is ready to read. */
+	onReady?(callback: () => void): void;
 	write(data: Uint8Array): void;
 	resize(rows: number, columns: number): void;
 	input(command: string): void;
@@ -42,6 +44,10 @@ export interface DataPort {
 const VIDEO_WINDOW = 4;
 /** How often the other computer's pointer is looked at: faster than a screen refreshes. */
 const CURSOR_POLL_MS = 8;
+/** How soon an empty channel is read again; the engine says when a picture is ready. */
+const POLL_MS = 4;
+/** A channel the engine wakes is still read this often, should a wake ever be missed. */
+const WOKEN_POLL_MS = 250;
 
 export class DataChannelHost {
 	private closed = false;
@@ -50,6 +56,8 @@ export class DataChannelHost {
 	private readonly poll = { timer: undefined as ReturnType<typeof setTimeout> | undefined };
 	private cursorTimer: ReturnType<typeof setInterval> | undefined;
 	private sequence = 0;
+	/** Whether the engine says when a packet is ready, so the channel need not poll. */
+	private woken = false;
 	/** The last packet the renderer acknowledged. */
 	private acknowledged = 0;
 	private ended = false;
@@ -81,6 +89,12 @@ export class DataChannelHost {
 			return;
 		}
 		this.native = native;
+		if (this.request.kind === 'video' && native.onReady) {
+			native.onReady(() => {
+				this.pump();
+			});
+			this.woken = true;
+		}
 		this.port.postMessage({ type: 'ready' });
 		// A files channel reads too: the engine pushes its job changes.
 		if (this.request.kind !== 'input') {
@@ -252,11 +266,12 @@ export class DataChannelHost {
 			while (this.sequence - this.acknowledged < window && !this.ended) {
 				const packet = this.native.read();
 				if (!packet) {
-					// Nothing ready: look again shortly; an acknowledgement also looks.
+					// Nothing ready: look again shortly, unless the engine says when; an
+					// acknowledgement also looks.
 					this.poll.timer = setTimeout(() => {
 						this.poll.timer = undefined;
 						this.pump();
-					}, 4);
+					}, this.woken ? WOKEN_POLL_MS : POLL_MS);
 					return;
 				}
 				this.ended = packet.kind === 'exited' || packet.kind === 'failed';

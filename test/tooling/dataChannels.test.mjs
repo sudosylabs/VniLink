@@ -137,6 +137,32 @@ test('the other pointer travels beside the picture, checked, and only on a pictu
 	}
 });
 
+test('a picture channel reads when the engine says a picture is ready, not every few milliseconds', async () => {
+	const f = fixture();
+	let ready;
+	let reads = 0;
+	const read = f.native.read;
+	f.native.read = () => {
+		reads++;
+		return read();
+	};
+	f.native.onReady = callback => {
+		ready = callback;
+	};
+	try {
+		f.host.start(f.native);
+		assert.equal(typeof ready, 'function', 'the channel did not ask to be woken');
+		const before = reads;
+		await new Promise(resolve => setTimeout(resolve, 60));
+		assert(reads - before <= 1, `an empty channel was read ${String(reads - before)} times in 60 ms`);
+		f.packets.push({ kind: 'video', data: Buffer.from([1]), metadata: '{}' });
+		ready();
+		assert.equal(f.messages.filter(m => m.type === 'data').length, 1, 'a ready picture waited');
+	} finally {
+		f.host.close();
+	}
+});
+
 test('other channels keep one packet on the way', () => {
 	const f = fixture('terminal');
 	try {

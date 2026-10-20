@@ -12,7 +12,13 @@ class WebCodecsDecoder implements CameraDecoder {
 
 	public decode(chunk: CameraChunk): void {
 		if (this.decoder.state === 'configured') {
-			this.decoder.decode(new EncodedVideoChunk({ type: chunk.key ? 'key' : 'delta', timestamp: chunk.timestamp, data: chunk.data }));
+			const { data } = chunk;
+			// Bytes that fill their own buffer, as a packet off the engine's
+			// channel does, are handed to the decoder rather than copied.
+			const transfer = data.byteOffset === 0 && data.byteLength === data.buffer.byteLength && data.buffer instanceof ArrayBuffer ? [data.buffer] : [];
+			// Chromium takes `transfer`; this TypeScript's DOM types predate it.
+			const init: EncodedVideoChunkInit & { readonly transfer: ArrayBuffer[] } = { type: chunk.key ? 'key' : 'delta', timestamp: chunk.timestamp, data, transfer };
+			this.decoder.decode(new EncodedVideoChunk(init));
 		}
 	}
 

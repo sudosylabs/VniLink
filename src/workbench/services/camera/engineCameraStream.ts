@@ -9,6 +9,7 @@ import { avcCodec } from './h264.js';
 export interface CameraChunk {
 	readonly key: boolean;
 	readonly timestamp: number;
+	/** Taken by the decoder: it may be detached once decode returns. */
 	readonly data: Uint8Array;
 }
 

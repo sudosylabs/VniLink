@@ -478,3 +478,32 @@ fn h264_frames_round_trip_and_reject_a_bad_payload() {
         Err(Error::InvalidSetting("encoded frame is larger than 1 MiB"))
     ));
 }
+
+/// A reader told when a frame is queued need not poll; once it is gone, the
+/// network task calls nothing.
+#[test]
+fn a_subscription_is_woken_when_a_frame_is_queued_until_it_is_dropped() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let inbox = Arc::new(crate::video::VideoInbox::new());
+    let subscription = crate::VideoSubscription::new(Arc::clone(&inbox), Arc::new(()));
+    let woken = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&woken);
+    subscription.on_ready(move || {
+        counter.fetch_add(1, Ordering::Relaxed);
+    });
+    let frame = |keyframe| EncodedFrame::h264(keyframe, 1, vec![0x65]).unwrap();
+    inbox.push(frame(true));
+    assert_eq!(woken.load(Ordering::Relaxed), 1);
+    assert!(subscription.try_recv().is_some());
+    // A frame dropped while a keyframe is owed wakes no one.
+    inbox.lost();
+    inbox.push(frame(false));
+    assert_eq!(woken.load(Ordering::Relaxed), 1);
+    drop(subscription);
+    inbox.push(frame(true));
+    assert_eq!(
+        woken.load(Ordering::Relaxed),
+        1,
+        "a dropped reader was woken"
+    );
+}
