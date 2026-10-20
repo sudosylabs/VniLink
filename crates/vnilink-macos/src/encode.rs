@@ -106,23 +106,34 @@ impl MacEncoder {
             } else {
                 ProfileLevel::H264ConstrainedBaselineAutoLevel
             };
-            let session = CompressionSession::builder(
-                i32::from(width),
-                i32::from(height),
-                if codec == vnilink::VideoCodec::H265 {
-                    Codec::HEVC
-                } else {
-                    Codec::H264
-                },
-            )
-            .with_profile_level(profile)
-            .with_real_time(true)
-            .with_allow_frame_reordering(false)
-            .with_average_bit_rate(bitrate)
-            .with_expected_frame_rate(f64::from(frame_rate))
-            .with_max_keyframe_interval(120)
-            .build()
-            .map_err(|_| Error::Unsupported("VideoToolbox H.264"))?;
+            let builder = || {
+                CompressionSession::builder(
+                    i32::from(width),
+                    i32::from(height),
+                    if codec == vnilink::VideoCodec::H265 {
+                        Codec::HEVC
+                    } else {
+                        Codec::H264
+                    },
+                )
+                .with_profile_level(profile)
+                .with_real_time(true)
+                .with_allow_frame_reordering(false)
+                .with_average_bit_rate(bitrate)
+                .with_expected_frame_rate(f64::from(frame_rate))
+            };
+            // Low-latency rate control encodes each picture as it comes,
+            // one in and one out, and keeps sizes near the target; keyframes
+            // then come only when asked for, as the viewer does after a loss.
+            // An encoder that refuses it keeps the ordinary rate control with
+            // a keyframe every 120 pictures.
+            let session = builder()
+                .with_low_latency_rate_control(true)
+                .build()
+                .or_else(|_| builder().with_max_keyframe_interval(120).build())
+                .map_err(|_| Error::Unsupported("VideoToolbox H.264"))?;
+            low_latency(&session);
+            set_rate(&session, bitrate, frame_rate);
             let surface = IOSurface::create(usize::from(width), usize::from(height), BGRA, 4)
                 .ok_or(Error::Unsupported("VideoToolbox H.264"))?;
             Ok(Self {
@@ -143,7 +154,93 @@ impl MacEncoder {
     }
 }
 
+/// Sets one property on a running session. VideoToolbox decides which it
+/// takes from a given encoder; refusal is reported, not an error.
+#[cfg(target_os = "macos")]
+fn set(
+    session: &CompressionSession,
+    key: videotoolbox::ffi::CFStringRef,
+    value: &dyn apple_cf::cf::AsCFType,
+) -> bool {
+    // SAFETY: `key` is one of VideoToolbox's exported property keys, and
+    // `value` is a live Core Foundation object of the type that key takes
+    // (a number, an array of numbers or a string), borrowed for the call;
+    // VideoToolbox retains whatever it keeps.
+    unsafe { session.set_property(key, value.as_ptr().cast_const()) }.is_ok()
+}
+
+/// The target bitrate and frame rate, with peaks held to 1.5 times the
+/// average over any second, so a keyframe cannot overrun the link. Returns
+/// whether the encoder took the bitrate.
+#[cfg(target_os = "macos")]
+fn set_rate(session: &CompressionSession, bitrate: i32, frame_rate: u8) -> bool {
+    use apple_cf::cf::{CFArray, CFNumber};
+    use videotoolbox::ffi;
+    // SAFETY (all three reads): VideoToolbox's exported constant keys,
+    // initialised by the framework before any session exists.
+    let (average, limits, expected) = unsafe {
+        (
+            ffi::kVTCompressionPropertyKey_AverageBitRate,
+            ffi::kVTCompressionPropertyKey_DataRateLimits,
+            ffi::kVTCompressionPropertyKey_ExpectedFrameRate,
+        )
+    };
+    let took = set(session, average, &CFNumber::from_i64(i64::from(bitrate)));
+    let peak_bytes = CFNumber::from_i64(i64::from(bitrate) * 3 / 16);
+    let second = CFNumber::from_f64(1.0);
+    set(
+        session,
+        limits,
+        &CFArray::from_values(&[&peak_bytes, &second]),
+    );
+    set(
+        session,
+        expected,
+        &CFNumber::from_f64(f64::from(frame_rate)),
+    );
+    took
+}
+
+/// No frame held back for later output, and colour marked as BT.709, the
+/// matrix VideoToolbox converts the BGRA pictures with, so decoders do not
+/// guess.
+#[cfg(target_os = "macos")]
+fn low_latency(session: &CompressionSession) {
+    use apple_cf::cf::{CFNumber, CFString};
+    use videotoolbox::ffi;
+    // SAFETY: VideoToolbox's exported constant keys, as in `set_rate`.
+    let (delay, primaries, transfer, matrix) = unsafe {
+        (
+            ffi::kVTCompressionPropertyKey_MaxFrameDelayCount,
+            ffi::kVTCompressionPropertyKey_ColorPrimaries,
+            ffi::kVTCompressionPropertyKey_TransferFunction,
+            ffi::kVTCompressionPropertyKey_YCbCrMatrix,
+        )
+    };
+    set(session, delay, &CFNumber::from_i64(0));
+    // The value of kCVImageBuffer…_ITU_R_709_2 for all three.
+    let bt709 = CFString::new("ITU_R_709_2");
+    set(session, primaries, &bt709);
+    set(session, transfer, &bt709);
+    set(session, matrix, &bt709);
+}
+
 impl VideoEncoder for MacEncoder {
+    fn retune(&mut self, bitrate_bps: u32, frame_rate: u8) -> Result<bool, Error> {
+        #[cfg(target_os = "macos")]
+        {
+            let Some(bitrate) = i32::try_from(bitrate_bps).ok().filter(|bits| *bits > 0) else {
+                return Ok(false);
+            };
+            Ok(frame_rate > 0 && set_rate(&self.session, bitrate, frame_rate))
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (bitrate_bps, frame_rate);
+            Ok(false)
+        }
+    }
+
     fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
         if frame.width() != self.width || frame.height() != self.height {
             return Err(Error::InvalidFrame(
@@ -302,6 +399,13 @@ impl VideoEncoder for MacVideoEncoder {
         match self {
             Self::Native(encoder) => encoder.encode(frame, params),
             Self::Software(encoder) => encoder.encode(frame, params),
+        }
+    }
+
+    fn retune(&mut self, bitrate_bps: u32, frame_rate: u8) -> Result<bool, Error> {
+        match self {
+            Self::Native(encoder) => encoder.retune(bitrate_bps, frame_rate),
+            Self::Software(encoder) => encoder.retune(bitrate_bps, frame_rate),
         }
     }
 }

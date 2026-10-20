@@ -548,3 +548,39 @@ fn hevc_probe_and_negotiated_encoder_process_real_synthetic_frames() {
         assert!(decoded.pixels()[2].abs_diff(128) < 20);
     }
 }
+
+/// A running VideoToolbox session takes a new bitrate and frame rate, and
+/// the pictures after it decode on from the same keyframe.
+#[test]
+fn videotoolbox_takes_a_new_rate_without_a_keyframe() {
+    let mut encoder = MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
+    let params = |force_keyframe, bitrate_bps, frame_rate| EncodeParams {
+        force_keyframe,
+        bitrate_bps,
+        frame_rate,
+    };
+    let first = encoder
+        .encode(&solid(64, 64, 0, 255, 0, 0), &params(true, 500_000, 30))
+        .unwrap();
+    let mut decoder = MacDecoder::new();
+    decoder
+        .decode(&EncodedFrame::h264(true, 0, first.bytes().to_vec()).unwrap())
+        .unwrap();
+    assert!(encoder.retune(2_000_000, 60).unwrap());
+    for index in 1..4u64 {
+        let sample = encoder
+            .encode(
+                &solid(64, 64, index * 16_667, 255, 0, 0),
+                &params(false, 2_000_000, 60),
+            )
+            .unwrap();
+        assert!(
+            !sample.keyframe(),
+            "picture {index} after the retune was a keyframe"
+        );
+        decoder
+            .decode(&EncodedFrame::h264(false, index * 16_667, sample.bytes().to_vec()).unwrap())
+            .unwrap();
+    }
+    assert!(!encoder.retune(0, 60).unwrap(), "a zero bitrate was taken");
+}
