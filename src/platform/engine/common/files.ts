@@ -73,6 +73,8 @@ export type FileOperation =
 		readonly dstPath: string;
 	}
 	| { readonly type: 'jobs' }
+	/** Watches the folder the pane shows, or none; changes arrive as `folderChanged` packets. */
+	| { readonly type: 'watch'; readonly folder: { readonly root: string; readonly path: string } | null }
 	/** Takes over and resumes the transfers a lost channel to this computer left interrupted. */
 	| { readonly type: 'adopt' }
 	| { readonly type: 'cancel' | 'resume' | 'forget'; readonly jobId: string }
@@ -175,6 +177,9 @@ export function isFileOperation(value: unknown): value is FileOperation {
 	switch (value.type) {
 		case 'places': case 'jobs': case 'adopt':
 			return keys(value, ['type']);
+		case 'watch':
+			return keys(value, ['type', 'folder']) && (value.folder === null
+				|| (record(value.folder) && keys(value.folder, ['root', 'path']) && decimal(value.folder.root) && isFilePath(value.folder.path)));
 		case 'list':
 			return keys(value, ['type', 'root', 'path', 'offset']) && decimal(value.root) && isFilePath(value.path) && decimal(value.offset);
 		case 'mkdir':

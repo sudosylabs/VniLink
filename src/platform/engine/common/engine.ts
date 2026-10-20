@@ -120,6 +120,8 @@ export interface TerminalSession {
 
 export type EngineEvent =
 	| { type: 'hostingChanged'; hosting: boolean }
+	/** A folder watched with `watchLocal` changed. */
+	| { type: 'folderChanged'; watch: string }
 	| { type: 'devicePaired' | 'deviceAuthorized' | 'deviceRevoked' | 'deviceUnpaired'; endpoint_id: string }
 	| { type: 'controlRequested'; endpoint_id: string; check: string }
 	/** A paired computer asked this one to restart or shut down; it runs after `remainingMs` unless cancelled. */
@@ -215,6 +217,9 @@ export type EngineCommand =
 	| { type: 'localPlaces' }
 	/** Names a path on this computer, such as one dropped from the system's file manager. */
 	| { type: 'locateLocal'; path: string }
+	/** Watches one folder on this computer; its changes arrive as `folderChanged` events. */
+	| { type: 'watchLocal'; root: string; path: string }
+	| { type: 'unwatchLocal'; watch: string }
 	| { type: 'listLocal'; root: string; path: string; offset: string }
 	| { type: 'createLocalDir'; root: string; path: string; name: string }
 	| { type: 'renameLocal'; root: string; path: string; name: string; token: FileToken | null; newName: string }
@@ -308,6 +313,7 @@ export type EngineReply =
 	| { type: 'places'; places: FilePlaces }
 	| { type: 'dirPage'; page: FilePage }
 	| { type: 'location'; location: FileTarget | null }
+	| { type: 'watching'; watch: string }
 	| { type: 'done' };
 
 export function record(value: unknown): value is Record<string, unknown> {
@@ -546,6 +552,7 @@ export function isEngineEvent(value: unknown): value is EngineEvent {
 	}
 	switch (value.type) {
 		case 'hostingChanged': return typeof value.hosting === 'boolean' && Object.keys(value).length === 2;
+		case 'folderChanged': return decimal(value.watch) && Object.keys(value).length === 2;
 		case 'devicePaired': case 'deviceAuthorized': case 'deviceRevoked': case 'deviceUnpaired':
 			return text(value.endpoint_id) && Object.keys(value).length === 2;
 		case 'controlRequested': return text(value.endpoint_id) && text(value.check) && Object.keys(value).length === 3;
@@ -648,6 +655,8 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'enableFilesystemAccess': keys = []; break;
 		case 'setTransferDirectory': keys = ['path']; valid = typeof value.path === 'string' && value.path.length > 0 && value.path.length <= 4096 && !value.path.includes('\0'); break;
 		case 'localPlaces': keys = []; valid = true; break;
+		case 'watchLocal': keys = ['root', 'path']; valid = decimal(value.root) && isFilePath(value.path); break;
+		case 'unwatchLocal': keys = ['watch']; valid = decimal(value.watch); break;
 		case 'locateLocal': keys = ['path']; valid = typeof value.path === 'string' && value.path.length > 0 && value.path.length <= 4096 && !value.path.includes('\0'); break;
 		case 'listLocal': keys = ['root', 'path', 'offset']; valid = decimal(value.root) && isFilePath(value.path) && decimal(value.offset); break;
 		case 'createLocalDir': keys = ['root', 'path', 'name']; valid = decimal(value.root) && isFilePath(value.path) && isFileName(value.name); break;
@@ -772,6 +781,7 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'places': return isFilePlaces(value.places) && Object.keys(value).length === 2;
 		case 'dirPage': return isFilePage(value.page) && Object.keys(value).length === 2;
 		case 'location': return (value.location === null || isFileTarget(value.location)) && Object.keys(value).length === 2;
+		case 'watching': return decimal(value.watch) && Object.keys(value).length === 2;
 		case 'done': return true;
 		default: return false;
 	}

@@ -398,6 +398,9 @@ export class FilesPaneView extends Disposable {
 	private anchor: number | undefined;
 	private confirming = false;
 	private stateAct: (() => void) | undefined;
+	/** The open folder's watch: changes made outside VniLink list it again. */
+	private readonly watcher = this._register(new MutableDisposable());
+	private readonly changedLater = this._register(new MutableDisposable());
 
 	constructor(
 		public readonly side: FilesPane,
@@ -659,6 +662,7 @@ export class FilesPaneView extends Disposable {
 	public setUnavailable(title: string, body: string, action?: { readonly label: string; readonly run: () => void }): void {
 		this.revision++;
 		this.disk = undefined;
+		this.watcher.clear();
 		this.entries = [];
 		this.show();
 		this.showState(title, body, action);
@@ -692,6 +696,11 @@ export class FilesPaneView extends Disposable {
 				this.forward.length = 0;
 			}
 			const entering = !same(this.current, folder);
+			if (entering || !this.watcher.value) {
+				this.watcher.value = disk.watch(folder, () => {
+					this.folderChanged();
+				});
+			}
 			this.current = folder;
 			this.entries = listing.entries;
 			this.truncated = listing.truncated;
@@ -712,6 +721,20 @@ export class FilesPaneView extends Disposable {
 		} finally {
 			clearTimeout(slow);
 		}
+	}
+
+	/** Lists the folder again shortly after it changed, once for changes that come together. */
+	private folderChanged(): void {
+		const timer = setTimeout(() => {
+			this.changedLater.clear();
+			// A name being typed is not taken away; the rename lists the folder when it ends.
+			if (this.editing === undefined) {
+				void this.refresh();
+			}
+		}, 300);
+		this.changedLater.value = toDisposable(() => {
+			clearTimeout(timer);
+		});
 	}
 
 	/** Shows or hides the drop bar for `count` items dragged over this pane. */

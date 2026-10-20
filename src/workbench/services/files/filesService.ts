@@ -1,4 +1,5 @@
 import type { Event } from '../../../base/common/event.js';
+import type { IDisposable } from '../../../base/common/lifecycle.js';
 import type { FileConflictChoice, FileEntry, FileJob, FilePlaces } from '../../../platform/engine/common/files.js';
 import { createDecorator } from '../../../platform/instantiation/common/instantiation.js';
 import type { FilesPane, FolderLocation } from '../../../platform/state/common/uiState.js';
@@ -35,6 +36,12 @@ export interface IFilesDisk {
 	 * with `Unsupported`.
 	 */
 	delete(folder: FolderLocation, entry: FileEntry, trash: boolean): Promise<void>;
+	/**
+	 * Calls `changed` when an entry of `folder` comes, goes, is renamed or
+	 * is written to, by VniLink or anything else, until disposed. On the
+	 * other computer one folder is watched at a time: the latest replaces it.
+	 */
+	watch(folder: FolderLocation, changed: () => void): IDisposable;
 }
 
 /** An entry to copy: its name in `folder`. */

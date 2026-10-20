@@ -76,6 +76,7 @@ mod terminal_runtime;
 mod terminal_stream;
 mod topology;
 mod video;
+mod watch;
 mod wire;
 
 pub use blob::{BLOB_ALPN, BLOB_MAX_BYTES};
@@ -620,6 +621,9 @@ struct Shared {
     /// One fetching connection per peer, reused by later fetches so a
     /// small file does not pay for a new handshake; dropped on revoke/unpair.
     blob_fetching: Mutex<HashMap<[u8; 32], iroh::endpoint::Connection>>,
+    /// This computer's folders watched for the window, by watch id.
+    folder_watches: Mutex<HashMap<u64, notify::RecommendedWatcher>>,
+    watch_next: AtomicU64,
     /// Transfer job records. Polled by each side; senders learn
     /// completion by asking the receiver.
     jobs: Arc<Mutex<HashMap<u64, jobs::JobRecord>>>,

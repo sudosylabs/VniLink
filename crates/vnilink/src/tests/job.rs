@@ -4076,3 +4076,39 @@ fn a_new_files_owner_resumes_what_a_lost_one_left() {
         bytes
     );
 }
+
+/// The folder a pane shows on the other computer is watched over a real
+/// connection: a file made there by anything raises the Files service's
+/// folder revision, while the pipe keeps answering, and watching nothing
+/// stops it.
+#[test]
+fn the_other_computers_folder_says_when_it_changes() {
+    let (host, controller, host_scratch, _controller_scratch) = setup("watch-remote");
+    let files = FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let (_owner, pipe) = owned_files(&controller, &host);
+    pipe.watch(Some((files.root, files.path(""))));
+    // The first answer is the folder as it is; only a change after it counts.
+    std::thread::sleep(Duration::from_millis(500));
+    let before = pipe.folder_revision();
+    std::fs::write(host_scratch.join("root/arrived.txt"), b"new").unwrap();
+    await_jobs(|| pipe.folder_revision() > before);
+    // The pipe is not held by the wait.
+    assert!(pipe
+        .list(files.root, &files.path(""), 0, 100)
+        .unwrap()
+        .entries
+        .iter()
+        .any(|entry| entry.name == "arrived.txt"));
+    pipe.watch(None);
+    std::thread::sleep(Duration::from_millis(500));
+    let stopped = pipe.folder_revision();
+    std::fs::write(host_scratch.join("root/later.txt"), b"later").unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(
+        pipe.folder_revision(),
+        stopped,
+        "an unwatched folder still counted changes"
+    );
+    host.shutdown();
+    controller.shutdown();
+}

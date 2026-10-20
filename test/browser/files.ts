@@ -1,5 +1,5 @@
 import { Emitter } from '../../src/base/common/event.js';
-import { DisposableStore } from '../../src/base/common/lifecycle.js';
+import { DisposableStore, toDisposable, type IDisposable } from '../../src/base/common/lifecycle.js';
 import type { IAction } from '../../src/base/common/actions.js';
 import { IContextMenuService } from '../../src/platform/contextview/browser/contextView.js';
 import type { FileConflictChoice, FileEntry, FileJob, FilePlaces } from '../../src/platform/engine/common/files.js';
@@ -78,6 +78,27 @@ class MemoryDisk implements IFilesDisk {
 		const index = entries.findIndex(candidate => candidate.name === item.name);
 		entries[index] = { ...item, name: newName };
 		return Promise.resolve();
+	}
+
+	/** Who watches which folder, to say when it changes outside VniLink. */
+	public readonly watchers = new Map<string, () => void>();
+
+	public watch(folder: FolderLocation, changed: () => void): IDisposable {
+		const key = `${folder.root}:${folder.path}`;
+		this.watchers.set(key, changed);
+		return toDisposable(() => {
+			if (this.watchers.get(key) === changed) {
+				this.watchers.delete(key);
+			}
+		});
+	}
+
+	/** Removes an entry as Finder or Explorer would, and says so to whoever watches. */
+	public removeOutside(folder: FolderLocation, name: string): void {
+		const key = `${folder.root}:${folder.path}`;
+		const entries = this.folders.get(key) ?? [];
+		entries.splice(entries.findIndex(candidate => candidate.name === name), 1);
+		this.watchers.get(key)?.();
 	}
 
 	/** What a transfer leaves in `folder`. */
@@ -418,11 +439,20 @@ export async function verifyFiles(): Promise<void> {
 		run('files.hidden');
 		assert(state.get('files.showHidden') === true, 'Show Hidden Files was not remembered');
 
+		// What changes outside VniLink, as a file deleted in Finder or Explorer, shows without a refresh.
+		localDisk.removeOutside({ root: '0', path: 'Users/hammed/Downloads' }, 'vnilink-demo.mov');
+		await until(() => !names(local).includes('vnilink-demo.mov'), 'A file removed outside VniLink stayed listed here');
+		const remoteFolder = crumbs(remote).join('/') === 'C:/Users/abass/Downloads' ? { root: '2', path: 'Users/abass/Downloads' } : undefined;
+		assert(remoteFolder !== undefined && remoteDisk.watchers.has('2:Users/abass/Downloads'), 'The other computer\'s open folder is not watched');
+		remoteDisk.removeOutside(remoteFolder, 'invoice.pdf');
+		await until(() => !names(remote).includes('invoice.pdf'), 'A file removed on the other computer stayed listed');
+
 		// A long folder scrolls to its last row, which shows whole above the status bar.
 		list(remote).focus();
 		press(list(remote), 'Home', 36);
 		press(list(remote), 'Enter', 13);
 		await until(() => crumbs(remote).at(-1) === 'Installers', 'Installers did not open');
+		assert(remoteDisk.watchers.has('2:Users/abass/Downloads/Installers') && !remoteDisk.watchers.has('2:Users/abass/Downloads'), 'The watch did not follow the open folder');
 		// A path longer than its bar scrolls, keeping whole names and the open folder in view.
 		remote.style.maxWidth = '380px';
 		await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));

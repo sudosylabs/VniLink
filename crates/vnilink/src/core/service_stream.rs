@@ -95,6 +95,14 @@ pub struct RemoteFilesService {
     tx: tokio::sync::mpsc::Sender<Work>,
     lease: ServiceLease,
     stop: tokio::sync::watch::Sender<bool>,
+    /// The connection and wire generation waits are made on, beside the pipe.
+    link: Connection,
+    generation: u64,
+    runtime: tokio::runtime::Handle,
+    /// Which watch is current; a new one, or none, ends the one before.
+    watching: Arc<AtomicU64>,
+    /// Bumped each time the watched folder changes.
+    folder_changes: Arc<AtomicU64>,
 }
 impl RemoteFilesService {
     fn request(&self, request: fs::Request) -> Result<super::fs::FsOutcome, Error> {
@@ -130,6 +138,49 @@ impl RemoteFilesService {
     }
     pub fn close(&self) {
         self.stop.send_replace(true);
+    }
+
+    /// Watches one folder on the other computer, or none: each change to
+    /// its entries bumps [`Self::folder_revision`]. Waits run one after
+    /// another on streams of their own, each from the last fingerprint, so
+    /// the pipe is never held and no change between them is missed.
+    pub fn watch(&self, folder: Option<(u64, String)>) {
+        let token = self.watching.fetch_add(1, Ordering::AcqRel) + 1;
+        let Some((root, path)) = folder else {
+            return;
+        };
+        let link = self.link.clone();
+        let generation = self.generation;
+        let watching = self.watching.clone();
+        let changes = self.folder_changes.clone();
+        let stop = self.stop.subscribe();
+        self.runtime.spawn(async move {
+            let mut since = None;
+            while watching.load(Ordering::Acquire) == token
+                && !*stop.borrow()
+                && link.close_reason().is_none()
+            {
+                match super::fs::wait_for_change(&link, generation, root, &path, since.unwrap_or(0))
+                    .await
+                {
+                    Ok(now) => {
+                        if since.is_some_and(|before| before != now)
+                            && watching.load(Ordering::Acquire) == token
+                        {
+                            changes.fetch_add(1, Ordering::AcqRel);
+                        }
+                        since = Some(now);
+                    }
+                    // A folder that went, or a refusal, is tried again calmly.
+                    Err(_) => tokio::time::sleep(Duration::from_secs(2)).await,
+                }
+            }
+        });
+    }
+
+    /// How many times the watched folder has changed; compare with the last read.
+    pub fn folder_revision(&self) -> u64 {
+        self.folder_changes.load(Ordering::Acquire)
     }
     pub fn list(
         &self,
@@ -310,6 +361,7 @@ impl Core {
             return Err(Error::InvalidSetting("this is not a Files service"));
         }
         let (link, stamp) = self.service_link(lease.info().connection_id, generation)?;
+        let (watch_link, watch_generation) = (link.clone(), stamp.generation);
         let stop = self
             .alive_state()?
             .services
@@ -423,6 +475,11 @@ impl Core {
             tx,
             lease: self.service_lease(id, generation)?,
             stop,
+            link: watch_link,
+            generation: watch_generation,
+            runtime: self.runtime.handle().clone(),
+            watching: Arc::new(AtomicU64::new(0)),
+            folder_changes: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -570,6 +627,10 @@ async fn exchange(
         | fs::Request::Rename { generation, .. }
         | fs::Request::Delete { generation, .. }
         | fs::Request::Places { generation, .. } => *generation = stamp.generation,
+        // A wait holds its stream; it has one of its own, never this pipe.
+        fs::Request::Watch { .. } => {
+            return Err(Error::InvalidSetting("a wait has a stream of its own"))
+        }
     }
     let list = matches!(request, fs::Request::List { .. });
     let places = matches!(request, fs::Request::Places { .. });

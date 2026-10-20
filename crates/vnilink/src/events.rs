@@ -17,6 +17,10 @@ pub enum CoreEvent {
     HostingChanged {
         hosting: bool,
     },
+    /// A folder watched with [`crate::Core::watch_folder`] changed.
+    FolderChanged {
+        watch: u64,
+    },
     /// A paired computer asked this one to restart or shut down. It runs
     /// after `remaining_ms` unless cancelled; show its user the notice.
     SystemActionScheduled {

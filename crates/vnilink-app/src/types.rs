@@ -384,6 +384,10 @@ pub enum FfiEvent {
     HostingChanged {
         hosting: bool,
     },
+    /// A folder watched with `watch_folder` changed.
+    FolderChanged {
+        watch: u64,
+    },
     /// A paired computer asked this one to restart or shut down.
     SystemActionScheduled {
         operation_id: u64,
@@ -666,6 +670,7 @@ pub(crate) fn event(event: vnilink::CoreEvent) -> FfiEvent {
             FfiEvent::PeerAvailabilityChanged { endpoint_id }
         }
         vnilink::CoreEvent::HostingChanged { hosting } => FfiEvent::HostingChanged { hosting },
+        vnilink::CoreEvent::FolderChanged { watch } => FfiEvent::FolderChanged { watch },
         vnilink::CoreEvent::SystemActionScheduled {
             operation_id,
             action,

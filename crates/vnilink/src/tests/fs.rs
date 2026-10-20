@@ -1705,3 +1705,47 @@ fn moving_to_the_trash_refuses_what_changed_since_it_was_listed() {
         .trash_entry(location.root, &location.path(""), "missing.txt", None)
         .is_err());
 }
+
+/// A watched folder on this computer says when an entry comes or goes,
+/// made by anything, and stops once unwatched.
+#[test]
+fn a_watched_folder_says_when_it_changes() {
+    let scratch = Scratch::new();
+    let folder = scratch.join("watched");
+    std::fs::create_dir(&folder).unwrap();
+    let core = start_direct();
+    core.enable_filesystem_access().unwrap();
+    let location = FilesystemLocation::new(core.file_roots().unwrap(), &folder);
+    let events = core.subscribe().unwrap();
+    let watch = core
+        .watch_folder(location.root, &location.path(""))
+        .unwrap();
+    let changed = |events: &crate::events::EventSubscription, seconds: f32| {
+        let until = std::time::Instant::now() + Duration::from_secs_f32(seconds);
+        while std::time::Instant::now() < until {
+            if let Some(crate::CoreEvent::FolderChanged { watch: seen }) =
+                events.recv_timeout(Duration::from_millis(100))
+            {
+                if seen == watch {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+    // FSEvents may report the watch's own start; let it settle first.
+    std::thread::sleep(Duration::from_millis(300));
+    while events.try_recv().is_some() {}
+    std::fs::write(folder.join("arrived.txt"), b"new").unwrap();
+    assert!(changed(&events, 5.0), "creating a file was not reported");
+    std::fs::remove_file(folder.join("arrived.txt")).unwrap();
+    assert!(changed(&events, 5.0), "deleting a file was not reported");
+    core.unwatch_folder(watch);
+    std::thread::sleep(Duration::from_millis(300));
+    while events.try_recv().is_some() {}
+    std::fs::write(folder.join("later.txt"), b"later").unwrap();
+    assert!(
+        !changed(&events, 1.5),
+        "an unwatched folder still reported changes"
+    );
+}

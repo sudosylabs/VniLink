@@ -512,6 +512,14 @@ impl FilesService {
     pub fn job_revision(&self) -> Result<u64, FfiError> {
         Ok(self.core()?.job_revision())
     }
+    /// Watches one folder on the other computer, or none.
+    pub fn watch(&self, folder: Option<(u64, String)>) {
+        self.inner.watch(folder);
+    }
+    /// How many times the watched folder has changed.
+    pub fn folder_revision(&self) -> u64 {
+        self.inner.folder_revision()
+    }
     pub fn jobs(&self) -> Result<Vec<crate::FfiJobSnapshot>, FfiError> {
         let info = self.inner.info();
         self.core()?

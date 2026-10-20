@@ -335,6 +335,8 @@ impl Core {
             blob_job_offers: Mutex::new(std::collections::HashSet::new()),
             blob_serving: Mutex::new(std::collections::HashMap::new()),
             blob_fetching: Mutex::new(std::collections::HashMap::new()),
+            folder_watches: Mutex::new(std::collections::HashMap::new()),
+            watch_next: std::sync::atomic::AtomicU64::new(1),
             jobs: Arc::new(Mutex::new(std::collections::HashMap::new())),
             job_next: std::sync::atomic::AtomicU64::new(1),
             job_save: Mutex::new(()),

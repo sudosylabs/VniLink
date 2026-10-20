@@ -329,6 +329,9 @@ impl EventTransfer {
             vnilink_app::FfiEvent::HostingChanged { hosting } => {
                 serde_json::json!({ "type": "hostingChanged", "hosting": hosting })
             }
+            vnilink_app::FfiEvent::FolderChanged { watch } => {
+                serde_json::json!({ "type": "folderChanged", "watch": watch.to_string() })
+            }
             vnilink_app::FfiEvent::SystemActionScheduled {
                 operation_id,
                 action,
@@ -835,6 +838,14 @@ enum Command {
     LocateLocal {
         path: String,
     },
+    /// Watches one folder on this computer; its changes arrive as `folderChanged` events.
+    WatchLocal {
+        root: String,
+        path: String,
+    },
+    UnwatchLocal {
+        watch: String,
+    },
     ListLocal {
         root: String,
         path: String,
@@ -1120,6 +1131,9 @@ enum Reply {
     },
     Location {
         location: Option<TransferDestination>,
+    },
+    Watching {
+        watch: String,
     },
     DirPage {
         page: files::TransferDirPage,
@@ -1699,6 +1713,16 @@ impl EngineBridge {
             Command::LocalPlaces => Reply::Places {
                 places: files::transfer_places(core.places().map_err(core_error)?),
             },
+            Command::WatchLocal { root, path } => Reply::Watching {
+                watch: core
+                    .watch_folder(parse_id(root, "Invalid root")?, path.clone())
+                    .map_err(core_error)?
+                    .to_string(),
+            },
+            Command::UnwatchLocal { watch } => {
+                core.unwatch_folder(parse_id(watch, "Invalid watch")?);
+                Reply::Done
+            }
             Command::LocateLocal { path } => Reply::Location {
                 location: core.locate(path.clone()).map_err(core_error)?.map(|found| {
                     TransferDestination {
@@ -2309,6 +2333,8 @@ impl EngineBridge {
             | Command::SetTransferDirectory { .. }
             | Command::LocalPlaces
             | Command::LocateLocal { .. }
+            | Command::WatchLocal { .. }
+            | Command::UnwatchLocal { .. }
             | Command::ListLocal { .. }
             | Command::CreateLocalDir { .. }
             | Command::RenameLocal { .. }
@@ -2583,6 +2609,8 @@ impl CommandShape {
             "setTransferDirectory" => &["type", "path"],
             "localPlaces" => &["type"],
             "locateLocal" => &["type", "path"],
+            "watchLocal" => &["type", "root", "path"],
+            "unwatchLocal" => &["type", "watch"],
             "listLocal" => &["type", "root", "path", "offset"],
             "createLocalDir" => &["type", "root", "path", "name"],
             "renameLocal" => &["type", "root", "path", "name", "token", "newName"],

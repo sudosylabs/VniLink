@@ -114,6 +114,8 @@ pub struct DataChannel {
     jobs: Arc<Mutex<Vec<u64>>>,
     /// What this channel last told JavaScript about its jobs.
     job_view: Mutex<JobView>,
+    /// The watched folder's change count last reported to the window.
+    folder_seen: std::sync::atomic::AtomicU64,
     video: Mutex<Option<VideoPoller>>,
     desktop: Mutex<Option<Arc<DesktopOwner>>>,
     terminal: Mutex<Option<Arc<TerminalService>>>,
@@ -357,6 +359,9 @@ impl DataChannel {
             return Ok(None);
         }
         if self.kind == "files" {
+            if let Some(changed) = self.folder_update()? {
+                return Ok(Some(changed));
+            }
             return self.job_updates();
         }
         if self.kind == "terminal" {
@@ -391,6 +396,32 @@ impl DataChannel {
             ));
         }
         Ok(None)
+    }
+
+    /// Says, unasked, that the folder the window watches on the other
+    /// computer changed since it was last said.
+    fn folder_update(&self) -> Result<Option<DataEvent>> {
+        let Some(files) = self
+            .files
+            .lock()
+            .map_err(|_| Error::from_reason("Channel unavailable"))?
+            .clone()
+        else {
+            return Ok(None);
+        };
+        let revision = files.folder_revision();
+        if self
+            .folder_seen
+            .swap(revision, std::sync::atomic::Ordering::AcqRel)
+            == revision
+        {
+            return Ok(None);
+        }
+        Ok(Some(DataEvent {
+            kind: "folderChanged".into(),
+            data: None,
+            metadata: "{}".into(),
+        }))
     }
 
     /// This channel's jobs that changed since they were last sent, unasked.
@@ -937,6 +968,7 @@ impl Task for OpenChannelTask {
             files: Mutex::new(files),
             jobs: Arc::new(Mutex::new(Vec::new())),
             job_view: Mutex::new(JobView::default()),
+            folder_seen: std::sync::atomic::AtomicU64::new(0),
             video: Mutex::new(video),
             desktop: Mutex::new(desktop),
             terminal: Mutex::new(terminal),
@@ -1002,6 +1034,14 @@ impl Engine {
     }
 }
 
+/// A folder on the other computer, by its root and path under the root.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WatchFolder {
+    root: String,
+    path: String,
+}
+
 #[derive(serde::Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 enum FileOperation {
@@ -1046,6 +1086,10 @@ enum FileOperation {
     Jobs,
     /// Takes over and resumes the transfers a lost channel left interrupted.
     Adopt,
+    /// Watches the folder the window shows of the other computer, or none.
+    Watch {
+        folder: Option<WatchFolder>,
+    },
     Cancel {
         #[serde(rename = "jobId")]
         job_id: String,
@@ -1244,6 +1288,20 @@ impl FileTask {
                     .map(crate::transfer_job)
                     .collect::<Vec<_>>(),
             ),
+            FileOperation::Watch { folder } => {
+                files.watch(
+                    folder
+                        .as_ref()
+                        .map(|folder| {
+                            Ok::<_, Refused>((
+                                parse_id(&folder.root, "Invalid root")?,
+                                folder.path.clone(),
+                            ))
+                        })
+                        .transpose()?,
+                );
+                Ok(serde_json::Value::Null)
+            }
             FileOperation::Adopt => {
                 let adopted = files.resume_orphans()?;
                 let mut jobs = self

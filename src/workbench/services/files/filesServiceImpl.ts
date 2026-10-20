@@ -1,5 +1,5 @@
-import { Emitter } from '../../../base/common/event.js';
-import { Disposable } from '../../../base/common/lifecycle.js';
+import { Emitter, type Event } from '../../../base/common/event.js';
+import { Disposable, toDisposable, type IDisposable } from '../../../base/common/lifecycle.js';
 import type { DataChannelRequest, DataPacket } from '../../../platform/engine/common/dataChannel.js';
 import { engineErrorCategory, type RemoteStatus } from '../../../platform/engine/common/engine.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
@@ -76,6 +76,34 @@ async function listAll(page: (offset: string) => Promise<unknown>): Promise<File
 class LocalDisk implements IFilesDisk {
 	constructor(private readonly engine: IEngineService) { }
 
+	public watch(folder: FolderLocation, changed: () => void): IDisposable {
+		let watch: string | undefined;
+		let disposed = false;
+		const events = this.engine.onDidReceiveEvents(batch => {
+			// Events may have been missed: look again rather than miss a change.
+			if (batch.resync || batch.events.some(event => event.type === 'folderChanged' && event.watch === watch)) {
+				changed();
+			}
+		});
+		void this.engine.execute({ type: 'watchLocal', root: folder.root, path: folder.path }).then(reply => {
+			if (reply.type !== 'watching') {
+				return;
+			}
+			if (disposed) {
+				void this.engine.execute({ type: 'unwatchLocal', watch: reply.watch }).catch(() => undefined);
+			} else {
+				watch = reply.watch;
+			}
+		}, () => undefined);
+		return toDisposable(() => {
+			disposed = true;
+			events.dispose();
+			if (watch !== undefined) {
+				void this.engine.execute({ type: 'unwatchLocal', watch }).catch(() => undefined);
+			}
+		});
+	}
+
 	public async places(): Promise<FilePlaces> {
 		const reply = await this.engine.execute({ type: 'localPlaces' });
 		if (reply.type !== 'places') {
@@ -106,7 +134,28 @@ class LocalDisk implements IFilesDisk {
 
 /** The other computer's disk, through the Files channel. */
 class RemoteDisk implements IFilesDisk {
-	constructor(private readonly ask: (operation: FileOperation) => Promise<unknown>) { }
+	private current: object | undefined;
+
+	constructor(private readonly ask: (operation: FileOperation) => Promise<unknown>, private readonly onDidChangeFolder: Event<void>) { }
+
+	public watch(folder: FolderLocation, changed: () => void): IDisposable {
+		// One folder at a time on the other computer: this one replaces the last.
+		const mine = {};
+		this.current = mine;
+		void this.ask({ type: 'watch', folder: { root: folder.root, path: folder.path } }).catch(() => undefined);
+		const listener = this.onDidChangeFolder(() => {
+			if (this.current === mine) {
+				changed();
+			}
+		});
+		return toDisposable(() => {
+			listener.dispose();
+			if (this.current === mine) {
+				this.current = undefined;
+				void this.ask({ type: 'watch', folder: null }).catch(() => undefined);
+			}
+		});
+	}
 
 	public async places(): Promise<FilePlaces> {
 		const places = await this.ask({ type: 'places' });
@@ -139,6 +188,7 @@ class FilesSession extends Disposable implements IFilesSession {
 	private readonly endedEmitter = this._register(new Emitter<void>());
 	public readonly onDidEnd = this.endedEmitter.event;
 	private readonly byId = new Map<string, FileJob>();
+	private readonly folderChanged = this._register(new Emitter<void>());
 	private channel: FilesChannel | undefined;
 	private holders = 1;
 	private endedValue = false;
@@ -151,7 +201,7 @@ class FilesSession extends Disposable implements IFilesSession {
 		private readonly onLost: (reason: string) => void,
 	) {
 		super();
-		this.remote = new RemoteDisk(operation => this.ask(operation));
+		this.remote = new RemoteDisk(operation => this.ask(operation), this.folderChanged.event);
 	}
 
 	public get jobs(): readonly FileJob[] {
@@ -182,6 +232,10 @@ class FilesSession extends Disposable implements IFilesSession {
 
 	/** A packet the channel sent unasked: jobs that changed. */
 	public consume(packet: DataPacket): void {
+		if (packet.kind === 'folderChanged') {
+			this.folderChanged.fire();
+			return;
+		}
 		if (packet.kind !== 'jobs') {
 			return;
 		}

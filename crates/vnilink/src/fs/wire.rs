@@ -28,6 +28,7 @@ const TAG_MKDIR: u8 = 2;
 const TAG_RENAME: u8 = 3;
 const TAG_DELETE: u8 = 4;
 const TAG_PLACES: u8 = 5;
+const TAG_WATCH: u8 = 6;
 
 const STATUS_OK: u8 = 0;
 /// Machine-readable response codes. The message line stays human-only.
@@ -78,6 +79,16 @@ pub enum Request {
     },
     /// The host's roots, home folder and usual folders.
     Places { id: u32, generation: u64 },
+    /// Answers with the folder's fingerprint once it differs from `since`,
+    /// or after a while if it does not change: a wait the controller makes
+    /// on a stream of its own, so the folder its pane shows stays current.
+    Watch {
+        id: u32,
+        generation: u64,
+        root: u64,
+        path: String,
+        since: u64,
+    },
 }
 
 /// A decoded response header. Entry payloads follow on the accepted stream
@@ -188,6 +199,20 @@ pub(crate) fn encode_request(request: &Request) -> Result<Vec<u8>, Error> {
             push_expected(&mut bytes, *expected);
             bytes.push(u8::from(*trash));
         }
+        Request::Watch {
+            id,
+            generation,
+            root,
+            path,
+            since,
+        } => {
+            push_u32(&mut bytes, *id);
+            push_u64(&mut bytes, *generation);
+            bytes.push(TAG_WATCH);
+            push_u64(&mut bytes, *root);
+            push_text(&mut bytes, path, MAX_REL_BYTES)?;
+            push_u64(&mut bytes, *since);
+        }
         Request::Places { id, generation } => {
             // The common root and path fields stay, empty, so every request
             // shares one header.
@@ -296,6 +321,19 @@ pub(crate) fn decode_request(bytes: &[u8]) -> Result<Request, WireError> {
                 name,
                 expected,
                 trash,
+            })
+        }
+        TAG_WATCH => {
+            let since = take_u64(&mut cursor).ok_or(error("the filesystem frame is malformed"))?;
+            if !cursor.is_empty() {
+                return Err(error("the filesystem frame is malformed"));
+            }
+            Ok(Request::Watch {
+                id,
+                generation,
+                root,
+                path,
+                since,
             })
         }
         TAG_PLACES => {

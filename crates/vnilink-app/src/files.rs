@@ -351,6 +351,16 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
+    /// Watches one folder on this computer for the window, which hears of
+    /// each change as a `FolderChanged` event with the returned id.
+    pub fn watch_folder(&self, root: u64, path: String) -> Result<u64, FfiError> {
+        self.inner.watch_folder(root, &path).map_err(map_error)
+    }
+
+    pub fn unwatch_folder(&self, watch: u64) {
+        self.inner.unwatch_folder(watch);
+    }
+
     /// This computer's roots, home folder and usual folders.
     pub fn places(&self) -> Result<FfiPlaces, FfiError> {
         self.inner.places().map(places).map_err(map_error)

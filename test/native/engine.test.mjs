@@ -168,6 +168,18 @@ test('this computer\'s disk lists, makes, renames and deletes through its own en
 		assert(existsSync(join(folder, 'renamed')));
 		assert.equal((await execute(engine, { type: 'deleteLocal', root: root.id, path, name: 'renamed', token: null, trash: false })).type, 'done');
 		assert(!existsSync(join(folder, 'renamed')));
+		// A change made outside VniLink is said as an event for the folder's watch.
+		const { subscriptionId } = await execute(engine, { type: 'subscribeEvents' });
+		const { watch } = await execute(engine, { type: 'watchLocal', root: root.id, path });
+		writeFileSync(join(folder, 'outside.txt'), 'outside');
+		let heard = false;
+		for (let attempt = 0; attempt < 50 && !heard; attempt++) {
+			await new Promise(resolve => setTimeout(resolve, 100));
+			const { events } = await execute(engine, { type: 'pollEvents', subscriptionId, maxEvents: 64 });
+			heard = events.some(event => event.type === 'folderChanged' && event.watch === watch);
+		}
+		assert(heard, 'a file written outside VniLink was not reported');
+		assert.equal((await execute(engine, { type: 'unwatchLocal', watch })).type, 'done');
 	} finally {
 		await execute(engine, { type: 'shutdown' });
 		rmSync(folder, { recursive: true, force: true });

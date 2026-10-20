@@ -79,6 +79,8 @@ test('identity, codecs, relays and session settings validate exactly', () => {
 
 test('bridge events keep core names and lossless ids', () => {
 	assert.equal(isEngineEvent({ type: 'hostingChanged', hosting: false }), true);
+	assert.equal(isEngineEvent({ type: 'folderChanged', watch: '4' }), true);
+	assert.equal(isEngineEvent({ type: 'folderChanged', watch: 4 }), false, 'ids are decimal strings');
 	assert.equal(isEngineEvent({ type: 'devicePaired', endpoint_id: 'peer' }), true);
 	assert.equal(isEngineEvent({ type: 'controlRequested', endpoint_id: 'peer', check: '123' }), true);
 	assert.equal(isEngineEvent({ type: 'peerRenamed', endpoint_id: 'peer', hostname: null }), true);
@@ -136,6 +138,9 @@ test('service commands validate kinds, policies, sessions and jobs exactly', () 
 	assert.equal(isEngineCommand({ type: 'listLocal', root: '0', path: '../etc', offset: '0' }), false);
 	assert.equal(isEngineCommand({ type: 'locateLocal', path: '/Users/hammed/Desktop/a.txt' }), true);
 	assert.equal(isEngineCommand({ type: 'locateLocal', path: '' }), false, 'an empty path names nothing');
+	assert.equal(isEngineCommand({ type: 'watchLocal', root: '0', path: 'Users/hammed' }), true);
+	assert.equal(isEngineCommand({ type: 'unwatchLocal', watch: '3' }), true);
+	assert.equal(isEngineCommand({ type: 'unwatchLocal', watch: 'three' }), false);
 	assert.equal(isEngineCommand({ type: 'createLocalDir', root: '0', path: '', name: 'New Folder' }), true);
 	assert.equal(isEngineCommand({ type: 'renameLocal', root: '0', path: 'Users', name: 'a', token: { dev: '1', ino: '2' }, newName: 'b' }), true);
 	assert.equal(isEngineCommand({ type: 'renameLocal', root: '0', path: 'Users', name: 'a', token: { dev: 1, ino: 2 }, newName: 'b' }), false, 'token parts are decimal strings');
@@ -150,6 +155,7 @@ test('service commands validate kinds, policies, sessions and jobs exactly', () 
 	assert.equal(isEngineReply({ type: 'places', places }), true);
 	assert.equal(isEngineReply({ type: 'location', location: { root: '0', path: 'Users/hammed', name: 'a.txt' } }), true);
 	assert.equal(isEngineReply({ type: 'location', location: null }), true, 'a path outside what is shared');
+	assert.equal(isEngineReply({ type: 'watching', watch: '3' }), true);
 	assert.equal(isEngineReply({ type: 'location', location: { root: '0', path: '/Users', name: 'a.txt' } }), false);
 	assert.equal(isEngineReply({ type: 'places', places: { ...places, folders: [{ kind: 'home', root: '2', path: '/Users' }] } }), false);
 	const entry = { name: 'a.txt', kind: 'file', size: '3', mtimeMs: '1700000000000', token: { dev: '1', ino: '9' } };
