@@ -23,6 +23,7 @@ gnome-keyring
 dbus-x11
 xvfb
 xauth
+iproute2
 
 libgbm-dev
 libegl-dev

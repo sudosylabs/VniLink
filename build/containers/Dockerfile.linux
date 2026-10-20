@@ -8,6 +8,8 @@ COPY build/containers/linux-packages.txt /tmp/linux-packages.txt
 RUN apt-get update && xargs -a /tmp/linux-packages.txt apt-get install -y --no-install-recommends && rm -rf /var/lib/apt/lists/* && rustup component add rustfmt clippy rust-analyzer llvm-tools-preview
 COPY build/containers/linux-entrypoint.sh /usr/local/bin/vnilink-tests
 RUN chmod +x /usr/local/bin/vnilink-tests
+COPY build/containers/impaired-entrypoint.sh /usr/local/bin/vnilink-impaired
+RUN chmod +x /usr/local/bin/vnilink-impaired
 RUN useradd --create-home --uid 1000 vnilink && mkdir -p /usr/local/cargo/git
 # Large native test executables must not link concurrently in Docker Desktop.
 ENV CARGO_BUILD_JOBS=1

@@ -5,3 +5,5 @@ Build, packaging, verification and test tasks are TypeScript functions run by `n
 Build definitions, resources and native artifact selection are shared by the one-shot, release, watch and test flows. Keep host tooling separate from runtime services and generated `out/`/`target/` artifacts. Formatting and import-layer tools stay deterministic.
 
 `build/vscode-source.json` and `node build/run.ts check:upstream` own copied-source provenance; `workbench-architecture` defines permitted upstream adaptations. `build/lint/vscode` holds verbatim VS Code lint rules. Toolchain changes also require `cross-platform-validation`.
+
+`IMPAIRED_NETWORK.md` documents the Linux netem measurement harness (`npm run measure:impaired`), its profiles and what its evidence does not cover.
