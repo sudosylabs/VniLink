@@ -1,6 +1,7 @@
 import * as nls from '../../../nls.js';
 import { $, addDisposableListener, append, EventType } from '../../../base/browser/dom.js';
 import { Icons } from '../../../base/common/icons.js';
+import { isMacintosh, isWindows } from '../../../base/common/platform.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import type { DisplayInfo } from '../../../platform/engine/common/engine.js';
 import { hidUsage } from '../../../platform/engine/common/keyUsage.js';
@@ -21,6 +22,9 @@ const WHEEL_PER_PIXEL = WHEEL_NOTCH / 100;
 const WHEEL_LIMIT = WHEEL_NOTCH * 64;
 
 const buttons = ['Left', 'Middle', 'Right', 'Back', 'Forward'] as const;
+
+/** The HID usage of the left Control key, which Windows also presses for AltGr. */
+const CONTROL_LEFT = 0xe0;
 
 interface OverlayAction {
 	readonly label: string;
@@ -71,10 +75,23 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	private hasPicture = false;
 	/** The display shown, and its bounds, as the other computer reports them at the picture's revision. */
 	private shown: { readonly display: string; readonly revision: string } | undefined;
-	private displays: { readonly revision: string; readonly list: readonly DisplayInfo[] } | undefined;
-	private readingDisplays: string | undefined;
+	/** The shown display's bounds, once the other computer's topology names it at the picture's revision. */
+	private display: DisplayInfo | undefined;
+	private readingDisplays = false;
+	private lastRead = -Infinity;
+	/** The display this session's pointer is selected for, sent once per session before any pointer. */
+	private selected: string | undefined;
 	private wheel = { dx: 0, dy: 0 };
 	private pressed = false;
+	/** Keys sent down and not yet up, by usage. */
+	private readonly down = new Set<number>();
+	/**
+	 * On Windows, AltGr arrives as a left Control press just before it. That
+	 * Control is held back until the next key says which it was, and dropped
+	 * with its release when it was AltGr's.
+	 */
+	private heldControl = false;
+	private phantomControl = false;
 
 	constructor(
 		private readonly device: DeviceSummary,
@@ -157,6 +174,10 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			this.showProblem(end, true);
 		}));
 		this.session.value = session;
+		this.selected = undefined;
+		this.display = undefined;
+		this.shown = undefined;
+		this.lastRead = -Infinity;
 		this.retries = 0;
 	}
 
@@ -181,7 +202,14 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			}
 			if (this.shown?.display !== display || this.shown.revision !== revision) {
 				this.shown = { display, revision };
-				void this.readDisplays(revision);
+				this.display = undefined;
+			}
+			if (this.control && this.selected !== display) {
+				this.selected = display;
+				this.session.value?.send({ type: 'selectDisplays', ids: [display] });
+			}
+			if (!this.display) {
+				void this.readDisplays();
 			}
 			// A background tab keeps decoding, so showing it again is immediate, but draws nothing.
 			if (!this.context || this.tabService.activeTab !== this) {
@@ -197,30 +225,34 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		}
 	}
 
-	/** The other computer's displays, read again when a picture names a newer revision. */
-	private async readDisplays(revision: string): Promise<void> {
+	/**
+	 * The shown display's bounds from the other computer's topology, which
+	 * may arrive just after the first picture: asked again, at most twice a
+	 * second, until it names the display at the picture's revision.
+	 */
+	private async readDisplays(): Promise<void> {
 		const session = this.session.value;
-		if (!session || this.readingDisplays === revision || this.displays?.revision === revision) {
-			this.updateStatus();
+		const shown = this.shown;
+		if (!session || !shown || this.readingDisplays || performance.now() - this.lastRead < 500) {
 			return;
 		}
-		this.readingDisplays = revision;
+		this.readingDisplays = true;
+		this.lastRead = performance.now();
 		try {
-			const list = await session.displays();
-			if (this.shown?.revision === revision) {
-				this.displays = { revision, list };
+			const found = (await session.displays()).find(display => display.id === shown.display && display.revision === shown.revision);
+			if (found && this.shown === shown) {
+				this.display = found;
 			}
 		} catch {
-			// The pointer waits for the next picture's revision.
+			// The next picture asks again.
 		} finally {
-			this.readingDisplays = undefined;
+			this.readingDisplays = false;
 		}
 		this.updateStatus();
 	}
 
 	private currentDisplay(): DisplayInfo | undefined {
-		const shown = this.shown;
-		return shown && this.displays?.revision === shown.revision ? this.displays.list.find(display => display.id === shown.display) : undefined;
+		return this.display;
 	}
 
 	private updateStatus(): void {
@@ -247,6 +279,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 				return;
 			}
 			event.preventDefault();
+			this.flushControl();
 			this.canvas.focus();
 			try {
 				// A drag that leaves the picture keeps going to the other computer until the button is up.
@@ -278,7 +311,13 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		}));
 	}
 
-	/** A key, by where it is on the keyboard; what it types travels with it when no shortcut modifier is held. */
+	/**
+	 * A key, by where it is on the keyboard, with the character it typed:
+	 * the other computer types that character whatever its own layout.
+	 * Shortcuts stay keys: no character travels with Control or Command, nor
+	 * on Windows with Alt, whose shortcuts type nothing. AltGr types, and so
+	 * does Option on a Mac, as both make characters there.
+	 */
 	private key(event: KeyboardEvent, down: boolean): void {
 		const usage = hidUsage(event.code);
 		if (usage === undefined || !this.session.value) {
@@ -286,13 +325,55 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		}
 		event.preventDefault();
 		event.stopPropagation();
-		// The other computer repeats a held key itself.
-		if (event.repeat) {
-			return;
+		if (isWindows) {
+			if (down && event.code === 'ControlLeft' && !event.repeat && !this.down.has(CONTROL_LEFT)) {
+				this.heldControl = true;
+				this.pressed = true;
+				return;
+			}
+			if (this.heldControl) {
+				this.heldControl = false;
+				if (down && event.code === 'AltRight' && event.key === 'AltGraph') {
+					this.phantomControl = true;
+				} else {
+					this.sendKey(CONTROL_LEFT, true, '', false);
+				}
+			}
+			if (!down && event.code === 'ControlLeft' && this.phantomControl) {
+				this.phantomControl = false;
+				return;
+			}
 		}
-		const typed = down && event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
+		// Windows reports Print Screen only as it is let go.
+		if (!down && !this.down.has(usage)) {
+			this.sendKey(usage, true, '', false);
+		}
+		const altGr = event.getModifierState('AltGraph');
+		const shortcut = event.metaKey || (event.ctrlKey && !altGr) || (!isMacintosh && event.altKey && !altGr);
+		// One character, emoji included; named keys such as Enter are longer.
+		const point = event.key.codePointAt(0);
+		const character = point !== undefined && String.fromCodePoint(point) === event.key;
+		const composing = down && (event.key === 'Dead' || event.key === 'Process' || event.isComposing);
+		// A held key repeats as the other computer types it: typed characters don't repeat there by themselves.
+		this.sendKey(usage, down, down && character && !shortcut ? event.key : '', composing);
+	}
+
+	private sendKey(usage: number, down: boolean, text: string, composing: boolean): void {
+		if (down) {
+			this.down.add(usage);
+		} else {
+			this.down.delete(usage);
+		}
 		this.pressed = true;
-		this.session.value.send({ type: 'submitLocalKey', usage, down, text: typed ? event.key : '' });
+		this.session.value?.send({ type: 'submitLocalKey', usage, down, text, composing });
+	}
+
+	/** A Control held back for AltGr goes down before anything that isn't a key, such as Control-click. */
+	private flushControl(): void {
+		if (this.heldControl) {
+			this.heldControl = false;
+			this.sendKey(CONTROL_LEFT, true, '', false);
+		}
 	}
 
 	/** Where the pointer is on the other computer's display, through the picture as it is fitted on screen. */
@@ -336,6 +417,9 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 
 	/** Lets go of every key and button held on the other computer. */
 	private releaseInput(): void {
+		this.heldControl = false;
+		this.phantomControl = false;
+		this.down.clear();
 		if (this.pressed) {
 			this.pressed = false;
 			this.session.value?.send({ type: 'releaseSessionInput' });

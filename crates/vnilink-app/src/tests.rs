@@ -127,7 +127,7 @@ fn input_clipboard_transfer_and_video_fail_without_a_session() {
     assert!(core.submit_wheel(1, 1, 0, -1).is_err());
     assert!(core.submit_text(1, 1, "hi".to_string()).is_err());
     assert!(core
-        .submit_local_key(1, 1, 0x04, true, "a".to_string())
+        .submit_local_key(1, 1, 0x04, true, "a".to_string(), false)
         .is_err());
     assert!(core.submit_clipboard(1, 1, "hi".to_string()).is_err());
     assert!(core.clipboard_text().unwrap().is_none());

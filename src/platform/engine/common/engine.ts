@@ -209,7 +209,8 @@ export type EngineCommand =
 	| { type: 'submitWheel' | 'submitMotion'; sessionId: string; generation: string; dx: number; dy: number }
 	| { type: 'submitPreciseWheel'; sessionId: string; generation: string; dx: number; dy: number }
 	| { type: 'submitText' | 'submitClipboard'; sessionId: string; generation: string; text: string }
-	| { type: 'submitLocalKey'; sessionId: string; generation: string; usage: number; down: boolean; text: string }
+	/** `composing`: a dead key or input-method step that has not typed a character yet. */
+	| { type: 'submitLocalKey'; sessionId: string; generation: string; usage: number; down: boolean; text: string; composing: boolean }
 	| { type: 'releaseSessionInput'; sessionId: string; generation: string }
 	| { type: 'setInputDefaults'; mode: 'Character' | 'Map' | 'Translate'; swap: boolean; pointer: PointerSettings }
 	| { type: 'enableFilesystemAccess' }
@@ -649,7 +650,10 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'submitWheel': case 'submitMotion': keys = ['sessionId', 'generation', 'dx', 'dy']; valid = decimal(value.sessionId) && decimal(value.generation) && int(value.dx, -32768, 32767) && int(value.dy, -32768, 32767); break;
 		case 'submitPreciseWheel': keys = ['sessionId', 'generation', 'dx', 'dy']; valid = decimal(value.sessionId) && decimal(value.generation) && int(value.dx, -2147483648, 2147483647) && int(value.dy, -2147483648, 2147483647); break;
 		case 'submitText': case 'submitClipboard': keys = ['sessionId', 'generation', 'text']; valid = decimal(value.sessionId) && decimal(value.generation) && longText(value.text); break;
-		case 'submitLocalKey': keys = ['sessionId', 'generation', 'usage', 'down', 'text']; valid = decimal(value.sessionId) && decimal(value.generation) && uint(value.usage, 65535) && typeof value.down === 'boolean' && text(value.text); break;
+		case 'submitLocalKey':
+			keys = ['sessionId', 'generation', 'usage', 'down', 'text', 'composing'];
+			valid = decimal(value.sessionId) && decimal(value.generation) && uint(value.usage, 65535) && typeof value.down === 'boolean' && text(value.text) && typeof value.composing === 'boolean';
+			break;
 		case 'releaseSessionInput': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
 		case 'setInputDefaults': keys = ['mode', 'swap', 'pointer']; valid = keyboardMode(value.mode) && typeof value.swap === 'boolean' && pointerSettings(value.pointer); break;
 		case 'enableFilesystemAccess': keys = []; break;

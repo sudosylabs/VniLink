@@ -30,6 +30,8 @@ pub struct WindowsCapture {
     /// Desktop size validated at open. A resize surfaces as access lost on the
     /// next acquire, so the size is fixed for the life of one capture.
     size: (u16, u16),
+    /// Where this output's top-left corner lies on the virtual desktop.
+    origin: (i32, i32),
     last: Mutex<Option<RawFrame>>,
     pointer: Mutex<crate::cursor::Pointer>,
     /// Last successful acquire or timeout. An error clears it.
@@ -43,6 +45,7 @@ struct UnvalidatedDesktop {
     format: DXGI_FORMAT,
     width: u32,
     height: u32,
+    origin: (i32, i32),
 }
 
 impl WindowsCapture {
@@ -58,6 +61,7 @@ impl WindowsCapture {
             context: desktop.context,
             duplication: desktop.duplication,
             size: frame_size(desktop.width, desktop.height)?,
+            origin: desktop.origin,
             last: Mutex::new(None),
             pointer: Mutex::new(crate::cursor::Pointer::default()),
             attested: Mutex::new(None),
@@ -75,6 +79,12 @@ impl WindowsCapture {
 
     pub fn size(&self) -> (u16, u16) {
         self.size
+    }
+
+    /// Where the captured output's top-left corner lies on the virtual
+    /// desktop, in the pixels pointer input is placed in.
+    pub fn origin(&self) -> (i32, i32) {
+        self.origin
     }
 
     /// `Ok(None)` when the desktop has not produced a new frame yet. The call
@@ -136,6 +146,7 @@ impl WindowsCapture {
         let context =
             context.ok_or_else(|| map_error(windows::core::Error::from_hresult(E_FAIL)))?;
         let output = adapter.EnumOutputs(0).map_err(map_error)?;
+        let bounds = output.GetDesc().map_err(map_error)?.DesktopCoordinates;
         let output: IDXGIOutput1 = output.cast().map_err(map_error)?;
         check_startup(startup)?;
         let duplication = output.DuplicateOutput(&device).map_err(map_error)?;
@@ -147,6 +158,7 @@ impl WindowsCapture {
             format: desc.ModeDesc.Format,
             width: desc.ModeDesc.Width,
             height: desc.ModeDesc.Height,
+            origin: (bounds.left, bounds.top),
         })
     }
 

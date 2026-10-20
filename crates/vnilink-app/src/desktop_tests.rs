@@ -247,7 +247,14 @@ fn native_desktop_contract_covers_shortcuts_clipboard_and_bidirectional_files() 
         (4, false, ""),
     ] {
         controller
-            .submit_local_key(session.id, session.generation, usage, down, text.into())
+            .submit_local_key(
+                session.id,
+                session.generation,
+                usage,
+                down,
+                text.into(),
+                false,
+            )
             .unwrap();
     }
     let expected = vec![
@@ -861,7 +868,7 @@ fn desktop_keyboard_settings_and_character_planning_cross_ffi() {
         .unwrap();
     assert_eq!(desktop.keyboard_mode().unwrap(), FfiKeyboardMode::Character);
     desktop
-        .submit_local_key(vnilink::usage::GRAVE, true, "@".into())
+        .submit_local_key(vnilink::usage::GRAVE, true, "@".into(), false)
         .unwrap();
     assert!(desktop.set_keyboard_mode(FfiKeyboardMode::Map).is_err());
     let until = Instant::now() + Duration::from_secs(5);
@@ -870,7 +877,7 @@ fn desktop_keyboard_settings_and_character_planning_cross_ffi() {
         std::thread::sleep(Duration::from_millis(10));
     }
     desktop
-        .submit_local_key(vnilink::usage::GRAVE, false, "".into())
+        .submit_local_key(vnilink::usage::GRAVE, false, "".into(), false)
         .unwrap();
     desktop.set_keyboard_mode(FfiKeyboardMode::Map).unwrap();
     desktop.set_swap_control_and_command(true).unwrap();
@@ -899,7 +906,9 @@ fn desktop_keyboard_settings_and_character_planning_cross_ffi() {
     );
     desktop.close();
     assert!(desktop.keyboard_mode().is_err());
-    assert!(desktop.submit_local_key(4, true, "a".into()).is_err());
+    assert!(desktop
+        .submit_local_key(4, true, "a".into(), false)
+        .is_err());
 }
 
 #[test]

@@ -119,17 +119,29 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		assert(canvas.width === 1920 && canvas.height === 1080, 'The picture was not drawn at its size');
 		assert(document.activeElement === canvas, 'The screen did not take the keyboard');
 
-		// Keys go by where they are; text only without a shortcut modifier, and a held key is not repeated.
+		// The pointer's display is chosen once, before anything else is sent.
+		assert(JSON.stringify(sessions[0].sent[0]) === JSON.stringify({ type: 'selectDisplays', ids: ['7'] }), `The shown display was not selected: ${JSON.stringify(sessions[0].sent[0])}`);
+		// Keys go by where they are, with what they type; a held key repeats; a shortcut types nothing; a dead key composes.
 		press(canvas, 'keydown', 'KeyA', 'a');
 		press(canvas, 'keydown', 'KeyA', 'a', { repeat: true });
 		press(canvas, 'keyup', 'KeyA', 'a');
 		press(canvas, 'keydown', 'KeyC', 'c', { metaKey: true });
+		press(canvas, 'keyup', 'KeyC', 'c');
+		press(canvas, 'keydown', 'BracketLeft', 'Dead');
+		press(canvas, 'keyup', 'BracketLeft', 'Dead');
+		const key = (usage: number, down: boolean, text = '', composing = false) => ({ type: 'submitLocalKey', usage, down, text, composing });
 		const keys = sessions[0].sent.filter(input => input.type === 'submitLocalKey');
 		assert(JSON.stringify(keys) === JSON.stringify([
-			{ type: 'submitLocalKey', usage: 4, down: true, text: 'a' },
-			{ type: 'submitLocalKey', usage: 4, down: false, text: '' },
-			{ type: 'submitLocalKey', usage: 6, down: true, text: '' },
+			key(4, true, 'a'), key(4, true, 'a'), key(4, false),
+			key(6, true), key(6, false),
+			key(0x2f, true, '', true), key(0x2f, false),
 		]), `Wrong keys: ${JSON.stringify(keys)}`);
+		// On a Mac, Option makes characters, as on a French keyboard Option-à types @.
+		if (navigator.platform.startsWith('Mac')) {
+			press(canvas, 'keydown', 'Digit0', '@', { altKey: true });
+			assert(JSON.stringify(sessions[0].sent.at(-1)) === JSON.stringify(key(0x27, true, '@')), `Option-typed text was lost: ${JSON.stringify(sessions[0].sent.at(-1))}`);
+			press(canvas, 'keyup', 'Digit0', '@', { altKey: true });
+		}
 
 		// The pointer lands on the other computer's display, through the fitted picture.
 		const box = canvas.getBoundingClientRect();

@@ -749,6 +749,8 @@ enum Command {
         usage: u16,
         down: bool,
         text: String,
+        /// A dead key or an input-method step that has not typed a character yet.
+        composing: bool,
     },
     ReleaseSessionInput {
         #[serde(rename = "sessionId")]
@@ -1671,9 +1673,10 @@ impl EngineBridge {
                 usage,
                 down,
                 text,
+                composing,
             } => {
                 let (id, gen) = session_target(session_id, generation)?;
-                core.submit_local_key(id, gen, *usage, *down, text.clone())
+                core.submit_local_key(id, gen, *usage, *down, text.clone(), *composing)
                     .map_err(core_error)?;
                 Reply::Done
             }
@@ -2526,7 +2529,15 @@ impl CommandShape {
                 &["type", "sessionId", "generation", "dx", "dy"]
             }
             "submitText" | "submitClipboard" => &["type", "sessionId", "generation", "text"],
-            "submitLocalKey" => &["type", "sessionId", "generation", "usage", "down", "text"],
+            "submitLocalKey" => &[
+                "type",
+                "sessionId",
+                "generation",
+                "usage",
+                "down",
+                "text",
+                "composing",
+            ],
             "releaseSessionInput"
             | "sessionPointerSettings"
             | "sessionClipboardText"

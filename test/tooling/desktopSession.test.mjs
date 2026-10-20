@@ -7,6 +7,7 @@ const result = await build({
 		contents: `
 			export { EngineDesktopSession, desktopCodec } from './src/workbench/services/remoteDesktop/engineDesktopSession.js';
 			export { hidUsage } from './src/platform/engine/common/keyUsage.js';
+			export { isInputCommand } from './src/platform/engine/common/dataChannel.js';
 		`,
 		loader: 'ts',
 		resolveDir: process.cwd(),
@@ -18,7 +19,7 @@ const result = await build({
 	tsconfig: 'tsconfig.json',
 });
 
-const { EngineDesktopSession, desktopCodec, hidUsage } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+const { EngineDesktopSession, desktopCodec, hidUsage, isInputCommand } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 
 /** An H.264 keyframe's start: a start code, then an SPS with profile 0x64, flags 0x00, level 0x28. */
 const keyframe = new Uint8Array([0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28, 0xac]);
@@ -106,4 +107,12 @@ test('keys are named by where they are, as HID usages', () => {
 	assert.equal(hidUsage('MetaRight'), 0xe7);
 	assert.equal(hidUsage('constructor'), undefined, 'only the table\'s own keys');
 	assert.equal(hidUsage('Fn'), undefined);
+});
+
+test('the input channel takes keys with their composing state and the display the pointer lands on', () => {
+	const target = { sessionId: '4', generation: '2' };
+	assert(isInputCommand({ type: 'submitLocalKey', ...target, usage: 0x2f, down: true, text: '', composing: true }));
+	assert(!isInputCommand({ type: 'submitLocalKey', ...target, usage: 4, down: true, text: 'a' }), 'a key says whether it composes');
+	assert(isInputCommand({ type: 'selectDisplays', ...target, ids: ['7'] }));
+	assert(!isInputCommand({ type: 'updateSessionQuality', ...target, role: 'Controller', quality: { max_bitrate_kbps: 1, max_frame_rate: 1, max_width: 1, max_height: 1 } }), 'only input and display selection');
 });

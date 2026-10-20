@@ -533,6 +533,7 @@ impl DataChannel {
                 | Command::SubmitText { .. }
                 | Command::SubmitLocalKey { .. }
                 | Command::ReleaseSessionInput { .. }
+                | Command::SelectDisplays { .. }
         ) {
             return Err(Error::from_reason("Not an interactive input command"));
         }
@@ -568,9 +569,19 @@ impl DataChannel {
             Command::SubmitPreciseWheel { dx, dy, .. } => service.submit_precise_wheel(dx, dy),
             Command::SubmitText { text, .. } => service.submit_text(text),
             Command::SubmitLocalKey {
-                usage, down, text, ..
-            } => service.submit_local_key(usage, down, text),
+                usage,
+                down,
+                text,
+                composing,
+                ..
+            } => service.submit_local_key(usage, down, text, composing),
             Command::ReleaseSessionInput { .. } => service.release_input(),
+            // The display the pointer lands on, sent in order with it.
+            Command::SelectDisplays { ids, .. } => service.select_displays(
+                ids.iter()
+                    .map(|id| parse_id(id, "Invalid display ID"))
+                    .collect::<Result<Vec<_>>>()?,
+            ),
             _ => unreachable!("input allowlist checked above"),
         }
         .map_err(core_error)?;

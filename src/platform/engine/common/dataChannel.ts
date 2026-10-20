@@ -67,6 +67,7 @@ export function isInputCommand(value: unknown): value is EngineCommand {
 			'submitText',
 			'submitLocalKey',
 			'releaseSessionInput',
+			'selectDisplays',
 		].includes(value.type)
 	);
 }

@@ -836,6 +836,7 @@ impl VnilinkCore {
         usage: u16,
         down: bool,
         text: String,
+        composing: bool,
     ) -> Result<(), FfiError> {
         self.inner
             .submit_local_key(
@@ -845,7 +846,7 @@ impl VnilinkCore {
                     usage,
                     down,
                     text: &text,
-                    composing: false,
+                    composing,
                 },
             )
             .map_err(map_error)

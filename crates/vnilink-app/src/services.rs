@@ -441,13 +441,20 @@ impl DesktopService {
             .set_swap_control_and_command(enabled)
             .map_err(map_error)
     }
-    pub fn submit_local_key(&self, usage: u16, down: bool, text: String) -> Result<(), FfiError> {
+    /// `composing` marks a dead key or an input-method step that has not typed yet.
+    pub fn submit_local_key(
+        &self,
+        usage: u16,
+        down: bool,
+        text: String,
+        composing: bool,
+    ) -> Result<(), FfiError> {
         self.inner
             .submit_local_key(vnilink::LocalKey {
                 usage,
                 down,
                 text: &text,
-                composing: false,
+                composing,
             })
             .map_err(map_error)
     }

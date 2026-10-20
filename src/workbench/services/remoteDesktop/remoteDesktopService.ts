@@ -58,11 +58,13 @@ export interface DesktopPicture {
 
 /** Input for the other computer, as the engine's input commands carry it without their session. */
 export type DesktopInput =
-	| { readonly type: 'submitLocalKey'; readonly usage: number; readonly down: boolean; readonly text: string }
+	| { readonly type: 'submitLocalKey'; readonly usage: number; readonly down: boolean; readonly text: string; readonly composing: boolean }
 	| { readonly type: 'submitPointer'; readonly x: number; readonly y: number; readonly display: string; readonly revision: string }
 	| { readonly type: 'submitButton'; readonly button: 'Left' | 'Right' | 'Middle' | 'Back' | 'Forward'; readonly down: boolean }
 	| { readonly type: 'submitPreciseWheel'; readonly dx: number; readonly dy: number }
-	| { readonly type: 'releaseSessionInput' };
+	| { readonly type: 'releaseSessionInput' }
+	/** The display the pointer lands on; the other computer takes the pointer only there. */
+	| { readonly type: 'selectDisplays'; readonly ids: string[] };
 
 /** A running view, or control, of a paired computer's screen. */
 export interface IDesktopSession extends IDisposable {

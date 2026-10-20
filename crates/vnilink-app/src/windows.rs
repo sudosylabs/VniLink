@@ -5,7 +5,7 @@
 //! last one leaves, so an idle host captures nothing. The secure UAC desktop
 //! is never captured.
 use crate::{error::map_error, FfiError, VnilinkCore};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use vnilink::Core;
@@ -99,6 +99,33 @@ impl VnilinkCore {
     }
 }
 
+/// The one display this host captures: the first output of the first
+/// adapter. Never 0, which names no display, so a viewer can select it and
+/// place its pointer on it.
+const DISPLAY: u64 = 1;
+
+static TOPOLOGY_REVISION: AtomicU64 = AtomicU64::new(0);
+
+/// Tells viewers where the captured display is, so their pointer lands on it
+/// and the host accepts it. A resize or move reopens the capture, which
+/// publishes again.
+fn publish_topology(core: &Core, capture: &vnilink_windows::WindowsCapture) {
+    let revision = TOPOLOGY_REVISION.fetch_add(1, Ordering::Relaxed) + 1;
+    let (width, height) = capture.size();
+    let (origin_x, origin_y) = capture.origin();
+    let display = vnilink::DisplayInfo {
+        id: DISPLAY,
+        origin_x,
+        origin_y,
+        width,
+        height,
+        rotation_deg: 0,
+        scale_percent: 100,
+        revision,
+    };
+    let _ = core.set_topology(revision, &[display]);
+}
+
 /// Opens Desktop Duplication for each run of viewers and closes it between them.
 fn serve(core: &Arc<Core>, stop: &Arc<AtomicBool>, error: &Mutex<Option<String>>) {
     let set_error = |message: Option<String>| {
@@ -109,8 +136,8 @@ fn serve(core: &Arc<Core>, stop: &Arc<AtomicBool>, error: &Mutex<Option<String>>
             std::thread::sleep(Duration::from_millis(100));
             continue;
         }
-        // Display 0 is the whole-desktop source every viewer follows.
-        let startup = match core.desktop_capture_startup(0, Arc::clone(stop), CAPTURE_STARTUP) {
+        let startup = match core.desktop_capture_startup(DISPLAY, Arc::clone(stop), CAPTURE_STARTUP)
+        {
             Ok(startup) => startup,
             Err(vnilink::Error::NoSession) => continue,
             Err(vnilink::Error::ShutDown) => break,
@@ -122,13 +149,14 @@ fn serve(core: &Arc<Core>, stop: &Arc<AtomicBool>, error: &Mutex<Option<String>>
         };
         let result = (|| -> Result<(), vnilink_media::PublishError> {
             let capture = vnilink_windows::WindowsCapture::open(&startup)?;
+            publish_topology(core, &capture);
             set_error(None);
             vnilink_media::serve_shared_capture(
                 &capture,
                 core,
                 stop,
                 true,
-                0,
+                DISPLAY,
                 |_| {},
                 |target, width, height, fps, bps| {
                     vnilink_windows::WindowsEncoder::open_codec(
