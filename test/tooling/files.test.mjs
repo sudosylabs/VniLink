@@ -31,7 +31,7 @@ const result = await build({
 
 const { FilesService, filesRefusal, filesOpenFailure, engineErrorCategory, folderName, formatSize, itemCount, jobStatus } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 
-const job = (id, state) => ({ id, peer: 'p', label: 'a.txt', direction: 'Upload', sender: true, state, total_bytes: '100', done_bytes: '40', files_total: '1', files_done: '0', resumed_files: '0', skipped_files: '0', skipped_symlinks: '0', waiting_file: null, error: null });
+const job = (id, state) => ({ id, peer: 'p', label: 'a.txt', direction: 'Upload', sender: true, state, total_bytes: '100', done_bytes: '40', files_total: '1', files_done: '0', resumed_files: '0', skipped_files: '0', skipped_symlinks: '0', waiting_file: null, error: null, destination: null });
 
 /** A paired computer with Files shared, a channel whose answers the test chooses, and a record of what was asked. */
 function fixture({ status = 'available', answer } = {}) {
@@ -73,10 +73,11 @@ test('Files that is turned off there says so, and nothing opens', async () => {
 });
 
 test('tabs for one computer share its connection, and its transfers report themselves', async () => {
-	const { service, opened } = fixture({ answer: operation => operation.type === 'jobs' ? { ok: [job('3', 'Complete')] } : undefined });
+	const { service, opened, asked } = fixture({ answer: operation => operation.type === 'jobs' ? { ok: [job('3', 'Complete')] } : undefined });
 	const [first, second] = await Promise.all([service.open('peer'), service.open('peer')]);
 	assert.equal(first.session, second.session);
 	assert.equal(opened.length, 1);
+	assert.deepEqual(asked.map(operation => operation.type), ['adopt', 'jobs'], 'a new connection first carries on with what a lost one left');
 	assert.deepEqual(opened[0].request, { kind: 'files', sessionId: '4', generation: '2' });
 	const session = first.session;
 	assert.deepEqual(session.jobs.map(item => item.id), ['3']);

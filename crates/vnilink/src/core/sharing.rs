@@ -108,7 +108,7 @@ impl Core {
                     .store(true, std::sync::atomic::Ordering::Release);
             }
         }
-        super::service_jobs::cancel_orphaned(&self.shared);
+        super::service_jobs::interrupt_orphaned(&self.shared);
         privacy_result
     }
 }

@@ -203,7 +203,7 @@ test('file operations run side by side, a refusal is an answer, and job changes 
 	const operations = [];
 	const errors = [];
 	const packets = [];
-	const job = { id: '7', peer: 'p', label: 'a.txt', direction: 'Upload', sender: true, state: 'Transferring', total_bytes: '100', done_bytes: '40', files_total: '1', files_done: '0', resumed_files: '0', skipped_files: '0', skipped_symlinks: '0', waiting_file: null, error: null };
+	const job = { id: '7', peer: 'p', label: 'a.txt', direction: 'Upload', sender: true, state: 'Transferring', total_bytes: '100', done_bytes: '40', files_total: '1', files_done: '0', resumed_files: '0', skipped_files: '0', skipped_symlinks: '0', waiting_file: null, error: null, destination: null };
 	const pushed = [{ kind: 'jobs', metadata: JSON.stringify({ jobs: [job] }) }];
 	const native = {
 		read: () => pushed.shift() ?? null,
@@ -264,6 +264,8 @@ test('a file operation outside its shape never reaches the engine', async () => 
 	assert(isFileOperation({ type: 'resolve', jobId: '3', choice: 'keepBoth', applyToRemaining: true }));
 	assert(!isFileOperation({ type: 'resolve', jobId: '3', choice: 'overwrite', applyToRemaining: true }));
 	assert(!isFileOperation({ type: 'poll', jobId: '3' }), 'progress is pushed, never polled');
+	assert(isFileOperation({ type: 'adopt' }));
+	assert(!isFileOperation({ type: 'adopt', jobId: '3' }), 'adoption names no job: it takes over every interrupted one');
 });
 
 test('media channels require matching bounded source configuration and reject extra authority', () => {

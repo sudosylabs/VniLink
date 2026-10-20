@@ -10,6 +10,32 @@ const OPEN: u8 = 1;
 const PROBE: u8 = 0;
 const MAX_FRAME: usize = super::fs::MAX_FS_FRAME;
 const TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a Files caller waits for its answer, queue included. A slow
+/// answer is that request's timeout, not the pipe's end: a transfer on the
+/// same path, or a busy disk on the host, can make one listing slow.
+#[cfg(not(test))]
+const PATIENCE: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const PATIENCE: Duration = Duration::from_secs(1);
+/// A delete walks the whole tree on the host before it answers.
+#[cfg(not(test))]
+const DELETE_PATIENCE: Duration = Duration::from_secs(120);
+#[cfg(test)]
+const DELETE_PATIENCE: Duration = Duration::from_secs(2);
+/// An exchange still unanswered after this means the host is gone. Until
+/// then the pipe reads a late answer to the end, so the next request's
+/// answer is never mistaken for it.
+#[cfg(not(test))]
+const STUCK: Duration = Duration::from_secs(150);
+#[cfg(test)]
+const STUCK: Duration = Duration::from_secs(3);
+
+fn patience(request: &fs::Request) -> Duration {
+    match request {
+        fs::Request::Delete { .. } => DELETE_PATIENCE,
+        _ => PATIENCE,
+    }
+}
 
 fn encode(bytes: &Vec<u8>) -> Result<Vec<u8>, Error> {
     let mut out = (bytes.len() as u32).to_be_bytes().to_vec();
@@ -76,22 +102,21 @@ impl RemoteFilesService {
             return Err(Error::NoSession);
         }
         let (reply, rx) = std::sync::mpsc::sync_channel(1);
+        let patience = patience(&request);
         self.tx
             .try_send(Work {
                 request,
                 reply,
-                deadline: std::time::Instant::now() + TIMEOUT,
+                deadline: std::time::Instant::now() + patience,
             })
             .map_err(|e| match e {
                 tokio::sync::mpsc::error::TrySendError::Full(_) => Error::Busy,
                 _ => Error::NoSession,
             })?;
-        let result =
-            rx.recv_timeout(TIMEOUT + Duration::from_secs(1))
-                .map_err(|error| match error {
-                    std::sync::mpsc::RecvTimeoutError::Timeout => Error::Timeout,
-                    std::sync::mpsc::RecvTimeoutError::Disconnected => Error::NoSession,
-                })?;
+        let result = rx.recv_timeout(patience).map_err(|error| match error {
+            std::sync::mpsc::RecvTimeoutError::Timeout => Error::Timeout,
+            std::sync::mpsc::RecvTimeoutError::Disconnected => Error::NoSession,
+        })?;
         if self.lease.is_cancelled() {
             return Err(Error::NoSession);
         }
@@ -252,7 +277,7 @@ impl Core {
         }
         super::desktop_service::retire_owner(&mut state, id, generation, true);
         drop(state);
-        super::service_jobs::cancel_orphaned(&self.shared);
+        super::service_jobs::interrupt_orphaned(&self.shared);
         Ok(())
     }
     pub(super) fn service_link(
@@ -337,14 +362,15 @@ impl Core {
                         }
                     },
                 };
+                // Its caller has stopped waiting; nothing is sent for it.
                 if std::time::Instant::now() >= work.deadline {
                     let _ = work.reply.send(Err(Error::Timeout));
                     continue;
                 }
                 let outcome = lease
                     .run(async {
-                        tokio::time::timeout_at(
-                            tokio::time::Instant::from_std(work.deadline),
+                        tokio::time::timeout(
+                            STUCK,
                             exchange(&mut send, &mut recv, stamp, work.request),
                         )
                         .await
@@ -385,7 +411,7 @@ impl Core {
                 }
             }
             drop(state);
-            super::service_jobs::cancel_orphaned(&shared);
+            super::service_jobs::interrupt_orphaned(&shared);
         });
         result
             .recv_timeout(TIMEOUT + Duration::from_secs(1))
@@ -593,7 +619,7 @@ impl Drop for HostedGuard {
             }
         }
         drop(state);
-        super::service_jobs::cancel_orphaned(&self.shared);
+        super::service_jobs::interrupt_orphaned(&self.shared);
     }
 }
 

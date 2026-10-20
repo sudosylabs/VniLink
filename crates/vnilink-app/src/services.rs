@@ -915,6 +915,15 @@ impl FilesService {
             .map(crate::files::job_snapshot)
             .map_err(map_error)
     }
+    /// Claims and resumes this computer's transfers that a lost Files owner
+    /// left interrupted.
+    pub fn resume_orphans(&self) -> Result<Vec<crate::FfiJobSnapshot>, FfiError> {
+        let info = self.inner.info();
+        self.core()?
+            .files_service_resume_orphans(info.id, info.generation)
+            .map(|jobs| jobs.into_iter().map(crate::files::job_snapshot).collect())
+            .map_err(map_error)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

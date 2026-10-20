@@ -148,6 +148,16 @@ pub(crate) struct TransferJob {
     skipped_symlinks: String,
     waiting_file: Option<String>,
     error: Option<String>,
+    destination: Option<TransferDestination>,
+}
+
+/// Where a transfer lands, with its root as a decimal string like other ids.
+#[derive(Serialize)]
+pub(crate) struct TransferDestination {
+    root: String,
+    #[serde(rename = "path")]
+    folder: String,
+    name: String,
 }
 
 pub(crate) fn transfer_job(snapshot: &vnilink_app::FfiJobSnapshot) -> TransferJob {
@@ -185,6 +195,14 @@ pub(crate) fn transfer_job(snapshot: &vnilink_app::FfiJobSnapshot) -> TransferJo
         skipped_symlinks: snapshot.skipped_symlinks.to_string(),
         waiting_file: snapshot.waiting_file.clone(),
         error: snapshot.error.clone(),
+        destination: snapshot
+            .destination
+            .as_ref()
+            .map(|destination| TransferDestination {
+                root: destination.root.to_string(),
+                folder: destination.folder.clone(),
+                name: destination.name.clone(),
+            }),
     }
 }
 

@@ -72,6 +72,9 @@ const STAGE_FAILED: &str = "the file could not be staged";
 pub(super) struct JobRecord {
     #[serde(default)]
     pub(super) owner: Option<super::service_jobs::JobOwner>,
+    /// Set by the submitting side only.
+    #[serde(default)]
+    destination: Option<crate::job::JobDestination>,
     pub(super) id: u64,
     /// Peer protocol job id; zero migrates older records whose ids matched.
     #[serde(default)]
@@ -116,6 +119,7 @@ impl JobRecord {
     fn test_receiver(id: u64, size: u64) -> Self {
         Self {
             owner: None,
+            destination: None,
             id,
             wire_id: id,
             created_at: retention_now(),
@@ -207,6 +211,7 @@ impl JobRecord {
                 .waiting_file
                 .and_then(|index| self.files().get(index).map(|entry| entry.path.clone())),
             error: self.error.clone(),
+            destination: self.destination.clone(),
         }
     }
 }
@@ -316,6 +321,11 @@ impl Core {
         let id = allocate_job_id(&self.shared)?;
         let record = JobRecord {
             owner,
+            destination: Some(crate::job::JobDestination {
+                root: dst_root,
+                folder: dst_rel.to_owned(),
+                name: src_rel.rsplit('/').next().unwrap_or(src_rel).to_owned(),
+            }),
             id,
             wire_id: id,
             created_at: retention_now(),
@@ -470,6 +480,11 @@ impl Core {
                 id,
                 JobRecord {
                     owner,
+                    destination: Some(crate::job::JobDestination {
+                        root: dst_root,
+                        folder: dst_rel.to_owned(),
+                        name: src_rel.rsplit('/').next().unwrap_or(src_rel).to_owned(),
+                    }),
                     id,
                     wire_id: reply.job_id,
                     created_at: retention_now(),
@@ -530,7 +545,7 @@ impl Core {
     /// the second caller observes the current snapshot without advancing.
     pub fn job_poll(&self, id: u64) -> Result<JobSnapshot, Error> {
         self.ensure_alive()?;
-        super::service_jobs::cancel_orphaned(&self.shared);
+        super::service_jobs::interrupt_orphaned(&self.shared);
         let sender = {
             let jobs = lock(&self.shared.jobs);
             let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
@@ -3909,6 +3924,7 @@ pub(super) async fn handle_upload_offer(
             local_id,
             JobRecord {
                 owner,
+                destination: None,
                 id: local_id,
                 wire_id: id,
                 created_at: retention_now(),
@@ -4059,6 +4075,7 @@ pub(super) async fn handle_download_request(
                     id,
                     JobRecord {
                         owner,
+                        destination: None,
                         id,
                         wire_id: id,
                         created_at: retention_now(),
@@ -4363,6 +4380,7 @@ mod lifecycle_tests {
     fn record(id: u64, size: u64, age: u64, state: JobState) -> JobRecord {
         JobRecord {
             owner: None,
+            destination: None,
             id,
             wire_id: id,
             created_at: retention_now().saturating_sub(age),

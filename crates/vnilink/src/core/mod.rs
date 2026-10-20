@@ -49,6 +49,8 @@ mod desktop_stream;
 mod diagnostics;
 mod file_resources;
 mod fs;
+#[cfg(test)]
+pub(crate) use fs::LIST_DELAY;
 mod host;
 mod jobs;
 #[cfg(unix)]

@@ -288,7 +288,7 @@ impl Core {
         }
         super::desktop_service::retire_owner(&mut state, id, generation, false);
         drop(state);
-        super::service_jobs::cancel_orphaned(&self.shared);
+        super::service_jobs::interrupt_orphaned(&self.shared);
         Ok(())
     }
 

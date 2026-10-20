@@ -2309,9 +2309,9 @@ fn service_jobs_close_preserves_legacy_job_sharing_the_same_hash() {
         .unwrap();
     assert_eq!(
         controller.job_snapshot(scoped).unwrap().state,
-        JobState::Cancelled
+        JobState::Interrupted
     );
-    await_jobs(|| host.job_snapshot(scoped_rx).unwrap().state == JobState::Cancelled);
+    await_jobs(|| host.job_snapshot(scoped_rx).unwrap().state == JobState::Interrupted);
     assert!(pipe.is_cancelled());
     assert!(matches!(
         controller.job_resume(scoped),
@@ -2360,9 +2360,9 @@ fn service_jobs_host_close_stops_download_and_rejects_new_work() {
     let hosted = host.hosted_services().unwrap()[0].clone();
     host.close_hosted_service(hosted.id, hosted.generation)
         .unwrap();
-    assert_eq!(host.job_snapshot(tx).unwrap().state, JobState::Cancelled);
+    assert_eq!(host.job_snapshot(tx).unwrap().state, JobState::Interrupted);
     await_jobs(|| pipe.is_cancelled());
-    await_jobs(|| controller.job_snapshot(job).unwrap().state == JobState::Cancelled);
+    await_jobs(|| controller.job_snapshot(job).unwrap().state == JobState::Interrupted);
     assert!(matches!(
         controller.files_service_download(
             owner.id,
@@ -2436,7 +2436,7 @@ fn service_jobs_require_peer_admission_and_explicit_adoption_after_restart() {
         )
         .unwrap();
     pipe.close();
-    await_jobs(|| controller.job_snapshot(job).unwrap().state == JobState::Cancelled);
+    await_jobs(|| controller.job_snapshot(job).unwrap().state == JobState::Interrupted);
     drop(pipe);
     controller.shutdown();
     drop(controller);
@@ -2444,7 +2444,7 @@ fn service_jobs_require_peer_admission_and_explicit_adoption_after_restart() {
     restarted.set_blob_directory(cs.join("blobs")).unwrap();
     assert_eq!(
         restarted.job_snapshot(job).unwrap().state,
-        JobState::Cancelled
+        JobState::Interrupted
     );
     assert!(matches!(restarted.job_resume(job), Err(Error::NoSession)));
 }
@@ -2553,18 +2553,22 @@ fn service_jobs_closing_one_computer_keeps_another_transfer_active() {
         .unwrap();
     assert_eq!(
         controller.job_snapshot(cancelled).unwrap().state,
-        JobState::Cancelled
+        JobState::Interrupted
     );
     assert_eq!(
         controller
             .files_service_job_snapshot(one.id, one.generation, cancelled)
             .unwrap()
             .state,
-        JobState::Cancelled
+        JobState::Interrupted
     );
     assert!(controller
         .files_service_job_resume(one.id, one.generation, cancelled)
         .is_err());
+    // An interrupted transfer is unfinished: it is cancelled before it is forgotten.
+    controller
+        .files_service_job_cancel(one.id, one.generation, cancelled)
+        .unwrap();
     controller
         .files_service_job_forget(one.id, one.generation, cancelled)
         .unwrap();
@@ -2634,7 +2638,7 @@ fn files_job_explicit_adoption_rebinds_both_sides_and_fences_old_handle() {
             .files_service_adopt_job(fresh.id, fresh.generation, job)
             .unwrap()
             .state,
-        JobState::Cancelled
+        JobState::Interrupted
     );
     assert!(controller
         .files_service_job_resume(old.id, old.generation, job)
@@ -2964,7 +2968,7 @@ fn files_adoption_local_save_failure_can_retry_remote_acknowledged_binding() {
     let adopted = controller
         .files_service_adopt_job(fresh.id, fresh.generation, job)
         .unwrap();
-    assert_eq!(adopted.state, JobState::Cancelled);
+    assert_eq!(adopted.state, JobState::Interrupted);
     controller
         .files_service_job_resume(fresh.id, fresh.generation, job)
         .unwrap();
@@ -3970,4 +3974,105 @@ fn a_small_file_completes_promptly_on_its_own() {
             2500
         );
     }
+}
+
+/// A listing slower than its caller waits is that request's timeout: the
+/// pipe stays open, reads the late answer to the end, and the next listing
+/// gets its own answer. Transfers keep their owner.
+#[test]
+fn a_slow_listing_times_out_without_ending_the_files_service() {
+    let (host, controller, host_scratch, _controller_scratch) = setup("slowlist");
+    std::fs::write(host_scratch.join("root/a.txt"), b"a").unwrap();
+    let files = FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let (owner, pipe) = owned_files(&controller, &host);
+    let key = std::str::FromStr::from_str(&controller.endpoint_id())
+        .map(|key: iroh::PublicKey| *key.as_bytes())
+        .unwrap();
+    // Slower than the caller waits, quicker than a stuck host.
+    *crate::core::LIST_DELAY.lock().unwrap() = Some((key, 1_800));
+    assert!(matches!(
+        pipe.list(files.root, &files.path(""), 0, 100),
+        Err(Error::Timeout)
+    ));
+    *crate::core::LIST_DELAY.lock().unwrap() = None;
+    let page = pipe.list(files.root, &files.path(""), 0, 100).unwrap();
+    assert!(page.entries.iter().any(|entry| entry.name == "a.txt"));
+    assert!(!pipe.is_cancelled());
+    let service = controller.controller_service(owner.id).unwrap();
+    assert_eq!(service.phase, crate::ServicePhase::Active);
+    host.shutdown();
+    controller.shutdown();
+}
+
+/// A Files owner that goes leaves its transfer interrupted, not cancelled;
+/// the next owner for that computer takes it over, resumes it, and it
+/// finishes where it was going.
+#[test]
+fn a_new_files_owner_resumes_what_a_lost_one_left() {
+    let (host, controller, host_scratch, controller_scratch) = setup("resume-orphans");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
+    let bytes = payload(512 * 1024, 917);
+    std::fs::write(controller_scratch.join("root/carry.bin"), &bytes).unwrap();
+    let session = controller.connect(&host.endpoint_id()).unwrap();
+    let owned = |core: &Core| {
+        let owner = core
+            .attach_controller_service(session.id, session.generation, crate::ServiceKind::Files)
+            .unwrap();
+        let pipe = core.open_files_service(owner.id, owner.generation).unwrap();
+        (owner, pipe)
+    };
+    let (lost, pipe) = owned(&controller);
+    let job = controller
+        .files_service_upload(
+            lost.id,
+            lost.generation,
+            controller_files.root,
+            &controller_files.path("carry.bin"),
+            host_files.root,
+            &host_files.path("inbox"),
+        )
+        .unwrap();
+    assert_eq!(
+        controller.job_snapshot(job).unwrap().destination,
+        Some(crate::job::JobDestination {
+            root: host_files.root,
+            folder: host_files.path("inbox"),
+            name: "carry.bin".into(),
+        })
+    );
+    let receiver = host.job_list().unwrap()[0].id;
+    controller
+        .close_controller_service(lost.id, lost.generation)
+        .unwrap();
+    drop(pipe);
+    assert_eq!(
+        controller.job_snapshot(job).unwrap().state,
+        JobState::Interrupted
+    );
+    await_jobs(|| host.hosted_services().unwrap().is_empty());
+    let (fresh, _pipe) = owned(&controller);
+    let resumed = controller
+        .files_service_resume_orphans(fresh.id, fresh.generation)
+        .unwrap();
+    assert_eq!(resumed.iter().map(|job| job.id).collect::<Vec<_>>(), [job]);
+    assert_ne!(resumed[0].state, JobState::Interrupted);
+    // Nothing is left to take over a second time.
+    assert!(controller
+        .files_service_resume_orphans(fresh.id, fresh.generation)
+        .unwrap()
+        .is_empty());
+    let (sender, receiver) = drive_to_end(&controller, job, &host, receiver);
+    assert_eq!(
+        (sender.state, receiver.state),
+        (JobState::Complete, JobState::Complete)
+    );
+    assert_eq!(
+        std::fs::read(host_scratch.join("root/inbox/carry.bin")).unwrap(),
+        bytes
+    );
 }

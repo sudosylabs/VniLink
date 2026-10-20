@@ -636,14 +636,13 @@ impl DataChannel {
                 }
             }
         }
-        let jobs = if already {
-            Vec::new()
-        } else {
-            self.jobs
-                .lock()
-                .map(|mut jobs| jobs.drain(..).collect())
-                .unwrap_or_default()
-        };
+        // Unfinished transfers are not cancelled: retiring the owner leaves
+        // them interrupted, for the next channel to this computer to resume.
+        if !already {
+            if let Ok(mut jobs) = self.jobs.lock() {
+                jobs.clear();
+            }
+        }
         if !already {
             if let Ok(mut terminal) = self.terminal.lock() {
                 if let Some(terminal) = terminal.take() {
@@ -672,7 +671,6 @@ impl DataChannel {
         CloseTask {
             core: self.core.clone(),
             owner: if already { None } else { self.owner },
-            jobs,
             files,
             desktop: if already {
                 None
@@ -695,7 +693,6 @@ impl Drop for DataChannel {
 pub struct CloseTask {
     core: Arc<VnilinkCore>,
     owner: Option<(u64, u64)>,
-    jobs: Vec<u64>,
     files: Option<Arc<vnilink_app::FilesService>>,
     desktop: Option<Arc<DesktopOwner>>,
 }
@@ -703,19 +700,6 @@ impl Task for CloseTask {
     type Output = ();
     type JsValue = ();
     fn compute(&mut self) -> Result<()> {
-        for job in self.jobs.drain(..) {
-            if self.core.job_snapshot(job).is_ok_and(|snapshot| {
-                matches!(
-                    snapshot.state,
-                    vnilink_app::FfiJobState::Cancelled
-                        | vnilink_app::FfiJobState::Failed
-                        | vnilink_app::FfiJobState::Complete
-                )
-            }) {
-                continue;
-            }
-            let _ = self.core.job_cancel(job);
-        }
         if let Some((id, generation)) = self.owner.take() {
             retire_service(&self.core, id, generation);
         }
@@ -1058,6 +1042,8 @@ enum FileOperation {
         dst_path: String,
     },
     Jobs,
+    /// Takes over and resumes the transfers a lost channel left interrupted.
+    Adopt,
     Cancel {
         #[serde(rename = "jobId")]
         job_id: String,
@@ -1254,6 +1240,16 @@ impl FileTask {
                     .map(crate::transfer_job)
                     .collect::<Vec<_>>(),
             ),
+            FileOperation::Adopt => {
+                let adopted = files.resume_orphans()?;
+                let mut jobs = self
+                    .jobs
+                    .lock()
+                    .map_err(|_| Error::from_reason("Channel unavailable"))?;
+                jobs.extend(adopted.iter().map(|job| job.id));
+                drop(jobs);
+                Self::json(adopted.iter().map(crate::transfer_job).collect::<Vec<_>>())
+            }
             FileOperation::Cancel { job_id } => {
                 Self::json(crate::transfer_job(&files.job_cancel(self.owned(job_id)?)?))
             }

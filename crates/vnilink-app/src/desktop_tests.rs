@@ -460,8 +460,8 @@ fn service_jobs_cross_the_ffi_boundary() {
     );
     pipe.close();
     let until = Instant::now() + Duration::from_secs(5);
-    while controller.inner.job_snapshot(down).unwrap().state != vnilink::JobState::Cancelled {
-        assert!(Instant::now() < until, "owned FFI job did not cancel");
+    while controller.inner.job_snapshot(down).unwrap().state != vnilink::JobState::Interrupted {
+        assert!(Instant::now() < until, "owned FFI job was not interrupted");
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(!controller_root.join("cancelled").exists());
@@ -1039,7 +1039,7 @@ fn files_handle_owns_submission_queue_and_cleanup() {
     assert_eq!(files.job_poll(job).unwrap().id, job);
     files.close();
     let until = Instant::now() + Duration::from_secs(5);
-    while files.job_snapshot(job).unwrap().state != FfiJobState::Cancelled {
+    while files.job_snapshot(job).unwrap().state != FfiJobState::Interrupted {
         assert!(Instant::now() < until);
         std::thread::sleep(Duration::from_millis(10));
     }

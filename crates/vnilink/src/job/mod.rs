@@ -100,6 +100,18 @@ pub struct JobSnapshot {
     pub skipped_symlinks: u64,
     pub waiting_file: Option<String>,
     pub error: Option<String>,
+    /// Where the transfer lands, on the side that submitted it.
+    pub destination: Option<JobDestination>,
+}
+
+/// Where a transfer lands: the folder on the receiving computer and the
+/// name of the file or folder copied into it, so the Files tab can show it
+/// arriving there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobDestination {
+    pub root: u64,
+    pub folder: String,
+    pub name: String,
 }
 
 /// Host-local cache retention. Active jobs/imports remain independently pinned.

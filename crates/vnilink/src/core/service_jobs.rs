@@ -45,9 +45,13 @@ pub(super) fn check_owner(state: &State, owner: Option<JobOwner>) -> Result<(), 
     Ok(())
 }
 
-/// Jobs -> state is the publication lock order. Never call under state.
-pub(super) fn cancel_orphaned(shared: &Shared) {
-    let cancelled = {
+/// Stops the jobs whose Files owner is gone and leaves them Interrupted,
+/// keeping what has arrived: an owner ends with its connection or pipe as
+/// well as with its window, and a new owner adopts and resumes them
+/// (`files_service_resume_orphans`). Jobs -> state is the publication lock
+/// order. Never call under state.
+pub(super) fn interrupt_orphaned(shared: &Shared) {
+    let interrupted = {
         let mut jobs = lock(&shared.jobs);
         let state = lock(&shared.state);
         jobs.values_mut()
@@ -56,7 +60,7 @@ pub(super) fn cancel_orphaned(shared: &Shared) {
                     && !r.state.is_terminal()
                     && check_owner(&state, r.owner).is_err()
                 {
-                    r.state = JobState::Cancelled;
+                    r.state = JobState::Interrupted;
                     r.waiting_file = None;
                     r.error = None;
                     Some((r.id, r.peer_key, r.sender))
@@ -66,7 +70,7 @@ pub(super) fn cancel_orphaned(shared: &Shared) {
             })
             .collect::<Vec<_>>()
     };
-    for (id, peer, sender) in &cancelled {
+    for (id, peer, sender) in &interrupted {
         if let Some(stop) = lock(&shared.job_cancel).remove(id) {
             stop.send_replace(true);
         }
@@ -74,7 +78,7 @@ pub(super) fn cancel_orphaned(shared: &Shared) {
             Core::withdraw_job_offers(shared, peer, *id);
         }
     }
-    if !cancelled.is_empty() {
+    if !interrupted.is_empty() {
         let _ = super::jobs::save_jobs(shared);
     }
 }
@@ -135,7 +139,7 @@ impl Core {
         if service.kind != ServiceKind::Files {
             return Err(Error::InvalidSetting("this is not a Files service"));
         }
-        cancel_orphaned(&self.shared);
+        interrupt_orphaned(&self.shared);
         let owner = JobOwner {
             id,
             generation,
@@ -187,7 +191,7 @@ impl Core {
     ) -> Result<JobSnapshot, Error> {
         let _owner_gate = lock(&self.shared.job_owner_gate);
         self.files_service_job_owner(id, generation, job)?;
-        cancel_orphaned(&self.shared);
+        interrupt_orphaned(&self.shared);
         self.job_snapshot(job)
     }
     pub fn files_service_job_poll(
@@ -266,7 +270,7 @@ impl Core {
         ) {
             let _ = self.close_controller_service(owner.id, owner.generation);
         }
-        cancel_orphaned(&self.shared);
+        interrupt_orphaned(&self.shared);
         result
     }
 }
@@ -384,7 +388,7 @@ impl Core {
         let _gate = lock(&self.shared.job_owner_gate);
         let (owner, peer_id) = self.files_job_owner(id, generation)?;
         let peer = parse_endpoint_id(&peer_id)?;
-        cancel_orphaned(&self.shared);
+        interrupt_orphaned(&self.shared);
         if !lock(&self.shared.job_driving).insert(job) {
             return Err(Error::Busy);
         }
@@ -449,6 +453,45 @@ impl Core {
             return Err(error);
         }
         self.job_snapshot(job)
+    }
+
+    /// Claims this peer's Files jobs that were interrupted when their owner
+    /// went, and resumes them, so a reconnected Files tab carries on where
+    /// the lost one stopped. A job that cannot be claimed or resumed yet
+    /// stays as it is; the claimed ones are returned.
+    pub fn files_service_resume_orphans(
+        &self,
+        id: u64,
+        generation: u64,
+    ) -> Result<Vec<JobSnapshot>, Error> {
+        let (owner, peer_id) = self.files_job_owner(id, generation)?;
+        let peer = parse_endpoint_id(&peer_id)?;
+        interrupt_orphaned(&self.shared);
+        let mut orphans = {
+            let jobs = lock(&self.shared.jobs);
+            let state = lock(&self.shared.state);
+            jobs.values()
+                .filter(|record| {
+                    record.peer_key == peer
+                        && record.state == JobState::Interrupted
+                        && record.owner.is_some_and(|o| !o.hosted && o != owner)
+                        && check_owner(&state, record.owner).is_err()
+                })
+                .map(|record| record.id)
+                .collect::<Vec<_>>()
+        };
+        orphans.sort_unstable();
+        let mut claimed = Vec::new();
+        for job in orphans {
+            if self.files_service_adopt_job(id, generation, job).is_err() {
+                continue;
+            }
+            let snapshot = self
+                .files_service_job_resume(id, generation, job)
+                .or_else(|_| self.job_snapshot(job))?;
+            claimed.push(snapshot);
+        }
+        Ok(claimed)
     }
 }
 

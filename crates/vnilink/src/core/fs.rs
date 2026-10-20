@@ -544,6 +544,11 @@ pub(super) async fn serve_aux_controller(
     }
 }
 
+/// Holds back each listing served to one controller, in milliseconds,
+/// so a test can play a slow host without slowing the others.
+#[cfg(test)]
+pub(crate) static LIST_DELAY: Mutex<Option<([u8; 32], u64)>> = Mutex::new(None);
+
 pub(super) async fn handle_fs_request(
     shared: &Shared,
     session_id: u64,
@@ -681,6 +686,13 @@ pub(super) async fn handle_fs_request(
             limit,
             ..
         } => {
+            #[cfg(test)]
+            {
+                let delay = *lock(&LIST_DELAY);
+                if let Some((_, millis)) = delay.filter(|(slow, _)| slow == peer) {
+                    tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
+                }
+            }
             serve_list_page(
                 shared,
                 session_id,

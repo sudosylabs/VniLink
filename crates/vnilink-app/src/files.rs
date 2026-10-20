@@ -145,6 +145,16 @@ pub struct FfiJobSnapshot {
     pub skipped_symlinks: u64,
     pub waiting_file: Option<String>,
     pub error: Option<String>,
+    /// Where the transfer lands, when this side submitted it.
+    pub destination: Option<FfiJobDestination>,
+}
+
+/// The folder a transfer lands in and the name it lands under.
+#[derive(Clone, PartialEq, Eq)]
+pub struct FfiJobDestination {
+    pub root: u64,
+    pub folder: String,
+    pub name: String,
 }
 
 impl std::fmt::Debug for FfiJobSnapshot {
@@ -275,6 +285,11 @@ pub(crate) fn job_snapshot(snapshot: vnilink::JobSnapshot) -> FfiJobSnapshot {
         skipped_symlinks: snapshot.skipped_symlinks,
         waiting_file: snapshot.waiting_file,
         error: snapshot.error,
+        destination: snapshot.destination.map(|destination| FfiJobDestination {
+            root: destination.root,
+            folder: destination.folder,
+            name: destination.name,
+        }),
     }
 }
 

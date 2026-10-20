@@ -42,12 +42,14 @@ export interface FileJob {
 	total_bytes: string; done_bytes: string; files_total: string; files_done: string;
 	resumed_files: string; skipped_files: string; skipped_symlinks: string;
 	waiting_file: string | null; error: string | null;
+	/** Where it lands, when this computer submitted it: the receiving folder and the name it arrives under. */
+	destination: FileTarget | null;
 }
 
 export type FileConflictChoice = 'skip' | 'replace' | 'keepBoth';
 
 /** Names one entry: its root, its folder's path under the root, and its name. */
-interface FileTarget {
+export interface FileTarget {
 	readonly root: string;
 	readonly path: string;
 	readonly name: string;
@@ -69,6 +71,8 @@ export type FileOperation =
 		readonly dstPath: string;
 	}
 	| { readonly type: 'jobs' }
+	/** Takes over and resumes the transfers a lost channel to this computer left interrupted. */
+	| { readonly type: 'adopt' }
 	| { readonly type: 'cancel' | 'resume' | 'forget'; readonly jobId: string }
 	| { readonly type: 'resolve'; readonly jobId: string; readonly choice: FileConflictChoice; readonly applyToRemaining: boolean };
 
@@ -145,7 +149,8 @@ export function isFileJob(value: unknown): value is FileJob {
 		&& decimal(value.files_total) && decimal(value.files_done) && decimal(value.resumed_files)
 		&& decimal(value.skipped_files) && decimal(value.skipped_symlinks)
 		&& (value.waiting_file === null || text(value.waiting_file, 4096)) && (value.error === null || text(value.error, 4096))
-		&& Object.keys(value).length === 15;
+		&& (value.destination === null || (record(value.destination) && keys(value.destination, ['root', 'path', 'name']) && target(value.destination)))
+		&& Object.keys(value).length === 16;
 }
 
 export function isFileJobs(value: unknown): value is FileJob[] {
@@ -161,7 +166,7 @@ export function isFileOperation(value: unknown): value is FileOperation {
 		return false;
 	}
 	switch (value.type) {
-		case 'places': case 'jobs':
+		case 'places': case 'jobs': case 'adopt':
 			return keys(value, ['type']);
 		case 'list':
 			return keys(value, ['type', 'root', 'path', 'offset']) && decimal(value.root) && isFilePath(value.path) && decimal(value.offset);

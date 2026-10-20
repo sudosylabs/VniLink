@@ -535,7 +535,7 @@ impl Core {
                 }
             }
             drop(state);
-            super::service_jobs::cancel_orphaned(&shared);
+            super::service_jobs::interrupt_orphaned(&shared);
         });
         result
             .recv_timeout(TIMEOUT + Duration::from_secs(1))
