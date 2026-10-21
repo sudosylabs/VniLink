@@ -130,6 +130,11 @@ pub struct PipelineSummary {
     pub encoder_reopens: u64,
     /// Frames the host dropped rather than queue behind a slow link.
     pub send_dropped: u64,
+    /// Host: what its viewer last reported losing, smoothed, in thousandths
+    /// of the fragments sent and of the frames after any repair. None
+    /// before a fresh report.
+    pub viewer_fragment_loss_permille: Option<u32>,
+    pub viewer_frame_loss_permille: Option<u32>,
     pub selected_display: Option<u64>,
     /// Fixed display-fault label, if the selected source failed.
     pub fault: Option<String>,

@@ -1,5 +1,6 @@
 use crate::video::{
-    decode_video_body, encode_video_body, fragment, EncodedFrame, Losses, Reassembler, FRAG_HEADER,
+    decode_video_body, encode_video_body, fragment, EncodedFrame, FragmentCounts, Losses,
+    Reassembler, FRAG_HEADER,
 };
 
 fn body(keyframe: bool, stamp: u64, payload: &[u8]) -> Vec<u8> {
@@ -211,6 +212,39 @@ fn a_silent_frame_expires() {
         Losses {
             expired: 1,
             ..Losses::default()
+        }
+    );
+}
+
+/// The reassembler counts every fragment that arrives, and the fragments a
+/// frame never got once it is given up.
+#[test]
+fn fragments_are_counted_for_the_loss_report() {
+    let silence = std::time::Duration::from_millis(20);
+    let whole = fragment(&body(true, 1, &[1; 3000]), 70, 900);
+    let cut = fragment(&body(false, 2, &[2; 3000]), 71, 900);
+    let mut reasm = Reassembler::with_silence(silence);
+    for frag in &whole {
+        reasm.push(frag);
+    }
+    reasm.push(&cut[0]);
+    assert_eq!(
+        reasm.take_fragments(),
+        FragmentCounts {
+            received: whole.len() as u64 + 1,
+            missing: 0,
+            repaired: 0,
+        }
+    );
+    std::thread::sleep(silence * 2);
+    // Pushing anything checks for silent frames.
+    reasm.push(&[0; 2]);
+    assert_eq!(
+        reasm.take_fragments(),
+        FragmentCounts {
+            received: 0,
+            missing: cut.len() as u64 - 1,
+            repaired: 0,
         }
     );
 }

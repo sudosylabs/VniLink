@@ -532,6 +532,23 @@ fn topology_and_one_display_selection_round_trip() {
     };
     assert_eq!(ControlMessage::decode(&empty.encode()).unwrap(), empty);
 
+    let report = ControlMessage::VideoReport {
+        stamp: SessionStamp::new(9, 2),
+        report: crate::video::VideoReport {
+            frames_completed: 28,
+            frames_lost: 2,
+            fragments_received: 900,
+            fragments_missing: 11,
+            fragments_repaired: 0,
+        },
+    };
+    let encoded = report.encode();
+    assert_eq!(ControlMessage::decode(&encoded).unwrap(), report);
+    assert!(matches!(
+        ControlMessage::decode(&encoded[..encoded.len() - 1]),
+        Err(Error::Malformed)
+    ));
+
     let selection = ControlMessage::SelectDisplays {
         stamp: SessionStamp::new(9, 2),
         displays: vec![2],

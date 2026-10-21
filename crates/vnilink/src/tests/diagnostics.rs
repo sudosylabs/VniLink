@@ -274,6 +274,12 @@ fn live_snapshot_reports_pipeline_path_and_lease() {
         let pipeline = &host.diagnostic_snapshot().unwrap().pipelines[0];
         pipeline.keyframes_sent == 1 && pipeline.keyframe_bytes == 64
     });
+    // The viewer reports what reached it; the host hears no loss.
+    wait(|| {
+        let pipeline = &host.diagnostic_snapshot().unwrap().pipelines[0];
+        pipeline.viewer_frame_loss_permille == Some(0)
+            && pipeline.viewer_fragment_loss_permille == Some(0)
+    });
     desktop.request_keyframe().unwrap();
     wait(|| {
         controller

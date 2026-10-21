@@ -251,6 +251,11 @@ pub(crate) enum ControlMessage {
         stamp: SessionStamp,
         displays: Vec<u64>,
     },
+    /// What the viewer lost of the desktop stream since its last report.
+    VideoReport {
+        stamp: SessionStamp,
+        report: crate::video::VideoReport,
+    },
 }
 
 /// Session identity stamped on every control message that belongs to one.
@@ -375,6 +380,13 @@ impl ControlMessage {
                     bytes.push(capability.wire_id());
                     bytes.push(status.wire_id());
                 }
+                bytes
+            }
+            Self::VideoReport { stamp, report } => {
+                let mut bytes = Vec::with_capacity(17 + crate::video::REPORT_LEN);
+                bytes.push(14);
+                write_stamp(stamp, &mut bytes);
+                report.encode(&mut bytes);
                 bytes
             }
             Self::SelectDisplays { stamp, displays } => {
@@ -504,6 +516,12 @@ impl ControlMessage {
             11 => decode_topology(bytes),
             12 => decode_selection(bytes),
             13 => decode_availability(bytes),
+            14 if bytes.len() == 17 + crate::video::REPORT_LEN => Ok(Self::VideoReport {
+                stamp: decode_stamp(bytes),
+                report: crate::video::VideoReport::decode(
+                    bytes[17..].try_into().expect("report length checked"),
+                ),
+            }),
             _ => Err(Error::Malformed),
         }
     }

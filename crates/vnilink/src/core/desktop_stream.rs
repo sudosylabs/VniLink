@@ -91,6 +91,10 @@ pub(super) struct DesktopRuntime {
     release: KeyframeFlag,
     /// Losses, keyframes and encoder reopens, for diagnostics.
     pub(super) counters: crate::video::VideoCounters,
+    /// Viewer: what it has lost since its last report to the host.
+    report: crate::video::ReportTally,
+    /// Host: what its viewer reports losing, smoothed.
+    viewer_loss: Mutex<crate::video::ViewerLoss>,
     /// The viewer's outstanding keyframe request, so losses while one is
     /// coming do not ask again.
     keyframe_requests: Mutex<crate::video::KeyframeRequests>,
@@ -169,6 +173,8 @@ impl DesktopRuntime {
             keyframe: KeyframeFlag::new(),
             release: KeyframeFlag::new(),
             counters: crate::video::VideoCounters::default(),
+            report: Default::default(),
+            viewer_loss: Mutex::new(Default::default()),
             keyframe_requests: Mutex::new(crate::video::KeyframeRequests::default()),
             control_state: tokio::sync::watch::channel((DesktopControlState::Viewing, 0)).0,
             control_commands: Mutex::new(std::collections::VecDeque::new()),
@@ -306,6 +312,9 @@ impl DesktopRuntime {
         let out = self.video.telemetry();
         let inbound = self.inbox.telemetry();
         let counts = self.counters.read();
+        let viewer = *lock(&self.viewer_loss);
+        let reported = viewer.heard.filter(|at| fresh(at)).map(|_| viewer);
+        let permille = |share: f64| (share * 1000.0).round() as u32;
         crate::diagnostics::PipelineSummary {
             service_id,
             hosted,
@@ -339,6 +348,8 @@ impl DesktopRuntime {
             keyframe_bytes: counts.keyframe_bytes,
             encoder_reopens: counts.encoder_reopens,
             send_dropped: counts.send_dropped,
+            viewer_fragment_loss_permille: reported.map(|loss| permille(loss.fragment_loss)),
+            viewer_frame_loss_permille: reported.map(|loss| permille(loss.frame_loss)),
             selected_display: lock(&self.selected).first().copied(),
             fault: lock(&self.display_fault).map(str::to_string),
         }
@@ -416,6 +427,9 @@ fn ensure_datagram_router(
         lock(&shared.desktop_routers).remove(&(connection_id, generation));
     });
 }
+
+/// How often a viewer tells its host what it lost.
+const REPORT_EVERY: Duration = Duration::from_millis(250);
 
 /// How often the router checks its connection is still the live one; between
 /// checks a closed owner is noticed by its own retired flag.
@@ -496,10 +510,17 @@ async fn route_desktop_datagrams(
                 .entry(key)
                 .or_insert_with(crate::video::Reassembler::new);
             let body = reassembly.push(fragment);
+            desktop.report.fragments(reassembly.take_fragments());
+            if body.is_some() {
+                desktop.report.frame_completed();
+            }
             // A lost frame: what follows waits for a keyframe, which is asked
             // for now rather than at the next periodic one.
             let losses = reassembly.take_loss();
             if losses.any() {
+                desktop
+                    .report
+                    .frames_lost(losses.expired + losses.evicted + losses.gap + losses.stale);
                 desktop.counters.lost(losses);
                 desktop.inbox.lost();
                 desktop.keyframe.request();
@@ -1249,6 +1270,8 @@ async fn client_send(
 ) -> Result<(), Error> {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut reports = tokio::time::interval(REPORT_EVERY);
+    reports.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut sampled_at = std::time::Instant::now();
     let mut last_path = None;
     loop {
@@ -1325,6 +1348,17 @@ async fn client_send(
         }
         tokio::select! {
             _ = &mut notified => {}, _ = desktop.keyframe.notified() => {}, _ = desktop.release.notified() => {}, _ = desktop.control_notify.notified() => {},
+            _ = reports.tick() => {
+                let report = desktop.report.take();
+                if !report.is_empty() {
+                    let mut bytes = vec![COMMAND];
+                    bytes.extend_from_slice(&lease_epoch.to_be_bytes());
+                    bytes.extend_from_slice(
+                        &ControlMessage::VideoReport { stamp: desktop.stamp, report }.encode(),
+                    );
+                    write(send, &bytes).await?;
+                }
+            },
             // An unanswered keyframe request is asked again when its patience runs out.
             _ = async {
                 match retry {
@@ -2132,6 +2166,9 @@ fn process_host_command(
             }
         }
         ControlMessage::Keyframe { stamp } if stamp == desktop.stamp => desktop.keyframe.request(),
+        ControlMessage::VideoReport { stamp, report } if stamp == desktop.stamp => {
+            lock(&desktop.viewer_loss).observe(&report, std::time::Instant::now());
+        }
         ControlMessage::Quality { stamp, quality } if stamp == desktop.stamp => {
             let caps = lock(&shared.video_caps).clone();
             // No keyframe here: the encoder takes a new rate as it runs, and

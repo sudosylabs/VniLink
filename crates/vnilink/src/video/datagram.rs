@@ -64,6 +64,13 @@ struct Partial {
     heard: Instant,
 }
 
+impl Partial {
+    /// Fragments of this frame that never arrived.
+    fn missing(&self) -> u64 {
+        (usize::from(self.count) - self.received) as u64
+    }
+}
+
 /// Frames lost since the last ask, by how each was lost.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Losses {
@@ -75,6 +82,15 @@ pub(crate) struct Losses {
     pub(crate) gap: u64,
     /// Completed after a newer frame, too late to decode.
     pub(crate) stale: u64,
+}
+
+/// Fragments seen since the last ask: arrived, missing from frames that
+/// were tracked, and rebuilt from parity.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FragmentCounts {
+    pub(crate) received: u64,
+    pub(crate) missing: u64,
+    pub(crate) repaired: u64,
 }
 
 impl Losses {
@@ -96,6 +112,8 @@ pub(crate) struct Reassembler {
     gone: VecDeque<u32>,
     /// How long an incomplete frame may go without a fragment.
     silence: Duration,
+    /// Fragments seen since [`Self::take_fragments`] was last asked.
+    fragments: FragmentCounts,
 }
 
 impl Reassembler {
@@ -107,7 +125,13 @@ impl Reassembler {
             lost: Losses::default(),
             gone: VecDeque::new(),
             silence: FRAG_SILENCE,
+            fragments: FragmentCounts::default(),
         }
+    }
+
+    /// Fragments seen since the last call, for the viewer's loss report.
+    pub(crate) fn take_fragments(&mut self) -> FragmentCounts {
+        std::mem::take(&mut self.fragments)
     }
 
     /// A reassembler whose incomplete frames expire after `silence`, for
@@ -151,7 +175,9 @@ impl Reassembler {
         }
         if self.partial.len() >= MAX_PARTIAL_FRAMES && !self.partial.contains_key(&seq) {
             if let Some(oldest) = self.partial.keys().next().copied() {
-                self.partial.remove(&oldest);
+                if let Some(evicted) = self.partial.remove(&oldest) {
+                    self.fragments.missing += evicted.missing();
+                }
                 self.lost.evicted += 1;
                 self.remember_gone(oldest);
             }
@@ -171,6 +197,7 @@ impl Reassembler {
             partial.parts[index] = Some(payload.to_vec());
             partial.received += 1;
             partial.heard = Instant::now();
+            self.fragments.received += 1;
         }
         if partial.received < usize::from(partial.count) {
             return None;
@@ -201,8 +228,15 @@ impl Reassembler {
                     })
                     .count() as u64;
                 self.lost.gap += u64::from(ahead - 1).saturating_sub(counted);
-                self.partial
-                    .retain(|&pending, _| pending.wrapping_sub(seq) <= u32::MAX / 2);
+                let mut missing = 0;
+                self.partial.retain(|&pending, partial| {
+                    let keep = pending.wrapping_sub(seq) <= u32::MAX / 2;
+                    if !keep {
+                        missing += partial.missing();
+                    }
+                    keep
+                });
+                self.fragments.missing += missing;
             }
         }
         self.newest = Some(seq);
@@ -222,7 +256,9 @@ impl Reassembler {
             .map(|(&seq, _)| seq)
             .collect();
         for seq in expired {
-            self.partial.remove(&seq);
+            if let Some(expired) = self.partial.remove(&seq) {
+                self.fragments.missing += expired.missing();
+            }
             self.lost.expired += 1;
             self.remember_gone(seq);
         }
