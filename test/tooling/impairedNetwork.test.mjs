@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { NETEM_PROFILES, blackoutArguments, creationCommands, netemArguments, profileCommands, qdiscCommands, selectProfiles, shellScript, statisticsDelta, topology } from '../../build/lib/netem.ts';
-import { DEFAULT_OPTIONS, checkoutVolume, parseImpairedArguments, parseSize, renderSummary, resolveOptions, scenarioEnvironment } from '../../build/lib/impaired.ts';
+import { NETEM_PROFILES, RELAY_PATH, blackoutArguments, creationCommands, netemArguments, profileCommands, qdiscCommands, relayPathCommands, selectProfiles, shellScript, statisticsDelta, topology } from '../../build/lib/netem.ts';
+import { DEFAULT_OPTIONS, checkoutVolume, parseImpairedArguments, parseSize, pathMismatch, relayUrl, renderSummary, resolveOptions, scenarioEnvironment } from '../../build/lib/impaired.ts';
 
 const named = name => NETEM_PROFILES.find(item => item.name === name);
 
@@ -62,6 +62,35 @@ test('the topology routes loopback over the veth and impairs both directions', (
 	]);
 });
 
+test('relay mode reaches a relay in the host namespace and keeps UDP off the link', () => {
+	const link = topology({ host: 'a', view: 'b' });
+	const commands = relayPathCommands(link, { host: 'aa:aa', view: 'bb:bb' }).map(command => command.join(' '));
+	// The viewer reaches the relay from its own loopback address across the veth.
+	assert.ok(commands.includes(`ip -n b route add ${RELAY_PATH.address}/32 dev b-veth table 100 scope link src ${RELAY_PATH.viewerSource}`));
+	assert.ok(commands.includes(`ip -n b neigh replace ${RELAY_PATH.address} lladdr aa:aa dev b-veth nud permanent`));
+	assert.ok(commands.includes(`ip -n a route add ${RELAY_PATH.viewerSource}/32 dev a-veth table 100 scope link`));
+	assert.ok(commands.includes(`ip -n a neigh replace ${RELAY_PATH.viewerSource} lladdr bb:bb dev a-veth nud permanent`));
+	// The relay's replies to the host core stay local, ahead of the veth rule.
+	assert.ok(commands.includes(`ip -n a rule add pref 5 from ${RELAY_PATH.address} to 127.0.0.1 lookup local`));
+	for (const [namespace, device] of [['a', 'a-veth'], ['b', 'b-veth']]) {
+		assert.ok(commands.includes(`tc -n ${namespace} qdisc add dev ${device} clsact`));
+		assert.ok(commands.includes(`tc -n ${namespace} filter add dev ${device} egress protocol ip pref 1 u32 match ip protocol 17 0xff action drop`));
+	}
+	assert.equal(relayUrl(), `http://${RELAY_PATH.address}:${String(RELAY_PATH.port)}`);
+});
+
+test('a scenario fails unless every core reports the expected path', () => {
+	const sample = (host, viewer) => ({ host: host.map(path => ({ path })), viewer: viewer.map(path => ({ path })) });
+	const result = (connected, finished) => ({ paths: { connected, finished } });
+	assert.equal(pathMismatch(result(sample(['relay'], ['relay']), sample(['relay'], ['relay'])), 'relay'), null);
+	// A path not selected yet right after connecting is not a mismatch.
+	assert.equal(pathMismatch(result(sample([], ['none']), sample(['direct'], ['direct'])), 'direct'), null);
+	assert.match(pathMismatch(result(sample(['relay'], ['direct']), sample(['relay'], ['relay'])), 'relay'), /viewer core's connection used the direct path when connected/);
+	assert.match(pathMismatch(result(sample(['relay'], ['relay']), sample(['relay'], ['none'])), 'relay'), /viewer core reported no relay connection when finished \(none\)/);
+	assert.match(pathMismatch(result(sample([], []), sample([], [])), 'direct'), /host core reported no direct connection when finished \(no connections\)/);
+	assert.match(pathMismatch({ cases: [] }, 'relay'), /no transport paths/);
+});
+
 test('hook scripts stop at the first failure and quote every argument', () => {
 	assert.equal(shellScript([['tc', 'qdisc', 'it\'s']]), '#!/bin/sh\nset -e\n\'tc\' \'qdisc\' \'it\'\\\'\'s\'\n');
 });
@@ -83,13 +112,15 @@ test('options are validated before any namespace exists', () => {
 	assert.throws(() => resolveOptions({ scenarios: ['audio'] }), /Unknown scenario: audio/);
 	assert.throws(() => resolveOptions({ driver: 'fast' }), /tight or background/);
 	assert.throws(() => resolveOptions({ viewer: 'eager' }), /passive or request-while-corrupt/);
+	assert.equal(resolved.path, 'direct');
+	assert.throws(() => resolveOptions({ path: 'turn' }), /direct or relay/);
 	assert.throws(() => resolveOptions({ bursts: -1 }), /bursts must be a whole number/);
 	assert.throws(() => resolveOptions({ largeBytes: Number.NaN }), /largeBytes/);
 });
 
 test('task arguments map to options and reject what the harness does not know', () => {
-	const parsed = parseImpairedArguments(['--profiles', 'loss-1, quick', '--large-size', '1GiB', '--bursts', '0', '--output', '/e']);
-	assert.deepEqual(parsed, { output: '/e', profiles: ['loss-1', 'quick'], largeBytes: 1024 ** 3, bursts: 0 });
+	const parsed = parseImpairedArguments(['--profiles', 'loss-1, quick', '--large-size', '1GiB', '--bursts', '0', '--output', '/e', '--path', 'relay']);
+	assert.deepEqual(parsed, { output: '/e', profiles: ['loss-1', 'quick'], largeBytes: 1024 ** 3, bursts: 0, path: 'relay' });
 	assert.deepEqual(parseImpairedArguments([]), {});
 	assert.throws(() => parseImpairedArguments(['--burst', '3']), /Unknown option/);
 	assert.throws(() => parseImpairedArguments(['--seed', '1.5']), /--seed must be a whole number/);
@@ -108,6 +139,12 @@ test('each scenario receives only its own settings', () => {
 	assert.equal(video.VNILINK_IMPAIRED_BURST_START, '/start');
 	assert.equal(video.VNILINK_IMPAIRED_VIEWER, 'passive');
 	assert.equal(video.VNILINK_IMPAIRED_SMALL_FILES, undefined);
+	// Only relay mode names a relay; direct cores keep their dead one.
+	assert.equal(transfer.VNILINK_IMPAIRED_RELAY_URL, undefined);
+	const relayed = resolveOptions({ path: 'relay' });
+	for (const name of ['transfer', 'video']) {
+		assert.equal(scenarioEnvironment(name, relayed, paths, link).VNILINK_IMPAIRED_RELAY_URL, relayUrl());
+	}
 });
 
 test('the summary reports refusals, recovery and failed runs', () => {
@@ -125,6 +162,8 @@ test('the summary reports refusals, recovery and failed runs', () => {
 	assert.match(summary, /\| loss-1 \| large \| refused: the transfer exceeds its limits \|/);
 	assert.match(summary, /\| loss-1 \| 90\.0% \| 50\.0% \| 1\/2\/7 \| 4\/4\/9 \| 300\/1200 \| 1\/3 \| 12\.3\/40\.0 \|/);
 	assert.match(summary, /- rate-2 video: cargo exited \(101\)/);
+	assert.doesNotMatch(summary, /Path: relay/);
+	assert.match(renderSummary({ started: 'now', commit: 'abc', path: 'relay', runs: [] }), /Path: relay\. .*not a public relay or an internet path/);
 });
 
 test('each checkout caches its build in a volume of its own', () => {

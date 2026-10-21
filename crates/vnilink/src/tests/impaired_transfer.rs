@@ -24,6 +24,7 @@ use super::filesystem_location::FilesystemLocation;
 use crate::core::{Core, CoreConfig, Listen};
 use crate::job::JobState;
 use crate::manifest;
+use crate::relay::{CustomRelay, RelaySettings};
 
 /// Sizes of one matrix run.
 struct Matrix {
@@ -83,19 +84,31 @@ impl Matrix {
     }
 }
 
-/// Boots one direct-mode core, inside `namespace` when one is named.
+/// Boots one loopback core, inside `namespace` when one is named.
+///
+/// Direct-only by default. With `VNILINK_IMPAIRED_RELAY_URL` the core uses
+/// that relay alone; the harness serves it and blocks direct UDP.
 fn boot_in(namespace: Option<String>) -> Arc<Core> {
+    let relay = std::env::var("VNILINK_IMPAIRED_RELAY_URL").ok();
     std::thread::spawn(move || {
         if let Some(name) = namespace {
             enter_namespace(&name);
         }
-        let core = Core::boot(
-            CoreConfig {
-                listen: Listen::Loopback,
+        let listen = Listen::Loopback;
+        let core = match relay {
+            Some(url) => Core::start(CoreConfig {
+                listen,
+                relay: RelaySettings::custom(vec![CustomRelay::new(url).unwrap()]).unwrap(),
                 ..CoreConfig::default()
-            },
-            RelayMode::Disabled,
-        )
+            }),
+            None => Core::boot(
+                CoreConfig {
+                    listen,
+                    ..CoreConfig::default()
+                },
+                RelayMode::Disabled,
+            ),
+        }
         .expect("loopback core");
         // Admission negotiates video even for a Files-only connection.
         core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
@@ -104,6 +117,17 @@ fn boot_in(namespace: Option<String>) -> Arc<Core> {
     })
     .join()
     .expect("boot thread")
+}
+
+/// The selected transport path of each of `core`'s connections, as its
+/// diagnostics report it: `direct`, `relay` or `none`.
+fn selected_paths(core: &Core) -> Value {
+    let snapshot = core.diagnostic_snapshot().expect("diagnostic snapshot");
+    snapshot
+        .connections
+        .iter()
+        .map(|connection| json!({ "role": connection.role, "path": connection.path, "rtt_ms": connection.rtt_ms }))
+        .collect()
 }
 
 #[cfg(target_os = "linux")]
@@ -364,6 +388,7 @@ fn run_matrix(matrix: &Matrix) -> Value {
         })
         .unwrap();
     controller.connect(&host.endpoint_id()).unwrap();
+    let connected = json!({ "host": selected_paths(&host), "viewer": selected_paths(&controller) });
     if matrix.driver == Driver::Background {
         host.start_job_driver();
         controller.start_job_driver();
@@ -388,6 +413,9 @@ fn run_matrix(matrix: &Matrix) -> Value {
             )
         })
         .collect();
+    // Files run on their own connection, which the diagnostics do not list;
+    // with direct UDP blocked it, too, can only cross the relay.
+    let finished = json!({ "host": selected_paths(&host), "viewer": selected_paths(&controller) });
     json!({
         "scenario": "transfer",
         "direction": "upload",
@@ -399,6 +427,7 @@ fn run_matrix(matrix: &Matrix) -> Value {
         "mixed_max_bytes": matrix.mixed_max_bytes,
         "timeout_s": matrix.timeout.as_secs(),
         "cases": results,
+        "paths": { "connected": connected, "finished": finished },
     })
 }
 

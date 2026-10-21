@@ -70,6 +70,17 @@ const NETEM_CHILD = Object.freeze(['parent', '1:1', 'handle', '10:', 'netem']);
 
 const ROUTE_TABLE = '100';
 
+/**
+ * Relay mode serves the relay on a second loopback address in the host
+ * namespace. The host core reaches it over its own loopback; the viewer's
+ * core reaches it from a third loopback address across the veth, so each
+ * relayed packet crosses the impaired link once, as a direct one does.
+ */
+export const RELAY_PATH = Object.freeze({ address: '127.0.0.2', port: 3340, viewerSource: '127.0.0.3' });
+
+/** How the two cores reach each other: straight over the link, or only through the relay. */
+export type LinkPath = 'direct' | 'relay';
+
 /** Resolves names, `quick` and `all` in order, rejecting unknown names. */
 export function selectProfiles(names: readonly string[]): NetemProfile[] {
 	const selected: NetemProfile[] = [];
@@ -200,6 +211,30 @@ export function creationCommands(link: Topology): string[][] {
 	return [...commands, ...profileCommands(link, ['limit', String(UNSHAPED_LIMIT)]).filter(command => command[4] !== 'del')];
 }
 
+/**
+ * Commands that route the viewer to a relay in the host namespace and drop
+ * every UDP packet before it enters either side's netem qdisc, so the cores
+ * can only reach each other over the relay's TCP connection. `addresses`
+ * are the two veth hardware addresses.
+ */
+export function relayPathCommands(link: Topology, addresses: { readonly host: string; readonly view: string }): string[][] {
+	const [host, view] = link.sides;
+	const { address, viewerSource } = RELAY_PATH;
+	return [
+		['ip', '-n', view.namespace, 'route', 'add', `${address}/32`, 'dev', view.device, 'table', ROUTE_TABLE, 'scope', 'link', 'src', viewerSource],
+		['ip', '-n', view.namespace, 'neigh', 'replace', address, 'lladdr', addresses.host, 'dev', view.device, 'nud', 'permanent'],
+		['ip', '-n', host.namespace, 'route', 'add', `${viewerSource}/32`, 'dev', host.device, 'table', ROUTE_TABLE, 'scope', 'link'],
+		['ip', '-n', host.namespace, 'neigh', 'replace', viewerSource, 'lladdr', addresses.view, 'dev', host.device, 'nud', 'permanent'],
+		// The relay's replies to the host core stay on loopback; the rule for
+		// locally sent traffic would otherwise send them across the veth.
+		['ip', '-n', host.namespace, 'rule', 'add', 'pref', '5', 'from', address, 'to', '127.0.0.1', 'lookup', 'local'],
+		...link.sides.flatMap(side => [
+			['tc', '-n', side.namespace, 'qdisc', 'add', 'dev', side.device, 'clsact'],
+			['tc', '-n', side.namespace, 'filter', 'add', 'dev', side.device, 'egress', 'protocol', 'ip', 'pref', '1', 'u32', 'match', 'ip', 'protocol', '17', '0xff', 'action', 'drop'],
+		]),
+	];
+}
+
 async function runAll(commands: readonly (readonly string[])[], signal: AbortSignal): Promise<void> {
 	for (const [command, ...args] of commands) {
 		signal.throwIfAborted();
@@ -212,7 +247,7 @@ async function json(command: string, args: readonly string[], signal: AbortSigna
 }
 
 /** Creates the link, replacing any namespaces left behind by an interrupted run. */
-export async function createTopology(link: Topology, signal: AbortSignal): Promise<void> {
+export async function createTopology(link: Topology, signal: AbortSignal, path: LinkPath = 'direct'): Promise<void> {
 	await disposeTopology(link);
 	await runAll(creationCommands(link), signal);
 	const [host, view] = link.sides;
@@ -221,6 +256,9 @@ export async function createTopology(link: Topology, signal: AbortSignal): Promi
 	const viewAddress = await address(view);
 	await run('ip', ['-n', host.namespace, 'neigh', 'replace', '127.0.0.1', 'lladdr', viewAddress, 'dev', host.device, 'nud', 'permanent'], { signal });
 	await run('ip', ['-n', view.namespace, 'neigh', 'replace', '127.0.0.1', 'lladdr', hostAddress, 'dev', view.device, 'nud', 'permanent'], { signal });
+	if (path === 'relay') {
+		await runAll(relayPathCommands(link, { host: hostAddress, view: viewAddress }), signal);
+	}
 }
 
 export async function applyProfile(link: Topology, item: NetemProfile, seed: number, signal: AbortSignal): Promise<void> {
@@ -237,7 +275,21 @@ export async function writeBurstHooks(link: Topology, item: NetemProfile, seed: 
 
 export type LinkCounters = Record<string, Record<string, number>>;
 
-/** Device counters, which may count GSO batches, and netem counters, which count wire-sized segments. */
+interface FilterAction {
+	readonly stats?: { readonly drops?: number };
+}
+
+/** UDP packets the relay-mode egress filter dropped; zero where no filter is installed. */
+async function blockedUdp(side: Topology['sides'][number], signal: AbortSignal): Promise<number> {
+	const filters = await json('tc', ['-n', side.namespace, '-s', '-j', 'filter', 'show', 'dev', side.device, 'egress'], signal).catch(() => []);
+	const actions = filters.flatMap(filter => (filter.options as { actions?: FilterAction[] } | undefined)?.actions ?? []);
+	return actions.reduce((sum, action) => sum + (action.stats?.drops ?? 0), 0);
+}
+
+/**
+ * Device counters, which may count GSO batches; netem counters, which count
+ * wire-sized segments; and UDP packets relay mode kept off the link.
+ */
 export async function linkStatistics(link: Topology, signal: AbortSignal): Promise<LinkCounters> {
 	const sides: LinkCounters = {};
 	for (const side of link.sides) {
@@ -250,6 +302,7 @@ export async function linkStatistics(link: Topology, signal: AbortSignal): Promi
 			rxBytes: device.stats64.rx.bytes,
 			netemPackets: netem?.packets ?? 0,
 			netemDrops: netem?.drops ?? 0,
+			udpBlocked: await blockedUdp(side, signal),
 		};
 	}
 	return sides;

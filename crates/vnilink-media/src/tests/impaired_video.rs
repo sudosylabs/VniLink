@@ -119,23 +119,38 @@ impl Stream {
     }
 }
 
+/// Boots one loopback core, inside `namespace` when one is named.
+///
+/// A custom relay keeps the endpoint off the public relays. Without
+/// `VNILINK_IMPAIRED_RELAY_URL` nothing listens on it, so the cores talk
+/// directly; with it, the harness serves that relay and blocks direct UDP.
 fn boot_in(namespace: Option<String>) -> Core {
+    let relay =
+        std::env::var("VNILINK_IMPAIRED_RELAY_URL").unwrap_or_else(|_| "http://127.0.0.1:9".into());
     std::thread::spawn(move || {
         if let Some(name) = namespace {
             enter_namespace(&name);
         }
-        // A custom relay keeps the endpoint off the public relays; nothing
-        // listens on it, so the cores talk directly over loopback.
         Core::start(CoreConfig {
             listen: Listen::Loopback,
-            relay: RelaySettings::custom(vec![CustomRelay::new("http://127.0.0.1:9").unwrap()])
-                .unwrap(),
+            relay: RelaySettings::custom(vec![CustomRelay::new(relay).unwrap()]).unwrap(),
             ..CoreConfig::default()
         })
         .expect("loopback core")
     })
     .join()
     .expect("boot thread")
+}
+
+/// The selected transport path of each of `core`'s connections, as its
+/// diagnostics report it: `direct`, `relay` or `none`.
+fn selected_paths(core: &Core) -> Value {
+    let snapshot = core.diagnostic_snapshot().expect("diagnostic snapshot");
+    snapshot
+        .connections
+        .iter()
+        .map(|connection| json!({ "role": connection.role, "path": connection.path, "rtt_ms": connection.rtt_ms }))
+        .collect()
 }
 
 #[cfg(target_os = "linux")]
@@ -449,6 +464,7 @@ fn run_stream(stream: &Stream) -> Value {
         .open_desktop_service(owner.id, owner.generation)
         .unwrap();
     let frames = handle.subscribe_video().unwrap();
+    let connected = json!({ "host": selected_paths(&host), "viewer": selected_paths(&viewer) });
 
     let record = Arc::new(Host::new());
     let stop = Arc::new(AtomicBool::new(false));
@@ -540,6 +556,7 @@ fn run_stream(stream: &Stream) -> Value {
         })
     };
     let engine = json!({ "host": pipelines(&host), "viewer": pipelines(&viewer) });
+    let finished = json!({ "host": selected_paths(&host), "viewer": selected_paths(&viewer) });
     handle.close();
 
     let counters = record.counters.lock().unwrap();
@@ -615,6 +632,7 @@ fn run_stream(stream: &Stream) -> Value {
             "viewer_queue": stage(|arrival| arrival.queued_us),
         },
         "engine": engine,
+        "paths": { "connected": connected, "finished": finished },
         "bursts": burst_reports,
         "unrecovered_bursts": unrecovered,
         "timeline": timeline,
