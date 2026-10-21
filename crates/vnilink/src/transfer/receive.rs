@@ -108,8 +108,7 @@ pub(crate) async fn receive(
         }
     };
     tokio::pin!(stopped);
-    // The value of the segment just written, while it arrives.
-    let mut value: Option<Vec<u8>> = None;
+    let mut incoming = Incoming::default();
     loop {
         let chunk = tokio::select! {
             biased;
@@ -128,17 +127,43 @@ pub(crate) async fn receive(
             }
             Err(error) => return Err(Error::network(error)),
         };
-        let mut rest = &bytes[..];
-        while !rest.is_empty() {
-            if let Some(pending) = value.as_mut() {
-                let take = rest.len().min(VALUE_LEN - pending.len());
-                pending.extend_from_slice(&rest[..take]);
-                rest = &rest[take..];
+        if !incoming.feed(partial, &bytes, progress)? {
+            return Ok(Received::Mismatch);
+        }
+    }
+    incoming.finish(partial, size)?;
+    Ok(Received::Done {
+        downloaded: size - from,
+    })
+}
+
+/// Splits the bytes of a sending stream, however they are chunked, into
+/// segment bytes for the partial and the value after each segment.
+#[derive(Default)]
+struct Incoming {
+    /// The value of the segment just written, while it arrives.
+    value: Option<Vec<u8>>,
+}
+
+impl Incoming {
+    /// Takes the next bytes of the stream. False when a segment failed its
+    /// check; an error when the bytes cannot be part of the file.
+    fn feed(
+        &mut self,
+        partial: &mut Partial,
+        mut bytes: &[u8],
+        progress: &std::sync::mpsc::Sender<u64>,
+    ) -> Result<bool, Error> {
+        while !bytes.is_empty() {
+            if let Some(pending) = self.value.as_mut() {
+                let take = bytes.len().min(VALUE_LEN - pending.len());
+                pending.extend_from_slice(&bytes[..take]);
+                bytes = &bytes[take..];
                 if pending.len() == VALUE_LEN {
                     if !partial.seal(pending)? {
-                        return Ok(Received::Mismatch);
+                        return Ok(false);
                     }
-                    value = None;
+                    self.value = None;
                 }
                 continue;
             }
@@ -147,21 +172,24 @@ pub(crate) async fn receive(
                 // Bytes past the file's end.
                 return Err(Error::Malformed);
             }
-            let take = rest.len().min(left as usize);
-            partial.append(&rest[..take])?;
-            rest = &rest[take..];
+            let take = bytes.len().min(left as usize);
+            partial.append(&bytes[..take])?;
+            bytes = &bytes[take..];
             let _ = progress.send(partial.written());
             if partial.segment_left() == 0 {
-                value = Some(Vec::with_capacity(VALUE_LEN));
+                self.value = Some(Vec::with_capacity(VALUE_LEN));
             }
         }
+        Ok(true)
     }
-    if value.is_some() || partial.checked() != size {
-        return Err(Error::network("the file stream ended early"));
+
+    /// Checks the stream ended where the file does.
+    fn finish(&self, partial: &Partial, size: u64) -> Result<(), Error> {
+        if self.value.is_some() || partial.checked() != size {
+            return Err(Error::network("the file stream ended early"));
+        }
+        Ok(())
     }
-    Ok(Received::Done {
-        downloaded: size - from,
-    })
 }
 
 #[cfg(test)]
@@ -411,5 +439,124 @@ mod tests {
         assert_eq!(scratch.data(), bytes);
         assert_eq!(arrived.try_iter().last(), Some(size));
         let _ = STATUS_DENIED;
+    }
+
+    /// Randomized properties of the stream parser, seeded so a failure
+    /// replays: however a sender's stream is chunked it lands whole, and
+    /// a corrupted, cut or overlong stream never lands as a file.
+    mod properties {
+        use rand::rngs::StdRng;
+        use rand::{RngExt, SeedableRng};
+
+        use super::super::super::hash::{segment_len, SEGMENT_LEN};
+        use super::*;
+
+        /// What a sender sends for `bytes`: each segment, then its value.
+        fn stream_of(bytes: &[u8]) -> Vec<u8> {
+            let size = bytes.len() as u64;
+            let mut stream = Vec::new();
+            let mut start = 0;
+            while start < size {
+                let end = start + segment_len(start, size);
+                let segment = &bytes[start as usize..end as usize];
+                let mut hasher = SegmentHasher::at(start);
+                hasher.update(segment);
+                stream.extend_from_slice(segment);
+                stream.extend_from_slice(&hasher.finalize());
+                start = end;
+            }
+            stream
+        }
+
+        /// Feeds `stream` to a fresh partial in random chunks. Ok(true) when
+        /// the file landed whole, Ok(false) when a segment failed its check.
+        fn land(
+            scratch: &Scratch,
+            size: u64,
+            stream: &[u8],
+            rng: &mut StdRng,
+        ) -> Result<bool, Error> {
+            let _ = std::fs::remove_file(scratch.0.join("data"));
+            let _ = std::fs::remove_file(scratch.0.join("journal"));
+            let mut partial = scratch.partial(size);
+            let mut incoming = Incoming::default();
+            let (progress, _) = std::sync::mpsc::channel();
+            let mut rest = stream;
+            while !rest.is_empty() {
+                let take = rng.random_range(1..=rest.len().min(3 * VALUE_LEN + 7));
+                if !incoming.feed(&mut partial, &rest[..take], &progress)? {
+                    return Ok(false);
+                }
+                rest = &rest[take..];
+            }
+            incoming.finish(&partial, size)?;
+            Ok(true)
+        }
+
+        fn file(rng: &mut StdRng) -> Vec<u8> {
+            let size = rng.random_range(0..=3 * SEGMENT_LEN as usize + 100);
+            (0..size).map(|_| rng.random::<u8>()).collect()
+        }
+
+        #[test]
+        fn any_chunking_lands_the_file_whole() {
+            let scratch = Scratch::new("chunked");
+            let mut rng = StdRng::seed_from_u64(0x5e9);
+            for _ in 0..64 {
+                let bytes = file(&mut rng);
+                let stream = stream_of(&bytes);
+                assert!(land(&scratch, bytes.len() as u64, &stream, &mut rng).unwrap());
+                if !bytes.is_empty() {
+                    assert_eq!(scratch.data(), bytes);
+                }
+            }
+        }
+
+        #[test]
+        fn a_changed_byte_never_lands() {
+            let scratch = Scratch::new("flipped");
+            let mut rng = StdRng::seed_from_u64(0xf11b);
+            for _ in 0..128 {
+                let bytes = file(&mut rng);
+                if bytes.is_empty() {
+                    continue;
+                }
+                let mut stream = stream_of(&bytes);
+                let at = rng.random_range(0..stream.len());
+                stream[at] ^= 1 << rng.random_range(0..8);
+                let landed = land(&scratch, bytes.len() as u64, &stream, &mut rng);
+                assert!(!matches!(landed, Ok(true)), "byte {at} changed and landed");
+            }
+        }
+
+        #[test]
+        fn a_cut_stream_never_lands() {
+            let scratch = Scratch::new("cut");
+            let mut rng = StdRng::seed_from_u64(0xc07);
+            for _ in 0..128 {
+                let bytes = file(&mut rng);
+                let stream = stream_of(&bytes);
+                if stream.is_empty() {
+                    continue;
+                }
+                let cut = rng.random_range(0..stream.len());
+                let landed = land(&scratch, bytes.len() as u64, &stream[..cut], &mut rng);
+                assert!(landed.is_err(), "cut at {cut} of {} landed", stream.len());
+            }
+        }
+
+        #[test]
+        fn bytes_after_the_last_value_never_land() {
+            let scratch = Scratch::new("long");
+            let mut rng = StdRng::seed_from_u64(0x10e);
+            for _ in 0..64 {
+                let bytes = file(&mut rng);
+                let mut stream = stream_of(&bytes);
+                let extra = rng.random_range(1..=VALUE_LEN + 3);
+                stream.extend((0..extra).map(|_| rng.random::<u8>()));
+                let landed = land(&scratch, bytes.len() as u64, &stream, &mut rng);
+                assert!(matches!(landed, Err(Error::Malformed)));
+            }
+        }
     }
 }

@@ -9,8 +9,13 @@
 use blake3::hazmat::{ChainingValue, HasherExt};
 
 /// Bytes per segment: what a failed check refetches and what a resume can
-/// lose at most.
-pub(crate) const SEGMENT_LEN: u64 = 16 * 1024 * 1024;
+/// lose at most. Small in tests, so files of many segments stay cheap; any
+/// power of two at least a BLAKE3 chunk keeps segments whole subtrees.
+pub(crate) const SEGMENT_LEN: u64 = if cfg!(test) {
+    64 * 1024
+} else {
+    16 * 1024 * 1024
+};
 
 /// Hashes the segment starting at `start`, a multiple of [`SEGMENT_LEN`].
 pub(crate) struct SegmentHasher {

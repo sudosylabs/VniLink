@@ -93,4 +93,21 @@ mod tests {
         long.push(0);
         assert!(matches!(FileRequest::decode(&long), Err(Error::Malformed)));
     }
+
+    /// Every 20 bytes decode to a request that encodes back to them, and no
+    /// other length decodes at all.
+    #[test]
+    fn any_request_bytes_round_trip_and_other_lengths_are_refused() {
+        use rand::rngs::StdRng;
+        use rand::{RngExt, SeedableRng};
+        let mut rng = StdRng::seed_from_u64(0x2e9);
+        for _ in 0..1000 {
+            let len = rng.random_range(0..=2 * REQUEST_LEN);
+            let bytes: Vec<u8> = (0..len).map(|_| rng.random::<u8>()).collect();
+            match FileRequest::decode(&bytes) {
+                Ok(request) => assert_eq!(request.encode().as_slice(), bytes.as_slice()),
+                Err(_) => assert_ne!(len, REQUEST_LEN),
+            }
+        }
+    }
 }
