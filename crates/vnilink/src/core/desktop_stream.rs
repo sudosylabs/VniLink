@@ -2225,7 +2225,10 @@ struct SendGate {
     awaiting: bool,
     /// The owed keyframe was asked for, and has not been sent or dropped.
     asked: bool,
-    /// Wire size of the latest keyframe, to judge when the next would fit.
+    /// Wire size of the keyframe the next ask would bring, to judge when it
+    /// would fit: the latest that answered an ask. A larger keyframe nobody
+    /// asked for, a full-quality refresh or a periodic one, does not raise
+    /// it: the one asked for is a recovery keyframe.
     keyframe_wire: usize,
     /// Backlog a keyframe just sent may hold on top of the budget, until
     /// the link drains back within it.
@@ -2253,21 +2256,30 @@ impl SendGate {
     /// The gate dropped a frame. A dropped keyframe leaves the one owed
     /// still to ask for.
     fn dropped(&mut self, keyframe: bool, wire: usize) {
+        if keyframe {
+            self.learn_keyframe(wire);
+        }
         self.awaiting = true;
         self.asked = false;
-        if keyframe {
-            self.keyframe_wire = wire;
-        }
+    }
+
+    /// Learns the size of a keyframe sent or dropped: as it is when it
+    /// answered an ask or nothing is known yet, otherwise only if smaller.
+    fn learn_keyframe(&mut self, wire: usize) {
+        self.keyframe_wire = if self.asked || self.keyframe_wire == 0 {
+            wire
+        } else {
+            self.keyframe_wire.min(wire)
+        };
     }
 
     /// A frame went out; a keyframe pays what was owed.
     fn sent(&mut self, keyframe: bool, wire: usize) {
         if keyframe {
-            *self = Self {
-                keyframe_wire: wire,
-                draining: wire,
-                ..Self::default()
-            };
+            self.learn_keyframe(wire);
+            self.awaiting = false;
+            self.asked = false;
+            self.draining = wire;
         }
     }
 
@@ -2570,6 +2582,29 @@ mod tests {
         let mut gate = SendGate::default();
         gate.sent(false, 8_000);
         assert!(!gate.admits(buffer - 72_000, 8_000, budget));
+    }
+
+    /// A full-quality refresh larger than the budget, sent without being
+    /// asked for, does not make the gate wait for an empty queue before
+    /// asking for the small recovery keyframe it owes next.
+    #[test]
+    fn a_large_unasked_keyframe_does_not_hold_back_the_next_ask() {
+        let buffer = crate::core::host::DATAGRAM_SEND_BUFFER;
+        let budget = 64 * 1024;
+        let mut gate = SendGate::default();
+        // A recovery keyframe answers an ask.
+        gate.dropped(false, 5_000);
+        assert!(gate.should_ask(buffer, budget));
+        gate.sent(true, 30_000);
+        // A full-quality refresh goes out unasked.
+        gate.sent(true, 90_000);
+        // A drop behind a backlog: the recovery keyframe owed would fit.
+        gate.dropped(false, 5_000);
+        assert!(gate.should_ask(buffer - 30_000, budget));
+        // A recovery keyframe that grew is learnt when it answers.
+        gate.sent(true, 60_000);
+        gate.dropped(false, 5_000);
+        assert!(!gate.should_ask(buffer - 30_000, budget));
     }
 
     #[test]
