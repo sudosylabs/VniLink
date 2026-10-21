@@ -449,6 +449,10 @@ pub(crate) fn decode_payload(bytes: &[u8]) -> Result<ScreenSnapshot, Error> {
     if bytes.len() < 2 || bytes[0] != 1 {
         return Err(Error::Malformed);
     }
+    // Only an image follows its outcome byte.
+    if bytes[1] != OUTCOME_IMAGE && bytes.len() != 2 {
+        return Err(Error::Malformed);
+    }
     match bytes[1] {
         OUTCOME_PERMISSION => Ok(ScreenSnapshot::NeedsPermission),
         OUTCOME_SOURCE => Ok(ScreenSnapshot::NeedsSourceSelection),
