@@ -72,6 +72,7 @@ const STAGE_FAILED: &str = "the file could not be staged";
 const UNREACHABLE: &str = "the other computer could not be reached";
 const CONNECTION_ENDED: &str = "the connection to the other computer ended";
 const STALLED: &str = "the transfer stalled";
+const SENDER_BUSY: &str = "the other computer is busy sending other files";
 const SENDER_STOPPED: &str = "the other computer stopped sending";
 const PERMISSION_OFF: &str = "file transfer is no longer allowed";
 const UNPAIRED: &str = "the computers are no longer paired";
@@ -1469,6 +1470,7 @@ impl Core {
             // permission or folder went: it will not serve again by itself.
             Ok(Received::Denied) => return self.mark_interrupted(id, SENDER_STOPPED),
             Ok(Received::Stalled) => return self.retry_later(id, STALLED),
+            Ok(Received::Busy) => return self.retry_later(id, SENDER_BUSY),
             Err(Error::InvalidSetting(reason))
                 if reason == transfer::NO_SPACE || reason == transfer::PARTIAL_FAILED =>
             {

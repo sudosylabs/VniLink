@@ -18,6 +18,63 @@ use crate::error::Error;
 use crate::transfer::{self, Answer, FileRequest, Partial, Received, FILES_ALPN};
 
 const DIAL_WITHIN: Duration = Duration::from_secs(30);
+/// Files served at once, to one peer and in all. Each holds a few chunks
+/// read ahead, so these bound what peers can make this computer hold.
+const SERVE_PER_PEER: usize = 8;
+const SERVE_IN_ALL: usize = 32;
+/// How long a request waits for a serving slot before it is told busy.
+const SLOT_WITHIN: Duration = Duration::from_secs(5);
+
+/// Bounds the files this computer serves at once, per peer and in all,
+/// so no peer can make it read and buffer without limit.
+pub(super) struct ServeGate {
+    all: Arc<tokio::sync::Semaphore>,
+    per_peer: usize,
+    peers: Mutex<HashMap<[u8; 32], Arc<tokio::sync::Semaphore>>>,
+}
+
+/// One file's place in [`ServeGate`], given back when it drops.
+struct ServeSlot {
+    _peer: tokio::sync::OwnedSemaphorePermit,
+    _all: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl ServeGate {
+    fn new(in_all: usize, per_peer: usize) -> Self {
+        Self {
+            all: Arc::new(tokio::sync::Semaphore::new(in_all)),
+            per_peer,
+            peers: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// A slot for one file to `peer`, or none when no slot frees within
+    /// `within`. The peer's own bound is taken first, so a peer waiting on
+    /// its own files never holds a slot others could use.
+    async fn admit(&self, peer: &[u8; 32], within: Duration) -> Option<ServeSlot> {
+        let own = lock(&self.peers)
+            .entry(*peer)
+            .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(self.per_peer)))
+            .clone();
+        tokio::time::timeout(within, async {
+            let peer = own.acquire_owned().await.ok()?;
+            let all = self.all.clone().acquire_owned().await.ok()?;
+            Some(ServeSlot {
+                _peer: peer,
+                _all: all,
+            })
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+}
+
+impl Default for ServeGate {
+    fn default() -> Self {
+        Self::new(SERVE_IN_ALL, SERVE_PER_PEER)
+    }
+}
 
 /// Windows counterpart of the Unix verified open: resolves `parent_rel/name`
 /// under `root` and holds the file so its absolute path keeps naming this
@@ -123,6 +180,10 @@ async fn serve_stream(
     let Some(request) = transfer::read_request(&mut recv).await else {
         return;
     };
+    let Some(_slot) = shared.files_gate.admit(&peer, SLOT_WITHIN).await else {
+        transfer::refuse(&mut send, transfer::STATUS_BUSY).await;
+        return;
+    };
     // Opening walks the approved root's handles: slow storage parks a
     // blocking thread, never a runtime worker.
     let opened = {
@@ -199,6 +260,7 @@ impl Core {
                     }
                     Answer::Changed => Ok(Received::Changed),
                     Answer::Denied => Ok(Received::Denied),
+                    Answer::Busy => Ok(Received::Busy),
                 }
             });
             match received {
@@ -279,4 +341,31 @@ fn forget_files_connection(shared: &Shared, peer: &[u8; 32], connection: &Connec
 /// True when the connection negotiated the files ALPN.
 pub(super) fn is_files_connection(connection: &Connection) -> bool {
     connection.alpn() == FILES_ALPN
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A peer gets as many files as its bound and waits beyond it, while
+    /// other peers still get theirs up to the bound in all; a slot given
+    /// back is taken again.
+    #[tokio::test]
+    async fn serving_is_bounded_per_peer_and_in_all() {
+        let gate = ServeGate::new(3, 2);
+        let wait = Duration::from_millis(30);
+        let first = gate.admit(&[1; 32], wait).await.unwrap();
+        let _second = gate.admit(&[1; 32], wait).await.unwrap();
+        assert!(
+            gate.admit(&[1; 32], wait).await.is_none(),
+            "past the peer's bound"
+        );
+        let _other = gate.admit(&[2; 32], wait).await.unwrap();
+        assert!(
+            gate.admit(&[3; 32], wait).await.is_none(),
+            "past the bound in all"
+        );
+        drop(first);
+        assert!(gate.admit(&[1; 32], wait).await.is_some());
+    }
 }

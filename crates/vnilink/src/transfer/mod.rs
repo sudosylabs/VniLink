@@ -28,7 +28,7 @@ pub(crate) use hash::{SegmentHasher, SEGMENT_LEN};
 pub(crate) use partial::{Partial, NO_SPACE, PARTIAL_FAILED};
 pub(crate) use receive::{ask, receive, Answer, Received};
 pub(crate) use send::{read_request, refuse, send, Source};
-pub(crate) use wire::{FileRequest, FILES_ALPN, STATUS_CHANGED, STATUS_DENIED};
+pub(crate) use wire::{FileRequest, FILES_ALPN, STATUS_BUSY, STATUS_CHANGED, STATUS_DENIED};
 
 /// Bytes per read, per stream write and per stream read.
 const CHUNK: usize = 256 * 1024;

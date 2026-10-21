@@ -588,6 +588,8 @@ struct Shared {
     /// One files connection per peer, kept for the files that follow so a
     /// small file does not pay for a handshake; dropped on revoke/unpair.
     files_fetching: Mutex<HashMap<[u8; 32], iroh::endpoint::Connection>>,
+    /// Bounds the files served at once, per peer and in all.
+    files_gate: transfer::ServeGate,
     /// This computer's folders watched for the window, by watch id.
     folder_watches: Mutex<HashMap<u64, notify::RecommendedWatcher>>,
     watch_next: AtomicU64,

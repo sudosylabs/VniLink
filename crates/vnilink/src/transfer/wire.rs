@@ -26,6 +26,8 @@ pub const STATUS_SENDING: u8 = 0;
 pub const STATUS_DENIED: u8 = 1;
 /// The source is no longer the file the manifest describes.
 pub const STATUS_CHANGED: u8 = 2;
+/// The sender is serving as many files as it allows; ask again later.
+pub const STATUS_BUSY: u8 = 3;
 
 /// Stream reset code for a source that changed while it was being sent.
 pub const RESET_CHANGED: u32 = 2;

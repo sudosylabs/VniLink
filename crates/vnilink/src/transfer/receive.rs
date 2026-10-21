@@ -7,7 +7,8 @@ use iroh::endpoint::{Connection, ReadError, ReadExactError, RecvStream, VarInt};
 use crate::error::Error;
 
 use super::wire::{
-    FileRequest, RESET_CHANGED, RESET_STALLED, STATUS_CHANGED, STATUS_SENDING, VALUE_LEN,
+    FileRequest, RESET_CHANGED, RESET_STALLED, STATUS_BUSY, STATUS_CHANGED, STATUS_SENDING,
+    VALUE_LEN,
 };
 use super::{Partial, CHUNK, STALL_WITHIN};
 
@@ -27,6 +28,8 @@ pub(crate) enum Answer {
     Changed,
     /// The sender does not serve this file now.
     Denied,
+    /// The sender serves as many files as it allows; ask again later.
+    Busy,
 }
 
 /// How receiving one file ended.
@@ -39,6 +42,8 @@ pub(crate) enum Received {
     Cancelled,
     /// The sender does not serve this file now.
     Denied,
+    /// The sender serves as many files as it allows; ask again later.
+    Busy,
     /// The source is no longer the file the manifest describes.
     Changed,
     /// No byte arrived in time; the stream is stopped and the partial keeps
@@ -79,6 +84,7 @@ async fn ask_now(connection: &Connection, request: FileRequest) -> Result<Answer
     Ok(match status[0] {
         STATUS_SENDING => Answer::Sending(recv),
         STATUS_CHANGED => Answer::Changed,
+        STATUS_BUSY => Answer::Busy,
         _ => Answer::Denied,
     })
 }
@@ -256,7 +262,7 @@ mod tests {
             Answer::Sending(recv) => recv,
             // A reset can overtake the status byte.
             Answer::Changed => return (Ok(Received::Changed), partial),
-            Answer::Denied => panic!("the scripted sender sends"),
+            Answer::Denied | Answer::Busy => panic!("the scripted sender sends"),
         };
         let (progress, _) = std::sync::mpsc::channel();
         let (_stop, mut cancel) = tokio::sync::watch::channel(false);
