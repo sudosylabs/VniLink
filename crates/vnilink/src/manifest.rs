@@ -548,6 +548,8 @@ pub(crate) fn validate(manifest: &Manifest) -> Result<(), Error> {
     if manifest.entries.is_empty() || manifest.entries.len() > MAX_MANIFEST_FILES {
         return Err(Error::InvalidSetting(MANIFEST_LIMIT));
     }
+    // The sizes are a peer's word: their sum must stay a byte count.
+    let mut total = 0u64;
     let mut seen = HashSet::with_capacity(manifest.entries.len());
     let mut folded = HashSet::with_capacity(manifest.entries.len());
     for entry in &manifest.entries {
@@ -565,6 +567,9 @@ pub(crate) fn validate(manifest: &Manifest) -> Result<(), Error> {
         if entry.is_dir && entry.size != 0 {
             return Err(Error::InvalidSetting(MANIFEST_UNSAFE));
         }
+        total = total
+            .checked_add(entry.size)
+            .ok_or(Error::InvalidSetting(MANIFEST_LIMIT))?;
     }
     Ok(())
 }

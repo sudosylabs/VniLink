@@ -303,6 +303,29 @@ fn manifest_validation_rejects_bad_shapes() {
     }
 }
 
+/// Crashes the `job_message` fuzz target: sizes summing past `u64::MAX`
+/// validated, then overflowed the job's total.
+#[test]
+fn manifest_validation_rejects_sizes_past_a_byte_count() {
+    use crate::manifest::{Manifest, ManifestEntry};
+
+    let file = |path: &str, size| ManifestEntry {
+        path: path.to_owned(),
+        is_dir: false,
+        size,
+        source_mtime_ms: 0,
+    };
+    let largest = Manifest {
+        entries: vec![file("a", u64::MAX - 1), file("b", 1)],
+    };
+    manifest::validate(&largest).unwrap();
+    assert_eq!(largest.total_bytes(), u64::MAX);
+    let past = Manifest {
+        entries: vec![file("a", u64::MAX), file("b", 1)],
+    };
+    assert!(manifest::validate(&past).is_err());
+}
+
 #[test]
 fn upload_tree_matches_exactly() {
     let _heavy = HEAVY_JOB
