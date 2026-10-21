@@ -101,7 +101,7 @@ pub(super) fn interrupt_orphaned(shared: &Shared) {
                         r.error = Some("the transfer stopped before it was prepared".to_owned());
                     } else {
                         r.state = JobState::Interrupted;
-                        r.error = None;
+                        r.error = Some(super::jobs::OWNER_GONE.to_owned());
                     }
                     r.waiting_file = None;
                     Some(r.id)

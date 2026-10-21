@@ -8,7 +8,10 @@ use crate::error::Error;
 
 use super::hash::{segment_len, SegmentHasher};
 
-const PARTIAL_FAILED: &str = "the file could not be staged";
+/// Writing the partial failed for a reason other than space.
+pub(crate) const PARTIAL_FAILED: &str = "the file could not be staged";
+/// The destination's disk is full, or its quota is used up.
+pub(crate) const NO_SPACE: &str = "there is not enough space for this file";
 const VALUE_LEN: u64 = 32;
 
 /// A `size`-byte file arriving: the bytes written so far and, beside them,
@@ -148,8 +151,25 @@ fn next_segment(start: u64, size: u64) -> Option<SegmentHasher> {
     (start < size).then(|| SegmentHasher::at(start))
 }
 
-fn failed(_: std::io::Error) -> Error {
-    Error::InvalidSetting(PARTIAL_FAILED)
+fn failed(error: std::io::Error) -> Error {
+    Error::InvalidSetting(if no_space(&error) {
+        NO_SPACE
+    } else {
+        PARTIAL_FAILED
+    })
+}
+
+/// Whether `error` says the disk or the user's quota is full.
+fn no_space(error: &std::io::Error) -> bool {
+    use std::io::ErrorKind;
+    if matches!(
+        error.kind(),
+        ErrorKind::StorageFull | ErrorKind::QuotaExceeded
+    ) {
+        return true;
+    }
+    // ERROR_HANDLE_DISK_FULL and ERROR_DISK_FULL.
+    cfg!(windows) && matches!(error.raw_os_error(), Some(39 | 112))
 }
 
 #[cfg(test)]
@@ -261,6 +281,17 @@ mod tests {
         land_segment(&mut partial, &whole);
         drop(partial);
         assert_eq!(std::fs::read(scratch.0.join("data")).unwrap(), whole);
+    }
+
+    #[test]
+    fn a_full_disk_is_named() {
+        let full = std::io::Error::from(std::io::ErrorKind::StorageFull);
+        assert!(matches!(failed(full), Error::InvalidSetting(NO_SPACE)));
+        let other = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(matches!(
+            failed(other),
+            Error::InvalidSetting(PARTIAL_FAILED)
+        ));
     }
 
     #[test]

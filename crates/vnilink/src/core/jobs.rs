@@ -67,6 +67,19 @@ const VERIFY_FAILED: &str = "the destination could not be verified";
 const PUBLISH_FAILED: &str = "the file could not be published";
 const STAGE_FAILED: &str = "the file could not be staged";
 
+// Why a job stopped short of finishing, shown with the job until it
+// resumes.
+const UNREACHABLE: &str = "the other computer could not be reached";
+const CONNECTION_ENDED: &str = "the connection to the other computer ended";
+const STALLED: &str = "the transfer stalled";
+const SENDER_STOPPED: &str = "the other computer stopped sending";
+const PERMISSION_OFF: &str = "file transfer is no longer allowed";
+const UNPAIRED: &str = "the computers are no longer paired";
+pub(super) const OWNER_GONE: &str = "the Files window that started it closed";
+const STOPPED: &str = "the transfer stopped before the file was written";
+const VOLUME_CHANGED: &str = "the destination's disk changed";
+const APP_CLOSED: &str = "VniLink closed during the transfer";
+
 /// Durable job record. Counters and choices survive restart; a partial
 /// file in the transfer directory keeps the bytes of the file arriving.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1148,7 +1161,9 @@ impl Core {
         };
         let generation = match self.generation_for(&peer_key, outgoing, owner) {
             Ok(generation) => generation,
-            Err(Error::NoSession | Error::StaleSession) => return self.mark_interrupted(id),
+            Err(Error::NoSession | Error::StaleSession) => {
+                return self.mark_interrupted(id, UNREACHABLE)
+            }
             Err(error) => return Err(error),
         };
         let query = job::JobStatus {
@@ -1261,7 +1276,7 @@ impl Core {
             // skeleton before claiming completion so empty folders land.
             // Revocation stops here: no new directories after the grant is gone.
             if !Self::receiver_granted(&self.shared, &peer_bytes) {
-                return self.mark_interrupted(id);
+                return self.mark_interrupted(id, PERMISSION_OFF);
             }
             if let Err(error) = self.ensure_receiver_dirs(id) {
                 return self.interrupt_on_rebind(id, error);
@@ -1276,7 +1291,7 @@ impl Core {
         // directory creation as well as file publication.
         if file_index == 0 {
             if !Self::receiver_granted(&self.shared, &peer_bytes) {
-                return self.mark_interrupted(id);
+                return self.mark_interrupted(id, PERMISSION_OFF);
             }
             if let Err(error) = self.ensure_receiver_dirs(id) {
                 return self.interrupt_on_rebind(id, error);
@@ -1326,12 +1341,21 @@ impl Core {
         // Fetch under the receiver's own grant: revocation stops new
         // reads here even while the sender still serves.
         if !Self::receiver_granted(&self.shared, &peer_bytes) {
-            return self.mark_interrupted(id);
+            return self.mark_interrupted(id, PERMISSION_OFF);
         }
         // Admission precedes network fetching and export. Saturated workers
         // leave the job queued for a subsequent poll; impossible budgets fail
         // with a durable, payload-free explanation.
-        let available = self.receiver_available_storage(id, &entry.path)?;
+        let available = match self.receiver_available_storage(id, &entry.path) {
+            Ok(available) => available,
+            Err(Error::InvalidSetting(msg)) if msg == fs::ROOTS_REBOUND => {
+                return self.mark_interrupted(id, fs::ROOTS_REBOUND);
+            }
+            // The destination folder is gone or unreadable: say so on the
+            // job rather than failing every poll.
+            Err(Error::InvalidSetting(msg)) => return self.mark_failed(id, msg),
+            Err(error) => return Err(error),
+        };
         let _reservation =
             match super::file_resources::reserve(&self.shared, id, entry.size, available) {
                 Ok(Some(reservation)) => reservation,
@@ -1387,14 +1411,19 @@ impl Core {
         // destination file: re-check authorization before any staging or
         // commit. The publication itself re-checks as well.
         if !Self::receiver_granted(&self.shared, &peer_bytes) {
-            return self.mark_interrupted(id);
+            return self.mark_interrupted(id, PERMISSION_OFF);
         }
-        use crate::transfer::Received;
+        use crate::transfer::{self, Received};
         let downloaded = match fetch {
             Ok(Received::Done { downloaded }) => downloaded,
-            Ok(Received::Denied | Received::Stalled) | Err(_) => {
-                return self.mark_interrupted(id);
+            Ok(Received::Denied) => return self.mark_interrupted(id, SENDER_STOPPED),
+            Ok(Received::Stalled) => return self.mark_interrupted(id, STALLED),
+            Err(Error::InvalidSetting(reason))
+                if reason == transfer::NO_SPACE || reason == transfer::PARTIAL_FAILED =>
+            {
+                return self.mark_failed(id, reason);
             }
+            Err(_) => return self.mark_interrupted(id, UNREACHABLE),
             Ok(Received::Changed) => return self.mark_failed(id, SOURCE_CHANGED),
             Ok(Received::Mismatch) => return self.mark_failed(id, VERIFY_FAILED),
             Ok(Received::Cancelled) => {
@@ -1469,7 +1498,9 @@ impl Core {
         };
         let generation = match self.generation_for(&peer, outgoing, owner) {
             Ok(generation) => generation,
-            Err(Error::NoSession | Error::StaleSession) => return self.mark_interrupted(id),
+            Err(Error::NoSession | Error::StaleSession) => {
+                return self.mark_interrupted(id, UNREACHABLE)
+            }
             Err(error) => return Err(error),
         };
         let query = job::JobStatus {
@@ -1494,7 +1525,7 @@ impl Core {
         let manifest = match (reply.status, reply.manifest) {
             (job::STATUS_OK, None) => return self.job_snapshot(id),
             (job::STATUS_OK, Some(manifest)) => manifest,
-            (job::STATUS_STALE, _) => return self.mark_interrupted(id),
+            (job::STATUS_STALE, _) => return self.mark_interrupted(id, CONNECTION_ENDED),
             _ => return self.mark_failed(id, PREPARE_FAILED),
         };
         if manifest::validate(&manifest).is_err() {
@@ -1636,7 +1667,9 @@ impl Core {
     /// and resuming continues. Any other error keeps its meaning.
     fn interrupt_on_rebind(&self, id: u64, error: Error) -> Result<JobSnapshot, Error> {
         match error {
-            Error::InvalidSetting(msg) if msg == fs::ROOTS_REBOUND => self.mark_interrupted(id),
+            Error::InvalidSetting(msg) if msg == fs::ROOTS_REBOUND => {
+                self.mark_interrupted(id, fs::ROOTS_REBOUND)
+            }
             error => Err(error),
         }
     }
@@ -1718,7 +1751,7 @@ impl Core {
         };
         if !Self::receiver_granted(&self.shared, &peer_key) {
             let _ = std::fs::remove_file(staged);
-            self.mark_interrupted(id)?;
+            self.mark_interrupted(id, PERMISSION_OFF)?;
             return Ok(None);
         }
         let policy = match choice {
@@ -1874,7 +1907,7 @@ impl Core {
         loop {
             if !self.prestage_live(id) {
                 let _ = std::fs::remove_file(staged);
-                self.mark_interrupted(id)?;
+                self.mark_interrupted(id, STOPPED)?;
                 return Ok((None, true));
             }
             if let Some(probe) = probe {
@@ -2058,6 +2091,8 @@ impl Core {
             if !granted || super::service_jobs::check_owner(&state_guard, record.owner).is_err() {
                 if record.state != JobState::Cancelled {
                     record.state = JobState::Interrupted;
+                    let reason = if granted { OWNER_GONE } else { PERMISSION_OFF };
+                    record.error = Some(reason.to_owned());
                     record.waiting_file = None;
                 }
                 drop(state_guard);
@@ -2116,6 +2151,7 @@ impl Core {
                             // retryably; the next poll re-detects volumes.
                             if record.state != JobState::Cancelled {
                                 record.state = JobState::Interrupted;
+                                record.error = Some(VOLUME_CHANGED.to_owned());
                                 record.waiting_file = None;
                             }
                             drop(state_guard);
@@ -2158,6 +2194,7 @@ impl Core {
                             Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
                                 if record.state != JobState::Cancelled {
                                     record.state = JobState::Interrupted;
+                                    record.error = Some(VOLUME_CHANGED.to_owned());
                                     record.waiting_file = None;
                                 }
                                 drop(state_guard);
@@ -2194,6 +2231,7 @@ impl Core {
                             Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
                                 if record.state != JobState::Cancelled {
                                     record.state = JobState::Interrupted;
+                                    record.error = Some(VOLUME_CHANGED.to_owned());
                                     record.waiting_file = None;
                                 }
                                 drop(state_guard);
@@ -2283,15 +2321,15 @@ impl Core {
         self.job_snapshot(id)
     }
 
-    fn mark_interrupted(&self, id: u64) -> Result<JobSnapshot, Error> {
+    /// Stops a job for `reason`, which it shows until it resumes. A
+    /// cancelled job stays cancelled.
+    fn mark_interrupted(&self, id: u64, reason: &'static str) -> Result<JobSnapshot, Error> {
         {
             let mut jobs = lock(&self.shared.jobs);
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
-            if record.state == JobState::Cancelled {
-                drop(jobs);
-            } else {
+            if record.state != JobState::Cancelled {
                 record.state = JobState::Interrupted;
-                drop(jobs);
+                record.error = Some(reason.to_owned());
             }
         }
         save_jobs(&self.shared)?;
@@ -2957,13 +2995,15 @@ fn paths_overlap(a: &str, b: &str) -> bool {
 /// removal. Verified bytes stay in the store; resume continues them.
 /// In-flight fetches are signalled through their cancel watches so active
 /// work stops instead of publishing after revocation.
-pub(super) fn interrupt_peer_jobs(shared: &Shared, peer: &[u8; 32]) {
-    interrupt_jobs(shared, peer, false);
+pub(super) fn interrupt_peer_jobs(shared: &Shared, peer: &[u8; 32], unpaired: bool) {
+    let reason = if unpaired { UNPAIRED } else { PERMISSION_OFF };
+    interrupt_jobs(shared, peer, false, reason);
 }
+/// Marks the jobs riding a controller session that ended interrupted.
 pub(super) fn interrupt_controller_jobs(shared: &Shared, peer: &[u8; 32]) {
-    interrupt_jobs(shared, peer, true);
+    interrupt_jobs(shared, peer, true, CONNECTION_ENDED);
 }
-fn interrupt_jobs(shared: &Shared, peer: &[u8; 32], controller_only: bool) {
+fn interrupt_jobs(shared: &Shared, peer: &[u8; 32], controller_only: bool, reason: &'static str) {
     let ids: Vec<u64> = {
         let mut jobs = lock(&shared.jobs);
         let mut ids = Vec::new();
@@ -2972,6 +3012,7 @@ fn interrupt_jobs(shared: &Shared, peer: &[u8; 32], controller_only: bool) {
                 match record.state {
                     JobState::Serving | JobState::Transferring | JobState::WaitingDecision => {
                         record.state = JobState::Interrupted;
+                        record.error = Some(reason.to_owned());
                         record.waiting_file = None;
                         ids.push(record.id);
                     }
@@ -3164,6 +3205,7 @@ pub(super) fn load_jobs(shared: &Shared) {
                 }
                 JobState::Preparing | JobState::Serving | JobState::Transferring => {
                     record.state = JobState::Interrupted;
+                    record.error = Some(APP_CLOSED.to_owned());
                 }
                 _ => {}
             }

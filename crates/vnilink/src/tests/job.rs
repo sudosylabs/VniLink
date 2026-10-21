@@ -612,6 +612,12 @@ fn job_restart_resumes_unfinished_files() {
     let jobs = controller.job_list().unwrap();
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].state, JobState::Interrupted);
+    // A clean shutdown ends the session first; a crash leaves the record
+    // to say VniLink closed. Either way the job says why it stopped.
+    assert!(matches!(
+        jobs[0].error.as_deref(),
+        Some("the connection to the other computer ended" | "VniLink closed during the transfer")
+    ));
     controller
         .accept_invitation(&host.create_invitation(Duration::from_secs(60)).unwrap())
         .unwrap();
@@ -834,6 +840,10 @@ fn revoke_pauses_and_reauthorize_resumes() {
     let next = controller.job_poll(job).unwrap();
     assert_eq!(next.state, JobState::Interrupted);
     assert_eq!(next.files_done, 1);
+    assert_eq!(
+        next.error.as_deref(),
+        Some("the other computer stopped sending")
+    );
     assert!(!controller_scratch.join("root/got/root/two.txt").exists());
 
     // Re-authorize and resume to an exact tree. Revocation dropped the
@@ -1000,6 +1010,10 @@ fn revoke_before_publish_prevents_file_creation() {
     host.revoke(&controller.endpoint_id()).unwrap();
     let next = controller.job_poll(job).unwrap();
     assert_eq!(next.state, JobState::Interrupted);
+    assert_eq!(
+        next.error.as_deref(),
+        Some("the connection to the other computer ended")
+    );
     // Only the first file landed; the second was refused at publication.
     assert!(controller.job_snapshot(job).unwrap().files_done <= 1);
 }

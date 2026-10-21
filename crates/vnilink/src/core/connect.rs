@@ -99,7 +99,7 @@ impl Core {
             let _ = stop.send(true);
         }
         close_peer_files(&self.shared, &key);
-        super::jobs::interrupt_peer_jobs(&self.shared, &key);
+        super::jobs::interrupt_peer_jobs(&self.shared, &key, true);
         self.shared.events.publish(CoreEvent::DeviceUnpaired {
             endpoint_id: endpoint_id.to_owned(),
         });
