@@ -724,3 +724,62 @@ fn recovery_keyframe_sizes() {
         }
     }
 }
+
+/// Saves decoded pictures of a 720p 2 Mb/s stream, to judge by eye what a
+/// recovery keyframe costs in legibility: the full keyframe at picture 60,
+/// and in a stream whose keyframes after the first are recovery ones, the
+/// recovery keyframe at 60 and the pictures 5 and 15 after it. Written as
+/// PPM to `$VNILINK_PICTURES` (default `target/recovery-pictures`):
+/// `cargo test -p vnilink-macos --release --lib recovery_keyframe_pictures -- --ignored --nocapture`.
+#[test]
+#[ignore = "measurement"]
+fn recovery_keyframe_pictures() {
+    let directory = std::path::PathBuf::from(
+        std::env::var("VNILINK_PICTURES").unwrap_or_else(|_| "target/recovery-pictures".into()),
+    );
+    std::fs::create_dir_all(&directory).unwrap();
+    for recovery in [false, true] {
+        let mut encoder = MacEncoder::open(1280, 720, 30, 2_000_000, true).unwrap();
+        let mut decoder = MacDecoder::new();
+        let mut owed = false;
+        for index in 0..76u64 {
+            let force = owed || index % 30 == 0;
+            let params = EncodeParams {
+                force_keyframe: force,
+                recovery: recovery && force && index > 0,
+                bitrate_bps: 2_000_000,
+                frame_rate: 30,
+            };
+            let sample = match encoder.encode(&page(1280, 720, index), &params) {
+                Ok(sample) => sample,
+                Err(vnilink_media::Error::EncodeRejected("the encoder produced no frame")) => {
+                    owed = force;
+                    continue;
+                }
+                Err(error) => panic!("picture {index}: {error}"),
+            };
+            owed = false;
+            let frame =
+                EncodedFrame::h264(sample.keyframe(), index * 33_333, sample.bytes().to_vec())
+                    .unwrap();
+            let picture = decoder.decode(&frame).unwrap();
+            let name = match (recovery, index) {
+                (false, 60) => "full-keyframe",
+                (true, 60) => "recovery-keyframe",
+                (true, 65) => "recovery-plus-5",
+                (true, 75) => "recovery-plus-15",
+                _ => continue,
+            };
+            let path = directory.join(format!("{name}.ppm"));
+            let mut bytes =
+                format!("P6\n{} {}\n255\n", picture.width(), picture.height()).into_bytes();
+            for y in 0..picture.height() {
+                for bgra in picture.row(y)[..usize::from(picture.width()) * 4].chunks_exact(4) {
+                    bytes.extend_from_slice(&[bgra[2], bgra[1], bgra[0]]);
+                }
+            }
+            std::fs::write(&path, bytes).unwrap();
+            println!("{name}: {} B -> {}", sample.bytes().len(), path.display());
+        }
+    }
+}
