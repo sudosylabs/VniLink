@@ -9,10 +9,9 @@ use iroh::endpoint::{RecvStream, SendStream, VarInt};
 
 use super::hash::{segment_len, SegmentHasher, SEGMENT_LEN};
 use super::wire::{
-    FileRequest, REQUEST_LEN, RESET_CHANGED, RESET_STALLED, STATUS_DENIED, STATUS_SENDING,
-    VALUE_LEN,
+    FileRequest, REQUEST_LEN, RESET_CHANGED, STATUS_DENIED, STATUS_SENDING, VALUE_LEN,
 };
-use super::{TransferCounters, CHUNK, STALL_WITHIN};
+use super::{TransferCounters, CHUNK};
 
 /// Chunks read ahead of the network.
 const READ_AHEAD: usize = 8;
@@ -65,8 +64,7 @@ enum Piece {
 /// The file is read on a blocking thread a few chunks ahead of the
 /// network, and nothing before `offset` is read. `may_send` is asked every
 /// few megabytes; once it says no, the stream is reset, so a cancel or
-/// revoke stops a file mid-way. A receiver that takes no bytes for
-/// [`STALL_WITHIN`] is reset as stalled. `sent_to` hears how far into the
+/// revoke stops a file mid-way. `sent_to` hears how far into the
 /// file the stream has taken bytes, and finally that the file was sent. A source that changed while it was read
 /// is reset as changed instead of carrying on.
 pub(crate) async fn send(
@@ -92,20 +90,16 @@ pub(crate) async fn send(
         match piece {
             Piece::Bytes(bytes) => {
                 let len = bytes.len();
-                // A receiver that stops reading must not pin the reader
-                // and its buffers.
-                match tokio::time::timeout(STALL_WITHIN, send.write_chunk(bytes)).await {
-                    Ok(Ok(())) => {
-                        counters.sent(len);
-                        position += len as u64;
-                        sent_to(position, false);
-                    }
-                    Ok(Err(_)) => break,
-                    Err(_) => {
-                        let _ = send.reset(VarInt::from_u32(RESET_STALLED));
-                        break;
-                    }
+                // No deadline on a write: on a slow link a write waits while
+                // the stream's window drains, for longer than any fixed time.
+                // A receiver that stops reading stops the stream itself, and
+                // a peer that is gone ends the connection.
+                if send.write_chunk(bytes).await.is_err() {
+                    break;
                 }
+                counters.sent(len);
+                position += len as u64;
+                sent_to(position, false);
                 sent += 1;
                 if sent % RECHECK_EVERY == 0 && !may_send() {
                     let _ = send.reset(VarInt::from_u32(0));
