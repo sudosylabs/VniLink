@@ -9,9 +9,10 @@ use iroh::endpoint::{RecvStream, SendStream, VarInt};
 
 use super::hash::{segment_len, SegmentHasher, SEGMENT_LEN};
 use super::wire::{
-    FileRequest, REQUEST_LEN, RESET_CHANGED, STATUS_DENIED, STATUS_SENDING, VALUE_LEN,
+    FileRequest, REQUEST_LEN, RESET_CHANGED, RESET_STALLED, STATUS_DENIED, STATUS_SENDING,
+    VALUE_LEN,
 };
-use super::CHUNK;
+use super::{CHUNK, STALL_WITHIN};
 
 /// Chunks read ahead of the network.
 const READ_AHEAD: usize = 8;
@@ -64,7 +65,8 @@ enum Piece {
 /// The file is read on a blocking thread a few chunks ahead of the
 /// network, and nothing before `offset` is read. `may_send` is asked every
 /// few megabytes; once it says no, the stream is reset, so a cancel or
-/// revoke stops a file mid-way. A source that changed while it was read
+/// revoke stops a file mid-way. A receiver that takes no bytes for
+/// [`STALL_WITHIN`] is reset as stalled. A source that changed while it was read
 /// is reset as changed instead of carrying on.
 pub(crate) async fn send(
     send: &mut SendStream,
@@ -85,8 +87,15 @@ pub(crate) async fn send(
     while let Some(piece) = arriving.recv().await {
         match piece {
             Piece::Bytes(bytes) => {
-                if send.write_chunk(bytes).await.is_err() {
-                    break;
+                // A receiver that stops reading must not pin the reader
+                // and its buffers.
+                match tokio::time::timeout(STALL_WITHIN, send.write_chunk(bytes)).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => break,
+                    Err(_) => {
+                        let _ = send.reset(VarInt::from_u32(RESET_STALLED));
+                        break;
+                    }
                 }
                 sent += 1;
                 if sent % RECHECK_EVERY == 0 && !may_send() {

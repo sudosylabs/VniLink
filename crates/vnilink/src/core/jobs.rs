@@ -1392,7 +1392,7 @@ impl Core {
         use crate::transfer::Received;
         let downloaded = match fetch {
             Ok(Received::Done { downloaded }) => downloaded,
-            Ok(Received::Denied) | Err(_) => {
+            Ok(Received::Denied | Received::Stalled) | Err(_) => {
                 return self.mark_interrupted(id);
             }
             Ok(Received::Changed) => return self.mark_failed(id, SOURCE_CHANGED),

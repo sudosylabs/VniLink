@@ -29,6 +29,8 @@ pub const STATUS_CHANGED: u8 = 2;
 
 /// Stream reset code for a source that changed while it was being sent.
 pub const RESET_CHANGED: u32 = 2;
+/// Stream reset or stop code for a peer that made no progress in time.
+pub const RESET_STALLED: u32 = 3;
 
 /// One file of one sending job, from `offset` on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

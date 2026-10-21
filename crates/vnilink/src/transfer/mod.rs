@@ -32,3 +32,11 @@ pub(crate) use wire::{FileRequest, FILES_ALPN, STATUS_CHANGED, STATUS_DENIED};
 
 /// Bytes per read, per stream write and per stream read.
 const CHUNK: usize = 256 * 1024;
+
+/// How long either side waits for the other to move a byte before it gives
+/// the stream up as stalled. Short in tests, which provoke stalls.
+const STALL_WITHIN: std::time::Duration = if cfg!(test) {
+    std::time::Duration::from_millis(500)
+} else {
+    std::time::Duration::from_secs(20)
+};
