@@ -1274,8 +1274,7 @@ async fn client_send(
             .iter()
             .find(|path| path.is_selected())
             .map_or(Duration::ZERO, |path| path.rtt());
-        let frame_period =
-            Duration::from_secs(1) / u32::from(lock(&desktop.quality).max_frame_rate.max(1));
+        let frame_period = frame_period(desktop);
         let ask = lock(&desktop.keyframe_requests).should_send(
             std::time::Instant::now(),
             path_rtt,
@@ -2175,6 +2174,79 @@ fn admits_frame(space: usize, wire: usize, budget: usize) -> bool {
     wire <= space && (queued == 0 || queued + wire <= budget)
 }
 
+/// Which frames go out, and the keyframe owed after video is dropped.
+///
+/// The predicted frames after a dropped frame reference it, so they are
+/// dropped too until a keyframe goes out. Every drop therefore costs a
+/// keyframe, the largest frame. The owed keyframe is asked for once, and
+/// only when the link could take it. Asked for while the backlog that
+/// caused the drop remains, it would be dropped in turn and ask for
+/// another: the encoder would make keyframe after keyframe, and the link
+/// would carry few of them.
+#[derive(Debug, Default)]
+struct SendGate {
+    /// Frames are dropped until a keyframe goes out.
+    awaiting: bool,
+    /// The owed keyframe was asked for, and has not been sent or dropped.
+    asked: bool,
+    /// Wire size of the latest keyframe, to judge when the next would fit.
+    keyframe_wire: usize,
+}
+
+impl SendGate {
+    /// Whether a frame is dropped without reaching the gate: a predicted
+    /// frame while a keyframe is owed.
+    fn skips(&self, keyframe: bool) -> bool {
+        self.awaiting && !keyframe
+    }
+
+    /// The gate dropped a frame. A dropped keyframe leaves the one owed
+    /// still to ask for.
+    fn dropped(&mut self, keyframe: bool, wire: usize) {
+        self.awaiting = true;
+        self.asked = false;
+        if keyframe {
+            self.keyframe_wire = wire;
+        }
+    }
+
+    /// A frame went out; a keyframe pays what was owed.
+    fn sent(&mut self, keyframe: bool, wire: usize) {
+        if keyframe {
+            *self = Self {
+                keyframe_wire: wire,
+                ..Self::default()
+            };
+        }
+    }
+
+    /// Whether a keyframe is owed and not yet asked for.
+    fn owed(&self) -> bool {
+        self.awaiting && !self.asked
+    }
+
+    /// Whether to ask the encoder for the owed keyframe now: the link has
+    /// room for one as large as the latest.
+    fn should_ask(&mut self, space: usize, budget: usize) -> bool {
+        if !self.owed() || !admits_frame(space, self.keyframe_wire, budget) {
+            return false;
+        }
+        self.asked = true;
+        true
+    }
+}
+
+/// The video send backlog allowed at the agreed quality.
+fn send_budget(desktop: &DesktopRuntime) -> usize {
+    let quality = *lock(&desktop.quality);
+    backlog_budget(quality.max_bitrate_kbps, quality.max_frame_rate)
+}
+
+/// The interval between frames at the agreed frame rate.
+fn frame_period(desktop: &DesktopRuntime) -> Duration {
+    Duration::from_secs(1) / u32::from(lock(&desktop.quality).max_frame_rate.max(1))
+}
+
 async fn host_send(
     shared: &Shared,
     desktop: &DesktopRuntime,
@@ -2186,7 +2258,7 @@ async fn host_send(
         .and_then(|s| s.link.clone())
         .ok_or(Error::NoSession)?;
     let mut seq = 0u32;
-    let mut awaiting_keyframe = false;
+    let mut gate = SendGate::default();
     let mut metrics = tokio::time::interval(Duration::from_secs(1));
     metrics.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut cursor = desktop.cursor.subscribe();
@@ -2205,7 +2277,7 @@ async fn host_send(
         for frame in desktop.video.drain() {
             // After a frame was dropped, the predicted frames that follow
             // reference it: they go too, until the keyframe owed for it.
-            if awaiting_keyframe && !frame.keyframe {
+            if gate.skips(frame.keyframe) {
                 desktop.counters.send_dropped();
                 continue;
             }
@@ -2231,25 +2303,23 @@ async fn host_send(
                     })
                     .collect::<Vec<_>>();
                 let wire: usize = datagrams.iter().map(bytes::Bytes::len).sum();
-                let quality = *lock(&desktop.quality);
                 if !admits_frame(
                     link.datagram_send_buffer_space(),
                     wire,
-                    backlog_budget(quality.max_bitrate_kbps, quality.max_frame_rate),
+                    send_budget(desktop),
                 ) {
                     // The link is behind: sending would queue stale video, or
                     // make the transport drop older fragments and so split
                     // frames. Drop this one whole and start again from a
                     // keyframe once the backlog drains.
                     desktop.counters.send_dropped();
-                    awaiting_keyframe = true;
-                    desktop.keyframe.request();
+                    gate.dropped(frame.keyframe, wire);
                     continue;
                 }
                 link.send_many_datagrams(&datagrams)
                     .map_err(Error::network_debug)?;
                 seq = seq.wrapping_add(1);
-                awaiting_keyframe &= !frame.keyframe;
+                gate.sent(frame.keyframe, wire);
                 if frame.keyframe {
                     desktop.counters.keyframe_sent(frame.payload.len());
                 }
@@ -2257,12 +2327,18 @@ async fn host_send(
                 let mut bytes = vec![VIDEO];
                 bytes.extend_from_slice(&body);
                 write(send, &bytes).await?;
-                awaiting_keyframe &= !frame.keyframe;
+                gate.sent(frame.keyframe, bytes.len());
                 if frame.keyframe {
                     desktop.counters.keyframe_sent(frame.payload.len());
                 }
             }
         }
+        if gate.should_ask(link.datagram_send_buffer_space(), send_budget(desktop)) {
+            desktop.keyframe.request();
+        }
+        // While a keyframe is owed, look at the backlog again each frame
+        // period: a still screen may bring no frame to wake on.
+        let owed_check = gate.owed().then(|| frame_period(desktop));
         let current = cursor.borrow_and_update().clone();
         if current != previous {
             if let Some(current) = &current {
@@ -2295,6 +2371,7 @@ async fn host_send(
                 write(send, &bytes).await?;
             }
             _ = &mut notified => {},
+            () = tokio::time::sleep(owed_check.unwrap_or_default()), if owed_check.is_some() => {},
             _ = cursor.changed() => {},
             changed = recording_rx.changed() => {
                 changed.map_err(|_|Error::NoSession)?;
@@ -2363,6 +2440,45 @@ mod tests {
         assert!(!admits_frame(buffer - 60_000, 20_000, 64 * 1024));
         // Never a frame the transport would make room for by dropping.
         assert!(!admits_frame(10_000, 20_000, usize::MAX));
+    }
+
+    #[test]
+    fn a_dropped_keyframe_asks_for_one_more_only_once_the_link_could_take_it() {
+        let buffer = crate::core::host::DATAGRAM_SEND_BUFFER;
+        let budget = 64 * 1024;
+        let backlog = buffer - 40_000;
+        let mut gate = SendGate::default();
+        gate.sent(true, 83_000);
+        assert!(!gate.should_ask(buffer, budget), "nothing is owed");
+        // A predicted frame is dropped behind a backlog: the keyframe owed
+        // for it is not asked for while the backlog would drop it too.
+        gate.dropped(false, 5_000);
+        assert!(gate.skips(false));
+        assert!(!gate.skips(true));
+        assert!(!gate.should_ask(backlog, budget));
+        assert!(gate.owed());
+        // Drained: asked for once, however many frames pass before it comes.
+        assert!(gate.should_ask(buffer, budget));
+        assert!(!gate.owed());
+        assert!(!gate.should_ask(buffer, budget));
+        // The keyframe met a new backlog and was dropped: one more is owed,
+        // again only once the link has room for it.
+        gate.dropped(true, 83_000);
+        assert!(!gate.should_ask(backlog, budget));
+        assert!(gate.should_ask(buffer, budget));
+        // It went out: predicted frames flow again.
+        gate.sent(true, 83_000);
+        assert!(!gate.skips(false));
+        assert!(!gate.owed());
+    }
+
+    #[test]
+    fn a_small_keyframe_is_asked_for_behind_a_backlog_it_fits_within() {
+        let buffer = crate::core::host::DATAGRAM_SEND_BUFFER;
+        let mut gate = SendGate::default();
+        gate.sent(true, 20_000);
+        gate.dropped(false, 5_000);
+        assert!(gate.should_ask(buffer - 40_000, 64 * 1024));
     }
 
     fn desktop() -> Arc<DesktopRuntime> {
