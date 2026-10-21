@@ -4,6 +4,14 @@
 //! description, so a keyframe is rewritten as Annex-B with those sets in front.
 //! This encoder does not capture the screen. Callers supply the picture.
 //! Without VideoToolbox H.264 this returns unsupported.
+//!
+//! A recovery keyframe is encoded under a quantiser floor that
+//! [`RecoveryQp`] moves until it fits a few pictures' bytes. VideoToolbox
+//! takes no byte limit for one picture: on this kind of session, neither the
+//! data-rate limit nor `MaxAllowedFrameQP` shrank a forced keyframe, and
+//! `MinAllowedFrameQP` did. The floor is a session property, set for that
+//! one picture and cleared after it; `encode_with_properties` waits for the
+//! picture, so no other picture is encoded under it.
 
 #[cfg(target_os = "macos")]
 use apple_cf::cm::CMTime;
@@ -13,6 +21,8 @@ use apple_cf::iosurface::IOSurface;
 use videotoolbox::compression::{CompressionSession, FrameProperties, ProfileLevel};
 #[cfg(target_os = "macos")]
 use videotoolbox::session::Codec;
+#[cfg(target_os = "macos")]
+use vnilink_media::RecoveryQp;
 use vnilink_media::{
     to_annex_b, AvccAccessUnit, EncodeParams, EncodedSample, Error, RawFrame, VideoEncoder,
 };
@@ -32,6 +42,8 @@ pub struct MacEncoder {
     frame_rate: i32,
     #[cfg(target_os = "macos")]
     frame_index: i64,
+    #[cfg(target_os = "macos")]
+    recovery_qp: RecoveryQp,
 }
 
 impl MacEncoder {
@@ -144,6 +156,7 @@ impl MacEncoder {
                 height,
                 frame_rate: i32::from(frame_rate),
                 frame_index: 0,
+                recovery_qp: RecoveryQp::default(),
             })
         }
         #[cfg(not(target_os = "macos"))]
@@ -201,6 +214,20 @@ fn set_rate(session: &CompressionSession, bitrate: i32, frame_rate: u8) -> bool 
     took
 }
 
+/// The lowest QP the session may use; [`NO_QP_FLOOR`] clears it. Returns
+/// whether the encoder took it.
+#[cfg(target_os = "macos")]
+fn set_qp_floor(session: &CompressionSession, qp: i64) -> bool {
+    use apple_cf::cf::CFNumber;
+    // SAFETY: VideoToolbox's exported constant key, as in `set_rate`.
+    let key = unsafe { videotoolbox::ffi::kVTCompressionPropertyKey_MinAllowedFrameQP };
+    set(session, key, &CFNumber::from_i64(qp))
+}
+
+/// The value a session reports for `MinAllowedFrameQP` before one is set.
+#[cfg(target_os = "macos")]
+const NO_QP_FLOOR: i64 = -1;
+
 /// No frame held back for later output, and colour marked as BT.709, the
 /// matrix VideoToolbox converts the BGRA pictures with, so decoders do not
 /// guess.
@@ -252,12 +279,22 @@ impl VideoEncoder for MacEncoder {
             paint(&self.surface, frame)?;
             let time = CMTime::new(self.frame_index, self.frame_rate);
             let properties = FrameProperties::new().with_force_key_frame(params.force_keyframe);
+            let floored = params.force_keyframe
+                && params.recovery
+                && set_qp_floor(&self.session, i64::from(self.recovery_qp.floor()));
             let encoded = self
                 .session
-                .encode_with_properties(&self.surface, time, properties)
-                .map_err(|_| Error::EncodeRejected("VideoToolbox rejected the frame"))?;
+                .encode_with_properties(&self.surface, time, properties);
+            if floored {
+                set_qp_floor(&self.session, NO_QP_FLOOR);
+            }
+            let encoded =
+                encoded.map_err(|_| Error::EncodeRejected("VideoToolbox rejected the frame"))?;
             if encoded.data.is_empty() {
                 return Err(Error::EncodeRejected("the encoder produced no frame"));
+            }
+            if floored {
+                self.recovery_qp.observe(encoded.data.len(), params);
             }
             let sample = encoded
                 .cm_sample_buffer()
