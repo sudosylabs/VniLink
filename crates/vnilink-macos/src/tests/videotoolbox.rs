@@ -783,3 +783,67 @@ fn recovery_keyframe_pictures() {
         }
     }
 }
+
+/// Whether the encoder refines a still screen after a keyframe: the same
+/// page is encoded for two seconds after a full or a recovery keyframe, and
+/// each decoded picture is compared with the page (PSNR over RGB). Prints
+/// sizes and PSNR every ten pictures:
+/// `cargo test -p vnilink-macos --release --lib still_screen_refinement -- --ignored --nocapture`.
+#[test]
+#[ignore = "measurement"]
+fn still_screen_refinement() {
+    let psnr = |source: &vnilink_media::RawFrame, decoded: &vnilink_media::RawFrame| {
+        let (mut error, mut count) = (0f64, 0f64);
+        for y in 0..source.height() {
+            let (a, b) = (source.row(y), decoded.row(y));
+            for x in 0..usize::from(source.width()) {
+                for c in 0..3 {
+                    let d = f64::from(a[x * 4 + c]) - f64::from(b[x * 4 + c]);
+                    error += d * d;
+                    count += 1.0;
+                }
+            }
+        }
+        10.0 * (255.0f64 * 255.0 / (error / count).max(1e-9)).log10()
+    };
+    for recovery in [false, true] {
+        let mut encoder = MacEncoder::open(1280, 720, 30, 2_000_000, true).unwrap();
+        let mut decoder = MacDecoder::new();
+        let still = page(1280, 720, 0);
+        let mut line = Vec::new();
+        for index in 0..91u64 {
+            // A full first keyframe, then the keyframe under test at 30.
+            let force = index == 0 || index == 30;
+            let params = EncodeParams {
+                force_keyframe: force,
+                recovery: recovery && index == 30,
+                bitrate_bps: 2_000_000,
+                frame_rate: 30,
+            };
+            let frame =
+                vnilink_media::RawFrame::bgra(1280, 720, index * 33_333, still.pixels().to_vec())
+                    .unwrap();
+            let Ok(sample) = encoder.encode(&frame, &params) else {
+                line.push(format!("{index}:dropped"));
+                continue;
+            };
+            let encoded =
+                EncodedFrame::h264(sample.keyframe(), index * 33_333, sample.bytes().to_vec())
+                    .unwrap();
+            let picture = decoder.decode(&encoded).unwrap();
+            if index >= 30 && (index - 30) % 10 == 0 || index == 31 {
+                line.push(format!(
+                    "+{}: {} B {:.1} dB",
+                    index - 30,
+                    sample.bytes().len(),
+                    psnr(&still, &picture)
+                ));
+            }
+        }
+        println!(
+            "{}: {}",
+            if recovery { "recovery" } else { "full" },
+            line.join(", ")
+        );
+    }
+}

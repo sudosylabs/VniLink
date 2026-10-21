@@ -224,9 +224,12 @@ fn set_qp_floor(session: &CompressionSession, qp: i64) -> bool {
     set(session, key, &CFNumber::from_i64(qp))
 }
 
-/// The value a session reports for `MinAllowedFrameQP` before one is set.
+/// Clears `MinAllowedFrameQP`. The session reports -1 before one is set,
+/// but setting -1 back leaves the floor where it was: every picture after
+/// the first recovery keyframe stayed at that floor, and a still page of
+/// text stayed as coarse as that keyframe.
 #[cfg(target_os = "macos")]
-const NO_QP_FLOOR: i64 = -1;
+const NO_QP_FLOOR: i64 = 0;
 
 /// No frame held back for later output, and colour marked as BT.709, the
 /// matrix VideoToolbox converts the BGRA pictures with, so decoders do not
