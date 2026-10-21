@@ -109,6 +109,14 @@ const MISSED_SEVERE: u64 = 150;
 /// How long frames must go missing at the viewer before it is the link.
 const LOSS_LASTS_MS: u64 = 3000;
 
+/// Healthy time before stepping back up towards the bitrate in use before
+/// the strain, and before probing above any known rate.
+const RETURN_AFTER_MS: u64 = 3000;
+const PROBE_AFTER_MS: u64 = 6000;
+
+/// A rate recovery got back to and held this long is proven again.
+const RESTORE_PROVEN_MS: u64 = 10_000;
+
 #[derive(Default)]
 pub(crate) struct Adaptive {
     previous: Option<Feedback>,
@@ -118,6 +126,12 @@ pub(crate) struct Adaptive {
     lossy_ms: u64,
     cooldown_ms: u64,
     rtt_floor: u64,
+    /// The bitrate in use when the link last strained: recovery returns to
+    /// it sooner than it probes above it.
+    before_strain: Option<u32>,
+    /// How long since recovery got back to `before_strain`; strain within
+    /// [`RESTORE_PROVEN_MS`] of it says that rate was too much after all.
+    since_restore: Option<u64>,
     pub status: DesktopMediaStatus,
 }
 impl Adaptive {
@@ -144,6 +158,8 @@ impl Adaptive {
             self.strained_ms = 0;
             self.lossy_ms = 0;
             self.cooldown_ms = 0;
+            self.before_strain = None;
+            self.since_restore = None;
             self.rtt_floor = next.rtt_ms.max(1);
             self.status.reason = AdaptationReason::WarmingUp;
             return None;
@@ -203,6 +219,13 @@ impl Adaptive {
         let missed_per_mille = per_mille(viewer_lost.saturating_add(gate_dropped));
         self.rtt_floor = self.rtt_floor.min(next.rtt_ms.max(1));
         self.cooldown_ms = self.cooldown_ms.saturating_sub(elapsed_ms);
+        if let Some(since) = self.since_restore.as_mut() {
+            *since = since.saturating_add(elapsed_ms);
+            if *since >= RESTORE_PROVEN_MS {
+                self.since_restore = None;
+                self.before_strain = None;
+            }
+        }
         self.status = DesktopMediaStatus {
             reason: AdaptationReason::Stable,
             received_kbps: bytes
@@ -286,12 +309,25 @@ impl Adaptive {
                         as u16;
                 }
             } else {
-                let kept = if missed_per_mille >= MISSED_SEVERE {
-                    quality.max_bitrate_kbps / 2
-                } else {
-                    quality.max_bitrate_kbps * 3 / 4
+                let rate = quality.max_bitrate_kbps;
+                // A restore that strains again was too much: the rate to
+                // return to comes down by a quarter. Otherwise the rate in
+                // use now is the one this strain started from.
+                self.before_strain = match (self.before_strain, self.since_restore.take()) {
+                    (Some(before), Some(_)) => Some(before * 3 / 4),
+                    (Some(before), None) => Some(before),
+                    (None, _) => Some(rate),
                 };
-                quality.max_bitrate_kbps = kept.max(500).min(quality.max_bitrate_kbps);
+                let backlog = next.host.map_or(0, |host| host.backlog_ms);
+                // Graded by how bad: a mild strain takes off less.
+                let kept = if missed_per_mille >= MISSED_SEVERE || backlog >= 600 || loss >= 100 {
+                    rate / 2
+                } else if missed_per_mille >= 100 || backlog >= 300 || loss >= 50 {
+                    rate * 3 / 4
+                } else {
+                    rate * 85 / 100
+                };
+                quality.max_bitrate_kbps = kept.max(500).min(rate);
                 if quality.max_bitrate_kbps <= 1500 {
                     quality.max_frame_rate = (quality.max_frame_rate / 2)
                         .max(10)
@@ -307,9 +343,18 @@ impl Adaptive {
             return None;
         }
         // Recovery requires sustained observed frame delivery; no upshift from
-        // an unused owner's empty queue or from a clock leap.
+        // an unused owner's empty queue or from a clock leap. Back to the
+        // rate in use before a strain is sooner than probing above it.
         self.healthy_ms = self.healthy_ms.saturating_add(elapsed_ms);
-        if self.healthy_ms < 6000 || self.cooldown_ms != 0 {
+        let returning = self
+            .before_strain
+            .is_some_and(|before| current.max_bitrate_kbps < before);
+        let wait = if returning {
+            RETURN_AFTER_MS
+        } else {
+            PROBE_AFTER_MS
+        };
+        if self.healthy_ms < wait || self.cooldown_ms != 0 {
             return None;
         }
         self.healthy_ms = 0;
@@ -318,11 +363,27 @@ impl Adaptive {
         let width = source.0.max(current.max_width);
         let height = source.1.max(current.max_height);
         let cap = ((u32::from(width) * u32::from(height) * 3) / 1000).clamp(6000, 50_000);
-        quality.max_bitrate_kbps = quality
-            .max_bitrate_kbps
-            .saturating_add((quality.max_bitrate_kbps / 4).max(250))
-            .min(cap)
-            .max(current.max_bitrate_kbps);
+        // Only a stream using its bitrate proves the link carries more: a
+        // still screen sending a fraction of it proves nothing.
+        let used = u64::from(self.status.received_kbps) * 2 >= u64::from(current.max_bitrate_kbps);
+        if used {
+            let up = quality
+                .max_bitrate_kbps
+                .saturating_add((quality.max_bitrate_kbps / 4).max(250));
+            // Back up to the rate before the strain, not past it in one step.
+            let up = match self.before_strain {
+                Some(before) if returning => up.min(before),
+                _ => up,
+            };
+            quality.max_bitrate_kbps = up.min(cap).max(current.max_bitrate_kbps);
+            if returning
+                && self
+                    .before_strain
+                    .is_some_and(|before| quality.max_bitrate_kbps >= before)
+            {
+                self.since_restore = Some(0);
+            }
+        }
         let processing_us = next
             .decode_us
             .unwrap_or(0)
@@ -422,8 +483,9 @@ mod tests {
         assert!(state.step(quality, (1920, 1080), 1000, sample).is_none());
         sample = frame_sample(2);
         sample.host.as_mut().unwrap().lost_bytes = 20_000;
+        // 4% of bytes lost is a mild strain: 15% off.
         let next = state.step(quality, (1920, 1080), 1000, sample).unwrap();
-        assert_eq!(next, Quality::new(6000, 60, 1920, 1080).unwrap());
+        assert_eq!(next, Quality::new(6800, 60, 1920, 1080).unwrap());
         assert_eq!(state.status.send_loss_per_mille, 40);
         assert_eq!(state.status.reason, AdaptationReason::NetworkPressure);
         sample = frame_sample(3);
@@ -446,11 +508,11 @@ mod tests {
             stepped.map(|quality| quality.max_bitrate_kbps)
         };
         // The host dropping frames behind the link: two seconds of it.
-        assert_eq!(run(&[(0, 2), (0, 4)]), Some(6000));
+        assert_eq!(run(&[(0, 2), (0, 4)]), Some(6800));
         assert_eq!(run(&[(0, 10), (0, 20)]), Some(4000));
         // Frames lost at the viewer: three seconds of it.
         assert_eq!(run(&[(2, 0), (4, 0)]), None);
-        assert_eq!(run(&[(2, 0), (4, 0), (6, 0), (8, 0)]), Some(6000));
+        assert_eq!(run(&[(2, 0), (4, 0), (6, 0), (8, 0)]), Some(6800));
         // A blackout loses many frames once, or across two samples.
         assert_eq!(run(&[(8, 0), (8, 0), (8, 0), (8, 0)]), None);
         assert_eq!(run(&[(0, 0), (4, 0), (8, 0), (8, 0), (8, 0)]), None);
@@ -467,10 +529,79 @@ mod tests {
         sample.host.as_mut().unwrap().backlog_ms = 300;
         assert!(state.step(quality, (1920, 1080), 1000, sample).is_none());
         let mut sample = frame_sample(2);
-        sample.host.as_mut().unwrap().backlog_ms = 280;
+        sample.host.as_mut().unwrap().backlog_ms = 320;
         let next = state.step(quality, (1920, 1080), 1000, sample).unwrap();
         assert_eq!(next.max_bitrate_kbps, 6000);
         assert_eq!(state.status.reason, AdaptationReason::NetworkPressure);
+    }
+
+    /// The cut grows with the strain; recovery returns to the rate in use
+    /// before it sooner than it probes above, and a return that strains
+    /// again lowers that rate by a quarter.
+    #[test]
+    fn recovery_returns_to_the_last_good_rate_and_learns_from_a_failed_return() {
+        // Samples carry 4,000 kb/s, so a 4,000 kb/s quality uses its rate.
+        let sample = |second: u64, lost_bytes: u64| {
+            let mut feedback = frame_sample(second);
+            feedback.receiver.received_bytes = second * 500_000;
+            let host = feedback.host.as_mut().unwrap();
+            host.sent_bytes = second * 500_000;
+            host.lost_bytes = lost_bytes;
+            feedback
+        };
+        let mut state = Adaptive::default();
+        let mut quality = Quality::new(4000, 30, 1920, 1080).unwrap();
+        let mut second = 0;
+        let mut lost = 0;
+        let mut run = |state: &mut Adaptive, quality: &mut Quality, seconds: u64, loss: u64| {
+            let mut changes = Vec::new();
+            for _ in 0..seconds {
+                second += 1;
+                lost += loss;
+                if let Some(next) = state.step(*quality, (1920, 1080), 1000, sample(second, lost)) {
+                    *quality = next;
+                    changes.push((second, next.max_bitrate_kbps));
+                }
+            }
+            changes
+        };
+        run(&mut state, &mut quality, 1, 0);
+        // 12% of bytes lost: a severe strain, halved.
+        let down = run(&mut state, &mut quality, 2, 60_000);
+        assert_eq!(down.last().unwrap().1, 2000);
+        // Healthy: back towards 4,000 after three seconds, not six, and not
+        // past it.
+        let back = run(&mut state, &mut quality, 12, 0);
+        assert_eq!(back.first().unwrap(), &(6, 2500));
+        assert_eq!(quality.max_bitrate_kbps, 4000);
+        // Strain right after getting back: the rate to return to is now
+        // 3,000.
+        run(&mut state, &mut quality, 2, 60_000);
+        let again = run(&mut state, &mut quality, 20, 0);
+        let rates: Vec<u32> = again.iter().map(|(_, rate)| *rate).collect();
+        assert_eq!(
+            &rates[..2],
+            [2500, 3000],
+            "returned only to 3,000: {rates:?}"
+        );
+        assert_eq!(state.before_strain, None, "proven again after holding");
+    }
+
+    /// A stream sending far less than its bitrate does not earn more:
+    /// frame rate may still recover, the bitrate stays.
+    #[test]
+    fn an_unused_bitrate_is_not_raised() {
+        let mut state = Adaptive::default();
+        // Samples carry 2,000 kb/s against an 8,000 kb/s quality.
+        let quality = Quality::new(8000, 30, 1280, 720).unwrap();
+        state.step(quality, (1920, 1080), 1000, frame_sample(0));
+        let mut raised = None;
+        for second in 1..=7 {
+            raised = raised.or(state.step(quality, (1920, 1080), 1000, frame_sample(second)));
+        }
+        let raised = raised.unwrap();
+        assert_eq!(raised.max_bitrate_kbps, 8000);
+        assert!(raised.max_frame_rate > 30);
     }
 
     #[test]
