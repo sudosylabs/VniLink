@@ -37,8 +37,18 @@ pub(crate) const MAX_PROTECTION: f64 = 0.5;
 const FRAG_SILENCE: Duration = Duration::from_millis(500);
 
 /// At most this many incomplete frames are tracked; older sequences are
-/// evicted first. Bounds memory to a few megabytes even under attack.
+/// evicted first.
 const MAX_PARTIAL_FRAMES: usize = 8;
+
+/// Most shard bytes the incomplete frames hold together; older sequences
+/// are evicted first. The frame count alone does not bound memory: eight
+/// forged frames of 12288 shards each would hold some 140 MB of one-datagram
+/// shards. A frame completes once it holds its data count of shards, so an
+/// honest one peaks near its body, at most [`super::MAX_VIDEO_FRAME`] and a shard.
+pub(crate) const MAX_PARTIAL_BYTES: usize = 8 * 1024 * 1024;
+
+/// Largest shard payload accepted, above any datagram a path carries.
+const MAX_SHARD: usize = 64 * 1024;
 
 /// Recently completed sequences. Straggler fragments for these are ignored
 /// instead of reopening a frame the decoder already consumed.
@@ -110,6 +120,8 @@ struct Partial {
     shards: Vec<Option<Vec<u8>>>,
     received: usize,
     data_received: usize,
+    /// Payload bytes of the shards held.
+    bytes: usize,
     /// When its latest new fragment arrived.
     heard: Instant,
 }
@@ -271,16 +283,12 @@ impl Reassembler {
             return None;
         }
         let payload = &datagram[FRAG_HEADER..];
-        if payload.len() > 64 * 1024 {
+        if payload.len() > MAX_SHARD {
             return None;
         }
         if self.partial.len() >= MAX_PARTIAL_FRAMES && !self.partial.contains_key(&seq) {
             if let Some(oldest) = self.partial.keys().next().copied() {
-                if let Some(evicted) = self.partial.remove(&oldest) {
-                    self.fragments.missing += evicted.missing();
-                }
-                self.lost.evicted += 1;
-                self.remember_gone(oldest);
+                self.evict(oldest);
             }
         }
         let partial = self.partial.entry(seq).or_insert_with(|| Partial {
@@ -289,6 +297,7 @@ impl Reassembler {
             shards: vec![None; usize::from(data) + usize::from(parity)],
             received: 0,
             data_received: 0,
+            bytes: 0,
             heard: Instant::now(),
         });
         if (partial.data, partial.parity) != (data, parity) {
@@ -296,6 +305,7 @@ impl Reassembler {
         }
         if partial.shards[index].is_none() {
             partial.shards[index] = Some(payload.to_vec());
+            partial.bytes += payload.len();
             partial.received += 1;
             if index < usize::from(data) {
                 partial.data_received += 1;
@@ -304,6 +314,15 @@ impl Reassembler {
             self.fragments.received += 1;
         }
         if !partial.whole() {
+            // Older frames make room first; this one goes last, when it
+            // alone is larger than any a sender makes.
+            while self.buffered_bytes() > MAX_PARTIAL_BYTES {
+                let oldest = self.partial.keys().copied().find(|&other| other != seq);
+                self.evict(oldest.unwrap_or(seq));
+                if oldest.is_none() {
+                    break;
+                }
+            }
             return None;
         }
         let partial = self.partial.remove(&seq).expect("present");
@@ -354,6 +373,20 @@ impl Reassembler {
         self.fragments.missing += repaired;
         self.fragments.repaired += repaired;
         Some(body)
+    }
+
+    /// Payload bytes the incomplete frames hold.
+    pub(crate) fn buffered_bytes(&self) -> usize {
+        self.partial.values().map(|partial| partial.bytes).sum()
+    }
+
+    /// Drops the incomplete frame `seq` to make room, counting it lost.
+    fn evict(&mut self, seq: u32) {
+        if let Some(evicted) = self.partial.remove(&seq) {
+            self.fragments.missing += evicted.missing();
+        }
+        self.lost.evicted += 1;
+        self.remember_gone(seq);
     }
 
     fn expire(&mut self) {

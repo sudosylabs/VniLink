@@ -1,7 +1,8 @@
 use crate::video::{
     decode_video_body, encode_video_body, fragment, EncodedFrame, FragmentCounts, Losses,
-    Reassembler, FRAG_HEADER,
+    Reassembler, FRAG_HEADER, MAX_PARTIAL_BYTES,
 };
+use crate::MAX_VIDEO_FRAME;
 
 fn body(keyframe: bool, stamp: u64, payload: &[u8]) -> Vec<u8> {
     encode_video_body(&EncodedFrame::h264(keyframe, stamp, payload.to_vec()).unwrap())
@@ -336,4 +337,61 @@ fn malformed_parity_is_ignored() {
     other[8..10].copy_from_slice(&0u16.to_be_bytes());
     assert!(reasm.push(&other).is_none());
     assert_eq!(reasm.take_fragments().received, 1);
+}
+
+/// A forged shard of frame `seq` claiming 8192 data shards, so it never
+/// completes.
+fn forged(seq: u32, index: u16, payload: &[u8]) -> Vec<u8> {
+    let mut datagram = seq.to_be_bytes().to_vec();
+    datagram.extend(index.to_be_bytes());
+    datagram.extend(8192u16.to_be_bytes());
+    datagram.extend(0u16.to_be_bytes());
+    datagram.extend_from_slice(payload);
+    datagram
+}
+
+/// Eight frames that never complete, of shards as large as a fragment may
+/// be, would hold 120 MB here: the oldest are evicted at the byte budget.
+#[test]
+fn forged_frames_never_hold_more_than_the_byte_budget() {
+    let mut reasm = Reassembler::new();
+    let payload = vec![7; 60 * 1024];
+    for n in 0..2048u32 {
+        assert!(reasm
+            .push(&forged(n % 8, (n / 8) as u16, &payload))
+            .is_none());
+        assert!(reasm.buffered_bytes() <= MAX_PARTIAL_BYTES);
+    }
+    assert!(reasm.take_loss().evicted > 0);
+}
+
+/// One frame larger than the budget alone is dropped, not kept growing.
+#[test]
+fn a_frame_larger_than_the_byte_budget_is_dropped() {
+    let mut reasm = Reassembler::new();
+    let payload = vec![7; 60 * 1024];
+    for index in 0..1024 {
+        assert!(reasm.push(&forged(1, index, &payload)).is_none());
+        assert!(reasm.buffered_bytes() <= MAX_PARTIAL_BYTES);
+    }
+    assert!(reasm.take_loss().evicted > 0);
+}
+
+/// The largest frame a sender makes still completes beside forged frames
+/// filling most of the budget.
+#[test]
+fn the_largest_frame_fits_the_byte_budget() {
+    let mut reasm = Reassembler::new();
+    let payload = vec![7; 60 * 1024];
+    for index in 0..100 {
+        assert!(reasm.push(&forged(1, index, &payload)).is_none());
+    }
+    let largest = body(true, 2, &vec![5; MAX_VIDEO_FRAME]);
+    let fragments = fragment(&largest, 2, 1410, 0.5);
+    let mut whole = Vec::new();
+    for datagram in fragments.iter().rev() {
+        whole.extend(reasm.push(datagram));
+    }
+    assert_eq!(whole, [largest]);
+    assert_eq!(reasm.take_loss(), Losses::default());
 }
