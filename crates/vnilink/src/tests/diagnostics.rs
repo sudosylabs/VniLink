@@ -6,15 +6,30 @@ use crate::diagnostics::{
 };
 use crate::{ServiceKind, SessionPhase};
 
-fn wait(mut condition: impl FnMut() -> bool) {
+/// Polls `observe` until `done` accepts what it saw. A timeout names `what`
+/// and the last observation, so a failure says which condition hung and
+/// how far it got.
+fn wait_for<T: std::fmt::Debug>(
+    what: &str,
+    mut observe: impl FnMut() -> T,
+    done: impl Fn(&T) -> bool,
+) {
     let until = std::time::Instant::now() + std::time::Duration::from_secs(8);
-    while !condition() {
+    loop {
+        let observed = observe();
+        if done(&observed) {
+            return;
+        }
         assert!(
             std::time::Instant::now() < until,
-            "diagnostics condition timed out"
+            "diagnostics condition timed out: {what}; last observed {observed:?}"
         );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
+}
+
+fn wait(what: &str, condition: impl FnMut() -> bool) {
+    wait_for(what, condition, |done| *done);
 }
 
 fn connection(id: u64) -> ConnectionSummary {
@@ -185,7 +200,9 @@ fn live_snapshot_lists_connections_services_and_counts() {
     let pending = controller
         .begin_connect_services(&host.endpoint_id())
         .unwrap();
-    wait(|| controller.controller_session(pending.id).unwrap().phase == SessionPhase::Active);
+    wait("connection active", || {
+        controller.controller_session(pending.id).unwrap().phase == SessionPhase::Active
+    });
     let parent = controller.controller_session(pending.id).unwrap();
     controller
         .attach_controller_service(parent.id, parent.generation, ServiceKind::Files)
@@ -224,7 +241,9 @@ fn live_snapshot_reports_pipeline_path_and_lease() {
     let pending = controller
         .begin_connect_services(&host.endpoint_id())
         .unwrap();
-    wait(|| controller.controller_session(pending.id).unwrap().phase == SessionPhase::Active);
+    wait("connection active", || {
+        controller.controller_session(pending.id).unwrap().phase == SessionPhase::Active
+    });
     let parent = controller.controller_session(pending.id).unwrap();
     let owner = controller
         .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
@@ -232,7 +251,9 @@ fn live_snapshot_reports_pipeline_path_and_lease() {
     let desktop = controller
         .open_desktop_service(owner.id, owner.generation)
         .unwrap();
-    wait(|| desktop.control_state().unwrap() == crate::DesktopControlState::Controlling);
+    wait("viewer controlling", || {
+        desktop.control_state().unwrap() == crate::DesktopControlState::Controlling
+    });
     // Publish one frame so the produce queue has something to count.
     let remote = host
         .hosted_services()
@@ -270,25 +291,52 @@ fn live_snapshot_reports_pipeline_path_and_lease() {
     assert!(!export.contains(&host.endpoint_id()));
     // The keyframe sent is counted with its bytes on the host; a keyframe
     // the viewer asks for is counted on the viewer.
-    wait(|| {
-        let pipeline = &host.diagnostic_snapshot().unwrap().pipelines[0];
-        pipeline.keyframes_sent == 1 && pipeline.keyframe_bytes == 64
-    });
-    // The viewer reports what reached it; the host hears no loss.
-    wait(|| {
-        let pipeline = &host.diagnostic_snapshot().unwrap().pipelines[0];
-        pipeline.viewer_frame_loss_permille == Some(0)
-            && pipeline.viewer_fragment_loss_permille == Some(0)
-    });
+    wait_for(
+        "host counts the keyframe sent",
+        || {
+            let pipeline = &host.diagnostic_snapshot().unwrap().pipelines[0];
+            (pipeline.keyframes_sent, pipeline.keyframe_bytes)
+        },
+        |sent| *sent == (1, 64),
+    );
+    // The viewer reports what reached it; the host hears no loss. A report
+    // is current for `PIPELINE_FRESH_SECS` and one frame brings only one, so
+    // a test thread held off longer would wait for a report that never
+    // comes. While the host has none, another keyframe brings a fresh one;
+    // a keyframe never makes the viewer ask for another.
+    wait_for(
+        "host hears the viewer lose nothing",
+        || {
+            let pipeline = &host.diagnostic_snapshot().unwrap().pipelines[0];
+            let loss = (
+                pipeline.viewer_frame_loss_permille,
+                pipeline.viewer_fragment_loss_permille,
+            );
+            if loss == (None, None) {
+                host.publish_desktop_video(
+                    remote.id,
+                    remote.generation,
+                    crate::EncodedFrame::h264(true, 1, vec![7; 64]).unwrap(),
+                )
+                .unwrap();
+            }
+            loss
+        },
+        |loss| *loss == (Some(0), Some(0)),
+    );
     desktop.request_keyframe().unwrap();
-    wait(|| {
-        controller
-            .diagnostic_snapshot()
-            .unwrap()
-            .pipelines
-            .first()
-            .is_some_and(|pipeline| pipeline.keyframes_requested >= 1)
-    });
+    wait_for(
+        "viewer counts the keyframe it asked for",
+        || {
+            controller
+                .diagnostic_snapshot()
+                .unwrap()
+                .pipelines
+                .first()
+                .map(|pipeline| pipeline.keyframes_requested)
+        },
+        |requested| requested.is_some_and(|requested| requested >= 1),
+    );
     let viewer = &controller.diagnostic_snapshot().unwrap().pipelines[0];
     assert_eq!(
         (
