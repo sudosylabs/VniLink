@@ -445,7 +445,7 @@ fn encode_image(image: &ScreenImage) -> Vec<u8> {
     payload
 }
 
-fn decode_payload(bytes: &[u8]) -> Result<ScreenSnapshot, Error> {
+pub(crate) fn decode_payload(bytes: &[u8]) -> Result<ScreenSnapshot, Error> {
     if bytes.len() < 2 || bytes[0] != 1 {
         return Err(Error::Malformed);
     }
@@ -457,6 +457,21 @@ fn decode_payload(bytes: &[u8]) -> Result<ScreenSnapshot, Error> {
         OUTCOME_IMAGE => decode_image(&bytes[2..]).map(ScreenSnapshot::Ready),
         _ => Err(Error::Malformed),
     }
+}
+
+/// The payload the host writes for `snapshot`: what [`decode_payload`]
+/// reads. A cancelled snapshot never crosses the wire.
+#[cfg(feature = "fuzzing")]
+pub(crate) fn encode_payload(snapshot: &ScreenSnapshot) -> Vec<u8> {
+    let outcome = match snapshot {
+        ScreenSnapshot::Ready(image) => return encode_image(image),
+        ScreenSnapshot::NeedsPermission => OUTCOME_PERMISSION,
+        ScreenSnapshot::NeedsSourceSelection => OUTCOME_SOURCE,
+        ScreenSnapshot::Unavailable => OUTCOME_UNAVAILABLE,
+        ScreenSnapshot::TimedOut => OUTCOME_TIMEOUT,
+        ScreenSnapshot::Cancelled => unreachable!("a cancelled snapshot is never written"),
+    };
+    vec![1, outcome]
 }
 
 fn decode_image(bytes: &[u8]) -> Result<ScreenImage, Error> {

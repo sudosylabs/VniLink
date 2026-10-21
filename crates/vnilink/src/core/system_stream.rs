@@ -35,7 +35,7 @@ const MAX_OPERATIONS: usize = 64;
 const MAX_DETAIL: usize = 256;
 const MAX_SESSION_LABEL: usize = 64;
 
-fn encode_operation(operation: &SystemOperation) -> Vec<u8> {
+pub(crate) fn encode_operation(operation: &SystemOperation) -> Vec<u8> {
     let detail = truncate_detail(operation.detail.clone());
     let mut out = vec![
         0,
@@ -51,7 +51,7 @@ fn encode_operation(operation: &SystemOperation) -> Vec<u8> {
     out
 }
 
-fn decode_operation(bytes: &[u8]) -> Result<SystemOperation, Error> {
+pub(crate) fn decode_operation(bytes: &[u8]) -> Result<SystemOperation, Error> {
     if bytes.len() < 19 || bytes[0] != 0 || bytes[1] != TAG_OPERATION {
         return Err(Error::Malformed);
     }
@@ -80,7 +80,7 @@ fn decode_operation(bytes: &[u8]) -> Result<SystemOperation, Error> {
     })
 }
 
-fn encode_support(support: SystemSupport, session: &HostSessionState) -> Vec<u8> {
+pub(crate) fn encode_support(support: SystemSupport, session: &HostSessionState) -> Vec<u8> {
     let mut label = session.session.as_bytes().to_vec();
     if label.len() > MAX_SESSION_LABEL {
         label.truncate(MAX_SESSION_LABEL);
@@ -106,7 +106,7 @@ fn encode_support(support: SystemSupport, session: &HostSessionState) -> Vec<u8>
     out
 }
 
-fn decode_support(bytes: &[u8]) -> Result<(SystemSupport, HostSessionState), Error> {
+pub(crate) fn decode_support(bytes: &[u8]) -> Result<(SystemSupport, HostSessionState), Error> {
     if bytes.len() < 7 || bytes[0] != 0 || bytes[1] != TAG_SUPPORT {
         return Err(Error::Malformed);
     }
@@ -140,7 +140,7 @@ fn decode_support(bytes: &[u8]) -> Result<(SystemSupport, HostSessionState), Err
     ))
 }
 
-fn encode_privacy(state: PrivacyState) -> Vec<u8> {
+pub(crate) fn encode_privacy(state: PrivacyState) -> Vec<u8> {
     let mut out = vec![
         0,
         TAG_PRIVACY,
@@ -152,7 +152,7 @@ fn encode_privacy(state: PrivacyState) -> Vec<u8> {
     out
 }
 
-fn decode_privacy(bytes: &[u8]) -> Result<PrivacyState, Error> {
+pub(crate) fn decode_privacy(bytes: &[u8]) -> Result<PrivacyState, Error> {
     if bytes.len() != 13 || bytes[0] != 0 || bytes[1] != TAG_PRIVACY {
         return Err(Error::Malformed);
     }
