@@ -2042,8 +2042,9 @@ impl Core {
         *lock(&PRESTAGE_HOOKS) = hooks;
     }
 
-    /// Identifies this engine to [`PrestageHooks`].
-    #[cfg(unix)]
+    /// Identifies this engine to its test hooks: [`PrestageHooks`] on
+    /// Unix, and [`PREPARE_SCAN_HOOKS`] everywhere.
+    #[cfg(any(unix, test))]
     pub(crate) fn prestage_key(&self) -> usize {
         Arc::as_ptr(&self.shared) as usize
     }
