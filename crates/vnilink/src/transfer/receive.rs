@@ -11,8 +11,13 @@ use super::wire::{
 };
 use super::{Partial, CHUNK, STALL_WITHIN};
 
-/// How long the sender may take to answer a request.
-const ANSWER_WITHIN: Duration = Duration::from_secs(15);
+/// How long the sender may take to answer a request. Short in tests,
+/// which hold a sender back.
+const ANSWER_WITHIN: Duration = if cfg!(test) {
+    Duration::from_secs(1)
+} else {
+    Duration::from_secs(15)
+};
 
 /// The sender's answer to a request.
 pub(crate) enum Answer {

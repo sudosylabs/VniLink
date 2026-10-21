@@ -48,8 +48,12 @@ transfer stream were removed; all movement goes through jobs.
 6. Jobs are peer-scoped: one peer cannot resume, list or adopt another
    peer's job. Job control rides the connection of the Files service
    that owns the job, else the peer's control session. Revoking Files
-   interrupts that peer's jobs, and a dropped session interrupts rather
-   than replays. A Files job whose owner goes, with its window, pipe or
+   interrupts that peer's jobs, and a session that ends interrupts its
+   jobs rather than replaying them. A failure that may clear on its own (a
+   connection lost or redialing, a stalled stream, a sender that answers
+   late) keeps the job going and tries again after 1, 2, 4, 8, 16, then
+   30 s; once six tries or two minutes pass without a byte moving, the job
+   is interrupted. Every interrupted job says why until it resumes. A Files job whose owner goes, with its window, pipe or
    connection, is left Interrupted; the next Files owner for that peer
    adopts and resumes it on its own (`files_service_resume_orphans`,
    which the Files channel calls as it opens), and `job_resume` resumes

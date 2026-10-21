@@ -4471,3 +4471,63 @@ fn a_long_download_preparation_shows_and_finishes() {
     );
     assert!(!cs.join("root/second.bin").exists());
 }
+
+/// A sender that does not answer in time costs the receiver one retry, not
+/// the job: the next try, after its pause, finishes the file without
+/// anyone resuming it.
+#[test]
+fn a_late_sender_is_retried_without_a_resume() {
+    let (host, controller, host_scratch, controller_scratch) = setup("retry");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
+    let bytes = payload(64 * 1024, 1801);
+    std::fs::write(controller_scratch.join("root/late.bin"), &bytes).unwrap();
+    controller.connect(&host.endpoint_id()).unwrap();
+    let job = controller
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("late.bin"),
+            host_files.root,
+            &host_files.path("arrived"),
+        )
+        .unwrap();
+    let rx = receiver_id(&host, job);
+
+    // Hold the first serve past the receiver's answer deadline.
+    let probe = arm_serve_probe(&controller, job);
+    let first = std::thread::scope(|scope| {
+        let poll = scope.spawn(|| host.job_poll(rx).unwrap());
+        assert!(probe.parked(), "the serve never opened");
+        let first = poll.join().unwrap();
+        probe.release();
+        first
+    });
+    drop(probe);
+    assert_eq!(first.state, JobState::Transferring);
+    assert_eq!(
+        first.error.as_deref(),
+        Some("the other computer could not be reached")
+    );
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let receiver = loop {
+        let snapshot = host.job_poll(rx).unwrap();
+        if snapshot.state.is_terminal() {
+            break snapshot;
+        }
+        assert_ne!(snapshot.state, JobState::Interrupted);
+        assert!(std::time::Instant::now() < deadline, "the retry never ran");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(receiver.state, JobState::Complete);
+    assert_eq!(receiver.error, None);
+    assert_eq!(
+        files_with_bytes(&host_scratch.join("root"), &bytes).len(),
+        1
+    );
+}

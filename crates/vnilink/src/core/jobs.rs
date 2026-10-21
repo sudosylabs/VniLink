@@ -139,6 +139,10 @@ pub(super) struct JobRecord {
     /// Files landed since the journal last heard, oldest first.
     #[serde(skip)]
     unsaved_landed: Vec<(usize, String)>,
+    /// A failure that may clear on its own, retried with backoff; none
+    /// while steps succeed. Not saved: a restart resumes explicitly.
+    #[serde(skip)]
+    retry: Option<Retry>,
 }
 
 impl JobRecord {
@@ -182,6 +186,7 @@ impl JobRecord {
             error: None,
             in_flight: 0,
             unsaved_landed: Vec::new(),
+            retry: None,
             source_ids: Vec::new(),
         }
     }
@@ -380,6 +385,39 @@ impl JobRecord {
     }
 }
 
+/// Retries of a job whose last step failed in a way that may clear on its
+/// own: a lost or reconnecting connection, a stalled stream, a sender that
+/// stopped serving for now.
+#[derive(Debug, Clone)]
+struct Retry {
+    /// Retries since the job last moved a byte.
+    attempts: u32,
+    first_at: std::time::Instant,
+    next_at: std::time::Instant,
+    /// The job's bytes when the first of these retries was scheduled.
+    done_at: u64,
+}
+
+/// Retries before a job is left interrupted, and the longest it keeps
+/// retrying without moving a byte.
+const MAX_RETRIES: u32 = 6;
+const RETRY_WINDOW: Duration = Duration::from_secs(120);
+
+/// The pause before retry `attempt` (from one): 1, 2, 4, 8, 16, then 30 s,
+/// each varied by up to a fifth so jobs that failed together spread out.
+fn retry_pause(attempt: u32) -> Duration {
+    let base = match attempt {
+        0 | 1 => 1.0,
+        2 => 2.0,
+        3 => 4.0,
+        4 => 8.0,
+        5 => 16.0,
+        _ => 30.0,
+    };
+    let spread = 0.8 + 0.4 * (rand::random::<u32>() as f64 / u32::MAX as f64);
+    Duration::from_secs_f64(base * spread)
+}
+
 /// Where a transfer lands, as the side that submitted it keeps it: the
 /// folder on the receiving computer and the names arriving in it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -575,6 +613,7 @@ impl Core {
             error: None,
             in_flight: 0,
             unsaved_landed: Vec::new(),
+            retry: None,
             source_ids,
         };
         // Announce over the auxiliary stream on the live control session.
@@ -755,6 +794,7 @@ impl Core {
                     error: None,
                     in_flight: 0,
                     unsaved_landed: Vec::new(),
+                    retry: None,
                     source_ids: Vec::new(),
                 },
             );
@@ -798,6 +838,14 @@ impl Core {
             if record.state.is_terminal()
                 || record.state == JobState::Interrupted
                 || (record.state == JobState::WaitingDecision && !record.sender)
+            {
+                return Ok(record.snapshot());
+            }
+            // A retry waits out its pause.
+            if record
+                .retry
+                .as_ref()
+                .is_some_and(|retry| retry.next_at > std::time::Instant::now())
             {
                 return Ok(record.snapshot());
             }
@@ -1162,7 +1210,7 @@ impl Core {
         let generation = match self.generation_for(&peer_key, outgoing, owner) {
             Ok(generation) => generation,
             Err(Error::NoSession | Error::StaleSession) => {
-                return self.mark_interrupted(id, UNREACHABLE)
+                return self.retry_later(id, UNREACHABLE)
             }
             Err(error) => return Err(error),
         };
@@ -1184,7 +1232,7 @@ impl Core {
             &job::encode(&query)?,
         ) {
             Ok(bytes) => bytes,
-            Err(_) => return self.job_snapshot(id),
+            Err(_) => return self.retry_later(id, UNREACHABLE),
         };
         let reply: job::JobStateReply = job::decode(&reply_bytes).map_err(|_| Error::Malformed)?;
         if reply.id != query.id {
@@ -1198,6 +1246,7 @@ impl Core {
             let mut jobs = lock(&self.shared.jobs);
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             let before = record.reported();
+            Self::retry_settled(record);
             // Do not overwrite a locally cancelled record with a stale
             // receiver state: cancellation wins.
             if record.state != JobState::Cancelled {
@@ -1416,14 +1465,16 @@ impl Core {
         use crate::transfer::{self, Received};
         let downloaded = match fetch {
             Ok(Received::Done { downloaded }) => downloaded,
+            // A sender stops serving only when its job stopped or its
+            // permission or folder went: it will not serve again by itself.
             Ok(Received::Denied) => return self.mark_interrupted(id, SENDER_STOPPED),
-            Ok(Received::Stalled) => return self.mark_interrupted(id, STALLED),
+            Ok(Received::Stalled) => return self.retry_later(id, STALLED),
             Err(Error::InvalidSetting(reason))
                 if reason == transfer::NO_SPACE || reason == transfer::PARTIAL_FAILED =>
             {
                 return self.mark_failed(id, reason);
             }
-            Err(_) => return self.mark_interrupted(id, UNREACHABLE),
+            Err(_) => return self.retry_later(id, UNREACHABLE),
             Ok(Received::Changed) => return self.mark_failed(id, SOURCE_CHANGED),
             Ok(Received::Mismatch) => return self.mark_failed(id, VERIFY_FAILED),
             Ok(Received::Cancelled) => {
@@ -1472,6 +1523,7 @@ impl Core {
             if downloaded < entry.size {
                 record.resumed_files += 1;
             }
+            Self::retry_settled(record);
             record.files_done += 1;
             record.done_bytes = record.done_bytes.saturating_add(entry.size);
             record.in_flight = 0;
@@ -1499,7 +1551,7 @@ impl Core {
         let generation = match self.generation_for(&peer, outgoing, owner) {
             Ok(generation) => generation,
             Err(Error::NoSession | Error::StaleSession) => {
-                return self.mark_interrupted(id, UNREACHABLE)
+                return self.retry_later(id, UNREACHABLE)
             }
             Err(error) => return Err(error),
         };
@@ -1525,7 +1577,7 @@ impl Core {
         let manifest = match (reply.status, reply.manifest) {
             (job::STATUS_OK, None) => return self.job_snapshot(id),
             (job::STATUS_OK, Some(manifest)) => manifest,
-            (job::STATUS_STALE, _) => return self.mark_interrupted(id, CONNECTION_ENDED),
+            (job::STATUS_STALE, _) => return self.retry_later(id, CONNECTION_ENDED),
             _ => return self.mark_failed(id, PREPARE_FAILED),
         };
         if manifest::validate(&manifest).is_err() {
@@ -2321,12 +2373,61 @@ impl Core {
         self.job_snapshot(id)
     }
 
+    /// Schedules another try of a step that failed for `reason`, a failure
+    /// that may clear on its own, keeping the job's state. The job shows
+    /// `reason` meanwhile. Once [`MAX_RETRIES`] tries or [`RETRY_WINDOW`]
+    /// pass without the job moving a byte, it is interrupted for `reason`.
+    fn retry_later(&self, id: u64, reason: &'static str) -> Result<JobSnapshot, Error> {
+        let give_up = {
+            let mut jobs = lock(&self.shared.jobs);
+            let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            if record.state.is_terminal() || record.state == JobState::Interrupted {
+                return Ok(record.snapshot());
+            }
+            let now = std::time::Instant::now();
+            let done = record.done();
+            let fresh = Retry {
+                attempts: 0,
+                first_at: now,
+                next_at: now,
+                done_at: done,
+            };
+            let retry = record.retry.get_or_insert_with(|| fresh.clone());
+            // Bytes moved since: this is a new run of failures.
+            if done > retry.done_at {
+                *retry = fresh;
+            }
+            if retry.attempts >= MAX_RETRIES || now.duration_since(retry.first_at) >= RETRY_WINDOW {
+                record.retry = None;
+                true
+            } else {
+                retry.attempts += 1;
+                retry.next_at = now + retry_pause(retry.attempts);
+                record.error = Some(reason.to_owned());
+                false
+            }
+        };
+        if give_up {
+            return self.mark_interrupted(id, reason);
+        }
+        save_jobs(&self.shared)?;
+        self.job_snapshot(id)
+    }
+
+    /// Ends a run of retries after a step that worked.
+    fn retry_settled(record: &mut JobRecord) {
+        if record.retry.take().is_some() {
+            record.error = None;
+        }
+    }
+
     /// Stops a job for `reason`, which it shows until it resumes. A
     /// cancelled job stays cancelled.
     fn mark_interrupted(&self, id: u64, reason: &'static str) -> Result<JobSnapshot, Error> {
         {
             let mut jobs = lock(&self.shared.jobs);
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            record.retry = None;
             if record.state != JobState::Cancelled {
                 record.state = JobState::Interrupted;
                 record.error = Some(reason.to_owned());
@@ -4012,6 +4113,7 @@ pub(super) async fn handle_upload_offer(
                 error: None,
                 in_flight: 0,
                 unsaved_landed: Vec::new(),
+                retry: None,
                 source_ids: Vec::new(),
             },
         );
@@ -4158,6 +4260,7 @@ pub(super) async fn handle_download_request(
                 error: None,
                 in_flight: 0,
                 unsaved_landed: Vec::new(),
+                retry: None,
                 source_ids: Vec::new(),
             },
         );
@@ -4525,6 +4628,7 @@ mod lifecycle_tests {
             error: None,
             in_flight: 0,
             unsaved_landed: Vec::new(),
+            retry: None,
             source_ids: Vec::new(),
         }
     }
@@ -4777,6 +4881,93 @@ mod arrival_tests {
         assert!(core.job_revision() > before);
         drop(progress);
         watcher.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+
+    fn core() -> Core {
+        Core::boot(
+            crate::core::CoreConfig {
+                listen: crate::core::Listen::Loopback,
+                ..crate::core::CoreConfig::default()
+            },
+            iroh::RelayMode::Disabled,
+        )
+        .unwrap()
+    }
+
+    /// Failures that may clear are retried with growing pauses while the
+    /// job keeps its state and shows why; bytes moved start the count
+    /// again, and after the last try the job is interrupted for the cause.
+    #[test]
+    fn retries_back_off_reset_on_progress_and_give_up() {
+        let core = core();
+        let mut record = JobRecord::test_receiver(7, 1000);
+        record.state = JobState::Transferring;
+        lock(&core.shared.jobs).insert(7, record);
+        let retry = |core: &Core| lock(&core.shared.jobs)[&7].retry.clone();
+
+        let first = core.retry_later(7, STALLED).unwrap();
+        assert_eq!(first.state, JobState::Transferring);
+        assert_eq!(first.error.as_deref(), Some(STALLED));
+        let pause = retry(&core).unwrap().next_at - std::time::Instant::now();
+        assert!(pause > Duration::from_millis(700) && pause <= Duration::from_millis(1200));
+        // Polls wait out the pause.
+        assert_eq!(core.job_poll(7).unwrap().state, JobState::Transferring);
+
+        core.retry_later(7, STALLED).unwrap();
+        assert_eq!(retry(&core).unwrap().attempts, 2);
+        // Bytes arrived since: a new run of failures.
+        lock(&core.shared.jobs).get_mut(&7).unwrap().in_flight = 100;
+        core.retry_later(7, UNREACHABLE).unwrap();
+        assert_eq!(retry(&core).unwrap().attempts, 1);
+
+        for _ in 1..MAX_RETRIES {
+            core.retry_later(7, UNREACHABLE).unwrap();
+        }
+        assert_eq!(retry(&core).unwrap().attempts, MAX_RETRIES);
+        let stopped = core.retry_later(7, UNREACHABLE).unwrap();
+        assert_eq!(stopped.state, JobState::Interrupted);
+        assert_eq!(stopped.error.as_deref(), Some(UNREACHABLE));
+        assert!(retry(&core).is_none());
+        core.shutdown();
+    }
+
+    /// A step that works ends the retries and the shown cause.
+    #[test]
+    fn a_working_step_settles_retries() {
+        let mut record = JobRecord::test_receiver(7, 1000);
+        record.error = Some(STALLED.to_owned());
+        record.retry = Some(Retry {
+            attempts: 3,
+            first_at: std::time::Instant::now(),
+            next_at: std::time::Instant::now(),
+            done_at: 0,
+        });
+        Core::retry_settled(&mut record);
+        assert!(record.retry.is_none());
+        assert!(record.error.is_none());
+    }
+
+    #[test]
+    fn pauses_grow_to_half_a_minute() {
+        for (attempt, seconds) in [
+            (1, 1.0),
+            (2, 2.0),
+            (3, 4.0),
+            (5, 16.0),
+            (6, 30.0),
+            (9, 30.0),
+        ] {
+            let pause = retry_pause(attempt).as_secs_f64();
+            assert!(
+                pause >= seconds * 0.8 && pause <= seconds * 1.2,
+                "{attempt}: {pause}"
+            );
+        }
     }
 }
 

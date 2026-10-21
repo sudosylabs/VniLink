@@ -1105,7 +1105,11 @@ fn settle_outgoing(shared: &Shared, info: &SessionInfo, phase: SessionPhase, pee
         lock(&controller.pointer).reset();
         *lock(&controller.auto) = AutoState::default();
     }
-    super::jobs::interrupt_controller_jobs(shared, peer_key);
+    // A session that is redialing leaves its jobs to retry until it is
+    // back, or until their retries run out; one that ended stops them.
+    if phase != SessionPhase::Reconnecting {
+        super::jobs::interrupt_controller_jobs(shared, peer_key);
+    }
     shared.events.publish(CoreEvent::SessionChanged {
         id: info.id,
         generation: info.generation,
