@@ -197,6 +197,51 @@ impl Incoming {
     }
 }
 
+/// What an honest sender sends for `bytes` cut into segments of
+/// `segment`: each segment, then its chaining value.
+#[cfg(any(test, feature = "fuzzing"))]
+pub(crate) fn stream_of(bytes: &[u8], segment: u64) -> Vec<u8> {
+    let size = bytes.len() as u64;
+    let mut stream = Vec::new();
+    let mut start = 0;
+    while start < size {
+        let end = start + super::hash::segment_len(start, size, segment);
+        let mut hasher = super::hash::SegmentHasher::at(start);
+        hasher.update(&bytes[start as usize..end as usize]);
+        stream.extend_from_slice(&bytes[start as usize..end as usize]);
+        stream.extend_from_slice(&hasher.finalize());
+        start = end;
+    }
+    stream
+}
+
+/// Feeds `chunks` of a sending stream to a fresh `size`-byte partial at
+/// `data` and `journal`, cut into segments of `segment`, as [`receive`]
+/// does with what arrives. Ok(true) when the file landed whole, Ok(false)
+/// when a segment failed its check.
+#[cfg(feature = "fuzzing")]
+pub(crate) fn land<'a>(
+    data: &std::path::Path,
+    journal: &std::path::Path,
+    size: u64,
+    segment: u64,
+    chunks: impl IntoIterator<Item = &'a [u8]>,
+) -> Result<bool, Error> {
+    let _ = std::fs::remove_file(data);
+    let _ = std::fs::remove_file(journal);
+    let mut partial = Partial::open_in(data, journal, size, segment)?;
+    let mut incoming = Incoming::default();
+    let (progress, _) = std::sync::mpsc::channel();
+    let counters = TransferCounters::default();
+    for chunk in chunks {
+        if !incoming.feed(&mut partial, chunk, &progress, &counters)? {
+            return Ok(false);
+        }
+    }
+    incoming.finish(&partial, size)?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -467,27 +512,13 @@ mod tests {
         use rand::rngs::StdRng;
         use rand::{RngExt, SeedableRng};
 
-        use super::super::super::hash::segment_len;
         use super::*;
 
         /// Small segments, so streams of several stay cheap.
         const SEGMENT_LEN: u64 = 64 * 1024;
 
-        /// What a sender sends for `bytes`: each segment, then its value.
         fn stream_of(bytes: &[u8]) -> Vec<u8> {
-            let size = bytes.len() as u64;
-            let mut stream = Vec::new();
-            let mut start = 0;
-            while start < size {
-                let end = start + segment_len(start, size, SEGMENT_LEN);
-                let segment = &bytes[start as usize..end as usize];
-                let mut hasher = SegmentHasher::at(start);
-                hasher.update(segment);
-                stream.extend_from_slice(segment);
-                stream.extend_from_slice(&hasher.finalize());
-                start = end;
-            }
-            stream
+            super::super::stream_of(bytes, SEGMENT_LEN)
         }
 
         /// Feeds `stream` to a fresh partial in random chunks. Ok(true) when

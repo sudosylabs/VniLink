@@ -60,10 +60,18 @@ export function resources(root: string, outputDirectory = join(root, 'out')): Re
 
 const generatedDirectories = new Set(['.git', '.build', 'target', 'node_modules', '__pycache__']);
 
+/**
+ * A cargo-fuzz crate is outside the workspace, so no relink input; its
+ * build and corpus are large, and a running fuzzer rewrites the corpus.
+ */
+export function relinkSourceFilter(source: string): boolean {
+	return basename(source) !== 'fuzz';
+}
+
 /** Only source inputs belong in relinking material; generated files are never build inputs. */
 export function releaseSourceFilter(source: string): boolean {
 	const name = basename(source);
-	return !generatedDirectories.has(name) && name !== 'AGENTS.md' && !/\.(o|obj|a|so|dylib|dll|node|exe|pyc)$/.test(name);
+	return relinkSourceFilter(source) && !generatedDirectories.has(name) && name !== 'AGENTS.md' && !/\.(o|obj|a|so|dylib|dll|node|exe|pyc)$/.test(name);
 }
 
 export interface ApplicationBuildOptions extends BundleOptions {
@@ -89,8 +97,8 @@ export async function buildApplication(root: string, signal: AbortSignal, option
 				await Promise.all(bundleOptions(root, { production, outputDirectory }).map(value => build(value)));
 			}),
 			define('resources:stage', async () => {
-				const filter = production ? { filter: releaseSourceFilter } : {};
-				await Promise.all(resources(root, outputDirectory).map(({ source, output }) => cp(source, output, { recursive: true, ...filter })));
+				const filter = production ? releaseSourceFilter : relinkSourceFilter;
+				await Promise.all(resources(root, outputDirectory).map(({ source, output }) => cp(source, output, { recursive: true, filter })));
 			}),
 			define('native:stage', async () => {
 				if (!compiled) {
