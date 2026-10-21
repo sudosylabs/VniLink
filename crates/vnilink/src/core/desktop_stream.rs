@@ -2330,7 +2330,9 @@ async fn host_send(
                 max
             };
             if let Some(max) = max.filter(|max| *max > PREFIX + crate::video::FRAG_HEADER + 64) {
-                let datagrams = crate::video::fragment(&body, seq, max - PREFIX)
+                let protection = lock(&desktop.viewer_loss)
+                    .protection(frame.keyframe, std::time::Instant::now());
+                let datagrams = crate::video::fragment(&body, seq, max - PREFIX, protection)
                     .into_iter()
                     .map(|fragment| {
                         let mut bytes = Vec::with_capacity(PREFIX + fragment.len());

@@ -1,24 +1,34 @@
 //! Loss-tolerant video fragments over QUIC datagrams.
 //!
-//! Each encoded body (codec header plus payload) is split into fragments that
-//! fit one datagram. Fragments may arrive out of order or not at all: the
-//! reassembler completes a frame only when every fragment arrived recently,
-//! and in order. A frame that never completes, or that would reach the
-//! decoder after a newer one, is lost: [`Reassembler::take_loss`] says so,
-//! and the caller asks for a keyframe, exactly as it does for queue drops.
+//! Each encoded body (codec header plus payload) is split into data shards
+//! that fit one datagram, followed by parity shards: Reed–Solomon over the
+//! data, so that any data-count of a frame's shards rebuild it. Fragments
+//! may arrive out of order or not at all. A frame that does not gather
+//! enough shards, or that would reach the decoder after a newer one, is
+//! lost: [`Reassembler::take_loss`] says so, and the caller asks for a
+//! keyframe, exactly as it does for queue drops. How much parity a frame
+//! carries is the sender's choice, from what its viewer reports losing.
 //! Wire bytes are screen content: do not log them.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
 
-/// Fragment header: frame sequence, fragment index, fragment count.
-/// Keyframe and timestamp travel inside the reassembled body, which the
-/// existing video-body codec validates.
-pub(crate) const FRAG_HEADER: usize = 8;
+/// Fragment header: frame sequence u32, shard index u16 (data shards first,
+/// then parity), data shard count u16, parity shard count u16. Keyframe and
+/// timestamp travel inside the reassembled body, which the existing
+/// video-body codec validates.
+pub(crate) const FRAG_HEADER: usize = 10;
 
-/// Largest fragment count accepted. A 1 MiB frame over ~240-byte payloads
-/// needs about four thousand fragments; anything larger is malformed.
+/// Each frame's shards begin with its body's length, so the padding that
+/// evens out parity-protected shards can be cut off again.
+const LEN_PREFIX: usize = 4;
+
+/// Largest data shard count accepted. A 1 MiB frame over ~240-byte payloads
+/// needs about four thousand shards; anything larger is malformed.
 const MAX_FRAGMENTS: u16 = 8192;
+
+/// Most parity a frame carries, as a share of its data shards.
+pub(crate) const MAX_PROTECTION: f64 = 0.5;
 
 /// An incomplete frame that has had no fragment for this long never
 /// completes: the decoder has already moved on and a keyframe request is in
@@ -34,40 +44,122 @@ const MAX_PARTIAL_FRAMES: usize = 8;
 /// instead of reopening a frame the decoder already consumed.
 const COMPLETED_MEMORY: usize = 16;
 
-/// Split `body` into datagram payloads of at most `max_datagram` bytes.
-/// `seq` identifies the frame; the caller increments it per frame.
-pub(crate) fn fragment(body: &[u8], seq: u32, max_datagram: usize) -> Vec<Vec<u8>> {
-    let per = max_datagram.saturating_sub(FRAG_HEADER).max(64);
-    let count = body
-        .len()
-        .div_ceil(per)
-        .max(1)
-        .min(usize::from(MAX_FRAGMENTS));
-    let mut out = Vec::with_capacity(count);
-    for (index, chunk) in body.chunks(per).enumerate() {
-        let mut frag = Vec::with_capacity(FRAG_HEADER + chunk.len());
-        frag.extend_from_slice(&seq.to_be_bytes());
-        frag.extend_from_slice(&(index as u16).to_be_bytes());
-        frag.extend_from_slice(&(count as u16).to_be_bytes());
-        frag.extend_from_slice(chunk);
-        out.push(frag);
+/// Parity shards for `data` data shards at `protection`, a share of the
+/// data: none at zero, else at least one and at most [`MAX_PROTECTION`].
+pub(crate) fn parity_count(data: usize, protection: f64) -> usize {
+    if !(protection > 0.0) {
+        return 0;
     }
-    out
+    ((data as f64) * protection.min(MAX_PROTECTION))
+        .ceil()
+        .max(1.0) as usize
+}
+
+/// Split `body` into datagram payloads of at most `max_datagram` bytes:
+/// its data shards, then [`parity_count`] parity shards at `protection`.
+/// `seq` identifies the frame; the caller increments it per frame.
+pub(crate) fn fragment(
+    body: &[u8],
+    seq: u32,
+    max_datagram: usize,
+    protection: f64,
+) -> Vec<Vec<u8>> {
+    // Reed–Solomon shards are even in length.
+    let per = max_datagram.saturating_sub(FRAG_HEADER).max(64) & !1;
+    let mut framed = Vec::with_capacity(LEN_PREFIX + body.len());
+    framed.extend_from_slice(&u32::try_from(body.len()).unwrap_or(u32::MAX).to_be_bytes());
+    framed.extend_from_slice(body);
+    let mut shards: Vec<Vec<u8>> = framed
+        .chunks(per)
+        .take(usize::from(MAX_FRAGMENTS))
+        .map(<[u8]>::to_vec)
+        .collect();
+    let data = shards.len();
+    let mut parity = parity_count(data, protection);
+    if parity > 0 {
+        // Parity covers equal shards: the last data shard is padded.
+        if let Some(last) = shards.last_mut() {
+            last.resize(per, 0);
+        }
+        match reed_solomon_simd::encode(data, parity, &shards) {
+            Ok(recovery) => shards.extend(recovery),
+            Err(_) => {
+                parity = 0;
+            }
+        }
+    }
+    shards
+        .into_iter()
+        .enumerate()
+        .map(|(index, shard)| {
+            let mut frag = Vec::with_capacity(FRAG_HEADER + shard.len());
+            frag.extend_from_slice(&seq.to_be_bytes());
+            frag.extend_from_slice(&(index as u16).to_be_bytes());
+            frag.extend_from_slice(&(data as u16).to_be_bytes());
+            frag.extend_from_slice(&(parity as u16).to_be_bytes());
+            frag.extend_from_slice(&shard);
+            frag
+        })
+        .collect()
 }
 
 struct Partial {
-    count: u16,
-    parts: Vec<Option<Vec<u8>>>,
+    data: u16,
+    parity: u16,
+    /// Data shards, then parity shards, as they arrive.
+    shards: Vec<Option<Vec<u8>>>,
     received: usize,
-    bytes: usize,
+    data_received: usize,
     /// When its latest new fragment arrived.
     heard: Instant,
 }
 
 impl Partial {
-    /// Fragments of this frame that never arrived.
+    /// Shards of this frame that never arrived.
     fn missing(&self) -> u64 {
-        (usize::from(self.count) - self.received) as u64
+        (usize::from(self.data) + usize::from(self.parity) - self.received) as u64
+    }
+
+    fn whole(&self) -> bool {
+        self.received >= usize::from(self.data)
+    }
+
+    /// The frame's body from its shards, rebuilding missing data shards
+    /// from parity, with how many it rebuilt. None when the shards do not
+    /// decode or do not hold a body.
+    fn assemble(self) -> Option<(Vec<u8>, u64)> {
+        let data = usize::from(self.data);
+        let mut repaired = 0;
+        let mut shards = self.shards;
+        if self.data_received < data {
+            let parity = usize::from(self.parity);
+            let restored = reed_solomon_simd::decode(
+                data,
+                parity,
+                shards[..data]
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, shard)| Some((index, shard.as_ref()?))),
+                shards[data..]
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, shard)| Some((index, shard.as_ref()?))),
+            )
+            .ok()?;
+            for (index, shard) in restored {
+                shards[index] = Some(shard);
+                repaired += 1;
+            }
+        }
+        let mut framed = Vec::new();
+        for shard in shards.into_iter().take(data) {
+            framed.extend_from_slice(&shard?);
+        }
+        let len = u32::from_be_bytes(framed.get(..LEN_PREFIX)?.try_into().ok()?) as usize;
+        let body = framed
+            .get(LEN_PREFIX..LEN_PREFIX.checked_add(len)?)?
+            .to_vec();
+        Some((body, repaired))
     }
 }
 
@@ -162,8 +254,13 @@ impl Reassembler {
         let index = usize::from(u16::from_be_bytes(
             datagram[4..6].try_into().expect("2 bytes"),
         ));
-        let count = u16::from_be_bytes(datagram[6..8].try_into().expect("2 bytes"));
-        if count == 0 || count > MAX_FRAGMENTS || index >= usize::from(count) {
+        let data = u16::from_be_bytes(datagram[6..8].try_into().expect("2 bytes"));
+        let parity = u16::from_be_bytes(datagram[8..10].try_into().expect("2 bytes"));
+        if data == 0
+            || data > MAX_FRAGMENTS
+            || usize::from(parity) > parity_count(usize::from(data), MAX_PROTECTION)
+            || index >= usize::from(data) + usize::from(parity)
+        {
             return None;
         }
         if self.completed.contains(&seq) {
@@ -183,23 +280,26 @@ impl Reassembler {
             }
         }
         let partial = self.partial.entry(seq).or_insert_with(|| Partial {
-            count,
-            parts: vec![None; usize::from(count)],
+            data,
+            parity,
+            shards: vec![None; usize::from(data) + usize::from(parity)],
             received: 0,
-            bytes: 0,
+            data_received: 0,
             heard: Instant::now(),
         });
-        if partial.count != count {
+        if (partial.data, partial.parity) != (data, parity) {
             return None;
         }
-        if partial.parts[index].is_none() {
-            partial.bytes += payload.len();
-            partial.parts[index] = Some(payload.to_vec());
+        if partial.shards[index].is_none() {
+            partial.shards[index] = Some(payload.to_vec());
             partial.received += 1;
+            if index < usize::from(data) {
+                partial.data_received += 1;
+            }
             partial.heard = Instant::now();
             self.fragments.received += 1;
         }
-        if partial.received < usize::from(partial.count) {
+        if !partial.whole() {
             return None;
         }
         let partial = self.partial.remove(&seq).expect("present");
@@ -240,10 +340,15 @@ impl Reassembler {
             }
         }
         self.newest = Some(seq);
-        let mut body = Vec::with_capacity(partial.bytes);
-        for part in partial.parts {
-            body.extend_from_slice(&part.expect("counted"));
-        }
+        // Parity still on its way to a frame already whole is not missed,
+        // and a data shard rebuilt from parity was.
+        let Some((body, repaired)) = partial.assemble() else {
+            // Shards that do not decode to a body: lost like an unfinished frame.
+            self.lost.expired += 1;
+            return None;
+        };
+        self.fragments.missing += repaired;
+        self.fragments.repaired += repaired;
         Some(body)
     }
 

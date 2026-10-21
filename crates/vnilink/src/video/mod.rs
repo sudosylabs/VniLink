@@ -14,7 +14,9 @@ mod recovery;
 mod report;
 
 pub(crate) use counters::{VideoCounters, VideoCounts};
-pub(crate) use datagram::{fragment, FragmentCounts, Losses, Reassembler, FRAG_HEADER};
+pub(crate) use datagram::{
+    fragment, parity_count, FragmentCounts, Losses, Reassembler, FRAG_HEADER, MAX_PROTECTION,
+};
 pub(crate) use frame::micros_since;
 pub(crate) use frame::{check_video_len, decode_video_body, encode_video_body};
 pub use frame::{EncodedFrame, FrameTiming};

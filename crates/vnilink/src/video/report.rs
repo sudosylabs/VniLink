@@ -103,6 +103,19 @@ impl ReportTally {
 /// Weight of the newest report in the host's smoothed rates.
 const NEWEST: f64 = 0.3;
 
+/// Reports older than this no longer describe the link.
+const REPORT_FRESH: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Parity per unit of reported fragment loss: enough to rebuild a frame
+/// through most of the loss bursts a rate that size makes likely.
+const PARITY_PER_LOSS: f64 = 2.5;
+
+/// Fragment loss below this is a clean link: no parity but a keyframe's.
+const CLEAN_LOSS: f64 = 0.001;
+
+/// Parity on a keyframe before any report: losing one starts a spiral.
+const KEYFRAME_PARITY: f64 = 0.1;
+
 /// The host's view of what its viewer loses, smoothed over reports.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ViewerLoss {
@@ -126,6 +139,27 @@ impl ViewerLoss {
             self.frame_loss = self.blend(self.frame_loss, lost);
         }
         self.heard = Some(at);
+    }
+
+    /// Parity for a frame, as a share of its data shards, from what the
+    /// viewer reports losing. A keyframe gets double, at least
+    /// [`KEYFRAME_PARITY`]: a lost one costs the most to send again.
+    pub(crate) fn protection(&self, keyframe: bool, now: Instant) -> f64 {
+        let fresh = self
+            .heard
+            .is_some_and(|at| now.saturating_duration_since(at) <= REPORT_FRESH);
+        let loss = if fresh { self.fragment_loss } else { 0.0 };
+        let share = if loss < CLEAN_LOSS {
+            0.0
+        } else {
+            loss * PARITY_PER_LOSS
+        };
+        let share = if keyframe {
+            (share * 2.0).max(KEYFRAME_PARITY)
+        } else {
+            share
+        };
+        share.min(super::MAX_PROTECTION)
     }
 
     fn blend(&self, smoothed: f64, newest: f64) -> f64 {
@@ -180,6 +214,30 @@ mod tests {
             (30, 3, 1)
         );
         assert!(tally.take().is_empty());
+    }
+
+    #[test]
+    fn protection_follows_reported_loss() {
+        let now = Instant::now();
+        let mut loss = ViewerLoss::default();
+        // Before any report: only keyframes, a little.
+        assert_eq!(loss.protection(false, now), 0.0);
+        assert!((loss.protection(true, now) - KEYFRAME_PARITY).abs() < 1e-9);
+        loss.observe(
+            &VideoReport {
+                fragments_received: 98,
+                fragments_missing: 2,
+                ..VideoReport::default()
+            },
+            now,
+        );
+        assert!((loss.protection(false, now) - 0.05).abs() < 1e-9);
+        assert!((loss.protection(true, now) - 0.1).abs() < 1e-9);
+        // Heavy loss is capped; a stale report counts as no loss.
+        loss.fragment_loss = 0.4;
+        assert_eq!(loss.protection(true, now), crate::video::MAX_PROTECTION);
+        let later = now + REPORT_FRESH + std::time::Duration::from_secs(1);
+        assert_eq!(loss.protection(false, later), 0.0);
     }
 
     #[test]

@@ -86,6 +86,7 @@ fn datagrams(index: u64, keyframe: bool) -> Vec<Vec<u8>> {
         &encode_video_body(&frame(index, keyframe)),
         index as u32,
         DATAGRAM,
+        0.0,
     )
 }
 
