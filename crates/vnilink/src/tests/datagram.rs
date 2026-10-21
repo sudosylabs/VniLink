@@ -175,3 +175,42 @@ fn interleaved_frames_each_complete() {
     assert_eq!(done.len(), 2);
     assert!(done.contains(&first) && done.contains(&second));
 }
+
+/// A frame whose fragments keep coming completes however long it takes to
+/// arrive, as a keyframe does on a slow link.
+#[test]
+fn a_frame_still_arriving_outlives_the_silence() {
+    let silence = std::time::Duration::from_millis(40);
+    let keyframe = body(true, 1, &[3; 6000]);
+    let frags = fragment(&keyframe, 50, 900);
+    let mut reasm = Reassembler::with_silence(silence);
+    let mut done = None;
+    for frag in &frags {
+        // Fragments a little closer together than the silence, adding up
+        // to several times it.
+        std::thread::sleep(silence / 2);
+        done = done.or(reasm.push(frag));
+    }
+    assert_eq!(done, Some(keyframe));
+    assert!(!reasm.take_loss().any());
+}
+
+/// A frame whose fragments stop coming is lost once it has been silent for
+/// the span, and a fragment arriving after that does not revive it.
+#[test]
+fn a_silent_frame_expires() {
+    let silence = std::time::Duration::from_millis(40);
+    let frame = body(false, 2, &[4; 3000]);
+    let frags = fragment(&frame, 60, 900);
+    let mut reasm = Reassembler::with_silence(silence);
+    assert!(reasm.push(&frags[0]).is_none());
+    std::thread::sleep(silence * 2);
+    assert!(reasm.push(&frags[1]).is_none());
+    assert_eq!(
+        reasm.take_loss(),
+        Losses {
+            expired: 1,
+            ..Losses::default()
+        }
+    );
+}

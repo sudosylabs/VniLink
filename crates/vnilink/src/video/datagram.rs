@@ -20,9 +20,11 @@ pub(crate) const FRAG_HEADER: usize = 8;
 /// needs about four thousand fragments; anything larger is malformed.
 const MAX_FRAGMENTS: u16 = 8192;
 
-/// Incomplete frames older than this never complete: the decoder has already
-/// moved on and a keyframe request is in flight.
-const FRAG_TTL: Duration = Duration::from_millis(500);
+/// An incomplete frame that has had no fragment for this long never
+/// completes: the decoder has already moved on and a keyframe request is in
+/// flight. Silence, not age, decides: on a slow link a keyframe can take
+/// longer than this to arrive while its fragments keep coming.
+const FRAG_SILENCE: Duration = Duration::from_millis(500);
 
 /// At most this many incomplete frames are tracked; older sequences are
 /// evicted first. Bounds memory to a few megabytes even under attack.
@@ -58,13 +60,14 @@ struct Partial {
     parts: Vec<Option<Vec<u8>>>,
     received: usize,
     bytes: usize,
-    since: Instant,
+    /// When its latest new fragment arrived.
+    heard: Instant,
 }
 
 /// Frames lost since the last ask, by how each was lost.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Losses {
-    /// Unfinished when its fragments grew too old.
+    /// Unfinished when its fragments stopped coming.
     pub(crate) expired: u64,
     /// Unfinished when newer frames needed its place.
     pub(crate) evicted: u64,
@@ -91,6 +94,8 @@ pub(crate) struct Reassembler {
     /// Recent sequences already counted lost unfinished, so a later gap
     /// over them does not count them twice.
     gone: VecDeque<u32>,
+    /// How long an incomplete frame may go without a fragment.
+    silence: Duration,
 }
 
 impl Reassembler {
@@ -101,6 +106,17 @@ impl Reassembler {
             newest: None,
             lost: Losses::default(),
             gone: VecDeque::new(),
+            silence: FRAG_SILENCE,
+        }
+    }
+
+    /// A reassembler whose incomplete frames expire after `silence`, for
+    /// tests that cannot wait the real span.
+    #[cfg(test)]
+    pub(crate) fn with_silence(silence: Duration) -> Self {
+        Self {
+            silence,
+            ..Self::new()
         }
     }
 
@@ -145,7 +161,7 @@ impl Reassembler {
             parts: vec![None; usize::from(count)],
             received: 0,
             bytes: 0,
-            since: Instant::now(),
+            heard: Instant::now(),
         });
         if partial.count != count {
             return None;
@@ -154,6 +170,7 @@ impl Reassembler {
             partial.bytes += payload.len();
             partial.parts[index] = Some(payload.to_vec());
             partial.received += 1;
+            partial.heard = Instant::now();
         }
         if partial.received < usize::from(partial.count) {
             return None;
@@ -201,7 +218,7 @@ impl Reassembler {
         let expired: Vec<u32> = self
             .partial
             .iter()
-            .filter(|(_, partial)| now.duration_since(partial.since) >= FRAG_TTL)
+            .filter(|(_, partial)| now.duration_since(partial.heard) >= self.silence)
             .map(|(&seq, _)| seq)
             .collect();
         for seq in expired {
