@@ -174,17 +174,13 @@ impl ViewerLoss {
     }
 }
 
-/// How long after the send gate drops a frame the link still counts as
-/// congested.
-const DROP_CONGESTS: Duration = Duration::from_secs(1);
-
-/// The host's view of its own link: whether it is queueing. Its round trip
-/// has grown well past the least seen on the path, or the send gate has
-/// just dropped a frame because the link was behind.
+/// The host's view of its own link: whether it is queueing, its round trip
+/// grown well past the least seen on the path. The send gate dropping
+/// frames is not this: on a lossy link it follows keyframe bursts the
+/// congestion window cannot carry, and loss there is still random.
 #[derive(Debug, Default)]
 pub(crate) struct Congestion {
     floor: Option<Duration>,
-    dropped_at: Option<Instant>,
 }
 
 impl Congestion {
@@ -195,20 +191,11 @@ impl Congestion {
         }
     }
 
-    pub(crate) fn dropped(&mut self, at: Instant) {
-        self.dropped_at = Some(at);
-    }
-
     /// Whether the link is queueing, given its round trip now: at least
     /// twice and 30 ms over the least seen.
-    pub(crate) fn congested(&self, rtt: Duration, now: Instant) -> bool {
-        let queueing = self
-            .floor
-            .is_some_and(|floor| rtt >= floor * 2 && rtt >= floor + Duration::from_millis(30));
-        queueing
-            || self
-                .dropped_at
-                .is_some_and(|at| now.saturating_duration_since(at) < DROP_CONGESTS)
+    pub(crate) fn congested(&self, rtt: Duration) -> bool {
+        self.floor
+            .is_some_and(|floor| rtt >= floor * 2 && rtt >= floor + Duration::from_millis(30))
     }
 }
 
@@ -302,23 +289,19 @@ mod tests {
     }
 
     #[test]
-    fn a_link_is_congested_while_its_round_trip_grows_or_after_a_drop() {
-        let now = Instant::now();
+    fn a_link_is_congested_while_its_round_trip_grows() {
         let ms = Duration::from_millis;
         let mut link = Congestion::default();
-        assert!(!link.congested(ms(500), now), "nothing to compare with");
+        assert!(!link.congested(ms(500)), "nothing to compare with");
         link.rtt(ms(20));
         link.rtt(ms(0));
-        assert!(!link.congested(ms(35), now));
-        assert!(link.congested(ms(50), now));
+        assert!(!link.congested(ms(35)));
+        assert!(link.congested(ms(50)));
         // A long path's jitter is not queueing.
         let mut far = Congestion::default();
         far.rtt(ms(80));
-        assert!(!far.congested(ms(120), now));
-        assert!(far.congested(ms(160), now));
-        far.dropped(now);
-        assert!(far.congested(ms(80), now + ms(500)));
-        assert!(!far.congested(ms(80), now + DROP_CONGESTS));
+        assert!(!far.congested(ms(120)));
+        assert!(far.congested(ms(160)));
     }
 
     #[test]

@@ -2361,7 +2361,7 @@ async fn host_send(
                 let now = std::time::Instant::now();
                 let protection = lock(&desktop.viewer_loss).protection(
                     frame.keyframe,
-                    congestion.congested(rtt, now),
+                    congestion.congested(rtt),
                     now,
                 );
                 let datagrams = crate::video::fragment(&body, seq, max - PREFIX, protection)
@@ -2384,7 +2384,6 @@ async fn host_send(
                     // frames. Drop this one whole and start again from a
                     // keyframe once the backlog drains.
                     desktop.counters.send_dropped();
-                    congestion.dropped(now);
                     gate.dropped(frame.keyframe, wire);
                     continue;
                 }
