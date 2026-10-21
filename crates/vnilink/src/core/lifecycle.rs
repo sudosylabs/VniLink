@@ -325,6 +325,7 @@ impl Core {
             files_serving: Mutex::new(std::collections::HashMap::new()),
             files_fetching: Mutex::new(std::collections::HashMap::new()),
             files_gate: Default::default(),
+            transfer_counters: Default::default(),
             folder_watches: Mutex::new(std::collections::HashMap::new()),
             watch_next: std::sync::atomic::AtomicU64::new(1),
             jobs: Arc::new(Mutex::new(std::collections::HashMap::new())),

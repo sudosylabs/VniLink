@@ -2405,6 +2405,7 @@ impl Core {
             } else {
                 retry.attempts += 1;
                 retry.next_at = now + retry_pause(retry.attempts);
+                self.shared.transfer_counters.retried();
                 record.error = Some(reason.to_owned());
                 false
             }

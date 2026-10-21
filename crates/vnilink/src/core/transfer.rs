@@ -181,6 +181,7 @@ async fn serve_stream(
         return;
     };
     let Some(_slot) = shared.files_gate.admit(&peer, SLOT_WITHIN).await else {
+        shared.transfer_counters.refused(transfer::STATUS_BUSY);
         transfer::refuse(&mut send, transfer::STATUS_BUSY).await;
         return;
     };
@@ -197,13 +198,20 @@ async fn serve_stream(
         Ok(Ok(source)) => {
             // Cancelling or revoking stops a file mid-way, not only the
             // next one.
-            transfer::send(&mut send, source, request.offset, || {
+            let counters = &shared.transfer_counters;
+            transfer::send(&mut send, source, request.offset, counters, || {
                 super::jobs::still_serving(&shared, &peer, request.job)
             })
             .await;
         }
-        Ok(Err(status)) => transfer::refuse(&mut send, status).await,
-        Err(_) => transfer::refuse(&mut send, transfer::STATUS_DENIED).await,
+        Ok(Err(status)) => {
+            shared.transfer_counters.refused(status);
+            transfer::refuse(&mut send, status).await;
+        }
+        Err(_) => {
+            shared.transfer_counters.refused(transfer::STATUS_DENIED);
+            transfer::refuse(&mut send, transfer::STATUS_DENIED).await;
+        }
     }
 }
 
@@ -256,7 +264,16 @@ impl Core {
             let received = self.runtime.block_on(async {
                 match ask_kept(&self.shared, peer, addr.clone(), request).await? {
                     Answer::Sending(recv) => {
-                        transfer::receive(recv, &mut partial, size, &progress, &mut cancel).await
+                        let counters = &self.shared.transfer_counters;
+                        transfer::receive(
+                            recv,
+                            &mut partial,
+                            size,
+                            &progress,
+                            counters,
+                            &mut cancel,
+                        )
+                        .await
                     }
                     Answer::Changed => Ok(Received::Changed),
                     Answer::Denied => Ok(Received::Denied),
@@ -266,11 +283,15 @@ impl Core {
             match received {
                 Ok(Received::Mismatch) if mismatches == 0 => mismatches += 1,
                 Ok(Received::Done { .. }) => {
+                    self.shared.transfer_counters.fetched(from > 0);
                     return Ok(Received::Done {
                         downloaded: size - from,
-                    })
+                    });
                 }
                 other => {
+                    if matches!(other, Ok(Received::Stalled)) {
+                        self.shared.transfer_counters.stalled();
+                    }
                     // Unchecked bytes never outlive the attempt.
                     partial.drop_unchecked()?;
                     return other;

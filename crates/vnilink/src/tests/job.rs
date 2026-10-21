@@ -4531,3 +4531,45 @@ fn a_late_sender_is_retried_without_a_resume() {
         1
     );
 }
+
+/// Diagnostics count what a finished transfer moved on each side, and a
+/// finished job no longer counts as active.
+#[test]
+fn diagnostics_count_a_finished_transfer() {
+    let (host, controller, host_scratch, controller_scratch) = setup("counted");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
+    let bytes = payload(200 * 1024, 1901);
+    std::fs::write(controller_scratch.join("root/counted.bin"), &bytes).unwrap();
+    controller.connect(&host.endpoint_id()).unwrap();
+    let job = controller
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("counted.bin"),
+            host_files.root,
+            &host_files.path("arrived"),
+        )
+        .unwrap();
+    let rx = receiver_id(&host, job);
+    let (sender, receiver) = drive_to_end(&controller, job, &host, rx);
+    assert_eq!(
+        (sender.state, receiver.state),
+        (JobState::Complete, JobState::Complete)
+    );
+
+    let received = host.diagnostic_snapshot().unwrap();
+    assert_eq!(received.transfers.files_fetched, 1);
+    assert_eq!(received.transfers.bytes_received, bytes.len() as u64);
+    assert!(received.transfers.segments_checked >= 1);
+    assert_eq!(received.transfers.segments_mismatched, 0);
+    assert_eq!(received.resources.active_jobs, 0);
+    let sent = controller.diagnostic_snapshot().unwrap();
+    assert_eq!(sent.transfers.files_served, 1);
+    assert_eq!(sent.transfers.bytes_sent, bytes.len() as u64);
+    assert_eq!(sent.resources.active_jobs, 0);
+}

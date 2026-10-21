@@ -132,7 +132,7 @@ pub use core::{DesktopControlState, DesktopInfo};
 pub use diagnostics::{
     build_snapshot, export_json, file_name_only, fingerprint, monotonic_ms, ConnectionSummary,
     DiagnosticSnapshot, QueueDepths, ResourceCounts, ServiceSummary, SnapshotInputs,
-    MAX_EXPORT_BYTES, MAX_SNAPSHOT_LISTED, SNAPSHOT_VERSION,
+    TransferSummary, MAX_EXPORT_BYTES, MAX_SNAPSHOT_LISTED, SNAPSHOT_VERSION,
 };
 pub use error::Error;
 pub use events::{CoreEvent, EventSubscription};

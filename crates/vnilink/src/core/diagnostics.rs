@@ -124,7 +124,10 @@ impl Core {
             terminal_sessions: lock(&self.shared.terminal_sessions).len() as u32,
             retained_operations: state.system_operations.len() as u32,
             privacy_held: state.privacy.is_some(),
-            active_jobs: lock(&self.shared.jobs).len() as u32,
+            active_jobs: lock(&self.shared.jobs)
+                .values()
+                .filter(|record| super::jobs::ACTIVE_STATES.contains(&record.state))
+                .count() as u32,
             paired_devices: state.trust.devices().count() as u32,
             control_connection: state.input_holder(),
         };
@@ -164,6 +167,7 @@ impl Core {
             pipelines,
             resources,
             queues,
+            transfers: self.shared.transfer_counters.summary(),
         });
         Ok(snapshot)
     }

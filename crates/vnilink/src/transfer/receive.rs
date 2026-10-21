@@ -10,7 +10,7 @@ use super::wire::{
     FileRequest, RESET_CHANGED, RESET_STALLED, STATUS_BUSY, STATUS_CHANGED, STATUS_SENDING,
     VALUE_LEN,
 };
-use super::{Partial, CHUNK, STALL_WITHIN};
+use super::{Partial, TransferCounters, CHUNK, STALL_WITHIN};
 
 /// How long the sender may take to answer a request. Short in tests,
 /// which hold a sender back.
@@ -99,6 +99,7 @@ pub(crate) async fn receive(
     partial: &mut Partial,
     size: u64,
     progress: &std::sync::mpsc::Sender<u64>,
+    counters: &TransferCounters,
     cancel: &mut tokio::sync::watch::Receiver<bool>,
 ) -> Result<Received, Error> {
     let from = partial.checked();
@@ -127,7 +128,7 @@ pub(crate) async fn receive(
             }
             Err(error) => return Err(Error::network(error)),
         };
-        if !incoming.feed(partial, &bytes, progress)? {
+        if !incoming.feed(partial, &bytes, progress, counters)? {
             return Ok(Received::Mismatch);
         }
     }
@@ -153,6 +154,7 @@ impl Incoming {
         partial: &mut Partial,
         mut bytes: &[u8],
         progress: &std::sync::mpsc::Sender<u64>,
+        counters: &TransferCounters,
     ) -> Result<bool, Error> {
         while !bytes.is_empty() {
             if let Some(pending) = self.value.as_mut() {
@@ -160,7 +162,9 @@ impl Incoming {
                 pending.extend_from_slice(&bytes[..take]);
                 bytes = &bytes[take..];
                 if pending.len() == VALUE_LEN {
-                    if !partial.seal(pending)? {
+                    let matched = partial.seal(pending)?;
+                    counters.checked(matched);
+                    if !matched {
                         return Ok(false);
                     }
                     self.value = None;
@@ -174,6 +178,7 @@ impl Incoming {
             }
             let take = bytes.len().min(left as usize);
             partial.append(&bytes[..take])?;
+            counters.received(take);
             bytes = &bytes[take..];
             let _ = progress.send(partial.written());
             if partial.segment_left() == 0 {
@@ -294,7 +299,8 @@ mod tests {
         };
         let (progress, _) = std::sync::mpsc::channel();
         let (_stop, mut cancel) = tokio::sync::watch::channel(false);
-        let received = receive(recv, &mut partial, size, &progress, &mut cancel).await;
+        let counters = TransferCounters::default();
+        let received = receive(recv, &mut partial, size, &progress, &counters, &mut cancel).await;
         (received, partial)
     }
 
@@ -411,7 +417,8 @@ mod tests {
                     size,
                     mtime_ms: 0,
                 };
-                super::super::send(&mut send, source, request.offset, || true).await;
+                let counters = TransferCounters::default();
+                super::super::send(&mut send, source, request.offset, &counters, || true).await;
             }
         });
         let unaligned = FileRequest {
@@ -434,8 +441,12 @@ mod tests {
         let mut partial = scratch.partial(size);
         let (progress, arrived) = std::sync::mpsc::channel();
         let (_stop, mut cancel) = tokio::sync::watch::channel(false);
-        let received = receive(recv, &mut partial, size, &progress, &mut cancel).await;
+        let counters = TransferCounters::default();
+        let received = receive(recv, &mut partial, size, &progress, &counters, &mut cancel).await;
         assert_eq!(received.unwrap(), Received::Done { downloaded: size });
+        let summary = counters.summary();
+        assert_eq!(summary.bytes_received, size);
+        assert!(summary.segments_checked >= 1);
         assert_eq!(scratch.data(), bytes);
         assert_eq!(arrived.try_iter().last(), Some(size));
         let _ = STATUS_DENIED;
@@ -481,10 +492,11 @@ mod tests {
             let mut partial = scratch.partial(size);
             let mut incoming = Incoming::default();
             let (progress, _) = std::sync::mpsc::channel();
+            let counters = TransferCounters::default();
             let mut rest = stream;
             while !rest.is_empty() {
                 let take = rng.random_range(1..=rest.len().min(3 * VALUE_LEN + 7));
-                if !incoming.feed(&mut partial, &rest[..take], &progress)? {
+                if !incoming.feed(&mut partial, &rest[..take], &progress, &counters)? {
                     return Ok(false);
                 }
                 rest = &rest[take..];

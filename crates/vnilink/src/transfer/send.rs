@@ -12,7 +12,7 @@ use super::wire::{
     FileRequest, REQUEST_LEN, RESET_CHANGED, RESET_STALLED, STATUS_DENIED, STATUS_SENDING,
     VALUE_LEN,
 };
-use super::{CHUNK, STALL_WITHIN};
+use super::{TransferCounters, CHUNK, STALL_WITHIN};
 
 /// Chunks read ahead of the network.
 const READ_AHEAD: usize = 8;
@@ -72,6 +72,7 @@ pub(crate) async fn send(
     send: &mut SendStream,
     source: Source,
     offset: u64,
+    counters: &TransferCounters,
     mut may_send: impl FnMut() -> bool,
 ) {
     if offset > source.size || offset % SEGMENT_LEN != 0 {
@@ -87,10 +88,11 @@ pub(crate) async fn send(
     while let Some(piece) = arriving.recv().await {
         match piece {
             Piece::Bytes(bytes) => {
+                let len = bytes.len();
                 // A receiver that stops reading must not pin the reader
                 // and its buffers.
                 match tokio::time::timeout(STALL_WITHIN, send.write_chunk(bytes)).await {
-                    Ok(Ok(())) => {}
+                    Ok(Ok(())) => counters.sent(len),
                     Ok(Err(_)) => break,
                     Err(_) => {
                         let _ = send.reset(VarInt::from_u32(RESET_STALLED));
@@ -109,7 +111,9 @@ pub(crate) async fn send(
                 }
             }
             Piece::End => {
-                let _ = send.finish();
+                if send.finish().is_ok() {
+                    counters.served();
+                }
                 break;
             }
             Piece::Changed => {

@@ -70,6 +70,7 @@ fn inputs_pipelines(connections: usize, services: usize, pipelines: usize) -> Sn
             ..Default::default()
         },
         queues: QueueDepths::default(),
+        transfers: Default::default(),
     }
 }
 
@@ -133,6 +134,7 @@ fn export_round_trips_small_snapshots_as_expected_keys() {
             "queues",
             "resources",
             "services",
+            "transfers",
             "truncated",
             "version"
         ]
@@ -153,6 +155,7 @@ fn export_sheds_lists_to_fit_the_cap_and_says_so() {
         pipelines: (0..2000u64).map(pipeline).collect(),
         resources: ResourceCounts::default(),
         queues: QueueDepths::default(),
+        transfers: Default::default(),
         truncated: false,
     };
     // Sanity: the untrimmed form really exceeds the cap.

@@ -10,7 +10,7 @@
 use serde::Serialize;
 
 /// Snapshot format version. Bump when fields change meaning.
-pub const SNAPSHOT_VERSION: u32 = 2;
+pub const SNAPSHOT_VERSION: u32 = 3;
 /// Hard cap on exported JSON bytes.
 pub const MAX_EXPORT_BYTES: usize = 64 * 1024;
 /// Per-list cap before `truncated` is set.
@@ -144,6 +144,25 @@ pub struct QueueDepths {
     pub files_serving: u32,
 }
 
+/// File transfer since this core started: bytes and files each way,
+/// segment checks, and how often transfers resumed, retried, stalled or
+/// were refused, by refusal.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct TransferSummary {
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+    pub files_served: u64,
+    pub files_fetched: u64,
+    pub files_resumed: u64,
+    pub segments_checked: u64,
+    pub segments_mismatched: u64,
+    pub retries: u64,
+    pub stalls: u64,
+    pub refused_denied: u64,
+    pub refused_changed: u64,
+    pub refused_busy: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct DiagnosticSnapshot {
     pub version: u32,
@@ -155,6 +174,7 @@ pub struct DiagnosticSnapshot {
     pub pipelines: Vec<PipelineSummary>,
     pub resources: ResourceCounts,
     pub queues: QueueDepths,
+    pub transfers: TransferSummary,
     pub truncated: bool,
 }
 
@@ -169,6 +189,7 @@ pub struct SnapshotInputs {
     pub pipelines: Vec<PipelineSummary>,
     pub resources: ResourceCounts,
     pub queues: QueueDepths,
+    pub transfers: TransferSummary,
 }
 
 pub fn build_snapshot(mut inputs: SnapshotInputs) -> DiagnosticSnapshot {
@@ -194,6 +215,7 @@ pub fn build_snapshot(mut inputs: SnapshotInputs) -> DiagnosticSnapshot {
         pipelines: inputs.pipelines,
         resources: inputs.resources,
         queues: inputs.queues,
+        transfers: inputs.transfers,
         truncated,
     }
 }

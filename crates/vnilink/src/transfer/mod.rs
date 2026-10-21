@@ -17,12 +17,14 @@
 //! partials live and when files publish belong to the core (`core/jobs`
 //! and `core/transfer`).
 
+mod counters;
 mod hash;
 mod partial;
 mod receive;
 mod send;
 mod wire;
 
+pub(crate) use counters::TransferCounters;
 #[cfg(test)]
 pub(crate) use hash::{SegmentHasher, SEGMENT_LEN};
 pub(crate) use partial::{Partial, NO_SPACE, PARTIAL_FAILED};
