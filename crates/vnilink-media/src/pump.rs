@@ -127,7 +127,15 @@ pub struct FramePump {
     recovery: bool,
     awaiting_keyframe: bool,
     last_sent: Option<u64>,
+    /// When a full-quality keyframe replaces the latest recovery one.
+    refresh_at: Option<u64>,
 }
+
+/// How long after a recovery keyframe, with no further loss, a full-quality
+/// keyframe replaces it. Encoders in low-latency mode make keyframes only
+/// when asked, and on a still screen they refine nothing: the coarse
+/// picture would stay until the next loss.
+pub const REFRESH_AFTER_US: u64 = 2_000_000;
 
 impl FramePump {
     pub fn new(quality: Quality) -> Self {
@@ -137,6 +145,7 @@ impl FramePump {
             recovery: false,
             awaiting_keyframe: true,
             last_sent: None,
+            refresh_at: None,
         }
     }
 
@@ -185,6 +194,13 @@ impl FramePump {
             self.quality.max_width,
             self.quality.max_height,
         )?;
+        if self
+            .refresh_at
+            .is_some_and(|at| frame.timestamp_us() >= at && !self.force_keyframe)
+        {
+            self.refresh_at = None;
+            self.request_keyframe();
+        }
         let force = self.force_keyframe || self.awaiting_keyframe;
         if !force && !self.due(frame.timestamp_us()) {
             return Ok(PumpOutput::Skipped);
@@ -215,6 +231,9 @@ impl FramePump {
             EncodedFrame::new(sample.codec, keyframe, frame.timestamp_us(), sample.annex_b)
                 .map_err(|_| Error::InvalidFrame("encoded frame was rejected"))?;
         if keyframe {
+            self.refresh_at = params
+                .recovery
+                .then(|| frame.timestamp_us().saturating_add(REFRESH_AFTER_US));
             self.force_keyframe = false;
             self.recovery = false;
             self.awaiting_keyframe = false;

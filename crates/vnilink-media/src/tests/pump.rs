@@ -176,6 +176,45 @@ fn only_a_requested_keyframe_is_a_recovery_keyframe() {
     );
 }
 
+/// A recovery keyframe is replaced by a full-quality one once no loss has
+/// asked for another; a loss in between puts the replacement off.
+#[test]
+fn a_recovery_keyframe_is_refreshed_at_full_quality_once_the_link_is_quiet() {
+    let refresh = crate::pump::REFRESH_AFTER_US;
+    let (encoder, log) = Scripted::honoring();
+    let mut host = HostVideo::new(quality(30, 32, 32), encoder);
+    host.push(&picture(32, 32, 0)).unwrap();
+    host.observe(&CoreEvent::KeyframeRequested { id: 1 });
+    host.push(&picture(32, 32, 100_000)).unwrap();
+    // Another loss before the refresh: a new recovery keyframe, and the
+    // refresh is put off from it.
+    host.observe(&CoreEvent::KeyframeRequested { id: 1 });
+    host.push(&picture(32, 32, 1_000_000)).unwrap();
+    host.push(&picture(32, 32, 100_000 + refresh)).unwrap();
+    host.push(&picture(32, 32, 1_000_000 + refresh)).unwrap();
+    // Refreshed once only.
+    host.push(&picture(32, 32, 1_000_000 + 3 * refresh))
+        .unwrap();
+    let calls: Vec<_> = log
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .map(|call| (call.force_keyframe, call.recovery))
+        .collect();
+    assert_eq!(
+        calls,
+        [
+            (true, false),
+            (true, true),
+            (true, true),
+            (false, false),
+            (true, false),
+            (false, false),
+        ]
+    );
+}
+
 #[test]
 fn a_clock_that_moves_backwards_is_encoded() {
     let (encoder, _) = Scripted::honoring();
