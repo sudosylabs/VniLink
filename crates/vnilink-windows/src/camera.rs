@@ -498,6 +498,7 @@ fn run(
                     bitrate_bps: 4_000_000,
                     frame_rate: config.fps as u8,
                     force_keyframe: keyframe,
+                    recovery: false,
                 },
             )
             .map_err(|_| Error::Unsupported("Windows camera encoding"))?;

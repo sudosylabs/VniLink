@@ -22,3 +22,5 @@ mod pump_tests;
 mod rate_tests;
 #[path = "tests/recording_segments.rs"]
 mod recording_segments_tests;
+#[path = "tests/recovery.rs"]
+mod recovery_tests;

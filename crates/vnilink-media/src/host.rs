@@ -169,10 +169,10 @@ impl<E: VideoEncoder> HostSession<E> {
         }
         match self.video.publish_to(sink, session_id, frame) {
             // A frame larger than one may be is dropped, not fatal: the next
-            // starts from a keyframe, at a quarter less bitrate.
+            // starts from a recovery keyframe, at a quarter less bitrate.
             Err(PublishError::Media(error)) if error.is_too_large() => {
                 self.shrink()?;
-                self.video.request_keyframe();
+                self.video.request_recovery_keyframe();
                 Ok(PumpOutput::Skipped)
             }
             other => other,

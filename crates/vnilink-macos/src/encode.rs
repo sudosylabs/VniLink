@@ -421,6 +421,7 @@ pub fn probe_hevc() -> vnilink::CodecSupport {
             &raw,
             &EncodeParams {
                 force_keyframe: true,
+                recovery: false,
                 bitrate_bps: 500_000,
                 frame_rate: 30,
             },

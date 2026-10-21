@@ -34,6 +34,8 @@ mod recording_segments;
 pub use recording_segments::{
     RecordingFailure, RecordingRetention, RecordingSnapshot, SegmentWriter,
 };
+mod recovery;
+pub use recovery::{RecoveryQp, RECOVERY_KEYFRAME_FRAMES};
 mod recording_worker;
 pub use recording_worker::{recover_desktop_recording, Recorder, RecordingPhase, RecordingStatus};
 mod recording_recovery;

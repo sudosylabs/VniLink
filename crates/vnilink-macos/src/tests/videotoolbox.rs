@@ -26,6 +26,7 @@ fn videotoolbox_encodes_and_decodes_a_synthetic_picture() {
     let mut encoder = MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
     let params = EncodeParams {
         force_keyframe: true,
+        recovery: false,
         bitrate_bps: 500_000,
         frame_rate: 30,
     };
@@ -50,6 +51,7 @@ fn videotoolbox_encodes_and_decodes_a_synthetic_picture() {
             &solid(64, 64, 33_333, 0, 0, 255),
             &EncodeParams {
                 force_keyframe: false,
+                recovery: false,
                 bitrate_bps: 500_000,
                 frame_rate: 30,
             },
@@ -84,6 +86,7 @@ fn videotoolbox_high_decodes_and_marks_profile_100() {
             &solid(64, 64, 0, 0, 0, 255),
             &EncodeParams {
                 force_keyframe: true,
+                recovery: false,
                 bitrate_bps: 500_000,
                 frame_rate: 30,
             },
@@ -121,6 +124,7 @@ fn recording_remuxes_native_h264_without_reencoding() {
                 &solid(64, 64, time, 0, 0, 255),
                 &EncodeParams {
                     force_keyframe: index % 30 == 0,
+                    recovery: false,
                     bitrate_bps: 500_000,
                     frame_rate: 30,
                 },
@@ -309,6 +313,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
                 &solid(64, 64, time, 0, 0, 255),
                 &EncodeParams {
                     force_keyframe: index == 0,
+                    recovery: false,
                     bitrate_bps: 500_000,
                     frame_rate: 30,
                 },
@@ -355,6 +360,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
             &solid(64, 64, 1_000_000, 0, 255, 0),
             &EncodeParams {
                 force_keyframe: true,
+                recovery: false,
                 bitrate_bps: 500_000,
                 frame_rate: 30,
             },
@@ -385,6 +391,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
             &solid(64, 64, 1_033_333, 0, 255, 0),
             &EncodeParams {
                 force_keyframe: false,
+                recovery: false,
                 bitrate_bps: 500_000,
                 frame_rate: 30,
             },
@@ -424,6 +431,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
                 &solid(64, 64, time, 0, 0, 255),
                 &EncodeParams {
                     force_keyframe: index == 0,
+                    recovery: false,
                     bitrate_bps: 500_000,
                     frame_rate: 30,
                 },
@@ -451,6 +459,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
                 &solid(64, 64, time, 0, 255, 0),
                 &EncodeParams {
                     force_keyframe: index == 0,
+                    recovery: false,
                     bitrate_bps: 500_000,
                     frame_rate: 30,
                 },
@@ -530,6 +539,7 @@ fn hevc_probe_and_negotiated_encoder_process_real_synthetic_frames() {
                 &raw,
                 &EncodeParams {
                     force_keyframe: i == 0,
+                    recovery: false,
                     bitrate_bps: 500_000,
                     frame_rate: 30,
                 },
@@ -556,6 +566,7 @@ fn videotoolbox_takes_a_new_rate_without_a_keyframe() {
     let mut encoder = MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
     let params = |force_keyframe, bitrate_bps, frame_rate| EncodeParams {
         force_keyframe,
+        recovery: false,
         bitrate_bps,
         frame_rate,
     };

@@ -134,6 +134,48 @@ fn frames_inside_the_interval_are_skipped_until_a_keyframe_is_requested() {
     assert!(log.lock().unwrap().calls.last().unwrap().force_keyframe);
 }
 
+/// A keyframe the core asks for answers a loss and may be capped; the
+/// first picture, a size change, and a full request are not.
+#[test]
+fn only_a_requested_keyframe_is_a_recovery_keyframe() {
+    let (encoder, log) = Scripted::honoring();
+    let mut host = HostVideo::new(quality(30, 32, 32), encoder);
+    host.push(&picture(32, 32, 0)).unwrap();
+    host.observe(&CoreEvent::KeyframeRequested { id: 1 });
+    host.push(&picture(32, 32, 1_000)).unwrap();
+    host.push(&picture(32, 32, 40_000)).unwrap();
+    host.observe(&CoreEvent::KeyframeRequested { id: 1 });
+    host.request_keyframe();
+    host.push(&picture(32, 32, 41_000)).unwrap();
+    host.request_keyframe();
+    host.request_recovery_keyframe();
+    host.push(&picture(32, 32, 42_000)).unwrap();
+    host.observe(&CoreEvent::KeyframeRequested { id: 1 });
+    host.observe(&CoreEvent::QualityUpdated {
+        id: 1,
+        quality: quality(30, 16, 16),
+    });
+    host.push(&picture(32, 32, 43_000)).unwrap();
+    let calls: Vec<_> = log
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .map(|call| (call.force_keyframe, call.recovery))
+        .collect();
+    assert_eq!(
+        calls,
+        [
+            (true, false),
+            (true, true),
+            (false, false),
+            (true, false),
+            (true, false),
+            (true, false),
+        ]
+    );
+}
+
 #[test]
 fn a_clock_that_moves_backwards_is_encoded() {
     let (encoder, _) = Scripted::honoring();

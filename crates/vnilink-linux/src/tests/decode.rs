@@ -34,6 +34,7 @@ fn mac_encoder_output_is_accepted_by_linux_syntax() {
                     &frame,
                     &EncodeParams {
                         force_keyframe: index == 0,
+                        recovery: false,
                         bitrate_bps: 2_000_000,
                         frame_rate: 30,
                     },
@@ -410,6 +411,7 @@ fn vaapi_decodes_what_it_encoded() {
     let mut decoder = crate::decode::LinuxDecoder::new();
     let key_params = EncodeParams {
         force_keyframe: true,
+        recovery: false,
         bitrate_bps: 500_000,
         frame_rate: 30,
     };
@@ -428,6 +430,7 @@ fn vaapi_decodes_what_it_encoded() {
             &solid(64, 64, 33_333, 0, 255, 0),
             &EncodeParams {
                 force_keyframe: false,
+                recovery: false,
                 ..key_params
             },
         )
@@ -475,6 +478,7 @@ fn vaapi_high_round_trips_where_the_entrypoint_exists() {
             &solid(64, 64, 0, 0, 0, 255),
             &EncodeParams {
                 force_keyframe: true,
+                recovery: false,
                 bitrate_bps: 500_000,
                 frame_rate: 30,
             },
