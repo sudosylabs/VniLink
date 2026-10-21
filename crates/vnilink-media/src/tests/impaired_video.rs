@@ -343,6 +343,61 @@ fn impair(stream: &Stream, started: Instant) -> Vec<(Instant, Instant)> {
         .collect()
 }
 
+/// How often the timeline samples the engines.
+const SAMPLE_EVERY: Duration = Duration::from_millis(100);
+
+/// The engines' running counters every [`SAMPLE_EVERY`] until `done`: when
+/// the host dropped frames at its send gate or sent keyframes, against the
+/// round trip, the encoder's rate and what the viewer lost.
+fn sample_timeline(
+    host: &Core,
+    viewer: &Core,
+    record: &Host,
+    started: Instant,
+    done: &AtomicBool,
+) -> Vec<Value> {
+    let read = |core: &Core| {
+        let snapshot = core.diagnostic_snapshot().ok()?;
+        let pipeline = serde_json::to_value(snapshot.pipelines.first()?).ok()?;
+        let rtt = snapshot
+            .connections
+            .iter()
+            .filter_map(|connection| connection.rtt_ms)
+            .max();
+        Some((pipeline, rtt))
+    };
+    let mut samples = Vec::new();
+    while !done.load(Ordering::Acquire) {
+        let at = millis(started.elapsed());
+        if let (Some((host, rtt)), Some((viewer, _))) = (read(host), read(viewer)) {
+            let lost = ["lost_expired", "lost_evicted", "lost_gap", "lost_stale"]
+                .iter()
+                .filter_map(|key| viewer[key].as_u64())
+                .sum::<u64>();
+            let bps = record
+                .counters
+                .lock()
+                .unwrap()
+                .opens
+                .last()
+                .map(|open| open.1);
+            samples.push(json!({
+                "ms": at,
+                "rtt_ms": rtt,
+                "bps": bps,
+                "send_dropped": host["send_dropped"],
+                "keyframes_sent": host["keyframes_sent"],
+                "keyframe_bytes": host["keyframe_bytes"],
+                "fragment_loss_permille": host["viewer_fragment_loss_permille"],
+                "viewer_lost": lost,
+                "viewer_in_dropped": viewer["in_dropped"],
+            }));
+        }
+        std::thread::sleep(SAMPLE_EVERY);
+    }
+    samples
+}
+
 fn percentile(sorted: &[f64], fraction: f64) -> Option<f64> {
     if sorted.is_empty() {
         return None;
@@ -422,8 +477,10 @@ fn run_stream(stream: &Stream) -> Value {
     };
 
     let started = Instant::now();
+    let sampling = AtomicBool::new(false);
     let bursts = std::thread::scope(|scope| {
         let schedule = scope.spawn(|| impair(stream, started));
+        let timeline = scope.spawn(|| sample_timeline(&host, &viewer, &record, started, &sampling));
         let mut decoder = Decoder::default();
         let mut arrivals = Vec::new();
         let mut keyframes = 0u64;
@@ -455,8 +512,10 @@ fn run_stream(stream: &Stream) -> Value {
             });
         }
         let bursts = schedule.join().expect("impairment schedule");
+        sampling.store(true, Ordering::Release);
+        let timeline = timeline.join().expect("timeline sampler");
         (
-            bursts,
+            (bursts, timeline),
             decoder,
             arrivals,
             keyframes,
@@ -464,7 +523,8 @@ fn run_stream(stream: &Stream) -> Value {
             first_picture,
         )
     });
-    let (bursts, decoder, arrivals, keyframes_received, requests, first_picture) = bursts;
+    let ((bursts, timeline), decoder, arrivals, keyframes_received, requests, first_picture) =
+        bursts;
     stop.store(true, Ordering::Release);
     capture
         .join()
@@ -557,6 +617,7 @@ fn run_stream(stream: &Stream) -> Value {
         "engine": engine,
         "bursts": burst_reports,
         "unrecovered_bursts": unrecovered,
+        "timeline": timeline,
     })
 }
 
