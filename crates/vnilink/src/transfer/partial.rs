@@ -6,7 +6,7 @@ use blake3::hazmat::ChainingValue;
 
 use crate::error::Error;
 
-use super::hash::{segment_len, SegmentHasher};
+use super::hash::{segment_len, SegmentHasher, SEGMENT_LEN};
 
 /// Writing the partial failed for a reason other than space.
 pub(crate) const PARTIAL_FAILED: &str = "the file could not be staged";
@@ -23,6 +23,8 @@ pub(crate) struct Partial {
     file: std::fs::File,
     journal: std::fs::File,
     size: u64,
+    /// Bytes per segment.
+    segment: u64,
     /// Bytes in journaled segments.
     checked: u64,
     /// Bytes written, checked or not.
@@ -38,6 +40,17 @@ impl Partial {
         path: &std::path::Path,
         journal: &std::path::Path,
         size: u64,
+    ) -> Result<Self, Error> {
+        Self::open_in(path, journal, size, SEGMENT_LEN)
+    }
+
+    /// [`Partial::open`] for a file cut into segments of `segment`, which
+    /// tests make small.
+    pub(crate) fn open_in(
+        path: &std::path::Path,
+        journal: &std::path::Path,
+        size: u64,
+        segment: u64,
     ) -> Result<Self, Error> {
         let open = |path: &std::path::Path| {
             std::fs::OpenOptions::new()
@@ -55,7 +68,7 @@ impl Partial {
         let mut checked = 0;
         let mut segments = 0;
         while segments < values && checked < size {
-            let end = checked + segment_len(checked, size);
+            let end = checked + segment_len(checked, size, segment);
             if end > held {
                 break;
             }
@@ -66,6 +79,7 @@ impl Partial {
             file,
             journal,
             size,
+            segment,
             checked,
             written: checked,
             hasher: next_segment(checked, size),
@@ -88,7 +102,7 @@ impl Partial {
         if self.checked == self.size {
             return 0;
         }
-        self.checked + segment_len(self.checked, self.size) - self.written
+        self.checked + segment_len(self.checked, self.size, self.segment) - self.written
     }
 
     /// Writes bytes of the current segment; at most [`Self::segment_left`].
@@ -174,8 +188,10 @@ fn no_space(error: &std::io::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::hash::SEGMENT_LEN;
     use super::*;
+
+    /// Small segments, so files of several stay cheap.
+    const SEGMENT_LEN: u64 = 64 * 1024;
 
     struct Scratch(std::path::PathBuf);
 
@@ -189,7 +205,13 @@ mod tests {
         }
 
         fn open(&self, size: u64) -> Partial {
-            Partial::open(&self.0.join("data"), &self.0.join("journal"), size).unwrap()
+            Partial::open_in(
+                &self.0.join("data"),
+                &self.0.join("journal"),
+                size,
+                SEGMENT_LEN,
+            )
+            .unwrap()
         }
     }
 
@@ -209,7 +231,7 @@ mod tests {
     /// it with its true value.
     fn land_segment(partial: &mut Partial, whole: &[u8]) {
         let start = partial.checked();
-        let end = start + segment_len(start, whole.len() as u64);
+        let end = start + segment_len(start, whole.len() as u64, SEGMENT_LEN);
         partial
             .append(&whole[partial.written() as usize..end as usize])
             .unwrap();

@@ -154,7 +154,7 @@ fn read_source(mut source: Source, offset: u64, pieces: tokio::sync::mpsc::Sende
     };
     let mut start = offset;
     while start < source.size {
-        let end = start + segment_len(start, source.size);
+        let end = start + segment_len(start, source.size, SEGMENT_LEN);
         let mut hasher = SegmentHasher::at(start);
         let mut at = start;
         while at < end {
@@ -269,7 +269,7 @@ mod tests {
             assert_eq!(sent, whole[offset as usize..]);
         }
         assert_eq!(
-            super::super::hash::root(&values, whole.len() as u64),
+            super::super::hash::root(&values, whole.len() as u64, SEGMENT_LEN),
             blake3::hash(&whole)
         );
         let _ = std::fs::remove_file(path);

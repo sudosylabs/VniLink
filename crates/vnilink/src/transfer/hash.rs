@@ -9,22 +9,19 @@
 use blake3::hazmat::{ChainingValue, HasherExt};
 
 /// Bytes per segment: what a failed check refetches and what a resume can
-/// lose at most. Small in tests, so files of many segments stay cheap; any
-/// power of two at least a BLAKE3 chunk keeps segments whole subtrees.
-pub(crate) const SEGMENT_LEN: u64 = if cfg!(test) {
-    64 * 1024
-} else {
-    16 * 1024 * 1024
-};
+/// lose at most. Any power of two of at least a BLAKE3 chunk keeps segments
+/// whole subtrees; tests of many segments use smaller ones.
+pub(crate) const SEGMENT_LEN: u64 = 16 * 1024 * 1024;
 
-/// Hashes the segment starting at `start`, a multiple of [`SEGMENT_LEN`].
+/// Hashes the segment starting at `start`, a multiple of the segment
+/// length.
 pub(crate) struct SegmentHasher {
     hasher: blake3::Hasher,
 }
 
 impl SegmentHasher {
     pub(crate) fn at(start: u64) -> Self {
-        debug_assert_eq!(start % SEGMENT_LEN, 0);
+        debug_assert_eq!(start % blake3::CHUNK_LEN as u64, 0);
         let mut hasher = blake3::Hasher::new();
         hasher.set_input_offset(start);
         Self { hasher }
@@ -40,34 +37,36 @@ impl SegmentHasher {
     }
 }
 
-/// The length of the segment starting at `start` in a `size`-byte file.
-pub(crate) fn segment_len(start: u64, size: u64) -> u64 {
-    SEGMENT_LEN.min(size - start)
+/// The length of the segment starting at `start` in a `size`-byte file
+/// cut into segments of `len`.
+pub(crate) fn segment_len(start: u64, size: u64, len: u64) -> u64 {
+    len.min(size - start)
 }
 
-/// The root BLAKE3 hash of a `size`-byte file from its segments' chaining
-/// values, in order. Proves the segmentation is BLAKE3's own tree.
+/// The root BLAKE3 hash of a `size`-byte file from the chaining values of
+/// its segments of `segment`, in order. Proves the segmentation is BLAKE3's
+/// own tree.
 #[cfg(test)]
-pub(crate) fn root(segments: &[ChainingValue], size: u64) -> blake3::Hash {
+pub(crate) fn root(segments: &[ChainingValue], size: u64, segment: u64) -> blake3::Hash {
     use blake3::hazmat::{left_subtree_len, merge_subtrees_non_root, merge_subtrees_root, Mode};
 
-    fn subtree(segments: &[ChainingValue], start: u64, len: u64) -> ChainingValue {
-        if len <= SEGMENT_LEN {
-            return segments[(start / SEGMENT_LEN) as usize];
+    fn subtree(segments: &[ChainingValue], segment: u64, start: u64, len: u64) -> ChainingValue {
+        if len <= segment {
+            return segments[(start / segment) as usize];
         }
         let left = left_subtree_len(len);
         merge_subtrees_non_root(
-            &subtree(segments, start, left),
-            &subtree(segments, start + left, len - left),
+            &subtree(segments, segment, start, left),
+            &subtree(segments, segment, start + left, len - left),
             Mode::Hash,
         )
     }
 
-    assert!(size > SEGMENT_LEN, "a single segment is hashed whole");
+    assert!(size > segment, "a single segment is hashed whole");
     let left = left_subtree_len(size);
     merge_subtrees_root(
-        &subtree(segments, 0, left),
-        &subtree(segments, left, size - left),
+        &subtree(segments, segment, 0, left),
+        &subtree(segments, segment, left, size - left),
         Mode::Hash,
     )
 }
@@ -76,12 +75,15 @@ pub(crate) fn root(segments: &[ChainingValue], size: u64) -> blake3::Hash {
 mod tests {
     use super::*;
 
+    /// Small segments, so files of several stay cheap to hash.
+    const SEGMENT: u64 = 64 * 1024;
+
     fn segments_of(bytes: &[u8]) -> Vec<ChainingValue> {
         let size = bytes.len() as u64;
         let mut start = 0;
         let mut values = Vec::new();
         while start < size {
-            let end = start + segment_len(start, size);
+            let end = start + segment_len(start, size, SEGMENT);
             let mut hasher = SegmentHasher::at(start);
             hasher.update(&bytes[start as usize..end as usize]);
             values.push(hasher.finalize());
@@ -94,11 +96,11 @@ mod tests {
     /// even, uneven and power-of-two segment counts.
     #[test]
     fn segments_are_subtrees_of_the_file_hash() {
-        let seg = SEGMENT_LEN as usize;
+        let seg = SEGMENT as usize;
         for len in [seg + 1, 2 * seg, 3 * seg - 5, 4 * seg + 1024, 5 * seg + 7] {
             let bytes: Vec<u8> = (0..len).map(|n| (n % 251) as u8).collect();
             assert_eq!(
-                root(&segments_of(&bytes), len as u64),
+                root(&segments_of(&bytes), len as u64, SEGMENT),
                 blake3::hash(&bytes),
                 "{len} bytes"
             );
@@ -112,7 +114,7 @@ mod tests {
         let bytes = vec![9u8; 4096];
         let mut first = SegmentHasher::at(0);
         first.update(&bytes);
-        let mut second = SegmentHasher::at(SEGMENT_LEN);
+        let mut second = SegmentHasher::at(SEGMENT);
         second.update(&bytes);
         assert_ne!(first.finalize(), second.finalize());
     }

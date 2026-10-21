@@ -467,8 +467,11 @@ mod tests {
         use rand::rngs::StdRng;
         use rand::{RngExt, SeedableRng};
 
-        use super::super::super::hash::{segment_len, SEGMENT_LEN};
+        use super::super::super::hash::segment_len;
         use super::*;
+
+        /// Small segments, so streams of several stay cheap.
+        const SEGMENT_LEN: u64 = 64 * 1024;
 
         /// What a sender sends for `bytes`: each segment, then its value.
         fn stream_of(bytes: &[u8]) -> Vec<u8> {
@@ -476,7 +479,7 @@ mod tests {
             let mut stream = Vec::new();
             let mut start = 0;
             while start < size {
-                let end = start + segment_len(start, size);
+                let end = start + segment_len(start, size, SEGMENT_LEN);
                 let segment = &bytes[start as usize..end as usize];
                 let mut hasher = SegmentHasher::at(start);
                 hasher.update(segment);
@@ -497,7 +500,13 @@ mod tests {
         ) -> Result<bool, Error> {
             let _ = std::fs::remove_file(scratch.0.join("data"));
             let _ = std::fs::remove_file(scratch.0.join("journal"));
-            let mut partial = scratch.partial(size);
+            let mut partial = Partial::open_in(
+                &scratch.0.join("data"),
+                &scratch.0.join("journal"),
+                size,
+                SEGMENT_LEN,
+            )
+            .unwrap();
             let mut incoming = Incoming::default();
             let (progress, _) = std::sync::mpsc::channel();
             let counters = TransferCounters::default();
