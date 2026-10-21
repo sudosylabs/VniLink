@@ -44,11 +44,13 @@ const PRODUCED_SLOTS: usize = 8_192;
 /// What the viewer does when it notices a reference gap.
 #[derive(Clone, Copy, PartialEq)]
 enum ViewerPolicy {
-    /// The current product: nothing on the receive path requests a keyframe.
+    /// The product as it is: the harness viewer asks for nothing itself,
+    /// and the core asks for a keyframe when it loses a frame, within its
+    /// own limits.
     Passive,
-    /// Ask for a keyframe on every corrupt picture, with no outstanding-request
-    /// limit. This previews what loss-triggered requests do to the host
-    /// before the keyframe-discipline change bounds them.
+    /// Also ask for a keyframe on every corrupt picture, with no
+    /// outstanding-request limit: what unbounded requests would do to the
+    /// host.
     RequestWhileCorrupt,
 }
 
