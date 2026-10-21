@@ -324,6 +324,7 @@ impl Core {
             transfer_dir: Mutex::new(None),
             files_serving: Mutex::new(std::collections::HashMap::new()),
             files_fetching: Mutex::new(std::collections::HashMap::new()),
+            files_dialing: tokio::sync::Mutex::new(()),
             files_gate: Default::default(),
             transfer_counters: Default::default(),
             folder_watches: Mutex::new(std::collections::HashMap::new()),

@@ -343,20 +343,27 @@ async fn files_connection(
     peer: &[u8; 32],
     addr: EndpointAddr,
 ) -> Result<(Connection, bool), Error> {
-    if let Some(kept) = lock(&shared.files_fetching).get(peer) {
-        if kept.close_reason().is_none() {
-            return Ok((kept.clone(), true));
-        }
+    let kept = || {
+        lock(&shared.files_fetching)
+            .get(peer)
+            .filter(|kept| kept.close_reason().is_none())
+            .cloned()
+    };
+    if let Some(kept) = kept() {
+        return Ok((kept, true));
+    }
+    // Files fetched together share one connection: one of them dials, and
+    // the others wait and take what it dialed. A connection in use is never
+    // replaced, which would end the other fetches' streams.
+    let _dialing = shared.files_dialing.lock().await;
+    if let Some(kept) = kept() {
+        return Ok((kept, true));
     }
     let connection = tokio::time::timeout(DIAL_WITHIN, shared.endpoint.connect(addr, FILES_ALPN))
         .await
         .map_err(|_| Error::Timeout)?
         .map_err(Error::network_debug)?;
-    if let Some(old) = lock(&shared.files_fetching).insert(*peer, connection.clone()) {
-        if old.stable_id() != connection.stable_id() {
-            old.close(0u8.into(), b"done");
-        }
-    }
+    lock(&shared.files_fetching).insert(*peer, connection.clone());
     Ok((connection, false))
 }
 

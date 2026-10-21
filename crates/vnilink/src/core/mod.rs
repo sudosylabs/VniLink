@@ -588,6 +588,9 @@ struct Shared {
     /// One files connection per peer, kept for the files that follow so a
     /// small file does not pay for a handshake; dropped on revoke/unpair.
     files_fetching: Mutex<HashMap<[u8; 32], iroh::endpoint::Connection>>,
+    /// Held while a files connection is dialed, so fetches that start
+    /// together dial once.
+    files_dialing: tokio::sync::Mutex<()>,
     /// Bounds the files served at once, per peer and in all.
     files_gate: transfer::ServeGate,
     transfer_counters: crate::transfer::TransferCounters,
