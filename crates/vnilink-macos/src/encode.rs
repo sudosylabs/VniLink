@@ -295,6 +295,8 @@ impl VideoEncoder for MacEncoder {
             }
             if floored {
                 self.recovery_qp.observe(encoded.data.len(), params);
+            } else if params.force_keyframe {
+                self.recovery_qp.observe_full(encoded.data.len(), params);
             }
             let sample = encoded
                 .cm_sample_buffer()

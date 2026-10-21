@@ -273,6 +273,8 @@ impl VideoEncoder for WindowsEncoder {
             let sample = sample?;
             if floored {
                 self.recovery_qp.observe(sample.bytes.len(), params);
+            } else if params.force_keyframe {
+                self.recovery_qp.observe_full(sample.bytes.len(), params);
             }
             return h264_access_unit(&sample.bytes, &sample.header);
         }

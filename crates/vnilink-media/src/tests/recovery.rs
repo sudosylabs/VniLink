@@ -56,3 +56,24 @@ fn a_small_keyframe_lowers_the_floor_slowly() {
     qp.observe(0, &params(2_000_000, 30));
     assert_eq!(qp.floor(), 24);
 }
+
+/// A full keyframe seeds where the first recovery keyframe starts; once a
+/// recovery keyframe has been seen, only those move the floor.
+#[test]
+fn a_full_keyframe_seeds_the_first_floor() {
+    let budget = RecoveryQp::budget(&params(2_000_000, 30));
+    let mut qp = RecoveryQp::default();
+    // Measured: a full 720p keyframe of text at 2 Mb/s, about 5.6 budgets,
+    // came out at 3.2 budgets at the first floor and fit at about 50.
+    qp.observe_full(budget * 56 / 10, &params(2_000_000, 30));
+    assert_eq!(qp.floor(), 51);
+    // A full keyframe within budget seeds a lower floor.
+    let mut easy = RecoveryQp::default();
+    easy.observe_full(budget / 2, &params(2_000_000, 30));
+    assert!(easy.floor() < 40);
+    // After a recovery keyframe, full ones no longer move it.
+    easy.observe(budget, &params(2_000_000, 30));
+    let learned = easy.floor();
+    easy.observe_full(budget * 100, &params(2_000_000, 30));
+    assert_eq!(easy.floor(), learned);
+}

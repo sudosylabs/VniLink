@@ -23,16 +23,25 @@ const MIN_FLOOR: u8 = 24;
 const FIRST_FLOOR: u8 = 40;
 /// QP steps that halve an intra picture's bytes.
 const STEPS_PER_HALVING: f64 = 6.0;
+/// What a keyframe at [`FIRST_FLOOR`] weighs against one at full quality.
+/// Measured on VideoToolbox with a text-heavy screen (commit `1aca252f`):
+/// 0.58 at 720p and 0.74 at 1080p, both at 2 Mb/s.
+const FIRST_FLOOR_SHARE: f64 = 0.65;
 
 /// The quantiser floor for one encoder's recovery keyframes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecoveryQp {
     floor: u8,
+    /// A recovery keyframe has been seen, and the floor follows those.
+    learned: bool,
 }
 
 impl Default for RecoveryQp {
     fn default() -> Self {
-        Self { floor: FIRST_FLOOR }
+        Self {
+            floor: FIRST_FLOOR,
+            learned: false,
+        }
     }
 }
 
@@ -52,6 +61,7 @@ impl RecoveryQp {
     /// `params`: up when it overran the budget, down when it used less than
     /// half, so a floor that was only needed for a busy screen is let go.
     pub fn observe(&mut self, bytes: usize, params: &EncodeParams) {
+        self.learned = true;
         let budget = Self::budget(params).max(1);
         if bytes == 0 || (bytes <= budget && bytes * 2 >= budget) {
             return;
@@ -62,5 +72,20 @@ impl RecoveryQp {
         let steps = steps.clamp(-STEPS_PER_HALVING, f64::from(MAX_QP)) as i16;
         self.floor =
             (i16::from(self.floor) + steps).clamp(i16::from(MIN_FLOOR), i16::from(MAX_QP)) as u8;
+    }
+
+    /// Seeds the floor from a full-quality keyframe of `bytes` at `params`,
+    /// until a recovery keyframe has been seen: the first recovery keyframe
+    /// would otherwise start from a guess, and on a busy screen run several
+    /// times over its budget.
+    pub fn observe_full(&mut self, bytes: usize, params: &EncodeParams) {
+        if self.learned || bytes == 0 {
+            return;
+        }
+        let budget = Self::budget(params).max(1) as f64;
+        let at_first_floor = bytes as f64 * FIRST_FLOOR_SHARE;
+        let steps = (STEPS_PER_HALVING * (at_first_floor / budget).log2()).round();
+        self.floor =
+            (f64::from(FIRST_FLOOR) + steps).clamp(f64::from(MIN_FLOOR), f64::from(MAX_QP)) as u8;
     }
 }
