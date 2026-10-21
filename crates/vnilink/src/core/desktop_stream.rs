@@ -2192,20 +2192,14 @@ async fn write_control_state(
 }
 
 /// Bytes of video a desktop may have waiting in the transport: three
-/// frames at the agreed bitrate, and no more than [`BACKLOG_TIME`] of it.
-/// Beyond it a new frame would only add latency. A backlog the transport
-/// holds is invisible to the round trip, so a link slower than the bitrate
-/// must show as frames dropped here, which rate control hears, rather than
-/// as a standing queue under a generous budget.
+/// frames at the agreed bitrate, and never under 64 KiB. Beyond it a new
+/// frame would only add latency.
 fn backlog_budget(bitrate_kbps: u32, frame_rate: u8) -> usize {
-    let bytes_per_second = u64::from(bitrate_kbps) * 1000 / 8;
-    let frames = bytes_per_second / u64::from(frame_rate.max(1)) * 3;
-    let time = bytes_per_second * BACKLOG_TIME.as_millis() as u64 / 1000;
-    usize::try_from(frames.min(time)).unwrap_or(usize::MAX)
+    let per_frame = u64::from(bitrate_kbps) * 1000 / 8 / u64::from(frame_rate.max(1));
+    usize::try_from(per_frame * 3)
+        .unwrap_or(usize::MAX)
+        .max(64 * 1024)
 }
-
-/// The longest backlog of video at the agreed bitrate.
-const BACKLOG_TIME: Duration = Duration::from_millis(150);
 
 /// Whether a frame of `wire` bytes goes out now. It must fit the space the
 /// transport has without dropping older datagrams, and, unless nothing is
@@ -2506,12 +2500,10 @@ mod tests {
 
     #[test]
     fn a_frame_waits_behind_at_most_three_frames_of_video() {
-        // 8 Mb/s at 50 fps is 20 kB a frame: three of them.
-        assert_eq!(backlog_budget(8_000, 50), 60_000);
+        // 8 Mb/s at 50 fps is 20 kB a frame: the floor of 64 KiB applies.
+        assert_eq!(backlog_budget(8_000, 50), 64 * 1024);
         // 24 Mb/s at 30 fps is 100 kB a frame.
         assert_eq!(backlog_budget(24_000, 30), 300_000);
-        // 750 kb/s at 10 fps: three frames would be 300 ms, so 150 ms.
-        assert_eq!(backlog_budget(750, 10), 14_062);
         let buffer = crate::core::host::DATAGRAM_SEND_BUFFER;
         // Nothing waiting: any frame that fits goes, a large keyframe too.
         assert!(admits_frame(buffer, 500_000, 64 * 1024));
