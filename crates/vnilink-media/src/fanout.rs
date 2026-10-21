@@ -319,10 +319,23 @@ fn consume<E, F>(
             let _ = core.report_desktop_encoder_reopen(target.id, target.generation);
         }
         // On an unchanged screen no new picture comes: a keyframe still
-        // owed is made from the last one.
+        // owed is made from the last one, and after a keyframe the last one
+        // is encoded again, stamped now, for the encoder to refine it.
         let next = slot
             .wait_newer(seen, Duration::from_millis(20))
-            .or_else(|| session.keyframe_pending().then(|| slot.latest()).flatten());
+            .or_else(|| {
+                (session.keyframe_pending() || session.refining())
+                    .then(|| slot.latest())
+                    .flatten()
+                    .map(|mut sample| {
+                        if let Some(at) = sample.captured_at {
+                            let since = u64::try_from(at.elapsed().as_micros()).unwrap_or(u64::MAX);
+                            let stamp = sample.frame.timestamp_us().saturating_add(since);
+                            sample.frame = sample.frame.with_timestamp(stamp);
+                        }
+                        sample
+                    })
+            });
         let Some(Sample {
             generation,
             mut frame,

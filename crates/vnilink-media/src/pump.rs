@@ -105,6 +105,13 @@ pub trait VideoEncoder: Send {
         let _ = (bitrate_bps, frame_rate);
         Ok(false)
     }
+
+    /// Whether pictures of an unchanged screen after a keyframe bring it to
+    /// full quality. One that does not gets a full-quality keyframe after a
+    /// coarse recovery one instead; see [`REFRESH_AFTER_US`].
+    fn refines_still_pictures(&self) -> bool {
+        false
+    }
 }
 
 /// Platform H.264 decoder. The returned picture is what the UI paints.
@@ -129,12 +136,22 @@ pub struct FramePump {
     last_sent: Option<u64>,
     /// When a full-quality keyframe replaces the latest recovery one.
     refresh_at: Option<u64>,
+    /// Until when the unchanged picture is encoded again at the frame rate
+    /// after a keyframe, for the encoder to refine it.
+    refine_until: Option<u64>,
 }
 
+/// How long after a keyframe an unchanged picture is encoded again at the
+/// frame rate. A still screen otherwise brings a picture a second, and an
+/// encoder refines a coarse keyframe over tens of pictures: VideoToolbox
+/// took a recovery keyframe from 15 to 46 dB in two seconds at 30 fps.
+pub const REFINE_FOR_US: u64 = 2_000_000;
+
 /// How long after a recovery keyframe, with no further loss, a full-quality
-/// keyframe replaces it. Encoders in low-latency mode make keyframes only
-/// when asked, and on a still screen they refine nothing: the coarse
-/// picture would stay until the next loss.
+/// keyframe replaces it, for an encoder that does not refine a still
+/// picture ([`VideoEncoder::refines_still_pictures`]). Encoders in
+/// low-latency mode make keyframes only when asked: the coarse picture
+/// would otherwise stay until the next loss.
 pub const REFRESH_AFTER_US: u64 = 2_000_000;
 
 impl FramePump {
@@ -146,6 +163,7 @@ impl FramePump {
             awaiting_keyframe: true,
             last_sent: None,
             refresh_at: None,
+            refine_until: None,
         }
     }
 
@@ -183,6 +201,12 @@ impl FramePump {
         self.force_keyframe || self.awaiting_keyframe
     }
 
+    /// Whether an unchanged picture should still be encoded at the frame
+    /// rate, for the encoder to refine the latest keyframe.
+    pub fn refining(&self) -> bool {
+        self.refine_until.is_some()
+    }
+
     pub fn push(
         &mut self,
         frame: &RawFrame,
@@ -194,6 +218,12 @@ impl FramePump {
             self.quality.max_width,
             self.quality.max_height,
         )?;
+        if self
+            .refine_until
+            .is_some_and(|until| frame.timestamp_us() >= until)
+        {
+            self.refine_until = None;
+        }
         if self
             .refresh_at
             .is_some_and(|at| frame.timestamp_us() >= at && !self.force_keyframe)
@@ -231,9 +261,13 @@ impl FramePump {
             EncodedFrame::new(sample.codec, keyframe, frame.timestamp_us(), sample.annex_b)
                 .map_err(|_| Error::InvalidFrame("encoded frame was rejected"))?;
         if keyframe {
-            self.refresh_at = params
-                .recovery
+            // An encoder that refines gets the unchanged picture again for a
+            // while; one that does not gets a full-quality keyframe once the
+            // link is quiet.
+            let refines = encoder.refines_still_pictures();
+            self.refresh_at = (params.recovery && !refines)
                 .then(|| frame.timestamp_us().saturating_add(REFRESH_AFTER_US));
+            self.refine_until = refines.then(|| frame.timestamp_us().saturating_add(REFINE_FOR_US));
             self.force_keyframe = false;
             self.recovery = false;
             self.awaiting_keyframe = false;
@@ -282,6 +316,11 @@ impl<E: VideoEncoder> HostVideo<E> {
     /// Whether the next encoded picture must be a keyframe.
     pub fn keyframe_pending(&self) -> bool {
         self.pump.keyframe_pending()
+    }
+
+    /// See [`FramePump::refining`].
+    pub fn refining(&self) -> bool {
+        self.pump.refining()
     }
 
     pub fn set_quality(&mut self, quality: Quality) {

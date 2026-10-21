@@ -529,6 +529,13 @@ impl<N: VideoEncoder> VideoEncoder for CodecEncoder<N> {
             Self::Software(encoder) => encoder.retune(bitrate_bps, frame_rate),
         }
     }
+
+    fn refines_still_pictures(&self) -> bool {
+        match self {
+            Self::Native(encoder) => encoder.refines_still_pictures(),
+            Self::Software(encoder) => encoder.refines_still_pictures(),
+        }
+    }
 }
 #[derive(Default)]
 pub struct SoftwareDecoderSlot(Option<(VideoCodec, SoftwareDecoder)>);

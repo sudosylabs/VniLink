@@ -811,3 +811,112 @@ fn an_unchanged_screen_is_sent_once_a_second_and_a_keyframe_still_comes() {
     stop.store(true, Ordering::Relaxed);
     worker.join().unwrap().unwrap();
 }
+
+/// An [`Encoder`] that refines still pictures.
+struct Refining(Encoder);
+
+impl VideoEncoder for Refining {
+    fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
+        self.0.encode(frame, params)
+    }
+
+    fn refines_still_pictures(&self) -> bool {
+        true
+    }
+}
+
+/// After a keyframe an encoder that refines is given the unchanged picture
+/// at the frame rate, for the refinement window only; then once a second
+/// again.
+#[test]
+fn an_unchanged_screen_is_encoded_again_while_a_keyframe_is_refined() {
+    let host = Arc::new(boot());
+    let viewer = boot();
+    host.set_capture(Box::new(Source {
+        idle: false,
+        frames: Arc::new(AtomicUsize::new(0)),
+        thread: Mutex::new(None),
+        wrong_thread: Arc::new(AtomicBool::new(false)),
+    }))
+    .unwrap();
+    for core in [&host, &viewer] {
+        core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
+            .unwrap();
+    }
+    host.set_topology(9, &[twin(7, 0)]).unwrap();
+    pair(&host, &viewer);
+    host.start_hosting().unwrap();
+    let parent = viewer.begin_connect_services(&host.endpoint_id()).unwrap();
+    wait_active(&viewer, parent.id);
+    let parent = viewer.controller_session(parent.id).unwrap();
+    let owner = viewer
+        .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
+        .unwrap();
+    let handle = viewer
+        .open_desktop_service(owner.id, owner.generation)
+        .unwrap();
+    let frames = handle.subscribe_video().unwrap();
+    let encodes = Arc::new(AtomicUsize::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    let (worker_stop, worker_host, worker_encodes) =
+        (Arc::clone(&stop), Arc::clone(&host), Arc::clone(&encodes));
+    let worker = std::thread::spawn(move || {
+        crate::serve_shared_capture(
+            &Still { at: Instant::now() },
+            &worker_host,
+            &worker_stop,
+            false,
+            7,
+            |_| {},
+            move |_, _, _, _, _| {
+                Ok(Refining(Encoder {
+                    slow: false,
+                    encodes: Arc::clone(&worker_encodes),
+                    opens: Arc::new(AtomicUsize::new(0)),
+                }))
+            },
+        )
+    });
+    let first = frames
+        .recv_timeout(Duration::from_secs(5))
+        .expect("first picture");
+    assert!(first.keyframe);
+    // A viewer reads what arrives: one that does not falls behind and asks
+    // for keyframes, each starting a new window.
+    let keyframes = Arc::new(AtomicUsize::new(0));
+    let reader = {
+        let (keyframes, stop) = (Arc::clone(&keyframes), Arc::clone(&stop));
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                if let Some(frame) = frames.recv_timeout(Duration::from_millis(20)) {
+                    keyframes.fetch_add(usize::from(frame.keyframe), Ordering::Relaxed);
+                }
+            }
+        })
+    };
+    std::thread::sleep(Duration::from_millis(600));
+    let refined = encodes.load(Ordering::Relaxed);
+    assert!(
+        refined >= 5,
+        "only {refined} pictures were encoded while refining"
+    );
+    // Past the window: back to a picture a second.
+    std::thread::sleep(Duration::from_millis(
+        crate::pump::REFINE_FOR_US / 1_000 - 600 + 300,
+    ));
+    let settled = encodes.load(Ordering::Relaxed);
+    std::thread::sleep(Duration::from_millis(600));
+    let after = encodes.load(Ordering::Relaxed);
+    assert_eq!(
+        keyframes.load(Ordering::Relaxed),
+        0,
+        "no keyframe was asked for"
+    );
+    assert!(
+        after <= settled + 1,
+        "an unchanged screen was still encoded at the frame rate after the window: {settled} then {after}"
+    );
+    stop.store(true, Ordering::Relaxed);
+    reader.join().unwrap();
+    worker.join().unwrap().unwrap();
+}

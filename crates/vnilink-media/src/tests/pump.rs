@@ -47,6 +47,19 @@ impl VideoEncoder for Scripted {
     }
 }
 
+/// A [`Scripted`] encoder that refines still pictures.
+struct Refining(Scripted);
+
+impl VideoEncoder for Refining {
+    fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
+        self.0.encode(frame, params)
+    }
+
+    fn refines_still_pictures(&self) -> bool {
+        true
+    }
+}
+
 fn sample(keyframe: bool) -> Result<EncodedSample, Error> {
     let sps = vec![0x67, 0x42];
     let pps = vec![0x68, 0xCE];
@@ -213,6 +226,39 @@ fn a_recovery_keyframe_is_refreshed_at_full_quality_once_the_link_is_quiet() {
             (false, false),
         ]
     );
+}
+
+/// An encoder that refines is given the unchanged picture for a while
+/// after a keyframe and no full-quality refresh; one that does not is given
+/// neither repeats nor a window, only the refresh.
+#[test]
+fn a_refining_encoder_gets_the_still_picture_again_instead_of_a_refresh() {
+    let refine = crate::pump::REFINE_FOR_US;
+    let (encoder, log) = Scripted::honoring();
+    let mut host = HostVideo::new(quality(30, 32, 32), Refining(encoder));
+    host.push(&picture(32, 32, 0)).unwrap();
+    assert!(host.refining());
+    host.observe(&CoreEvent::KeyframeRequested { id: 1 });
+    host.push(&picture(32, 32, 100_000)).unwrap();
+    assert!(host.refining());
+    host.push(&picture(32, 32, 100_000 + refine)).unwrap();
+    assert!(!host.refining());
+    host.push(&picture(32, 32, 100_000 + 2 * refine)).unwrap();
+    let calls: Vec<_> = log
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .map(|call| (call.force_keyframe, call.recovery))
+        .collect();
+    assert_eq!(
+        calls,
+        [(true, false), (true, true), (false, false), (false, false)]
+    );
+    let (encoder, _) = Scripted::honoring();
+    let mut plain = HostVideo::new(quality(30, 32, 32), encoder);
+    plain.push(&picture(32, 32, 0)).unwrap();
+    assert!(!plain.refining());
 }
 
 #[test]

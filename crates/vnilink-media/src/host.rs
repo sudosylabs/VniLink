@@ -100,6 +100,12 @@ impl<E: VideoEncoder> HostSession<E> {
         self.video.keyframe_pending()
     }
 
+    /// Whether an unchanged picture is still to be encoded at the frame
+    /// rate, for the encoder to refine the latest keyframe.
+    pub fn refining(&self) -> bool {
+        self.video.refining()
+    }
+
     /// How many times a quality change opened the encoder again.
     pub fn reopens(&self) -> u64 {
         self.reopens
