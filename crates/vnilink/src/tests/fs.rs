@@ -693,6 +693,20 @@ fn case_only_rename_keeps_the_object() {
     }
 }
 
+/// Found by the `fs_wire` fuzz target: a List whose path is one NUL byte
+/// decoded, though no request with it can be encoded.
+#[test]
+fn wire_text_with_a_nul_byte_is_refused() {
+    let mut list = vec![1, 0, 0x24, 0, 0, 0, 0, 0x10, 0, 0, 0, 0, 0, 1];
+    list.extend_from_slice(&2u64.to_be_bytes());
+    list.extend_from_slice(&[0, 1, 0]);
+    list.extend_from_slice(&0u64.to_be_bytes());
+    list.extend_from_slice(&10u16.to_be_bytes());
+    assert!(crate::fs::decode_request(&list).is_err());
+    let path_ok = [&list[..22], &[0, 1, b'a'], &list[25..]].concat();
+    assert!(crate::fs::decode_request(&path_ok).is_ok());
+}
+
 #[test]
 fn wire_codec_round_trips_and_rejects() {
     use crate::fs::{Request as WireRequest, Response as WireResponse};
