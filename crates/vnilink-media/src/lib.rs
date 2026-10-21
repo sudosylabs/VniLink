@@ -34,6 +34,9 @@ mod recording_segments;
 pub use recording_segments::{
     RecordingFailure, RecordingRetention, RecordingSnapshot, SegmentWriter,
 };
+/// Pictures and comparisons for the platform encoders' measurements.
+#[doc(hidden)]
+pub mod measure;
 mod recovery;
 pub use recovery::{RecoveryQp, RECOVERY_KEYFRAME_FRAMES};
 mod recording_worker;

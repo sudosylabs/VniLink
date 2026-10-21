@@ -6,3 +6,6 @@ mod decode_tests;
 mod host_tests;
 #[path = "tests/plan.rs"]
 mod plan_tests;
+#[cfg(windows)]
+#[path = "tests/recovery.rs"]
+mod recovery_tests;
