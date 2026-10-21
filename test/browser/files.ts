@@ -122,7 +122,7 @@ class MemoryDisk implements IFilesDisk {
 
 const job = (id: string, state: FileJob['state'], extra: Partial<FileJob> = {}): FileJob => ({
 	id, peer: 'studio', label: 'vnilink-demo.mov', direction: 'Upload', sender: true, state,
-	total_bytes: '1000000', done_bytes: '250000', files_total: '3', files_done: '0', resumed_files: '0', skipped_files: '0', skipped_symlinks: '0', waiting_file: null, error: null, destination: null, ...extra,
+	total_bytes: '1000000', done_bytes: '250000', files_total: '3', files_done: '0', resumed_files: '0', skipped_files: '0', skipped_symlinks: '0', waiting_file: null, current_file: null, error: null, destination: null, ...extra,
 });
 
 class FakeSession implements IFilesSession {

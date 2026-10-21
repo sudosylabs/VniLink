@@ -153,6 +153,7 @@ pub struct FfiJobSnapshot {
     pub skipped_files: u64,
     pub skipped_symlinks: u64,
     pub waiting_file: Option<String>,
+    pub current_file: Option<String>,
     pub error: Option<String>,
     /// Where the transfer lands, when this side submitted it.
     pub destination: Option<FfiJobDestination>,
@@ -301,6 +302,7 @@ pub(crate) fn job_snapshot(snapshot: vnilink::JobSnapshot) -> FfiJobSnapshot {
         skipped_files: snapshot.skipped_files,
         skipped_symlinks: snapshot.skipped_symlinks,
         waiting_file: snapshot.waiting_file,
+        current_file: snapshot.current_file,
         error: snapshot.error,
         destination: snapshot.destination.map(|destination| FfiJobDestination {
             root: destination.root,

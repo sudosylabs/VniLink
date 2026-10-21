@@ -295,7 +295,7 @@ test('file operations run side by side, a refusal is an answer, and job changes 
 	const operations = [];
 	const errors = [];
 	const packets = [];
-	const job = { id: '7', peer: 'p', label: 'a.txt', direction: 'Upload', sender: true, state: 'Transferring', total_bytes: '100', done_bytes: '40', files_total: '1', files_done: '0', resumed_files: '0', skipped_files: '0', skipped_symlinks: '0', waiting_file: null, error: null, destination: null };
+	const job = { id: '7', peer: 'p', label: 'a.txt', direction: 'Upload', sender: true, state: 'Transferring', total_bytes: '100', done_bytes: '40', files_total: '1', files_done: '0', resumed_files: '0', skipped_files: '0', skipped_symlinks: '0', waiting_file: null, current_file: null, error: null, destination: null };
 	const pushed = [{ kind: 'jobs', metadata: JSON.stringify({ jobs: [job] }) }];
 	const native = {
 		read: () => pushed.shift() ?? null,

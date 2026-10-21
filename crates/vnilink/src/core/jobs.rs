@@ -303,6 +303,21 @@ impl JobRecord {
         self.landed = landed;
     }
 
+    /// The path of the file moving now, while files move: the receiver's
+    /// own place, or for a sender the file after those its receiver has
+    /// landed or skipped.
+    fn current_file(&self) -> Option<String> {
+        if !matches!(self.state, JobState::Serving | JobState::Transferring) {
+            return None;
+        }
+        let index = if self.sender {
+            (self.files_done + self.skipped_files) as usize
+        } else {
+            self.file_index
+        };
+        self.files().get(index).map(|entry| entry.path.clone())
+    }
+
     /// Bytes done, including the file arriving now.
     fn done(&self) -> u64 {
         self.done_bytes.saturating_add(self.in_flight)
@@ -359,6 +374,7 @@ impl JobRecord {
                     .nth(index)
                     .map(|entry| entry.path.clone())
             }),
+            current_file: self.current_file(),
             error: self.error.clone(),
             destination: self.destination.as_ref().map(|landing| {
                 // A chosen folder is what the manifest's paths lie under.
@@ -4953,6 +4969,28 @@ mod retry_tests {
         Core::retry_settled(&mut record);
         assert!(record.retry.is_none());
         assert!(record.error.is_none());
+    }
+
+    /// The file moving now is the receiver's own place, or for a sender the
+    /// file after those landed or skipped; none once files stop moving.
+    #[test]
+    fn the_current_file_follows_each_side() {
+        let mut record = JobRecord::test_receiver_of(1, 3);
+        let path = |index: usize| record_path(&record, index);
+        fn record_path(record: &JobRecord, index: usize) -> Option<String> {
+            record.files().get(index).map(|entry| entry.path.clone())
+        }
+        let paths: Vec<_> = (0..3).map(path).collect();
+        record.state = JobState::Transferring;
+        record.file_index = 1;
+        assert_eq!(record.snapshot().current_file, paths[1]);
+        record.sender = true;
+        record.state = JobState::Serving;
+        record.files_done = 1;
+        record.skipped_files = 1;
+        assert_eq!(record.snapshot().current_file, paths[2]);
+        record.state = JobState::Interrupted;
+        assert_eq!(record.snapshot().current_file, None);
     }
 
     #[test]

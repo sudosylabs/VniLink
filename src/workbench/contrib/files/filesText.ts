@@ -68,14 +68,28 @@ export function jobStatus(job: FileJob, rate: number | undefined): string {
 		case 'Preparing':
 			return nls.localize('files.preparing', 'Checking files…');
 		case 'Serving':
-			return done > 0 ? progress(done, total, rate) : nls.localize('files.waiting', 'Waiting to start');
-		case 'Transferring':
-			return progress(done, total, rate);
+		case 'Transferring': {
+			if (job.error) {
+				return nls.localize('files.retrying', 'Trying again: {0}', job.error);
+			}
+			if (job.state === 'Serving' && done === 0) {
+				return nls.localize('files.waiting', 'Waiting to start');
+			}
+			const moving = progress(done, total, rate);
+			return job.current_file && Number(job.files_total) > 1
+				? nls.localize('files.movingFile', '{0} · {1}', baseName(job.current_file), moving)
+				: moving;
+		}
 		case 'WaitingDecision':
 			return job.waiting_file
-				? nls.localize('files.exists', '“{0}” is already there', job.waiting_file.slice(job.waiting_file.lastIndexOf('/') + 1))
+				? nls.localize('files.exists', '“{0}” is already there', baseName(job.waiting_file))
 				: nls.localize('files.decide', 'Needs your decision');
 		case 'Interrupted':
+			if (job.error) {
+				return done > 0
+					? nls.localize('files.interruptedAtBecause', 'Stopped at {0} of {1}: {2}', formatSize(done), formatSize(total), job.error)
+					: nls.localize('files.interruptedBecause', 'Stopped: {0}', job.error);
+			}
 			return done > 0
 				? nls.localize('files.interruptedAt', 'Stopped at {0} of {1}', formatSize(done), formatSize(total))
 				: nls.localize('files.interrupted', 'Stopped: the connection was lost');
@@ -88,6 +102,11 @@ export function jobStatus(job: FileJob, rate: number | undefined): string {
 				? nls.localize('files.completeOne', '{0}, checked', formatSize(total))
 				: nls.localize('files.complete', '{0} files, {1}, checked', job.files_total, formatSize(total));
 	}
+}
+
+/** The last part of a `/`-separated path. */
+function baseName(path: string): string {
+	return path.slice(path.lastIndexOf('/') + 1);
 }
 
 function progress(done: number, total: number, rate: number | undefined): string {
@@ -132,6 +151,9 @@ export function arrivalStatus(job: FileJob, rate: number | undefined): string {
 			return nls.localize('files.preparing', 'Checking files…');
 		case 'Serving':
 		case 'Transferring': {
+			if (job.error) {
+				return nls.localize('files.tryingAgain', 'Trying again');
+			}
 			if (done === 0) {
 				return nls.localize('files.waiting', 'Waiting to start');
 			}

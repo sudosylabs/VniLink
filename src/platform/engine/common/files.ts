@@ -42,7 +42,11 @@ export interface FileJob {
 	state: 'Preparing' | 'Serving' | 'Transferring' | 'WaitingDecision' | 'Interrupted' | 'Cancelled' | 'Failed' | 'Complete';
 	total_bytes: string; done_bytes: string; files_total: string; files_done: string;
 	resumed_files: string; skipped_files: string; skipped_symlinks: string;
-	waiting_file: string | null; error: string | null;
+	waiting_file: string | null;
+	/** The file moving now, while files move. */
+	current_file: string | null;
+	/** Why it stopped or failed; while it still moves files, why it is trying again. */
+	error: string | null;
 	/** Where it lands, when this computer submitted it: the receiving folder and what arrives in it. */
 	destination: FileLanding | null;
 }
@@ -165,9 +169,10 @@ export function isFileJob(value: unknown): value is FileJob {
 		&& fileJobState(value.state) && decimal(value.total_bytes) && decimal(value.done_bytes)
 		&& decimal(value.files_total) && decimal(value.files_done) && decimal(value.resumed_files)
 		&& decimal(value.skipped_files) && decimal(value.skipped_symlinks)
-		&& (value.waiting_file === null || text(value.waiting_file, 4096)) && (value.error === null || text(value.error, 4096))
+		&& (value.waiting_file === null || text(value.waiting_file, 4096))
+		&& (value.current_file === null || text(value.current_file, 4096)) && (value.error === null || text(value.error, 4096))
 		&& (value.destination === null || isFileLanding(value.destination))
-		&& Object.keys(value).length === 16;
+		&& Object.keys(value).length === 17;
 }
 
 export function isFileJobs(value: unknown): value is FileJob[] {

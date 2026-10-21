@@ -100,6 +100,10 @@ pub struct JobSnapshot {
     pub skipped_files: u64,
     pub skipped_symlinks: u64,
     pub waiting_file: Option<String>,
+    /// The file moving now, while the transfer moves files.
+    pub current_file: Option<String>,
+    /// Why the transfer stopped, failed, or is trying again while it
+    /// still moves files.
     pub error: Option<String>,
     /// Where the transfer lands, on the side that submitted it.
     pub destination: Option<JobDestination>,

@@ -31,7 +31,7 @@ const result = await build({
 
 const { FilesService, filesRefusal, filesOpenFailure, engineErrorCategory, folderName, formatSize, itemCount, jobStatus } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 
-const job = (id, state) => ({ id, peer: 'p', label: 'a.txt', direction: 'Upload', sender: true, state, total_bytes: '100', done_bytes: '40', files_total: '1', files_done: '0', resumed_files: '0', skipped_files: '0', skipped_symlinks: '0', waiting_file: null, error: null, destination: null });
+const job = (id, state) => ({ id, peer: 'p', label: 'a.txt', direction: 'Upload', sender: true, state, total_bytes: '100', done_bytes: '40', files_total: '1', files_done: '0', resumed_files: '0', skipped_files: '0', skipped_symlinks: '0', waiting_file: null, current_file: null, error: null, destination: null });
 
 /** A paired computer with Files shared, a channel whose answers the test chooses, and a record of what was asked. */
 function fixture({ status = 'available', answer } = {}) {
@@ -146,6 +146,11 @@ test('sizes, folders and transfers read as a file manager says them', () => {
 	assert.equal(jobStatus({ ...running, state: 'WaitingDecision', waiting_file: 'Reports/q3.xlsx' }), '“q3.xlsx” is already there');
 	assert.equal(jobStatus({ ...running, state: 'Interrupted' }), 'Stopped at 40 bytes of 100 bytes');
 	assert.equal(jobStatus({ ...running, state: 'Interrupted', done_bytes: '0' }), 'Stopped: the connection was lost');
+	assert.equal(jobStatus({ ...running, state: 'Interrupted', error: 'the transfer stalled' }), 'Stopped at 40 bytes of 100 bytes: the transfer stalled');
+	assert.equal(jobStatus({ ...running, state: 'Interrupted', done_bytes: '0', error: 'file transfer is no longer allowed' }), 'Stopped: file transfer is no longer allowed');
+	assert.equal(jobStatus({ ...running, error: 'the other computer could not be reached' }), 'Trying again: the other computer could not be reached');
+	assert.equal(jobStatus({ ...running, files_total: '3', current_file: 'Photos/b.jpg' }), 'b.jpg · 40 bytes of 100 bytes');
+	assert.equal(jobStatus({ ...running, current_file: 'a.txt' }), '40 bytes of 100 bytes', 'one file needs no name');
 	assert.equal(jobStatus({ ...running, state: 'Failed', error: 'there is not enough space' }), 'there is not enough space');
 	assert.equal(jobStatus({ ...running, state: 'Complete', files_total: '86', total_bytes: '212000000' }), '86 files, 212 MB, checked');
 });

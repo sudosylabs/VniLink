@@ -154,6 +154,7 @@ pub(crate) struct TransferJob {
     skipped_files: String,
     skipped_symlinks: String,
     waiting_file: Option<String>,
+    current_file: Option<String>,
     error: Option<String>,
     destination: Option<TransferDestination>,
 }
@@ -217,6 +218,7 @@ pub(crate) fn transfer_job(snapshot: &vnilink_app::FfiJobSnapshot) -> TransferJo
         skipped_files: snapshot.skipped_files.to_string(),
         skipped_symlinks: snapshot.skipped_symlinks.to_string(),
         waiting_file: snapshot.waiting_file.clone(),
+        current_file: snapshot.current_file.clone(),
         error: snapshot.error.clone(),
         destination: snapshot
             .destination
