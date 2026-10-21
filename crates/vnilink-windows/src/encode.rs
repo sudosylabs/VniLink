@@ -7,9 +7,17 @@
 //! before the input sample is processed. The pump rejects a forced frame
 //! that is not a keyframe. Without Media Foundation H.264 this returns
 //! unsupported.
+//!
+//! A recovery keyframe is encoded under a quantiser floor
+//! (`AVEncVideoMinQP`) that [`RecoveryQp`] moves until it fits a few
+//! pictures' bytes, and the floor is cleared once its picture is drained.
+//! A floor rather than a higher `AVEncVideoMaxQP`: on VideoToolbox, the only
+//! encoder this was measured on, raising the ceiling left a forced keyframe
+//! as large, and a floor shrank it. The transform here is synchronous and
+//! drained after each input, so no other picture is encoded under the floor.
 
 #[cfg(windows)]
-use vnilink_media::bgra_to_nv12;
+use vnilink_media::{bgra_to_nv12, RecoveryQp};
 use vnilink_media::{EncodeParams, EncodedSample, Error, RawFrame, VideoEncoder};
 #[cfg(windows)]
 use windows::core::Interface;
@@ -17,14 +25,15 @@ use windows::core::Interface;
 use windows::Win32::Media::MediaFoundation::{
     eAVEncCommonRateControlMode_CBR, eAVScenarioInfo_DisplayRemoting,
     CODECAPI_AVEncCommonBufferSize, CODECAPI_AVEncCommonMeanBitRate,
-    CODECAPI_AVEncCommonRateControlMode, CODECAPI_AVEncVideoForceKeyFrame, CODECAPI_AVScenarioInfo,
-    ICodecAPI, IMFMediaType, IMFSample, IMFTransform, MFCreateMediaType, MFCreateMemoryBuffer,
-    MFCreateSample, MFMediaType_Video, MFNominalRange_16_235, MFStartup, MFVideoFormat_H264,
-    MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFVideoTransferMatrix_BT601,
-    MFSTARTUP_NOSOCKET, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
-    MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MF_E_TRANSFORM_NEED_MORE_INPUT,
-    MF_LOW_LATENCY, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
-    MF_MT_MAJOR_TYPE, MF_MT_MAX_KEYFRAME_SPACING, MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_SUBTYPE,
+    CODECAPI_AVEncCommonRateControlMode, CODECAPI_AVEncVideoForceKeyFrame,
+    CODECAPI_AVEncVideoMinQP, CODECAPI_AVScenarioInfo, ICodecAPI, IMFMediaType, IMFSample,
+    IMFTransform, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Video,
+    MFNominalRange_16_235, MFStartup, MFVideoFormat_H264, MFVideoFormat_NV12,
+    MFVideoInterlace_Progressive, MFVideoTransferMatrix_BT601, MFSTARTUP_NOSOCKET,
+    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER,
+    MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MF_E_TRANSFORM_NEED_MORE_INPUT, MF_LOW_LATENCY,
+    MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
+    MF_MT_MAX_KEYFRAME_SPACING, MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_SUBTYPE,
     MF_MT_VIDEO_NOMINAL_RANGE, MF_MT_YUV_MATRIX, MF_VERSION,
 };
 #[cfg(windows)]
@@ -53,6 +62,8 @@ pub struct WindowsEncoder {
     /// The frame rate the transform was opened for; it cannot change.
     #[cfg(windows)]
     frame_rate: u8,
+    #[cfg(windows)]
+    recovery_qp: RecoveryQp,
 }
 
 // The transform is a COM pointer used through `&mut self` only, from the
@@ -183,6 +194,7 @@ impl WindowsEncoder {
             provides_samples,
             output_size,
             frame_rate,
+            recovery_qp: RecoveryQp::default(),
         })
     }
 }
@@ -235,6 +247,18 @@ impl VideoEncoder for WindowsEncoder {
         #[cfg(windows)]
         {
             let nv12 = bgra_to_nv12(frame)?;
+            // SAFETY (floor and clear): `transform` is this encoder's live
+            // transform, used from the thread that owns it.
+            let floored = params.force_keyframe
+                && params.recovery
+                && unsafe {
+                    set_codec_u32(
+                        &self.transform,
+                        &CODECAPI_AVEncVideoMinQP,
+                        u32::from(self.recovery_qp.floor()),
+                    )
+                }
+                .is_ok();
             let sample = unsafe {
                 self.encode_nv12(
                     nv12.y_plane(),
@@ -242,7 +266,14 @@ impl VideoEncoder for WindowsEncoder {
                     frame.timestamp_us(),
                     params,
                 )
-            }?;
+            };
+            if floored {
+                let _ = unsafe { set_codec_u32(&self.transform, &CODECAPI_AVEncVideoMinQP, 0) };
+            }
+            let sample = sample?;
+            if floored {
+                self.recovery_qp.observe(sample.bytes.len(), params);
+            }
             return h264_access_unit(&sample.bytes, &sample.header);
         }
         #[cfg(not(windows))]

@@ -230,6 +230,7 @@ fn probe_caps() -> Result<vnilink::VideoCodecCaps, FfiError> {
                 &raw,
                 &EncodeParams {
                     force_keyframe: true,
+                    recovery: false,
                     bitrate_bps: 500_000,
                     frame_rate: 30,
                 },
@@ -1466,6 +1467,7 @@ mod viewer_tests {
                 &raw,
                 &EncodeParams {
                     force_keyframe: true,
+                    recovery: false,
                     bitrate_bps: 500_000,
                     frame_rate: 30,
                 },
@@ -1564,6 +1566,7 @@ mod viewer_tests {
                 &raw,
                 &EncodeParams {
                     force_keyframe: true,
+                    recovery: false,
                     bitrate_bps: 500_000,
                     frame_rate: 30,
                 },

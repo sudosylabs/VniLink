@@ -35,6 +35,7 @@ fn vaapi_encodes_a_synthetic_picture_when_a_render_node_is_open() {
     };
     let params = vnilink_media::EncodeParams {
         force_keyframe: true,
+        recovery: false,
         bitrate_bps: 500_000,
         frame_rate: 30,
     };
@@ -50,6 +51,7 @@ fn vaapi_encodes_a_synthetic_picture_when_a_render_node_is_open() {
             &solid(64, 64, 33_333, 0, 0, 255),
             &vnilink_media::EncodeParams {
                 force_keyframe: false,
+                recovery: false,
                 bitrate_bps: 500_000,
                 frame_rate: 30,
             },
@@ -146,6 +148,7 @@ fn higher_bitrate_changes_the_hardware_output_budget() {
                     &frame,
                     &vnilink_media::EncodeParams {
                         force_keyframe: index == 0,
+                        recovery: false,
                         bitrate_bps: bitrate,
                         frame_rate: 60,
                     },

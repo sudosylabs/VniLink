@@ -26,6 +26,7 @@ fn videotoolbox_encodes_and_decodes_a_synthetic_picture() {
     let mut encoder = MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
     let params = EncodeParams {
         force_keyframe: true,
+        recovery: false,
         bitrate_bps: 500_000,
         frame_rate: 30,
     };
@@ -50,6 +51,7 @@ fn videotoolbox_encodes_and_decodes_a_synthetic_picture() {
             &solid(64, 64, 33_333, 0, 0, 255),
             &EncodeParams {
                 force_keyframe: false,
+                recovery: false,
                 bitrate_bps: 500_000,
                 frame_rate: 30,
             },
@@ -84,6 +86,7 @@ fn videotoolbox_high_decodes_and_marks_profile_100() {
             &solid(64, 64, 0, 0, 0, 255),
             &EncodeParams {
                 force_keyframe: true,
+                recovery: false,
                 bitrate_bps: 500_000,
                 frame_rate: 30,
             },
@@ -121,6 +124,7 @@ fn recording_remuxes_native_h264_without_reencoding() {
                 &solid(64, 64, time, 0, 0, 255),
                 &EncodeParams {
                     force_keyframe: index % 30 == 0,
+                    recovery: false,
                     bitrate_bps: 500_000,
                     frame_rate: 30,
                 },
@@ -309,6 +313,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
                 &solid(64, 64, time, 0, 0, 255),
                 &EncodeParams {
                     force_keyframe: index == 0,
+                    recovery: false,
                     bitrate_bps: 500_000,
                     frame_rate: 30,
                 },
@@ -355,6 +360,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
             &solid(64, 64, 1_000_000, 0, 255, 0),
             &EncodeParams {
                 force_keyframe: true,
+                recovery: false,
                 bitrate_bps: 500_000,
                 frame_rate: 30,
             },
@@ -385,6 +391,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
             &solid(64, 64, 1_033_333, 0, 255, 0),
             &EncodeParams {
                 force_keyframe: false,
+                recovery: false,
                 bitrate_bps: 500_000,
                 frame_rate: 30,
             },
@@ -424,6 +431,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
                 &solid(64, 64, time, 0, 0, 255),
                 &EncodeParams {
                     force_keyframe: index == 0,
+                    recovery: false,
                     bitrate_bps: 500_000,
                     frame_rate: 30,
                 },
@@ -451,6 +459,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
                 &solid(64, 64, time, 0, 255, 0),
                 &EncodeParams {
                     force_keyframe: index == 0,
+                    recovery: false,
                     bitrate_bps: 500_000,
                     frame_rate: 30,
                 },
@@ -530,6 +539,7 @@ fn hevc_probe_and_negotiated_encoder_process_real_synthetic_frames() {
                 &raw,
                 &EncodeParams {
                     force_keyframe: i == 0,
+                    recovery: false,
                     bitrate_bps: 500_000,
                     frame_rate: 30,
                 },
@@ -556,6 +566,7 @@ fn videotoolbox_takes_a_new_rate_without_a_keyframe() {
     let mut encoder = MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
     let params = |force_keyframe, bitrate_bps, frame_rate| EncodeParams {
         force_keyframe,
+        recovery: false,
         bitrate_bps,
         frame_rate,
     };
@@ -583,4 +594,133 @@ fn videotoolbox_takes_a_new_rate_without_a_keyframe() {
             .unwrap();
     }
     assert!(!encoder.retune(0, 60).unwrap(), "a zero bitrate was taken");
+}
+
+/// A page of text-like glyphs from a fixed alphabet on white, with a
+/// coloured sidebar and one line that grows by a glyph a picture, like
+/// typing. Dense enough that a keyframe costs many pictures' bytes.
+fn page(width: u16, height: u16, index: u64) -> vnilink_media::RawFrame {
+    let (w, h) = (usize::from(width), usize::from(height));
+    let mut pixels = vec![255u8; w * h * 4];
+    let mut seed = 0x1234_5678u32;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed
+    };
+    let alphabet: Vec<u32> = (0..40).map(|_| next()).collect();
+    for row in pixels.chunks_exact_mut(w * 4) {
+        for pixel in row[..(w / 8) * 4].chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[80, 60, 40, 255]);
+        }
+    }
+    let (mut y, mut line) = (20, 0);
+    while y + 14 < h {
+        let mut x = w / 8 + 20;
+        let end = if line == 20 {
+            x + (index as usize * 9).min(w / 2)
+        } else {
+            (x + 300 + (next() % 800) as usize).min(w - 20)
+        };
+        while x + 8 < end {
+            let glyph = alphabet[(next() % 40) as usize];
+            for gy in 0..12 {
+                for gx in 0..7 {
+                    if (glyph >> ((gy * 7 + gx) % 31)) & 1 == 1 && (gy + gx) % 3 != 0 {
+                        let at = ((y + gy) * w + x + gx) * 4;
+                        pixels[at..at + 3].copy_from_slice(&[20, 20, 20]);
+                    }
+                }
+            }
+            x += if next() % 7 == 0 { 18 } else { 9 };
+        }
+        y += 18;
+        line += 1;
+    }
+    vnilink_media::RawFrame::bgra(width, height, index * 33_333, pixels).unwrap()
+}
+
+/// Sizes of the forced keyframes in a stream that asks for one every
+/// `every` pictures after the first, and how many pictures the encoder
+/// dropped to repay their bytes. A dropped keyframe stays owed, as in the
+/// pump. Every picture the encoder made is decoded.
+fn forced_keyframes(
+    width: u16,
+    height: u16,
+    bitrate_bps: u32,
+    recovery: bool,
+    every: u64,
+    count: u64,
+) -> (Vec<usize>, u64) {
+    let mut encoder = MacEncoder::open(width, height, 30, bitrate_bps, true).unwrap();
+    let mut decoder = MacDecoder::new();
+    let (mut sizes, mut dropped, mut owed) = (Vec::new(), 0, false);
+    for index in 0..every * (count + 1) {
+        let force = owed || index % every == 0;
+        let params = EncodeParams {
+            force_keyframe: force,
+            recovery: recovery && force && index > 0,
+            bitrate_bps,
+            frame_rate: 30,
+        };
+        match encoder.encode(&page(width, height, index), &params) {
+            Ok(sample) => {
+                owed = false;
+                if force && index > 0 {
+                    assert!(sample.keyframe(), "picture {index} was not a keyframe");
+                    sizes.push(sample.bytes().len());
+                }
+                let frame =
+                    EncodedFrame::h264(sample.keyframe(), index * 33_333, sample.bytes().to_vec())
+                        .unwrap();
+                decoder.decode(&frame).unwrap();
+            }
+            Err(vnilink_media::Error::EncodeRejected("the encoder produced no frame")) => {
+                owed = force;
+                dropped += 1;
+            }
+            Err(error) => panic!("picture {index}: {error}"),
+        }
+    }
+    (sizes, dropped)
+}
+
+/// A recovery keyframe comes out smaller than a full one of the same
+/// screen, still decodes, and the stream after it decodes on.
+#[test]
+fn a_recovery_keyframe_is_smaller_than_a_full_one() {
+    let (full, _) = forced_keyframes(1280, 720, 2_000_000, false, 15, 3);
+    let (recovery, _) = forced_keyframes(1280, 720, 2_000_000, true, 15, 3);
+    let (full, recovery) = (full.iter().max().unwrap(), recovery.iter().max().unwrap());
+    assert!(
+        recovery * 3 < full * 2,
+        "recovery keyframes reached {recovery} bytes against {full} for a full one"
+    );
+}
+
+/// Prints forced-keyframe sizes, full against recovery, for the V4 record:
+/// `cargo test -p vnilink-macos --release --lib recovery_keyframe_sizes -- --ignored --nocapture`.
+#[test]
+#[ignore = "measurement"]
+fn recovery_keyframe_sizes() {
+    for (width, height) in [(1280, 720), (1920, 1080)] {
+        for bitrate_bps in [2_000_000, 8_000_000] {
+            let budget = vnilink_media::RecoveryQp::budget(&EncodeParams {
+                force_keyframe: true,
+                recovery: true,
+                bitrate_bps,
+                frame_rate: 30,
+            });
+            for recovery in [false, true] {
+                let (sizes, dropped) =
+                    forced_keyframes(width, height, bitrate_bps, recovery, 30, 8);
+                println!(
+                    "{width}x{height} {} kb/s {}: budget {budget} B, forced keyframes {sizes:?} B, pictures dropped {dropped}",
+                    bitrate_bps / 1_000,
+                    if recovery { "recovery" } else { "full" },
+                );
+            }
+        }
+    }
 }

@@ -75,7 +75,7 @@ Each case reports outcome, submit time, elapsed time from submit to completion, 
 
 **Video** (`crates/vnilink-media/src/tests/impaired_video.rs`) runs the real shared-capture fanout with a synthetic source and encoder:
 
-- Encoded sizes follow the encoder's bitrate and frame rate. Keyframes are ten predicted frames in size, and a periodic keyframe comes every 120 frames.
+- Encoded sizes follow the encoder's bitrate and frame rate. Keyframes are ten predicted frames in size, and a periodic keyframe comes every 120 frames. A recovery keyframe, which answers a loss, is four frames in size: a model of the cap the platform encoders apply (`vnilink-media` `RecoveryQp`), not a real encoder's output.
 - Each picture carries its sequence number, so the viewer can tell a clean picture from one decoded against a missing reference.
 - The link is blacked out for each burst.
 

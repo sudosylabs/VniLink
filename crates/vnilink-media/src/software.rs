@@ -374,6 +374,7 @@ fn probe(codec: VideoCodec) -> Result<(), Error> {
         &frame,
         &EncodeParams {
             force_keyframe: true,
+            recovery: false,
             bitrate_bps: 500_000,
             frame_rate: 30,
         },
@@ -419,6 +420,7 @@ mod tests {
                         &raw,
                         &EncodeParams {
                             force_keyframe: force,
+                            recovery: false,
                             bitrate_bps: 500_000,
                             frame_rate: 30,
                         },
@@ -465,6 +467,7 @@ mod tests {
                         &frame,
                         &EncodeParams {
                             force_keyframe: i == 0,
+                            recovery: false,
                             bitrate_bps: 500_000,
                             frame_rate: 30,
                         },

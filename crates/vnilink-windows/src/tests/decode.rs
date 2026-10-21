@@ -52,6 +52,7 @@ fn media_foundation_decodes_what_it_encoded() {
             &solid(64, 64, 0, 0, 0, 255),
             &EncodeParams {
                 force_keyframe: true,
+                recovery: false,
                 bitrate_bps: 500_000,
                 frame_rate: 30,
             },

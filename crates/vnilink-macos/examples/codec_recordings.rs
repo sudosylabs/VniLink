@@ -24,6 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &raw,
                 &EncodeParams {
                     force_keyframe: index == 0,
+                    recovery: false,
                     bitrate_bps: 500_000,
                     frame_rate: 30,
                 },

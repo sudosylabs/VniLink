@@ -418,6 +418,7 @@ fn capture(
                         &frame,
                         &EncodeParams {
                             force_keyframe: source.take_keyframe_request(),
+                            recovery: false,
                             bitrate_bps: BITRATE,
                             frame_rate: config.fps as u8,
                         },
@@ -518,6 +519,7 @@ mod tests {
                 &frame,
                 &EncodeParams {
                     force_keyframe: true,
+                    recovery: false,
                     bitrate_bps: BITRATE,
                     frame_rate: 30,
                 },

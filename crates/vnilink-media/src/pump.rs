@@ -3,6 +3,10 @@
 //! The first picture, a quality-size change, and [`vnilink::CoreEvent::KeyframeRequested`]
 //! all force a keyframe. Frames that arrive faster than the quality frame rate
 //! are skipped, unless a keyframe is still owed.
+//!
+//! A requested keyframe answers a loss, so it is a recovery keyframe: the
+//! encoder may cap its size and let quality refine over the pictures after
+//! it. The first picture and a size change still get a full keyframe.
 
 use vnilink::Quality;
 use vnilink::{Core, CoreEvent, EncodedFrame, MAX_VIDEO_FRAME};
@@ -15,6 +19,10 @@ use crate::frame::{encoded_size, scale_bgra, RawFrame};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EncodeParams {
     pub force_keyframe: bool,
+    /// The forced keyframe answers a loss: an encoder that can should hold
+    /// it to a few pictures' bytes, at lower quality, so that resending it
+    /// does not crowd the link. Never set without `force_keyframe`.
+    pub recovery: bool,
     pub bitrate_bps: u32,
     pub frame_rate: u8,
 }
@@ -115,6 +123,8 @@ pub enum PumpOutput {
 pub struct FramePump {
     quality: Quality,
     force_keyframe: bool,
+    /// Every request since the last keyframe was for recovery.
+    recovery: bool,
     awaiting_keyframe: bool,
     last_sent: Option<u64>,
 }
@@ -124,6 +134,7 @@ impl FramePump {
         Self {
             quality,
             force_keyframe: false,
+            recovery: false,
             awaiting_keyframe: true,
             last_sent: None,
         }
@@ -143,7 +154,18 @@ impl FramePump {
         }
     }
 
+    /// Forces the next picture as a full-quality keyframe.
     pub fn request_keyframe(&mut self) {
+        self.force_keyframe = true;
+        self.recovery = false;
+    }
+
+    /// Forces the next picture as a recovery keyframe, unless a full one is
+    /// already owed.
+    pub fn request_recovery_keyframe(&mut self) {
+        if !self.force_keyframe {
+            self.recovery = true;
+        }
         self.force_keyframe = true;
     }
 
@@ -176,6 +198,7 @@ impl FramePump {
         };
         let params = EncodeParams {
             force_keyframe: force,
+            recovery: force && self.recovery && !self.awaiting_keyframe,
             bitrate_bps: self.quality.max_bitrate_kbps.checked_mul(1_000).ok_or(
                 Error::InvalidSetting("bitrate does not fit in bits per second"),
             )?,
@@ -193,6 +216,7 @@ impl FramePump {
                 .map_err(|_| Error::InvalidFrame("encoded frame was rejected"))?;
         if keyframe {
             self.force_keyframe = false;
+            self.recovery = false;
             self.awaiting_keyframe = false;
         }
         self.last_sent = Some(frame.timestamp_us());
@@ -232,6 +256,10 @@ impl<E: VideoEncoder> HostVideo<E> {
         self.pump.request_keyframe();
     }
 
+    pub fn request_recovery_keyframe(&mut self) {
+        self.pump.request_recovery_keyframe();
+    }
+
     /// Whether the next encoded picture must be a keyframe.
     pub fn keyframe_pending(&self) -> bool {
         self.pump.keyframe_pending()
@@ -245,11 +273,12 @@ impl<E: VideoEncoder> HostVideo<E> {
         self.pump.quality()
     }
 
-    /// A keyframe request forces the next encoded picture.
+    /// A keyframe request forces the next encoded picture as a recovery
+    /// keyframe: the core asks for one when pictures were lost or dropped.
     /// A quality update replaces the limits the encoder sees.
     pub fn observe(&mut self, event: &CoreEvent) {
         match event {
-            CoreEvent::KeyframeRequested { .. } => self.request_keyframe(),
+            CoreEvent::KeyframeRequested { .. } => self.request_recovery_keyframe(),
             CoreEvent::QualityUpdated { quality, .. } => self.set_quality(*quality),
             _ => {}
         }

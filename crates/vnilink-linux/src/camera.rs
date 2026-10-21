@@ -601,6 +601,7 @@ fn capture(
                 &frame,
                 &EncodeParams {
                     force_keyframe: source.take_keyframe_request(),
+                    recovery: false,
                     bitrate_bps: BITRATE,
                     frame_rate: config.fps as u8,
                 },

@@ -23,6 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &frame,
                 &EncodeParams {
                     force_keyframe: index == 0,
+                    recovery: false,
                     bitrate_bps: 8_000_000,
                     frame_rate: 30,
                 },
