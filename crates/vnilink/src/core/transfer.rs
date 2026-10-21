@@ -259,57 +259,90 @@ impl Core {
         progress: std::sync::mpsc::Sender<u64>,
         mut cancel: tokio::sync::watch::Receiver<bool>,
     ) -> Result<Received, Error> {
-        let addr = {
-            let state = self.alive_state()?;
-            device_addr(state.trust.get(peer).ok_or(Error::NotPaired)?)?
-        };
-        let mut partial = Partial::open(partial, journal, size)?;
-        let from = partial.checked();
-        let mut mismatches = 0;
-        loop {
-            if *cancel.borrow() {
-                return Ok(Received::Cancelled);
-            }
-            let request = FileRequest {
+        let addr = peer_addr(&self.shared, peer)?;
+        self.runtime.block_on(fetch_file(
+            &self.shared,
+            peer,
+            addr,
+            FileRequest {
                 job,
                 file,
-                offset: partial.checked(),
-            };
-            let received = self.runtime.block_on(async {
-                match ask_kept(&self.shared, peer, addr.clone(), request).await? {
-                    Answer::Sending(recv) => {
-                        let counters = &self.shared.transfer_counters;
-                        transfer::receive(
-                            recv,
-                            &mut partial,
-                            size,
-                            &progress,
-                            counters,
-                            &mut cancel,
-                        )
-                        .await
-                    }
-                    Answer::Changed => Ok(Received::Changed),
-                    Answer::Denied => Ok(Received::Denied),
-                    Answer::Busy => Ok(Received::Busy),
+                offset: 0,
+            },
+            size,
+            partial,
+            journal,
+            &progress,
+            &mut cancel,
+            &mut None,
+        ))
+    }
+}
+
+/// Where to dial `peer`, while it is paired.
+pub(super) fn peer_addr(shared: &Shared, peer: &[u8; 32]) -> Result<EndpointAddr, Error> {
+    let state = lock(&shared.state);
+    if state.shut_down {
+        return Err(Error::ShutDown);
+    }
+    device_addr(state.trust.get(peer).ok_or(Error::NotPaired)?)
+}
+
+/// Fetches one file of a sending job into its partial, continuing after
+/// its last checked segment; `request` names the job and file, and its
+/// offset is taken from the partial. `via` learns which connection the
+/// file arrived on. Run where blocking file writes are fine: the caller's
+/// own thread or a blocking worker, never a runtime worker.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn fetch_file(
+    shared: &Shared,
+    peer: &[u8; 32],
+    addr: EndpointAddr,
+    request: FileRequest,
+    size: u64,
+    partial: &std::path::Path,
+    journal: &std::path::Path,
+    progress: &std::sync::mpsc::Sender<u64>,
+    cancel: &mut tokio::sync::watch::Receiver<bool>,
+    via: &mut Option<usize>,
+) -> Result<Received, Error> {
+    let mut partial = Partial::open(partial, journal, size)?;
+    let from = partial.checked();
+    let mut mismatches = 0;
+    loop {
+        if *cancel.borrow() {
+            return Ok(Received::Cancelled);
+        }
+        let request = FileRequest {
+            offset: partial.checked(),
+            ..request
+        };
+        let received = match ask_kept(shared, peer, addr.clone(), request).await {
+            Ok((Answer::Sending(recv), connection)) => {
+                *via = Some(connection);
+                let counters = &shared.transfer_counters;
+                transfer::receive(recv, &mut partial, size, progress, counters, cancel).await
+            }
+            Ok((Answer::Changed, _)) => Ok(Received::Changed),
+            Ok((Answer::Denied, _)) => Ok(Received::Denied),
+            Ok((Answer::Busy, _)) => Ok(Received::Busy),
+            Err(error) => Err(error),
+        };
+        match received {
+            Ok(Received::Mismatch) if mismatches == 0 => mismatches += 1,
+            Ok(Received::Done { .. }) => {
+                shared.transfer_counters.fetched(from > 0);
+                return Ok(Received::Done {
+                    downloaded: size - from,
+                });
+            }
+            other => {
+                if matches!(other, Ok(Received::Stalled)) {
+                    shared.transfer_counters.stalled();
                 }
-            });
-            match received {
-                Ok(Received::Mismatch) if mismatches == 0 => mismatches += 1,
-                Ok(Received::Done { .. }) => {
-                    self.shared.transfer_counters.fetched(from > 0);
-                    return Ok(Received::Done {
-                        downloaded: size - from,
-                    });
-                }
-                other => {
-                    if matches!(other, Ok(Received::Stalled)) {
-                        self.shared.transfer_counters.stalled();
-                    }
-                    // Unchecked bytes never outlive the attempt.
-                    partial.drop_unchecked()?;
-                    return other;
-                }
+                // Unchecked bytes never outlive the attempt.
+                partial.drop_unchecked()?;
+                return other;
             }
         }
     }
@@ -322,7 +355,7 @@ async fn ask_kept(
     peer: &[u8; 32],
     addr: EndpointAddr,
     request: FileRequest,
-) -> Result<Answer, Error> {
+) -> Result<(Answer, usize), Error> {
     let (mut connection, mut reused) = files_connection(shared, peer, addr.clone()).await?;
     let mut answered = transfer::ask(&connection, request).await;
     while reused && answered.is_err() {
@@ -333,7 +366,16 @@ async fn ask_kept(
     if answered.is_err() {
         forget_files_connection(shared, peer, &connection);
     }
-    answered
+    answered.map(|answer| (answer, connection.stable_id()))
+}
+
+/// Whether `connection` is still the peer's open files connection. Revoking
+/// and unpairing close it, so a file that arrived on it before then is not
+/// used after.
+pub(super) fn still_connected(shared: &Shared, peer: &[u8; 32], connection: usize) -> bool {
+    lock(&shared.files_fetching)
+        .get(peer)
+        .is_some_and(|kept| kept.stable_id() == connection && kept.close_reason().is_none())
 }
 
 /// The peer's kept files connection while it is open, or a new one kept

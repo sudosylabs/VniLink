@@ -95,7 +95,15 @@ control or the desktop behind it.
    bytes are dropped. A segment that fails its check is fetched once more,
    then fails the job. The last segment is checked but not journaled: the
    file publishes as soon as it checks.
-5. Publication then follows the conflict choice, re-checking cancel,
+5. While a receiver takes one file, it fetches up to seven of the next
+   small files (one segment or less, 64 MiB in all) ahead into their
+   partials, so many small files do not cost a round trip each. They still
+   publish one at a time in manifest order, through the same conflict and
+   permission checks, and one is used only if it arrived whole on the files
+   connection still open: revoking closes that connection, so nothing
+   fetched after a revoke lands, though a file that had already arrived
+   whole when the revoke reached this computer may.
+6. Publication then follows the conflict choice, re-checking cancel,
    grant and owner under the commit (see `publish_staged`). Cancelled
    and interrupted jobs keep their partials for resume, within the
    resume retention policy; finished, failed and forgotten jobs remove

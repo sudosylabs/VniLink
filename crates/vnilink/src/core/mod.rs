@@ -594,6 +594,10 @@ struct Shared {
     /// Bounds the files served at once, per peer and in all.
     files_gate: transfer::ServeGate,
     transfer_counters: crate::transfer::TransferCounters,
+    /// Small files of receiving jobs fetched ahead of their turn, by job.
+    job_prefetch: Mutex<HashMap<u64, jobs::Prefetch>>,
+    #[cfg(test)]
+    prefetch_off: AtomicBool,
     /// This computer's folders watched for the window, by watch id.
     folder_watches: Mutex<HashMap<u64, notify::RecommendedWatcher>>,
     watch_next: AtomicU64,

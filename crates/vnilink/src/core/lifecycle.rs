@@ -327,6 +327,9 @@ impl Core {
             files_dialing: tokio::sync::Mutex::new(()),
             files_gate: Default::default(),
             transfer_counters: Default::default(),
+            job_prefetch: Mutex::new(std::collections::HashMap::new()),
+            #[cfg(test)]
+            prefetch_off: AtomicBool::new(false),
             folder_watches: Mutex::new(std::collections::HashMap::new()),
             watch_next: std::sync::atomic::AtomicU64::new(1),
             jobs: Arc::new(Mutex::new(std::collections::HashMap::new())),

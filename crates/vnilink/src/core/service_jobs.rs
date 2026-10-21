@@ -115,6 +115,7 @@ pub(super) fn interrupt_orphaned(shared: &Shared) {
         if let Some(stop) = lock(&shared.job_cancel).remove(id) {
             stop.send_replace(true);
         }
+        super::jobs::stop_prefetch(shared, *id);
     }
     if !interrupted.is_empty() {
         let _ = super::jobs::save_jobs(shared);

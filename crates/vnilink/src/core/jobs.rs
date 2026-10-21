@@ -424,6 +424,36 @@ impl JobRecord {
     }
 }
 
+/// Small files of one receiving job fetched ahead of their turn, by their
+/// place among the job's files, with their sizes. They only fill their
+/// partials: publication still takes each in order, and uses one only when
+/// it arrived whole.
+#[derive(Default)]
+pub(super) struct Prefetch {
+    /// Stops every fetch ahead when the job stops.
+    stop: Option<tokio::sync::watch::Sender<bool>>,
+    files: HashMap<usize, (u64, tokio::task::JoinHandle<Fetched>)>,
+}
+
+/// How a file fetched ahead ended, and the connection it arrived on.
+type Fetched = (Result<crate::transfer::Received, Error>, Option<usize>);
+
+/// Files a job fetches ahead of the one it takes now, and their bytes at
+/// most. With the file taken now, a job stays within a sender's serving
+/// bound for one peer.
+const PREFETCH_FILES: usize = 7;
+const PREFETCH_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Stops a job's fetches ahead and forgets them. Their partials stay, and
+/// what they hold is checked again whenever it is used.
+pub(super) fn stop_prefetch(shared: &Shared, id: u64) {
+    if let Some(prefetch) = lock(&shared.job_prefetch).remove(&id) {
+        if let Some(stop) = prefetch.stop {
+            let _ = stop.send(true);
+        }
+    }
+}
+
 /// Retries of a job whose last step failed in a way that may clear on its
 /// own: a lost or reconnecting connection, a stalled stream, a sender that
 /// stopped serving for now.
@@ -1040,6 +1070,7 @@ impl Core {
         if let Some(stop) = lock(&self.shared.job_cancel).remove(&id) {
             let _ = stop.send(true);
         }
+        stop_prefetch(&self.shared, id);
         // Best-effort peer notification: without a live session the local
         // record is still cancelled and serves nothing, so a later status
         // poll or resume observes the terminal state.
@@ -1472,19 +1503,40 @@ impl Core {
                 std::fs::create_dir_all(parent).map_err(|_| Error::InvalidSetting(STAGE_FAILED))?;
             }
         }
+        // This file may already be arriving: take it before the next small
+        // files start, so no second fetch ever writes its partial.
+        let ahead = lock(&self.shared.job_prefetch)
+            .get_mut(&id)
+            .and_then(|prefetch| prefetch.files.remove(&file_index));
+        self.prefetch_after(id, &peer_bytes, wire_job, file_index);
+        let arrived = ahead
+            .map(|(_, fetching)| self.runtime.block_on(fetching))
+            .and_then(|joined| joined.ok());
         let (progress, arriving) = std::sync::mpsc::channel();
         let watcher = follow_arrival(self.shared.jobs.clone(), self.shared.clone(), id, arriving);
         let file = u32::try_from(file_index).map_err(|_| Error::InvalidSetting(NO_JOB))?;
-        let fetch = self.fetch_job_file(
-            &peer_bytes,
-            wire_job,
-            file,
-            entry.size,
-            &staged,
-            &segments,
-            progress,
-            stop_rx,
-        );
+        // A file fetched ahead is used only when it arrived whole, on the
+        // connection still kept: revoking closes it, and a file that came
+        // before must not land after. Anything else is fetched again here,
+        // with this poll's retries and cancel.
+        let fetch = match arrived {
+            Some((Ok(done @ Received::Done { .. }), Some(via)))
+                if super::transfer::still_connected(&self.shared, &peer_bytes, via) =>
+            {
+                drop(progress);
+                Ok(done)
+            }
+            _ => self.fetch_job_file(
+                &peer_bytes,
+                wire_job,
+                file,
+                entry.size,
+                &staged,
+                &segments,
+                progress,
+                stop_rx,
+            ),
+        };
         let _ = watcher.join();
         lock(&self.shared.job_cancel).remove(&id);
         // A cancel or interruption during fetch preserves its state even if bytes arrived.
@@ -1741,6 +1793,97 @@ impl Core {
         Ok(destination.min(super::file_resources::available(&transfer_dir)?))
     }
 
+    /// Starts fetching the small files after `current` that are not
+    /// already arriving, up to [`PREFETCH_FILES`] and [`PREFETCH_BYTES`]
+    /// ahead. A file of more than one segment is left for its turn.
+    fn prefetch_after(&self, id: u64, peer: &[u8; 32], wire_job: u64, current: usize) {
+        #[cfg(test)]
+        if self.shared.prefetch_off.load(Ordering::Relaxed) {
+            return;
+        }
+        let Ok(addr) = super::transfer::peer_addr(&self.shared, peer) else {
+            return;
+        };
+        let started = {
+            let jobs = lock(&self.shared.jobs);
+            let Some(record) = jobs.get(&id) else {
+                return;
+            };
+            let mut prefetches = lock(&self.shared.job_prefetch);
+            let prefetch = prefetches.entry(id).or_default();
+            // Files the job already passed, landed or skipped, are done with.
+            prefetch.files.retain(|index, _| *index > current);
+            let mut count = prefetch.files.len();
+            let mut bytes: u64 = prefetch.files.values().map(|(size, _)| size).sum();
+            let mut started = Vec::new();
+            for (index, entry) in record.files().iter().enumerate().skip(current + 1) {
+                if count >= PREFETCH_FILES || bytes >= PREFETCH_BYTES {
+                    break;
+                }
+                if entry.size > crate::transfer::SEGMENT_LEN || prefetch.files.contains_key(&index)
+                {
+                    continue;
+                }
+                count += 1;
+                bytes += entry.size;
+                started.push((index, entry.path.clone(), entry.size));
+            }
+            let stop = prefetch
+                .stop
+                .get_or_insert_with(|| tokio::sync::watch::channel(false).0)
+                .clone();
+            (started, stop)
+        };
+        let (started, stop) = started;
+        for (index, path, size) in started {
+            let Ok((staged, segments)) = self.stage_paths(id, &path) else {
+                return;
+            };
+            let made = [&staged, &segments].into_iter().all(|path| {
+                path.parent()
+                    .is_none_or(|parent| std::fs::create_dir_all(parent).is_ok())
+            });
+            let Ok(file) = u32::try_from(index) else {
+                return;
+            };
+            if !made {
+                return;
+            }
+            let shared = self.shared.clone();
+            let handle = self.runtime.handle().clone();
+            let peer = *peer;
+            let addr = addr.clone();
+            let mut cancel = stop.subscribe();
+            // A blocking worker drives it: partial writes block.
+            let fetching = self.runtime.spawn_blocking(move || {
+                let (progress, _) = std::sync::mpsc::channel();
+                let mut via = None;
+                let fetched = handle.block_on(super::transfer::fetch_file(
+                    &shared,
+                    &peer,
+                    addr,
+                    crate::transfer::FileRequest {
+                        job: wire_job,
+                        file,
+                        offset: 0,
+                    },
+                    size,
+                    &staged,
+                    &segments,
+                    &progress,
+                    &mut cancel,
+                    &mut via,
+                ));
+                (fetched, via)
+            });
+            lock(&self.shared.job_prefetch)
+                .entry(id)
+                .or_default()
+                .files
+                .insert(index, (size, fetching));
+        }
+    }
+
     /// Where file `rel_path` of job `id` arrives, and its segment journal.
     fn stage_paths(
         &self,
@@ -1910,6 +2053,21 @@ impl Core {
     #[cfg(test)]
     pub(crate) fn set_serve_source_probe(probe: Option<fn(usize, u64)>) {
         *lock(&SERVE_SOURCE_PROBE) = probe;
+    }
+
+    /// Files of job `id` being fetched ahead of their turn.
+    #[cfg(test)]
+    pub(crate) fn fetching_ahead(&self, id: u64) -> usize {
+        lock(&self.shared.job_prefetch)
+            .get(&id)
+            .map_or(0, |prefetch| prefetch.files.len())
+    }
+
+    /// Takes one file at a time, as tests that park a particular serve
+    /// expect.
+    #[cfg(test)]
+    pub(crate) fn fetch_one_file_at_a_time(&self) {
+        self.shared.prefetch_off.store(true, Ordering::Relaxed);
     }
 
     /// Identifies this engine to [`SERVE_SOURCE_PROBE`].
@@ -2476,6 +2634,7 @@ impl Core {
                 record.error = Some(reason.to_owned());
             }
         }
+        stop_prefetch(&self.shared, id);
         save_jobs(&self.shared)?;
         self.job_snapshot(id)
     }
@@ -3205,6 +3364,7 @@ fn interrupt_jobs(shared: &Shared, peer: &[u8; 32], controller_only: bool, reaso
         if let Some(stop) = lock(&shared.job_cancel).remove(&id) {
             let _ = stop.send(true);
         }
+        stop_prefetch(shared, id);
     }
     let _ = save_jobs(shared);
 }
@@ -3342,8 +3502,9 @@ fn follow_arrival(
     })
 }
 
-/// Removes the partial files of job `id`.
+/// Removes the partial files of job `id`, stopping its fetches ahead.
 fn remove_staging(shared: &Shared, id: u64) {
+    stop_prefetch(shared, id);
     if let Some(dir) = lock(&shared.transfer_dir).clone() {
         let _ = std::fs::remove_dir_all(dir.join(STAGING_DIR).join(format!("job-{id}")));
     }
@@ -3660,6 +3821,7 @@ async fn handle_cancel(
         if let Some(stop) = lock(&shared.job_cancel).remove(&id) {
             let _ = stop.send(true);
         }
+        stop_prefetch(shared, id);
         let _ = save_jobs(shared);
     }
     reply(

@@ -60,16 +60,6 @@ impl Scratch {
         Self { path }
     }
 
-    /// Scratch on a RAM disk when one is usable, else the temp dir.
-    fn tagged_fast(tag: &str) -> Self {
-        let base = std::path::PathBuf::from("/dev/shm");
-        let probe = base.join(format!(".vnilink-probe-{}", std::process::id()));
-        let ram = std::fs::create_dir_all(&probe)
-            .and_then(|_| std::fs::remove_dir(&probe))
-            .is_ok();
-        Self::tagged_in(tag, if ram { base } else { std::env::temp_dir() })
-    }
-
     fn join(&self, name: &str) -> PathBuf {
         self.path.join(name)
     }
@@ -808,6 +798,10 @@ fn export_failure_keeps_the_original() {
 #[test]
 fn revoke_pauses_and_reauthorize_resumes() {
     let (host, controller, _host_scratch, controller_scratch) = setup("revoke");
+    // The controller receives. A file that arrived whole before the revoke
+    // reached it may still land; this test pins that nothing fetched after
+    // does, so it takes one file at a time.
+    controller.fetch_one_file_at_a_time();
     let host_files =
         FilesystemLocation::new(host.file_roots().unwrap(), &_host_scratch.join("root"));
     let controller_files = FilesystemLocation::new(
@@ -3373,6 +3367,8 @@ fn rebound_source_interrupts_and_restores() {
     // The controller uploads: the dialed side cannot rebind mid-session
     // (Busy), so the sender leg under test is the dialer's own.
     let (host, controller, host_scratch, controller_scratch) = setup_confined("rebind-src");
+    // The host receives; this test parks one particular serve.
+    host.fetch_one_file_at_a_time();
     let controller_root = controller_scratch.join("root");
     let one = payload(512, 1603);
     let two = payload(512, 1604);
@@ -3717,6 +3713,8 @@ fn open_handle_completes_across_source_rebind() {
     // The controller uploads: the dialed side cannot rebind mid-session
     // (Busy), so the sender leg under test is the dialer's own.
     let (host, controller, host_scratch, controller_scratch) = setup_confined("rebind-flight");
+    // The host receives; this test parks one particular serve.
+    host.fetch_one_file_at_a_time();
     let controller_root = controller_scratch.join("root");
     let one = payload(512, 1601);
     let two = payload(512, 1602);
@@ -4572,4 +4570,80 @@ fn diagnostics_count_a_finished_transfer() {
     assert_eq!(sent.transfers.files_served, 1);
     assert_eq!(sent.transfers.bytes_sent, bytes.len() as u64);
     assert_eq!(sent.resources.active_jobs, 0);
+}
+
+/// While a job takes one file, it fetches the next small files ahead, so a
+/// folder of small files lands without a round trip per file; they still
+/// land in order and exactly. Cancelling stops what is ahead.
+#[test]
+fn small_files_arrive_ahead_and_land_in_order() {
+    let (host, controller, host_scratch, controller_scratch) = setup("ahead");
+    let host_files =
+        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::new(
+        controller.file_roots().unwrap(),
+        &controller_scratch.join("root"),
+    );
+    let folder = controller_scratch.join("root/many");
+    std::fs::create_dir_all(&folder).unwrap();
+    for n in 0..20u64 {
+        std::fs::write(folder.join(format!("f{n:02}.bin")), payload(3000, 2000 + n)).unwrap();
+    }
+    controller.connect(&host.endpoint_id()).unwrap();
+    let job = controller
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("many"),
+            host_files.root,
+            &host_files.path(""),
+        )
+        .unwrap();
+    let rx = receiver_id(&host, job);
+
+    let first = host.job_poll(rx).unwrap();
+    assert_eq!(first.files_done, 1);
+    assert_eq!(
+        host.fetching_ahead(rx),
+        7,
+        "seven files ahead of the second"
+    );
+    // Each later poll lands exactly the next file.
+    let second = host.job_poll(rx).unwrap();
+    assert_eq!(second.files_done, 2);
+    let (sender, receiver) = drive_to_end(&controller, job, &host, rx);
+    assert_eq!(
+        (sender.state, receiver.state),
+        (JobState::Complete, JobState::Complete)
+    );
+    manifest::assert_trees_equal(&folder, &host_scratch.join("root/many"));
+    assert_eq!(host.fetching_ahead(rx), 0);
+
+    // A second job, cancelled with files ahead, stops them.
+    let again = controller_scratch.join("root/again");
+    std::fs::create_dir_all(&again).unwrap();
+    for n in 0..10u64 {
+        std::fs::write(again.join(format!("g{n:02}.bin")), payload(3000, 2100 + n)).unwrap();
+    }
+    let job = controller
+        .job_submit_upload(
+            &host.endpoint_id(),
+            controller_files.root,
+            &controller_files.path("again"),
+            host_files.root,
+            &host_files.path(""),
+        )
+        .unwrap();
+    let rx = host
+        .job_list()
+        .unwrap()
+        .into_iter()
+        .find(|listed| !listed.sender && listed.state != JobState::Complete)
+        .expect("the second receiver")
+        .id;
+    host.job_poll(rx).unwrap();
+    assert!(host.fetching_ahead(rx) > 0);
+    host.job_cancel(rx).unwrap();
+    assert_eq!(host.fetching_ahead(rx), 0);
+    let _ = job;
 }
