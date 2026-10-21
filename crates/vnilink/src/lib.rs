@@ -89,6 +89,9 @@ pub mod diagnostics;
 mod error;
 mod events;
 pub mod fs;
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzzing;
 mod hostname;
 mod input;
 mod installation;

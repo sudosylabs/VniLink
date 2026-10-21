@@ -31,7 +31,9 @@ async function sourceFiles(root: string): Promise<string[]> {
 	const files: string[] = [];
 	const collect = async (directory: string): Promise<void> => {
 		for (const entry of await readdir(directory, { withFileTypes: true })) {
-			if (['target', '.git'].includes(entry.name)) {
+			// A cargo-fuzz crate is outside the workspace, so no addon input,
+			// and its corpus changes while a fuzzer runs.
+			if (['target', '.git', 'fuzz'].includes(entry.name)) {
 				continue;
 			}
 			const path = join(directory, entry.name);

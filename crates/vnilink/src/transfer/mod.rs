@@ -30,6 +30,8 @@ pub(crate) use hash::SegmentHasher;
 pub(crate) use hash::SEGMENT_LEN;
 pub(crate) use partial::{Partial, NO_SPACE, PARTIAL_FAILED};
 pub(crate) use receive::{ask, receive, Answer, Received};
+#[cfg(feature = "fuzzing")]
+pub(crate) use receive::{land, stream_of};
 pub(crate) use send::{read_request, refuse, send, Source};
 pub(crate) use wire::{FileRequest, FILES_ALPN, STATUS_BUSY, STATUS_CHANGED, STATUS_DENIED};
 

@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
-import { bundleOptions, releaseSourceFilter } from '../../build/lib/bundles.ts';
+import { bundleOptions, relinkSourceFilter, releaseSourceFilter } from '../../build/lib/bundles.ts';
 import { assertNativeFresh, compileNative, nativeEnvironment, nativeIdentity, stageGlass, stageNative } from '../../build/lib/native.ts';
 import { loadProduct } from '../../build/lib/product.ts';
 import { buildRelease } from '../../build/lib/release.ts';
@@ -146,6 +146,27 @@ test('a macOS minimum reaches only the target triple, never host build tools', a
 	}
 });
 
+test('the addon identity follows crate sources, not a fuzz crate or its corpus', async () => {
+	const root = await mkdtemp(join(tmpdir(), 'vnilink-native-sources-'));
+	try {
+		for (const name of ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/core/src/lib.rs']) {
+			await put(root, name);
+		}
+		for (const directory of ['vendor', '.cargo']) {
+			await mkdir(join(root, directory), { recursive: true });
+		}
+		const options = { profile: 'dev' };
+		const identity = await nativeIdentity(root, options);
+		await put(root, 'crates/core/fuzz/corpus/target/input', 'new input');
+		await put(root, 'crates/core/fuzz/fuzz_targets/target.rs', 'fn main() {}');
+		assert.deepEqual(await nativeIdentity(root, options), identity, 'A fuzz crate changed the addon identity');
+		await put(root, 'crates/core/src/lib.rs', 'changed');
+		assert.notDeepEqual(await nativeIdentity(root, options), identity, 'A crate source left the addon identity unchanged');
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 const product = await loadProduct(repository);
 
 const hostTarget = product.platforms[process.platform]?.targets.some(target => target.architecture === process.arch);
@@ -218,9 +239,11 @@ test('release publication inventories only complete payloads, cleans failures an
 });
 
 test('relink staging excludes generated objects and tooling metadata while retaining source/license files', () => {
-	for (const file of ['target', '.git', '.build', 'node_modules', 'AGENTS.md', 'libcodec.a', 'codec.o', 'addon.node']) {
+	for (const file of ['target', '.git', '.build', 'node_modules', 'AGENTS.md', 'libcodec.a', 'codec.o', 'addon.node', 'crates/core/fuzz']) {
 		assert.equal(releaseSourceFilter(file), false, file);
 	}
+	assert.equal(relinkSourceFilter('crates/core/fuzz'), false, 'Development relink staging copies a fuzz crate');
+	assert.equal(relinkSourceFilter('crates/core/src'), true);
 	for (const file of ['build.rs', 'Cargo.lock', 'LICENSE', 'COPYING', 'VNILINK.md', 'source.cpp']) {
 		assert.equal(releaseSourceFilter(file), true, file);
 	}

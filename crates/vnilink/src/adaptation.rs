@@ -1,5 +1,6 @@
 //! Measured per-Desktop adaptation. Only local monotonic intervals are used;
 //! remote capture timestamps are not assumed synchronized with this computer.
+use crate::protocol::MAX_EDGE;
 use crate::Quality;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -360,9 +361,11 @@ impl Adaptive {
         self.healthy_ms = 0;
         self.cooldown_ms = 2000;
         let mut quality = current;
-        let width = source.0.max(current.max_width);
-        let height = source.1.max(current.max_height);
-        let cap = ((u32::from(width) * u32::from(height) * 3) / 1000).clamp(6000, 50_000);
+        // Toward the host's monitor, but no further than a quality holds.
+        let width = source.0.max(current.max_width).min(MAX_EDGE);
+        let height = source.1.max(current.max_height).min(MAX_EDGE);
+        // The host announces its monitor; any u16 by u16 counts in u64.
+        let cap = ((u64::from(width) * u64::from(height) * 3) / 1000).clamp(6000, 50_000) as u32;
         // Only a stream using its bitrate proves the link carries more: a
         // still screen sending a fraction of it proves nothing.
         let used = u64::from(self.status.received_kbps) * 2 >= u64::from(current.max_bitrate_kbps);
@@ -455,6 +458,47 @@ mod tests {
         assert_eq!(state.status.reason, AdaptationReason::Recovering);
         assert_eq!(state.status.received_fps, 30);
         assert_eq!(state.status.received_kbps, 2000);
+    }
+    /// Found by the `host_feedback` fuzz target: the host's monitor size
+    /// comes from its Accept, and the largest one overflowed the bitrate
+    /// cap's pixel count when the link recovered.
+    #[test]
+    fn the_largest_monitor_a_host_announces_caps_recovery_without_overflow() {
+        let mut state = Adaptive::default();
+        let quality = Quality::new(1000, 15, 1280, 720).unwrap();
+        let monitor = (u16::MAX, u16::MAX);
+        state.step(quality, monitor, 1000, frame_sample(0));
+        for second in 1..6 {
+            assert!(state
+                .step(quality, monitor, 1000, frame_sample(second))
+                .is_none());
+        }
+        let next = state.step(quality, monitor, 1000, frame_sample(6)).unwrap();
+        assert_eq!(next.max_bitrate_kbps, 1250);
+        assert_eq!(state.status.reason, AdaptationReason::Recovering);
+    }
+    /// Found by the `host_feedback` fuzz target: recovery grew the size
+    /// toward a host's monitor past what a quality may hold, and the host
+    /// refused the update as malformed and ended the stream.
+    #[test]
+    fn recovery_toward_a_monitor_past_the_quality_limit_stays_a_quality() {
+        let mut state = Adaptive::default();
+        let quality = Quality::new(1000, 15, 7000, 7000).unwrap();
+        let monitor = (7936, 8000);
+        state.step(quality, monitor, 1000, frame_sample(0));
+        for second in 1..6 {
+            assert!(state
+                .step(quality, monitor, 1000, frame_sample(second))
+                .is_none());
+        }
+        let next = state.step(quality, monitor, 1000, frame_sample(6)).unwrap();
+        assert_eq!((next.max_width, next.max_height), (MAX_EDGE, MAX_EDGE));
+        let encoded = crate::protocol::ControlMessage::Quality {
+            stamp: crate::protocol::SessionStamp::new(1, 1),
+            quality: next,
+        }
+        .encode();
+        assert!(crate::protocol::ControlMessage::decode(&encoded).is_ok());
     }
     #[test]
     fn decoder_pressure_reduces_frame_rate_before_bitrate_or_text_resolution() {
