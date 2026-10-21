@@ -97,6 +97,9 @@ pub struct Quality {
     pub max_height: u16,
 }
 
+/// Largest width or height a [`Quality`] holds.
+pub(crate) const MAX_EDGE: u16 = 7680;
+
 impl Quality {
     pub fn new(
         max_bitrate_kbps: u32,
@@ -112,7 +115,7 @@ impl Quality {
         if !(1..=60).contains(&max_frame_rate) {
             return Err(Error::InvalidSetting("frame rate must be between 1 and 60"));
         }
-        if !(1..=7680).contains(&max_width) || !(1..=7680).contains(&max_height) {
+        if !(1..=MAX_EDGE).contains(&max_width) || !(1..=MAX_EDGE).contains(&max_height) {
             return Err(Error::InvalidSetting(
                 "width and height must be between 1 and 7680",
             ));
