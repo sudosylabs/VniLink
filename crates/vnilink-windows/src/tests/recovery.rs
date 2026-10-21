@@ -11,8 +11,9 @@ use crate::decode::WindowsDecoder;
 use crate::encode::WindowsEncoder;
 
 /// Sizes of the forced keyframes in a stream asking for one every `every`
-/// pictures after the first, and how many pictures the transform did not
-/// return. Every picture it returned is decoded.
+/// pictures after the first, how many pictures the transform did not
+/// return, and how many of those it returned the decoder gave no picture
+/// for (Media Foundation's decoder may hold one back).
 fn forced_keyframes(
     width: u16,
     height: u16,
@@ -20,10 +21,10 @@ fn forced_keyframes(
     recovery: bool,
     every: u64,
     count: u64,
-) -> (Vec<usize>, u64) {
+) -> (Vec<usize>, u64, u64) {
     let mut encoder = WindowsEncoder::open(width, height, 30, bitrate_bps).unwrap();
     let mut decoder = WindowsDecoder::new();
-    let (mut sizes, mut dropped, mut owed) = (Vec::new(), 0, false);
+    let (mut sizes, mut dropped, mut undecoded, mut owed) = (Vec::new(), 0, 0, false);
     for index in 0..every * (count + 1) {
         let force = owed || index % every == 0;
         let params = EncodeParams {
@@ -42,7 +43,7 @@ fn forced_keyframes(
                 let frame =
                     EncodedFrame::h264(sample.keyframe(), index * 33_333, sample.bytes().to_vec())
                         .unwrap();
-                decoder.decode(&frame).unwrap();
+                undecoded += u64::from(decoder.decode(&frame).is_err());
             }
             Err(_) => {
                 owed = force;
@@ -50,7 +51,7 @@ fn forced_keyframes(
             }
         }
     }
-    (sizes, dropped)
+    (sizes, dropped, undecoded)
 }
 
 #[test]
@@ -65,10 +66,10 @@ fn recovery_keyframe_sizes() {
                 frame_rate: 30,
             });
             for recovery in [false, true] {
-                let (sizes, dropped) =
+                let (sizes, dropped, undecoded) =
                     forced_keyframes(width, height, bitrate_bps, recovery, 30, 8);
                 println!(
-                    "{width}x{height} {} kb/s {}: budget {budget} B, forced keyframes {sizes:?} B, pictures not returned {dropped}",
+                    "{width}x{height} {} kb/s {}: budget {budget} B, forced keyframes {sizes:?} B, pictures not returned {dropped}, undecoded {undecoded}",
                     bitrate_bps / 1_000,
                     if recovery { "recovery" } else { "full" },
                 );
