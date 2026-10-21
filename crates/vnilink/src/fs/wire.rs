@@ -460,9 +460,10 @@ pub(crate) fn decode_list_body(bytes: &[u8]) -> Result<DirPage, WireError> {
             kind,
             size,
             mtime_ms,
+            // Strong is both halves, as `encode_list_body` writes it.
             token: EntryToken {
-                dev: (strong == 1 && dev != 0).then_some(dev),
-                ino: (strong == 1 && ino != 0).then_some(ino),
+                dev: (strong == 1).then_some(dev),
+                ino: (strong == 1).then_some(ino),
             },
         });
     }

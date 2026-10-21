@@ -707,6 +707,33 @@ fn wire_text_with_a_nul_byte_is_refused() {
     assert!(crate::fs::decode_request(&path_ok).is_ok());
 }
 
+/// Breaks the `fs_wire` fuzz target's round trip: a strong listing token
+/// with a zero device decoded as half a token, which re-encodes as none.
+#[test]
+fn a_strong_listing_token_decodes_whole() {
+    let mut body = Vec::new();
+    body.extend_from_slice(&1u64.to_be_bytes());
+    body.extend_from_slice(&u64::MAX.to_be_bytes());
+    body.push(0);
+    body.extend_from_slice(&0u64.to_be_bytes());
+    body.extend_from_slice(&1u16.to_be_bytes());
+    body.extend_from_slice(&[0, 1, b'a', 0]);
+    body.extend_from_slice(&[0; 16]);
+    body.push(1);
+    body.extend_from_slice(&0u64.to_be_bytes());
+    body.extend_from_slice(&5u64.to_be_bytes());
+    let page = crate::fs::decode_list_body(&body).unwrap();
+    assert_eq!(
+        page.entries[0].token,
+        EntryToken {
+            dev: Some(0),
+            ino: Some(5),
+        }
+    );
+    let encoded = crate::fs::encode_list_body(&page).unwrap();
+    assert_eq!(encoded, body);
+}
+
 #[test]
 fn wire_codec_round_trips_and_rejects() {
     use crate::fs::{Request as WireRequest, Response as WireResponse};
