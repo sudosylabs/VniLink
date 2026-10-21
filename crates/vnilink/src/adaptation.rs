@@ -317,7 +317,8 @@ impl Adaptive {
         let mut quality = current;
         let width = source.0.max(current.max_width);
         let height = source.1.max(current.max_height);
-        let cap = ((u32::from(width) * u32::from(height) * 3) / 1000).clamp(6000, 50_000);
+        // The host announces its monitor; any u16 by u16 counts in u64.
+        let cap = ((u64::from(width) * u64::from(height) * 3) / 1000).clamp(6000, 50_000) as u32;
         quality.max_bitrate_kbps = quality
             .max_bitrate_kbps
             .saturating_add((quality.max_bitrate_kbps / 4).max(250))
@@ -394,6 +395,24 @@ mod tests {
         assert_eq!(state.status.reason, AdaptationReason::Recovering);
         assert_eq!(state.status.received_fps, 30);
         assert_eq!(state.status.received_kbps, 2000);
+    }
+    /// Found by the `host_feedback` fuzz target: the host's monitor size
+    /// comes from its Accept, and the largest one overflowed the bitrate
+    /// cap's pixel count when the link recovered.
+    #[test]
+    fn the_largest_monitor_a_host_announces_caps_recovery_without_overflow() {
+        let mut state = Adaptive::default();
+        let quality = Quality::new(1000, 15, 1280, 720).unwrap();
+        let monitor = (u16::MAX, u16::MAX);
+        state.step(quality, monitor, 1000, frame_sample(0));
+        for second in 1..6 {
+            assert!(state
+                .step(quality, monitor, 1000, frame_sample(second))
+                .is_none());
+        }
+        let next = state.step(quality, monitor, 1000, frame_sample(6)).unwrap();
+        assert_eq!(next.max_bitrate_kbps, 1250);
+        assert_eq!(state.status.reason, AdaptationReason::Recovering);
     }
     #[test]
     fn decoder_pressure_reduces_frame_rate_before_bitrate_or_text_resolution() {
