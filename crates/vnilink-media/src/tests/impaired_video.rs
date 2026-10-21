@@ -10,7 +10,11 @@
 //! The host runs the real shared-capture fanout with a synthetic source and
 //! encoder. Encoded sizes follow the encoder's bitrate and frame rate, with
 //! keyframes about ten predicted frames large and a periodic keyframe every
-//! 120 frames like VideoToolbox. Each picture carries its sequence number, so
+//! 120 frames like VideoToolbox. A recovery keyframe, one that answers a
+//! loss, is modelled at [`RECOVERY_KEYFRAME_FRAMES`] frames, the budget the
+//! platform encoders hold it to; this is a model of that cap, not a
+//! measurement of a real encoder, which reaches it only after its first
+//! recovery keyframe. Each picture carries its sequence number, so
 //! the viewer can tell a clean picture from one decoded against a missing
 //! reference, which a real decoder shows as corruption rather than an error.
 //!
@@ -33,6 +37,7 @@ use crate::error::Error;
 use crate::frame::RawFrame;
 use crate::pump::{EncodeParams, EncodedSample, VideoEncoder};
 use crate::FrameSource;
+use crate::RECOVERY_KEYFRAME_FRAMES;
 
 const WIDTH: u16 = 640;
 const HEIGHT: u16 = 360;
@@ -243,7 +248,9 @@ impl VideoEncoder for Encoder {
         let keyframe = opening || params.force_keyframe || self.since_keyframe + 1 >= GOP;
         let per_frame =
             (u64::from(params.bitrate_bps) / 8 / u64::from(params.frame_rate.max(1))).max(256);
-        let bytes = if keyframe {
+        let bytes = if keyframe && params.recovery {
+            per_frame * u64::from(RECOVERY_KEYFRAME_FRAMES)
+        } else if keyframe {
             per_frame * KEYFRAME_RATIO
         } else {
             per_frame
