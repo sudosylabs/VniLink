@@ -38,6 +38,7 @@ On a Linux machine, run the inner task as root: `sudo node build/run.ts measure:
 | `--driver` | `tight` | `tight` advances the receiver back to back. `background` uses only the app's background job driver. |
 | `--video-seconds`, `--bursts`, `--burst-ms` | `30`, `5`, `250` | Stream length and the blackouts inside it. |
 | `--viewer` | `passive` | `passive` is the product viewer. `request-while-corrupt` asks for a keyframe on every corrupt picture. |
+| `--path` | `direct` | `direct` lets the cores reach each other only directly. `relay` makes every byte cross a local iroh relay; see [Relay mode](#relay-mode). |
 
 A case the engine refuses, such as one past its free-space admission, is recorded as `refused` with the engine's error. It is not a harness failure.
 
@@ -63,6 +64,21 @@ The engines send UDP GSO batches. Without help, netem would see each batch as on
 
 Each scenario boots each core on a thread that first enters its namespace with `setns`. The core's runtime, its worker threads and its endpoint socket are therefore created inside that namespace.
 
+## Relay mode
+
+`--path relay` measures the relay fallback instead of the direct path:
+
+```bash
+npm run measure:impaired -- --profiles quick --path relay
+```
+
+- **Relay.** The harness builds `crates/vnilink/examples/impaired_relay.rs`, an `iroh-relay` 1.3.0 server serving plain HTTP with no QUIC address discovery and no rate limits. It runs inside `vnl-host` on `127.0.0.2:3340`. Both cores use it as their only custom relay through `VNILINK_IMPAIRED_RELAY_URL`; in direct mode they keep a relay on `127.0.0.1:9`, where nothing listens.
+- **Routes.** The host core reaches the relay over its own loopback. The viewer's core reaches it from `127.0.0.3` across the veth, so each relayed packet crosses netem once, as a direct packet does. Only the viewer's leg is impaired; the relay's TCP connection, not QUIC, carries that leg's loss recovery.
+- **No direct path.** A `clsact` egress filter on each veth drops every UDP packet before it reaches the netem qdisc. The `udpBlocked` counter in `results.json` counts what it kept off the link.
+- **Verification.** Each scenario reports the selected path of every connection, from the cores' diagnostics, once connected and once finished. A run fails unless every core finishes on a connection over the expected path, in either mode. The Files connection is not in those diagnostics; with UDP blocked it can only use the relay too.
+
+This is a local relay on the same Linux host as both engines, over netem. It says nothing about the public n0 relays, their load or distance, TLS, or internet paths.
+
 ## Scenarios
 
 **Transfer** (`crates/vnilink/src/tests/impaired_transfer.rs`) uploads three cases from the viewer's core to the host's core through the job engine:
@@ -71,7 +87,7 @@ Each scenario boots each core on a thread that first enters its namespace with `
 - one large file;
 - a mixed tree of 200 files from 1 KiB to 4 MiB, up to four folders deep, with empty folders.
 
-Each case reports outcome, submit time, elapsed time from submit to completion, MB/s (10⁶ bytes) and files per second. A complete case is compared byte for byte with its source.
+Each case reports outcome, submit time, elapsed time from submit to completion, MB/s (10⁶ bytes) and files per second. A complete case is compared byte for byte with its source. The report also gives each core's selected path once connected and once finished.
 
 **Video** (`crates/vnilink-media/src/tests/impaired_video.rs`) runs the real shared-capture fanout with a synthetic source and encoder:
 
@@ -85,7 +101,8 @@ The report includes:
 - keyframes by cause (encoder open, forced by a request, periodic);
 - delivery and clean ratios;
 - viewer keyframe requests;
-- one-way latency percentiles, measured on one clock in the same process.
+- one-way latency percentiles, measured on one clock in the same process;
+- each core's selected path once connected and once finished.
 
 Both scenarios run as ignored tests through the harness. A small version of each runs in ordinary `cargo test` over plain loopback so the scenario code stays working.
 
