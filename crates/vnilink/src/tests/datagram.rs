@@ -281,6 +281,21 @@ fn parity_rebuilds_a_frame_missing_that_many_shards() {
     }
 }
 
+/// A small protected frame carries two parity shards whatever its share, so
+/// it survives two lost datagrams; an unprotected one carries none.
+#[test]
+fn a_small_protected_frame_survives_two_lost_datagrams() {
+    assert_eq!(crate::video::parity_count(1, 0.01), 2);
+    assert_eq!(crate::video::parity_count(40, 0.01), 2);
+    assert_eq!(crate::video::parity_count(40, 0.25), 10);
+    assert_eq!(crate::video::parity_count(1, 0.0), 0);
+    let frame = body(false, 4, &[7u8; 300]);
+    let frags = fragment(&frame, 81, 1000, 0.01);
+    assert_eq!(frags.len(), 3, "one data shard and two parity shards");
+    let mut reasm = Reassembler::new();
+    assert_eq!(reasm.push(&frags[2]), Some(frame));
+}
+
 /// Seeded random loss: a protected frame arrives exactly whenever no more
 /// than its parity count of shards is lost, and never otherwise.
 #[test]
