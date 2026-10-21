@@ -66,7 +66,8 @@ enum Piece {
 /// network, and nothing before `offset` is read. `may_send` is asked every
 /// few megabytes; once it says no, the stream is reset, so a cancel or
 /// revoke stops a file mid-way. A receiver that takes no bytes for
-/// [`STALL_WITHIN`] is reset as stalled. A source that changed while it was read
+/// [`STALL_WITHIN`] is reset as stalled. `sent_to` hears how far into the
+/// file the stream has taken bytes, and finally that the file was sent. A source that changed while it was read
 /// is reset as changed instead of carrying on.
 pub(crate) async fn send(
     send: &mut SendStream,
@@ -74,6 +75,7 @@ pub(crate) async fn send(
     offset: u64,
     counters: &TransferCounters,
     mut may_send: impl FnMut() -> bool,
+    mut sent_to: impl FnMut(u64, bool),
 ) {
     if offset > source.size || offset % SEGMENT_LEN != 0 {
         refuse(send, STATUS_DENIED).await;
@@ -85,6 +87,7 @@ pub(crate) async fn send(
     let (pieces, mut arriving) = tokio::sync::mpsc::channel(READ_AHEAD);
     let reader = tokio::task::spawn_blocking(move || read_source(source, offset, pieces));
     let mut sent: u64 = 0;
+    let mut position = offset;
     while let Some(piece) = arriving.recv().await {
         match piece {
             Piece::Bytes(bytes) => {
@@ -92,7 +95,11 @@ pub(crate) async fn send(
                 // A receiver that stops reading must not pin the reader
                 // and its buffers.
                 match tokio::time::timeout(STALL_WITHIN, send.write_chunk(bytes)).await {
-                    Ok(Ok(())) => counters.sent(len),
+                    Ok(Ok(())) => {
+                        counters.sent(len);
+                        position += len as u64;
+                        sent_to(position, false);
+                    }
                     Ok(Err(_)) => break,
                     Err(_) => {
                         let _ = send.reset(VarInt::from_u32(RESET_STALLED));
@@ -113,6 +120,7 @@ pub(crate) async fn send(
             Piece::End => {
                 if send.finish().is_ok() {
                     counters.served();
+                    sent_to(position, true);
                 }
                 break;
             }

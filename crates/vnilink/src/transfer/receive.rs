@@ -418,7 +418,15 @@ mod tests {
                     mtime_ms: 0,
                 };
                 let counters = TransferCounters::default();
-                super::super::send(&mut send, source, request.offset, &counters, || true).await;
+                super::super::send(
+                    &mut send,
+                    source,
+                    request.offset,
+                    &counters,
+                    || true,
+                    |_, _| {},
+                )
+                .await;
             }
         });
         let unaligned = FileRequest {

@@ -199,9 +199,23 @@ async fn serve_stream(
             // Cancelling or revoking stops a file mid-way, not only the
             // next one.
             let counters = &shared.transfer_counters;
-            transfer::send(&mut send, source, request.offset, counters, || {
-                super::jobs::still_serving(&shared, &peer, request.job)
-            })
+            transfer::send(
+                &mut send,
+                source,
+                request.offset,
+                counters,
+                || super::jobs::still_serving(&shared, &peer, request.job),
+                |position, finished| {
+                    super::jobs::sending_at(
+                        &shared,
+                        &peer,
+                        request.job,
+                        request.file,
+                        position,
+                        finished,
+                    )
+                },
+            )
             .await;
         }
         Ok(Err(status)) => {

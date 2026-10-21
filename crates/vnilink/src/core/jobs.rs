@@ -144,6 +144,11 @@ pub(super) struct JobRecord {
     /// while steps succeed. Not saved: a restart resumes explicitly.
     #[serde(skip)]
     retry: Option<Retry>,
+    /// Sender only: the file it sends now and how far into it the stream
+    /// has taken bytes, so its progress moves without waiting on its
+    /// receiver's replies.
+    #[serde(skip)]
+    sent_at: Option<(usize, u64)>,
 }
 
 impl JobRecord {
@@ -188,6 +193,7 @@ impl JobRecord {
             in_flight: 0,
             unsaved_landed: Vec::new(),
             retry: None,
+            sent_at: None,
             source_ids: Vec::new(),
         }
     }
@@ -303,6 +309,19 @@ impl JobRecord {
         self.landed = landed;
     }
 
+    /// Sender only: bytes its streams have taken, counting the files before
+    /// the one it sends now as whole. Zero once files stop moving.
+    fn sent(&self) -> u64 {
+        let Some((file, position)) = self.sent_at else {
+            return 0;
+        };
+        if !self.sender || !matches!(self.state, JobState::Serving | JobState::Transferring) {
+            return 0;
+        }
+        let before: u64 = self.files().iter().take(file).map(|entry| entry.size).sum();
+        before.saturating_add(position)
+    }
+
     /// The path of the file moving now, while files move: the receiver's
     /// own place, or for a sender the file after those its receiver has
     /// landed or skipped.
@@ -359,7 +378,10 @@ impl JobRecord {
             sender: self.sender,
             state: self.state,
             total_bytes,
-            done_bytes: self.done().min(total_bytes.max(self.done_bytes)),
+            done_bytes: self
+                .done()
+                .max(self.sent())
+                .min(total_bytes.max(self.done_bytes)),
             files_total,
             files_done: self.files_done,
             resumed_files: self.resumed_files,
@@ -631,6 +653,7 @@ impl Core {
             in_flight: 0,
             unsaved_landed: Vec::new(),
             retry: None,
+            sent_at: None,
             source_ids,
         };
         // Announce over the auxiliary stream on the live control session.
@@ -812,6 +835,7 @@ impl Core {
                     in_flight: 0,
                     unsaved_landed: Vec::new(),
                     retry: None,
+                    sent_at: None,
                     source_ids: Vec::new(),
                 },
             );
@@ -2920,6 +2944,41 @@ pub(super) fn still_serving(shared: &Shared, peer: &[u8; 32], job: u64) -> bool 
     state.trust.granted(peer, Grant::Transfer) && served_job(&jobs, &state, peer, job).is_some()
 }
 
+/// Bytes a sending stream advanced at least before its job hears again,
+/// so progress moves smoothly without taking the jobs lock per chunk.
+const SENT_EVERY: u64 = 1024 * 1024;
+
+/// Records that the peer's sending job `job` has sent file `file` up to
+/// `position`, telling watchers once it moved [`SENT_EVERY`] or finished.
+pub(super) fn sending_at(
+    shared: &Shared,
+    peer: &[u8; 32],
+    job: u64,
+    file: u32,
+    position: u64,
+    finished: bool,
+) {
+    {
+        let mut jobs = lock(&shared.jobs);
+        let Some(record) = jobs
+            .values_mut()
+            .find(|record| wire_job_id(record) == job && serving(record, peer))
+        else {
+            return;
+        };
+        let file = file as usize;
+        let moved = match record.sent_at {
+            Some((at, before)) if at == file => position.saturating_sub(before),
+            _ => u64::MAX,
+        };
+        if moved < SENT_EVERY && !finished {
+            return;
+        }
+        record.sent_at = Some((file, position));
+    }
+    jobs_changed(shared);
+}
+
 /// Test probe parked by the rebind regression: called with the serving
 /// engine ([`Core::engine_key`]) and job after the source opens, before it
 /// is authorized. Production leaves it unset. The probe must return
@@ -4133,6 +4192,7 @@ pub(super) async fn handle_upload_offer(
                 in_flight: 0,
                 unsaved_landed: Vec::new(),
                 retry: None,
+                sent_at: None,
                 source_ids: Vec::new(),
             },
         );
@@ -4280,6 +4340,7 @@ pub(super) async fn handle_download_request(
                 in_flight: 0,
                 unsaved_landed: Vec::new(),
                 retry: None,
+                sent_at: None,
                 source_ids: Vec::new(),
             },
         );
@@ -4648,6 +4709,7 @@ mod lifecycle_tests {
             in_flight: 0,
             unsaved_landed: Vec::new(),
             retry: None,
+            sent_at: None,
             source_ids: Vec::new(),
         }
     }
@@ -4991,6 +5053,32 @@ mod retry_tests {
         assert_eq!(record.snapshot().current_file, paths[2]);
         record.state = JobState::Interrupted;
         assert_eq!(record.snapshot().current_file, None);
+    }
+
+    /// A sender's progress follows its own stream, counting earlier files
+    /// whole, and is told at most once a megabyte until the file is sent.
+    #[test]
+    fn a_sender_shows_what_its_stream_took() {
+        let core = core();
+        let mut record = JobRecord::test_receiver_of(7, 3);
+        record.sender = true;
+        record.state = JobState::Serving;
+        record.peer_key = [4; 32];
+        lock(&core.shared.jobs).insert(7, record);
+        let sent_at = |core: &Core| lock(&core.shared.jobs)[&7].sent_at;
+
+        sending_at(&core.shared, &[4; 32], 7, 2, 0, false);
+        assert_eq!(sent_at(&core), Some((2, 0)));
+        // Two earlier files of one byte each count whole.
+        assert_eq!(core.job_snapshot(7).unwrap().done_bytes, 2);
+        sending_at(&core.shared, &[4; 32], 7, 2, 100, false);
+        assert_eq!(sent_at(&core), Some((2, 0)), "under a megabyte waits");
+        sending_at(&core.shared, &[4; 32], 7, 2, 100, true);
+        assert_eq!(sent_at(&core), Some((2, 100)));
+        // Another peer's request never moves it.
+        sending_at(&core.shared, &[5; 32], 7, 2, 500, true);
+        assert_eq!(sent_at(&core), Some((2, 100)));
+        core.shutdown();
     }
 
     #[test]
