@@ -970,15 +970,17 @@ mod viewer_tests {
         assert!(!kept.is_cancelled());
         reopened.stop();
         host.stop_hosted_session().unwrap();
-        assert_eq!(
-            host.inner
-                .hosted_sessions()
-                .unwrap()
-                .into_iter()
-                .find(|s| s.id == incoming.id)
-                .unwrap()
-                .phase,
-            SessionPhase::Stopping
+        // Stopping is brief: the session may already be gone.
+        let phase = host
+            .inner
+            .hosted_sessions()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.id == incoming.id)
+            .map(|s| s.phase);
+        assert!(
+            matches!(phase, None | Some(SessionPhase::Stopping)),
+            "a stopped session is stopping or gone, not {phase:?}"
         );
     }
     #[test]
