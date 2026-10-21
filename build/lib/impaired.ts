@@ -7,6 +7,7 @@
  * macOS or Windows capture, encoding, scheduling or network stacks.
  */
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -394,6 +395,15 @@ export async function measureImpaired(root: string, signal: AbortSignal, args: r
 	return report;
 }
 
+/**
+ * A cache volume for one checkout: worktrees of the same repository build
+ * different code, and a shared release target would let one run execute
+ * another's binaries.
+ */
+export function checkoutVolume(name: string, root: string): string {
+	return `${name}-${createHash('sha256').update(root).digest('hex').slice(0, 12)}`;
+}
+
 /** Runs `measureImpaired` in a privileged project container; arguments pass through. */
 export async function measureImpairedInContainer(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
 	// Fail on bad arguments before building an image.
@@ -406,6 +416,11 @@ export async function measureImpairedInContainer(root: string, signal: AbortSign
 	await mkdir(output, { recursive: true });
 	try {
 		await processes.run('docker', ['info', '--format', '{{.OSType}} {{.Architecture}}']);
+		// Runs on one machine compete for its CPUs, and both sets of numbers would be wrong.
+		const running = await promisify(execFile)('docker', ['ps', '--filter', 'name=vnilink-impaired-', '--format', '{{.Names}}']).then(result => result.stdout.trim());
+		if (running) {
+			throw new Error(`Another impaired-network run is in progress (${running.split('\n').join(', ')}). Wait for it to finish: runs on one machine skew each other's numbers.`);
+		}
 		await processes.run('docker', ['build', '-f', 'build/containers/Dockerfile.linux', '-t', 'vnilink-linux-validation:local', '.'], { cwd: root });
 		launched = true;
 		const environment = ['-e', `VNILINK_COMMIT=${commit}`, ...(process.env.CARGO_BUILD_JOBS ? ['-e', `CARGO_BUILD_JOBS=${process.env.CARGO_BUILD_JOBS}`] : [])];
@@ -415,8 +430,8 @@ export async function measureImpairedInContainer(root: string, signal: AbortSign
 			'--mount', `type=bind,source=${root},target=/source,readonly`,
 			'--mount', `type=bind,source=${output},target=/evidence`,
 			'--mount', 'type=volume,source=vnilink-linux-cargo-registry,target=/usr/local/cargo/registry',
-			'--mount', 'type=volume,source=vnilink-impaired-release-target,target=/work/target',
-			'--mount', 'type=volume,source=vnilink-impaired-node-modules,target=/work/node_modules',
+			'--mount', `type=volume,source=${checkoutVolume('vnilink-impaired-release-target', root)},target=/work/target`,
+			'--mount', `type=volume,source=${checkoutVolume('vnilink-impaired-node-modules', root)},target=/work/node_modules`,
 			'--entrypoint', '/usr/local/bin/vnilink-impaired',
 			'vnilink-linux-validation:local', ...args,
 		]);

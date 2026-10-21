@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { NETEM_PROFILES, blackoutArguments, creationCommands, netemArguments, profileCommands, qdiscCommands, selectProfiles, shellScript, statisticsDelta, topology } from '../../build/lib/netem.ts';
-import { DEFAULT_OPTIONS, parseImpairedArguments, parseSize, renderSummary, resolveOptions, scenarioEnvironment } from '../../build/lib/impaired.ts';
+import { DEFAULT_OPTIONS, checkoutVolume, parseImpairedArguments, parseSize, renderSummary, resolveOptions, scenarioEnvironment } from '../../build/lib/impaired.ts';
 
 const named = name => NETEM_PROFILES.find(item => item.name === name);
 
@@ -125,4 +125,12 @@ test('the summary reports refusals, recovery and failed runs', () => {
 	assert.match(summary, /\| loss-1 \| large \| refused: the transfer exceeds its limits \|/);
 	assert.match(summary, /\| loss-1 \| 90\.0% \| 50\.0% \| 1\/2\/7 \| 4\/4\/9 \| 300\/1200 \| 1\/3 \| 12\.3\/40\.0 \|/);
 	assert.match(summary, /- rate-2 video: cargo exited \(101\)/);
+});
+
+test('each checkout caches its build in a volume of its own', () => {
+	const main = checkoutVolume('vnilink-impaired-release-target', '/work/vnilink');
+	const worktree = checkoutVolume('vnilink-impaired-release-target', '/work/vnilink/.claude/worktrees/one');
+	assert.match(main, /^vnilink-impaired-release-target-[0-9a-f]{12}$/);
+	assert.notEqual(main, worktree);
+	assert.equal(main, checkoutVolume('vnilink-impaired-release-target', '/work/vnilink'));
 });

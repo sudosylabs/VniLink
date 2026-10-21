@@ -23,7 +23,7 @@ The `measure:impaired` task builds the project image (`build/containers/Dockerfi
 - `environment.txt`: kernel, toolchain, `tc` version, CPU count and memory.
 - `<profile>/<scenario>.json`: the raw scenario output.
 
-The release test build is cached in the `vnilink-impaired-release-target` volume, and the Node dependencies the task runner loads are cached in `vnilink-impaired-node-modules`. The first build is slow; set `CARGO_BUILD_JOBS` on the host to raise the image's single-job default.
+The release test build is cached in a `vnilink-impaired-release-target-<checkout>` volume, and the Node dependencies the task runner loads in `vnilink-impaired-node-modules-<checkout>`, one of each per checkout, so worktrees never run each other's binaries. A run refuses to start while another is in progress: two runs on one machine compete for its CPUs and skew each other's numbers. The first build is slow; set `CARGO_BUILD_JOBS` on the host to raise the image's single-job default.
 
 On a Linux machine, run the inner task as root: `sudo node build/run.ts measure:impaired:linux --profiles loss-1`. `build/lib/impaired.ts` owns both tasks.
 
