@@ -2,7 +2,7 @@
 set -euo pipefail
 # Network namespaces need root; the checkout stays read-only and outputs stay in container volumes.
 mkdir -p /work /evidence
-tar -C /source --exclude=./node_modules --exclude=./target --exclude=./out --exclude=./.git --exclude=./.build --exclude=./dist --exclude=./docs -cf - . | tar -C /work -xf -
+tar -C /source --exclude=./node_modules --exclude=./target --exclude=./out --exclude=./.git --exclude=./.build --exclude=./dist --exclude=./docs --exclude=./.claude -cf - . | tar -C /work -xf -
 cd /work
 # build/run.ts loads every task module; install scripts (Electron's download) are not needed here.
 npm ci --ignore-scripts --no-audit --no-fund

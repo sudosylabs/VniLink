@@ -3,7 +3,7 @@ set -euo pipefail
 if [[ "${1:-}" != --prepared ]]; then
     mkdir -p /work /evidence
     # Source remains read-only; OS-specific dependencies and outputs are isolated from the Mac checkout.
-    tar -C /source --exclude=./node_modules --exclude=./target --exclude=./out --exclude=./.git --exclude=./.build --exclude=./dist --exclude=./docs -cf - . | tar -C /work -xf -
+    tar -C /source --exclude=./node_modules --exclude=./target --exclude=./out --exclude=./.git --exclude=./.build --exclude=./dist --exclude=./docs --exclude=./.claude -cf - . | tar -C /work -xf -
     chown -R vnilink:vnilink /work /evidence /usr/local/cargo/registry /usr/local/cargo/git
     runuser -u vnilink -- bash -c 'cd /work && npm ci && node -e '\''require("electron")'\'''
     chown root:root /work/node_modules/electron/dist/chrome-sandbox
