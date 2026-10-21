@@ -2312,6 +2312,8 @@ async fn host_send(
     let mut gate = SendGate::default();
     let mut congestion = crate::video::Congestion::default();
     let mut path = None;
+    // The least backlog the gate saw since the last feedback.
+    let mut least_backlog: Option<usize> = None;
     let mut metrics = tokio::time::interval(Duration::from_secs(1));
     metrics.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut cursor = desktop.cursor.subscribe();
@@ -2374,6 +2376,9 @@ async fn host_send(
                     })
                     .collect::<Vec<_>>();
                 let wire: usize = datagrams.iter().map(bytes::Bytes::len).sum();
+                let backlog = super::host::DATAGRAM_SEND_BUFFER
+                    .saturating_sub(link.datagram_send_buffer_space());
+                least_backlog = Some(least_backlog.map_or(backlog, |least| least.min(backlog)));
                 if !gate.admits(
                     link.datagram_send_buffer_space(),
                     wire,
@@ -2436,6 +2441,10 @@ async fn host_send(
                     sent_bytes: stats.udp_tx.bytes, lost_bytes: stats.lost_bytes,
                     dropped: queue.dropped, queued: queue.queued, oldest_ms: queue.oldest_ms,
                     send_dropped: desktop.counters.read().send_dropped,
+                    backlog_ms: (least_backlog.take().unwrap_or(0) as u64 * 8)
+                        .checked_div(u64::from(lock(&desktop.quality).max_bitrate_kbps))
+                        .unwrap_or(0)
+                        .min(600_000),
                     capture_us: timing.0, encode_us: timing.1,
                 };
                 let mut bytes = vec![MEDIA_FEEDBACK];

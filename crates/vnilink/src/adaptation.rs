@@ -27,7 +27,7 @@ pub struct DesktopMediaStatus {
     pub capture_us: u64,
 }
 /// Encoded size of a [`HostFeedback`].
-const HOST_FEEDBACK_LEN: usize = 58;
+const HOST_FEEDBACK_LEN: usize = 66;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct HostFeedback {
@@ -36,6 +36,10 @@ pub(crate) struct HostFeedback {
     pub dropped: u64,
     /// Frames the host's send gate dropped rather than queue behind the link.
     pub send_dropped: u64,
+    /// The least video waiting in the transport over the interval, in
+    /// milliseconds at the agreed bitrate: a queue the round trip does not
+    /// show, and that never drains while the link is slower than the video.
+    pub backlog_ms: u64,
     pub queued: u16,
     pub oldest_ms: u64,
     pub encode_us: u64,
@@ -52,6 +56,7 @@ impl HostFeedback {
             self.encode_us,
             self.capture_us,
             self.send_dropped,
+            self.backlog_ms,
         ] {
             bytes.extend_from_slice(&value.to_be_bytes());
         }
@@ -70,9 +75,13 @@ impl HostFeedback {
             encode_us: u64::from_be_bytes(bytes[32..40].try_into().unwrap()),
             capture_us: u64::from_be_bytes(bytes[40..48].try_into().unwrap()),
             send_dropped: u64::from_be_bytes(bytes[48..56].try_into().unwrap()),
-            queued: u16::from_be_bytes(bytes[56..58].try_into().unwrap()),
+            backlog_ms: u64::from_be_bytes(bytes[56..64].try_into().unwrap()),
+            queued: u16::from_be_bytes(bytes[64..66].try_into().unwrap()),
         };
-        if feedback.queued > 8 || feedback.encode_us > 5_000_000 || feedback.capture_us > 5_000_000
+        if feedback.queued > 8
+            || feedback.encode_us > 5_000_000
+            || feedback.capture_us > 5_000_000
+            || feedback.backlog_ms > 600_000
         {
             return Err(crate::Error::Malformed);
         }
@@ -231,9 +240,9 @@ impl Adaptive {
             || (drops >= 3 && next.receiver.oldest_ms >= 60);
         // Sender loss concerns the actual sending connection, not the controller's
         // unrelated outbound input. RTT alone or use of a relay is not congestion.
-        let host_pressure = next
-            .host
-            .is_some_and(|host| host.oldest_ms >= 150 && host.queued >= 3);
+        let host_pressure = next.host.is_some_and(|host| {
+            (host.oldest_ms >= 150 && host.queued >= 3) || host.backlog_ms >= 150
+        });
         let inflated_rtt = next.rtt_ms
             >= self
                 .rtt_floor
@@ -450,6 +459,21 @@ mod tests {
     }
 
     #[test]
+    fn a_standing_backlog_in_the_transport_lowers_the_bitrate() {
+        let mut state = Adaptive::default();
+        let quality = initial();
+        state.step(quality, (1920, 1080), 1000, frame_sample(0));
+        let mut sample = frame_sample(1);
+        sample.host.as_mut().unwrap().backlog_ms = 300;
+        assert!(state.step(quality, (1920, 1080), 1000, sample).is_none());
+        let mut sample = frame_sample(2);
+        sample.host.as_mut().unwrap().backlog_ms = 280;
+        let next = state.step(quality, (1920, 1080), 1000, sample).unwrap();
+        assert_eq!(next.max_bitrate_kbps, 6000);
+        assert_eq!(state.status.reason, AdaptationReason::NetworkPressure);
+    }
+
+    #[test]
     fn idle_counter_reset_and_path_change_never_pretend_to_prove_capacity() {
         let mut state = Adaptive::default();
         let quality = initial();
@@ -490,6 +514,7 @@ mod tests {
             lost_bytes: 123,
             dropped: 456,
             send_dropped: 42,
+            backlog_ms: 150,
             queued: 8,
             oldest_ms: 789,
             encode_us: 1234,
@@ -499,7 +524,7 @@ mod tests {
         let decoded = HostFeedback::decode(&bytes).unwrap();
         assert_eq!(decoded.sent_bytes, u64::MAX);
         assert_eq!((decoded.encode_us, decoded.capture_us), (1234, 5678));
-        assert_eq!(decoded.send_dropped, 42);
+        assert_eq!((decoded.send_dropped, decoded.backlog_ms), (42, 150));
         assert_eq!(
             (
                 decoded.lost_bytes,
@@ -513,7 +538,7 @@ mod tests {
             assert!(HostFeedback::decode(&bytes[..end]).is_err());
         }
         let mut malformed = bytes;
-        malformed[57] = 9;
+        malformed[65] = 9;
         assert!(HostFeedback::decode(&malformed).is_err());
     }
 }
