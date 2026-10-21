@@ -97,11 +97,16 @@ const MISSED_PRESSURE: u64 = 50;
 /// Share of frames missed, per mille, at which the bitrate halves.
 const MISSED_SEVERE: u64 = 150;
 
+/// How long frames must go missing at the viewer before it is the link.
+const LOSS_LASTS_MS: u64 = 3000;
+
 #[derive(Default)]
 pub(crate) struct Adaptive {
     previous: Option<Feedback>,
     healthy_ms: u64,
     strained_ms: u64,
+    /// How long the viewer has been missing frames without a break.
+    lossy_ms: u64,
     cooldown_ms: u64,
     rtt_floor: u64,
     pub status: DesktopMediaStatus,
@@ -128,6 +133,7 @@ impl Adaptive {
         {
             self.healthy_ms = 0;
             self.strained_ms = 0;
+            self.lossy_ms = 0;
             self.cooldown_ms = 0;
             self.rtt_floor = next.rtt_ms.max(1);
             self.status.reason = AdaptationReason::WarmingUp;
@@ -169,11 +175,23 @@ impl Adaptive {
             (Some(now), Some(before)) => now.send_dropped.saturating_sub(before.send_dropped),
             _ => 0,
         };
-        let missed = viewer_lost.saturating_add(gate_dropped);
-        let missed_per_mille = missed
-            .saturating_mul(1000)
-            .checked_div(frames.saturating_add(missed))
-            .unwrap_or(0);
+        let per_mille = |missed: u64| {
+            missed
+                .saturating_mul(1000)
+                .checked_div(frames.saturating_add(missed))
+                .unwrap_or(0)
+        };
+        let missing = |missed: u64| missed >= 2 && per_mille(missed) >= MISSED_PRESSURE;
+        // A blackout of a fraction of a second loses many frames at once
+        // but says nothing of the link's rate: loss at the viewer counts
+        // only once it lasts. The host dropping frames behind the link
+        // is the link falling short, and counts as soon as any strain.
+        self.lossy_ms = if missing(viewer_lost) {
+            self.lossy_ms.saturating_add(elapsed_ms)
+        } else {
+            0
+        };
+        let missed_per_mille = per_mille(viewer_lost.saturating_add(gate_dropped));
         self.rtt_floor = self.rtt_floor.min(next.rtt_ms.max(1));
         self.cooldown_ms = self.cooldown_ms.saturating_sub(elapsed_ms);
         self.status = DesktopMediaStatus {
@@ -221,7 +239,7 @@ impl Adaptive {
                 .rtt_floor
                 .saturating_mul(3)
                 .max(self.rtt_floor.saturating_add(80));
-        let losing_frames = missed >= 2 && missed_per_mille >= MISSED_PRESSURE;
+        let losing_frames = missing(gate_dropped) || self.lossy_ms >= LOSS_LASTS_MS;
         let network_pressure =
             loss >= 20 || host_pressure || (loss >= 5 && inflated_rtt) || losing_frames;
         if receiver_pressure || network_pressure {
@@ -238,10 +256,7 @@ impl Adaptive {
             } else {
                 AdaptationReason::NetworkPressure
             };
-            // Lost frames each cost a keyframe, so the link is answered
-            // sooner than a slow decoder.
-            let patience = if receiver_pressure { 2000 } else { 1000 };
-            if self.strained_ms < patience || self.cooldown_ms != 0 {
+            if self.strained_ms < 2000 || self.cooldown_ms != 0 {
                 return None;
             }
             self.strained_ms = 0;
@@ -393,48 +408,45 @@ mod tests {
         let mut state = Adaptive::default();
         let quality = initial();
         state.step(quality, (1920, 1080), 1000, frame_sample(0));
-        // One second of loss is enough on the network's side.
         let mut sample = frame_sample(1);
         sample.host.as_mut().unwrap().lost_bytes = 10_000;
+        assert!(state.step(quality, (1920, 1080), 1000, sample).is_none());
+        sample = frame_sample(2);
+        sample.host.as_mut().unwrap().lost_bytes = 20_000;
         let next = state.step(quality, (1920, 1080), 1000, sample).unwrap();
         assert_eq!(next, Quality::new(6000, 60, 1920, 1080).unwrap());
         assert_eq!(state.status.send_loss_per_mille, 40);
         assert_eq!(state.status.reason, AdaptationReason::NetworkPressure);
-        // Not again within the cooldown, but again once it has passed.
-        sample = frame_sample(2);
-        sample.host.as_mut().unwrap().lost_bytes = 20_000;
-        assert!(state.step(next, (1920, 1080), 1000, sample).is_none());
         sample = frame_sample(3);
         sample.host.as_mut().unwrap().lost_bytes = 30_000;
-        let again = state.step(next, (1920, 1080), 1000, sample).unwrap();
-        assert_eq!(again.max_bitrate_kbps, 4500);
+        assert!(state.step(next, (1920, 1080), 1000, sample).is_none());
     }
     #[test]
-    fn frames_that_never_arrive_lower_the_bitrate_and_many_halve_it() {
+    fn frames_that_keep_going_missing_lower_the_bitrate_and_many_halve_it() {
         let quality = initial();
-        // A few frames lost after repair, or dropped at the host's gate.
-        let mut state = Adaptive::default();
-        state.step(quality, (1920, 1080), 1000, frame_sample(0));
-        let mut sample = frame_sample(1);
-        sample.frames_lost = 2;
-        sample.host.as_mut().unwrap().send_dropped = 1;
-        let next = state.step(quality, (1920, 1080), 1000, sample).unwrap();
-        assert_eq!(next.max_bitrate_kbps, 6000);
-        assert_eq!(state.status.reason, AdaptationReason::NetworkPressure);
-        // Many: the bitrate halves.
-        let mut state = Adaptive::default();
-        state.step(quality, (1920, 1080), 1000, frame_sample(0));
-        let mut sample = frame_sample(1);
-        sample.host.as_mut().unwrap().send_dropped = 10;
-        let next = state.step(quality, (1920, 1080), 1000, sample).unwrap();
-        assert_eq!(next.max_bitrate_kbps, 4000);
+        let run = |samples: &[(u64, u64)]| {
+            let mut state = Adaptive::default();
+            state.step(quality, (1920, 1080), 1000, frame_sample(0));
+            let mut stepped = None;
+            for (second, &(lost, dropped)) in (1..).zip(samples) {
+                let mut sample = frame_sample(second);
+                sample.frames_lost = lost;
+                sample.host.as_mut().unwrap().send_dropped = dropped;
+                stepped = stepped.or(state.step(quality, (1920, 1080), 1000, sample));
+            }
+            stepped.map(|quality| quality.max_bitrate_kbps)
+        };
+        // The host dropping frames behind the link: two seconds of it.
+        assert_eq!(run(&[(0, 2), (0, 4)]), Some(6000));
+        assert_eq!(run(&[(0, 10), (0, 20)]), Some(4000));
+        // Frames lost at the viewer: three seconds of it.
+        assert_eq!(run(&[(2, 0), (4, 0)]), None);
+        assert_eq!(run(&[(2, 0), (4, 0), (6, 0), (8, 0)]), Some(6000));
+        // A blackout loses many frames once, or across two samples.
+        assert_eq!(run(&[(8, 0), (8, 0), (8, 0), (8, 0)]), None);
+        assert_eq!(run(&[(0, 0), (4, 0), (8, 0), (8, 0), (8, 0)]), None);
         // One stray loss is not pressure.
-        let mut state = Adaptive::default();
-        state.step(quality, (1920, 1080), 1000, frame_sample(0));
-        let mut sample = frame_sample(1);
-        sample.frames_lost = 1;
-        assert!(state.step(quality, (1920, 1080), 1000, sample).is_none());
-        assert_eq!(state.status.reason, AdaptationReason::Stable);
+        assert_eq!(run(&[(1, 0), (2, 0), (3, 0), (4, 0)]), None);
     }
 
     #[test]
