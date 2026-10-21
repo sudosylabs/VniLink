@@ -26,11 +26,16 @@ pub struct DesktopMediaStatus {
     pub encode_us: u64,
     pub capture_us: u64,
 }
+/// Encoded size of a [`HostFeedback`].
+const HOST_FEEDBACK_LEN: usize = 58;
+
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct HostFeedback {
     pub sent_bytes: u64,
     pub lost_bytes: u64,
     pub dropped: u64,
+    /// Frames the host's send gate dropped rather than queue behind the link.
+    pub send_dropped: u64,
     pub queued: u16,
     pub oldest_ms: u64,
     pub encode_us: u64,
@@ -38,7 +43,7 @@ pub(crate) struct HostFeedback {
 }
 impl HostFeedback {
     pub fn encode(self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(50);
+        let mut bytes = Vec::with_capacity(HOST_FEEDBACK_LEN);
         for value in [
             self.sent_bytes,
             self.lost_bytes,
@@ -46,6 +51,7 @@ impl HostFeedback {
             self.oldest_ms,
             self.encode_us,
             self.capture_us,
+            self.send_dropped,
         ] {
             bytes.extend_from_slice(&value.to_be_bytes());
         }
@@ -53,7 +59,7 @@ impl HostFeedback {
         bytes
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, crate::Error> {
-        if bytes.len() != 50 {
+        if bytes.len() != HOST_FEEDBACK_LEN {
             return Err(crate::Error::Malformed);
         }
         let feedback = Self {
@@ -63,7 +69,8 @@ impl HostFeedback {
             oldest_ms: u64::from_be_bytes(bytes[24..32].try_into().unwrap()),
             encode_us: u64::from_be_bytes(bytes[32..40].try_into().unwrap()),
             capture_us: u64::from_be_bytes(bytes[40..48].try_into().unwrap()),
-            queued: u16::from_be_bytes(bytes[48..50].try_into().unwrap()),
+            send_dropped: u64::from_be_bytes(bytes[48..56].try_into().unwrap()),
+            queued: u16::from_be_bytes(bytes[56..58].try_into().unwrap()),
         };
         if feedback.queued > 8 || feedback.encode_us > 5_000_000 || feedback.capture_us > 5_000_000
         {
@@ -76,12 +83,20 @@ impl HostFeedback {
 pub(crate) struct Feedback {
     pub receiver: crate::video::QueueTelemetry,
     pub host: Option<HostFeedback>,
+    /// Frames the viewer lost on the way, after any repair from parity.
+    pub frames_lost: u64,
     pub rtt_ms: u64,
     pub path_changed: bool,
     /// The viewer decoder's time per picture while others wait for it: its
     /// throughput, not how long one picture takes to come out.
     pub decode_us: Option<u64>,
 }
+/// Share of frames missed, per mille, that strains the link.
+const MISSED_PRESSURE: u64 = 50;
+
+/// Share of frames missed, per mille, at which the bitrate halves.
+const MISSED_SEVERE: u64 = 150;
+
 #[derive(Default)]
 pub(crate) struct Adaptive {
     previous: Option<Feedback>,
@@ -147,6 +162,18 @@ impl Adaptive {
             }
             _ => 0,
         };
+        // Frames that never reached the viewer: lost on the way after any
+        // repair, or dropped by the host's send gate behind the link.
+        let viewer_lost = next.frames_lost.saturating_sub(previous.frames_lost);
+        let gate_dropped = match (next.host, previous.host) {
+            (Some(now), Some(before)) => now.send_dropped.saturating_sub(before.send_dropped),
+            _ => 0,
+        };
+        let missed = viewer_lost.saturating_add(gate_dropped);
+        let missed_per_mille = missed
+            .saturating_mul(1000)
+            .checked_div(frames.saturating_add(missed))
+            .unwrap_or(0);
         self.rtt_floor = self.rtt_floor.min(next.rtt_ms.max(1));
         self.cooldown_ms = self.cooldown_ms.saturating_sub(elapsed_ms);
         self.status = DesktopMediaStatus {
@@ -194,7 +221,9 @@ impl Adaptive {
                 .rtt_floor
                 .saturating_mul(3)
                 .max(self.rtt_floor.saturating_add(80));
-        let network_pressure = loss >= 20 || host_pressure || (loss >= 5 && inflated_rtt);
+        let losing_frames = missed >= 2 && missed_per_mille >= MISSED_PRESSURE;
+        let network_pressure =
+            loss >= 20 || host_pressure || (loss >= 5 && inflated_rtt) || losing_frames;
         if receiver_pressure || network_pressure {
             self.healthy_ms = 0;
             self.strained_ms = self.strained_ms.saturating_add(elapsed_ms);
@@ -209,7 +238,10 @@ impl Adaptive {
             } else {
                 AdaptationReason::NetworkPressure
             };
-            if self.strained_ms < 2000 || self.cooldown_ms != 0 {
+            // Lost frames each cost a keyframe, so the link is answered
+            // sooner than a slow decoder.
+            let patience = if receiver_pressure { 2000 } else { 1000 };
+            if self.strained_ms < patience || self.cooldown_ms != 0 {
                 return None;
             }
             self.strained_ms = 0;
@@ -230,9 +262,12 @@ impl Adaptive {
                         as u16;
                 }
             } else {
-                quality.max_bitrate_kbps = (quality.max_bitrate_kbps * 3 / 4)
-                    .max(500)
-                    .min(quality.max_bitrate_kbps);
+                let kept = if missed_per_mille >= MISSED_SEVERE {
+                    quality.max_bitrate_kbps / 2
+                } else {
+                    quality.max_bitrate_kbps * 3 / 4
+                };
+                quality.max_bitrate_kbps = kept.max(500).min(quality.max_bitrate_kbps);
                 if quality.max_bitrate_kbps <= 1500 {
                     quality.max_frame_rate = (quality.max_frame_rate / 2)
                         .max(10)
@@ -307,6 +342,7 @@ mod tests {
                 sent_bytes: second * 250_000,
                 ..Default::default()
             }),
+            frames_lost: 0,
             rtt_ms: 300,
             path_changed: false,
             decode_us: None,
@@ -357,19 +393,50 @@ mod tests {
         let mut state = Adaptive::default();
         let quality = initial();
         state.step(quality, (1920, 1080), 1000, frame_sample(0));
+        // One second of loss is enough on the network's side.
         let mut sample = frame_sample(1);
         sample.host.as_mut().unwrap().lost_bytes = 10_000;
-        assert!(state.step(quality, (1920, 1080), 1000, sample).is_none());
-        sample = frame_sample(2);
-        sample.host.as_mut().unwrap().lost_bytes = 20_000;
         let next = state.step(quality, (1920, 1080), 1000, sample).unwrap();
         assert_eq!(next, Quality::new(6000, 60, 1920, 1080).unwrap());
         assert_eq!(state.status.send_loss_per_mille, 40);
         assert_eq!(state.status.reason, AdaptationReason::NetworkPressure);
+        // Not again within the cooldown, but again once it has passed.
+        sample = frame_sample(2);
+        sample.host.as_mut().unwrap().lost_bytes = 20_000;
+        assert!(state.step(next, (1920, 1080), 1000, sample).is_none());
         sample = frame_sample(3);
         sample.host.as_mut().unwrap().lost_bytes = 30_000;
-        assert!(state.step(next, (1920, 1080), 1000, sample).is_none());
+        let again = state.step(next, (1920, 1080), 1000, sample).unwrap();
+        assert_eq!(again.max_bitrate_kbps, 4500);
     }
+    #[test]
+    fn frames_that_never_arrive_lower_the_bitrate_and_many_halve_it() {
+        let quality = initial();
+        // A few frames lost after repair, or dropped at the host's gate.
+        let mut state = Adaptive::default();
+        state.step(quality, (1920, 1080), 1000, frame_sample(0));
+        let mut sample = frame_sample(1);
+        sample.frames_lost = 2;
+        sample.host.as_mut().unwrap().send_dropped = 1;
+        let next = state.step(quality, (1920, 1080), 1000, sample).unwrap();
+        assert_eq!(next.max_bitrate_kbps, 6000);
+        assert_eq!(state.status.reason, AdaptationReason::NetworkPressure);
+        // Many: the bitrate halves.
+        let mut state = Adaptive::default();
+        state.step(quality, (1920, 1080), 1000, frame_sample(0));
+        let mut sample = frame_sample(1);
+        sample.host.as_mut().unwrap().send_dropped = 10;
+        let next = state.step(quality, (1920, 1080), 1000, sample).unwrap();
+        assert_eq!(next.max_bitrate_kbps, 4000);
+        // One stray loss is not pressure.
+        let mut state = Adaptive::default();
+        state.step(quality, (1920, 1080), 1000, frame_sample(0));
+        let mut sample = frame_sample(1);
+        sample.frames_lost = 1;
+        assert!(state.step(quality, (1920, 1080), 1000, sample).is_none());
+        assert_eq!(state.status.reason, AdaptationReason::Stable);
+    }
+
     #[test]
     fn idle_counter_reset_and_path_change_never_pretend_to_prove_capacity() {
         let mut state = Adaptive::default();
@@ -410,6 +477,7 @@ mod tests {
             sent_bytes: u64::MAX,
             lost_bytes: 123,
             dropped: 456,
+            send_dropped: 42,
             queued: 8,
             oldest_ms: 789,
             encode_us: 1234,
@@ -419,6 +487,7 @@ mod tests {
         let decoded = HostFeedback::decode(&bytes).unwrap();
         assert_eq!(decoded.sent_bytes, u64::MAX);
         assert_eq!((decoded.encode_us, decoded.capture_us), (1234, 5678));
+        assert_eq!(decoded.send_dropped, 42);
         assert_eq!(
             (
                 decoded.lost_bytes,
@@ -432,7 +501,7 @@ mod tests {
             assert!(HostFeedback::decode(&bytes[..end]).is_err());
         }
         let mut malformed = bytes;
-        malformed[49] = 9;
+        malformed[57] = 9;
         assert!(HostFeedback::decode(&malformed).is_err());
     }
 }
@@ -451,6 +520,7 @@ mod decoder_tests {
                 ..Default::default()
             },
             host: None,
+            frames_lost: 0,
             rtt_ms: 5,
             path_changed: false,
             decode_us: Some(25_000),
@@ -498,6 +568,7 @@ mod producer_tests {
                 sent_bytes: second * 250_000,
                 ..Default::default()
             }),
+            frames_lost: 0,
             rtt_ms: 5,
             path_changed: false,
             decode_us: None,

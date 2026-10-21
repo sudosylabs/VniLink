@@ -490,8 +490,11 @@ pub(super) async fn host_video_loop(
                     let body = encode_video_body(frame);
                     // This stream hears no loss report: keyframes carry the
                     // default parity, other frames none.
-                    let protection = crate::video::ViewerLoss::default()
-                        .protection(frame.keyframe, std::time::Instant::now());
+                    let protection = crate::video::ViewerLoss::default().protection(
+                        frame.keyframe,
+                        false,
+                        std::time::Instant::now(),
+                    );
                     for frag in crate::video::fragment(&body, seq, max, protection) {
                         datagrams.push(bytes::Bytes::from(frag));
                     }

@@ -6,7 +6,7 @@
 //! how much protection to send, and whether the link needs less.
 
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// One interval of what arrived and what did not.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -104,7 +104,7 @@ impl ReportTally {
 const NEWEST: f64 = 0.3;
 
 /// Reports older than this no longer describe the link.
-const REPORT_FRESH: std::time::Duration = std::time::Duration::from_secs(3);
+const REPORT_FRESH: Duration = Duration::from_secs(3);
 
 /// Parity per unit of reported fragment loss: enough to rebuild a frame
 /// through most of the loss bursts a rate that size makes likely.
@@ -143,11 +143,14 @@ impl ViewerLoss {
 
     /// Parity for a frame, as a share of its data shards, from what the
     /// viewer reports losing. A keyframe gets double, at least
-    /// [`KEYFRAME_PARITY`]: a lost one costs the most to send again.
-    pub(crate) fn protection(&self, keyframe: bool, now: Instant) -> f64 {
-        let fresh = self
-            .heard
-            .is_some_and(|at| now.saturating_duration_since(at) <= REPORT_FRESH);
+    /// [`KEYFRAME_PARITY`]: a lost one costs the most to send again. On a
+    /// `congested` link loss is its queue overflowing, which more parity
+    /// would only add to: the keyframe's least is all it gets.
+    pub(crate) fn protection(&self, keyframe: bool, congested: bool, now: Instant) -> f64 {
+        let fresh = !congested
+            && self
+                .heard
+                .is_some_and(|at| now.saturating_duration_since(at) <= REPORT_FRESH);
         let loss = if fresh { self.fragment_loss } else { 0.0 };
         let share = if loss < CLEAN_LOSS {
             0.0
@@ -168,6 +171,44 @@ impl ViewerLoss {
         } else {
             smoothed * (1.0 - NEWEST) + newest * NEWEST
         }
+    }
+}
+
+/// How long after the send gate drops a frame the link still counts as
+/// congested.
+const DROP_CONGESTS: Duration = Duration::from_secs(1);
+
+/// The host's view of its own link: whether it is queueing. Its round trip
+/// has grown well past the least seen on the path, or the send gate has
+/// just dropped a frame because the link was behind.
+#[derive(Debug, Default)]
+pub(crate) struct Congestion {
+    floor: Option<Duration>,
+    dropped_at: Option<Instant>,
+}
+
+impl Congestion {
+    /// The path's round trip now.
+    pub(crate) fn rtt(&mut self, rtt: Duration) {
+        if !rtt.is_zero() {
+            self.floor = Some(self.floor.map_or(rtt, |floor| floor.min(rtt)));
+        }
+    }
+
+    pub(crate) fn dropped(&mut self, at: Instant) {
+        self.dropped_at = Some(at);
+    }
+
+    /// Whether the link is queueing, given its round trip now: at least
+    /// twice and 30 ms over the least seen.
+    pub(crate) fn congested(&self, rtt: Duration, now: Instant) -> bool {
+        let queueing = self
+            .floor
+            .is_some_and(|floor| rtt >= floor * 2 && rtt >= floor + Duration::from_millis(30));
+        queueing
+            || self
+                .dropped_at
+                .is_some_and(|at| now.saturating_duration_since(at) < DROP_CONGESTS)
     }
 }
 
@@ -221,8 +262,8 @@ mod tests {
         let now = Instant::now();
         let mut loss = ViewerLoss::default();
         // Before any report: only keyframes, a little.
-        assert_eq!(loss.protection(false, now), 0.0);
-        assert!((loss.protection(true, now) - KEYFRAME_PARITY).abs() < 1e-9);
+        assert_eq!(loss.protection(false, false, now), 0.0);
+        assert!((loss.protection(true, false, now) - KEYFRAME_PARITY).abs() < 1e-9);
         loss.observe(
             &VideoReport {
                 fragments_received: 98,
@@ -231,13 +272,53 @@ mod tests {
             },
             now,
         );
-        assert!((loss.protection(false, now) - 0.05).abs() < 1e-9);
-        assert!((loss.protection(true, now) - 0.1).abs() < 1e-9);
+        assert!((loss.protection(false, false, now) - 0.05).abs() < 1e-9);
+        assert!((loss.protection(true, false, now) - 0.1).abs() < 1e-9);
         // Heavy loss is capped; a stale report counts as no loss.
         loss.fragment_loss = 0.4;
-        assert_eq!(loss.protection(true, now), crate::video::MAX_PROTECTION);
-        let later = now + REPORT_FRESH + std::time::Duration::from_secs(1);
-        assert_eq!(loss.protection(false, later), 0.0);
+        assert_eq!(
+            loss.protection(true, false, now),
+            crate::video::MAX_PROTECTION
+        );
+        let later = now + REPORT_FRESH + Duration::from_secs(1);
+        assert_eq!(loss.protection(false, false, later), 0.0);
+    }
+
+    #[test]
+    fn a_congested_link_gets_no_more_parity_for_its_loss() {
+        let now = Instant::now();
+        let mut loss = ViewerLoss::default();
+        loss.observe(
+            &VideoReport {
+                fragments_received: 90,
+                fragments_missing: 10,
+                ..VideoReport::default()
+            },
+            now,
+        );
+        assert!(loss.protection(false, false, now) > 0.2);
+        assert_eq!(loss.protection(false, true, now), 0.0);
+        assert!((loss.protection(true, true, now) - KEYFRAME_PARITY).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_link_is_congested_while_its_round_trip_grows_or_after_a_drop() {
+        let now = Instant::now();
+        let ms = Duration::from_millis;
+        let mut link = Congestion::default();
+        assert!(!link.congested(ms(500), now), "nothing to compare with");
+        link.rtt(ms(20));
+        link.rtt(ms(0));
+        assert!(!link.congested(ms(35), now));
+        assert!(link.congested(ms(50), now));
+        // A long path's jitter is not queueing.
+        let mut far = Congestion::default();
+        far.rtt(ms(80));
+        assert!(!far.congested(ms(120), now));
+        assert!(far.congested(ms(160), now));
+        far.dropped(now);
+        assert!(far.congested(ms(80), now + ms(500)));
+        assert!(!far.congested(ms(80), now + DROP_CONGESTS));
     }
 
     #[test]

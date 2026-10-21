@@ -25,7 +25,7 @@ pub use queue::{RecordingVideoTap, VideoSubscription};
 #[cfg(test)]
 pub(crate) use queue::{VideoQueue, INBOX_MAX_AGE, VIDEO_QUEUE};
 pub(crate) use recovery::KeyframeRequests;
-pub(crate) use report::{ReportTally, VideoReport, ViewerLoss, REPORT_LEN};
+pub(crate) use report::{Congestion, ReportTally, VideoReport, ViewerLoss, REPORT_LEN};
 
 /// Largest encoded payload, not counting the video header before it.
 pub const MAX_VIDEO_FRAME: usize = 1_048_576;

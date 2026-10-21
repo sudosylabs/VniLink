@@ -518,9 +518,7 @@ async fn route_desktop_datagrams(
             // for now rather than at the next periodic one.
             let losses = reassembly.take_loss();
             if losses.any() {
-                desktop
-                    .report
-                    .frames_lost(losses.expired + losses.evicted + losses.gap + losses.stale);
+                desktop.report.frames_lost(losses.total());
                 desktop.counters.lost(losses);
                 desktop.inbox.lost();
                 desktop.keyframe.request();
@@ -1379,6 +1377,7 @@ async fn client_send(
                     let current = *lock(&desktop.quality);
                     let feedback = crate::adaptation::Feedback {
                         receiver: desktop.inbox.telemetry(), host,
+                        frames_lost: desktop.counters.read().lost.total(),
                         rtt_ms: path.rtt().as_millis().min(u64::MAX as u128) as u64,
                         path_changed,
                         decode_us: lock(&desktop.decode_duration).as_ref()
@@ -2228,6 +2227,9 @@ struct SendGate {
     asked: bool,
     /// Wire size of the latest keyframe, to judge when the next would fit.
     keyframe_wire: usize,
+    /// Backlog a keyframe just sent may hold on top of the budget, until
+    /// the link drains back within it.
+    draining: usize,
 }
 
 impl SendGate {
@@ -2235,6 +2237,17 @@ impl SendGate {
     /// frame while a keyframe is owed.
     fn skips(&self, keyframe: bool) -> bool {
         self.awaiting && !keyframe
+    }
+
+    /// Whether a frame of `wire` bytes goes out now. The frames behind a
+    /// keyframe larger than the budget wait for it whatever the gate does,
+    /// and dropping one would only cost another keyframe: so they may add
+    /// to its backlog until it drains back within the budget.
+    fn admits(&mut self, space: usize, wire: usize, budget: usize) -> bool {
+        if super::host::DATAGRAM_SEND_BUFFER.saturating_sub(space) <= budget {
+            self.draining = 0;
+        }
+        admits_frame(space, wire, budget.saturating_add(self.draining))
     }
 
     /// The gate dropped a frame. A dropped keyframe leaves the one owed
@@ -2252,6 +2265,7 @@ impl SendGate {
         if keyframe {
             *self = Self {
                 keyframe_wire: wire,
+                draining: wire,
                 ..Self::default()
             };
         }
@@ -2296,6 +2310,8 @@ async fn host_send(
         .ok_or(Error::NoSession)?;
     let mut seq = 0u32;
     let mut gate = SendGate::default();
+    let mut congestion = crate::video::Congestion::default();
+    let mut path = None;
     let mut metrics = tokio::time::interval(Duration::from_secs(1));
     metrics.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut cursor = desktop.cursor.subscribe();
@@ -2318,6 +2334,18 @@ async fn host_send(
                 desktop.counters.send_dropped();
                 continue;
             }
+            // A new path starts its round trip floor afresh.
+            let selected = link
+                .paths()
+                .iter()
+                .find(|candidate| candidate.is_selected())
+                .map(|selected| (selected.id(), selected.rtt()));
+            let rtt = selected.map_or(Duration::ZERO, |(_, rtt)| rtt);
+            if selected.map(|(id, _)| id) != path {
+                path = selected.map(|(id, _)| id);
+                congestion = crate::video::Congestion::default();
+            }
+            congestion.rtt(rtt);
             let body = crate::video::encode_video_body(&frame);
             let max = link.max_datagram_size();
             #[cfg(test)]
@@ -2330,8 +2358,12 @@ async fn host_send(
                 max
             };
             if let Some(max) = max.filter(|max| *max > PREFIX + crate::video::FRAG_HEADER + 64) {
-                let protection = lock(&desktop.viewer_loss)
-                    .protection(frame.keyframe, std::time::Instant::now());
+                let now = std::time::Instant::now();
+                let protection = lock(&desktop.viewer_loss).protection(
+                    frame.keyframe,
+                    congestion.congested(rtt, now),
+                    now,
+                );
                 let datagrams = crate::video::fragment(&body, seq, max - PREFIX, protection)
                     .into_iter()
                     .map(|fragment| {
@@ -2342,7 +2374,7 @@ async fn host_send(
                     })
                     .collect::<Vec<_>>();
                 let wire: usize = datagrams.iter().map(bytes::Bytes::len).sum();
-                if !admits_frame(
+                if !gate.admits(
                     link.datagram_send_buffer_space(),
                     wire,
                     send_budget(desktop),
@@ -2352,6 +2384,7 @@ async fn host_send(
                     // frames. Drop this one whole and start again from a
                     // keyframe once the backlog drains.
                     desktop.counters.send_dropped();
+                    congestion.dropped(now);
                     gate.dropped(frame.keyframe, wire);
                     continue;
                 }
@@ -2403,6 +2436,7 @@ async fn host_send(
                 let feedback = crate::adaptation::HostFeedback {
                     sent_bytes: stats.udp_tx.bytes, lost_bytes: stats.lost_bytes,
                     dropped: queue.dropped, queued: queue.queued, oldest_ms: queue.oldest_ms,
+                    send_dropped: desktop.counters.read().send_dropped,
                     capture_us: timing.0, encode_us: timing.1,
                 };
                 let mut bytes = vec![MEDIA_FEEDBACK];
@@ -2509,6 +2543,25 @@ mod tests {
         gate.sent(true, 83_000);
         assert!(!gate.skips(false));
         assert!(!gate.owed());
+    }
+
+    #[test]
+    fn the_frames_behind_a_large_keyframe_go_while_it_drains() {
+        let buffer = crate::core::host::DATAGRAM_SEND_BUFFER;
+        let budget = 64 * 1024;
+        let mut gate = SendGate::default();
+        assert!(gate.admits(buffer, 92_000, budget));
+        gate.sent(true, 92_000);
+        // Most of the keyframe still waits: a predicted frame goes behind it.
+        assert!(gate.admits(buffer - 72_000, 8_000, budget));
+        gate.sent(false, 8_000);
+        // Drained back within the budget: the budget alone applies again.
+        assert!(gate.admits(buffer - 30_000, 8_000, budget));
+        assert!(!gate.admits(buffer - 60_000, 8_000, budget));
+        // Nor does a predicted frame's backlog earn the allowance.
+        let mut gate = SendGate::default();
+        gate.sent(false, 8_000);
+        assert!(!gate.admits(buffer - 72_000, 8_000, budget));
     }
 
     #[test]

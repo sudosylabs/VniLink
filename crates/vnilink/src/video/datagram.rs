@@ -187,7 +187,11 @@ pub(crate) struct FragmentCounts {
 
 impl Losses {
     pub(crate) fn any(&self) -> bool {
-        self.expired + self.evicted + self.gap + self.stale > 0
+        self.total() > 0
+    }
+
+    pub(crate) fn total(&self) -> u64 {
+        self.expired + self.evicted + self.gap + self.stale
     }
 }
 
