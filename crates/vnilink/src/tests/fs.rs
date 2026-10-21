@@ -1649,7 +1649,9 @@ fn remote_delete_removes_the_host_entry_and_keeps_a_replacement() {
 /// A path from the system's file manager is named as the panes name an
 /// item: its folder's root and path, and its own name. A link keeps its
 /// own name rather than its target's, and a path outside what is shared
-/// is not named at all.
+/// is not named at all. Unix only: rooted Files operations need
+/// handle-relative Windows support (`fs/roots.rs`).
+#[cfg(unix)]
 #[test]
 fn a_dropped_path_is_named_by_its_folder_and_its_own_name() {
     let scratch = Scratch::new();

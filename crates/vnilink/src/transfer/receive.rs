@@ -276,6 +276,21 @@ mod tests {
         F: FnOnce(SendStream) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send,
     {
+        let (received, partial, _) = receive_timed(scratch, size, script).await;
+        (received, partial)
+    }
+
+    /// [`receive_from`], with how long the receiving took once the stream
+    /// was answered: the loopback connection's setup is not part of it.
+    async fn receive_timed<F, Fut>(
+        scratch: &Scratch,
+        size: u64,
+        script: F,
+    ) -> (Result<Received, Error>, Partial, Duration)
+    where
+        F: FnOnce(SendStream) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send,
+    {
         let (connection, serving, _receiver, _sender) = pair().await;
         tokio::spawn(async move {
             let (mut send, mut recv) = serving.accept_bi().await.unwrap();
@@ -294,14 +309,15 @@ mod tests {
         let recv = match ask(&connection, request).await.unwrap() {
             Answer::Sending(recv) => recv,
             // A reset can overtake the status byte.
-            Answer::Changed => return (Ok(Received::Changed), partial),
+            Answer::Changed => return (Ok(Received::Changed), partial, Duration::ZERO),
             Answer::Denied | Answer::Busy => panic!("the scripted sender sends"),
         };
         let (progress, _) = std::sync::mpsc::channel();
         let (_stop, mut cancel) = tokio::sync::watch::channel(false);
         let counters = TransferCounters::default();
+        let started = std::time::Instant::now();
         let received = receive(recv, &mut partial, size, &progress, &counters, &mut cancel).await;
-        (received, partial)
+        (received, partial, started.elapsed())
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -376,14 +392,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_silent_sender_is_stalled() {
         let scratch = Scratch::new("stalled");
-        let started = std::time::Instant::now();
-        let (received, partial) = receive_from(&scratch, 8, |mut send| async move {
+        let (received, partial, took) = receive_timed(&scratch, 8, |mut send| async move {
             send.write_all(b"abcd").await.unwrap();
             tokio::time::sleep(Duration::from_secs(4)).await;
         })
         .await;
         assert_eq!(received.unwrap(), Received::Stalled);
-        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(took < Duration::from_secs(3), "stalled after {took:?}");
         assert_eq!(partial.checked(), 0);
     }
 
