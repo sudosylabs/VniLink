@@ -34,18 +34,29 @@ use vnilink_media::{
 #[cfg(target_os = "macos")]
 const BGRA: u32 = 0x4247_5241;
 
+/// Scaling ScreenCaptureKit pictures on the GPU, for one encoder.
+#[cfg(target_os = "macos")]
+enum Scaler {
+    /// No picture of another size yet.
+    Untried,
+    Ready(
+        videotoolbox::transfer::PixelTransferSession,
+        apple_cf::cv::CVPixelBuffer,
+    ),
+    /// The GPU could not scale: pictures are read into memory and scaled on
+    /// the CPU until the encoder is reopened.
+    Unavailable,
+}
+
 pub struct MacEncoder {
     codec: vnilink::VideoCodec,
     #[cfg(target_os = "macos")]
     session: CompressionSession,
     #[cfg(target_os = "macos")]
     surface: IOSurface,
-    /// Scales a ScreenCaptureKit picture into `surface`, made on first use.
+    /// Scales ScreenCaptureKit pictures into `surface` on the GPU.
     #[cfg(target_os = "macos")]
-    scaler: Option<(
-        videotoolbox::transfer::PixelTransferSession,
-        apple_cf::cv::CVPixelBuffer,
-    )>,
+    scaler: Scaler,
     width: u16,
     height: u16,
     #[cfg(target_os = "macos")]
@@ -162,7 +173,7 @@ impl MacEncoder {
                 codec,
                 session,
                 surface,
-                scaler: None,
+                scaler: Scaler::Untried,
                 width,
                 height,
                 frame_rate: i32::from(frame_rate),
@@ -267,26 +278,50 @@ fn low_latency(session: &CompressionSession) {
 }
 
 impl MacEncoder {
-    /// Scales a ScreenCaptureKit picture into the encoder's surface on the GPU.
+    /// Scales a ScreenCaptureKit picture into the encoder's surface on the
+    /// GPU. `false` once the GPU cannot: the caller scales on the CPU.
     #[cfg(target_os = "macos")]
-    fn scale(&mut self, picture: &crate::pixels::MacPicture) -> Result<(), Error> {
-        let rejected = |_| Error::EncodeRejected("VideoToolbox rejected the frame");
-        if self.scaler.is_none() {
-            let session = videotoolbox::transfer::PixelTransferSession::new().map_err(rejected)?;
-            // Each output pixel averages the pixels it covers: text stays
-            // legible where nearest-neighbour would drop strokes.
-            session
-                .set_downsampling_mode(videotoolbox::transfer::DownsamplingMode::Average)
-                .map_err(rejected)?;
-            session.set_real_time(true).map_err(rejected)?;
-            let target = apple_cf::cv::CVPixelBuffer::create_with_io_surface(&self.surface)
-                .map_err(|_| Error::EncodeRejected("VideoToolbox rejected the frame"))?;
-            self.scaler = Some((session, target));
+    fn scale(&mut self, picture: &crate::pixels::MacPicture) -> bool {
+        if matches!(self.scaler, Scaler::Untried) {
+            self.scaler = (|| {
+                let session = videotoolbox::transfer::PixelTransferSession::new().ok()?;
+                // Each output pixel averages the pixels it covers: text stays
+                // legible where nearest-neighbour would drop strokes.
+                session
+                    .set_downsampling_mode(videotoolbox::transfer::DownsamplingMode::Average)
+                    .ok()?;
+                session.set_real_time(true).ok()?;
+                let target =
+                    apple_cf::cv::CVPixelBuffer::create_with_io_surface(&self.surface).ok()?;
+                Some(Scaler::Ready(session, target))
+            })()
+            .unwrap_or(Scaler::Unavailable);
         }
-        let (session, target) = self.scaler.as_ref().expect("made above");
-        session
-            .transfer(picture.pixel_buffer(), target)
-            .map_err(rejected)
+        let Scaler::Ready(session, target) = &self.scaler else {
+            return false;
+        };
+        if session.transfer(picture.pixel_buffer(), target).is_err() {
+            self.scaler = Scaler::Unavailable;
+            return false;
+        }
+        true
+    }
+
+    /// Whether pictures of another size are scaled on the GPU: `None` before
+    /// the first one.
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn scales_on_gpu(&self) -> Option<bool> {
+        match self.scaler {
+            Scaler::Untried => None,
+            Scaler::Ready(..) => Some(true),
+            Scaler::Unavailable => Some(false),
+        }
+    }
+
+    /// As if the GPU could not scale, to exercise the CPU path.
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn refuse_gpu_scaling(&mut self) {
+        self.scaler = Scaler::Unavailable;
     }
 }
 
@@ -331,21 +366,25 @@ impl VideoEncoder for MacEncoder {
         }
         #[cfg(target_os = "macos")]
         {
-            let held;
-            let surface = match captured {
-                Some(picture) if (frame.width(), frame.height()) == (self.width, self.height) => {
-                    held = picture
-                        .pixel_buffer()
-                        .io_surface()
-                        .ok_or(Error::EncodeRejected("VideoToolbox rejected the frame"))?;
-                    &held
-                }
-                Some(picture) => {
-                    self.scale(picture)?;
+            let same_size = (frame.width(), frame.height()) == (self.width, self.height);
+            let in_surface = captured
+                .filter(|_| same_size)
+                .and_then(|picture| picture.pixel_buffer().io_surface());
+            let scaled_on_gpu = !same_size && captured.is_some_and(|picture| self.scale(picture));
+            let surface = match &in_surface {
+                Some(held) => held,
+                None if scaled_on_gpu => &self.surface,
+                // Not a captured picture, or the GPU could not take it: its
+                // pixels, read into memory and scaled on the CPU if need be.
+                None if same_size => {
+                    paint(&self.surface, frame)?;
                     &self.surface
                 }
                 None => {
-                    paint(&self.surface, frame)?;
+                    paint(
+                        &self.surface,
+                        &vnilink_media::scale_bgra(frame, self.width, self.height)?,
+                    )?;
                     &self.surface
                 }
             };

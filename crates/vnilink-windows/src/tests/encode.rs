@@ -282,8 +282,18 @@ fn adapters_and_outputs() {
 /// `frame` in a texture on the first adapter, as Desktop Duplication's
 /// pictures arrive, through the capture's pool.
 fn on_gpu(frame: &vnilink_media::RawFrame) -> vnilink_media::RawFrame {
+    on_device(
+        frame,
+        windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE,
+    )
+}
+
+/// `frame` in a texture on a device of `driver`'s kind.
+fn on_device(
+    frame: &vnilink_media::RawFrame,
+    driver: windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE,
+) -> vnilink_media::RawFrame {
     use windows::Win32::Foundation::HMODULE;
-    use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
     use windows::Win32::Graphics::Direct3D11::{
         D3D11CreateDevice, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
         D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION, D3D11_SUBRESOURCE_DATA,
@@ -291,19 +301,27 @@ fn on_gpu(frame: &vnilink_media::RawFrame) -> vnilink_media::RawFrame {
     };
     use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
     unsafe {
+        // As the capture does: video support where the driver has it.
         let (mut device, mut context) = (None, None);
-        D3D11CreateDevice(
-            None,
-            D3D_DRIVER_TYPE_HARDWARE,
-            HMODULE::default(),
+        for flags in [
             D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
-            None,
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            Some(&mut context),
-        )
-        .unwrap();
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        ] {
+            let made = D3D11CreateDevice(
+                None,
+                driver,
+                HMODULE::default(),
+                flags,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                Some(&mut context),
+            );
+            if made.is_ok() {
+                break;
+            }
+        }
         let (device, context) = (device.unwrap(), context.unwrap());
         crate::gpu::protect(&device).unwrap();
         let (width, height) = (u32::from(frame.width()), u32::from(frame.height()));
@@ -504,4 +522,81 @@ fn capture_to_encode_cost() {
             used.as_secs_f64() / started.elapsed().as_secs_f64()
         );
     }
+}
+
+/// When the GPU cannot convert (no video processor, as on Microsoft's basic
+/// render driver), a captured picture is read into memory, scaled and
+/// converted on the CPU: the stream goes on, as before the GPU path.
+#[test]
+fn a_captured_picture_is_converted_on_the_cpu_when_the_gpu_cannot() {
+    use vnilink_media::measure::{psnr, text_page};
+    use vnilink_media::{HostVideo, PumpOutput, Quality};
+    let page = text_page(1280, 720, 0);
+    for candidate in unsafe { h264_encoders() } {
+        let Ok(mut encoder) = WindowsEncoder::open_candidate(&candidate, 640, 360, 30, 8_000_000)
+        else {
+            continue;
+        };
+        assert_eq!(encoder.converts_on_gpu(), None);
+        encoder.refuse_gpu_conversion();
+        // One transform of a hardware encoder is live at a time: this one
+        // goes before the next opens.
+        {
+            let mut host = HostVideo::new(Quality::new(8_000, 30, 640, 360).unwrap(), encoder);
+            let mut decoder = WindowsDecoder::new();
+            let mut shown = None;
+            for index in 0..4u64 {
+                let frame = on_gpu(&page).with_timestamp(index * 33_333);
+                if let PumpOutput::Encoded(encoded) = host.push(&frame).unwrap() {
+                    if let Ok(decoded) = decoder.decode(&encoded) {
+                        shown = Some(decoded);
+                    }
+                }
+            }
+            let decoded = shown.unwrap_or_else(|| panic!("{}: no picture", candidate.name));
+            // Nearest-neighbour, as the CPU path scales.
+            let reference = vnilink_media::scale_bgra(&page, 640, 360).unwrap();
+            let quality = psnr(&reference, &decoded);
+            assert!(quality > 25.0, "{}: {quality:.1} dB", candidate.name);
+        }
+        // An encoder that has not been refused converts on the GPU.
+        let mut encoder =
+            WindowsEncoder::open_candidate(&candidate, 640, 360, 30, 8_000_000).unwrap();
+        let _ = encoder.encode(
+            &on_gpu(&page),
+            &EncodeParams {
+                force_keyframe: true,
+                recovery: false,
+                bitrate_bps: 8_000_000,
+                frame_rate: 30,
+            },
+        );
+        assert_eq!(encoder.converts_on_gpu(), Some(true), "{}", candidate.name);
+    }
+}
+
+/// Microsoft's software renderer (WARP), as in a virtual machine without a
+/// GPU: its device has no video support, so the picture is converted on the
+/// CPU, and encoded.
+#[test]
+fn a_picture_on_the_software_renderer_is_encoded() {
+    let page = vnilink_media::measure::text_page(1280, 720, 0);
+    let frame = on_device(
+        &page,
+        windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_WARP,
+    );
+    let mut encoder = WindowsEncoder::open(640, 360, 30, 8_000_000).unwrap();
+    let sample = encoder
+        .encode(
+            &frame,
+            &EncodeParams {
+                force_keyframe: true,
+                recovery: false,
+                bitrate_bps: 8_000_000,
+                frame_rate: 30,
+            },
+        )
+        .unwrap();
+    assert!(sample.keyframe());
+    assert_eq!(encoder.converts_on_gpu(), Some(false));
 }

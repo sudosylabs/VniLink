@@ -83,9 +83,21 @@ pub struct WindowsEncoder {
     frame_rate: u8,
     #[cfg(windows)]
     recovery_qp: RecoveryQp,
-    /// Converts captured pictures to NV12 on their GPU, made for the first.
+    /// Whether captured pictures are converted to NV12 on their GPU.
     #[cfg(windows)]
-    converter: Option<crate::gpu::Nv12Converter>,
+    gpu: GpuConversion,
+}
+
+/// Converting captured pictures on the GPU, for one encoder.
+#[cfg(windows)]
+enum GpuConversion {
+    /// No captured picture yet.
+    Untried,
+    Ready(crate::gpu::Nv12Converter),
+    /// The GPU could not convert (no video processor, as on Microsoft's
+    /// basic render driver or in some virtual machines): pictures are read
+    /// into memory and converted on the CPU until the encoder is reopened.
+    Unavailable,
 }
 
 // The transform is a COM pointer used through `&mut self` only, from the
@@ -278,7 +290,7 @@ impl WindowsEncoder {
             output_size,
             frame_rate,
             recovery_qp: RecoveryQp::default(),
-            converter: None,
+            gpu: GpuConversion::Untried,
         })
     }
 }
@@ -357,9 +369,9 @@ impl VideoEncoder for WindowsEncoder {
         }
         #[cfg(windows)]
         {
-            let (y_plane, uv_plane) = match captured {
-                Some(picture) => self.convert(picture)?,
-                None => bgra_to_nv12(frame)?.into_planes(),
+            let (y_plane, uv_plane) = match captured.and_then(|picture| self.convert(picture)) {
+                Some(planes) => planes,
+                None => self.convert_on_cpu(frame)?,
             };
             // SAFETY (floor and clear): `transform` is this encoder's live
             // transform, used from the thread that owns it.
@@ -404,33 +416,65 @@ struct MfSample {
 #[cfg(windows)]
 impl WindowsEncoder {
     /// A captured picture as NV12 at this encoder's size, converted on the
-    /// GPU that holds it; only the NV12 picture is read into memory.
-    fn convert(
-        &mut self,
-        picture: &crate::gpu::WindowsPicture,
-    ) -> Result<(Vec<u8>, Vec<u8>), Error> {
+    /// GPU that holds it; only the NV12 picture is read into memory. `None`
+    /// once the GPU cannot: the caller converts on the CPU instead.
+    fn convert(&mut self, picture: &crate::gpu::WindowsPicture) -> Option<(Vec<u8>, Vec<u8>)> {
         use vnilink_media::NativePicture;
-        let rejected = |_| Error::EncodeRejected("the encoder rejected the frame");
-        if !self
-            .converter
-            .as_ref()
-            .is_some_and(|converter| converter.fits(picture))
-        {
+        let fits = match &self.gpu {
+            GpuConversion::Unavailable => return None,
+            GpuConversion::Ready(converter) => converter.fits(picture),
+            GpuConversion::Untried => false,
+        };
+        if !fits {
             let (width, height) = picture.size();
-            self.converter = Some(
-                unsafe {
-                    crate::gpu::Nv12Converter::new(
-                        picture.device(),
-                        picture.context(),
-                        (u32::from(width), u32::from(height)),
-                        (self.width, self.height),
-                    )
-                }
-                .map_err(rejected)?,
-            );
+            let made = unsafe {
+                crate::gpu::Nv12Converter::new(
+                    picture.device(),
+                    picture.context(),
+                    (u32::from(width), u32::from(height)),
+                    (self.width, self.height),
+                )
+            };
+            self.gpu = made.map_or(GpuConversion::Unavailable, GpuConversion::Ready);
         }
-        let converter = self.converter.as_ref().expect("made above");
-        unsafe { converter.convert(picture) }.map_err(rejected)
+        let GpuConversion::Ready(converter) = &self.gpu else {
+            return None;
+        };
+        match unsafe { converter.convert(picture) } {
+            Ok(planes) => Some(planes),
+            Err(_) => {
+                self.gpu = GpuConversion::Unavailable;
+                None
+            }
+        }
+    }
+
+    /// `frame` as NV12 converted on the CPU, scaled first if it is a captured
+    /// picture of another size; reading a captured picture copies it out.
+    fn convert_on_cpu(&self, frame: &RawFrame) -> Result<(Vec<u8>, Vec<u8>), Error> {
+        let size = (u32::from(frame.width()), u32::from(frame.height()));
+        if size == (self.width, self.height) {
+            return Ok(bgra_to_nv12(frame)?.into_planes());
+        }
+        let scaled = vnilink_media::scale_bgra(frame, self.width as u16, self.height as u16)?;
+        Ok(bgra_to_nv12(&scaled)?.into_planes())
+    }
+
+    /// Whether captured pictures are converted on the GPU: `None` before the
+    /// first one.
+    #[cfg(test)]
+    pub(crate) fn converts_on_gpu(&self) -> Option<bool> {
+        match self.gpu {
+            GpuConversion::Untried => None,
+            GpuConversion::Ready(_) => Some(true),
+            GpuConversion::Unavailable => Some(false),
+        }
+    }
+
+    /// As if the GPU could not convert, to exercise the CPU path.
+    #[cfg(test)]
+    pub(crate) fn refuse_gpu_conversion(&mut self) {
+        self.gpu = GpuConversion::Unavailable;
     }
 
     unsafe fn encode_nv12(

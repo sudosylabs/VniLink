@@ -978,3 +978,36 @@ fn a_captured_picture_is_encoded_in_its_surface_at_any_size() {
     assert!(psnr(&ideal, &gpu) > psnr(&ideal, &cpu) + 3.0);
     assert!(edge_psnr(&ideal, &gpu) > edge_psnr(&ideal, &cpu) + 3.0);
 }
+
+/// When the GPU cannot scale, a captured picture is read into memory and
+/// scaled on the CPU: the stream goes on, as before the GPU path.
+#[test]
+fn a_captured_picture_is_scaled_on_the_cpu_when_the_gpu_cannot() {
+    use vnilink_media::measure::{psnr, text_page};
+    let page = text_page(1280, 720, 0);
+    let mut encoder = MacEncoder::open(640, 360, 30, 8_000_000, false).unwrap();
+    assert_eq!(encoder.scales_on_gpu(), None);
+    encoder.refuse_gpu_scaling();
+    let mut host = HostVideo::new(Quality::new(8_000, 30, 640, 360).unwrap(), encoder);
+    let PumpOutput::Encoded(frame) = host.push(&captured(&page)).unwrap() else {
+        panic!("the first picture is encoded");
+    };
+    let decoded = MacDecoder::new().decode(&frame).unwrap();
+    // Nearest-neighbour, as the CPU path scales.
+    let reference = vnilink_media::scale_bgra(&page, 640, 360).unwrap();
+    assert!(psnr(&reference, &decoded) > 30.0);
+    // An encoder that has not been refused scales on the GPU.
+    let mut encoder = MacEncoder::open(640, 360, 30, 8_000_000, false).unwrap();
+    encoder
+        .encode(
+            &captured(&page),
+            &EncodeParams {
+                force_keyframe: true,
+                recovery: false,
+                bitrate_bps: 8_000_000,
+                frame_rate: 30,
+            },
+        )
+        .unwrap();
+    assert_eq!(encoder.scales_on_gpu(), Some(true));
+}

@@ -161,18 +161,29 @@ impl WindowsCapture {
         let mut device = None;
         let mut context = None;
         check_startup(startup)?;
-        D3D11CreateDevice(
-            &adapter,
-            D3D_DRIVER_TYPE_UNKNOWN,
-            HMODULE::default(),
-            // Video support: encoders convert pictures to NV12 on this device.
+        // Video support lets encoders convert pictures to NV12 on this
+        // device. A driver without it (Microsoft's basic display adapter, a
+        // virtual machine's) refuses the flag: capture without it, and
+        // encoders convert on the CPU.
+        let create = |flags, device: &mut _, context: &mut _| {
+            D3D11CreateDevice(
+                &adapter,
+                D3D_DRIVER_TYPE_UNKNOWN,
+                HMODULE::default(),
+                flags,
+                None,
+                D3D11_SDK_VERSION,
+                Some(device),
+                None,
+                Some(context),
+            )
+        };
+        create(
             D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
-            None,
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            Some(&mut context),
+            &mut device,
+            &mut context,
         )
+        .or_else(|_| create(D3D11_CREATE_DEVICE_BGRA_SUPPORT, &mut device, &mut context))
         .map_err(map_error)?;
         check_startup(startup)?;
         let device = device.ok_or_else(|| map_error(windows::core::Error::from_hresult(E_FAIL)))?;
