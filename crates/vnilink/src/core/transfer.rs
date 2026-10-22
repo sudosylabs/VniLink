@@ -203,6 +203,7 @@ async fn serve_stream(
                 &mut send,
                 source,
                 request.offset,
+                request.held,
                 counters,
                 || super::jobs::still_serving(&shared, &peer, request.job),
                 |position, finished| {
@@ -309,6 +310,7 @@ impl Core {
                 job,
                 file,
                 offset: 0,
+                held: 0,
             },
             size,
             partial,
@@ -330,8 +332,8 @@ pub(super) fn peer_addr(shared: &Shared, peer: &[u8; 32]) -> Result<EndpointAddr
 }
 
 /// Fetches one file of a sending job into its partial, continuing after
-/// its last checked segment; `request` names the job and file, and its
-/// offset is taken from the partial. `via` learns which connection the
+/// the bytes it holds; `request` names the job and file, and its offset and
+/// held bytes are taken from the partial. `via` learns which connection the
 /// file arrived on. Run where blocking file writes are fine: the caller's
 /// own thread or a blocking worker, never a runtime worker.
 #[allow(clippy::too_many_arguments)]
@@ -348,7 +350,7 @@ pub(super) async fn fetch_file(
     via: &mut Option<usize>,
 ) -> Result<Received, Error> {
     let mut partial = Partial::open(partial, journal, size)?;
-    let from = partial.checked();
+    let from = partial.written();
     let mut mismatches = 0;
     loop {
         if *cancel.borrow() {
@@ -356,6 +358,7 @@ pub(super) async fn fetch_file(
         }
         let request = FileRequest {
             offset: partial.checked(),
+            held: partial.held(),
             ..request
         };
         let received = match ask_kept(shared, peer, addr.clone(), request).await {
@@ -381,8 +384,12 @@ pub(super) async fn fetch_file(
                 if matches!(other, Ok(Received::Stalled)) {
                     shared.transfer_counters.stalled();
                 }
-                // Unchecked bytes never outlive the attempt.
-                partial.drop_unchecked()?;
+                // Bytes that arrived stay for the next attempt, which asks
+                // only for the rest: a link that keeps dropping still makes
+                // progress. A source that changed makes them stale.
+                if matches!(other, Ok(Received::Changed)) {
+                    partial.drop_unchecked()?;
+                }
                 return other;
             }
         }

@@ -1,6 +1,6 @@
 //! The partial file a receiver appends to, and its segment journal.
 
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 
 use blake3::hazmat::ChainingValue;
 
@@ -13,12 +13,17 @@ pub(crate) const PARTIAL_FAILED: &str = "the file could not be staged";
 /// The destination's disk is full, or its quota is used up.
 pub(crate) const NO_SPACE: &str = "there is not enough space for this file";
 const VALUE_LEN: u64 = 32;
+/// Bytes read at a time when held bytes are hashed again.
+const HOLD_CHUNK: usize = 1024 * 1024;
 
 /// A `size`-byte file arriving: the bytes written so far and, beside them,
 /// a journal of the chaining value of every segment checked. A segment is
 /// journaled only after its bytes are on disk, so after a crash the
-/// journal never claims bytes the partial lost; a resume continues after
-/// the last journaled segment without reading anything back.
+/// journal never claims bytes the partial lost. A resume continues after
+/// the last journaled segment, keeping the bytes of the next segment that
+/// already arrived: they are read back and hashed again, and the request
+/// names them so the sender sends only the rest. Bytes a crash tore fail
+/// that segment's check, which costs the segment once.
 pub(crate) struct Partial {
     file: std::fs::File,
     journal: std::fs::File,
@@ -35,7 +40,8 @@ pub(crate) struct Partial {
 
 impl Partial {
     /// Opens or creates the partial at `path` and its journal at
-    /// `journal`. Bytes past the last journaled segment are dropped.
+    /// `journal`. Bytes past the segment after the last journaled one are
+    /// dropped.
     pub(crate) fn open(
         path: &std::path::Path,
         journal: &std::path::Path,
@@ -63,13 +69,13 @@ impl Partial {
         };
         let file = open(path)?;
         let journal = open(journal)?;
-        let held = file.metadata().map_err(failed)?.len();
+        let on_disk = file.metadata().map_err(failed)?.len();
         let values = journal.metadata().map_err(failed)?.len() / VALUE_LEN;
         let mut checked = 0;
         let mut segments = 0;
         while segments < values && checked < size {
             let end = checked + segment_len(checked, size, segment);
-            if end > held {
+            if end > on_disk {
                 break;
             }
             checked = end;
@@ -85,7 +91,26 @@ impl Partial {
             hasher: next_segment(checked, size),
         };
         partial.truncate(segments)?;
+        let unchecked = on_disk.saturating_sub(checked);
+        partial.hold(unchecked.min(partial.segment_left()))?;
         Ok(partial)
+    }
+
+    /// Takes the first `bytes` past the checked segments back into the
+    /// segment being written, reading them from disk for its hasher.
+    fn hold(&mut self, bytes: u64) -> Result<(), Error> {
+        if let Some(hasher) = self.hasher.as_mut() {
+            let mut chunk = vec![0u8; HOLD_CHUNK.min(bytes as usize)];
+            let mut left = bytes;
+            while left > 0 {
+                let take = left.min(HOLD_CHUNK as u64) as usize;
+                self.file.read_exact(&mut chunk[..take]).map_err(failed)?;
+                hasher.update(&chunk[..take]);
+                left -= take as u64;
+            }
+        }
+        self.written = self.checked + bytes;
+        self.file.set_len(self.written).map_err(failed)
     }
 
     /// Bytes in checked segments: where the next request starts.
@@ -95,6 +120,11 @@ impl Partial {
 
     pub(crate) fn written(&self) -> u64 {
         self.written
+    }
+
+    /// Bytes written past the checked segments: the request's held bytes.
+    pub(crate) fn held(&self) -> u64 {
+        self.written - self.checked
     }
 
     /// Bytes still due in the segment being written.
@@ -148,9 +178,10 @@ impl Partial {
         Ok(())
     }
 
-    /// Cuts the partial to its first `segments` checked segments.
+    /// Cuts the journal to its first `segments` values and positions the
+    /// partial after the checked segments; the bytes past them stay until
+    /// [`Self::hold`] keeps or cuts them.
     fn truncate(&mut self, segments: u64) -> Result<(), Error> {
-        self.file.set_len(self.checked).map_err(failed)?;
         self.file
             .seek(SeekFrom::Start(self.checked))
             .map_err(failed)?;
@@ -253,15 +284,53 @@ mod tests {
         drop(partial);
 
         let mut partial = scratch.open(size);
+        assert_eq!(partial.checked(), SEGMENT_LEN);
         assert_eq!(
-            partial.checked(),
-            SEGMENT_LEN,
-            "unchecked bytes are dropped"
+            partial.held(),
+            SEGMENT_LEN / 2,
+            "the unchecked half is held"
         );
         land_segment(&mut partial, &whole);
         land_segment(&mut partial, &whole);
         assert_eq!(partial.checked(), size);
         assert_eq!(partial.segment_left(), 0);
+        drop(partial);
+        assert_eq!(std::fs::read(scratch.0.join("data")).unwrap(), whole);
+    }
+
+    /// A whole segment that arrived without its value is held whole, and
+    /// only the value is still due; bytes past it are cut.
+    #[test]
+    fn a_resume_holds_at_most_the_next_segment() {
+        let scratch = Scratch::new("hold");
+        let whole: Vec<u8> = (0..2 * SEGMENT_LEN + 7).map(|n| (n * 3) as u8).collect();
+        let size = whole.len() as u64;
+        std::fs::write(scratch.0.join("data"), &whole[..(SEGMENT_LEN + 5) as usize]).unwrap();
+        let mut partial = scratch.open(size);
+        assert_eq!((partial.checked(), partial.held()), (0, SEGMENT_LEN));
+        assert_eq!(partial.segment_left(), 0);
+        assert!(partial
+            .seal(&value_of(&whole[..SEGMENT_LEN as usize], 0))
+            .unwrap());
+        drop(partial);
+        assert_eq!(
+            std::fs::metadata(scratch.0.join("data")).unwrap().len(),
+            SEGMENT_LEN
+        );
+    }
+
+    /// Held bytes a crash tore fail the segment's check, which drops them.
+    #[test]
+    fn torn_held_bytes_fail_their_segment() {
+        let scratch = Scratch::new("torn");
+        let whole = vec![9u8; SEGMENT_LEN as usize];
+        std::fs::write(scratch.0.join("data"), vec![0u8; 100]).unwrap();
+        let mut partial = scratch.open(whole.len() as u64);
+        assert_eq!(partial.held(), 100);
+        partial.append(&whole[100..]).unwrap();
+        assert!(!partial.seal(&value_of(&whole, 0)).unwrap());
+        assert_eq!(partial.held(), 0);
+        land_segment(&mut partial, &whole);
         drop(partial);
         assert_eq!(std::fs::read(scratch.0.join("data")).unwrap(), whole);
     }

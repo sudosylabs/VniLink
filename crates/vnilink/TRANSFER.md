@@ -90,11 +90,16 @@ control or the desktop behind it.
 4. The receiver appends to the file's partial in the transfer directory
    and checks each segment as it lands. A checked segment before the last
    is synced and then journaled beside the partial, so a resume, after a
-   cancel or a restart, asks for the file from the segment after the last
-   journaled one and neither side reads earlier bytes again; unjournaled
-   bytes are dropped. A segment that fails its check is fetched once more,
-   then fails the job. The last segment is checked but not journaled: the
-   file publishes as soon as it checks.
+   cancel, a lost connection or a restart, asks for the file from the
+   segment after the last journaled one and neither side reads earlier
+   bytes again. The bytes of that segment which already arrived are kept:
+   the receiver reads them back for the segment's hash, and the request
+   names them, so the sender reads them for its hash too and sends only the
+   rest. A link that keeps dropping still makes progress, where restarting
+   the segment would lose up to 16 MiB each time. A source that changed
+   drops them. A segment that fails its check, held bytes a crash tore
+   among them, is fetched once more, then fails the job. The last segment
+   is checked but not journaled: the file publishes as soon as it checks.
 5. While a receiver takes one file, it fetches up to seven of the next
    small files (one segment or less, 64 MiB in all) ahead into their
    partials, so many small files do not cost a round trip each. They still

@@ -102,14 +102,14 @@ pub(crate) async fn receive(
     counters: &TransferCounters,
     cancel: &mut tokio::sync::watch::Receiver<bool>,
 ) -> Result<Received, Error> {
-    let from = partial.checked();
+    let from = partial.written();
     let stopped = async {
         if cancel.wait_for(|stop| *stop).await.is_err() {
             std::future::pending::<()>().await;
         }
     };
     tokio::pin!(stopped);
-    let mut incoming = Incoming::default();
+    let mut incoming = Incoming::after(partial);
     loop {
         let chunk = tokio::select! {
             biased;
@@ -140,13 +140,21 @@ pub(crate) async fn receive(
 
 /// Splits the bytes of a sending stream, however they are chunked, into
 /// segment bytes for the partial and the value after each segment.
-#[derive(Default)]
 struct Incoming {
     /// The value of the segment just written, while it arrives.
     value: Option<Vec<u8>>,
 }
 
 impl Incoming {
+    /// The stream for what `partial` still lacks: when it holds a whole
+    /// segment unchecked, that segment's value comes first.
+    fn after(partial: &Partial) -> Self {
+        let whole = partial.held() > 0 && partial.segment_left() == 0;
+        Self {
+            value: whole.then(|| Vec::with_capacity(VALUE_LEN)),
+        }
+    }
+
     /// Takes the next bytes of the stream. False when a segment failed its
     /// check; an error when the bytes cannot be part of the file.
     fn feed(
@@ -230,7 +238,7 @@ pub(crate) fn land<'a>(
     let _ = std::fs::remove_file(data);
     let _ = std::fs::remove_file(journal);
     let mut partial = Partial::open_in(data, journal, size, segment)?;
-    let mut incoming = Incoming::default();
+    let mut incoming = Incoming::after(&partial);
     let (progress, _) = std::sync::mpsc::channel();
     let counters = TransferCounters::default();
     for chunk in chunks {
@@ -349,6 +357,7 @@ mod tests {
             job: 1,
             file: 0,
             offset: 0,
+            held: 0,
         };
         let mut partial = scratch.partial(size);
         let recv = match ask(&connection, request).await.unwrap() {
@@ -457,23 +466,18 @@ mod tests {
         assert_eq!(received.unwrap(), Received::Done { downloaded: 0 });
     }
 
-    /// The real sender and receiver agree, and an offset off a segment
-    /// boundary is refused before anything is read.
+    /// A connection to the real sender serving `bytes` as file 0 of job 1.
     #[cfg(not(windows))]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_served_file_arrives_whole() {
-        let scratch = Scratch::new("served");
-        let bytes: Vec<u8> = (0..300_000u32).map(|n| (n % 241) as u8).collect();
+    async fn serve(scratch: &Scratch, bytes: &[u8]) -> (Connection, Endpoint, Endpoint) {
         let source_path = scratch.0.join("source");
-        std::fs::write(&source_path, &bytes).unwrap();
-        let (connection, serving, _receiver, _sender) = pair().await;
+        std::fs::write(&source_path, bytes).unwrap();
+        let (connection, serving, receiver, sender) = pair().await;
         let size = bytes.len() as u64;
-        let serve_path = source_path.clone();
         tokio::spawn(async move {
             while let Ok((mut send, mut recv)) = serving.accept_bi().await {
                 let request = super::super::read_request(&mut recv).await.unwrap();
                 let source = super::super::Source {
-                    file: std::fs::File::open(&serve_path).unwrap(),
+                    file: std::fs::File::open(&source_path).unwrap(),
                     size,
                     mtime_ms: 0,
                 };
@@ -482,6 +486,7 @@ mod tests {
                     &mut send,
                     source,
                     request.offset,
+                    request.held,
                     &counters,
                     || true,
                     |_, _| {},
@@ -489,19 +494,36 @@ mod tests {
                 .await;
             }
         });
-        let unaligned = FileRequest {
-            job: 1,
-            file: 0,
-            offset: 5,
-        };
-        assert!(matches!(
-            ask(&connection, unaligned).await.unwrap(),
-            Answer::Denied
-        ));
+        (connection, receiver, sender)
+    }
+
+    /// The real sender and receiver agree, and an offset off a segment
+    /// boundary or more held bytes than the segment has is refused before
+    /// anything is read.
+    #[cfg(not(windows))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_served_file_arrives_whole() {
+        let scratch = Scratch::new("served");
+        let bytes: Vec<u8> = (0..300_000u32).map(|n| (n % 241) as u8).collect();
+        let size = bytes.len() as u64;
+        let (connection, _receiver, _sender) = serve(&scratch, &bytes).await;
+        for (offset, held) in [(5, 0), (0, size + 1)] {
+            let refused = FileRequest {
+                job: 1,
+                file: 0,
+                offset,
+                held,
+            };
+            assert!(matches!(
+                ask(&connection, refused).await.unwrap(),
+                Answer::Denied
+            ));
+        }
         let request = FileRequest {
             job: 1,
             file: 0,
             offset: 0,
+            held: 0,
         };
         let Answer::Sending(recv) = ask(&connection, request).await.unwrap() else {
             panic!("the sender sends");
@@ -518,6 +540,39 @@ mod tests {
         assert_eq!(scratch.data(), bytes);
         assert_eq!(arrived.try_iter().last(), Some(size));
         let _ = STATUS_DENIED;
+    }
+
+    /// A file whose last attempt ended mid-segment continues from the bytes
+    /// it holds: the sender sends only the rest, and the segment still
+    /// checks against the bytes held.
+    #[cfg(not(windows))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_interrupted_file_continues_from_the_bytes_it_holds() {
+        let scratch = Scratch::new("continues");
+        let bytes: Vec<u8> = (0..300_000u32).map(|n| (n % 251) as u8).collect();
+        let size = bytes.len() as u64;
+        let landed = 123_457;
+        std::fs::write(scratch.0.join("data"), &bytes[..landed]).unwrap();
+        let (connection, _receiver, _sender) = serve(&scratch, &bytes).await;
+        let mut partial = scratch.partial(size);
+        assert_eq!((partial.checked(), partial.held()), (0, landed as u64));
+        let request = FileRequest {
+            job: 1,
+            file: 0,
+            offset: partial.checked(),
+            held: partial.held(),
+        };
+        let Answer::Sending(recv) = ask(&connection, request).await.unwrap() else {
+            panic!("the sender sends");
+        };
+        let (progress, _) = std::sync::mpsc::channel();
+        let (_stop, mut cancel) = tokio::sync::watch::channel(false);
+        let counters = TransferCounters::default();
+        let received = receive(recv, &mut partial, size, &progress, &counters, &mut cancel).await;
+        let rest = size - landed as u64;
+        assert_eq!(received.unwrap(), Received::Done { downloaded: rest });
+        assert_eq!(counters.summary().bytes_received, rest);
+        assert_eq!(scratch.data(), bytes);
     }
 
     /// Randomized properties of the stream parser, seeded so a failure
@@ -553,7 +608,7 @@ mod tests {
                 SEGMENT_LEN,
             )
             .unwrap();
-            let mut incoming = Incoming::default();
+            let mut incoming = Incoming::after(&partial);
             let (progress, _) = std::sync::mpsc::channel();
             let counters = TransferCounters::default();
             let mut rest = stream;

@@ -30,7 +30,7 @@ pub fn control_message(bytes: &[u8]) {
     assert_eq!(again.ok(), Some(message), "a decoded message re-encodes");
 }
 
-/// Exactly the request's 20 bytes decode, back to themselves.
+/// Exactly the request's 28 bytes decode, back to themselves.
 pub fn file_request(bytes: &[u8]) {
     if let Ok(request) = FileRequest::decode(bytes) {
         assert_eq!(request.encode().as_slice(), bytes);
