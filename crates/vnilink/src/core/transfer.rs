@@ -244,9 +244,9 @@ pub(super) fn close_peer_files(shared: &Shared, peer: &[u8; 32]) {
 
 /// What QUIC sees on each path of this computer's files connections,
 /// serving and fetching, for the impaired-network harness.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-probes"))]
 impl Core {
-    pub(crate) fn files_path_stats(&self) -> Vec<serde_json::Value> {
+    pub fn files_path_stats(&self) -> Vec<serde_json::Value> {
         let shared = &self.shared;
         let serving: Vec<Connection> = lock(&shared.files_serving)
             .values()
