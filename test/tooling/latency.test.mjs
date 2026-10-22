@@ -39,7 +39,7 @@ test('latency options are bounded', () => {
 	assert.deepEqual(options, { seconds: 5, settleSeconds: 1, output: resolve('/out'), app: undefined });
 	assert.equal(latencyOptions('/root', ['--app', '/x/VniLink.app']).app, '/x/VniLink.app');
 	assert.throws(() => latencyOptions('/root', ['--app', '/x/VniLink']));
-	assert.ok(latencyOptions('/root', []).output.startsWith(join('/root', '.build', 'latency')));
+	assert.ok(latencyOptions('/root', []).output.startsWith(resolve('/root', '.build', 'latency')));
 	assert.equal(latencyOptions('/root', ['--output', 'relative/out']).output, join(process.cwd(), 'relative/out'));
 	assert.throws(() => latencyOptions('/root', ['--seconds', '0']));
 	assert.throws(() => latencyOptions('/root', ['--seconds', '2.5']));
