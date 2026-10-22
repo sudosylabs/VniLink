@@ -25,6 +25,8 @@ mod transform_events;
 
 #[cfg(windows)]
 mod capture;
+#[cfg(windows)]
+mod gpu;
 #[cfg(any(windows, test))]
 mod shells;
 #[cfg(windows)]

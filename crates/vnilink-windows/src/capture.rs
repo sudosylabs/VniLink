@@ -2,8 +2,11 @@
 //!
 //! The secure UAC desktop is a different desktop. DuplicateOutput fails there,
 //! and this module reports that instead of pretending the picture is available.
+//!
+//! Pictures stay on the GPU that captured them ([`crate::gpu`]): the encoder
+//! converts and scales them there, and anything else that reads their pixels
+//! copies them out once.
 
-use std::slice;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -12,9 +15,8 @@ use windows::core::Interface;
 use windows::Win32::Foundation::{E_ACCESSDENIED, E_FAIL, HMODULE};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CPU_ACCESS_READ,
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_STAGING,
+    D3D11CreateDevice, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+    D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM};
 use windows::Win32::Graphics::Dxgi::{
@@ -26,8 +28,9 @@ use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use crate::plan::frame_size;
 
 pub struct WindowsCapture {
-    context: ID3D11DeviceContext,
     duplication: IDXGIOutputDuplication,
+    /// Where each presented picture is copied on the GPU.
+    pool: crate::gpu::TexturePool,
     /// Desktop size validated at open. A resize surfaces as access lost on the
     /// next acquire, so the size is fixed for the life of one capture.
     size: (u16, u16),
@@ -44,6 +47,7 @@ pub struct WindowsCapture {
 
 /// Desktop Duplication handles before the format and size are validated.
 struct UnvalidatedDesktop {
+    device: windows::Win32::Graphics::Direct3D11::ID3D11Device,
     context: ID3D11DeviceContext,
     duplication: IDXGIOutputDuplication,
     format: DXGI_FORMAT,
@@ -62,8 +66,12 @@ impl WindowsCapture {
             return Err(Error::Unsupported("Desktop Duplication format is not BGRA"));
         }
         Ok(Self {
-            context: desktop.context,
             duplication: desktop.duplication,
+            pool: crate::gpu::TexturePool::new(
+                desktop.device,
+                desktop.context,
+                (desktop.width, desktop.height),
+            ),
             size: frame_size(desktop.width, desktop.height)?,
             origin: desktop.origin,
             last: Mutex::new(None),
@@ -157,7 +165,8 @@ impl WindowsCapture {
             &adapter,
             D3D_DRIVER_TYPE_UNKNOWN,
             HMODULE::default(),
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            // Video support: encoders convert pictures to NV12 on this device.
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
             None,
             D3D11_SDK_VERSION,
             Some(&mut device),
@@ -169,6 +178,7 @@ impl WindowsCapture {
         let device = device.ok_or_else(|| map_error(windows::core::Error::from_hresult(E_FAIL)))?;
         let context =
             context.ok_or_else(|| map_error(windows::core::Error::from_hresult(E_FAIL)))?;
+        crate::gpu::protect(&device).map_err(map_error)?;
         let output = adapter.EnumOutputs(0).map_err(map_error)?;
         let bounds = output.GetDesc().map_err(map_error)?.DesktopCoordinates;
         let output: IDXGIOutput1 = output.cast().map_err(map_error)?;
@@ -177,6 +187,7 @@ impl WindowsCapture {
         check_startup(startup)?;
         let desc = duplication.GetDesc();
         Ok(UnvalidatedDesktop {
+            device,
             context,
             duplication,
             format: desc.ModeDesc.Format,
@@ -281,57 +292,10 @@ impl WindowsCapture {
         if desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM {
             return Err(Error::Unsupported("Desktop Duplication format is not BGRA"));
         }
-        desc.Usage = D3D11_USAGE_STAGING;
-        desc.BindFlags = 0;
-        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
-        desc.MiscFlags = 0;
-        let device = self.context.GetDevice().map_err(map_error)?;
-        let mut staging = None;
-        device
-            .CreateTexture2D(&desc, None, Some(&mut staging))
-            .map_err(map_error)?;
-        let staging =
-            staging.ok_or_else(|| map_error(windows::core::Error::from_hresult(E_FAIL)))?;
-        self.context.CopyResource(&staging, &source);
-        let mut mapped = windows::Win32::Graphics::Direct3D11::D3D11_MAPPED_SUBRESOURCE::default();
-        self.context
-            .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
-            .map_err(map_error)?;
-        let copied = copy_mapped(
-            desc.Width,
-            desc.Height,
-            mapped.RowPitch,
-            mapped.pData,
-            timestamp_us,
-        );
-        self.context.Unmap(&staging, 0);
-        copied
+        frame_size(desc.Width, desc.Height)?;
+        let picture = self.pool.picture(&source).map_err(map_error)?;
+        RawFrame::native(timestamp_us, Box::new(picture)).map(Some)
     }
-}
-
-fn copy_mapped(
-    width: u32,
-    height: u32,
-    stride: u32,
-    data: *mut std::ffi::c_void,
-    timestamp_us: u64,
-) -> Result<Option<RawFrame>, Error> {
-    let (width, height) = frame_size(width, height)?;
-    if data.is_null() || stride == 0 {
-        return Err(Error::CaptureRejected(
-            "Desktop Duplication returned an empty frame",
-        ));
-    }
-    let bytes = stride as usize * usize::from(height);
-    let pixels = unsafe { slice::from_raw_parts(data as *const u8, bytes) };
-    RawFrame::with_stride(
-        width,
-        height,
-        stride as usize,
-        timestamp_us,
-        pixels.to_vec(),
-    )
-    .map(Some)
 }
 
 fn map_error(err: windows::core::Error) -> Error {

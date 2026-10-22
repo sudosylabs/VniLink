@@ -83,6 +83,9 @@ pub struct WindowsEncoder {
     frame_rate: u8,
     #[cfg(windows)]
     recovery_qp: RecoveryQp,
+    /// Converts captured pictures to NV12 on their GPU, made for the first.
+    #[cfg(windows)]
+    converter: Option<crate::gpu::Nv12Converter>,
 }
 
 // The transform is a COM pointer used through `&mut self` only, from the
@@ -275,11 +278,17 @@ impl WindowsEncoder {
             output_size,
             frame_rate,
             recovery_qp: RecoveryQp::default(),
+            converter: None,
         })
     }
 }
 
 impl VideoEncoder for WindowsEncoder {
+    /// A captured picture is converted to NV12 and scaled on its GPU.
+    fn scales_native(&self) -> bool {
+        cfg!(windows)
+    }
+
     /// Per transform, as measured ([`Vendor::refines_still_pictures`]).
     fn refines_still_pictures(&self) -> bool {
         #[cfg(windows)]
@@ -331,14 +340,27 @@ impl VideoEncoder for WindowsEncoder {
     }
 
     fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
-        if frame.width() as u32 != self.width || frame.height() as u32 != self.height {
+        #[cfg(windows)]
+        let captured = frame.native_picture().and_then(|picture| {
+            picture
+                .as_any()
+                .downcast_ref::<crate::gpu::WindowsPicture>()
+        });
+        #[cfg(not(windows))]
+        let captured: Option<()> = None;
+        if captured.is_none()
+            && (frame.width() as u32 != self.width || frame.height() as u32 != self.height)
+        {
             return Err(Error::InvalidFrame(
                 "the frame size does not match the encoder",
             ));
         }
         #[cfg(windows)]
         {
-            let nv12 = bgra_to_nv12(frame)?;
+            let (y_plane, uv_plane) = match captured {
+                Some(picture) => self.convert(picture)?,
+                None => bgra_to_nv12(frame)?.into_planes(),
+            };
             // SAFETY (floor and clear): `transform` is this encoder's live
             // transform, used from the thread that owns it.
             let floored = params.force_keyframe
@@ -352,14 +374,8 @@ impl VideoEncoder for WindowsEncoder {
                     )
                 }
                 .is_ok();
-            let sample = unsafe {
-                self.encode_nv12(
-                    nv12.y_plane(),
-                    nv12.uv_plane(),
-                    frame.timestamp_us(),
-                    params,
-                )
-            };
+            let sample =
+                unsafe { self.encode_nv12(&y_plane, &uv_plane, frame.timestamp_us(), params) };
             if floored {
                 let _ = unsafe { set_codec_u32(&self.transform, &CODECAPI_AVEncVideoMinQP, 0) };
             }
@@ -387,6 +403,36 @@ struct MfSample {
 
 #[cfg(windows)]
 impl WindowsEncoder {
+    /// A captured picture as NV12 at this encoder's size, converted on the
+    /// GPU that holds it; only the NV12 picture is read into memory.
+    fn convert(
+        &mut self,
+        picture: &crate::gpu::WindowsPicture,
+    ) -> Result<(Vec<u8>, Vec<u8>), Error> {
+        use vnilink_media::NativePicture;
+        let rejected = |_| Error::EncodeRejected("the encoder rejected the frame");
+        if !self
+            .converter
+            .as_ref()
+            .is_some_and(|converter| converter.fits(picture))
+        {
+            let (width, height) = picture.size();
+            self.converter = Some(
+                unsafe {
+                    crate::gpu::Nv12Converter::new(
+                        picture.device(),
+                        picture.context(),
+                        (u32::from(width), u32::from(height)),
+                        (self.width, self.height),
+                    )
+                }
+                .map_err(rejected)?,
+            );
+        }
+        let converter = self.converter.as_ref().expect("made above");
+        unsafe { converter.convert(picture) }.map_err(rejected)
+    }
+
     unsafe fn encode_nv12(
         &mut self,
         y_plane: &[u8],
