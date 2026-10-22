@@ -1000,6 +1000,10 @@ fn sender_cancel_prevents_delivery() {
 #[test]
 fn revoke_before_publish_prevents_file_creation() {
     let (host, controller, host_scratch, _controller_scratch) = setup("revoke-publish");
+    // A file that arrived whole before the revoke reached the controller
+    // may still land; this test pins that nothing fetched after does, so
+    // it takes one file at a time.
+    controller.fetch_one_file_at_a_time();
     let host_files =
         FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
     let controller_files = FilesystemLocation::new(

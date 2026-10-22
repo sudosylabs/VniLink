@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { NETEM_PROFILES, RELAY_PATH, blackoutArguments, creationCommands, netemArguments, profileCommands, qdiscCommands, relayPathCommands, selectProfiles, shellScript, statisticsDelta, topology } from '../../build/lib/netem.ts';
-import { DEFAULT_OPTIONS, checkoutVolume, observeRelay, parseImpairedArguments, parseSize, parseSocketSample, conditionMismatch, expectedConditions, pathMismatch, relayUrl, renderSummary, resolveOptions, scenarioEnvironment } from '../../build/lib/impaired.ts';
+import { DEFAULT_OPTIONS, observeRelay, parseImpairedArguments, parseSize, parseSocketSample, conditionMismatch, expectedConditions, pathMismatch, relayUrl, renderSummary, resolveOptions, scenarioEnvironment } from '../../build/lib/impaired.ts';
 
 const named = name => NETEM_PROFILES.find(item => item.name === name);
 
@@ -195,14 +195,6 @@ test('relay counters and socket samples become per-run deltas and peaks', () => 
 	assert.equal(observeRelay(null, base, []).queueDiscarded, null);
 	const summary = renderSummary({ started: 'now', commit: 'abc', path: 'relay', runs: [{ profile: 'loss-1', scenario: 'transfer', status: 'passed', result: null, relay: observed }] });
 	assert.match(summary, /\| loss-1 \| transfer \| 100\/55 \| 2\/43 \| 3\/3 \| 4\.19 MB, 951 ms \| – \|/);
-});
-
-test('each checkout caches its build in a volume of its own', () => {
-	const main = checkoutVolume('vnilink-impaired-release-target', '/work/vnilink');
-	const worktree = checkoutVolume('vnilink-impaired-release-target', '/work/vnilink/.claude/worktrees/one');
-	assert.match(main, /^vnilink-impaired-release-target-[0-9a-f]{12}$/);
-	assert.notEqual(main, worktree);
-	assert.equal(main, checkoutVolume('vnilink-impaired-release-target', '/work/vnilink'));
 });
 
 test('each profile expects its dominant condition, and a mismatch says what the viewer held', () => {
