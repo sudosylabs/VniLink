@@ -73,3 +73,78 @@ fn every_transform_encodes_each_picture() {
         }
     }
 }
+
+/// Every transform's stream says BT.709 limited range, and pictures
+/// converted with that matrix come back through Media Foundation's decoder
+/// in the colours they went in with.
+#[test]
+fn every_transform_keeps_the_stream_colour() {
+    // (b, g, r)
+    let colours = [
+        [0u8, 0, 255],
+        [0, 255, 0],
+        [255, 0, 0],
+        [0, 255, 255],
+        [255, 0, 255],
+        [0, 128, 255],
+        [128, 128, 128],
+    ];
+    for candidate in unsafe { h264_encoders() } {
+        for colour in colours {
+            let Ok(mut encoder) =
+                WindowsEncoder::open_candidate(&candidate, 640, 480, 30, 8_000_000)
+            else {
+                break;
+            };
+            let mut decoder = WindowsDecoder::new();
+            let mut pixels = Vec::with_capacity(640 * 480 * 4);
+            for _ in 0..640 * 480 {
+                pixels.extend_from_slice(&[colour[0], colour[1], colour[2], 255]);
+            }
+            let mut shown = None;
+            // Media Foundation's decoder may hold a picture back: give it a few.
+            for index in 0..6u64 {
+                let picture =
+                    vnilink_media::RawFrame::bgra(640, 480, index * 33_333, pixels.clone())
+                        .unwrap();
+                let params = EncodeParams {
+                    force_keyframe: index == 0,
+                    recovery: false,
+                    bitrate_bps: 8_000_000,
+                    frame_rate: 30,
+                };
+                let sample = encoder.encode(&picture, &params).unwrap();
+                if index == 0 {
+                    let parsed = vnilink_media::parse_annex_b(sample.bytes()).unwrap();
+                    let sps = parsed
+                        .units()
+                        .iter()
+                        .find(|unit| unit.nal_type == 7)
+                        .unwrap();
+                    assert_eq!(
+                        vnilink_media::h264_video_signal(sps.bytes()).unwrap(),
+                        Some(vnilink_media::STREAM_SIGNAL),
+                        "{}",
+                        candidate.name
+                    );
+                }
+                let frame =
+                    EncodedFrame::h264(sample.keyframe(), index * 33_333, sample.bytes().to_vec())
+                        .unwrap();
+                if let Ok(decoded) = decoder.decode(&frame) {
+                    shown = Some(decoded);
+                }
+            }
+            let decoded = shown.unwrap_or_else(|| panic!("{}: no picture", candidate.name));
+            let pixel = &decoded.row(240)[320 * 4..320 * 4 + 3];
+            for channel in 0..3 {
+                let drift = (i16::from(pixel[channel]) - i16::from(colour[channel])).abs();
+                assert!(
+                    drift <= 6,
+                    "{}: {colour:?} came back as {pixel:?}",
+                    candidate.name
+                );
+            }
+        }
+    }
+}

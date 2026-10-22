@@ -66,7 +66,11 @@ fn sample(keyframe: bool) -> Result<EncodedSample, Error> {
     };
     let mut avcc = (picture.len() as u32).to_be_bytes().to_vec();
     avcc.extend_from_slice(picture);
-    let sets = [vec![0x67, 0x42], vec![0x68, 0xCE]];
+    // A real SPS: hosts give every SPS the stream's VUI.
+    let sets = [
+        vec![0x67, 0x42, 0x00, 0x1e, 0xda, 0x10, 0x99],
+        vec![0x68, 0xCE],
+    ];
     let annex = to_annex_b(&AvccAccessUnit {
         nal_length_size: 4,
         avcc: &avcc,

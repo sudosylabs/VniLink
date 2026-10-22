@@ -66,6 +66,51 @@ fn videotoolbox_encodes_and_decodes_a_synthetic_picture() {
     assert!(MacDecoder::new().decode(&junk).is_err());
 }
 
+/// The SPS says BT.709 limited range, and VideoToolbox converts the BGRA
+/// pictures with that matrix: saturated colours come back as they went in.
+/// Tagged BT.601 instead, pure red comes back 9 low (measured 2026-10-22).
+#[test]
+fn videotoolbox_colours_match_the_stream_signal() {
+    let params = EncodeParams {
+        force_keyframe: true,
+        recovery: false,
+        bitrate_bps: 8_000_000,
+        frame_rate: 30,
+    };
+    // (b, g, r)
+    for colour in [
+        [0, 0, 255],
+        [0, 255, 0],
+        [255, 0, 0],
+        [0, 255, 255],
+        [255, 255, 0],
+        [255, 0, 255],
+        [0, 128, 255],
+        [128, 128, 128],
+    ] {
+        let mut encoder = MacEncoder::open(64, 64, 30, 8_000_000, false).unwrap();
+        let picture = solid(64, 64, 0, colour[0], colour[1], colour[2]);
+        let sample = encoder.encode(&picture, &params).unwrap();
+        let parsed = parse_annex_b(sample.bytes()).unwrap();
+        let sps = parsed
+            .units()
+            .iter()
+            .find(|unit| unit.nal_type == 7)
+            .unwrap();
+        assert_eq!(
+            vnilink_media::h264_video_signal(sps.bytes()).unwrap(),
+            Some(vnilink_media::STREAM_SIGNAL)
+        );
+        let encoded = EncodedFrame::h264(true, 0, sample.bytes().to_vec()).unwrap();
+        let decoded = MacDecoder::new().decode(&encoded).unwrap();
+        let pixel = &decoded.row(32)[32 * 4..32 * 4 + 3];
+        for channel in 0..3 {
+            let drift = (i16::from(pixel[channel]) - i16::from(colour[channel])).abs();
+            assert!(drift <= 6, "{colour:?} came back as {pixel:?}");
+        }
+    }
+}
+
 #[test]
 fn the_pump_accepts_a_videotoolbox_keyframe() {
     let quality = Quality::new(500, 30, 64, 64).unwrap();

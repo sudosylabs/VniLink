@@ -4,7 +4,7 @@ use crate::bitstream::{h264_access_unit, picture_size};
 
 #[test]
 fn a_length_prefixed_idr_gains_parameter_sets() {
-    let sps = [0x67, 0x42];
+    let sps = [0x67, 0x42, 0x00, 0x1e, 0xda, 0x10, 0x99];
     let pps = [0x68, 0xce];
     let header = avc_decoder_config(&sps, &pps);
     let sample = h264_access_unit(&length_prefixed(&[0x65, 0x88]), &header).unwrap();
@@ -16,7 +16,9 @@ fn a_length_prefixed_idr_gains_parameter_sets() {
 
 #[test]
 fn an_annex_b_sequence_header_is_prefixed_onto_an_idr() {
-    let header = [0, 0, 0, 1, 0x67, 0x42, 0, 0, 0, 1, 0x68, 0xce];
+    let header = [
+        0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1e, 0xda, 0x10, 0x99, 0, 0, 0, 1, 0x68, 0xce,
+    ];
     let sample = h264_access_unit(&length_prefixed(&[0x65, 0x10]), &header).unwrap();
     assert!(sample.keyframe());
     let parsed = parse_annex_b(sample.bytes()).unwrap();

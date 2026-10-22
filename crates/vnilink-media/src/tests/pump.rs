@@ -68,7 +68,8 @@ impl VideoEncoder for Refining {
 }
 
 fn sample(keyframe: bool) -> Result<EncodedSample, Error> {
-    let sps = vec![0x67, 0x42];
+    // A real SPS: hosts give every SPS the stream's VUI.
+    let sps = vec![0x67, 0x42, 0x00, 0x1e, 0xda, 0x10, 0x99];
     let pps = vec![0x68, 0xCE];
     let picture: &[u8] = if keyframe {
         &[0x65, 0x10]

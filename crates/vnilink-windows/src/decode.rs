@@ -2,13 +2,16 @@
 //!
 //! A keyframe carries SPS, PPS, and an IDR. The picture size comes from the
 //! SPS; those parameter sets open the decoder. Later predicted frames use the
-//! same session. Output is NV12, converted to BGRA for the UI to paint.
+//! same session. Output is NV12, converted to BGRA for the UI to paint in
+//! the colour the SPS says, BT.709 limited range when it says none.
 //! Bitstreams are screen content: do not log them.
 
 use vnilink::EncodedFrame;
+use vnilink_media::{
+    h264_video_signal, parse_annex_b, Error, RawFrame, VideoDecoder, STREAM_SIGNAL,
+};
 #[cfg(windows)]
-use vnilink_media::nv12_to_bgra;
-use vnilink_media::{parse_annex_b, Error, RawFrame, VideoDecoder};
+use vnilink_media::{nv12_to_bgra, VideoSignal};
 
 use crate::bitstream::picture_size;
 
@@ -36,6 +39,8 @@ struct OpenDecoder {
     height: u16,
     #[cfg(windows)]
     parameter_sets: Vec<Vec<u8>>,
+    #[cfg(windows)]
+    signal: VideoSignal,
 }
 
 pub struct WindowsDecoder {
@@ -88,7 +93,7 @@ impl VideoDecoder for WindowsDecoder {
         };
         #[cfg(windows)]
         {
-            decode_picture(&open.transform, frame, open.width, open.height)
+            decode_picture(&open.transform, frame, open.width, open.height, open.signal)
         }
         #[cfg(not(windows))]
         {
@@ -115,6 +120,7 @@ impl WindowsDecoder {
                 "a keyframe needs SPS, PPS, and an IDR",
             ))?;
         let (width, height) = picture_size(sps)?;
+        let signal = h264_video_signal(sps)?.unwrap_or(STREAM_SIGNAL);
         #[cfg(windows)]
         {
             let transform = open_transform(width, height)
@@ -124,12 +130,13 @@ impl WindowsDecoder {
                 width,
                 height,
                 parameter_sets: parameter_sets.to_vec(),
+                signal,
             });
             Ok(())
         }
         #[cfg(not(windows))]
         {
-            let _ = (width, height);
+            let _ = (width, height, signal);
             Err(Error::Unsupported("Media Foundation H.264"))
         }
     }
@@ -166,10 +173,11 @@ fn decode_picture(
     frame: &EncodedFrame,
     width: u16,
     height: u16,
+    signal: VideoSignal,
 ) -> Result<RawFrame, Error> {
     let bytes = feed(transform, &frame.payload, frame.timestamp_us)?;
     let (y, uv) = split_nv12(&bytes, width, height)?;
-    nv12_to_bgra(width, height, frame.timestamp_us, y, uv)
+    nv12_to_bgra(width, height, frame.timestamp_us, y, uv, signal)
 }
 
 #[cfg(windows)]

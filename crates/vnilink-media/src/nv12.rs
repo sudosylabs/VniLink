@@ -1,8 +1,11 @@
-//! BGRA to limited-range NV12. Media Foundation and VA-API take this layout.
+//! BGRA to BT.709 limited-range NV12, the stream's colour
+//! ([`crate::STREAM_SIGNAL`]), and back from NV12 in the colour a stream
+//! says. Media Foundation and VA-API take this layout.
 //! The planes are screen content: do not log them.
 
 use std::fmt;
 
+use crate::colour::{ToRgb, VideoSignal};
 use crate::error::Error;
 use crate::frame::RawFrame;
 
@@ -50,16 +53,18 @@ impl fmt::Debug for Nv12 {
     }
 }
 
-/// Convert limited-range NV12 to tightly packed BGRA.
+/// Convert NV12 in the colour `signal` names to tightly packed BGRA.
 ///
-/// Inverse of [`bgra_to_nv12`] within integer rounding: each channel lands
-/// within 2 of the original. Width and height must be even.
+/// With [`crate::STREAM_SIGNAL`] this is the inverse of [`bgra_to_nv12`]
+/// within integer rounding: each channel lands within 2 of the original.
+/// Width and height must be even.
 pub fn nv12_to_bgra(
     width: u16,
     height: u16,
     timestamp_us: u64,
     y: &[u8],
     uv: &[u8],
+    signal: VideoSignal,
 ) -> Result<RawFrame, Error> {
     if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
         return Err(Error::InvalidFrame("NV12 width and height must be even"));
@@ -68,6 +73,7 @@ pub fn nv12_to_bgra(
     if y.len() < width_usize * height_usize || uv.len() < width_usize * height_usize / 2 {
         return Err(Error::InvalidFrame("frame is missing pixels"));
     }
+    let to_rgb = ToRgb::of(signal);
     let mut bgra = vec![0u8; width_usize * height_usize * 4];
     // Chroma is shared by a 2x2 block. Derive its RGB contributions once
     // and walk bounded row chunks instead of indexing every pixel separately.
@@ -87,11 +93,11 @@ pub fn nv12_to_bgra(
         {
             let d = i32::from(uv[0]) - 128;
             let e = i32::from(uv[1]) - 128;
-            let red = 409 * e + 128;
-            let green = -100 * d - 208 * e + 128;
-            let blue = 516 * d + 128;
+            let red = to_rgb.cr_red * e + 128;
+            let green = to_rgb.cb_green * d + to_rgb.cr_green * e + 128;
+            let blue = to_rgb.cb_blue * d + 128;
             let rgb = |luma: u8| {
-                let c = 298 * (i32::from(luma) - 16);
+                let c = to_rgb.luma * (i32::from(luma) - to_rgb.luma_offset);
                 [
                     clamp((c + blue) >> 8),
                     clamp((c + green) >> 8),
@@ -108,7 +114,7 @@ pub fn nv12_to_bgra(
     RawFrame::bgra(width, height, timestamp_us, bgra)
 }
 
-/// Convert BGRA to BT.601 limited-range NV12.
+/// Convert BGRA to BT.709 limited-range NV12, the stream's colour.
 ///
 /// Width and height must be even. Chroma is the average of each 2 by 2 block.
 pub fn bgra_to_nv12(frame: &RawFrame) -> Result<Nv12, Error> {
@@ -153,9 +159,11 @@ fn yuv(red: u8, green: u8, blue: u8) -> (u8, u8, u8) {
     let red = i32::from(red);
     let green = i32::from(green);
     let blue = i32::from(blue);
-    let y = ((66 * red + 129 * green + 25 * blue + 128) >> 8) + 16;
-    let u = ((-38 * red - 74 * green + 112 * blue + 128) >> 8) + 128;
-    let v = ((112 * red - 94 * green - 18 * blue + 128) >> 8) + 128;
+    // BT.709, limited range, x256. Each chroma row sums to 0 so grey stays
+    // at 128.
+    let y = ((47 * red + 157 * green + 16 * blue + 128) >> 8) + 16;
+    let u = ((-26 * red - 86 * green + 112 * blue + 128) >> 8) + 128;
+    let v = ((112 * red - 102 * green - 10 * blue + 128) >> 8) + 128;
     // With eight-bit RGB these coefficients bound Y to 16..=235 and
     // U/V to 16..=240; clamping here repeats work without changing output.
     (y as u8, u as u8, v as u8)
