@@ -89,6 +89,16 @@ impl SoftwareEncoder {
     }
 }
 impl VideoEncoder for SoftwareEncoder {
+    fn implementation(&self) -> vnilink::EncoderImplementation {
+        vnilink::EncoderImplementation {
+            name: match self {
+                Self::Vpx(..) => "libvpx",
+                Self::Av1(_) => "libaom",
+                Self::Hevc(_) => "x265",
+            },
+            hardware: Some(false),
+        }
+    }
     fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
         let (y, u, v) = to_i420(frame)?;
         match self {
@@ -534,6 +544,12 @@ impl<N: VideoEncoder> VideoEncoder for CodecEncoder<N> {
         match self {
             Self::Native(encoder) => encoder.refines_still_pictures(),
             Self::Software(encoder) => encoder.refines_still_pictures(),
+        }
+    }
+    fn implementation(&self) -> vnilink::EncoderImplementation {
+        match self {
+            Self::Native(encoder) => encoder.implementation(),
+            Self::Software(encoder) => encoder.implementation(),
         }
     }
 }

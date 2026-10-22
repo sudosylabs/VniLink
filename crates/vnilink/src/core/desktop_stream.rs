@@ -82,6 +82,12 @@ pub(super) struct DesktopRuntime {
     decode_duration: Mutex<Option<(u64, std::time::Instant)>>,
     producer_duration: Mutex<Option<(u64, u64, std::time::Instant)>>,
     host_feedback: Mutex<Option<(crate::adaptation::HostFeedback, std::time::Instant)>>,
+    /// Viewer: what is wrong with the picture now; see [`crate::Condition`].
+    conditions: Mutex<crate::video::Conditions>,
+    /// Viewer: what the window's decoder reports of itself.
+    decoder: Mutex<DecoderState>,
+    /// Host: the encoder open for this viewer, once the producer said.
+    encoder: Mutex<Option<crate::EncoderImplementation>>,
     input: Arc<InputOutbox>,
     inbox: Arc<VideoInbox>,
     subscriber: Mutex<Weak<()>>,
@@ -116,6 +122,13 @@ pub(super) struct DesktopRuntime {
     pub(super) clipboard: super::desktop_clipboard::ClipboardState,
     #[cfg(test)]
     force_stream: std::sync::atomic::AtomicBool,
+}
+/// The window decoder's own report: whether it decodes in software, and
+/// how often it restarted from a keyframe after an error.
+#[derive(Debug, Clone, Copy, Default)]
+struct DecoderState {
+    software: bool,
+    recoveries: u64,
 }
 pub(super) struct DesktopKeyboard {
     pub(super) pointer: crate::input::PointerPlan,
@@ -163,6 +176,9 @@ impl DesktopRuntime {
             decode_duration: Mutex::new(None),
             producer_duration: Mutex::new(None),
             host_feedback: Mutex::new(None),
+            conditions: Mutex::new(Default::default()),
+            decoder: Mutex::new(DecoderState::default()),
+            encoder: Mutex::new(None),
             info,
             stamp,
             input: Arc::new(InputOutbox::new()),
@@ -649,6 +665,26 @@ impl Core {
         *measured = Some((average.0, average.1, now));
         Ok(())
     }
+    /// The encoder the producer opened for this viewer, at open and at every
+    /// reopen; the viewer learns whether it is hardware.
+    pub fn report_desktop_encoder(
+        &self,
+        id: u64,
+        generation: u64,
+        encoder: crate::EncoderImplementation,
+    ) -> Result<(), Error> {
+        *lock(&runtime(&*self.alive_state()?, id, generation, true)?.encoder) = Some(encoder);
+        Ok(())
+    }
+    /// The platform backend's view of whether the screen is on a desktop
+    /// it cannot capture. Every viewer learns it with its next feedback.
+    pub fn report_secure_desktop(&self, active: bool) -> Result<(), Error> {
+        self.ensure_alive()?;
+        self.shared
+            .secure_desktop
+            .store(active, std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
     /// The host opened its encoder again for this viewer's new settings.
     pub fn report_desktop_encoder_reopen(&self, id: u64, generation: u64) -> Result<(), Error> {
         runtime(&*self.alive_state()?, id, generation, true)?
@@ -854,8 +890,30 @@ impl RemoteDesktopService {
         *measured = Some((average, now));
         Ok(())
     }
+    /// The window's decoder reports whether it decodes in software and how
+    /// many times it restarted from a keyframe after an error, in total.
+    /// A count that goes back is refused: it belongs to another decoder.
+    pub fn report_decoder(&self, software: bool, recoveries: u64) -> Result<(), Error> {
+        let desktop = self.active_desktop()?;
+        let mut decoder = lock(&desktop.decoder);
+        if recoveries < decoder.recoveries {
+            return Err(Error::InvalidSetting("decoder recoveries went back"));
+        }
+        *decoder = DecoderState {
+            software,
+            recoveries,
+        };
+        Ok(())
+    }
     pub fn media_status(&self) -> Result<crate::DesktopMediaStatus, Error> {
-        Ok(lock(&self.active_desktop()?.adaptive).status)
+        let desktop = self.active_desktop()?;
+        let mut status = lock(&desktop.adaptive).status;
+        status.conditions = lock(&desktop.conditions).active();
+        Ok(status)
+    }
+    /// The conditions held now, with since when and their evidence.
+    pub fn conditions(&self) -> Result<Vec<crate::ConditionEntry>, Error> {
+        Ok(lock(&self.active_desktop()?.conditions).entries())
     }
     /// The one display this desktop stream will show and control.
     pub fn select_displays(&self, ids: &[u64]) -> Result<(), Error> {
@@ -1384,8 +1442,23 @@ async fn client_send(
                             .filter(|(_, at)| now.saturating_duration_since(*at) <= Duration::from_secs(3))
                             .map(|(us, _)| *us),
                     };
-                    let next = lock(&desktop.adaptive).step(current,
-                        (desktop.info.monitor_width, desktop.info.monitor_height), elapsed, feedback);
+                    let (next, signals) = {
+                        let mut adaptive = lock(&desktop.adaptive);
+                        let next = adaptive.step(current,
+                            (desktop.info.monitor_width, desktop.info.monitor_height), elapsed, feedback);
+                        (next, adaptive.signals)
+                    };
+                    let decoder = *lock(&desktop.decoder);
+                    lock(&desktop.conditions).observe(crate::diagnostics::monotonic_ms(), &crate::video::Observation {
+                        elapsed_ms: elapsed,
+                        signals,
+                        relay: path.is_relay(),
+                        received_frames: feedback.receiver.received_frames,
+                        keyframe_pending: lock(&desktop.keyframe_requests).outstanding(),
+                        host: host.map(|host| host.host_state()),
+                        decoder_software: decoder.software,
+                        decoder_recoveries: decoder.recoveries,
+                    });
                     if let Some(next) = next {
                         // Controller-side step: monitor clamp only. The host
                         // applies its encoder caps when the update arrives.
@@ -2300,6 +2373,25 @@ impl SendGate {
 }
 
 /// The video send backlog allowed at the agreed quality.
+/// What the host says of itself in its feedback: its encoder, and whether
+/// its screen is on a desktop it cannot capture.
+fn host_flags(shared: &Shared, desktop: &DesktopRuntime) -> u8 {
+    use crate::adaptation::{ENCODER_HARDWARE, ENCODER_KNOWN, SECURE_DESKTOP};
+    let encoder = match lock(&desktop.encoder).and_then(|encoder| encoder.hardware) {
+        Some(true) => ENCODER_KNOWN | ENCODER_HARDWARE,
+        Some(false) => ENCODER_KNOWN,
+        None => 0,
+    };
+    let secure = if shared
+        .secure_desktop
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        SECURE_DESKTOP
+    } else {
+        0
+    };
+    encoder | secure
+}
 fn send_budget(desktop: &DesktopRuntime) -> usize {
     let quality = *lock(&desktop.quality);
     backlog_budget(quality.max_bitrate_kbps, quality.max_frame_rate)
@@ -2458,6 +2550,9 @@ async fn host_send(
                         .unwrap_or(0)
                         .min(600_000),
                     capture_us: timing.0, encode_us: timing.1,
+                    congestion_events: link.paths().iter().find(|path| path.is_selected())
+                        .map_or(0, |path| path.stats().congestion_events),
+                    flags: host_flags(shared, desktop),
                 };
                 let mut bytes = vec![MEDIA_FEEDBACK];
                 bytes.extend(feedback.encode());

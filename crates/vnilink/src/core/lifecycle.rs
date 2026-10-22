@@ -309,6 +309,7 @@ impl Core {
             session_gate: tokio::sync::Mutex::new(()),
             desktop_gate: tokio::sync::Mutex::new(()),
             desktop_streams: AtomicUsize::new(0),
+            secure_desktop: std::sync::atomic::AtomicBool::new(false),
             desktop_routers: Mutex::new(std::collections::HashSet::new()),
             topology: Mutex::new(super::topology::TopologySnapshot {
                 revision: 0,

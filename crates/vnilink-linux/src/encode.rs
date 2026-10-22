@@ -63,6 +63,13 @@ impl LinuxEncoder {
 }
 
 impl VideoEncoder for LinuxEncoder {
+    fn implementation(&self) -> vnilink::EncoderImplementation {
+        vnilink::EncoderImplementation {
+            name: "vaapi",
+            hardware: Some(true),
+        }
+    }
+
     fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
         if frame.width() != self.width || frame.height() != self.height {
             return Err(Error::InvalidFrame(

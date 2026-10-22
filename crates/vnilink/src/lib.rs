@@ -169,11 +169,12 @@ pub use system::{
     SystemAction, SystemOperation, SystemPolicy, SystemSupport, SYSTEM_ACTION_NOTICE,
 };
 pub use video::{
-    CodecSupport, EncodedFrame, FrameTiming, HostCapture, RecordingVideoTap, VideoCodec,
-    VideoSubscription, MAX_VIDEO_FRAME,
+    CodecSupport, Condition, ConditionEntry, ConditionSet, EncodedFrame, Evidence, FrameTiming,
+    HostCapture, RecordingVideoTap, VideoCodec, VideoSubscription, MAX_VIDEO_FRAME,
 };
 pub use video_caps::{
-    clamp_quality, negotiate as negotiate_video_codec, AgreedCodec, VideoCodecCaps, WindowDecoder,
+    clamp_quality, negotiate as negotiate_video_codec, AgreedCodec, EncoderImplementation,
+    VideoCodecCaps, WindowDecoder,
 };
 
 #[cfg(test)]

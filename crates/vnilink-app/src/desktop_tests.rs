@@ -1504,6 +1504,7 @@ fn measured_media_status_crosses_ffi_without_losing_counters_or_reason() {
         decode_us: 1234,
         encode_us: 5678,
         capture_us: 9012,
+        conditions: vnilink::ConditionSet::default(),
     };
     let ffi: FfiDesktopMediaStatus = status.into();
     assert_eq!(ffi.reason, FfiAdaptationReason::NetworkPressure);

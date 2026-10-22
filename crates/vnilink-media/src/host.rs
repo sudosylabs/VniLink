@@ -106,6 +106,11 @@ impl<E: VideoEncoder> HostSession<E> {
         self.video.refining()
     }
 
+    /// The open encoder; see [`VideoEncoder::implementation`].
+    pub fn implementation(&self) -> vnilink::EncoderImplementation {
+        self.video.implementation()
+    }
+
     /// How many times a quality change opened the encoder again.
     pub fn reopens(&self) -> u64 {
         self.reopens

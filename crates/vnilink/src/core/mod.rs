@@ -566,6 +566,9 @@ struct Shared {
     /// each other.
     desktop_gate: tokio::sync::Mutex<()>,
     desktop_streams: AtomicUsize,
+    /// Host-only. The screen is on a desktop the capture cannot read, such
+    /// as a sign-in or elevation prompt; reported by the platform backend.
+    secure_desktop: std::sync::atomic::AtomicBool,
     /// Controller-only. Connections with a live desktop datagram router,
     /// keyed `(connection id, generation)`. One router per key owns
     /// `read_datagram`, so sibling owners never split each other's fragments.

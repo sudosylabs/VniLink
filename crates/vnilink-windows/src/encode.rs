@@ -279,6 +279,21 @@ impl WindowsEncoder {
 }
 
 impl VideoEncoder for WindowsEncoder {
+    /// The Media Foundation transform that opened, by vendor.
+    fn implementation(&self) -> vnilink::EncoderImplementation {
+        #[cfg(windows)]
+        {
+            vnilink::EncoderImplementation {
+                name: self.vendor.label(),
+                hardware: Some(self.hardware),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            vnilink::EncoderImplementation::UNKNOWN
+        }
+    }
+
     /// Per transform, as measured ([`Vendor::refines_still_pictures`]).
     fn refines_still_pictures(&self) -> bool {
         #[cfg(windows)]

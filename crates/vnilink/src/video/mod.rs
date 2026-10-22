@@ -6,6 +6,9 @@
 
 mod codec;
 pub use codec::{CodecSupport, VideoCodec};
+mod condition;
+pub use condition::{Condition, ConditionEntry, ConditionSet, Evidence};
+pub(crate) use condition::{Conditions, HostState, Observation};
 mod counters;
 mod datagram;
 mod frame;

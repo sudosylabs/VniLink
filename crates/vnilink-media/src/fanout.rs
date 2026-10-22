@@ -258,6 +258,9 @@ fn consume<E, F>(
         capture_revision,
         captured_at: None,
     };
+    if target.service {
+        let _ = core.report_desktop_encoder(target.id, target.generation, session.implementation());
+    }
     let mut applied_quality = target.quality;
     let mut seen = 0u64;
     while !control.cancel.load(Ordering::Acquire) {
@@ -317,6 +320,8 @@ fn consume<E, F>(
         }
         if target.service && session.reopens() != reopens {
             let _ = core.report_desktop_encoder_reopen(target.id, target.generation);
+            let _ =
+                core.report_desktop_encoder(target.id, target.generation, session.implementation());
         }
         // On an unchanged screen no new picture comes: a keyframe still
         // owed is made from the last one, and after a keyframe the last one

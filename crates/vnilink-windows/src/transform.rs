@@ -37,6 +37,17 @@ pub(crate) enum Vendor {
 /// hardware are not measured and keep the settings that are harmless where
 /// ignored.
 impl Vendor {
+    /// Short fixed name for diagnostics.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Microsoft => "mf-microsoft",
+            Self::Nvidia => "mf-nvidia",
+            Self::Intel => "mf-intel",
+            Self::Amd => "mf-amd",
+            Self::Other => "mf-other",
+        }
+    }
+
     /// Whether a quantiser floor (`AVEncVideoMinQP`) may shrink a recovery
     /// keyframe. NVIDIA's and Microsoft's take it and ignore it, alone or
     /// with a reconfiguring bitrate write; Intel's does not support it;
