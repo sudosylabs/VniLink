@@ -15,8 +15,9 @@ use crate::transform::{h264_encoders, H264Transform};
 fn each_transform(mut measure: impl FnMut(&H264Transform)) {
     for candidate in unsafe { h264_encoders() } {
         println!(
-            "== {} ({})",
+            "== {} ({:?}, {})",
             candidate.name,
+            candidate.vendor,
             if candidate.hardware() {
                 "hardware"
             } else {
@@ -187,4 +188,201 @@ fn still_screen_refinement_of(candidate: &H264Transform) {
             line.join(", ")
         );
     }
+}
+
+/// Which `ICodecAPI` change around one forced keyframe shrinks it: forced
+/// keyframe sizes at 720p 2 Mb/s, each change applied before the keyframe
+/// and undone after it.
+#[test]
+#[ignore = "measurement"]
+fn keyframe_caps() {
+    use windows::Win32::Media::MediaFoundation::{
+        CODECAPI_AVEncCommonBufferSize, CODECAPI_AVEncCommonMeanBitRate, CODECAPI_AVEncVideoMaxQP,
+        CODECAPI_AVEncVideoMinQP,
+    };
+    let bitrate_bps = 2_000_000u32;
+    let frame = bitrate_bps / 30;
+    type Change = (&'static str, Vec<(windows::core::GUID, u32, u32)>);
+    use windows::Win32::Media::MediaFoundation::CODECAPI_AVEncVideoEncodeQP;
+    let changes: Vec<Change> = vec![
+        ("none", vec![]),
+        (
+            "min QP 36 + same bitrate",
+            vec![
+                (CODECAPI_AVEncVideoMinQP, 36, 0),
+                (CODECAPI_AVEncCommonMeanBitRate, bitrate_bps, bitrate_bps),
+            ],
+        ),
+        (
+            "min QP 40 + same bitrate",
+            vec![
+                (CODECAPI_AVEncVideoMinQP, 40, 0),
+                (CODECAPI_AVEncCommonMeanBitRate, bitrate_bps, bitrate_bps),
+            ],
+        ),
+        (
+            "min QP 46 + same bitrate",
+            vec![
+                (CODECAPI_AVEncVideoMinQP, 46, 0),
+                (CODECAPI_AVEncCommonMeanBitRate, bitrate_bps, bitrate_bps),
+            ],
+        ),
+        ("encode QP 40", vec![(CODECAPI_AVEncVideoEncodeQP, 40, 26)]),
+        ("min QP 40", vec![(CODECAPI_AVEncVideoMinQP, 40, 0)]),
+        ("min QP 46", vec![(CODECAPI_AVEncVideoMinQP, 46, 0)]),
+        (
+            "min QP 40, max QP 51",
+            vec![
+                (CODECAPI_AVEncVideoMinQP, 40, 0),
+                (CODECAPI_AVEncVideoMaxQP, 51, 51),
+            ],
+        ),
+        (
+            "buffer 1/4 picture",
+            vec![(CODECAPI_AVEncCommonBufferSize, frame / 4, frame)],
+        ),
+        (
+            "bitrate 1/4",
+            vec![
+                (
+                    CODECAPI_AVEncCommonMeanBitRate,
+                    bitrate_bps / 4,
+                    bitrate_bps,
+                ),
+                (CODECAPI_AVEncCommonBufferSize, frame / 4, frame),
+            ],
+        ),
+        (
+            "bitrate 1/8",
+            vec![
+                (
+                    CODECAPI_AVEncCommonMeanBitRate,
+                    bitrate_bps / 8,
+                    bitrate_bps,
+                ),
+                (CODECAPI_AVEncCommonBufferSize, frame / 8, frame),
+            ],
+        ),
+    ];
+    each_transform(|candidate| {
+        for (name, change) in &changes {
+            let Some(mut encoder) = open(candidate, 1280, 720, bitrate_bps) else {
+                return;
+            };
+            let (mut sizes, mut after) = (Vec::new(), Vec::new());
+            let mut taken = true;
+            for index in 0..30 * 5u64 {
+                let force = index % 30 == 0;
+                if force && index > 0 {
+                    for (key, value, _) in change {
+                        taken &= encoder.set_codec(key, *value);
+                    }
+                }
+                let params = EncodeParams {
+                    force_keyframe: force,
+                    recovery: false,
+                    bitrate_bps,
+                    frame_rate: 30,
+                };
+                let sample = encoder.encode(&text_page(1280, 720, index), &params);
+                if force && index > 0 {
+                    for (key, _, undo) in change {
+                        encoder.set_codec(key, *undo);
+                    }
+                    sizes.push(sample.map_or(0, |sample| sample.bytes().len()));
+                } else if index > 30 && index % 30 <= 3 {
+                    after.push(sample.map_or(0, |sample| sample.bytes().len()));
+                }
+            }
+            println!("{name}: taken {taken}, forced keyframes {sizes:?} B, next three {after:?} B");
+        }
+    });
+}
+
+/// Forced keyframe sizes under a mean bitrate cut to `1/divisor` for that
+/// picture, the two pictures after it, unforced keyframes in the stream,
+/// and the bytes of a second of pictures after a retune to half the rate.
+#[test]
+#[ignore = "measurement"]
+fn bitrate_cut_and_retune() {
+    use windows::Win32::Media::MediaFoundation::{
+        CODECAPI_AVEncCommonBufferSize, CODECAPI_AVEncCommonMeanBitRate,
+    };
+    each_transform(|candidate| {
+        for (width, height) in [(1280u16, 720u16), (1920, 1080)] {
+            for bitrate_bps in [2_000_000u32, 8_000_000] {
+                let budget = RecoveryQp::budget(&EncodeParams {
+                    force_keyframe: true,
+                    recovery: true,
+                    bitrate_bps,
+                    frame_rate: 30,
+                });
+                for divisor in [1u32, 2, 3, 4, 6, 8, 16] {
+                    let Some(mut encoder) = open(candidate, width, height, bitrate_bps) else {
+                        return;
+                    };
+                    let (mut sizes, mut after, mut unforced) = (Vec::new(), Vec::new(), 0);
+                    for index in 0..30 * 5u64 {
+                        let force = index % 30 == 0;
+                        let cut = force && index > 0 && divisor > 1;
+                        if cut {
+                            encoder
+                                .set_codec(&CODECAPI_AVEncCommonMeanBitRate, bitrate_bps / divisor);
+                            encoder.set_codec(
+                                &CODECAPI_AVEncCommonBufferSize,
+                                bitrate_bps / 30 / divisor,
+                            );
+                        }
+                        let params = EncodeParams {
+                            force_keyframe: force,
+                            recovery: false,
+                            bitrate_bps,
+                            frame_rate: 30,
+                        };
+                        let sample = encoder
+                            .encode(&text_page(width, height, index), &params)
+                            .ok();
+                        if cut {
+                            encoder.set_codec(&CODECAPI_AVEncCommonMeanBitRate, bitrate_bps);
+                            encoder.set_codec(&CODECAPI_AVEncCommonBufferSize, bitrate_bps / 30);
+                        }
+                        let bytes = sample.as_ref().map_or(0, |sample| sample.bytes().len());
+                        unforced +=
+                            u32::from(!force && sample.as_ref().is_some_and(|s| s.keyframe()));
+                        if force && index > 0 {
+                            sizes.push(bytes);
+                        } else if index > 30 && index % 30 <= 2 {
+                            after.push(bytes);
+                        }
+                    }
+                    println!(
+                        "{width}x{height} {} kb/s 1/{divisor}: budget {budget} B, forced keyframes {sizes:?} B, next two {after:?} B, unforced keyframes {unforced}",
+                        bitrate_bps / 1_000
+                    );
+                }
+            }
+        }
+        // A retune to half the rate: bytes of the second before and after.
+        let Some(mut encoder) = open(candidate, 1280, 720, 4_000_000) else {
+            return;
+        };
+        let mut seconds = [0usize; 4];
+        for index in 0..120u64 {
+            if index == 60 {
+                let taken = encoder.retune(2_000_000, 30);
+                println!("retune to 2 Mb/s: {taken:?}");
+            }
+            let bitrate_bps = if index < 60 { 4_000_000 } else { 2_000_000 };
+            let params = EncodeParams {
+                force_keyframe: index == 0,
+                recovery: false,
+                bitrate_bps,
+                frame_rate: 30,
+            };
+            if let Ok(sample) = encoder.encode(&text_page(1280, 720, index), &params) {
+                seconds[index as usize / 30] += sample.bytes().len();
+            }
+        }
+        println!("720p 4 then 2 Mb/s, bytes per second: {seconds:?}");
+    });
 }

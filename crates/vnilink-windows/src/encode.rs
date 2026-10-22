@@ -15,11 +15,13 @@
 //!
 //! A recovery keyframe is encoded under a quantiser floor
 //! (`AVEncVideoMinQP`) that [`RecoveryQp`] moves until it fits a few
-//! pictures' bytes, and the floor is cleared once its picture is drained.
-//! A floor rather than a higher `AVEncVideoMaxQP`: on VideoToolbox, the only
-//! encoder this was measured on, raising the ceiling left a forced keyframe
-//! as large, and a floor shrank it. The transform here is drained after
-//! each input, so no other picture is encoded under the floor.
+//! pictures' bytes, and the floor is cleared once its picture is drained;
+//! the transform is drained after each input, so no other picture is
+//! encoded under the floor. Only transforms not measured to ignore the
+//! floor get one ([`Vendor::takes_qp_floor`]). On those measured, a
+//! keyframe is as small as the transform's constant-bitrate control makes
+//! it: near the budget on the hardware ones, several times over it on
+//! Microsoft's.
 
 #[cfg(windows)]
 use vnilink_media::{bgra_to_nv12, RecoveryQp};
@@ -49,7 +51,7 @@ use windows::Win32::System::Variant::{VARIANT, VT_UI4};
 #[cfg(windows)]
 use crate::bitstream::h264_access_unit;
 #[cfg(windows)]
-use crate::transform::{h264_encoders, CreatedTransform, H264Transform};
+use crate::transform::{h264_encoders, CreatedTransform, H264Transform, Vendor};
 #[cfg(windows)]
 use crate::transform_events::{TransformEvents, Waited};
 
@@ -65,6 +67,8 @@ pub struct WindowsEncoder {
     /// Present when the transform is asynchronous.
     #[cfg(windows)]
     events: Option<TransformEvents>,
+    #[cfg(windows)]
+    vendor: Vendor,
     #[cfg(windows)]
     hardware: bool,
     width: u32,
@@ -145,6 +149,12 @@ impl WindowsEncoder {
         self.transform
             .cast::<ICodecAPI>()
             .is_ok_and(|api| unsafe { api.IsSupported(key) }.is_ok())
+    }
+
+    /// Sets the `ICodecAPI` value `key` on the transform, for measuring.
+    #[cfg(all(windows, test))]
+    pub(crate) fn set_codec(&self, key: &windows::core::GUID, value: u32) -> bool {
+        unsafe { set_codec_u32(&self.transform, key, value) }.is_ok()
     }
 
     /// Whether the open transform is a hardware encoder.
@@ -256,6 +266,7 @@ impl WindowsEncoder {
         Ok(Self {
             transform,
             events,
+            vendor: candidate.vendor,
             hardware: candidate.hardware(),
             width: u32::from(width),
             height: u32::from(height),
@@ -268,12 +279,24 @@ impl WindowsEncoder {
 }
 
 impl VideoEncoder for WindowsEncoder {
-    /// The mean bitrate changes while encoding; a new frame rate needs a
-    /// new transform.
+    /// Per transform, as measured ([`Vendor::refines_still_pictures`]).
+    fn refines_still_pictures(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.vendor.refines_still_pictures()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
+
+    /// The mean bitrate changes while encoding, on a transform that honours
+    /// it ([`Vendor::retunes`]); a new frame rate needs a new transform.
     fn retune(&mut self, bitrate_bps: u32, frame_rate: u8) -> Result<bool, Error> {
         #[cfg(windows)]
         {
-            if frame_rate != self.frame_rate || bitrate_bps == 0 {
+            if frame_rate != self.frame_rate || bitrate_bps == 0 || !self.vendor.retunes() {
                 return Ok(false);
             }
             let rate = u32::from(frame_rate.max(1));
@@ -319,6 +342,7 @@ impl VideoEncoder for WindowsEncoder {
             // transform, used from the thread that owns it.
             let floored = params.force_keyframe
                 && params.recovery
+                && self.vendor.takes_qp_floor()
                 && unsafe {
                     set_codec_u32(
                         &self.transform,
