@@ -188,12 +188,13 @@ fn a_frame_still_arriving_outlives_the_silence() {
     let keyframe = body(true, 1, &[3; 6000]);
     let frags = fragment(&keyframe, 50, 900, 0.0);
     let mut reasm = Reassembler::with_silence(silence);
+    let mut at = std::time::Instant::now();
     let mut done = None;
     for frag in &frags {
         // Fragments a little closer together than the silence, adding up
         // to several times it.
-        std::thread::sleep(silence / 2);
-        done = done.or(reasm.push(frag));
+        at += silence / 2;
+        done = done.or(reasm.push_at(frag, at));
     }
     assert_eq!(done, Some(keyframe));
     assert!(!reasm.take_loss().any());
@@ -207,9 +208,9 @@ fn a_silent_frame_expires() {
     let frame = body(false, 2, &[4; 3000]);
     let frags = fragment(&frame, 60, 900, 0.0);
     let mut reasm = Reassembler::with_silence(silence);
-    assert!(reasm.push(&frags[0]).is_none());
-    std::thread::sleep(silence * 2);
-    assert!(reasm.push(&frags[1]).is_none());
+    let at = std::time::Instant::now();
+    assert!(reasm.push_at(&frags[0], at).is_none());
+    assert!(reasm.push_at(&frags[1], at + silence).is_none());
     assert_eq!(
         reasm.take_loss(),
         Losses {
@@ -227,10 +228,11 @@ fn fragments_are_counted_for_the_loss_report() {
     let whole = fragment(&body(true, 1, &[1; 3000]), 70, 900, 0.0);
     let cut = fragment(&body(false, 2, &[2; 3000]), 71, 900, 0.0);
     let mut reasm = Reassembler::with_silence(silence);
+    let at = std::time::Instant::now();
     for frag in &whole {
-        reasm.push(frag);
+        reasm.push_at(frag, at);
     }
-    reasm.push(&cut[0]);
+    reasm.push_at(&cut[0], at);
     assert_eq!(
         reasm.take_fragments(),
         FragmentCounts {
@@ -239,9 +241,8 @@ fn fragments_are_counted_for_the_loss_report() {
             repaired: 0,
         }
     );
-    std::thread::sleep(silence * 2);
     // Pushing anything checks for silent frames.
-    reasm.push(&[0; 2]);
+    reasm.push_at(&[0; 2], at + silence);
     assert_eq!(
         reasm.take_fragments(),
         FragmentCounts {

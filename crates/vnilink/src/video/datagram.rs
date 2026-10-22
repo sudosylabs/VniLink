@@ -266,7 +266,13 @@ impl Reassembler {
     /// Feed one datagram. Returns the complete body when this datagram
     /// finishes a frame, else `None`. Malformed datagrams are ignored.
     pub(crate) fn push(&mut self, datagram: &[u8]) -> Option<Vec<u8>> {
-        self.expire();
+        self.push_at(datagram, Instant::now())
+    }
+
+    /// [`Self::push`] with the time the datagram arrived, so silence can be
+    /// stepped through without waiting it out.
+    pub(crate) fn push_at(&mut self, datagram: &[u8], now: Instant) -> Option<Vec<u8>> {
+        self.expire(now);
         if datagram.len() < FRAG_HEADER + 1 {
             return None;
         }
@@ -302,7 +308,7 @@ impl Reassembler {
             received: 0,
             data_received: 0,
             bytes: 0,
-            heard: Instant::now(),
+            heard: now,
         });
         if (partial.data, partial.parity) != (data, parity) {
             return None;
@@ -314,7 +320,7 @@ impl Reassembler {
             if index < usize::from(data) {
                 partial.data_received += 1;
             }
-            partial.heard = Instant::now();
+            partial.heard = now;
             self.fragments.received += 1;
         }
         if !partial.whole() {
@@ -393,8 +399,7 @@ impl Reassembler {
         self.remember_gone(seq);
     }
 
-    fn expire(&mut self) {
-        let now = Instant::now();
+    fn expire(&mut self, now: Instant) {
         let expired: Vec<u32> = self
             .partial
             .iter()
