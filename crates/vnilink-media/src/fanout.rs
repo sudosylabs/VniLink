@@ -272,8 +272,11 @@ fn consume<E, F>(
         capture_revision,
         captured_at: None,
     };
+    // The encoder as last reported: at open, at every reopen, and whenever
+    // a picture took another input than the one before.
+    let mut reported = session.implementation();
     if target.service {
-        let _ = core.report_desktop_encoder(target.id, target.generation, session.implementation());
+        let _ = core.report_desktop_encoder(target.id, target.generation, reported);
     }
     let mut applied_quality = target.quality;
     let mut seen = 0u64;
@@ -331,8 +334,8 @@ fn consume<E, F>(
         }
         if target.service && session.reopens() != reopens {
             let _ = core.report_desktop_encoder_reopen(target.id, target.generation);
-            let _ =
-                core.report_desktop_encoder(target.id, target.generation, session.implementation());
+            reported = session.implementation();
+            let _ = core.report_desktop_encoder(target.id, target.generation, reported);
         }
         // On an unchanged screen no new picture comes: a keyframe still
         // owed is made from the last one, and after a keyframe the last one
@@ -410,6 +413,10 @@ fn consume<E, F>(
         let encode_started = Instant::now();
         match session.publish(&frame, &mut sink, target.id) {
             Ok(crate::PumpOutput::Encoded(_)) => {
+                if target.service && session.implementation() != reported {
+                    reported = session.implementation();
+                    let _ = core.report_desktop_encoder(target.id, target.generation, reported);
+                }
                 if target.service {
                     let _ = core.report_desktop_producer_duration(
                         target.id,

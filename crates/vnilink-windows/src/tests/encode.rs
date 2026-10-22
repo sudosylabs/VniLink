@@ -26,6 +26,71 @@ fn prefers_a_hardware_transform_that_opens() {
     assert_eq!(crate::probe_video_codecs().hardware, hardware_opens);
 }
 
+/// For pictures on each adapter, the encoder rule decides, the same way at
+/// every open: that adapter's hardware encoders are tried first; the first
+/// D3D11-aware one reads its textures (zero copy) and says so; and an
+/// encoder opened without a device reads memory, on the GPU or the CPU as
+/// its pictures are.
+#[test]
+fn the_capture_adapter_decides_the_encoder() {
+    use vnilink::EncoderInput;
+    for (name, device, _) in adapter_devices() {
+        let device = crate::gpu::GpuDevice::new(device);
+        let adapter = unsafe { device.adapter().unwrap() };
+        let on_adapter: Vec<_> = unsafe { crate::transform::hardware_encoders_on(adapter) }
+            .into_iter()
+            .map(|candidate| candidate.name)
+            .collect();
+        let listed: Vec<_> = unsafe { crate::transform::h264_encoders_for(adapter) }
+            .into_iter()
+            .map(|candidate| candidate.name)
+            .collect();
+        assert_eq!(
+            listed[..on_adapter.len()],
+            on_adapter[..],
+            "{name}: its own encoders are not first"
+        );
+        let chosen: Vec<_> = (0..3)
+            .map(|_| {
+                let encoder = WindowsEncoder::open_on(1280, 720, 30, 4_000_000, &device).unwrap();
+                (encoder.vendor(), encoder.implementation())
+            })
+            .collect();
+        println!("{name}: {:?}", chosen[0]);
+        assert!(
+            chosen.iter().all(|choice| *choice == chosen[0]),
+            "{name}: the encoder changed between opens: {chosen:?}"
+        );
+        let (_, implementation) = chosen[0];
+        if implementation.input == Some(EncoderInput::GpuTexture) {
+            assert_eq!(implementation.hardware, Some(true));
+        } else {
+            assert_eq!(implementation.input, Some(EncoderInput::GpuReadBack));
+        }
+    }
+    let mut encoder = WindowsEncoder::open(1280, 720, 30, 4_000_000).unwrap();
+    assert_eq!(
+        encoder.implementation().input,
+        Some(EncoderInput::GpuReadBack)
+    );
+    encoder
+        .encode(
+            &text_page(1280, 720, 0),
+            &EncodeParams {
+                force_keyframe: true,
+                recovery: false,
+                bitrate_bps: 4_000_000,
+                frame_rate: 30,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        encoder.implementation().input,
+        Some(EncoderInput::Cpu),
+        "a picture in memory is converted on the CPU"
+    );
+}
+
 /// `profile_idc` of the SPS in an Annex-B keyframe.
 fn sps_profile(annex_b: &[u8]) -> Option<u8> {
     annex_b

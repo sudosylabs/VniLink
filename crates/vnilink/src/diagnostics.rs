@@ -149,9 +149,11 @@ pub struct PipelineSummary {
     pub conditions: Vec<ConditionSummary>,
     /// Why the picture stopped (`DesktopEnd::label`), once it did.
     pub end: Option<String>,
-    /// Host: the encoder open for this viewer and whether it is hardware.
+    /// Host: the encoder open for this viewer, whether it is hardware, and
+    /// what it reads pictures from (`EncoderInput::label`).
     pub encoder: Option<String>,
     pub encoder_hardware: Option<bool>,
+    pub encoder_input: Option<String>,
     /// Viewer: whether the window decodes in hardware, once it said, and how
     /// often its decoder restarted from a keyframe.
     pub decoder_hardware: Option<bool>,

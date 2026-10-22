@@ -331,6 +331,7 @@ impl VideoEncoder for MacEncoder {
         vnilink::EncoderImplementation {
             name: "videotoolbox",
             hardware: Some(self.hardware()),
+            input: None,
         }
     }
 

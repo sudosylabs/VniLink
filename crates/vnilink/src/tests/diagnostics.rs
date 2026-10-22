@@ -396,6 +396,7 @@ fn live_snapshot_names_the_coders_and_the_last_end() {
         crate::EncoderImplementation {
             name: "videotoolbox",
             hardware: Some(true),
+            input: Some(crate::EncoderInput::GpuTexture),
         },
     )
     .unwrap();
@@ -403,6 +404,7 @@ fn live_snapshot_names_the_coders_and_the_last_end() {
     let hosted = host.diagnostic_snapshot().unwrap().pipelines[0].clone();
     assert_eq!(hosted.encoder.as_deref(), Some("videotoolbox"));
     assert_eq!(hosted.encoder_hardware, Some(true));
+    assert_eq!(hosted.encoder_input.as_deref(), Some("gpu-texture"));
     assert_eq!(hosted.end, None);
     let viewing = controller.diagnostic_snapshot().unwrap().pipelines[0].clone();
     assert_eq!(viewing.decoder_hardware, Some(false));

@@ -1,8 +1,12 @@
 //! Media Foundation H.264. Input is NV12. Output is Annex-B.
 //!
-//! The desktop encoder is the first H.264 transform that opens, hardware
-//! first ([`crate::transform`]); the camera uses Microsoft's software
-//! transform. Hardware transforms are asynchronous: input and output wait
+//! The desktop encoder is the first H.264 transform that opens, in the
+//! encoder rule's order ([`crate::transform`]): a D3D11-aware hardware
+//! transform on the capture's adapter reading the converted texture (zero
+//! copy), else a hardware transform reading NV12 from memory, the capture
+//! adapter's first, else Microsoft's software transform. What the encoder
+//! reads a picture from is reported with it ([`vnilink::EncoderInput`]).
+//! The camera uses Microsoft's software transform. Hardware transforms are asynchronous: input and output wait
 //! for their events ([`TransformEvents`]).
 //!
 //! The Microsoft transform writes 4-byte length prefixes. SPS and PPS are
@@ -57,7 +61,7 @@ use windows::Win32::System::Variant::{VARIANT, VT_UI4};
 #[cfg(windows)]
 use crate::bitstream::h264_access_unit;
 #[cfg(windows)]
-use crate::transform::{h264_encoders, CreatedTransform, H264Transform, Vendor};
+use crate::transform::{h264_encoders, h264_encoders_for, CreatedTransform, H264Transform, Vendor};
 #[cfg(windows)]
 use crate::transform_events::{TransformEvents, Waited};
 
@@ -96,6 +100,10 @@ pub struct WindowsEncoder {
     /// handed to it there, never read into memory.
     #[cfg(windows)]
     textures: Option<crate::gpu::GpuDevice>,
+    /// What the last picture was read from; before the first, what the
+    /// encoder was opened to read.
+    #[cfg(windows)]
+    input: vnilink::EncoderInput,
 }
 
 /// Converting captured pictures on the GPU, for one encoder.
@@ -123,8 +131,10 @@ impl WindowsEncoder {
         }
         #[cfg(windows)]
         {
-            return unsafe { Self::open_transform(width, height, frame_rate, bitrate_bps) }
-                .map_err(|_| Error::Unsupported("Media Foundation H.264"));
+            return unsafe {
+                Self::open_first(|| h264_encoders(), width, height, frame_rate, bitrate_bps)
+            }
+            .map_err(|_| Error::Unsupported("Media Foundation H.264"));
         }
         #[cfg(not(windows))]
         {
@@ -133,8 +143,11 @@ impl WindowsEncoder {
         }
     }
 
+    /// The first of `candidates` that opens, reading NV12 from memory.
+    /// They are listed once Media Foundation has started.
     #[cfg(windows)]
-    unsafe fn open_transform(
+    unsafe fn open_first(
+        candidates: impl FnOnce() -> Vec<H264Transform>,
         width: u16,
         height: u16,
         frame_rate: u8,
@@ -143,7 +156,7 @@ impl WindowsEncoder {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)?;
         let mut failure = windows::core::Error::from(windows::Win32::Foundation::E_FAIL);
-        for candidate in h264_encoders() {
+        for candidate in candidates() {
             match Self::create_transform(
                 &candidate,
                 width,
@@ -331,6 +344,13 @@ impl WindowsEncoder {
             recovery_qp: RecoveryQp::default(),
             gpu: GpuConversion::Untried,
             textures: None,
+            input: if manager.is_some() {
+                vnilink::EncoderInput::GpuTexture
+            } else if camera {
+                vnilink::EncoderInput::Cpu
+            } else {
+                vnilink::EncoderInput::GpuReadBack
+            },
         })
     }
 }
@@ -343,6 +363,7 @@ impl VideoEncoder for WindowsEncoder {
             vnilink::EncoderImplementation {
                 name: self.vendor.label(),
                 hardware: Some(self.hardware),
+                input: Some(self.input),
             }
         }
         #[cfg(not(windows))]
@@ -526,7 +547,10 @@ impl WindowsEncoder {
             match converted {
                 Some(Ok(texture)) => {
                     match unsafe { self.encode_texture(&texture, frame.timestamp_us(), params) } {
-                        Ok(sample) => return Ok(sample),
+                        Ok(sample) => {
+                            self.input = vnilink::EncoderInput::GpuTexture;
+                            return Ok(sample);
+                        }
                         // This transform takes memory too: the rest go that way.
                         Err(_) => self.textures = None,
                     }
@@ -536,8 +560,14 @@ impl WindowsEncoder {
             }
         }
         let (y_plane, uv_plane) = match captured.and_then(|picture| self.convert(picture)) {
-            Some(planes) => planes,
-            None => self.convert_on_cpu(frame)?,
+            Some(planes) => {
+                self.input = vnilink::EncoderInput::GpuReadBack;
+                planes
+            }
+            None => {
+                self.input = vnilink::EncoderInput::Cpu;
+                self.convert_on_cpu(frame)?
+            }
         };
         unsafe { self.encode_nv12(&y_plane, &uv_plane, frame.timestamp_us(), params) }
     }
@@ -837,9 +867,11 @@ impl WindowsEncoder {
     /// An encoder for pictures captured on `device`. The first that opens of:
     /// a D3D11-aware hardware transform on `device`'s adapter, which reads
     /// the converted pictures as textures there and none is read into
-    /// memory; then [`Self::open`], which reads them from memory. Sharing a
-    /// texture with another adapter's encoder is not tried: D3D11 refuses
-    /// it between an integrated and a discrete GPU.
+    /// memory (path 1); then a transform reading them from memory, the
+    /// hardware ones on `device`'s adapter first (path 3, or 4 where the
+    /// GPU cannot convert). Sharing a texture with another adapter's encoder
+    /// (path 2) is not tried: D3D11 refuses it between an integrated and a
+    /// discrete GPU.
     #[cfg(windows)]
     pub fn open_on(
         width: u16,
@@ -856,7 +888,14 @@ impl WindowsEncoder {
         {
             return Ok(encoder);
         }
-        Self::open(width, height, frame_rate, bitrate_bps)
+        unsafe {
+            let candidates = || match device.adapter() {
+                Ok(adapter) => h264_encoders_for(adapter),
+                Err(_) => h264_encoders(),
+            };
+            Self::open_first(candidates, width, height, frame_rate, bitrate_bps)
+        }
+        .map_err(|_| Error::Unsupported("Media Foundation H.264"))
     }
 
     #[cfg(windows)]

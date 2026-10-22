@@ -97,6 +97,7 @@ impl VideoEncoder for SoftwareEncoder {
                 Self::Hevc(_) => "x265",
             },
             hardware: Some(false),
+            input: Some(vnilink::EncoderInput::Cpu),
         }
     }
     fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
