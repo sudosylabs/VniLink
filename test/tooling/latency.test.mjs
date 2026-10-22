@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { build } from 'esbuild';
 import { latencyOptions } from '../../build/lib/latency.ts';
@@ -35,10 +35,11 @@ test('the page carries the same strip as the module', () => {
 
 test('latency options are bounded', () => {
 	const options = latencyOptions('/root', ['--seconds', '5', '--settle', '1', '--output', '/out']);
-	assert.deepEqual(options, { seconds: 5, settleSeconds: 1, output: '/out', app: undefined });
+	// Paths resolve the platform's way: `/out` is `C:\out` on Windows.
+	assert.deepEqual(options, { seconds: 5, settleSeconds: 1, output: resolve('/out'), app: undefined });
 	assert.equal(latencyOptions('/root', ['--app', '/x/VniLink.app']).app, '/x/VniLink.app');
 	assert.throws(() => latencyOptions('/root', ['--app', '/x/VniLink']));
-	assert.match(latencyOptions('/root', []).output, /^\/root\/\.build\/latency\//);
+	assert.ok(latencyOptions('/root', []).output.startsWith(join('/root', '.build', 'latency')));
 	assert.equal(latencyOptions('/root', ['--output', 'relative/out']).output, join(process.cwd(), 'relative/out'));
 	assert.throws(() => latencyOptions('/root', ['--seconds', '0']));
 	assert.throws(() => latencyOptions('/root', ['--seconds', '2.5']));
