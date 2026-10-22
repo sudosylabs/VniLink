@@ -12,6 +12,8 @@ pub(crate) use condition::{Conditions, HostState, Observation};
 mod counters;
 mod datagram;
 mod frame;
+mod link_rate;
+pub(crate) use link_rate::LinkRate;
 mod queue;
 mod recovery;
 mod report;
@@ -39,11 +41,10 @@ pub const MAX_VIDEO_FRAME: usize = 1_048_576;
 /// waits behind it.
 pub const STILL_DRAIN: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// The largest still picture, in encoded bytes, a link agreed at
-/// `max_bitrate_kbps` carries within [`STILL_DRAIN`]. The host's still
-/// encoder aims below it; a larger one is not sent.
-pub fn still_budget(max_bitrate_kbps: u32) -> usize {
-    let bytes = u64::from(max_bitrate_kbps) * 1000 / 8 * STILL_DRAIN.as_millis() as u64 / 1000;
+/// The largest still picture, in encoded bytes, a link carrying
+/// `bits_per_second` takes within [`STILL_DRAIN`].
+pub(crate) fn still_budget(bits_per_second: u64) -> usize {
+    let bytes = (bits_per_second / 8).saturating_mul(STILL_DRAIN.as_millis() as u64) / 1000;
     usize::try_from(bytes)
         .unwrap_or(usize::MAX)
         .min(MAX_VIDEO_FRAME)

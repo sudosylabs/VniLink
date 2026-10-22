@@ -429,10 +429,10 @@ fn consume<E, F>(
                     _ => Some(sample.frame),
                 };
                 if let Some(frame) = frame {
-                    stills.make(
-                        frame,
-                        vnilink::still_budget(applied_quality.max_bitrate_kbps),
-                    );
+                    let budget = core
+                        .desktop_still_budget(target.id, target.generation)
+                        .unwrap_or(0);
+                    stills.make(frame, budget);
                 }
             }
         }

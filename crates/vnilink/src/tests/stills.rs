@@ -202,6 +202,42 @@ fn a_still_is_shown_but_never_recorded() {
 #[test]
 fn a_still_fits_what_the_link_drains_in_a_moment() {
     // 8 Mb/s carries 250 kB in the quarter second a still may hold it.
-    assert_eq!(crate::still_budget(8_000), 250_000);
-    assert_eq!(crate::still_budget(1_000_000), crate::MAX_VIDEO_FRAME);
+    assert_eq!(crate::video::still_budget(8_000_000), 250_000);
+    assert_eq!(crate::video::still_budget(u64::MAX), crate::MAX_VIDEO_FRAME);
+}
+
+/// An idle link's round trip is its floor while its window is still sized
+/// for the loaded link: the rate is the window over the loaded round trip.
+#[test]
+fn the_link_carries_its_window_over_its_loaded_round_trip() {
+    use crate::video::LinkRate;
+    let start = Instant::now();
+    let mut link = LinkRate::default();
+    assert_eq!(link.bits_per_second(), None, "nothing read yet");
+    // 10 Mb/s with 270 ms of round trip under load: a 337.5 kB window.
+    link.observe(337_500, Duration::from_millis(270), start);
+    assert_eq!(link.bits_per_second(), Some(10_000_000));
+    // Still, the queue drains: the round trip falls, the rate does not rise.
+    link.observe(
+        337_500,
+        Duration::from_millis(20),
+        start + Duration::from_secs(3),
+    );
+    assert_eq!(link.bits_per_second(), Some(10_000_000));
+    // A smaller window after a loss lowers it at once.
+    link.observe(
+        168_750,
+        Duration::from_millis(20),
+        start + Duration::from_secs(4),
+    );
+    assert_eq!(link.bits_per_second(), Some(5_000_000));
+    // Long after the load, the idle round trip is what the link shows.
+    link.observe(
+        25_000,
+        Duration::from_millis(20),
+        start + Duration::from_secs(15),
+    );
+    assert_eq!(link.bits_per_second(), Some(10_000_000));
+    link.reset();
+    assert_eq!(link.bits_per_second(), None, "a new path is unknown");
 }

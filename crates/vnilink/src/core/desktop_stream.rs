@@ -93,6 +93,8 @@ pub(super) struct DesktopRuntime {
     pub(super) info: DesktopInfo,
     stamp: SessionStamp,
     quality: Mutex<Quality>,
+    /// What the link carries now, to size still pictures by.
+    link_rate: Mutex<crate::video::LinkRate>,
     adaptive: Mutex<crate::adaptation::Adaptive>,
     decode_duration: Mutex<Option<(u64, std::time::Instant)>>,
     producer_duration: Mutex<Option<(u64, u64, std::time::Instant)>>,
@@ -194,6 +196,7 @@ impl DesktopRuntime {
             recording_gate: Mutex::new(()),
             activity: Mutex::new(super::activity::Activity::new(std::time::Instant::now())),
             quality: Mutex::new(info.quality),
+            link_rate: Mutex::new(crate::video::LinkRate::default()),
             adaptive: Mutex::new(crate::adaptation::Adaptive::default()),
             decode_duration: Mutex::new(None),
             producer_duration: Mutex::new(None),
@@ -323,6 +326,13 @@ impl DesktopRuntime {
             keyboard.held = HeldInput::default();
             self.control_state.send_replace((status, epoch));
         }
+    }
+    /// The largest still picture the link takes now: what it carries,
+    /// capped at the agreed bitrate, within [`crate::STILL_DRAIN`].
+    fn still_budget(&self) -> usize {
+        let agreed = u64::from(lock(&self.quality).max_bitrate_kbps) * 1000;
+        let carried = lock(&self.link_rate).bits_per_second().unwrap_or(agreed);
+        crate::video::still_budget(agreed.min(carried))
     }
     pub(super) fn metadata(&self) -> DesktopInfo {
         let mut info = self.info.clone();
@@ -694,6 +704,12 @@ impl Core {
     }
     pub fn hosted_desktop_info(&self, id: u64, generation: u64) -> Result<DesktopInfo, Error> {
         Ok(runtime(&*self.alive_state()?, id, generation, true)?.metadata())
+    }
+    /// The largest still picture, in encoded bytes, this hosted owner's link
+    /// takes now within [`crate::STILL_DRAIN`]: what the link carries,
+    /// capped at the agreed bitrate. A larger one is not sent.
+    pub fn desktop_still_budget(&self, id: u64, generation: u64) -> Result<usize, Error> {
+        Ok(runtime(&*self.alive_state()?, id, generation, true)?.still_budget())
     }
     /// Measured successful encode/preparation and native capture read costs.
     /// Capture read may include waiting for a frame; it is diagnostic, not a
@@ -2540,11 +2556,6 @@ fn send_budget(desktop: &DesktopRuntime) -> usize {
     backlog_budget(quality.max_bitrate_kbps, quality.max_frame_rate)
 }
 
-/// The largest still picture the link takes at the agreed quality.
-fn still_budget(desktop: &DesktopRuntime) -> usize {
-    crate::video::still_budget(lock(&desktop.quality).max_bitrate_kbps)
-}
-
 /// The interval between frames at the agreed frame rate.
 fn frame_period(desktop: &DesktopRuntime) -> Duration {
     Duration::from_secs(1) / u32::from(lock(&desktop.quality).max_frame_rate.max(1))
@@ -2605,11 +2616,17 @@ async fn host_send(
                 .paths()
                 .iter()
                 .find(|candidate| candidate.is_selected())
-                .map(|selected| (selected.id(), selected.rtt()));
-            let rtt = selected.map_or(Duration::ZERO, |(_, rtt)| rtt);
-            if selected.map(|(id, _)| id) != path {
-                path = selected.map(|(id, _)| id);
+                .map(|selected| (selected.id(), selected.stats()));
+            let rtt = selected
+                .as_ref()
+                .map_or(Duration::ZERO, |(_, stats)| stats.rtt);
+            if selected.as_ref().map(|(id, _)| *id) != path {
+                path = selected.as_ref().map(|(id, _)| *id);
                 congestion = crate::video::Congestion::default();
+                lock(&desktop.link_rate).reset();
+            }
+            if let Some((_, stats)) = &selected {
+                lock(&desktop.link_rate).observe(stats.cwnd, stats.rtt, std::time::Instant::now());
             }
             congestion.rtt(rtt);
             let body = crate::video::encode_video_body(&frame);
@@ -2644,10 +2661,11 @@ async fn host_send(
                     .saturating_sub(link.datagram_send_buffer_space());
                 least_backlog = Some(least_backlog.map_or(backlog, |least| least.min(backlog)));
                 if still {
-                    // Only into an idle link, and only as much as it drains
-                    // in a moment: the frames after it wait behind it.
+                    // A change behind it waits for what is queued and for
+                    // it: both must drain within the moment a still may
+                    // hold the link.
                     let space = link.datagram_send_buffer_space();
-                    if backlog > 0 || wire > space || wire > still_budget(desktop) {
+                    if wire > space || backlog + wire > desktop.still_budget() {
                         desktop.counters.still_dropped();
                         continue;
                     }
@@ -2679,7 +2697,7 @@ async fn host_send(
                     desktop.counters.keyframe_sent(frame.payload.len());
                 }
             } else if still {
-                if body.len() > still_budget(desktop) {
+                if body.len() > desktop.still_budget() {
                     desktop.counters.still_dropped();
                     continue;
                 }
@@ -2735,7 +2753,12 @@ async fn host_send(
                         .min(600_000),
                     capture_us: timing.0, encode_us: timing.1,
                     congestion_events: link.paths().iter().find(|path| path.is_selected())
-                        .map_or(0, |path| path.stats().congestion_events),
+                        .map_or(0, |path| {
+                            let stats = path.stats();
+                            // A still screen sends little: read the link here too.
+                            lock(&desktop.link_rate).observe(stats.cwnd, stats.rtt, std::time::Instant::now());
+                            stats.congestion_events
+                        }),
                     flags: host_flags(shared, desktop),
                 };
                 let mut bytes = vec![MEDIA_FEEDBACK];
