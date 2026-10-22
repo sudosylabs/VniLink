@@ -1,10 +1,11 @@
 //! Windows capture and H.264 for VniLink.
 //!
 //! [`WindowsCapture`] uses Desktop Duplication on the interactive desktop of
-//! this session. [`WindowsEncoder`] uses the Media Foundation H.264 transform
-//! and expects NV12. The transform's length-prefixed samples are turned into
-//! Annex-B before they leave this crate. Neither Win32 path is compiled on
-//! another operating system, and neither one reaches the secure UAC desktop.
+//! this session. [`WindowsEncoder`] uses a Media Foundation H.264 transform,
+//! hardware where one opens, and expects NV12. The transform's
+//! length-prefixed samples are turned into Annex-B before they leave this
+//! crate. Neither Win32 path is compiled on another operating system, and
+//! neither one reaches the secure UAC desktop.
 //! A build on macOS or Linux does not execute the Win32 code.
 
 mod bitstream;
@@ -17,6 +18,10 @@ mod host;
 #[cfg(any(windows, test))]
 mod idle;
 mod plan;
+#[cfg(windows)]
+mod transform;
+#[cfg(windows)]
+mod transform_events;
 
 #[cfg(windows)]
 mod capture;
