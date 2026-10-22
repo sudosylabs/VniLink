@@ -92,6 +92,11 @@ test('bridge events keep core names and lossless ids', () => {
 	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, kind: 'Hologram' } }), false);
 	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Revoked' } } } }), true);
 	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Abducted' } } } }), false);
+	// A producer failure on this computer says what failed, and only it carries one.
+	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Failed', failure: 'encoder' } } } }), true);
+	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Failed' } } } }), false);
+	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Failed', failure: 'boredom' } } } }), false);
+	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Revoked', failure: 'encoder' } } } }), false);
 	assert.equal(isEngineEvent({ type: 'qualityUpdated', id: '1', quality: { max_bitrate_kbps: 1000, max_frame_rate: 30, max_width: 1920, max_height: 1080 } }), true);
 	assert.equal(isEngineEvent({ type: 'inputFailed', id: '1', message: 'denied' }), true);
 	assert.equal(isEngineEvent({ type: 'topologyChanged', revision: '4' }), true);

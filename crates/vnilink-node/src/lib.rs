@@ -300,6 +300,16 @@ impl EventTransfer {
             vnilink_app::FfiCloseCause::Shutdown => "Shutdown",
             vnilink_app::FfiCloseCause::PeerClose => "PeerClose",
             vnilink_app::FfiCloseCause::IdleExpired => "IdleExpired",
+            vnilink_app::FfiCloseCause::Failed(_) => "Failed",
+        }
+    }
+
+    fn stream_failure(failure: &vnilink_app::FfiStreamFailure) -> &'static str {
+        match failure {
+            vnilink_app::FfiStreamFailure::Encoder => "encoder",
+            vnilink_app::FfiStreamFailure::Capture => "capture",
+            vnilink_app::FfiStreamFailure::Permission => "permission",
+            vnilink_app::FfiStreamFailure::DisplayGone => "displayGone",
         }
     }
 
@@ -309,6 +319,11 @@ impl EventTransfer {
             vnilink_app::FfiServicePhase::Active => serde_json::Value::String("Active".into()),
             vnilink_app::FfiServicePhase::Suspended => {
                 serde_json::Value::String("Suspended".into())
+            }
+            vnilink_app::FfiServicePhase::Closed {
+                cause: vnilink_app::FfiCloseCause::Failed(failure),
+            } => {
+                serde_json::json!({ "Closed": { "cause": "Failed", "failure": Self::stream_failure(failure) } })
             }
             vnilink_app::FfiServicePhase::Closed { cause } => {
                 serde_json::json!({ "Closed": { "cause": Self::close_cause(cause) } })

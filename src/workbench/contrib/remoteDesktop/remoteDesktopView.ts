@@ -13,7 +13,10 @@ import { ITabService, type WorkbenchTab } from '../../services/tabs/tabService.j
 type DesktopProblem = DesktopFailure | DesktopEnd;
 
 /** Problems another attempt may fix, tried again by themselves; the rest need a change on either computer. */
-const retryable: ReadonlySet<DesktopProblem> = new Set(['disconnected', 'unavailable', 'failed', 'lost']);
+const retryable: ReadonlySet<DesktopProblem> = new Set(['disconnected', 'unavailable', 'failed', 'linkLost', 'relayUnreachable', 'peerClosed', 'hostEncoderFailed', 'hostCaptureFailed']);
+
+/** Ends of a running picture that are tried again at once, before any failed attempt. */
+const reconnectAtOnce: ReadonlySet<DesktopProblem> = new Set(['linkLost', 'relayUnreachable', 'peerClosed', 'hostEncoderFailed', 'hostCaptureFailed']);
 
 /** Precise wheel units in one notch, the Windows wheel delta, as the engine counts them. */
 const WHEEL_NOTCH = 120;
@@ -143,8 +146,42 @@ function problemMessage(name: string, problem: DesktopProblem): string {
 		case 'unsupported': return nls.localize('desktop.unsupported', '{0} can’t share its screen.', name);
 		case 'unavailable': return nls.localize('desktop.unavailable', '{0} can’t open its screen right now.', name);
 		case 'failed': return nls.localize('desktop.failed', 'The screen of {0} didn’t start.', name);
-		case 'lost': return nls.localize('desktop.lost', 'The connection to {0} dropped.', name);
+		case 'linkLost': return nls.localize('desktop.lost', 'The connection to {0} dropped.', name);
+		case 'relayUnreachable': return nls.localize('desktop.relayUnreachable', 'The relayed connection to {0} dropped.', name);
+		case 'peerClosed': return nls.localize('desktop.peerClosed', '{0} stopped sending its screen.', name);
+		case 'hostEncoderFailed': return nls.localize('desktop.hostEncoderFailed', '{0} couldn’t keep encoding its screen.', name);
+		case 'hostCaptureFailed': return nls.localize('desktop.hostCaptureFailed', '{0} stopped capturing its screen.', name);
+		case 'hostPermission': return nls.localize('desktop.hostPermission', '{0} no longer allows VniLink to record its screen.', name);
+		case 'displayGone': return nls.localize('desktop.displayGone', 'The display shown from {0} went away.', name);
+		case 'hostStopped': return nls.localize('desktop.hostStopped', '{0} stopped sharing its screen.', name);
+		case 'hostShutdown': return nls.localize('desktop.hostShutdown', 'VniLink quit on {0}.', name);
+		case 'revoked': return nls.localize('desktop.revoked', '{0} no longer shares its screen with this computer.', name);
 		case 'cantShow': return nls.localize('desktop.cantShow', 'This computer can’t show the screen of {0}.', name);
+	}
+}
+
+/** What the user can do about a problem, when the title alone doesn't say. */
+function problemAdvice(name: string, problem: DesktopProblem): string {
+	switch (problem) {
+		case 'hostPermission': return nls.localize('desktop.hostPermissionAdvice', 'Someone at {0} needs to allow VniLink to record the screen in its system settings. Then try again.', name);
+		case 'displayGone': return nls.localize('desktop.displayGoneAdvice', 'Try again to show another display.');
+		case 'hostShutdown': return nls.localize('desktop.hostShutdownAdvice', 'Try again once VniLink is open on {0}.', name);
+		case 'disconnected': case 'turnedOff': case 'needsPermission': case 'unsupported': case 'unavailable': case 'failed':
+		case 'linkLost': case 'relayUnreachable': case 'peerClosed': case 'hostEncoderFailed': case 'hostCaptureFailed':
+		case 'hostStopped': case 'revoked': case 'cantShow':
+			return '';
+	}
+}
+
+/** Why a reconnect is under way, as the overlay's body says it. */
+function reconnectReason(name: string, problem: DesktopProblem | undefined): string {
+	switch (problem) {
+		case 'hostEncoderFailed': case 'hostCaptureFailed': case 'peerClosed': return `${problemMessage(name, problem)} ${nls.localize('desktop.reconnectingHost', 'Keys and the pointer stay here until its screen is back.')}`;
+		case 'relayUnreachable': return nls.localize('desktop.reconnectingRelay', 'The relayed connection dropped. Keys and the pointer stay here until it’s back.');
+		case 'disconnected': case 'turnedOff': case 'needsPermission': case 'unsupported': case 'unavailable': case 'failed':
+		case 'linkLost': case 'hostPermission': case 'displayGone': case 'hostStopped': case 'hostShutdown': case 'revoked': case 'cantShow':
+		case undefined:
+			return nls.localize('desktop.reconnectingBody', 'The connection dropped. Keys and the pointer stay here until it’s back.');
 	}
 }
 
@@ -186,6 +223,8 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	/** Whether this tab already reconnected once after a picture it couldn't show. */
 	private retriedCodec = false;
 	private hasPicture = false;
+	/** The end of the running picture that the current reconnect answers. */
+	private reconnectingFor: DesktopProblem | undefined;
 	/** The display shown, and its bounds, as the other computer reports them at the picture's revision. */
 	private shown: { readonly display: string; readonly revision: string } | undefined;
 	/** The shown display's bounds, once the other computer's topology names it at the picture's revision. */
@@ -657,12 +696,18 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		}
 	}
 
-	private showState(state: 'connecting' | 'reconnecting'): void {
+	/** `why` is the problem a reconnect answers, when one does. */
+	private showState(state: 'connecting' | 'reconnecting', why?: DesktopProblem): void {
 		const name = this.device.name;
+		if (why) {
+			this.reconnectingFor = why;
+		} else if (state === 'connecting') {
+			this.reconnectingFor = undefined;
+		}
 		this.setOverlay(
 			state,
 			state === 'connecting' ? nls.localize('desktop.connecting', 'Connecting to {0}…', name) : nls.localize('desktop.reconnecting', 'Reconnecting to {0}…', name),
-			state === 'reconnecting' ? nls.localize('desktop.reconnectingBody', 'The connection dropped. Keys and the pointer stay here until it’s back.') : '',
+			state === 'reconnecting' ? reconnectReason(name, this.reconnectingFor) : '',
 			[{ label: state === 'connecting' ? nls.localize('desktop.cancel', 'Cancel') : nls.localize('desktop.disconnect', 'Disconnect'), run: () => void this.tabService.close(this.id) }],
 		);
 	}
@@ -676,12 +721,12 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			void this.connect(true);
 			return;
 		}
-		if (retryable.has(problem) && (again || problem === 'lost')) {
-			this.showState('reconnecting');
+		if (retryable.has(problem) && (again || reconnectAtOnce.has(problem))) {
+			this.showState('reconnecting', reconnectAtOnce.has(problem) ? problem : undefined);
 			this.scheduleRetry();
 			return;
 		}
-		this.setOverlay('ended', problemMessage(name, problem), '', [
+		this.setOverlay('ended', problemMessage(name, problem), problemAdvice(name, problem), [
 			{ label: nls.localize('desktop.tryAgain', 'Try Again'), primary: true, run: () => void this.connect() },
 			{ label: nls.localize('desktop.closeTab', 'Close Tab'), run: () => void this.tabService.close(this.id) },
 		]);

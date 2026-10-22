@@ -95,7 +95,8 @@ export type ServiceKind = 'Desktop' | 'Files' | 'Terminal' | 'Camera' | 'SystemA
 export interface ServiceSummary {
 	id: string; connectionId: string; generation: string; peer_id: string;
 	kind: ServiceKind;
-	phase: string | { Closed: { cause: string } } | { Failed: { message: string } };
+	/** A `Failed` close says what failed in this computer's own producer. */
+	phase: string | { Closed: { cause: string; failure?: 'encoder' | 'capture' | 'permission' | 'displayGone' } } | { Failed: { message: string } };
 }
 
 export interface SystemPolicy { allow_lock: boolean; allow_restart: boolean; allow_shutdown: boolean; allow_privacy: boolean; }
@@ -537,6 +538,16 @@ function serviceCause(value: unknown): value is string {
 		|| value === 'DeviceLoss' || value === 'Shutdown' || value === 'PeerClose' || value === 'IdleExpired';
 }
 
+function closedPhase(value: unknown): boolean {
+	if (!record(value)) {
+		return false;
+	}
+	if (value.cause === 'Failed') {
+		return ['encoder', 'capture', 'permission', 'displayGone'].includes(String(value.failure)) && Object.keys(value).length === 2;
+	}
+	return serviceCause(value.cause) && Object.keys(value).length === 1;
+}
+
 function servicePhase(value: unknown): value is ServiceSummary['phase'] {
 	if (typeof value === 'string') {
 		return value === 'Waiting' || value === 'Active' || value === 'Suspended';
@@ -545,7 +556,7 @@ function servicePhase(value: unknown): value is ServiceSummary['phase'] {
 		return false;
 	}
 	if ('Closed' in value) {
-		return record(value.Closed) && serviceCause(value.Closed.cause) && Object.keys(value.Closed).length === 1;
+		return closedPhase(value.Closed);
 	}
 	if ('Failed' in value) {
 		return record(value.Failed) && text(value.Failed.message) && Object.keys(value.Failed).length === 1;

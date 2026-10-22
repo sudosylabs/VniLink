@@ -1635,3 +1635,105 @@ fn host_and_decoder_reports_become_the_viewers_conditions() {
     stream_until(&|set| set.iter().collect::<Vec<_>>() == [Condition::EncoderSoftware]);
     desktop.close();
 }
+
+/// Each way a host ends a picture reaches the viewer as its own reason;
+/// a picture this computer closed has none.
+#[test]
+fn the_viewer_learns_why_the_host_ended_its_picture() {
+    use crate::{DesktopEnd, StreamEnd, StreamFailure};
+    #[derive(Clone, Copy, Debug)]
+    enum HostAction {
+        Close,
+        Fail(StreamFailure),
+        StopSharing,
+        ViewerCloses,
+    }
+    for (action, expected) in [
+        (
+            HostAction::Close,
+            Some(DesktopEnd::Host(StreamEnd::Stopped)),
+        ),
+        (
+            HostAction::Fail(StreamFailure::Encoder),
+            Some(DesktopEnd::Host(StreamEnd::Failed(StreamFailure::Encoder))),
+        ),
+        (
+            HostAction::Fail(StreamFailure::Permission),
+            Some(DesktopEnd::Host(StreamEnd::Failed(
+                StreamFailure::Permission,
+            ))),
+        ),
+        (
+            HostAction::StopSharing,
+            Some(DesktopEnd::Host(StreamEnd::Revoked)),
+        ),
+        (HostAction::ViewerCloses, None),
+    ] {
+        let host = start_direct();
+        let controller = start_direct();
+        host.set_desktop(Box::new(RecordingDesktop {
+            events: Arc::new(Mutex::new(Vec::new())),
+        }))
+        .unwrap();
+        pair_for_control(&host, &controller);
+        let pending = controller
+            .begin_connect_services(&host.endpoint_id())
+            .unwrap();
+        wait(|| controller.controller_session(pending.id).unwrap().phase == SessionPhase::Active);
+        let session = controller.controller_session(pending.id).unwrap();
+        let owner = controller
+            .attach_controller_service(session.id, session.generation, ServiceKind::Desktop)
+            .unwrap();
+        let desktop = controller
+            .open_desktop_service(owner.id, owner.generation)
+            .unwrap();
+        let remote = host_owner(&host);
+        assert_eq!(desktop.end(), None, "a live picture has no end");
+        match action {
+            HostAction::Close => host
+                .close_hosted_service(remote.id, remote.generation)
+                .unwrap(),
+            HostAction::Fail(failure) => host
+                .fail_hosted_service(remote.id, remote.generation, failure)
+                .unwrap(),
+            HostAction::StopSharing => host
+                .set_service_sharing(ServiceKind::Desktop, false)
+                .unwrap(),
+            HostAction::ViewerCloses => desktop.close(),
+        }
+        wait(|| desktop.is_cancelled());
+        if expected.is_some() {
+            wait(|| desktop.end().is_some());
+        } else {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        assert_eq!(desktop.end(), expected, "{action:?}");
+    }
+}
+
+#[test]
+fn a_stream_end_is_one_known_byte() {
+    use crate::{StreamEnd, StreamFailure};
+    for end in [
+        StreamEnd::Failed(StreamFailure::Encoder),
+        StreamEnd::Failed(StreamFailure::Capture),
+        StreamEnd::Failed(StreamFailure::Permission),
+        StreamEnd::Failed(StreamFailure::DisplayGone),
+        StreamEnd::Stopped,
+        StreamEnd::Shutdown,
+        StreamEnd::Revoked,
+    ] {
+        assert_eq!(StreamEnd::decode(end.encode()).unwrap(), end);
+    }
+    for unknown in [0, 8, 255] {
+        assert!(matches!(
+            StreamEnd::decode(unknown),
+            Err(crate::Error::Malformed)
+        ));
+    }
+    assert_eq!(StreamEnd::for_close(crate::CloseCause::PeerClose), None);
+    assert_eq!(
+        StreamEnd::for_close(crate::CloseCause::DeviceLoss),
+        Some(StreamEnd::Failed(StreamFailure::Capture))
+    );
+}

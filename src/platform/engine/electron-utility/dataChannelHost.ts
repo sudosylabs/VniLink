@@ -153,8 +153,9 @@ export class DataChannelHost {
 			}
 			if (message.type === 'mediaStatus' && this.request.kind === 'video' && Number.isSafeInteger(message.id) && Number(message.id) > 0
 				&& Number.isSafeInteger(message.decodeUs) && Number(message.decodeUs) >= 0 && Number(message.decodeUs) <= 0xffffffff) {
+				// Null once the picture stopped: its last packet says why.
 				const status: unknown = JSON.parse(this.native.mediaStatus(Number(message.decodeUs)));
-				if (!isDesktopMediaStatus(status)) {
+				if (status !== null && !isDesktopMediaStatus(status)) {
 					throw new Error('Invalid desktop media status');
 				}
 				this.port.postMessage({ type: 'mediaStatus', id: message.id, status });
@@ -275,6 +276,11 @@ export class DataChannelHost {
 					return;
 				}
 				this.ended = packet.kind === 'exited' || packet.kind === 'failed';
+				// A stopped picture's pointer stops with it.
+				if (this.ended && this.cursorTimer) {
+					clearInterval(this.cursorTimer);
+					this.cursorTimer = undefined;
+				}
 				this.sequence++;
 				this.sentAt = performance.now();
 				this.port.postMessage({

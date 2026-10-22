@@ -5,7 +5,7 @@ import { record, videoCodecNames, type DisplayInfo, type EngineCommand, type Vid
 import type { CameraDecoder, CameraDecoderFactory } from '../camera/engineCameraStream.js';
 import { avcCodec } from '../camera/h264.js';
 import { DesktopLatency } from './desktopLatency.js';
-import type { DesktopEnd, DesktopInput, DesktopPicture, DesktopPointerShape, DesktopPointer, DesktopStats, IDesktopSession } from './remoteDesktopService.js';
+import { engineDesktopEnds, type DesktopEnd, type DesktopInput, type DesktopPicture, type DesktopPointerShape, type DesktopPointer, type DesktopStats, type IDesktopSession } from './remoteDesktopService.js';
 
 /** Pictures allowed to wait for the decoder before the channel stops acknowledging. */
 const decodeQueueLimit = 2;
@@ -170,6 +170,15 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 			return;
 		}
 		const fields: unknown = JSON.parse(packet.metadata);
+		// The channel's last packet says why the picture stopped.
+		if (packet.kind === 'exited') {
+			const end = record(fields) && Object.keys(fields).length === 1 ? engineDesktopEnds.find(known => known === fields.end) : undefined;
+			if (!end) {
+				throw new Error('Invalid desktop end');
+			}
+			this.end(end);
+			return;
+		}
 		if (packet.kind !== 'video' || !packet.data || !record(fields) || typeof fields.codec !== 'string' || typeof fields.keyframe !== 'boolean'
 			|| typeof fields.timestampUs !== 'string' || !/^\d{1,20}$/.test(fields.timestampUs)
 			|| typeof fields.displayId !== 'string' || typeof fields.revision !== 'string'
@@ -243,9 +252,9 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 		return this.ended;
 	}
 
-	/** The channel failed or stopped answering. */
+	/** The channel failed or stopped answering without saying why. */
 	public lost(): void {
-		this.end('lost');
+		this.end('linkLost');
 	}
 
 	private deliver(frame: VideoFrame): void {

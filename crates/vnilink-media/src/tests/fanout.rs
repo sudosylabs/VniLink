@@ -920,3 +920,102 @@ fn an_unchanged_screen_is_encoded_again_while_a_keyframe_is_refined() {
     reader.join().unwrap();
     worker.join().unwrap().unwrap();
 }
+
+/// An encoder that works for `good` pictures, then fails every one.
+struct FailsAfter {
+    good: usize,
+}
+
+impl VideoEncoder for FailsAfter {
+    fn encode(&mut self, _frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
+        if self.good == 0 {
+            return Err(Error::EncodeRejected("the test encoder stopped"));
+        }
+        self.good -= 1;
+        sample(params.force_keyframe)
+    }
+}
+
+/// An encoder that fails mid-stream ends that viewer's picture, and the
+/// viewer learns it was the host's encoder, not the link.
+#[test]
+fn an_encoder_failing_mid_stream_tells_the_viewer_why() {
+    let host = Arc::new(boot());
+    let viewer = boot();
+    host.set_capture(Box::new(Source {
+        idle: false,
+        frames: Arc::new(AtomicUsize::new(0)),
+        thread: Mutex::new(None),
+        wrong_thread: Arc::new(AtomicBool::new(false)),
+    }))
+    .unwrap();
+    for core in [&host, &viewer] {
+        core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
+            .unwrap();
+    }
+    pair(&host, &viewer);
+    host.start_hosting().unwrap();
+    let parent = viewer.begin_connect_services(&host.endpoint_id()).unwrap();
+    wait_active(&viewer, parent.id);
+    let parent = viewer.controller_session(parent.id).unwrap();
+    let owner = viewer
+        .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
+        .unwrap();
+    let handle = viewer
+        .open_desktop_service(owner.id, owner.generation)
+        .unwrap();
+    let frames = handle.subscribe_video().unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker_stop = Arc::clone(&stop);
+    let worker_host = Arc::clone(&host);
+    let worker = std::thread::spawn(move || {
+        crate::serve_shared_capture(
+            &Source {
+                idle: false,
+                frames: Arc::new(AtomicUsize::new(0)),
+                thread: Mutex::new(None),
+                wrong_thread: Arc::new(AtomicBool::new(false)),
+            },
+            &worker_host,
+            &worker_stop,
+            false,
+            0,
+            |_| {},
+            |_, _, _, _, _| Ok(FailsAfter { good: 5 }),
+        )
+    });
+    frames
+        .recv_timeout(Duration::from_secs(5))
+        .expect("a picture before the encoder fails");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while handle.end().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "the viewer never learned why the picture stopped"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        handle.end(),
+        Some(vnilink::DesktopEnd::Host(vnilink::StreamEnd::Failed(
+            vnilink::StreamFailure::Encoder
+        )))
+    );
+    let hosted = host
+        .hosted_services()
+        .unwrap()
+        .into_iter()
+        .find(|service| service.kind == ServiceKind::Desktop)
+        .map(|service| service.phase);
+    // The record may already be gone; while it lasts it names the failure.
+    if let Some(phase) = hosted {
+        assert_eq!(
+            phase,
+            vnilink::ServicePhase::Closed(vnilink::CloseCause::Failed(
+                vnilink::StreamFailure::Encoder
+            ))
+        );
+    }
+    stop.store(true, Ordering::Relaxed);
+    worker.join().unwrap().unwrap();
+}

@@ -228,3 +228,18 @@ test('the engine hears how fast the decoder works, not how long a picture waits 
 	await session.stats();
 	assert(reported[1] >= 8_000 && reported[1] < 40_000, `decoder time per picture: ${String(reported[1])} µs`);
 });
+
+test('the channel\'s last packet says why the picture stopped, and an unknown reason is refused', async () => {
+	for (const end of ['hostEncoderFailed', 'hostPermission', 'relayUnreachable', 'peerClosed', 'revoked']) {
+		const { session, ends } = fixture();
+		await session.consume({ type: 'data', sequence: 1, kind: 'exited', metadata: JSON.stringify({ end }) });
+		session.lost();
+		assert.deepEqual(ends, [end], 'the first reason stands');
+	}
+	const unknown = fixture();
+	await assert.rejects(unknown.session.consume({ type: 'data', sequence: 1, kind: 'exited', metadata: JSON.stringify({ end: 'cantShow' }) }), /Invalid desktop end/);
+	await assert.rejects(unknown.session.consume({ type: 'data', sequence: 1, kind: 'exited', metadata: JSON.stringify({ end: 'linkLost', extra: 1 }) }), /Invalid desktop end/);
+	const silent = fixture();
+	silent.session.lost();
+	assert.deepEqual(silent.ends, ['linkLost'], 'a channel that fails without a reason is a lost connection');
+});

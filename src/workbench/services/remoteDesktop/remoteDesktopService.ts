@@ -43,12 +43,33 @@ export type DesktopFailure =
 	/** Its screen didn't start. */
 	| 'failed';
 
-/** Why a running session stopped. */
+/** Why a running session stopped: the other computer's word when it gave one, otherwise what the engine saw. */
 export type DesktopEnd =
-	/** The connection ended, or the other computer stopped sending its screen. */
-	| 'lost'
+	/** The connection was lost, or this window's channel to the engine stopped. */
+	| 'linkLost'
+	/** The connection was lost while it went through a relay. */
+	| 'relayUnreachable'
+	/** The other computer finished the stream without saying why. */
+	| 'peerClosed'
+	/** Its encoder failed. */
+	| 'hostEncoderFailed'
+	/** Its screen capture stopped. */
+	| 'hostCaptureFailed'
+	/** Its system withdrew VniLink's permission to record the screen. */
+	| 'hostPermission'
+	/** The display being shown went away. */
+	| 'displayGone'
+	/** Its user stopped sharing, or closed the connection. */
+	| 'hostStopped'
+	/** VniLink quit on it. */
+	| 'hostShutdown'
+	/** Its user withdrew this computer's permission. */
+	| 'revoked'
 	/** This computer can't decode the picture. */
 	| 'cantShow';
+
+/** The ends the engine reports in a picture channel's last packet. */
+export const engineDesktopEnds: readonly DesktopEnd[] = ['linkLost', 'relayUnreachable', 'peerClosed', 'hostEncoderFailed', 'hostCaptureFailed', 'hostPermission', 'displayGone', 'hostStopped', 'hostShutdown', 'revoked'];
 
 /** One picture of a display on the other computer, at the topology revision it was taken with. */
 export interface DesktopPicture {

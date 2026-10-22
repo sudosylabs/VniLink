@@ -320,12 +320,25 @@ impl Core {
         })
     }
     pub fn close_hosted_service(&self, id: u64, generation: u64) -> Result<(), Error> {
+        self.end_hosted_service(id, generation, CloseCause::OwnerClose)
+    }
+    /// Closes a hosted service because this computer's own producer for it
+    /// failed. The viewer is told what failed; see [`crate::StreamEnd`].
+    pub fn fail_hosted_service(
+        &self,
+        id: u64,
+        generation: u64,
+        failure: crate::StreamFailure,
+    ) -> Result<(), Error> {
+        self.end_hosted_service(id, generation, CloseCause::Failed(failure))
+    }
+    fn end_hosted_service(&self, id: u64, generation: u64, cause: CloseCause) -> Result<(), Error> {
         let mut state = self.alive_state()?;
         let record = state.hosted_services.get_mut(&id).ok_or(Error::NoSession)?;
         if record.info.generation != generation {
             return Err(Error::StaleSession);
         }
-        if record.change(generation, ServicePhase::Closed(CloseCause::OwnerClose)) {
+        if record.change(generation, ServicePhase::Closed(cause)) {
             self.shared.events.publish(CoreEvent::HostedServiceChanged {
                 service: record.info.clone(),
             });

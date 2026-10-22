@@ -149,11 +149,11 @@ export class DataChannelClient {
 				return;
 			}
 			if (record(message) && message.type === 'mediaStatus') {
-				if (typeof message.id !== 'number' || !isDesktopMediaStatus(message.status)) {
+				if (typeof message.id !== 'number' || (message.status !== null && !isDesktopMediaStatus(message.status))) {
 					throw new Error('Invalid desktop media status');
 				}
 				if (this.statusPending?.id === message.id) {
-					this.statusPending.resolve(message.status);
+					this.statusPending.resolve(message.status ?? undefined);
 					this.statusPending = undefined;
 				}
 				return;

@@ -71,6 +71,27 @@ pub enum FfiCloseCause {
     Shutdown,
     PeerClose,
     IdleExpired,
+    Failed(FfiStreamFailure),
+}
+
+/// See [`vnilink::StreamFailure`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiStreamFailure {
+    Encoder,
+    Capture,
+    Permission,
+    DisplayGone,
+}
+
+impl From<vnilink::StreamFailure> for FfiStreamFailure {
+    fn from(value: vnilink::StreamFailure) -> Self {
+        match value {
+            vnilink::StreamFailure::Encoder => Self::Encoder,
+            vnilink::StreamFailure::Capture => Self::Capture,
+            vnilink::StreamFailure::Permission => Self::Permission,
+            vnilink::StreamFailure::DisplayGone => Self::DisplayGone,
+        }
+    }
 }
 
 impl From<vnilink::CloseCause> for FfiCloseCause {
@@ -84,6 +105,7 @@ impl From<vnilink::CloseCause> for FfiCloseCause {
             vnilink::CloseCause::Shutdown => Self::Shutdown,
             vnilink::CloseCause::PeerClose => Self::PeerClose,
             vnilink::CloseCause::IdleExpired => Self::IdleExpired,
+            vnilink::CloseCause::Failed(failure) => Self::Failed(failure.into()),
         }
     }
 }
@@ -1020,7 +1042,44 @@ impl From<vnilink::DesktopMediaStatus> for FfiDesktopMediaStatus {
     }
 }
 
+/// Why a desktop picture stopped; see [`vnilink::DesktopEnd`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiDesktopEnd {
+    HostEncoderFailed,
+    HostCaptureFailed,
+    HostPermission,
+    DisplayGone,
+    HostStopped,
+    HostShutdown,
+    Revoked,
+    PeerClosed,
+    LinkLost,
+    RelayUnreachable,
+}
+impl From<vnilink::DesktopEnd> for FfiDesktopEnd {
+    fn from(end: vnilink::DesktopEnd) -> Self {
+        use vnilink::{DesktopEnd as End, StreamEnd as Host, StreamFailure as Failed};
+        match end {
+            End::Host(Host::Failed(Failed::Encoder)) => Self::HostEncoderFailed,
+            End::Host(Host::Failed(Failed::Capture)) => Self::HostCaptureFailed,
+            End::Host(Host::Failed(Failed::Permission)) => Self::HostPermission,
+            End::Host(Host::Failed(Failed::DisplayGone)) => Self::DisplayGone,
+            End::Host(Host::Stopped) => Self::HostStopped,
+            End::Host(Host::Shutdown) => Self::HostShutdown,
+            End::Host(Host::Revoked) => Self::Revoked,
+            End::PeerClosed => Self::PeerClosed,
+            End::LinkLost => Self::LinkLost,
+            End::RelayUnreachable => Self::RelayUnreachable,
+        }
+    }
+}
+
 impl DesktopService {
+    /// Why the picture stopped, once it did; readable after the service
+    /// closed. `None` while it lives or when this computer closed it.
+    pub fn end(&self) -> Option<FfiDesktopEnd> {
+        self.inner.end().map(Into::into)
+    }
     pub fn report_decode_duration(&self, microseconds: u64) -> Result<(), FfiError> {
         self.inner
             .report_decode_duration(microseconds)
