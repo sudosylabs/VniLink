@@ -558,6 +558,10 @@ impl vnilink::HostCapture for MacCaptureDescriptor {
     fn separate_cursor(&self) -> bool {
         self.cursor
     }
+    /// The shared capture makes them ([`vnilink_media::StillEncoder`]).
+    fn stills(&self) -> bool {
+        true
+    }
 }
 
 impl MacHost {

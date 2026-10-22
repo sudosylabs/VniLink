@@ -2582,12 +2582,15 @@ async fn host_send(
         let notified = desktop.video.notified();
         tokio::pin!(notified);
         let frames = desktop.video.drain();
-        let newest = frames.len();
+        let last_change = frames
+            .iter()
+            .rposition(|frame| frame.role == crate::FrameRole::Changed);
         for (index, frame) in frames.into_iter().enumerate() {
-            // A still picture goes only as the newest picture, and never
-            // while the stream owes a keyframe.
+            // A still picture is stale once a changed picture follows it,
+            // and never goes while the stream owes a keyframe.
             let still = frame.role == crate::FrameRole::Still;
-            if still && (index + 1 != newest || gate.awaiting) {
+            let changed_after = last_change.is_some_and(|at| at > index);
+            if still && (changed_after || gate.awaiting) {
                 desktop.counters.still_dropped();
                 continue;
             }

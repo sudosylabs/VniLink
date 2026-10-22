@@ -26,5 +26,7 @@ mod rate_tests;
 mod recording_segments_tests;
 #[path = "tests/recovery.rs"]
 mod recovery_tests;
+#[path = "tests/still.rs"]
+mod still_tests;
 #[path = "tests/timecode.rs"]
 mod timecode_tests;

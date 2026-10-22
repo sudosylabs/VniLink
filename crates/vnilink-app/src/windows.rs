@@ -26,6 +26,10 @@ impl vnilink::HostCapture for WindowsCaptureDescriptor {
     fn separate_cursor(&self) -> bool {
         true
     }
+    /// The shared capture makes them ([`vnilink_media::StillEncoder`]).
+    fn stills(&self) -> bool {
+        true
+    }
 }
 
 /// A running Windows screen host. Dropping it stops the worker.

@@ -1023,3 +1023,108 @@ fn an_encoder_failing_mid_stream_tells_the_viewer_why() {
     stop.store(true, Ordering::Relaxed);
     worker.join().unwrap().unwrap();
 }
+
+/// A host whose capture sends still pictures.
+struct StillsCapture;
+
+impl vnilink::HostCapture for StillsCapture {
+    fn monitor(&self) -> (u16, u16) {
+        (64, 64)
+    }
+    fn stills(&self) -> bool {
+        true
+    }
+}
+
+/// The roles of the pictures a viewer receives over `watch` of an
+/// unchanged screen, from a host that sends stills, to a window that shows
+/// them when `shows`.
+fn roles_of_an_unchanged_screen(shows: bool, watch: Duration) -> Vec<vnilink::FrameRole> {
+    let host = Arc::new(boot());
+    let viewer = boot();
+    host.set_capture(Box::new(StillsCapture)).unwrap();
+    for core in [&host, &viewer] {
+        core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
+            .unwrap();
+    }
+    viewer
+        .set_window_decoders(vec![
+            vnilink::WindowDecoder {
+                codec: vnilink::VideoCodec::H264,
+                hardware: false,
+                chroma444: false,
+            },
+            vnilink::WindowDecoder {
+                codec: vnilink::VideoCodec::Av1,
+                hardware: false,
+                chroma444: shows,
+            },
+        ])
+        .unwrap();
+    host.set_topology(9, &[twin(7, 0)]).unwrap();
+    pair(&host, &viewer);
+    host.start_hosting().unwrap();
+    let parent = viewer.begin_connect_services(&host.endpoint_id()).unwrap();
+    wait_active(&viewer, parent.id);
+    let parent = viewer.controller_session(parent.id).unwrap();
+    let owner = viewer
+        .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
+        .unwrap();
+    let handle = viewer
+        .open_desktop_service(owner.id, owner.generation)
+        .unwrap();
+    let frames = handle.subscribe_video().unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (worker_stop, worker_host) = (Arc::clone(&stop), Arc::clone(&host));
+    let worker = std::thread::spawn(move || {
+        crate::serve_shared_capture(
+            &Still { at: Instant::now() },
+            &worker_host,
+            &worker_stop,
+            false,
+            7,
+            |_| {},
+            move |_, _, _, _, _| {
+                Ok(Encoder {
+                    slow: false,
+                    encodes: Arc::new(AtomicUsize::new(0)),
+                    opens: Arc::new(AtomicUsize::new(0)),
+                })
+            },
+        )
+    });
+    let until = Instant::now() + watch;
+    let mut roles = Vec::new();
+    while Instant::now() < until {
+        if let Some(frame) = frames.recv_timeout(Duration::from_millis(50)) {
+            if frame.role == vnilink::FrameRole::Still {
+                assert_eq!(frame.display_id, 7, "a still is stamped like any picture");
+            }
+            roles.push(frame.role);
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    worker.join().unwrap().unwrap();
+    roles
+}
+
+/// An unchanged screen brings one still picture once it stayed so for
+/// [`crate::STILL_AFTER`], and no other; the pictures of it the stream
+/// sends meanwhile say the screen is unchanged.
+#[test]
+fn an_unchanged_screen_brings_one_still_picture() {
+    use vnilink::FrameRole::{Changed, Still, Unchanged};
+    let watch = crate::STILL_AFTER + Duration::from_millis(2_500);
+    let roles = roles_of_an_unchanged_screen(true, watch);
+    assert_eq!(roles.first(), Some(&Changed), "{roles:?}");
+    assert_eq!(
+        roles.iter().filter(|role| **role == Still).count(),
+        1,
+        "{roles:?}"
+    );
+    assert!(roles[1..].iter().all(|role| *role != Changed), "{roles:?}");
+    assert!(roles.contains(&Unchanged), "{roles:?}");
+    // A window that cannot show them is sent none.
+    let roles = roles_of_an_unchanged_screen(false, watch);
+    assert!(!roles.contains(&Still), "{roles:?}");
+}

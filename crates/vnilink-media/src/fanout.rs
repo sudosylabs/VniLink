@@ -18,6 +18,7 @@ use crate::error::{Error, PublishError};
 use crate::frame::{encoded_size, RawFrame};
 use crate::host::HostSession;
 use crate::pump::{FrameSink, VideoEncoder};
+use crate::still::{StillWorker, STILL_AFTER};
 use crate::FrameSource;
 
 #[derive(Default)]
@@ -27,6 +28,8 @@ struct Picture {
     cursor: Option<CursorState>,
     capture_us: u64,
     captured_at: Option<Instant>,
+    /// The source attested the same screen as the picture before.
+    unchanged: bool,
 }
 struct PictureSlot {
     picture: Mutex<Picture>,
@@ -45,6 +48,7 @@ impl PictureSlot {
         cursor: Option<CursorState>,
         capture_us: u64,
         captured_at: Instant,
+        unchanged: bool,
     ) {
         let mut picture = self
             .picture
@@ -54,6 +58,7 @@ impl PictureSlot {
         picture.cursor = cursor;
         picture.capture_us = capture_us;
         picture.captured_at = Some(captured_at);
+        picture.unchanged = unchanged;
         picture.generation = picture.generation.wrapping_add(1).max(1);
         drop(picture);
         self.wake.notify_all();
@@ -85,6 +90,7 @@ impl PictureSlot {
             cursor: picture.cursor.clone(),
             capture_us: picture.capture_us,
             captured_at: picture.captured_at,
+            unchanged: picture.unchanged,
         })
     }
     /// The newest picture, whether or not this consumer has seen it.
@@ -99,6 +105,7 @@ impl PictureSlot {
             cursor: picture.cursor.clone(),
             capture_us: picture.capture_us,
             captured_at: picture.captured_at,
+            unchanged: picture.unchanged,
         })
     }
     fn poke(&self) {
@@ -113,6 +120,7 @@ struct Sample {
     cursor: Option<CursorState>,
     capture_us: u64,
     captured_at: Option<Instant>,
+    unchanged: bool,
 }
 
 /// How often an unchanged picture is still handed on, so a viewer sees the
@@ -176,6 +184,8 @@ struct TargetSink<'a> {
     capture_revision: Arc<AtomicU64>,
     /// When the picture being encoded was captured.
     captured_at: Option<Instant>,
+    /// The picture being encoded shows the same screen as the one before.
+    unchanged: bool,
 }
 
 impl FrameSink for TargetSink<'_> {
@@ -193,6 +203,9 @@ impl FrameSink for TargetSink<'_> {
         }
         if frame.timing.captured_at.is_none() {
             frame.timing.captured_at = self.captured_at;
+        }
+        if self.unchanged {
+            frame = frame.unchanged();
         }
         // Attest the revision the pixels were captured for, read live:
         // a supervisor re-attesting an unchanged capture updates the
@@ -236,6 +249,68 @@ fn fail_target(core: &Core, target: &VideoTarget, failure: StreamFailure) {
     }
 }
 
+/// One target's still pictures: asked for once the screen has stayed the
+/// same for [`STILL_AFTER`], once per still period, and published only if
+/// the screen did not change meanwhile.
+struct Stills {
+    /// The viewer agreed to still pictures.
+    agreed: bool,
+    worker: Option<StillWorker>,
+    /// Changes seen, and when the last came.
+    change: u64,
+    changed_at: Instant,
+    /// The change a still was last asked for after.
+    asked: Option<u64>,
+}
+
+impl Stills {
+    fn new() -> Self {
+        Self {
+            agreed: false,
+            worker: None,
+            change: 0,
+            changed_at: Instant::now(),
+            asked: None,
+        }
+    }
+
+    fn changed(&mut self) {
+        self.change = self.change.wrapping_add(1);
+        self.changed_at = Instant::now();
+    }
+
+    /// Whether to ask for a still now: agreed, still for long enough, not
+    /// asked for since the last change, and no keyframe owed.
+    fn due(&self, keyframe_pending: bool) -> bool {
+        self.agreed
+            && !keyframe_pending
+            && self.asked != Some(self.change)
+            && self.changed_at.elapsed() >= STILL_AFTER
+    }
+
+    fn make(&mut self, frame: RawFrame, budget: usize) {
+        if self.worker.is_none() {
+            self.worker = StillWorker::new().ok();
+        }
+        if self
+            .worker
+            .as_ref()
+            .is_some_and(|worker| worker.make(self.change, frame, budget))
+        {
+            self.asked = Some(self.change);
+        }
+    }
+
+    /// A still made since, unless the screen changed after it was asked for.
+    fn made(&mut self) -> Option<vnilink::EncodedFrame> {
+        let made = self.worker.as_ref()?.take()?;
+        if made.change != self.change {
+            return None;
+        }
+        vnilink::EncodedFrame::still(made.timestamp_us, made.picture?).ok()
+    }
+}
+
 fn consume<E, F>(
     core: &Core,
     slot: &PictureSlot,
@@ -271,12 +346,14 @@ fn consume<E, F>(
         capture_display,
         capture_revision,
         captured_at: None,
+        unchanged: false,
     };
     if target.service {
         let _ = core.report_desktop_encoder(target.id, target.generation, session.implementation());
     }
     let mut applied_quality = target.quality;
     let mut seen = 0u64;
+    let mut stills = Stills::new();
     while !control.cancel.load(Ordering::Acquire) {
         let reopens = session.reopens();
         if let Some(quality) = control
@@ -299,20 +376,22 @@ fn consume<E, F>(
         }
         if target.service {
             match core.hosted_desktop_info(target.id, target.generation) {
-                Ok(info) if info.quality != applied_quality => {
-                    if session
-                        .observe(&CoreEvent::QualityUpdated {
-                            id: target.id,
-                            quality: info.quality,
-                        })
-                        .is_err()
-                    {
-                        fail_target(core, &target, StreamFailure::Encoder);
-                        return;
+                Ok(info) => {
+                    stills.agreed = info.stills;
+                    if info.quality != applied_quality {
+                        if session
+                            .observe(&CoreEvent::QualityUpdated {
+                                id: target.id,
+                                quality: info.quality,
+                            })
+                            .is_err()
+                        {
+                            fail_target(core, &target, StreamFailure::Encoder);
+                            return;
+                        }
+                        applied_quality = info.quality;
                     }
-                    applied_quality = info.quality;
                 }
-                Ok(_) => {}
                 // The owner ended, or the core shut down: nobody to tell.
                 Err(_) => return,
             }
@@ -334,6 +413,29 @@ fn consume<E, F>(
             let _ =
                 core.report_desktop_encoder(target.id, target.generation, session.implementation());
         }
+        if let Some(still) = stills.made() {
+            sink.captured_at = None;
+            sink.unchanged = false;
+            match sink.publish_frame(target.id, still) {
+                Err(error) if ended(&error) => return,
+                // Left out or refused: the stream goes on without it.
+                _ => {}
+            }
+        }
+        if stills.due(session.keyframe_pending()) {
+            if let Some(sample) = slot.latest() {
+                let frame = match (&sample.cursor, target.separate_cursor) {
+                    (Some(cursor), false) => composite(&sample.frame, cursor).ok(),
+                    _ => Some(sample.frame),
+                };
+                if let Some(frame) = frame {
+                    stills.make(
+                        frame,
+                        vnilink::still_budget(applied_quality.max_bitrate_kbps),
+                    );
+                }
+            }
+        }
         // On an unchanged screen no new picture comes: a keyframe still
         // owed is made from the last one, and after a keyframe the last one
         // is encoded again, stamped now, for the encoder to refine it.
@@ -344,6 +446,7 @@ fn consume<E, F>(
                     .then(|| slot.latest())
                     .flatten()
                     .map(|mut sample| {
+                        sample.unchanged = true;
                         if let Some(at) = sample.captured_at {
                             let since = u64::try_from(at.elapsed().as_micros()).unwrap_or(u64::MAX);
                             let stamp = sample.frame.timestamp_us().saturating_add(since);
@@ -358,12 +461,17 @@ fn consume<E, F>(
             cursor,
             capture_us,
             captured_at,
+            unchanged,
         }) = next
         else {
             continue;
         };
         seen = generation;
         sink.captured_at = captured_at;
+        sink.unchanged = unchanged;
+        if !unchanged {
+            stills.changed();
+        }
         if frame.width() != capture_size.0 || frame.height() != capture_size.1 {
             // The source changed size. Leave the target up so the supervisor
             // can open a fresh encoder; do not close the peer.
@@ -630,6 +738,7 @@ where
                     cursor,
                     captured_at.elapsed().as_micros().min(5_000_000) as u64,
                     captured_at,
+                    unchanged,
                 );
             }
             // Always wait out the period: a slow read is no reason to read
@@ -707,6 +816,7 @@ mod coherent_slot_tests {
                     }),
                     sequence,
                     origin + Duration::from_micros(sequence),
+                    false,
                 );
             }
         });
@@ -720,6 +830,7 @@ mod coherent_slot_tests {
                 cursor,
                 capture_us,
                 captured_at,
+                ..
             }) = slot.wait_newer(seen, Duration::from_millis(20))
             {
                 assert_eq!(generation, frame.timestamp_us());

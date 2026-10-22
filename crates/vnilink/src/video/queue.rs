@@ -25,7 +25,7 @@ pub(crate) enum VideoPush {
     Queued,
     StillNeedsKeyframe,
     KeyframeNeeded,
-    /// A still picture was left out: frames were waiting before it.
+    /// A still picture was left out: the queue was full.
     Skipped,
 }
 
@@ -66,12 +66,12 @@ impl VideoQueue {
         self.received_bytes = self
             .received_bytes
             .saturating_add(frame.payload.len() as u64);
-        // A still picture waits behind nothing and owes nothing: it is queued
-        // only into an empty queue, and neither answers nor clears the
-        // keyframe the stream waits for. The stream drops it as it would a
-        // picture it replaces, without counting it.
+        // A still picture owes nothing: it neither answers nor clears the
+        // keyframe the stream waits for, and a full queue leaves it out
+        // rather than drop the stream's frames. A keyframe after it replaces
+        // it uncounted. The host sends it only as the newest picture.
         if frame.role == FrameRole::Still {
-            if !self.frames.is_empty() {
+            if self.frames.len() >= VIDEO_QUEUE {
                 return VideoPush::Skipped;
             }
             self.frames.push_back((frame, now));

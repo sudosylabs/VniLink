@@ -154,19 +154,24 @@ fn a_still_is_refused_where_it_was_not_agreed() {
 }
 
 #[test]
-fn a_still_waits_behind_nothing_and_owes_nothing() {
+fn a_still_waits_in_turn_and_owes_nothing() {
     let picture = |keyframe, at| EncodedFrame::h264(keyframe, at, vec![1]).unwrap();
     let still = |at| EncodedFrame::still(at, vec![2]).unwrap();
     let mut queue = VideoQueue::new();
-    assert_eq!(queue.push(still(1)), VideoPush::Queued, "an empty queue");
-    assert_eq!(queue.push(picture(false, 2)), VideoPush::Queued);
+    assert_eq!(queue.push(picture(true, 1)), VideoPush::Queued);
     assert_eq!(
-        queue.push(still(3)),
-        VideoPush::Skipped,
-        "frames are waiting"
+        queue.push(still(2)),
+        VideoPush::Queued,
+        "behind the picture before it"
     );
+    assert_eq!(queue.pop().unwrap().timestamp_us, 1);
     assert_eq!(queue.pop().unwrap().role, FrameRole::Still);
-    assert_eq!(queue.pop().unwrap().timestamp_us, 2);
+    // A full queue leaves a still out rather than drop the stream's frames.
+    for at in 0..crate::video::VIDEO_QUEUE as u64 {
+        queue.push(picture(at == 0, 10 + at));
+    }
+    assert_eq!(queue.push(still(30)), VideoPush::Skipped);
+    while queue.pop().is_some() {}
     // A loss leaves the stream waiting for a keyframe; a still neither
     // answers it nor lets the predicted frames through.
     queue.lost();
@@ -185,8 +190,8 @@ fn a_still_is_shown_but_never_recorded() {
     let inbox = VideoInbox::new();
     let tap = inbox.recording_tap().unwrap();
     inbox.push(EncodedFrame::h264(true, 1, vec![1]).unwrap());
-    assert_eq!(inbox.try_pop().unwrap().timestamp_us, 1);
     inbox.push(EncodedFrame::still(2, vec![2]).unwrap());
+    assert_eq!(inbox.try_pop().unwrap().timestamp_us, 1);
     assert_eq!(inbox.try_pop().unwrap().role, FrameRole::Still);
     let recorded: Vec<_> = std::iter::from_fn(|| tap.try_recv())
         .map(|frame| frame.timestamp_us)

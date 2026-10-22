@@ -155,7 +155,7 @@ pub fn bgra_to_nv12(frame: &RawFrame) -> Result<Nv12, Error> {
     })
 }
 
-fn yuv(red: u8, green: u8, blue: u8) -> (u8, u8, u8) {
+pub(crate) fn yuv(red: u8, green: u8, blue: u8) -> (u8, u8, u8) {
     let red = i32::from(red);
     let green = i32::from(green);
     let blue = i32::from(blue);

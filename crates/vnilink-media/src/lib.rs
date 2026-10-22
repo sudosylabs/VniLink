@@ -30,6 +30,8 @@ mod pixels;
 pub use pixels::{NativePicture, Pixels};
 mod pump;
 mod rate;
+mod still;
+pub use still::{StillEncoder, STILL_AFTER};
 mod recording;
 mod recording_format;
 mod recording_segments;
