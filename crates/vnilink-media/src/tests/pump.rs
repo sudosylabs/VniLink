@@ -438,3 +438,70 @@ fn publish_error_displays_the_media_reason() {
         "VA-API H.264 is not available on this system"
     );
 }
+
+/// A platform picture that counts how often its pixels are copied out.
+struct Held {
+    size: (u16, u16),
+    reads: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl crate::NativePicture for Held {
+    fn size(&self) -> (u16, u16) {
+        self.size
+    }
+
+    fn read_back(&self) -> Result<Vec<u8>, Error> {
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(vec![
+            9;
+            usize::from(self.size.0) * usize::from(self.size.1) * 4
+        ])
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// A [`Scripted`] encoder that reads platform pictures in place.
+struct InPlace(Scripted);
+
+impl VideoEncoder for InPlace {
+    fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
+        self.0.encode(frame, params)
+    }
+
+    fn scales_native(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn a_platform_picture_reaches_an_encoder_that_scales_it_unread() {
+    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let held = |timestamp| {
+        RawFrame::native(
+            timestamp,
+            Box::new(Held {
+                size: (160, 120),
+                reads: Arc::clone(&reads),
+            }),
+        )
+        .unwrap()
+    };
+    let (encoder, log) = Scripted::honoring();
+    let mut host = HostVideo::new(quality(30, 80, 60), InPlace(encoder));
+    encoded(host.push(&held(0)).unwrap());
+    // Handed over at its own size, never copied out.
+    assert_eq!(log.lock().unwrap().sizes, vec![(160, 120)]);
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 0);
+    // An encoder that does not gets it read back once and scaled.
+    let (encoder, log) = Scripted::honoring();
+    let mut host = HostVideo::new(quality(30, 80, 60), encoder);
+    let frame = held(0);
+    encoded(host.push(&frame).unwrap());
+    assert_eq!(log.lock().unwrap().sizes, vec![(80, 60)]);
+    assert_eq!(frame.pixels()[0], 9);
+    assert_eq!(frame.clone().pixels()[0], 9);
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+}

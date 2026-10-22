@@ -107,10 +107,15 @@ impl ScreenPlan {
     }
 
     /// BGRA, one monitor, cursor hidden unless the plan asks for it.
+    ///
+    /// Five buffers in the stream's queue: pictures are held in their
+    /// IOSurfaces (the newest in the channel, the shared capture's latest,
+    /// one being encoded), and the stream still needs free ones to fill.
     #[cfg(target_os = "macos")]
     pub fn configuration(&self) -> SCStreamConfiguration {
         let interval = CMTime::new(1, i32::from(self.frame_rate));
         SCStreamConfiguration::new()
+            .with_queue_depth(5)
             .with_width(u32::from(self.width))
             .with_height(u32::from(self.height))
             .with_pixel_format(PixelFormat::BGRA)
@@ -139,15 +144,20 @@ impl SCStreamOutputTrait for Handler {
         let captured_at = sample
             .display_time()
             .and_then(crate::clock::host_time_instant);
-        match crate::pixels::raw_frame_from_pixel_buffer(&pixel_buffer, 0) {
-            Ok(frame) => self.channel.push(ChannelSlot {
-                width: frame.width(),
-                height: frame.height(),
-                stride: usize::from(frame.width()) * 4,
-                // The one copy out of the IOSurface, shared from here on.
-                bytes: frame.shared_pixels(),
-                captured_at,
-            }),
+        // The picture stays in its IOSurface: VideoToolbox encodes it there,
+        // and whatever else reads it copies it out once.
+        match crate::pixels::MacPicture::new(pixel_buffer) {
+            Ok(picture) => {
+                use vnilink_media::NativePicture;
+                let (width, height) = picture.size();
+                self.channel.push(ChannelSlot {
+                    width,
+                    height,
+                    stride: usize::from(width) * 4,
+                    bytes: vnilink_media::Pixels::native(Box::new(picture)),
+                    captured_at,
+                });
+            }
             Err(Error::Unsupported(reason)) => self.channel.fail(reason),
             Err(_) => self
                 .channel
@@ -377,7 +387,7 @@ mod idle_tests {
             width: 2,
             height: 2,
             stride: 8,
-            bytes: Arc::new(vec![19; 16]),
+            bytes: vec![19; 16].into(),
             captured_at: Some(shown),
         });
         let first = poll_channel(&channel, 2).unwrap().unwrap();

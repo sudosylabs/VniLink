@@ -589,7 +589,11 @@ where
                 }
                 Err(error) => break Err(error.into()),
             };
-            if let Some(at) = capture.attested_at() {
+            // Reading a platform-held picture's pixels copies it: only when wanted.
+            if let Some(at) = capture
+                .attested_at()
+                .filter(|at| core.wants_attested_picture(*at))
+            {
                 core.offer_attested_picture(
                     at,
                     frame.width(),

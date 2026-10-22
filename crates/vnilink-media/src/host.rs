@@ -309,6 +309,10 @@ fn offer_snapshot(core: &Core, capture: &impl FrameSource, frame: &RawFrame) {
     let Some(at) = capture.attested_at() else {
         return;
     };
+    // Reading a platform-held picture's pixels copies it: only when wanted.
+    if !core.wants_attested_picture(at) {
+        return;
+    }
     core.offer_attested_picture(
         at,
         frame.width(),

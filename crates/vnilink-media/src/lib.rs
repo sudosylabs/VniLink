@@ -26,6 +26,8 @@ mod fanout;
 mod frame;
 mod host;
 mod nv12;
+mod pixels;
+pub use pixels::{NativePicture, Pixels};
 mod pump;
 mod rate;
 mod recording;

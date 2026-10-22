@@ -897,3 +897,84 @@ fn chroma_quality() {
         }
     }
 }
+
+/// A picture in an IOSurface-backed buffer, as ScreenCaptureKit delivers one.
+fn captured(frame: &vnilink_media::RawFrame) -> vnilink_media::RawFrame {
+    let surface = apple_cf::iosurface::IOSurface::create(
+        usize::from(frame.width()),
+        usize::from(frame.height()),
+        0x4247_5241,
+        4,
+    )
+    .unwrap();
+    {
+        let mut guard = surface.lock_read_write().unwrap();
+        let stride = guard.bytes_per_row();
+        let bytes = unsafe { guard.as_slice_mut() }.unwrap();
+        for y in 0..frame.height() {
+            let row = frame.row(y);
+            bytes[usize::from(y) * stride..usize::from(y) * stride + row.len()]
+                .copy_from_slice(row);
+        }
+    }
+    let buffer = apple_cf::cv::CVPixelBuffer::create_with_io_surface(&surface).unwrap();
+    let picture = crate::pixels::MacPicture::new(buffer).unwrap();
+    vnilink_media::RawFrame::native(frame.timestamp_us(), Box::new(picture)).unwrap()
+}
+
+/// `frame` averaged over `block` x `block` squares: what is where and in
+/// which colour, whatever filter scaled it.
+fn blocks(frame: &vnilink_media::RawFrame, block: u16) -> vnilink_media::RawFrame {
+    let (width, height) = (frame.width() / block, frame.height() / block);
+    let mut out = Vec::new();
+    for y in 0..height {
+        for x in 0..width {
+            for channel in 0..4 {
+                let mut sum = 0u32;
+                for dy in 0..block {
+                    for dx in 0..block {
+                        sum += u32::from(
+                            frame.row(y * block + dy)[usize::from(x * block + dx) * 4 + channel],
+                        );
+                    }
+                }
+                out.push((sum / u32::from(block * block)) as u8);
+            }
+        }
+    }
+    vnilink_media::RawFrame::bgra(width, height, 0, out).unwrap()
+}
+
+/// A captured picture is encoded in place, at its own size and scaled down
+/// on the GPU, and decodes to the page it holds; reading it back gives the
+/// same bytes the CPU path would have encoded. Scaled, it is nearer an even
+/// average of the page than the CPU's nearest-neighbour scale is (measured
+/// 2026-10-22: 20.0 against 14.1 dB, 16.3 against 10.4 at glyph edges),
+/// though the GPU's filter leaves thin dark text a little lighter.
+#[test]
+fn a_captured_picture_is_encoded_in_its_surface_at_any_size() {
+    use vnilink_media::measure::{edge_psnr, psnr, text_page};
+    let page = text_page(1280, 720, 0);
+    assert_eq!(captured(&page).pixels(), page.pixels());
+    let encode = |frame: &vnilink_media::RawFrame, width: u16, height: u16| {
+        let mut host = HostVideo::new(
+            Quality::new(8_000, 30, width, height).unwrap(),
+            MacEncoder::open(width, height, 30, 8_000_000, false).unwrap(),
+        );
+        let PumpOutput::Encoded(frame) = host.push(frame).unwrap() else {
+            panic!("the first picture is encoded");
+        };
+        let decoded = MacDecoder::new().decode(&frame).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (width, height));
+        decoded
+    };
+    // Its own size: the page, as the CPU path encodes it.
+    let same = encode(&captured(&page), 1280, 720);
+    assert!(psnr(&blocks(&page, 8), &blocks(&same, 8)) > 45.0);
+    // Half size: nearer the even average than nearest-neighbour is.
+    let ideal = blocks(&page, 2);
+    let gpu = encode(&captured(&page), 640, 360);
+    let cpu = encode(&page, 640, 360);
+    assert!(psnr(&ideal, &gpu) > psnr(&ideal, &cpu) + 3.0);
+    assert!(edge_psnr(&ideal, &gpu) > edge_psnr(&ideal, &cpu) + 3.0);
+}

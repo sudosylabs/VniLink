@@ -136,6 +136,13 @@ pub trait VideoEncoder: Send {
     fn refines_still_pictures(&self) -> bool {
         false
     }
+
+    /// Whether this encoder reads a picture the platform still holds
+    /// ([`RawFrame::native_picture`]) in place, scaling it itself to the size
+    /// it was opened at. Others get it read back and scaled in memory.
+    fn scales_native(&self) -> bool {
+        false
+    }
 }
 
 /// Platform H.264 decoder. The returned picture is what the UI paints.
@@ -260,7 +267,8 @@ impl FramePump {
             return Ok(PumpOutput::Skipped);
         }
         let scaled;
-        let input = if width == frame.width() && height == frame.height() {
+        let in_place = frame.native_picture().is_some() && encoder.scales_native();
+        let input = if in_place || (width == frame.width() && height == frame.height()) {
             frame
         } else {
             scaled = scale_bgra(frame, width, height)?;

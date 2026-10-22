@@ -1,5 +1,9 @@
 //! VideoToolbox H.264 encode of BGRA pictures.
 //!
+//! A ScreenCaptureKit picture is encoded in its own IOSurface, or scaled on
+//! the GPU into the encoder's (`VTPixelTransferSession`); any other picture
+//! is copied into the encoder's surface.
+//!
 //! The session emits length-prefixed NALs. SPS and PPS stay in the format
 //! description, so a keyframe is rewritten as Annex-B with those sets in front.
 //! This encoder does not capture the screen. Callers supply the picture.
@@ -36,6 +40,12 @@ pub struct MacEncoder {
     session: CompressionSession,
     #[cfg(target_os = "macos")]
     surface: IOSurface,
+    /// Scales a ScreenCaptureKit picture into `surface`, made on first use.
+    #[cfg(target_os = "macos")]
+    scaler: Option<(
+        videotoolbox::transfer::PixelTransferSession,
+        apple_cf::cv::CVPixelBuffer,
+    )>,
     width: u16,
     height: u16,
     #[cfg(target_os = "macos")]
@@ -152,6 +162,7 @@ impl MacEncoder {
                 codec,
                 session,
                 surface,
+                scaler: None,
                 width,
                 height,
                 frame_rate: i32::from(frame_rate),
@@ -255,7 +266,35 @@ fn low_latency(session: &CompressionSession) {
     set(session, matrix, &bt709);
 }
 
+impl MacEncoder {
+    /// Scales a ScreenCaptureKit picture into the encoder's surface on the GPU.
+    #[cfg(target_os = "macos")]
+    fn scale(&mut self, picture: &crate::pixels::MacPicture) -> Result<(), Error> {
+        let rejected = |_| Error::EncodeRejected("VideoToolbox rejected the frame");
+        if self.scaler.is_none() {
+            let session = videotoolbox::transfer::PixelTransferSession::new().map_err(rejected)?;
+            // Each output pixel averages the pixels it covers: text stays
+            // legible where nearest-neighbour would drop strokes.
+            session
+                .set_downsampling_mode(videotoolbox::transfer::DownsamplingMode::Average)
+                .map_err(rejected)?;
+            session.set_real_time(true).map_err(rejected)?;
+            let target = apple_cf::cv::CVPixelBuffer::create_with_io_surface(&self.surface)
+                .map_err(|_| Error::EncodeRejected("VideoToolbox rejected the frame"))?;
+            self.scaler = Some((session, target));
+        }
+        let (session, target) = self.scaler.as_ref().expect("made above");
+        session
+            .transfer(picture.pixel_buffer(), target)
+            .map_err(rejected)
+    }
+}
+
 impl VideoEncoder for MacEncoder {
+    fn scales_native(&self) -> bool {
+        cfg!(target_os = "macos")
+    }
+
     /// Measured with `still_screen_refinement`: H.264 in low-latency mode
     /// took a recovery keyframe of a page of text from 15 to 46 dB over two
     /// seconds of the unchanged page at 30 fps.
@@ -279,14 +318,37 @@ impl VideoEncoder for MacEncoder {
     }
 
     fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
-        if frame.width() != self.width || frame.height() != self.height {
+        #[cfg(target_os = "macos")]
+        let captured = frame
+            .native_picture()
+            .and_then(|picture| picture.as_any().downcast_ref::<crate::pixels::MacPicture>());
+        #[cfg(not(target_os = "macos"))]
+        let captured: Option<()> = None;
+        if captured.is_none() && (frame.width() != self.width || frame.height() != self.height) {
             return Err(Error::InvalidFrame(
                 "the frame size does not match the encoder",
             ));
         }
         #[cfg(target_os = "macos")]
         {
-            paint(&self.surface, frame)?;
+            let held;
+            let surface = match captured {
+                Some(picture) if (frame.width(), frame.height()) == (self.width, self.height) => {
+                    held = picture
+                        .pixel_buffer()
+                        .io_surface()
+                        .ok_or(Error::EncodeRejected("VideoToolbox rejected the frame"))?;
+                    &held
+                }
+                Some(picture) => {
+                    self.scale(picture)?;
+                    &self.surface
+                }
+                None => {
+                    paint(&self.surface, frame)?;
+                    &self.surface
+                }
+            };
             let time = CMTime::new(self.frame_index, self.frame_rate);
             let properties = FrameProperties::new().with_force_key_frame(params.force_keyframe);
             let floored = params.force_keyframe
@@ -294,7 +356,7 @@ impl VideoEncoder for MacEncoder {
                 && set_qp_floor(&self.session, i64::from(self.recovery_qp.floor()));
             let encoded = self
                 .session
-                .encode_with_properties(&self.surface, time, properties);
+                .encode_with_properties(surface, time, properties);
             if floored {
                 set_qp_floor(&self.session, NO_QP_FLOOR);
             }
@@ -455,6 +517,13 @@ impl VideoEncoder for MacVideoEncoder {
         match self {
             Self::Native(encoder) => encoder.refines_still_pictures(),
             Self::Software(encoder) => encoder.refines_still_pictures(),
+        }
+    }
+
+    fn scales_native(&self) -> bool {
+        match self {
+            Self::Native(encoder) => encoder.scales_native(),
+            Self::Software(encoder) => encoder.scales_native(),
         }
     }
 }

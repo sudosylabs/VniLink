@@ -7,7 +7,7 @@
 //! them.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::error::Error;
@@ -20,7 +20,7 @@ pub struct ChannelSlot {
     pub width: u16,
     pub height: u16,
     pub stride: usize,
-    pub bytes: Arc<Vec<u8>>,
+    pub bytes: crate::Pixels,
     /// When the OS captured the picture, if the platform says.
     pub captured_at: Option<Instant>,
 }
