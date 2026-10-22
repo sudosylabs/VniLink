@@ -68,13 +68,15 @@ enum Piece {
 /// few megabytes; once it says no, the stream is reset, so a cancel or
 /// revoke stops a file mid-way. `sent_to` hears how far into the
 /// file the stream has taken bytes, and finally that the file was sent. A source that changed while it was read
-/// is reset as changed instead of carrying on.
+/// is reset as changed instead of carrying on. Every write waits for
+/// `pace`, the connection's rate.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn send(
     send: &mut SendStream,
     source: Source,
     offset: u64,
     held: u64,
+    pace: &super::Pace,
     counters: &TransferCounters,
     mut may_send: impl FnMut() -> bool,
     mut sent_to: impl FnMut(u64, bool),
@@ -94,6 +96,7 @@ pub(crate) async fn send(
         match piece {
             Piece::Bytes(bytes) => {
                 let len = bytes.len();
+                pace.wait(len).await;
                 // No deadline on a write: on a slow link a write waits while
                 // the stream's window drains, for longer than any fixed time.
                 // A receiver that stops reading stops the stream itself, and

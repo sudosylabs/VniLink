@@ -14,6 +14,10 @@
 //! bytes of the next segment that already arrived are kept and named in the
 //! request, so an interrupted attempt costs only what was in flight.
 //!
+//! A sender paces itself through a relay, where every connection to the
+//! peer shares one queue that never drops, so a transfer yields to the
+//! desktop session instead of queueing seconds ahead of it (`pace`).
+//!
 //! This module owns the protocol: the wire format, sending a held source,
 //! receiving into a partial. Which job and file a peer may read, where
 //! partials live and when files publish belong to the core (`core/jobs`
@@ -21,6 +25,7 @@
 
 mod counters;
 mod hash;
+mod pace;
 mod partial;
 mod receive;
 mod send;
@@ -30,6 +35,7 @@ pub(crate) use counters::TransferCounters;
 #[cfg(test)]
 pub(crate) use hash::SegmentHasher;
 pub(crate) use hash::SEGMENT_LEN;
+pub(crate) use pace::Pace;
 pub(crate) use partial::{Partial, NO_SPACE, PARTIAL_FAILED};
 pub(crate) use receive::{ask, receive, Answer, Received};
 #[cfg(feature = "fuzzing")]

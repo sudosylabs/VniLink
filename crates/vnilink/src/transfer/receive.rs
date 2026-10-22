@@ -487,6 +487,7 @@ mod tests {
                     source,
                     request.offset,
                     request.held,
+                    &super::super::Pace::default(),
                     &counters,
                     || true,
                     |_, _| {},
