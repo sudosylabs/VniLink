@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { build } from 'esbuild';
 import { latencyOptions } from '../../build/lib/latency.ts';
@@ -38,6 +39,7 @@ test('latency options are bounded', () => {
 	assert.equal(latencyOptions('/root', ['--app', '/x/VniLink.app']).app, '/x/VniLink.app');
 	assert.throws(() => latencyOptions('/root', ['--app', '/x/VniLink']));
 	assert.match(latencyOptions('/root', []).output, /^\/root\/\.build\/latency\//);
+	assert.equal(latencyOptions('/root', ['--output', 'relative/out']).output, join(process.cwd(), 'relative/out'));
 	assert.throws(() => latencyOptions('/root', ['--seconds', '0']));
 	assert.throws(() => latencyOptions('/root', ['--seconds', '2.5']));
 	assert.throws(() => latencyOptions('/root', ['--settle', '-1']));
@@ -60,4 +62,12 @@ test('a run is summarised from the screen and the viewer stages', async () => {
 	assert.equal(summary.stages.has('Network'), false);
 	assert.match(renderLatencySummary(summary), /\| Glass to glass \| 20 \| 40 \| 40 \| 40 \|/);
 	assert.equal(summariseLatency('', '').total, undefined);
+});
+
+test('the summary shows each side\'s CPU, largest process first', async () => {
+	const { summariseLatency, renderLatencySummary } = await import('../../build/lib/latency.ts');
+	const text = renderLatencySummary(summariseLatency('', ''), { host: { Browser: 0.1, 'VniLink Engine': 1.25 }, viewer: { GPU: 0.5 } });
+	assert.match(text, /\| host \| 1\.35 \| VniLink Engine 1\.25, Browser 0\.10 \|/);
+	assert.match(text, /\| viewer \| 0\.50 \| GPU 0\.50 \|/);
+	assert.doesNotMatch(renderLatencySummary(summariseLatency('', '')), /CPU while/);
 });

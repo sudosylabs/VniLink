@@ -8,7 +8,7 @@
  * the runner in `build/lib/latency.ts` owns, and quit when it writes `done`.
  */
 import { execFile } from 'node:child_process';
-import { BrowserWindow, screen } from 'electron';
+import { app, BrowserWindow, screen } from 'electron';
 import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isEngineReply, record } from '../../src/platform/engine/common/engine.js';
@@ -52,6 +52,21 @@ async function expect(name: string, timeoutMs: number): Promise<Record<string, u
 		throw new Error(`${name} is not an object`);
 	}
 	return value;
+}
+
+/** Seconds of CPU this application's processes have used, by kind: the engine and other utility processes by name. */
+function cpuSeconds(): Record<string, number> {
+	const seconds: Record<string, number> = {};
+	for (const metric of app.getAppMetrics()) {
+		const kind = metric.type === 'Utility' && metric.name ? metric.name : metric.type;
+		seconds[kind] = (seconds[kind] ?? 0) + (metric.cpu.cumulativeCPUUsage ?? 0);
+	}
+	return seconds;
+}
+
+/** CPU used between two `cpuSeconds` samples, in cores, by kind. */
+function cores(start: Record<string, number>, end: Record<string, number>, wallSeconds: number): Record<string, number> {
+	return Object.fromEntries(Object.entries(end).map(([kind, used]) => [kind, (used - (start[kind] ?? 0)) / wallSeconds]));
 }
 
 async function engine(driver: WindowDriver, command: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -135,11 +150,13 @@ async function host(driver: WindowDriver): Promise<void> {
 		// The reader runs as this process's child, so macOS counts it under
 		// this application's Screen Recording permission.
 		const read = await expect('read', 5 * 60000);
+		const [cpuStart, startedAt] = [cpuSeconds(), Date.now()];
 		const outcome = await new Promise<{ code: number; output: string }>(resolve => {
 			execFile(String(read.reader), [String(read.seconds), String(read.samples)], (error, stdout, stderr) => {
 				resolve({ code: error ? 1 : 0, output: `${stdout}${stderr}` });
 			});
 		});
+		publish('host-cpu', cores(cpuStart, cpuSeconds(), (Date.now() - startedAt) / 1000));
 		publish('read-done', outcome);
 		await expect('done', 5 * 60000);
 	} finally {
@@ -217,7 +234,15 @@ async function viewer(driver: WindowDriver): Promise<void> {
 	// The view's own stage times, once a second, as it shows them: the
 	// runner sets them against the total read from the screen.
 	const stages = join(evidence, 'stages.jsonl');
+	// CPU over the reader's run, as the host measures its own.
+	let cpuStart: [Record<string, number>, number] | undefined;
 	while (!existsSync(join(rendezvous, 'done.json'))) {
+		if (!cpuStart && existsSync(join(rendezvous, 'read.json'))) {
+			cpuStart = [cpuSeconds(), Date.now()];
+		}
+		if (cpuStart && existsSync(join(rendezvous, 'read-done.json')) && !existsSync(join(rendezvous, 'viewer-cpu.json'))) {
+			publish('viewer-cpu', cores(cpuStart[0], cpuSeconds(), (Date.now() - cpuStart[1]) / 1000));
+		}
 		const text: unknown = await driver.window.webContents.executeJavaScript(`document.querySelector('.desktop-status-stats')?.title ?? ''`);
 		if (typeof text === 'string' && text.length > 0) {
 			appendFileSync(stages, `${JSON.stringify({ at: Date.now(), text })}\n`);

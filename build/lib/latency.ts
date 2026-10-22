@@ -14,7 +14,7 @@
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { electronExecutable } from './electron.ts';
 import { assertNativeFresh } from './native.ts';
@@ -49,7 +49,9 @@ export function latencyOptions(root: string, args: readonly string[]): LatencyOp
 	if (values.app !== undefined && !/\.app\/?$/.test(values.app)) {
 		throw new Error('--app must name a .app bundle');
 	}
-	return { seconds, settleSeconds, output: values.output ?? join(root, '.build/latency', new Date().toISOString().replaceAll(':', '-')), app: values.app };
+	// Absolute: the two sides run from another directory.
+	const output = resolve(values.output ?? join(root, '.build/latency', new Date().toISOString().replaceAll(':', '-')));
+	return { seconds, settleSeconds, output, app: values.app };
 }
 
 export interface Percentiles {
@@ -111,7 +113,13 @@ export function summariseLatency(samples: string, stages: string): LatencySummar
 	};
 }
 
-export function renderLatencySummary(summary: LatencySummary): string {
+/** Cores each side's processes used while the reader ran, by kind. */
+export interface LatencyCpu {
+	readonly host: Readonly<Record<string, number>>;
+	readonly viewer: Readonly<Record<string, number>>;
+}
+
+export function renderLatencySummary(summary: LatencySummary, cpu?: LatencyCpu): string {
 	const rows = [
 		'# Glass-to-glass latency',
 		'',
@@ -127,6 +135,18 @@ export function renderLatencySummary(summary: LatencySummary): string {
 		'|---|---|---|---|',
 		...[...summary.stages].map(([name, stage]) => `| ${name} | ${stage.p50.toFixed(1)} | ${stage.p95.toFixed(1)} | ${String(stage.windows)} |`),
 		'',
+		...(cpu ? [
+			'CPU while the reader ran, in cores (the reader itself not included):',
+			'',
+			'| Side | Total | By process |',
+			'|---|---|---|',
+			...(['host', 'viewer'] as const).map(side => {
+				const kinds = Object.entries(cpu[side]).sort(([, a], [, b]) => b - a);
+				const total = kinds.reduce((sum, [, used]) => sum + used, 0);
+				return `| ${side} | ${total.toFixed(2)} | ${kinds.map(([kind, used]) => `${kind} ${used.toFixed(2)}`).join(', ')} |`;
+			}),
+			'',
+		] : []),
 	];
 	return rows.join('\n');
 }
@@ -210,9 +230,17 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 		}
 		const run = { seconds: options.seconds, settle: options.settleSeconds, platform: process.platform, arch: process.arch, date: new Date().toISOString() };
 		await writeFile(join(options.output, 'run.json'), JSON.stringify(run, null, 2));
+		// The viewer samples once a second: let it report before it is told to quit.
+		await arrival(rendezvous, 'viewer-cpu', 5000, () => false, signal).catch(() => undefined);
 		await publish(rendezvous, 'done', {});
 		const stages = await readFile(join(options.output, 'stages.jsonl'), 'utf8').catch(() => '');
-		const summary = renderLatencySummary(summariseLatency(await readFile(samples, 'utf8'), stages));
+		const cpuOf = async (name: string): Promise<Record<string, number>> => {
+			const value: unknown = JSON.parse(await readFile(join(rendezvous, `${name}.json`), 'utf8').catch(() => '{}'));
+			return typeof value === 'object' && value !== null ? Object.fromEntries(Object.entries(value).filter((entry): entry is [string, number] => typeof entry[1] === 'number')) : {};
+		};
+		const cpu = { host: await cpuOf('host-cpu'), viewer: await cpuOf('viewer-cpu') };
+		await writeFile(join(options.output, 'cpu.json'), JSON.stringify(cpu, null, 2));
+		const summary = renderLatencySummary(summariseLatency(await readFile(samples, 'utf8'), stages), cpu);
 		await writeFile(join(options.output, 'summary.md'), summary);
 		console.log(summary);
 		console.log(`Evidence: ${options.output}`);
