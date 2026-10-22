@@ -30,10 +30,10 @@ On a Linux machine, run the inner task as root: `sudo node build/run.ts measure:
 | Option | Default | Meaning |
 |---|---|---|
 | `--profiles` | `all` | Comma-separated names, `quick` or `all`. |
-| `--scenarios` | `transfer,video` | Which scenarios run under each profile: `transfer`, `video` or `combined`. |
+| `--scenarios` | `transfer,video` | Which scenarios run under each profile: `transfer`, `video`, `combined` or `combined-download`. |
 | `--seed` | `17` | netem loss seed. The same seed drops the same packet positions. |
 | `--small-files`, `--small-size` | `1000`, `4096` | The many-small-files case. |
-| `--large-size` | `1GiB` | The large-file case, e.g. `256MiB` for a quicker run or `10GiB`. The combined scenario uploads a file this size. |
+| `--large-size` | `1GiB` | The large-file case, e.g. `256MiB` for a quicker run or `10GiB`. The combined scenarios move a file this size. |
 | `--transfer-timeout` | `120` | Seconds per case, from submit. At the deadline the job is cancelled on both sides and reported with the bytes and files done so far. |
 | `--driver` | `tight` | `tight` advances the receiver back to back. `background` uses only the app's background job driver. |
 | `--video-seconds`, `--bursts`, `--burst-ms` | `30`, `5`, `250` | Stream length and the blackouts inside it. |
@@ -112,9 +112,14 @@ The report includes:
 - one-way latency percentiles, measured on one clock in the same process;
 - each core's selected path once connected and once finished.
 
-**Combined** (`impaired_desktop_stream_during_upload`, beside the video scenario) runs the video scenario while the viewer's core uploads one file of `--large-size` to the host's core. The viewer opens a Files service beside its desktop service on the same session, as the app does, and the upload crosses the Files connection. In relay mode the stream, the Files connection and the session's control all share each core's one relay connection.
+**Combined** (`impaired_desktop_stream_during_upload` and `impaired_desktop_stream_during_download`, beside the video scenario) runs the video scenario while one file of `--large-size` moves between the cores:
+- `combined`: the viewer uploads it to the host, against the video;
+- `combined-download`: the viewer downloads it from the host, the video's way, through the host's side of the link.
 
-- The upload starts with the stream and runs until it completes or the stream ends, when it is cancelled. Its outcome, the bytes it moved and the time it took are reported with the video results, with `files_paths` as in the transfer scenario.
+The viewer opens a Files service beside its desktop service on the same session, as the app does, and the file crosses the Files connection. In relay mode the stream, the Files connection and the session's control all share each core's one relay connection.
+
+- The transfer starts with the stream and runs until it completes or the stream ends, when it is cancelled. Its direction, outcome, the bytes it moved and the time it took are reported under `transfer` with the video results, with `files_paths` as in the transfer scenario.
+- The summary's session round trip is the median of the timeline's `rtt_ms`, the session connection's selected path.
 - `longest_freeze_ms` is the longest time without a new clean picture after the first one, whatever caused it. `session_interruptions` counts how often the viewer's session left the active phase, sampled every 100 ms with the timeline. The video scenario reports both too.
 - The Relay table's client connections opened and closed show the relay clients reconnecting.
 

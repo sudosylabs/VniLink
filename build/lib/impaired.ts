@@ -22,6 +22,8 @@ export const SCENARIOS = Object.freeze({
 	video: Object.freeze({ crate: 'vnilink-media', test: 'tests::impaired_video_tests::impaired_desktop_stream' }),
 	/** The desktop stream while the viewer uploads one large file to the host. */
 	combined: Object.freeze({ crate: 'vnilink-media', test: 'tests::impaired_video_tests::impaired_desktop_stream_during_upload' }),
+	/** The desktop stream while the viewer downloads one large file from the host, the video's way. */
+	'combined-download': Object.freeze({ crate: 'vnilink-media', test: 'tests::impaired_video_tests::impaired_desktop_stream_during_download' }),
 });
 
 export type ScenarioName = keyof typeof SCENARIOS;
@@ -197,8 +199,8 @@ export function scenarioEnvironment(name: ScenarioName, options: ResolvedOptions
 		VNILINK_IMPAIRED_BURST_END: paths.burstEnd,
 		VNILINK_IMPAIRED_VIEWER: options.viewer,
 	};
-	// The upload is the large-file case, for as long as the stream runs.
-	return name === 'combined' ? { ...video, VNILINK_IMPAIRED_LARGE_BYTES: String(options.largeBytes) } : video;
+	// The transfer beside the stream is the large-file case, for as long as the stream runs.
+	return name === 'combined' || name === 'combined-download' ? { ...video, VNILINK_IMPAIRED_LARGE_BYTES: String(options.largeBytes) } : video;
 }
 
 interface TransferCase {
@@ -222,8 +224,16 @@ interface VideoResult {
 	longest_freeze_ms?: number | null;
 	/** How often the viewer's session left the active phase. */
 	session_interruptions?: number;
-	/** The combined scenario only. */
-	upload?: { outcome: string; elapsed_ms: number; done_bytes: number; mb_per_s: number } | null;
+	/** The combined scenarios only. */
+	transfer?: { direction: string; outcome: string; elapsed_ms: number; done_bytes: number; mb_per_s: number } | null;
+	/** Sampled every 100 ms; `rtt_ms` is the session connection's round trip. */
+	timeline?: readonly { rtt_ms?: number | null }[];
+}
+
+/** The median of the session's round trip over the timeline, in ms. */
+function sessionRtt(result: VideoResult): number | null {
+	const samples = (result.timeline ?? []).flatMap(sample => typeof sample.rtt_ms === 'number' ? [sample.rtt_ms] : []).sort((a, b) => a - b);
+	return samples.length ? samples[Math.floor(samples.length / 2)] : null;
 }
 
 /** Engine counters: frames the viewer lost, keyframes it asked for, keyframes the host sent. */
@@ -436,25 +446,26 @@ export function renderSummary(report: ImpairedReport): string {
 		}
 		lines.push('');
 	}
-	const combined = report.runs.filter(run => run.scenario === 'combined');
+	const combined = report.runs.filter(run => run.scenario === 'combined' || run.scenario === 'combined-download');
 	if (combined.length) {
 		lines.push(
-			'## Desktop video during an upload',
+			'## Desktop video beside a large transfer',
 			'',
-			'The viewer uploads one large file to the host while the host streams its desktop. The upload runs until it completes or the stream ends; MB/s counts the bytes it moved over that time. A freeze is the longest time without a new clean picture; an interruption is the viewer\'s session leaving the active phase.',
+			'The viewer uploads one large file to the host (`combined`) or downloads one from it (`combined-download`, the video\'s way) while the host streams its desktop. The transfer runs until it completes or the stream ends; MB/s counts the bytes it moved over that time. A freeze is the longest time without a new clean picture; an interruption is the viewer\'s session leaving the active phase; the session round trip is the median over the stream.',
 			'',
-			'| Profile | Delivered | Time to picture median/max ms | Unrecovered bursts | Latency p50/p95 ms | Longest freeze ms | Session interruptions | Upload | Upload MB/s |',
-			'|---|---|---|---|---|---|---|---|---|',
+			'| Profile | Direction | Delivered | Time to picture median/max ms | Unrecovered bursts | Latency p50/p95 ms | Longest freeze ms | Session interruptions | Session RTT ms | Transfer | Transfer MB/s |',
+			'|---|---|---|---|---|---|---|---|---|---|---|',
 		);
 		for (const run of combined) {
+			const direction = run.scenario === 'combined' ? 'upload' : 'download';
 			const result = run.result as VideoResult | null;
 			if (!result) {
-				lines.push(`| ${run.profile} | ${run.status} | – | – | – | – | – | – | – |`);
+				lines.push(`| ${run.profile} | ${direction} | ${run.status} | – | – | – | – | – | – | – | – |`);
 				continue;
 			}
-			const upload = result.upload;
-			const outcome = upload ? `${upload.outcome}, ${(upload.elapsed_ms / 1000).toFixed(1)} s` : '–';
-			lines.push(`| ${run.profile} | ${cell(result.delivery_ratio * 100)}% | ${videoCells(result).join(' | ')} | ${cell(result.longest_freeze_ms, 0)} | ${cell(result.session_interruptions, 0)} | ${outcome} | ${cell(upload?.mb_per_s, 2)} |`);
+			const transfer = result.transfer;
+			const outcome = transfer ? `${transfer.outcome}, ${(transfer.elapsed_ms / 1000).toFixed(1)} s` : '–';
+			lines.push(`| ${run.profile} | ${direction} | ${cell(result.delivery_ratio * 100)}% | ${videoCells(result).join(' | ')} | ${cell(result.longest_freeze_ms, 0)} | ${cell(result.session_interruptions, 0)} | ${cell(sessionRtt(result), 0)} | ${outcome} | ${cell(transfer?.mb_per_s, 2)} |`);
 		}
 		lines.push('');
 	}

@@ -140,13 +140,14 @@ test('each scenario receives only its own settings', () => {
 	assert.equal(video.VNILINK_IMPAIRED_VIEWER, 'passive');
 	assert.equal(video.VNILINK_IMPAIRED_SMALL_FILES, undefined);
 	assert.equal(video.VNILINK_IMPAIRED_LARGE_BYTES, undefined);
-	// The combined stream uploads the large-file case beside the video.
-	const combined = scenarioEnvironment('combined', options, paths, link);
-	assert.deepEqual(combined, { ...video, VNILINK_IMPAIRED_LARGE_BYTES: String(1024 ** 3) });
+	// The combined streams move the large-file case beside the video, either way.
+	for (const name of ['combined', 'combined-download']) {
+		assert.deepEqual(scenarioEnvironment(name, options, paths, link), { ...video, VNILINK_IMPAIRED_LARGE_BYTES: String(1024 ** 3) });
+	}
 	// Only relay mode names a relay; direct cores keep their dead one.
 	assert.equal(transfer.VNILINK_IMPAIRED_RELAY_URL, undefined);
 	const relayed = resolveOptions({ path: 'relay' });
-	for (const name of ['transfer', 'video', 'combined']) {
+	for (const name of ['transfer', 'video', 'combined', 'combined-download']) {
 		assert.equal(scenarioEnvironment(name, relayed, paths, link).VNILINK_IMPAIRED_RELAY_URL, relayUrl());
 	}
 });
@@ -159,7 +160,8 @@ test('the summary reports refusals, recovery and failed runs', () => {
 			{ profile: 'loss-1', scenario: 'transfer', status: 'passed', result: { cases: [{ case: 'small', outcome: 'complete', elapsed_ms: 2500, mb_per_s: 1.6384, files_per_s: 400 }, { case: 'large', outcome: 'refused', error: 'the transfer exceeds its limits' }] } },
 			{ profile: 'loss-1', scenario: 'video', status: 'passed', result: { delivery_ratio: 0.9, clean_ratio: 0.5, keyframes_produced: { open: 1, forced: 2, periodic: 7 }, bursts: [{ time_to_picture_ms: 300 }, { time_to_picture_ms: 1200 }, { time_to_picture_ms: null }], unrecovered_bursts: 1, latency_ms: { p50: 12.34, p95: 40 }, engine: { host: { pipelines: [{ keyframes_sent: 9 }] }, viewer: { pipelines: [{ lost_gap: 3, lost_expired: 1, keyframes_requested: 4 }] } } } },
 			{ profile: 'rate-2', scenario: 'video', status: 'failed', error: 'cargo exited (101)', result: null },
-			{ profile: 'loss-1', scenario: 'combined', status: 'passed', result: { delivery_ratio: 0.5, clean_ratio: 0.4, keyframes_produced: { open: 1, forced: 0, periodic: 2 }, bursts: [{ time_to_picture_ms: 700 }], unrecovered_bursts: 0, latency_ms: { p50: 80, p95: 2500 }, longest_freeze_ms: 4210.6, session_interruptions: 1, upload: { outcome: 'timed-out', elapsed_ms: 30000, done_bytes: 15e6, mb_per_s: 0.5 } } }
+			{ profile: 'loss-1', scenario: 'combined', status: 'passed', result: { delivery_ratio: 0.5, clean_ratio: 0.4, keyframes_produced: { open: 1, forced: 0, periodic: 2 }, bursts: [{ time_to_picture_ms: 700 }], unrecovered_bursts: 0, latency_ms: { p50: 80, p95: 2500 }, longest_freeze_ms: 4210.6, session_interruptions: 1, timeline: [{ rtt_ms: 40 }, { rtt_ms: 1800 }, { rtt_ms: 2000 }], transfer: { direction: 'upload', outcome: 'timed-out', elapsed_ms: 30000, done_bytes: 15e6, mb_per_s: 0.5 } } },
+			{ profile: 'rate-5', scenario: 'combined-download', status: 'failed', error: 'cargo exited (101)', result: null }
 		]
 	});
 	assert.match(summary, /Linux container evidence only/);
@@ -167,8 +169,9 @@ test('the summary reports refusals, recovery and failed runs', () => {
 	assert.match(summary, /\| loss-1 \| large \| refused: the transfer exceeds its limits \|/);
 	assert.match(summary, /\| loss-1 \| 90\.0% \| 50\.0% \| 1\/2\/7 \| 4\/4\/9 \| 300\/1200 \| 1\/3 \| 12\.3\/40\.0 \|/);
 	assert.match(summary, /- rate-2 video: cargo exited \(101\)/);
-	assert.match(summary, /## Desktop video during an upload/);
-	assert.match(summary, /\| loss-1 \| 50\.0% \| 700\/700 \| 0\/1 \| 80\.0\/2500\.0 \| 4211 \| 1 \| timed-out, 30\.0 s \| 0\.50 \|/);
+	assert.match(summary, /## Desktop video beside a large transfer/);
+	assert.match(summary, /\| loss-1 \| upload \| 50\.0% \| 700\/700 \| 0\/1 \| 80\.0\/2500\.0 \| 4211 \| 1 \| 1800 \| timed-out, 30\.0 s \| 0\.50 \|/);
+	assert.match(summary, /\| rate-5 \| download \| failed \|/);
 	assert.doesNotMatch(summary, /Path: relay/);
 	assert.match(renderSummary({ started: 'now', commit: 'abc', path: 'relay', runs: [] }), /Path: relay\. .*not a public relay or an internet path/);
 });

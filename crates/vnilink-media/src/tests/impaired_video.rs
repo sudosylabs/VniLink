@@ -24,7 +24,9 @@
 //!
 //! `impaired_desktop_stream_during_upload` streams the same desktop while the
 //! viewer's core uploads one large file to the host's over the Files
-//! connection, both cores' only other traffic. In relay mode the upload and
+//! connection, both cores' only other traffic, and
+//! `impaired_desktop_stream_during_download` while it downloads one from the
+//! host's, so the file goes the video's way. In relay mode the transfer and
 //! the stream share each core's one relay connection.
 
 use std::path::{Path, PathBuf};
@@ -81,9 +83,32 @@ struct Stream {
     burst_start: Option<PathBuf>,
     burst_end: Option<PathBuf>,
     policy: ViewerPolicy,
-    /// Bytes of the one file the viewer uploads to the host while the
-    /// stream runs, if any.
-    upload: Option<u64>,
+    /// The one file moved between the cores while the stream runs, if any.
+    transfer: Option<Transfer>,
+}
+
+/// Which way the file goes beside the stream.
+#[derive(Clone, Copy, PartialEq)]
+enum Direction {
+    /// From the viewer to the host: against the video.
+    Upload,
+    /// From the host to the viewer: the video's way.
+    Download,
+}
+
+impl Direction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Upload => "upload",
+            Self::Download => "download",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Transfer {
+    direction: Direction,
+    bytes: u64,
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
@@ -123,7 +148,7 @@ impl Stream {
                     "VNILINK_IMPAIRED_VIEWER must be passive or request-while-corrupt, got {other:?}"
                 ),
             },
-            upload: None,
+            transfer: None,
         }
     }
 }
@@ -544,17 +569,17 @@ fn file_location(core: &Core, path: &Path) -> (u64, String) {
         .expect("fixture belongs to an advertised filesystem root")
 }
 
-/// The upload the viewer runs beside the stream.
-struct Upload {
+/// The transfer the viewer runs beside the stream.
+struct Running {
     job: u64,
-    bytes: u64,
+    transfer: Transfer,
     _service: RemoteFilesService,
     _fixtures: [Scratch; 2],
 }
 
 /// Gives both cores a file area, which they accept only before they
-/// connect, and writes `bytes` of fixture on the viewer.
-fn prepare_upload(host: &Core, viewer: &Core, bytes: u64) -> [Scratch; 2] {
+/// connect, and writes the fixture on the side that sends it.
+fn prepare_transfer(host: &Core, viewer: &Core, transfer: Transfer) -> [Scratch; 2] {
     let fixtures = [Scratch::new("host"), Scratch::new("viewer")];
     for (core, scratch) in [host, viewer].into_iter().zip(&fixtures) {
         core.set_transfer_directory(scratch.0.join("transfer"))
@@ -562,62 +587,84 @@ fn prepare_upload(host: &Core, viewer: &Core, bytes: u64) -> [Scratch; 2] {
         core.enable_filesystem_access().unwrap();
         std::fs::create_dir_all(scratch.0.join("root")).unwrap();
     }
-    write_file(&fixtures[1].0.join("root/upload.bin"), bytes);
+    let sender = match transfer.direction {
+        Direction::Upload => &fixtures[1],
+        Direction::Download => &fixtures[0],
+    };
+    write_file(&sender.0.join("root/large.bin"), transfer.bytes);
     fixtures
 }
 
 /// Opens a Files service beside the desktop on the viewer's session
-/// `parent`, as the app does, and submits the upload of the prepared
-/// fixture to the host through it. Submission hashes the file before it
-/// returns, so this runs before the stream starts.
-fn submit_upload(
+/// `parent`, as the app does, and submits the transfer of the prepared
+/// fixture through it. Submission hashes the file before it returns, so
+/// this runs before the stream starts.
+fn submit_transfer(
     host: &Core,
     viewer: &Core,
     parent: &SessionInfo,
     fixtures: [Scratch; 2],
-    bytes: u64,
-) -> Upload {
+    transfer: Transfer,
+) -> Running {
     let owner = viewer
         .attach_controller_service(parent.id, parent.generation, ServiceKind::Files)
         .unwrap();
     let service = viewer
         .open_files_service(owner.id, owner.generation)
         .unwrap();
-    let (from_root, from) = file_location(viewer, &fixtures[1].0.join("root"));
-    let (to_root, to) = file_location(host, &fixtures[0].0.join("root"));
-    let job = viewer
-        .files_service_upload(
+    let (host_root, host_folder) = file_location(host, &fixtures[0].0.join("root"));
+    let (viewer_root, viewer_folder) = file_location(viewer, &fixtures[1].0.join("root"));
+    let names = ["large.bin".to_owned()];
+    let job = match transfer.direction {
+        Direction::Upload => viewer.files_service_upload(
             owner.id,
             owner.generation,
-            from_root,
-            &from,
-            &["upload.bin".to_owned()],
-            to_root,
-            &format!("{to}/arrived"),
-        )
-        .expect("upload submitted");
-    Upload {
+            viewer_root,
+            &viewer_folder,
+            &names,
+            host_root,
+            &format!("{host_folder}/arrived"),
+        ),
+        Direction::Download => viewer.files_service_download(
+            owner.id,
+            owner.generation,
+            host_root,
+            &host_folder,
+            &names,
+            viewer_root,
+            &format!("{viewer_folder}/arrived"),
+        ),
+    }
+    .expect("transfer submitted");
+    Running {
         job,
-        bytes,
+        transfer,
         _service: service,
         _fixtures: fixtures,
     }
 }
 
-/// Drives `upload` until `done`, cancelling it then if it still runs, and
+/// Drives `running` until `done`, cancelling it then if it still runs, and
 /// reports its progress with what QUIC saw on each core's Files connections
-/// once a second. The receiving host advances back to back; the sending
-/// viewer only asks for state, every 100 ms.
-fn drive_upload(
+/// once a second. The receiving core advances back to back; the sending one
+/// only asks for state, every 100 ms.
+fn drive_transfer(
     host: &Core,
     viewer: &Core,
-    upload: &Upload,
+    running: &Running,
     started: Instant,
     done: &AtomicBool,
 ) -> Value {
+    let (receiver, sender) = match running.transfer.direction {
+        Direction::Upload => (host, viewer),
+        Direction::Download => (viewer, host),
+    };
     let stop = AtomicBool::new(false);
     std::thread::scope(|scope| {
-        for (core, pause) in [(host, Duration::ZERO), (viewer, Duration::from_millis(100))] {
+        for (core, pause) in [
+            (receiver, Duration::ZERO),
+            (sender, Duration::from_millis(100)),
+        ] {
             let stop = &stop;
             scope.spawn(move || {
                 while !stop.load(Ordering::Acquire) {
@@ -633,9 +680,9 @@ fn drive_upload(
         let mut files_paths = Vec::new();
         let mut next_sample = started;
         let mut ended = None;
-        let mut snapshot = host.job_snapshot(upload.job).expect("receiver record");
+        let mut snapshot = receiver.job_snapshot(running.job).expect("receiver record");
         while !done.load(Ordering::Acquire) {
-            snapshot = host.job_snapshot(upload.job).expect("receiver record");
+            snapshot = receiver.job_snapshot(running.job).expect("receiver record");
             let now = Instant::now();
             if snapshot.state.is_terminal() {
                 ended.get_or_insert(now);
@@ -654,13 +701,14 @@ fn drive_upload(
         let ended = ended.unwrap_or_else(Instant::now);
         if !snapshot.state.is_terminal() {
             for core in [host, viewer] {
-                let _ = core.job_cancel(upload.job);
+                let _ = core.job_cancel(running.job);
             }
         }
         stop.store(true, Ordering::Release);
         let elapsed = (ended - started).as_secs_f64().max(1e-9);
         json!({
-            "bytes": upload.bytes,
+            "direction": running.transfer.direction.label(),
+            "bytes": running.transfer.bytes,
             "outcome": match snapshot.state {
                 JobState::Complete => "complete",
                 state if state.is_terminal() => "failed",
@@ -680,8 +728,8 @@ fn run_stream(stream: &Stream) -> Value {
     let host = Arc::new(boot_in(std::env::var("VNILINK_IMPAIRED_HOST_NS").ok()));
     let viewer = boot_in(std::env::var("VNILINK_IMPAIRED_VIEW_NS").ok());
     let fixtures = stream
-        .upload
-        .map(|bytes| (prepare_upload(&host, &viewer, bytes), bytes));
+        .transfer
+        .map(|transfer| (prepare_transfer(&host, &viewer, transfer), transfer));
     host.set_capture(Box::new(Source)).unwrap();
     for core in [&*host, &viewer] {
         core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
@@ -696,11 +744,12 @@ fn run_stream(stream: &Stream) -> Value {
         view: true,
         control: true,
         clipboard: false,
-        transfer: stream.upload.is_some(),
+        transfer: stream.transfer.is_some(),
     })
     .unwrap();
-    if stream.upload.is_some() {
-        // The host fetches the upload from the viewer, which grants that.
+    if stream.transfer.is_some() {
+        // Both ends of a transfer hold the grant: the sender serves under
+        // it and the receiver fetches and writes under its own.
         viewer
             .set_desktop_sharing(Grants {
                 view: false,
@@ -722,8 +771,8 @@ fn run_stream(stream: &Stream) -> Value {
         .unwrap();
     let frames = handle.subscribe_video().unwrap();
     let connected = json!({ "host": selected_paths(&host), "viewer": selected_paths(&viewer) });
-    let upload =
-        fixtures.map(|(fixtures, bytes)| submit_upload(&host, &viewer, &parent, fixtures, bytes));
+    let running = fixtures
+        .map(|(fixtures, transfer)| submit_transfer(&host, &viewer, &parent, fixtures, transfer));
 
     let record = Arc::new(Host::new());
     let stop = Arc::new(AtomicBool::new(false));
@@ -757,9 +806,9 @@ fn run_stream(stream: &Stream) -> Value {
         let schedule = scope.spawn(|| impair(stream, started));
         let timeline =
             scope.spawn(|| sample_timeline(&host, &viewer, parent.id, &record, started, &sampling));
-        let transfer = upload
-            .as_ref()
-            .map(|upload| scope.spawn(|| drive_upload(&host, &viewer, upload, started, &sampling)));
+        let transfer = running.as_ref().map(|running| {
+            scope.spawn(|| drive_transfer(&host, &viewer, running, started, &sampling))
+        });
         let mut decoder = Decoder::default();
         let mut arrivals = Vec::new();
         let mut keyframes = 0u64;
@@ -793,7 +842,7 @@ fn run_stream(stream: &Stream) -> Value {
         let bursts = schedule.join().expect("impairment schedule");
         sampling.store(true, Ordering::Release);
         let timeline = timeline.join().expect("timeline sampler");
-        let transfer = transfer.map(|driver| driver.join().expect("upload driver"));
+        let transfer = transfer.map(|driver| driver.join().expect("transfer driver"));
         (
             (bursts, timeline, transfer),
             decoder,
@@ -870,7 +919,11 @@ fn run_stream(stream: &Stream) -> Value {
         .filter(|burst| burst["time_to_picture_ms"].is_null())
         .count();
     json!({
-        "scenario": if upload.is_some() { "combined" } else { "video" },
+        "scenario": match stream.transfer.map(|transfer| transfer.direction) {
+            None => "video",
+            Some(Direction::Upload) => "combined",
+            Some(Direction::Download) => "combined-download",
+        },
         "viewer_policy": stream.policy.label(),
         "duration_s": stream.duration.as_secs_f64(),
         "gop_frames": GOP,
@@ -907,7 +960,7 @@ fn run_stream(stream: &Stream) -> Value {
         "paths": { "connected": connected, "finished": finished },
         "bursts": burst_reports,
         "unrecovered_bursts": unrecovered,
-        "upload": transfer,
+        "transfer": transfer,
         "timeline": timeline,
     })
 }
@@ -926,8 +979,22 @@ fn impaired_desktop_stream() {
 #[test]
 #[ignore = "impaired-network harness: run through `npm run measure:impaired`"]
 fn impaired_desktop_stream_during_upload() {
+    stream_beside(Direction::Upload);
+}
+
+#[test]
+#[ignore = "impaired-network harness: run through `npm run measure:impaired`"]
+fn impaired_desktop_stream_during_download() {
+    stream_beside(Direction::Download);
+}
+
+/// Runs the stream beside a transfer of the large-file case `direction`.
+fn stream_beside(direction: Direction) {
     let stream = Stream {
-        upload: Some(env_u64("VNILINK_IMPAIRED_LARGE_BYTES", 1 << 30)),
+        transfer: Some(Transfer {
+            direction,
+            bytes: env_u64("VNILINK_IMPAIRED_LARGE_BYTES", 1 << 30),
+        }),
         ..Stream::from_env()
     };
     let report = run_stream(&stream);
@@ -939,29 +1006,35 @@ fn impaired_desktop_stream_during_upload() {
 }
 
 #[test]
-fn desktop_stream_runs_beside_an_upload_on_loopback() {
-    let report = run_stream(&Stream {
-        duration: Duration::from_secs(4),
-        warmup: Duration::ZERO,
-        bursts: 0,
-        burst: Duration::ZERO,
-        burst_start: None,
-        burst_end: None,
-        policy: ViewerPolicy::Passive,
-        upload: Some(8 << 20),
-    });
-    assert!(report["first_picture_ms"].as_f64().is_some(), "{report}");
-    assert!(
-        report["frames_received"].as_u64().unwrap() >= 30,
-        "{report}"
-    );
-    let upload = &report["upload"];
-    assert_eq!(upload["outcome"], "complete", "{upload}");
-    assert_eq!(upload["done_bytes"], 8 << 20);
-    assert!(upload["files_paths"]
-        .as_array()
-        .is_some_and(|samples| !samples.is_empty()));
-    assert_eq!(report["session_interruptions"], 0, "{report}");
+fn desktop_stream_runs_beside_a_transfer_either_way_on_loopback() {
+    for direction in [Direction::Upload, Direction::Download] {
+        let report = run_stream(&Stream {
+            duration: Duration::from_secs(4),
+            warmup: Duration::ZERO,
+            bursts: 0,
+            burst: Duration::ZERO,
+            burst_start: None,
+            burst_end: None,
+            policy: ViewerPolicy::Passive,
+            transfer: Some(Transfer {
+                direction,
+                bytes: 8 << 20,
+            }),
+        });
+        assert!(report["first_picture_ms"].as_f64().is_some(), "{report}");
+        assert!(
+            report["frames_received"].as_u64().unwrap() >= 30,
+            "{report}"
+        );
+        let transfer = &report["transfer"];
+        assert_eq!(transfer["direction"], direction.label());
+        assert_eq!(transfer["outcome"], "complete", "{transfer}");
+        assert_eq!(transfer["done_bytes"], 8 << 20);
+        assert!(transfer["files_paths"]
+            .as_array()
+            .is_some_and(|samples| !samples.is_empty()));
+        assert_eq!(report["session_interruptions"], 0, "{report}");
+    }
 }
 
 #[test]
@@ -974,14 +1047,14 @@ fn desktop_stream_delivers_clean_pictures_on_loopback() {
         burst_start: None,
         burst_end: None,
         policy: ViewerPolicy::Passive,
-        upload: None,
+        transfer: None,
     });
     assert!(report["first_picture_ms"].as_f64().is_some(), "{report}");
     assert!(
         report["frames_received"].as_u64().unwrap() >= 30,
         "{report}"
     );
-    assert!(report["upload"].is_null());
+    assert!(report["transfer"].is_null());
     assert_eq!(report["keyframes_produced"]["open"], 1, "{report}");
     assert_eq!(report["reference_gaps"], 0, "{report}");
     assert!(report["latency_ms"]["p50"].as_f64().is_some());
