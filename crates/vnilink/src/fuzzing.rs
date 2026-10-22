@@ -9,7 +9,11 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Instant;
 
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+
 use crate::adaptation::{Adaptive, Feedback, HostFeedback};
+use crate::core::codecs;
 use crate::protocol::ControlMessage;
 use crate::transfer::FileRequest;
 use crate::video::{
@@ -209,6 +213,127 @@ pub fn host_feedback(mut quality: Quality, source: (u16, u16), intervals: &[Inte
             quality = changed;
         }
     }
+}
+
+/// The `vnilink/fs` parsers, chosen by `which`: a request, a response
+/// header, a listing body or a places body. Whatever decodes encodes, and
+/// decodes again to itself; a response header encodes to its own bytes.
+pub fn fs_wire(which: u8, bytes: &[u8]) {
+    use crate::fs;
+    match which % 4 {
+        0 => {
+            if let Ok(request) = fs::decode_request(bytes) {
+                let encoded = fs::encode_request(&request).expect("a decoded request encodes");
+                assert_eq!(fs::decode_request(&encoded), Ok(request));
+            }
+        }
+        1 => {
+            if let Ok(response) = fs::decode_response(bytes) {
+                assert_eq!(fs::encode_response(&response), bytes);
+            }
+        }
+        2 => {
+            if let Ok(page) = fs::decode_list_body(bytes) {
+                let encoded = fs::encode_list_body(&page).expect("a decoded listing encodes");
+                let again = fs::decode_list_body(&encoded).expect("an encoded listing decodes");
+                assert!(again == page, "a decoded listing re-encodes");
+            }
+        }
+        _ => {
+            if let Ok(places) = fs::decode_places_body(bytes) {
+                let encoded = fs::encode_places_body(&places).expect("decoded places encode");
+                assert_eq!(fs::decode_places_body(&encoded), Ok(places));
+            }
+        }
+    }
+}
+
+/// A clipboard frame, its file selections included, decodes only from the
+/// bytes it encodes to.
+pub fn clipboard_frame(payload: &[u8]) {
+    if let Ok(frame) = crate::clipboard::decode(payload) {
+        let encoded = crate::clipboard::encode(&frame).expect("a decoded frame encodes");
+        assert_eq!(&encoded[4..], payload, "a decoded frame re-encodes");
+    }
+}
+
+/// A cursor update decodes only from the bytes it encodes to.
+pub fn cursor_state(bytes: &[u8]) {
+    if let Ok(state) = crate::cursor::decode(bytes) {
+        assert_eq!(crate::cursor::encode(&state, true), bytes);
+    }
+}
+
+/// The System service's replies, chosen by `which`: an operation, the
+/// host's support or its privacy state. Each decodes only from the bytes
+/// it encodes to.
+pub fn system_reply(which: u8, bytes: &[u8]) {
+    match which % 3 {
+        0 => {
+            if let Ok(operation) = codecs::decode_operation(bytes) {
+                assert_eq!(codecs::encode_operation(&operation), bytes);
+            }
+        }
+        1 => {
+            if let Ok((support, session)) = codecs::decode_support(bytes) {
+                assert_eq!(codecs::encode_support(support, &session), bytes);
+            }
+        }
+        _ => {
+            if let Ok(state) = codecs::decode_privacy(bytes) {
+                assert_eq!(codecs::encode_privacy(state), bytes);
+            }
+        }
+    }
+}
+
+/// A snapshot reply decodes only from the bytes the host writes for it.
+pub fn snapshot_payload(bytes: &[u8]) {
+    use crate::core::snapshot::{decode_payload, encode_payload};
+    if let Ok(snapshot) = decode_payload(bytes) {
+        assert_eq!(encode_payload(&snapshot), bytes, "{snapshot:?} re-encodes");
+    }
+}
+
+/// A terminal event decodes only from the bytes it encodes to.
+pub fn terminal_event(bytes: &[u8]) {
+    if let Ok(event) = codecs::decode_event(bytes.to_vec()) {
+        assert_eq!(codecs::encode_event(event), bytes);
+    }
+}
+
+/// The job-control message `which` names, as JSON. Whatever decodes
+/// encodes to JSON that decodes to the same message, and a manifest that
+/// passes validation can be summed.
+pub fn job_message(which: u8, bytes: &[u8]) {
+    use crate::job;
+    let manifest = match which % 9 {
+        0 => json_round_trip::<job::UploadOffer>(bytes).map(|offer| offer.manifest),
+        1 => json_round_trip::<job::ManifestReply>(bytes).and_then(|reply| reply.manifest),
+        2 => json_round_trip::<job::DownloadRequest>(bytes).and(None),
+        3 => json_round_trip::<job::JobReply>(bytes).and(None),
+        4 => json_round_trip::<job::JobStatus>(bytes).and(None),
+        5 => json_round_trip::<job::JobCancel>(bytes).and(None),
+        6 => json_round_trip::<job::JobStateReply>(bytes).and(None),
+        7 => json_round_trip::<job::JobResolve>(bytes).and(None),
+        _ => json_round_trip::<job::JobResume>(bytes).and(None),
+    };
+    if let Some(manifest) = manifest.filter(|manifest| crate::manifest::validate(manifest).is_ok())
+    {
+        let _ = (manifest.total_bytes(), manifest.file_count());
+    }
+}
+
+fn json_round_trip<T: Serialize + DeserializeOwned>(bytes: &[u8]) -> Option<T> {
+    let message: T = crate::job::decode(bytes).ok()?;
+    let encoded = crate::job::encode(&message).expect("a decoded message encodes");
+    let again: T = crate::job::decode(&encoded).expect("an encoded message decodes");
+    assert_eq!(
+        crate::job::encode(&again).expect("a decoded message encodes"),
+        encoded,
+        "a decoded message re-encodes"
+    );
+    Some(message)
 }
 
 /// A directory of this process for the partials the transfer target

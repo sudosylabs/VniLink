@@ -1,5 +1,5 @@
 use super::support::{pair_for_control, start_direct};
-use crate::core::snapshot::snapshot_admitted;
+use crate::core::snapshot::{decode_payload, snapshot_admitted};
 use crate::snapshot::{
     classify_stop, encode_bgra, fitted_size, jpeg_size, tap_is_fresh, validate_image,
     HostSnapshotFactory, ScreenAccess, ScreenImage, ScreenSnapshot, SnapshotFailure,
@@ -51,6 +51,20 @@ fn decoded(jpeg: &[u8]) -> (u16, u16, Vec<u8>) {
 
 fn near(actual: u8, expected: u8) -> bool {
     actual.abs_diff(expected) <= 12
+}
+
+/// Found by the `snapshot_payload` fuzz target: an outcome with bytes after
+/// it decoded, though the host writes none.
+#[test]
+fn an_outcome_with_trailing_bytes_is_malformed() {
+    assert!(matches!(
+        decode_payload(&[1, 1]),
+        Ok(ScreenSnapshot::NeedsPermission)
+    ));
+    assert!(matches!(
+        decode_payload(&[1, 1, 0x37, 0x37]),
+        Err(Error::Malformed)
+    ));
 }
 
 #[test]

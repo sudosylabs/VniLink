@@ -76,6 +76,15 @@ pub use system_stream::RemoteSystemService;
 mod system_stream;
 mod terminal_runtime;
 mod terminal_stream;
+/// The service streams' private codecs, for `crate::fuzzing`.
+#[cfg(feature = "fuzzing")]
+pub(crate) mod codecs {
+    pub(crate) use super::system_stream::{
+        decode_operation, decode_privacy, decode_support, encode_operation, encode_privacy,
+        encode_support,
+    };
+    pub(crate) use super::terminal_stream::{decode_event, encode_event};
+}
 mod topology;
 mod transfer;
 mod video;

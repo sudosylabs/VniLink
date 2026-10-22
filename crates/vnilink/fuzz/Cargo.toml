@@ -68,3 +68,52 @@ path = "fuzz_targets/host_feedback.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fs_wire"
+path = "fuzz_targets/fs_wire.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "clipboard_frame"
+path = "fuzz_targets/clipboard_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cursor_state"
+path = "fuzz_targets/cursor_state.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "system_reply"
+path = "fuzz_targets/system_reply.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "snapshot_payload"
+path = "fuzz_targets/snapshot_payload.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "terminal_event"
+path = "fuzz_targets/terminal_event.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "job_message"
+path = "fuzz_targets/job_message.rs"
+test = false
+doc = false
+bench = false

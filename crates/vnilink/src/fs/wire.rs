@@ -460,9 +460,10 @@ pub(crate) fn decode_list_body(bytes: &[u8]) -> Result<DirPage, WireError> {
             kind,
             size,
             mtime_ms,
+            // Strong is both halves, as `encode_list_body` writes it.
             token: EntryToken {
-                dev: (strong == 1 && dev != 0).then_some(dev),
-                ino: (strong == 1 && ino != 0).then_some(ino),
+                dev: (strong == 1).then_some(dev),
+                ino: (strong == 1).then_some(ino),
             },
         });
     }
@@ -640,7 +641,8 @@ fn take_u64(cursor: &mut &[u8]) -> Option<u64> {
 
 fn take_text(cursor: &mut &[u8], max: usize) -> Option<String> {
     let len = take_u16(cursor)? as usize;
-    if len > max || cursor.len() < len {
+    // As `push_text` writes it: no NUL, which no path or name holds.
+    if len > max || cursor.len() < len || cursor[..len].contains(&0) {
         return None;
     }
     let text = std::str::from_utf8(&cursor[..len]).ok()?.to_owned();

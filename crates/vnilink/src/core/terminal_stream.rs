@@ -26,7 +26,7 @@ fn resize(size: TerminalSize) -> Vec<u8> {
     b.extend(size.columns.to_be_bytes());
     b
 }
-fn encode_event(event: TerminalEvent) -> Vec<u8> {
+pub(crate) fn encode_event(event: TerminalEvent) -> Vec<u8> {
     match event {
         TerminalEvent::Output(bytes) => {
             let mut b = vec![1];
@@ -46,7 +46,7 @@ fn encode_event(event: TerminalEvent) -> Vec<u8> {
         TerminalEvent::Failed(_) => vec![4], // Backend details never travel on the wire.
     }
 }
-fn decode_event(bytes: Vec<u8>) -> Result<TerminalEvent, Error> {
+pub(crate) fn decode_event(bytes: Vec<u8>) -> Result<TerminalEvent, Error> {
     match bytes.first() {
         Some(1) if bytes.len() > 1 && bytes.len() <= TERMINAL_CHUNK + 1 => {
             Ok(TerminalEvent::Output(bytes[1..].to_vec()))
