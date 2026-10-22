@@ -283,7 +283,8 @@ impl WindowsCapture {
         let presented = info.LastPresentTime != 0;
         let frame = self.update_pointer(&info).and_then(|_| {
             if presented {
-                self.copy_resource(resource.as_ref(), timestamp_us)
+                let frame = self.copy_resource(resource.as_ref(), timestamp_us)?;
+                Ok(frame.map(|frame| frame.with_captured_at(presented_at(info.LastPresentTime))))
             } else {
                 Ok(None)
             }
@@ -312,6 +313,26 @@ impl WindowsCapture {
         let picture = self.pool.picture(&source).map_err(map_error)?;
         RawFrame::native(timestamp_us, Box::new(picture)).map(Some)
     }
+}
+
+/// When the desktop was last presented, from Desktop Duplication's
+/// `LastPresentTime`, a QueryPerformanceCounter value: a picture's latency
+/// starts there, not when it was acquired. `Instant` counts on the same
+/// clock on Windows, so the age converts exactly.
+fn presented_at(present_qpc: i64) -> Option<std::time::Instant> {
+    use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+    let (now, mut counter, mut frequency) = (std::time::Instant::now(), 0i64, 0i64);
+    // SAFETY: both write one i64 each to valid locals.
+    unsafe {
+        QueryPerformanceCounter(&mut counter).ok()?;
+        QueryPerformanceFrequency(&mut frequency).ok()?;
+    }
+    let ticks = u64::try_from(counter.checked_sub(present_qpc)?).ok()?;
+    let frequency = u64::try_from(frequency).ok().filter(|hz| *hz > 0)?;
+    let age = std::time::Duration::from_nanos(
+        u64::try_from(u128::from(ticks) * 1_000_000_000 / u128::from(frequency)).ok()?,
+    );
+    now.checked_sub(age)
 }
 
 fn map_error(err: windows::core::Error) -> Error {
