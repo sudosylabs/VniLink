@@ -92,11 +92,11 @@ function stripGeometry(): { cell: number; height: number; area: Electron.Rectang
 	return { cell, height: Math.ceil(cell * 2), area };
 }
 
-/** Whether this application may record the screen; asks macOS once when not. */
+/** Whether this application may record the screen; asks macOS once when not. Windows asks no one. */
 async function screenRecording(driver: WindowDriver): Promise<boolean> {
 	const granted: unknown = await driver.window.webContents.executeJavaScript(`(async () => {
 		const snapshot = await window.driver.permissions.execute({ type: 'status' });
-		if (snapshot.permissions.some(permission => permission.kind === 'screen' && permission.status === 'granted')) {
+		if (snapshot.permissions.some(permission => permission.kind === 'screen' && (permission.status === 'granted' || permission.status === 'not-required'))) {
 			return true;
 		}
 		// macOS lists the application once it has asked; a refusal is the answer.
@@ -104,6 +104,14 @@ async function screenRecording(driver: WindowDriver): Promise<boolean> {
 		return false;
 	})()`);
 	return granted === true;
+}
+
+/** The pipelines the host's diagnostics hold for the screens it serves. */
+async function hostedPipelines(driver: WindowDriver): Promise<Record<string, unknown>[]> {
+	const reply = await engine(driver, { type: 'diagnosticSnapshot' });
+	const snapshot: unknown = typeof reply.snapshot === 'string' ? JSON.parse(reply.snapshot) : undefined;
+	const pipelines: unknown[] = record(snapshot) && Array.isArray(snapshot.pipelines) ? snapshot.pipelines : [];
+	return pipelines.filter((pipeline): pipeline is Record<string, unknown> => record(pipeline) && pipeline.hosted === true);
 }
 
 async function host(driver: WindowDriver): Promise<void> {
@@ -144,7 +152,7 @@ async function host(driver: WindowDriver): Promise<void> {
 		})()`);
 		for (let sample = 0; sample < 40 && !existsSync(join(rendezvous, 'viewer-streaming.json')) && !existsSync(join(rendezvous, 'read.json')); sample++) {
 			const events: unknown = await driver.window.webContents.executeJavaScript('window.latencyEvents.splice(0)');
-			appendFileSync(trace, `${String(Date.now())} ${JSON.stringify({ status: await engine(driver, { type: 'nativeSharingStatus' }), events })}\n`);
+			appendFileSync(trace, `${String(Date.now())} ${JSON.stringify({ status: await engine(driver, { type: 'nativeSharingStatus' }), events, pipelines: await hostedPipelines(driver) })}\n`);
 			await new Promise(resolve => setTimeout(resolve, 500));
 		}
 		// The reader runs as this process's child, so macOS counts it under
@@ -157,6 +165,9 @@ async function host(driver: WindowDriver): Promise<void> {
 			});
 		});
 		publish('host-cpu', cores(cpuStart, cpuSeconds(), (Date.now() - startedAt) / 1000));
+		// The viewer's pipeline as the host's diagnostics hold it: its encoder,
+		// keyframes, reopens and drops over the run.
+		publish('host-pipeline', (await hostedPipelines(driver)).at(0) ?? {});
 		publish('read-done', outcome);
 		await expect('done', 5 * 60000);
 	} finally {
@@ -192,6 +203,10 @@ async function viewer(driver: WindowDriver): Promise<void> {
 	// opens once it has.
 	const deadline = Date.now() + 30000;
 	const trace = join(evidence, 'viewer-start.log');
+	// The window's own messages, for a view that does not start.
+	driver.window.webContents.on('console-message', ({ level, message }) => {
+		appendFileSync(trace, `${String(Date.now())} console ${level} ${message}\n`);
+	});
 	// What the engine reports while the view starts, for a start that fails.
 	await driver.window.webContents.executeJavaScript(`(() => {
 		window.latencyEvents = [];
@@ -251,6 +266,8 @@ async function viewer(driver: WindowDriver): Promise<void> {
 	}
 }
 
-const application = new TestApplication({ showWindow: false, capture: role === 'host', timeoutMs: 30 * 60000 });
+// Both sides prepare native video: the viewer's engine admits a screen only
+// with a decoder of its own. Only the host turns screen sharing on.
+const application = new TestApplication({ showWindow: false, nativeVideo: true, timeoutMs: 30 * 60000 });
 
 void application.run((_window, driver) => role === 'host' ? host(driver) : viewer(driver));

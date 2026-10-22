@@ -132,7 +132,9 @@ export async function verifyTabs(): Promise<boolean> {
 		const close = root.querySelector<HTMLElement>('[aria-selected="true"] .tab-close');
 		assert(close !== null && getComputedStyle(close).borderRadius === '3px', 'Close hover target is not square');
 		assert(fill !== null && getComputedStyle(fill).backgroundColor === 'rgba(0, 0, 0, 0)', 'Active tab masked the titlebar background');
-		assert(fill !== null && getComputedStyle(fill).borderTopWidth === '1px' && getComputedStyle(fill).borderTopColor !== 'rgba(0, 0, 0, 0)', 'Active tab lost its selection outline');
+		// A 1px border is snapped to whole device pixels: one device pixel,
+		// 0.8px, at Windows' 125% scale.
+		assert(fill !== null && Math.round(Number.parseFloat(getComputedStyle(fill).borderTopWidth) * window.devicePixelRatio) === Math.max(1, Math.floor(window.devicePixelRatio)) && getComputedStyle(fill).borderTopColor !== 'rgba(0, 0, 0, 0)', 'Active tab lost its selection outline');
 		const active = root.querySelector<HTMLElement>('[aria-selected="true"]');
 		const inactive = root.querySelector<HTMLElement>('[aria-selected="false"]');
 		assert(active !== null && inactive !== null && getComputedStyle(active).color === getComputedStyle(inactive).color, 'Tab selection still changed the label color');

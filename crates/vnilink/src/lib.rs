@@ -176,7 +176,7 @@ pub use video::{
 };
 pub use video_caps::{
     clamp_quality, negotiate as negotiate_video_codec, AgreedCodec, EncoderImplementation,
-    VideoCodecCaps, WindowDecoder,
+    EncoderInput, VideoCodecCaps, WindowDecoder,
 };
 
 #[cfg(test)]

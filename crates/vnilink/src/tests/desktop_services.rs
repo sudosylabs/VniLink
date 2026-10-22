@@ -1576,6 +1576,7 @@ fn host_and_decoder_reports_become_the_viewers_conditions() {
         crate::EncoderImplementation {
             name: "test",
             hardware: Some(false),
+            input: None,
         },
     )
     .unwrap();

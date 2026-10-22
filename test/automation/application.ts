@@ -9,8 +9,12 @@ import { WindowDriver } from './driver.js';
 export interface TestApplicationOptions {
 	/** Show the workbench window, for a run that measures what is on screen. */
 	readonly showWindow?: boolean;
-	/** Let the temporary engine host this computer's screen. */
-	readonly capture?: boolean;
+	/**
+	 * Prepare the temporary engine's native video, as an installed engine
+	 * does: it decodes a screen it views, and hosts this computer's screen
+	 * once screen sharing is turned on.
+	 */
+	readonly nativeVideo?: boolean;
 	readonly timeoutMs?: number;
 }
 
@@ -69,7 +73,7 @@ export class TestApplication {
 		await new VniLinkApplication({
 			showWindow: this.options.showWindow ?? false,
 			temporaryEngine: true,
-			temporaryEngineCaptures: this.options.capture ?? false,
+			temporaryEngineCaptures: this.options.nativeVideo ?? false,
 			onReady: async window => {
 				const driver = new WindowDriver(window, this.output);
 				try {

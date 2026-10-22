@@ -7,6 +7,7 @@ import { setUnexpectedErrorHandler } from '../../base/common/errors.js';
 import { Event } from '../../base/common/event.js';
 import { Disposable, DisposableStore } from '../../base/common/lifecycle.js';
 import { mark } from '../../base/common/performance.js';
+import { isMacintosh } from '../../base/common/platform.js';
 import { platform } from '../../base/common/process.js';
 import { ProxyChannel } from '../../base/parts/ipc/common/ipc.js';
 import { Server as ElectronIPCServer } from '../../base/parts/ipc/electron-main/ipc.electron.js';
@@ -327,8 +328,10 @@ export class VniLinkApplication extends Disposable {
 				await permissions.synchronize().catch(() => {
 					this.logService.error('Native input backend could not be initialized.');
 				});
-			} else if (this.options.temporaryEngineCaptures === true) {
+			} else if (this.options.temporaryEngineCaptures === true && isMacintosh) {
 				// Screen only: a measuring host is viewed, never controlled.
+				// Elsewhere the system asks no permission to capture, and the
+				// engine is told nothing, as `synchronizeNativePermissions` does.
 				await engine.execute({ type: 'reportNativePermissions', screen: permissions.isGranted('screen'), input: false, camera: false, microphone: false });
 			}
 			await configuration.restoreEngineDefaults(temporary);

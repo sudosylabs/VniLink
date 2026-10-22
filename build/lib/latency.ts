@@ -1,24 +1,25 @@
 /**
- * Glass-to-glass latency on one Mac: a host and a viewer, each a temporary
- * VniLink with its own identity, stream this computer's screen to each
- * other over loopback. The host shows a strip carrying its frame time across
- * the top of the main display; the viewer shows the stream below it; a
- * ScreenCaptureKit reader decodes both strips from the same picture.
+ * Glass-to-glass latency on one Mac or Windows computer: a host and a
+ * viewer, each a temporary VniLink with its own identity, stream this
+ * computer's screen to each other over loopback. The host shows a strip
+ * carrying its frame time across the top of the main display; the viewer
+ * shows the stream below it; a reader (ScreenCaptureKit on macOS, Desktop
+ * Duplication on Windows) decodes both strips from the same picture.
  *
  * It proves capture-to-composited-picture latency through the real path:
- * ScreenCaptureKit, VideoToolbox, QUIC, the utility process, WebCodecs and
- * the canvas. It does not cover a network, panel response (both strips
+ * the platform's capture and encoder, QUIC, the utility process, WebCodecs
+ * and the canvas. It does not cover a network, panel response (both strips
  * share it), another computer or another operating system, and host and
  * viewer share one CPU and GPU.
  */
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { closeSync, existsSync, openSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { electronExecutable } from './electron.ts';
-import { assertNativeFresh } from './native.ts';
-import { ProcessRunner } from './processes.ts';
+import { assertNativeFresh, defaultNativeOptions } from './native.ts';
+import { type LaunchedProcess, ProcessRunner } from './processes.ts';
 
 export interface LatencyOptions {
 	/** How long the reader samples, after the stream has settled. */
@@ -27,8 +28,8 @@ export interface LatencyOptions {
 	readonly settleSeconds: number;
 	readonly output: string;
 	/**
-	 * A development VniLink that already holds Screen Recording, such as
-	 * another checkout's. macOS grants an ad-hoc signed copy by its code
+	 * macOS: a development VniLink that already holds Screen Recording, such
+	 * as another checkout's. macOS grants an ad-hoc signed copy by its code
 	 * hash, so each checkout's copy needs its own grant. The application
 	 * only hosts Electron; the code it runs is this checkout's `out/`.
 	 */
@@ -119,12 +120,30 @@ export interface LatencyCpu {
 	readonly viewer: Readonly<Record<string, number>>;
 }
 
-export function renderLatencySummary(summary: LatencySummary, cpu?: LatencyCpu): string {
+/** The encoder the host had open, as its diagnostics recorded it. */
+export interface LatencyEncoder {
+	readonly encoder?: string;
+	readonly hardware?: boolean;
+	readonly input?: string;
+}
+
+/** The encoder in the host's pipeline summary (`PipelineSummary`), keeping only fields of the expected types. */
+function latencyEncoder(pipeline: unknown): LatencyEncoder {
+	if (typeof pipeline !== 'object' || pipeline === null) {
+		return {};
+	}
+	const field = (name: string): unknown => (pipeline as Record<string, unknown>)[name];
+	const text = (name: string): string | undefined => typeof field(name) === 'string' ? field(name) as string : undefined;
+	return { encoder: text('encoder'), hardware: typeof field('encoder_hardware') === 'boolean' ? field('encoder_hardware') as boolean : undefined, input: text('encoder_input') };
+}
+
+export function renderLatencySummary(summary: LatencySummary, cpu?: LatencyCpu, encoder?: LatencyEncoder): string {
 	const rows = [
 		'# Glass-to-glass latency',
 		'',
 		`Pictures read: ${String(summary.pictures)}; with both strips: ${String(summary.total?.count ?? 0)}.`,
 		'',
+		...(encoder ? [`Host encoder: ${encoder.encoder ?? 'unknown'}, ${encoder.hardware === true ? 'hardware' : encoder.hardware === false ? 'software' : 'kind unknown'}, input ${encoder.input ?? 'unknown'}.`, ''] : []),
 		'| | p50 ms | p95 ms | p99 ms | max ms |',
 		'|---|---|---|---|---|',
 		summary.total ? `| Glass to glass | ${String(summary.total.p50)} | ${String(summary.total.p95)} | ${String(summary.total.p99)} | ${String(summary.total.max)} |` : '| Glass to glass | - | - | - | - |',
@@ -173,10 +192,59 @@ async function arrival(directory: string, name: string, timeoutMs: number, exite
 	}
 }
 
-export async function measureLatency(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
-	if (process.platform !== 'darwin') {
-		throw new Error('measure:latency reads a macOS display');
+/** How one platform runs the two sides and the reader. */
+interface LatencyPlatform {
+	/** The crate whose `glass_latency` example reads this platform's display. */
+	readonly readerCrate: string;
+	readonly reader: string;
+	/** Starts one side; its result settles when the side has quit. */
+	launch(role: 'host' | 'viewer', environment: Readonly<Record<string, string>>, log: string): LaunchedProcess;
+}
+
+async function latencyPlatform(root: string, options: LatencyOptions, processes: ProcessRunner, signal: AbortSignal): Promise<LatencyPlatform> {
+	const entry = join(root, 'out/latency.cjs');
+	if (process.platform === 'darwin') {
+		// .../VniLink.app/Contents/MacOS/Electron
+		const bundle = options.app ?? dirname(dirname(dirname(await electronExecutable(root, signal))));
+		return {
+			readerCrate: 'vnilink-macos',
+			reader: join(root, 'target/release/examples/glass_latency'),
+			// Launched through LaunchServices, each side is its own responsible
+			// application, so macOS asks Screen Recording of the development
+			// VniLink and not of whatever started this task. `open -W` waits for it.
+			launch: (_role, environment, log) => processes.start('open', [
+				'-n', '-W', '-g', '-a', bundle,
+				...Object.entries(environment).flatMap(([name, value]) => ['--env', `${name}=${value}`]),
+				'--stdout', log, '--stderr', log,
+				'--args', entry,
+			]),
+		};
 	}
+	if (process.platform === 'win32') {
+		if (options.app !== undefined) {
+			throw new Error('--app names a macOS application');
+		}
+		// Windows asks no permission to capture; Desktop Duplication needs the
+		// signed-in desktop, which a process started over SSH is not in.
+		const { target } = defaultNativeOptions();
+		const electron = await electronExecutable(root, signal);
+		return {
+			readerCrate: 'vnilink-windows',
+			reader: join(root, 'target', ...(target ? [target] : []), 'release/examples/glass_latency.exe'),
+			launch: (_role, environment, log) => {
+				const output = openSync(log, 'a');
+				try {
+					return processes.start(electron, [entry], { env: { ...process.env, ...environment }, stdio: ['ignore', output, output] });
+				} finally {
+					closeSync(output);
+				}
+			},
+		};
+	}
+	throw new Error('measure:latency reads a macOS or Windows display');
+}
+
+export async function measureLatency(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
 	const options = latencyOptions(root, args);
 	await assertNativeFresh(root);
 	const processes = new ProcessRunner(signal);
@@ -184,11 +252,10 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 	const sides: Promise<unknown>[] = [];
 	try {
 		await mkdir(options.output, { recursive: true });
+		const platform = await latencyPlatform(root, options, processes, signal);
 		// The reader is built before the sides start, so its compile does not
 		// count against their timeouts.
-		await processes.run('cargo', ['build', '--release', '--locked', '-p', 'vnilink-macos', '--example', 'glass_latency'], { cwd: root });
-		// .../VniLink.app/Contents/MacOS/Electron
-		const bundle = options.app ?? dirname(dirname(dirname(await electronExecutable(root, signal))));
+		await processes.run('cargo', ['build', '--release', '--locked', '-p', platform.readerCrate, '--example', 'glass_latency'], { cwd: root });
 		const rendezvous = join(work, 'rendezvous');
 		await mkdir(rendezvous);
 		let exited = false;
@@ -201,15 +268,7 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 				VNILINK_LATENCY_DIR: rendezvous,
 				VNILINK_LATENCY_OUTPUT: options.output,
 			};
-			// Launched through LaunchServices, each side is its own responsible
-			// application, so macOS asks Screen Recording of the development
-			// VniLink and not of whatever started this task. `open -W` waits for it.
-			const side = processes.start('open', [
-				'-n', '-W', '-g', '-a', bundle,
-				...Object.entries(environment).flatMap(([name, value]) => ['--env', `${name}=${value}`]),
-				'--stdout', join(options.output, `${role}.log`), '--stderr', join(options.output, `${role}.log`),
-				'--args', join(root, 'out/latency.cjs'),
-			]);
+			const side = platform.launch(role, environment, join(options.output, `${role}.log`));
 			sides.push(side.result.catch(() => undefined).finally(() => {
 				exited = true;
 			}));
@@ -222,7 +281,7 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 		await new Promise(resolve => setTimeout(resolve, options.settleSeconds * 1000));
 		const samples = join(options.output, 'samples.jsonl');
 		// The host runs the reader, under its own Screen Recording permission.
-		await publish(rendezvous, 'read', { reader: join(root, 'target/release/examples/glass_latency'), seconds: options.seconds, samples });
+		await publish(rendezvous, 'read', { reader: platform.reader, seconds: options.seconds, samples });
 		await arrival(rendezvous, 'read-done', (options.seconds + 60) * 1000, () => exited, signal);
 		const read: unknown = JSON.parse(await readFile(join(rendezvous, 'read-done.json'), 'utf8'));
 		if (typeof read !== 'object' || read === null || !('code' in read) || read.code !== 0) {
@@ -240,14 +299,18 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 		};
 		const cpu = { host: await cpuOf('host-cpu'), viewer: await cpuOf('viewer-cpu') };
 		await writeFile(join(options.output, 'cpu.json'), JSON.stringify(cpu, null, 2));
-		const summary = renderLatencySummary(summariseLatency(await readFile(samples, 'utf8'), stages), cpu);
+		const pipeline: unknown = JSON.parse(await readFile(join(rendezvous, 'host-pipeline.json'), 'utf8').catch(() => '{}'));
+		await writeFile(join(options.output, 'host-pipeline.json'), JSON.stringify(pipeline, null, 2));
+		const encoder = latencyEncoder(pipeline);
+		const summary = renderLatencySummary(summariseLatency(await readFile(samples, 'utf8'), stages), cpu, encoder);
 		await writeFile(join(options.output, 'summary.md'), summary);
 		console.log(summary);
 		console.log(`Evidence: ${options.output}`);
 	} finally {
 		// The sides quit on `done`; stopping `open` would not stop them.
 		await publish(join(work, 'rendezvous'), 'done', {}).catch(() => undefined);
-		// `open -W` returns when its side has quit; its profile is then free to remove.
+		// A side's process (`open -W` on macOS) returns when it has quit; its
+		// profile is then free to remove.
 		await Promise.race([Promise.all(sides), new Promise(resolve => setTimeout(resolve, 20000))]);
 		await processes.stop();
 		await rm(work, { recursive: true, force: true });

@@ -67,6 +67,7 @@ impl VideoEncoder for LinuxEncoder {
         vnilink::EncoderImplementation {
             name: "vaapi",
             hardware: Some(true),
+            input: None,
         }
     }
 

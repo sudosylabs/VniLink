@@ -348,8 +348,11 @@ fn consume<E, F>(
         captured_at: None,
         unchanged: false,
     };
+    // The encoder as last reported: at open, at every reopen, and whenever
+    // a picture took another input than the one before.
+    let mut reported = session.implementation();
     if target.service {
-        let _ = core.report_desktop_encoder(target.id, target.generation, session.implementation());
+        let _ = core.report_desktop_encoder(target.id, target.generation, reported);
     }
     let mut applied_quality = target.quality;
     let mut seen = 0u64;
@@ -410,8 +413,8 @@ fn consume<E, F>(
         }
         if target.service && session.reopens() != reopens {
             let _ = core.report_desktop_encoder_reopen(target.id, target.generation);
-            let _ =
-                core.report_desktop_encoder(target.id, target.generation, session.implementation());
+            reported = session.implementation();
+            let _ = core.report_desktop_encoder(target.id, target.generation, reported);
         }
         if let Some(still) = stills.made() {
             sink.captured_at = None;
@@ -518,6 +521,10 @@ fn consume<E, F>(
         let encode_started = Instant::now();
         match session.publish(&frame, &mut sink, target.id) {
             Ok(crate::PumpOutput::Encoded(_)) => {
+                if target.service && session.implementation() != reported {
+                    reported = session.implementation();
+                    let _ = core.report_desktop_encoder(target.id, target.generation, reported);
+                }
                 if target.service {
                     let _ = core.report_desktop_producer_duration(
                         target.id,

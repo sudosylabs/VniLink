@@ -14,17 +14,46 @@ use crate::protocol::{Quality, CODEC_H264_HIGH};
 /// sizes means no usable video path; admission then reports unsupported
 /// instead of a session that can never carry video.
 /// The encoder a host has open for one viewer: a short fixed name for
-/// diagnostics, and whether it is hardware, `None` when it cannot tell.
+/// diagnostics, whether it is hardware, and what it reads a picture from;
+/// `None` where it cannot tell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EncoderImplementation {
     pub name: &'static str,
     pub hardware: Option<bool>,
+    pub input: Option<EncoderInput>,
 }
 impl EncoderImplementation {
     pub const UNKNOWN: Self = Self {
         name: "unknown",
         hardware: None,
+        input: None,
     };
+}
+
+/// Where an encoder takes a captured picture from: the cost a host pays
+/// before encoding. It can change while the encoder is open, when a GPU
+/// step fails and the next picture takes the next way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncoderInput {
+    /// The picture stays on the GPU that captured it, converted there and
+    /// encoded from that texture: nothing is copied to memory.
+    GpuTexture,
+    /// Converted (and scaled) on the GPU that captured it, then read into
+    /// memory for the encoder.
+    GpuReadBack,
+    /// Read into memory, then scaled and converted on the CPU.
+    Cpu,
+}
+
+impl EncoderInput {
+    /// Short fixed label for diagnostics.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::GpuTexture => "gpu-texture",
+            Self::GpuReadBack => "gpu-readback",
+            Self::Cpu => "cpu",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

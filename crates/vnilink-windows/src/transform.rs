@@ -1,7 +1,15 @@
 //! The H.264 encoder transforms Media Foundation offers on this machine:
-//! hardware ones (NVIDIA NVENC, Intel Quick Sync, AMD) in the order Media
-//! Foundation ranks them, then Microsoft's software transform, which every
+//! hardware ones (NVIDIA NVENC, Intel Quick Sync, AMD), the capture
+//! adapter's first, then Microsoft's software transform, which every
 //! Windows with Media Foundation has.
+//!
+//! The order is the encoder rule's (S1.4 of the deferred video plans): an
+//! encoder on the GPU that holds the captured picture reads it without a
+//! copy, or with the cheapest one; ties on an adapter keep Media
+//! Foundation's merit order. Adapters are asked one by one, by LUID.
+//! `MFTEnumEx` over all of them put NVIDIA's first on a laptop whose panel
+//! is on Intel's GPU, in the signed-in desktop and over SSH alike, so an
+//! encoder that did not read the captured texture went to the other GPU.
 //!
 //! What a transform does with a recovery keyframe, a still screen and a new
 //! bitrate is measured per vendor (`recovery_tests`), not assumed from its
@@ -9,6 +17,8 @@
 //! it unsupported, and none applies it.
 
 use windows::core::{GUID, PWSTR};
+use windows::Win32::Foundation::LUID;
+use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
 use windows::Win32::Media::MediaFoundation::{
     IMFActivate, IMFTransform, MFCreateAttributes, MFMediaType_Video, MFTEnum2, MFTEnumEx,
     MFT_ENUM_HARDWARE_VENDOR_ID_Attribute, MFT_FRIENDLY_NAME_Attribute, MFVideoFormat_H264,
@@ -164,9 +174,7 @@ impl Drop for CreatedTransform {
 /// The hardware H.264 encoders on one adapter (`MFTEnum2` with
 /// `MFT_ENUM_ADAPTER_LUID`), in Media Foundation's order. Empty where the
 /// adapter has none or cannot be asked.
-pub(crate) unsafe fn hardware_encoders_on(
-    adapter: windows::Win32::Foundation::LUID,
-) -> Vec<H264Transform> {
+pub(crate) unsafe fn hardware_encoders_on(adapter: LUID) -> Vec<H264Transform> {
     (|| {
         let mut attributes = None;
         MFCreateAttributes(&mut attributes, 1)?;
@@ -174,8 +182,8 @@ pub(crate) unsafe fn hardware_encoders_on(
             .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?;
         // The attribute is the LUID itself, as a blob.
         let bytes = std::slice::from_raw_parts(
-            (&adapter as *const windows::Win32::Foundation::LUID).cast::<u8>(),
-            std::mem::size_of::<windows::Win32::Foundation::LUID>(),
+            (&adapter as *const LUID).cast::<u8>(),
+            std::mem::size_of::<LUID>(),
         );
         attributes.SetBlob(&MFT_ENUM_ADAPTER_LUID, bytes)?;
         let (input, output) = h264_types();
@@ -228,15 +236,59 @@ unsafe fn take_activates(activates: *mut Option<IMFActivate>, count: u32) -> Vec
     encoders
 }
 
-/// The H.264 encoders that take NV12, hardware first, Microsoft's software
-/// transform last. A machine whose hardware cannot be enumerated still gets
-/// the software transform.
+/// The H.264 encoders that take NV12 for pictures captured on the first
+/// DXGI adapter, the one capture opens ([`h264_encoders_for`]).
 pub(crate) unsafe fn h264_encoders() -> Vec<H264Transform> {
-    let mut encoders = hardware_encoders().unwrap_or_default();
+    let adapters = adapters();
+    match adapters.first() {
+        Some(&capture) => h264_encoders_for(capture),
+        None => {
+            let mut encoders = hardware_encoders().unwrap_or_default();
+            encoders.push(H264Transform::software());
+            encoders
+        }
+    }
+}
+
+/// The H.264 encoders that take NV12 for pictures captured on the adapter
+/// `capture`, in the order they are tried: its hardware encoders, then each
+/// other adapter's in DXGI's order, then Microsoft's software transform. A
+/// machine whose adapters list no hardware encoder gets Media Foundation's
+/// own list of them; one whose hardware cannot be enumerated still gets
+/// the software transform.
+pub(crate) unsafe fn h264_encoders_for(capture: LUID) -> Vec<H264Transform> {
+    let others = adapters()
+        .into_iter()
+        .filter(|adapter| !same(*adapter, capture));
+    let mut encoders: Vec<_> = std::iter::once(capture)
+        .chain(others)
+        .flat_map(|adapter| hardware_encoders_on(adapter))
+        .collect();
+    if encoders.is_empty() {
+        encoders = hardware_encoders().unwrap_or_default();
+    }
     encoders.push(H264Transform::software());
     encoders
 }
 
+/// The LUIDs of this machine's adapters, in DXGI's order; empty where DXGI
+/// cannot be asked.
+unsafe fn adapters() -> Vec<LUID> {
+    let Ok(factory) = CreateDXGIFactory1::<IDXGIFactory1>() else {
+        return Vec::new();
+    };
+    (0..)
+        .map_while(|index| factory.EnumAdapters1(index).ok())
+        .filter_map(|adapter| adapter.GetDesc1().ok())
+        .map(|desc| desc.AdapterLuid)
+        .collect()
+}
+
+fn same(a: LUID, b: LUID) -> bool {
+    (a.HighPart, a.LowPart) == (b.HighPart, b.LowPart)
+}
+
+/// Every hardware H.264 encoder Media Foundation lists, across adapters.
 unsafe fn hardware_encoders() -> windows::core::Result<Vec<H264Transform>> {
     let (input, output) = h264_types();
     let mut activates = std::ptr::null_mut::<Option<IMFActivate>>();

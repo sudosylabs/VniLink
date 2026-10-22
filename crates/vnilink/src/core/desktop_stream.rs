@@ -430,6 +430,9 @@ impl DesktopRuntime {
             end: lock(&self.end).map(|end| end.label().into()),
             encoder: encoder.map(|encoder| encoder.name.into()),
             encoder_hardware: encoder.and_then(|encoder| encoder.hardware),
+            encoder_input: encoder
+                .and_then(|encoder| encoder.input)
+                .map(|input| input.label().into()),
             decoder_hardware: decoder.software.map(|software| !software),
             decoder_recoveries: decoder.recoveries,
         }

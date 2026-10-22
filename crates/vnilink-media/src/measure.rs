@@ -3,6 +3,7 @@
 
 use crate::RawFrame;
 
+pub mod glass;
 pub mod timecode;
 
 /// A page of text-like glyphs from a fixed alphabet on white, with a

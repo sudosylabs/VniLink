@@ -72,3 +72,11 @@ test('the summary shows each side\'s CPU, largest process first', async () => {
 	assert.match(text, /\| viewer \| 0\.50 \| GPU 0\.50 \|/);
 	assert.doesNotMatch(renderLatencySummary(summariseLatency('', '')), /CPU while/);
 });
+
+test('the summary names the encoder the host had open and what it read', async () => {
+	const { summariseLatency, renderLatencySummary } = await import('../../build/lib/latency.ts');
+	const text = renderLatencySummary(summariseLatency('', ''), undefined, { encoder: 'mf-intel', hardware: true, input: 'gpu-texture' });
+	assert.match(text, /Host encoder: mf-intel, hardware, input gpu-texture\./);
+	assert.match(renderLatencySummary(summariseLatency('', ''), undefined, {}), /Host encoder: unknown, kind unknown, input unknown\./);
+	assert.doesNotMatch(renderLatencySummary(summariseLatency('', '')), /Host encoder/);
+});
