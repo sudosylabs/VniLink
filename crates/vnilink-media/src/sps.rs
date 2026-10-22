@@ -18,6 +18,16 @@ struct SpsFacts {
     vui_present: bool,
     /// The VUI's video signal, when it has one.
     signal: Option<VideoSignal>,
+    /// Where the VUI's video signal section starts and what follows it
+    /// begins, when the SPS has VUI.
+    vui: Option<VuiPrefix>,
+}
+
+/// Bit offsets in the RBSP around the VUI's video signal section.
+#[derive(Clone, Copy)]
+struct VuiPrefix {
+    signal_flag_at: usize,
+    rest_at: usize,
 }
 
 /// The colour an SPS says its pictures are in, or `None` when it says
@@ -26,38 +36,51 @@ pub fn h264_video_signal(sps: &[u8]) -> Result<Option<VideoSignal>, Error> {
     parse(sps).map(|facts| facts.signal)
 }
 
-/// `sps` with the VUI every VniLink stream carries in place of whatever VUI
-/// it had, or `None` when it cannot be read. Applied to every H.264 keyframe
-/// a host sends ([`crate::EncodedSample::annex_b`]).
+/// `sps` saying the stream's colour, [`STREAM_SIGNAL`], or `None` when it
+/// cannot be read. Applied to every H.264 keyframe a host sends
+/// ([`crate::EncodedSample::annex_b`]).
 ///
-/// The VUI says two things:
-/// - the colour, [`STREAM_SIGNAL`], so no decoder guesses it;
-/// - that each picture may be shown as soon as it is decoded: no
-///   reordering, and a decoded-picture buffer of the stream's reference
-///   frames, as Media Foundation's low-delay SPS says. Without it a decoder
-///   must assume reordering and may hold back a whole picture buffer;
-///   VideoToolbox writes no VUI even with reordering turned off.
+/// An SPS with VUI keeps everything its encoder wrote there (timing, HRD,
+/// bitstream restriction) and only its video signal is replaced: Media
+/// Foundation's decoder refuses some streams whose VUI lost the rest.
 ///
-/// Nothing else an encoder wrote there (aspect ratio, timing, HRD) is used
-/// by VniLink: pixels are square and pictures carry their own times.
+/// An SPS without VUI, as VideoToolbox writes even with reordering turned
+/// off, gains one that says the colour and that each picture may be shown
+/// as soon as it is decoded: no reordering, and a decoded-picture buffer of
+/// the stream's reference frames, as Media Foundation's low-delay SPS says.
+/// Without it a decoder must assume reordering and may hold back a whole
+/// picture buffer.
 pub fn h264_stream_sps(sps: &[u8]) -> Option<Vec<u8>> {
     let facts = parse(sps).ok()?;
     let payload = rbsp(&sps[1..]);
     let mut out = BitWriter::default();
     let mut bits = Bits::new(&payload);
+    if facts.vui_present {
+        let vui = facts.vui?;
+        for _ in 0..vui.signal_flag_at {
+            out.bit(bits.bit()?);
+        }
+        stream_signal(&mut out);
+        // The rest of the VUI as written, through the RBSP stop bit.
+        let stop = payload
+            .iter()
+            .rposition(|byte| *byte != 0)
+            .map(|at| at * 8 + 7 - payload[at].trailing_zeros() as usize)?;
+        bits.at = vui.rest_at;
+        while bits.at <= stop {
+            out.bit(bits.bit()?);
+        }
+        let mut nal = vec![sps[0]];
+        nal.extend(emulation_prevented(&out.finish()));
+        return Some(nal);
+    }
     for _ in 0..facts.vui_flag_at {
         out.bit(bits.bit()?);
     }
     out.bit(1); // vui_parameters_present_flag
     out.bit(0); // aspect_ratio_info_present_flag
     out.bit(0); // overscan_info_present_flag
-    out.bit(1); // video_signal_type_present_flag
-    out.bits(5, 3); // video_format: unspecified
-    out.bit(u32::from(STREAM_SIGNAL.full_range));
-    out.bit(1); // colour_description_present_flag
-    out.bits(u32::from(STREAM_SIGNAL.primaries), 8);
-    out.bits(u32::from(STREAM_SIGNAL.transfer), 8);
-    out.bits(u32::from(STREAM_SIGNAL.matrix), 8);
+    stream_signal(&mut out);
     // Chroma location, timing, NAL HRD, VCL HRD and picture structure: none.
     for _ in 0..5 {
         out.bit(0);
@@ -74,6 +97,18 @@ pub fn h264_stream_sps(sps: &[u8]) -> Option<Vec<u8>> {
     let mut nal = vec![sps[0]];
     nal.extend(emulation_prevented(&out.finish()));
     Some(nal)
+}
+
+/// `video_signal_type_present_flag` and the fields it introduces, saying
+/// [`STREAM_SIGNAL`].
+fn stream_signal(out: &mut BitWriter) {
+    out.bit(1); // video_signal_type_present_flag
+    out.bits(5, 3); // video_format: unspecified
+    out.bit(u32::from(STREAM_SIGNAL.full_range));
+    out.bit(1); // colour_description_present_flag
+    out.bits(u32::from(STREAM_SIGNAL.primaries), 8);
+    out.bits(u32::from(STREAM_SIGNAL.transfer), 8);
+    out.bits(u32::from(STREAM_SIGNAL.matrix), 8);
 }
 
 fn parse(sps: &[u8]) -> Result<SpsFacts, Error> {
@@ -166,10 +201,9 @@ fn parse(sps: &[u8]) -> Result<SpsFacts, Error> {
     };
     let vui_flag_at = bits.at;
     let vui_present = bits.bit().is_some_and(|flag| flag == 1);
-    let signal = if vui_present {
-        video_signal(&mut bits)
-    } else {
-        None
+    let (signal, vui) = match vui_present.then(|| video_signal(&mut bits)).flatten() {
+        Some((signal, prefix)) => (signal, Some(prefix)),
+        None => (None, None),
     };
     let invalid = || Error::InvalidFrame("H.264 SPS picture size is out of range");
     let coded_width = width_mbs
@@ -205,12 +239,13 @@ fn parse(sps: &[u8]) -> Result<SpsFacts, Error> {
         vui_flag_at,
         vui_present,
         signal,
+        vui,
     })
 }
 
-/// The VUI's video signal, read up to `colour_description` (H.264 E.1.1).
-/// `None` when the VUI has none or ends early.
-fn video_signal(bits: &mut Bits<'_>) -> Option<VideoSignal> {
+/// The VUI's video signal, read up to `colour_description` (H.264 E.1.1),
+/// and where that section starts and ends. `None` when the VUI ends early.
+fn video_signal(bits: &mut Bits<'_>) -> Option<(Option<VideoSignal>, VuiPrefix)> {
     if bits.bit()? == 1 {
         // aspect_ratio_idc 255 is Extended_SAR: a width and height follow.
         if bits.u8()? == 255 {
@@ -221,8 +256,16 @@ fn video_signal(bits: &mut Bits<'_>) -> Option<VideoSignal> {
     if bits.bit()? == 1 {
         bits.bit()?; // overscan_appropriate_flag
     }
+    let signal_flag_at = bits.at;
     if bits.bit()? == 0 {
-        return None;
+        let rest_at = bits.at;
+        return Some((
+            None,
+            VuiPrefix {
+                signal_flag_at,
+                rest_at,
+            },
+        ));
     }
     bits.u(3)?; // video_format
     let full_range = bits.bit()? == 1;
@@ -232,12 +275,20 @@ fn video_signal(bits: &mut Bits<'_>) -> Option<VideoSignal> {
     } else {
         (2, 2, 2)
     };
-    Some(VideoSignal {
+    let signal = VideoSignal {
         primaries,
         transfer,
         matrix,
         full_range,
-    })
+    };
+    let rest_at = bits.at;
+    Some((
+        Some(signal),
+        VuiPrefix {
+            signal_flag_at,
+            rest_at,
+        },
+    ))
 }
 
 /// Inserts emulation-prevention `0x03` wherever two zero bytes precede a byte of 3 or less.
@@ -509,7 +560,48 @@ mod tests {
         let replaced = h264_stream_sps(&other).unwrap();
         assert_eq!(h264_picture_size(&replaced).unwrap(), (64, 64));
         assert_eq!(h264_video_signal(&replaced).unwrap(), Some(STREAM_SIGNAL));
-        assert_eq!(replaced, h264_stream_sps(&valid).unwrap());
+        // Only the signal changed: the aspect ratio and overscan before it
+        // and the six flags after it are as written.
+        let facts = parse(&replaced).unwrap();
+        let payload = rbsp(&replaced[1..]);
+        let mut bits = Bits::new(&payload);
+        bits.at = facts.vui_flag_at + 1;
+        assert_eq!((bits.bit(), bits.u8()), (Some(1), Some(255)));
+        assert_eq!([bits.u(16), bits.u(16)], [Some(4), Some(3)]);
+        assert_eq!([bits.bit(), bits.bit()], [Some(1), Some(0)]);
+        bits.at = facts.vui.unwrap().rest_at;
+        for _ in 0..6 {
+            assert_eq!(bits.bit(), Some(0));
+        }
+        assert_eq!(bits.bit(), Some(1), "rbsp_stop_one_bit");
+        assert_eq!(h264_stream_sps(&replaced).unwrap(), replaced);
+    }
+
+    /// NVIDIA's 64x64 SPS through Media Foundation: VUI with timing and HRD.
+    /// Media Foundation's decoder refused this stream once its VUI was
+    /// replaced whole; only the signal may change.
+    #[test]
+    fn an_encoders_timing_and_hrd_survive_the_signal() {
+        let nvidia = [
+            0x27, 0x42, 0x40, 0x0d, 0x95, 0xa1, 0x09, 0xb0, 0x14, 0x08, 0x00, 0x00, 0x03, 0x00,
+            0x08, 0x00, 0x00, 0x03, 0x01, 0xe7, 0x42, 0x00, 0xf4, 0x00, 0x1f, 0x43, 0x7b, 0xdf,
+            0x07, 0x68, 0x70, 0xaa, 0x80,
+        ];
+        let before = parse(&nvidia).unwrap();
+        assert_eq!(before.size, (64, 64));
+        let stream = h264_stream_sps(&nvidia).unwrap();
+        let after = parse(&stream).unwrap();
+        assert_eq!(after.size, (64, 64));
+        assert_eq!(after.signal, Some(STREAM_SIGNAL));
+        // Everything after the signal section is the same bits.
+        let (old, new) = (rbsp(&nvidia[1..]), rbsp(&stream[1..]));
+        let (mut a, mut b) = (Bits::new(&old), Bits::new(&new));
+        a.at = before.vui.unwrap().rest_at;
+        b.at = after.vui.unwrap().rest_at;
+        while a.at < old.len() * 8 {
+            assert_eq!(a.bit(), b.bit(), "bit {} of the original", a.at);
+        }
+        assert_eq!(h264_stream_sps(&stream).unwrap(), stream);
     }
 
     #[test]

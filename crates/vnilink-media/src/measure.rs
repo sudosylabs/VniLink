@@ -74,7 +74,7 @@ pub fn psnr(source: &RawFrame, decoded: &RawFrame) -> f64 {
 pub fn colour_text_page(width: u16, height: u16, index: u64) -> RawFrame {
     let (w, h) = (usize::from(width), usize::from(height));
     let mut pixels = vec![255u8; w * h * 4];
-    let mut put = |pixels: &mut Vec<u8>, x: usize, y: usize, bgr: [u8; 3]| {
+    let put = |pixels: &mut Vec<u8>, x: usize, y: usize, bgr: [u8; 3]| {
         if x < w && y < h {
             pixels[(y * w + x) * 4..(y * w + x) * 4 + 3].copy_from_slice(&bgr);
         }

@@ -47,7 +47,8 @@ fn an_idr_without_parameter_sets_is_rejected() {
 #[test]
 fn an_annex_b_keyframe_is_kept() {
     let bytes = [
-        0, 0, 0, 1, 0x67, 0x42, 0, 0, 0, 1, 0x68, 0xce, 0, 0, 0, 1, 0x65, 0x88,
+        0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1e, 0xda, 0x10, 0x99, 0, 0, 0, 1, 0x68, 0xce, 0, 0, 0, 1,
+        0x65, 0x88,
     ];
     let sample = h264_access_unit(&bytes, &[]).unwrap();
     assert!(sample.keyframe());
