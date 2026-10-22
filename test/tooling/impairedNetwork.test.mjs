@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { NETEM_PROFILES, RELAY_PATH, blackoutArguments, creationCommands, netemArguments, profileCommands, qdiscCommands, relayPathCommands, selectProfiles, shellScript, statisticsDelta, topology } from '../../build/lib/netem.ts';
-import { DEFAULT_OPTIONS, checkoutVolume, parseImpairedArguments, parseSize, pathMismatch, relayUrl, renderSummary, resolveOptions, scenarioEnvironment } from '../../build/lib/impaired.ts';
+import { DEFAULT_OPTIONS, checkoutVolume, observeRelay, parseImpairedArguments, parseSize, parseSocketSample, pathMismatch, relayUrl, renderSummary, resolveOptions, scenarioEnvironment } from '../../build/lib/impaired.ts';
 
 const named = name => NETEM_PROFILES.find(item => item.name === name);
 
@@ -164,6 +164,27 @@ test('the summary reports refusals, recovery and failed runs', () => {
 	assert.match(summary, /- rate-2 video: cargo exited \(101\)/);
 	assert.doesNotMatch(summary, /Path: relay/);
 	assert.match(renderSummary({ started: 'now', commit: 'abc', path: 'relay', runs: [] }), /Path: relay\. .*not a public relay or an internet path/);
+});
+
+test('relay counters and socket samples become per-run deltas and peaks', () => {
+	const text = [
+		'ESTAB 0      4194304 127.0.0.3:41000 127.0.0.2:3340',
+		'\t cubic wscale:7,7 rto:1200 rtt:950.5/40 mss:1448 cwnd:4 bytes_sent:9 retrans:1/37 notsent:3000000',
+		'ESTAB 0      0       127.0.0.3:41002 127.0.0.2:3340',
+		'\t cubic rtt:20/5 cwnd:10',
+	].join('\n');
+	const first = parseSocketSample('vnl-view', text);
+	assert.deepEqual(first[0], { namespace: 'vnl-view', local: '127.0.0.3:41000', peer: '127.0.0.2:3340', sendQueue: 4194304, rttMs: 950.5, cwnd: 4, retransmitted: 37 });
+	assert.equal(first[1].retransmitted, null);
+	const later = parseSocketSample('vnl-view', 'ESTAB 0 1000 127.0.0.3:41000 127.0.0.2:3340\n\t rtt:30/5 cwnd:20 retrans:0/40');
+	const base = { bytes_recv: 0, bytes_sent: 0, frames_recv: 10, frames_sent: 5, frames_dropped: 1, accepts: 2, disconnects: 0 };
+	const observed = observeRelay(base, { ...base, frames_recv: 110, frames_sent: 60, frames_dropped: 3, accepts: 5, disconnects: 3 }, [...first, ...later]);
+	assert.equal(observed.queueDiscarded, 100 - 55 - 2);
+	assert.deepEqual(observed.counters.accepts, 3);
+	assert.deepEqual(observed.sockets[0], { namespace: 'vnl-view', local: '127.0.0.3:41000', peer: '127.0.0.2:3340', peakSendQueue: 4194304, peakRttMs: 950.5, retransmitted: 40 });
+	assert.equal(observeRelay(null, base, []).queueDiscarded, null);
+	const summary = renderSummary({ started: 'now', commit: 'abc', path: 'relay', runs: [{ profile: 'loss-1', scenario: 'transfer', status: 'passed', result: null, relay: observed }] });
+	assert.match(summary, /\| loss-1 \| transfer \| 100\/55 \| 2\/43 \| 3\/3 \| 4\.19 MB, 951 ms \| – \|/);
 });
 
 test('each checkout caches its build in a volume of its own', () => {

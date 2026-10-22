@@ -241,6 +241,47 @@ pub(super) fn close_peer_files(shared: &Shared, peer: &[u8; 32]) {
     }
 }
 
+/// What QUIC sees on each path of this computer's files connections,
+/// serving and fetching, for the impaired-network harness.
+#[cfg(test)]
+impl Core {
+    pub(crate) fn files_path_stats(&self) -> Vec<serde_json::Value> {
+        let shared = &self.shared;
+        let serving: Vec<Connection> = lock(&shared.files_serving)
+            .values()
+            .flatten()
+            .cloned()
+            .collect();
+        let fetching: Vec<Connection> = lock(&shared.files_fetching).values().cloned().collect();
+        let roles = serving.iter().map(|connection| ("serving", connection));
+        roles
+            .chain(fetching.iter().map(|connection| ("fetching", connection)))
+            .flat_map(|(role, connection)| {
+                connection
+                    .paths()
+                    .iter()
+                    .map(|path| {
+                        let stats = path.stats();
+                        serde_json::json!({
+                            "role": role,
+                            "relay": path.is_relay(),
+                            "selected": path.is_selected(),
+                            "rtt_ms": path.rtt().as_secs_f64() * 1e3,
+                            "cwnd": stats.cwnd,
+                            "congestion_events": stats.congestion_events,
+                            "spurious_congestion_events": stats.spurious_congestion_events,
+                            "sent_datagrams": stats.udp_tx.datagrams,
+                            "lost_packets": stats.lost_packets,
+                            "sent_bytes": stats.udp_tx.bytes,
+                            "lost_bytes": stats.lost_bytes,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+}
+
 impl Core {
     /// Fetches file `file` of the peer's sending job `job` into the
     /// partial at `partial`, whose segment journal is `journal`, continuing

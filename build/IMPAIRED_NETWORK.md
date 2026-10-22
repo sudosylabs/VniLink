@@ -76,6 +76,12 @@ npm run measure:impaired -- --profiles quick --path relay
 - **Routes.** The host core reaches the relay over its own loopback. The viewer's core reaches it from `127.0.0.3` across the veth, so each relayed packet crosses netem once, as a direct packet does. Only the viewer's leg is impaired; the relay's TCP connection, not QUIC, carries that leg's loss recovery.
 - **No direct path.** A `clsact` egress filter on each veth drops every UDP packet before it reaches the netem qdisc. The `udpBlocked` counter in `results.json` counts what it kept off the link.
 - **Verification.** Each scenario reports the selected path of every connection, from the cores' diagnostics, once connected and once finished. A run fails unless every core finishes on a connection over the expected path, in either mode. The Files connection is not in those diagnostics; with UDP blocked it can only use the relay too.
+- **Relay evidence.** The relay prints its cumulative counters once a second. Each run's `relay` entry in `results.json`, and the summary's Relay table, give their difference over the run:
+  - datagram frames taken from and written to clients;
+  - frames dropped for a gone recipient or a failed write;
+  - frames its per-client queues discarded. The server does not count these, so the harness derives them, give or take one queue still waiting at the end;
+  - client connections opened and closed. A client reconnects after a relay health-check ping times out, and the server closes one whose writes outlast its timeout.
+- **Relay sockets.** During each run, the harness samples every TCP connection to or from the relay with `ss -tin` once a second. `<profile>/<scenario>.relay-sockets.jsonl` holds each sample's Send-Q (bytes not yet acknowledged), TCP round trip, congestion window and retransmissions. The summary gives each leg's peak Send-Q and round trip. A backlog queued inside the clients, ahead of their sockets, does not show in Send-Q. It shows as the QUIC round trip in the transfer scenario's `files_paths`.
 
 This is a local relay on the same Linux host as both engines, over netem. It says nothing about the public n0 relays, their load or distance, TLS, or internet paths.
 
@@ -88,6 +94,8 @@ This is a local relay on the same Linux host as both engines, over netem. It say
 - a mixed tree of 200 files from 1 KiB to 4 MiB, up to four folders deep, with empty folders.
 
 Each case reports outcome, submit time, elapsed time from submit to completion, MB/s (10⁶ bytes) and files per second. A complete case is compared byte for byte with its source. The report also gives each core's selected path once connected and once finished.
+
+`files_paths` samples each core's Files connections once a second during a case: the receiver's progress, and for every QUIC path its round trip, congestion window, congestion events, packets lost, and datagrams and bytes sent. The sender is the viewer core (`serving`). A path that disappears between samples is a connection that ended and was dialled again.
 
 **Video** (`crates/vnilink-media/src/tests/impaired_video.rs`) runs the real shared-capture fanout with a synthetic source and encoder:
 

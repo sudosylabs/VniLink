@@ -252,7 +252,8 @@ fn pair(host: &Core, controller: &Core) {
 }
 
 /// Drives until the receiver record ends or `deadline` passes, and returns
-/// the receiver's snapshot with the time it was taken. A job still running at
+/// the receiver's snapshot with the time it was taken, and what QUIC saw on
+/// each core's files connections once a second meanwhile. A job still running at
 /// the deadline is cancelled on both sides before the drivers are joined: a
 /// receiver poll blocks for a whole file, and cancelling is what interrupts it.
 fn drive(
@@ -261,7 +262,7 @@ fn drive(
     host: &Arc<Core>,
     job: u64,
     deadline: Instant,
-) -> (crate::job::JobSnapshot, Instant) {
+) -> (crate::job::JobSnapshot, Instant, Vec<Value>) {
     let done = Arc::new(AtomicBool::new(false));
     // The receiver fetches, so it advances back to back. The sender only asks
     // the receiver for its state; spinning it would flood the link with
@@ -289,11 +290,23 @@ fn drive(
     } else {
         Vec::new()
     };
+    let started = Instant::now();
+    let mut files_paths = Vec::new();
+    let mut next_sample = started;
     let (snapshot, at) = loop {
         let snapshot = host.job_snapshot(job).expect("receiver record");
         let now = Instant::now();
         if snapshot.state.is_terminal() || now >= deadline {
             break (snapshot, now);
+        }
+        if now >= next_sample {
+            files_paths.push(json!({
+                "t_ms": (now - started).as_millis() as u64,
+                "done_bytes": snapshot.done_bytes,
+                "host": host.files_path_stats(),
+                "viewer": controller.files_path_stats(),
+            }));
+            next_sample += Duration::from_secs(1);
         }
         std::thread::sleep(Duration::from_millis(5));
     };
@@ -306,7 +319,7 @@ fn drive(
     for worker in workers {
         worker.join().expect("driver thread");
     }
-    (snapshot, at)
+    (snapshot, at, files_paths)
 }
 
 fn run_case(
@@ -334,7 +347,8 @@ fn run_case(
             return json!({ "case": name, "outcome": "refused", "error": error.to_string(), "submit_ms": submit_ms });
         }
     };
-    let (snapshot, ended) = drive(matrix, controller, host, job, started + matrix.timeout);
+    let (snapshot, ended, files_paths) =
+        drive(matrix, controller, host, job, started + matrix.timeout);
     let elapsed = ended - started;
     let outcome = match snapshot.state {
         JobState::Complete => {
@@ -364,6 +378,7 @@ fn run_case(
         "files_done": snapshot.files_done,
         "mb_per_s": snapshot.done_bytes as f64 / 1e6 / seconds,
         "files_per_s": snapshot.files_done as f64 / seconds,
+        "files_paths": files_paths,
     })
 }
 
