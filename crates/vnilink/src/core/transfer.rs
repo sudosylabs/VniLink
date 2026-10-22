@@ -12,7 +12,7 @@ use super::*;
 
 use std::time::Duration;
 
-use iroh::endpoint::{Connection, RecvStream, SendStream};
+use iroh::endpoint::{Connection, RecvStream, SendStream, VarInt};
 
 use crate::error::Error;
 use crate::transfer::{self, Answer, FileRequest, Partial, Received, FILES_ALPN};
@@ -238,7 +238,7 @@ pub(super) fn close_peer_files(shared: &Shared, peer: &[u8; 32]) {
         connection.close(0u8.into(), b"denied");
     }
     if let Some(fetching) = lock(&shared.files_fetching).remove(peer) {
-        fetching.close(0u8.into(), b"denied");
+        fetching.connection.close(0u8.into(), b"denied");
     }
 }
 
@@ -253,11 +253,23 @@ impl Core {
             .flatten()
             .cloned()
             .collect();
-        let fetching: Vec<Connection> = lock(&shared.files_fetching).values().cloned().collect();
-        let roles = serving.iter().map(|connection| ("serving", connection));
+        let fetching: Vec<(Connection, u64)> = lock(&shared.files_fetching)
+            .values()
+            .map(|fetching| {
+                let window = fetching.window.load(std::sync::atomic::Ordering::Relaxed);
+                (fetching.connection.clone(), window)
+            })
+            .collect();
+        let roles = serving
+            .iter()
+            .map(|connection| ("serving", connection, None));
         roles
-            .chain(fetching.iter().map(|connection| ("fetching", connection)))
-            .flat_map(|(role, connection)| {
+            .chain(
+                fetching
+                    .iter()
+                    .map(|(connection, window)| ("fetching", connection, Some(*window))),
+            )
+            .flat_map(|(role, connection, window)| {
                 connection
                     .paths()
                     .iter()
@@ -275,6 +287,7 @@ impl Core {
                             "lost_packets": stats.lost_packets,
                             "sent_bytes": stats.udp_tx.bytes,
                             "lost_bytes": stats.lost_bytes,
+                            "receive_window": window,
                         })
                     })
                     .collect::<Vec<_>>()
@@ -421,9 +434,66 @@ async fn ask_kept(
 /// and unpairing close it, so a file that arrived on it before then is not
 /// used after.
 pub(super) fn still_connected(shared: &Shared, peer: &[u8; 32], connection: usize) -> bool {
-    lock(&shared.files_fetching)
-        .get(peer)
-        .is_some_and(|kept| kept.stable_id() == connection && kept.close_reason().is_none())
+    lock(&shared.files_fetching).get(peer).is_some_and(|kept| {
+        kept.connection.stable_id() == connection && kept.connection.close_reason().is_none()
+    })
+}
+
+/// A files connection this computer dialed to fetch from a peer, with the
+/// receive window it holds the sender to.
+pub(super) struct Fetching {
+    connection: Connection,
+    /// The window last set, for the impaired-network harness.
+    #[cfg_attr(not(any(test, feature = "test-probes")), allow(dead_code))]
+    window: Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// How often a fetching connection's path feeds its receive window.
+const WINDOW_EVERY: Duration = Duration::from_millis(50);
+
+/// Holds `connection`'s receive window to what its selected path carries
+/// through a relay, from its round trip and the bytes it received, until
+/// the connection ends; see [`transfer::Window`].
+async fn follow_window(connection: Connection, shown: Arc<std::sync::atomic::AtomicU64>) {
+    let mut window = transfer::Window::new(u64::from(super::host::CONNECTION_RECEIVE_WINDOW));
+    let mut ticks = tokio::time::interval(WINDOW_EVERY);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut path = None;
+    let mut received: Option<(u64, tokio::time::Instant)> = None;
+    let mut set = window.window();
+    while connection.close_reason().is_none() {
+        ticks.tick().await;
+        let selected = connection
+            .paths()
+            .iter()
+            .find(|candidate| candidate.is_selected())
+            .map(|selected| {
+                let bytes = selected.stats().udp_rx.bytes;
+                (selected.id(), selected.rtt(), selected.is_relay(), bytes)
+            });
+        let Some((id, rtt, relayed, bytes)) = selected else {
+            continue;
+        };
+        let now = tokio::time::Instant::now();
+        let changed = path.replace(id).is_some_and(|before| before != id);
+        let rate = match received.replace((bytes, now)) {
+            Some((before, at)) if !changed && bytes >= before => {
+                let seconds = now.saturating_duration_since(at).as_secs_f64();
+                if seconds > 0.0 {
+                    (bytes - before) as f64 / seconds
+                } else {
+                    0.0
+                }
+            }
+            _ => 0.0,
+        };
+        window.observe(rtt, relayed, changed, rate, now);
+        if window.window() != set {
+            set = window.window();
+            connection.set_receive_window(VarInt::from_u64(set).unwrap_or(VarInt::MAX));
+            shown.store(set, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 }
 
 /// The peer's kept files connection while it is open, or a new one kept
@@ -436,8 +506,8 @@ async fn files_connection(
     let kept = || {
         lock(&shared.files_fetching)
             .get(peer)
-            .filter(|kept| kept.close_reason().is_none())
-            .cloned()
+            .filter(|kept| kept.connection.close_reason().is_none())
+            .map(|kept| kept.connection.clone())
     };
     if let Some(kept) = kept() {
         return Ok((kept, true));
@@ -449,11 +519,29 @@ async fn files_connection(
     if let Some(kept) = kept() {
         return Ok((kept, true));
     }
-    let connection = tokio::time::timeout(DIAL_WITHIN, shared.endpoint.connect(addr, FILES_ALPN))
-        .await
-        .map_err(|_| Error::Timeout)?
-        .map_err(Error::network_debug)?;
-    lock(&shared.files_fetching).insert(*peer, connection.clone());
+    // Dialed with a small receive window, widened by `follow_window`.
+    let options = iroh::endpoint::ConnectOptions::new()
+        .with_transport_config(super::host::files_transport_config());
+    let connection = tokio::time::timeout(DIAL_WITHIN, async {
+        shared
+            .endpoint
+            .connect_with_opts(addr, FILES_ALPN, options)
+            .await
+            .map_err(Error::network_debug)?
+            .await
+            .map_err(Error::network_debug)
+    })
+    .await
+    .map_err(|_| Error::Timeout)??;
+    let window = Arc::new(std::sync::atomic::AtomicU64::new(transfer::INITIAL_WINDOW));
+    tokio::spawn(follow_window(connection.clone(), window.clone()));
+    lock(&shared.files_fetching).insert(
+        *peer,
+        Fetching {
+            connection: connection.clone(),
+            window,
+        },
+    );
     Ok((connection, false))
 }
 
@@ -462,7 +550,7 @@ fn forget_files_connection(shared: &Shared, peer: &[u8; 32], connection: &Connec
     let mut fetching = lock(&shared.files_fetching);
     if fetching
         .get(peer)
-        .is_some_and(|kept| kept.stable_id() == connection.stable_id())
+        .is_some_and(|kept| kept.connection.stable_id() == connection.stable_id())
     {
         fetching.remove(peer);
     }

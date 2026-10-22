@@ -121,7 +121,7 @@ impl Core {
 const STREAM_RECEIVE_WINDOW: u32 = 16 * 1024 * 1024;
 /// Bytes all streams of one connection may have in flight, which bounds
 /// the receive memory a peer can claim.
-const CONNECTION_RECEIVE_WINDOW: u32 = 64 * 1024 * 1024;
+pub(super) const CONNECTION_RECEIVE_WINDOW: u32 = 64 * 1024 * 1024;
 /// Bytes sent and not yet acknowledged, across the connection.
 const SEND_WINDOW: u64 = 64 * 1024 * 1024;
 /// Datagram bytes the transport may hold before sending. noq's default,
@@ -133,9 +133,22 @@ pub(super) const DATAGRAM_SEND_BUFFER: usize = 1024 * 1024;
 /// change is made only on measurement. Datagram buffering keeps noq's
 /// default size; the desktop sender bounds its own backlog within it.
 fn transport_config() -> QuicTransportConfig {
+    transport_config_receiving(VarInt::from_u32(CONNECTION_RECEIVE_WINDOW))
+}
+
+/// The transport a files connection is dialed with: the same, but starting
+/// from a small receive window, so a sender cannot have the whole window in
+/// flight before its path is known. The receiver widens it from there.
+pub(super) fn files_transport_config() -> QuicTransportConfig {
+    transport_config_receiving(
+        VarInt::from_u64(crate::transfer::INITIAL_WINDOW).unwrap_or(VarInt::MAX),
+    )
+}
+
+fn transport_config_receiving(receive_window: VarInt) -> QuicTransportConfig {
     QuicTransportConfig::builder()
         .stream_receive_window(VarInt::from_u32(STREAM_RECEIVE_WINDOW))
-        .receive_window(VarInt::from_u32(CONNECTION_RECEIVE_WINDOW))
+        .receive_window(receive_window)
         .send_window(SEND_WINDOW)
         .datagram_send_buffer_size(DATAGRAM_SEND_BUFFER)
         .build()

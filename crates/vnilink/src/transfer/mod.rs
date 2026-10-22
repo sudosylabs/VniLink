@@ -14,6 +14,10 @@
 //! bytes of the next segment that already arrived are kept and named in the
 //! request, so an interrupted attempt costs only what was in flight.
 //!
+//! Through a relay the receiver holds its connection's receive window to
+//! what the path carries, so a transfer yields to the desktop session
+//! instead of queueing seconds ahead of it (`window`).
+//!
 //! This module owns the protocol: the wire format, sending a held source,
 //! receiving into a partial. Which job and file a peer may read, where
 //! partials live and when files publish belong to the core (`core/jobs`
@@ -24,6 +28,7 @@ mod hash;
 mod partial;
 mod receive;
 mod send;
+mod window;
 mod wire;
 
 pub(crate) use counters::TransferCounters;
@@ -35,6 +40,7 @@ pub(crate) use receive::{ask, receive, Answer, Received};
 #[cfg(feature = "fuzzing")]
 pub(crate) use receive::{land, stream_of};
 pub(crate) use send::{read_request, refuse, send, Source};
+pub(crate) use window::{Window, INITIAL_WINDOW};
 pub(crate) use wire::{FileRequest, FILES_ALPN, STATUS_BUSY, STATUS_CHANGED, STATUS_DENIED};
 
 /// Bytes per read, per stream write and per stream read.
