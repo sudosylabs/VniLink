@@ -8,12 +8,12 @@
  * macOS or Windows capture, encoding, scheduling or network stacks.
  */
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs, promisify } from 'node:util';
 import { createInterface } from 'node:readline';
+import { checkoutVolume } from './containers.ts';
 import { RELAY_PATH, applyProfile, createTopology, disposeTopology, linkStatistics, selectProfiles, statisticsDelta, topology, writeBurstHooks, type LinkCounters, type LinkPath, type NetemProfile, type Topology } from './netem.ts';
 import { ProcessRunner } from './processes.ts';
 
@@ -790,15 +790,6 @@ export async function measureImpaired(root: string, signal: AbortSignal, args: r
 		throw new Error(`${String(failed.length)} impaired-network run(s) failed; see ${join(output, 'summary.md')}`);
 	}
 	return report;
-}
-
-/**
- * A cache volume for one checkout: worktrees of the same repository build
- * different code, and a shared release target would let one run execute
- * another's binaries.
- */
-export function checkoutVolume(name: string, root: string): string {
-	return `${name}-${createHash('sha256').update(root).digest('hex').slice(0, 12)}`;
 }
 
 /** Runs `measureImpaired` in a privileged project container; arguments pass through. */

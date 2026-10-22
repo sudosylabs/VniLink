@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ScenarioSelection, scenarioNames } from '../../test/automation/scenarios.ts';
+import { linuxValidationVolumes } from './containers.ts';
 import { electronExecutable } from './electron.ts';
 import { assertNativeFresh, defaultNativeOptions, nativeEnvironment } from './native.ts';
 import { ProcessRunner } from './processes.ts';
@@ -61,9 +62,7 @@ export async function validateLinux(root: string, signal: AbortSignal): Promise<
 			'run', '--name', container, '--shm-size=512m', '--init',
 			'--mount', `type=bind,source=${root},target=/source,readonly`,
 			'--mount', `type=bind,source=${output},target=/evidence`,
-			'--mount', 'type=volume,source=vnilink-linux-cargo-registry,target=/usr/local/cargo/registry',
-			'--mount', 'type=volume,source=vnilink-linux-trixie-rust191-target,target=/work/target',
-			'--mount', 'type=volume,source=vnilink-linux-node-modules,target=/work/node_modules',
+			...linuxValidationVolumes(root),
 			'vnilink-linux-validation:local',
 		]);
 	} finally {
