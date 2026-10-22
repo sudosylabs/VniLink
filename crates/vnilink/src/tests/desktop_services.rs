@@ -1580,11 +1580,7 @@ fn host_and_decoder_reports_become_the_viewers_conditions() {
     )
     .unwrap();
     host.report_secure_desktop(true).unwrap();
-    desktop.report_decoder(true, 2).unwrap();
-    assert!(
-        desktop.report_decoder(true, 1).is_err(),
-        "a recovery count that goes back belongs to another decoder"
-    );
+    desktop.report_decoder(true, 0).unwrap();
     let mut timestamp = 1;
     let mut stream_until = |done: &dyn Fn(crate::ConditionSet) -> bool| {
         let until = Instant::now() + Duration::from_secs(10);
@@ -1631,8 +1627,15 @@ fn host_and_decoder_reports_become_the_viewers_conditions() {
         ]
     );
     host.report_secure_desktop(false).unwrap();
-    desktop.report_decoder(false, 2).unwrap();
+    desktop.report_decoder(false, 0).unwrap();
     stream_until(&|set| set.iter().collect::<Vec<_>>() == [Condition::EncoderSoftware]);
+    // The window's decoder restarted twice: it shows as recovering.
+    desktop.report_decoder(false, 2).unwrap();
+    stream_until(&|set| set.contains(Condition::DecoderRecovering));
+    assert!(
+        desktop.report_decoder(false, 1).is_err(),
+        "a restart count that goes back belongs to another decoder"
+    );
     desktop.close();
 }
 
