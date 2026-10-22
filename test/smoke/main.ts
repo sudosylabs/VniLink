@@ -112,6 +112,14 @@ class SmokeSuite {
 			throw new Error('The notice window did not open');
 		};
 		const detail = (window: BrowserWindow): Promise<unknown> => window.webContents.executeJavaScript(`document.querySelector('#notice-detail')?.textContent`);
+		// The notice takes focus with Cancel focused, so a key typed in another
+		// application while the suite runs would answer it. Only this check answers.
+		const ownInput = (_event: Electron.Event, window: BrowserWindow): void => {
+			window.webContents.on('before-input-event', event => {
+				event.preventDefault();
+			});
+		};
+		app.on('browser-window-created', ownInput);
 		try {
 			for (const mode of ['light', 'dark'] as const) {
 				nativeTheme.themeSource = mode;
@@ -150,6 +158,7 @@ class SmokeSuite {
 			assert.equal(await answer, undefined);
 			assert(window.isDestroyed(), 'An aborted notice stayed open');
 		} finally {
+			app.off('browser-window-created', ownInput);
 			nativeTheme.themeSource = theme;
 		}
 	}
