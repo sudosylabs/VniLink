@@ -1,7 +1,7 @@
 /** Emits renderer/main changes; the developer reloads or restarts the appropriate process. */
 import { context, type BuildContext } from 'esbuild';
 import { unwatchFile, watchFile } from 'node:fs';
-import { cp, mkdir, rm } from 'node:fs/promises';
+import { copyFile, cp, mkdir, rename, rm, stat } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 import { bundleOptions, resources, type Resource } from './bundles.ts';
 
@@ -83,7 +83,15 @@ export class ApplicationWatcher {
 		const next = previous.catch(() => undefined).then(async () => {
 			await mkdir(dirname(resource.output), { recursive: true });
 			try {
-				await cp(resource.source, resource.output, { recursive: true });
+				if ((await stat(resource.source)).isDirectory()) {
+					await cp(resource.source, resource.output, { recursive: true });
+				} else {
+					// `cp` unlinks the output before copying, so a reload in between
+					// finds no page; the renamed copy replaces it in one step.
+					const partial = `${resource.output}.partial`;
+					await copyFile(resource.source, partial);
+					await rename(partial, resource.output);
+				}
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
 					throw error;
