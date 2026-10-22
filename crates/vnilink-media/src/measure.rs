@@ -3,6 +3,8 @@
 
 use crate::RawFrame;
 
+pub mod timecode;
+
 /// A page of text-like glyphs from a fixed alphabet on white, with a
 /// coloured sidebar and one line that grows by a glyph a picture, like
 /// typing. Dense enough that a keyframe costs many pictures' bytes.
