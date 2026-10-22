@@ -146,72 +146,34 @@ impl Core {
 
 /// Serves one incoming files connection, one request per stream, until
 /// the peer closes it. Tracked by peer so revoke and unpair close it.
-/// A files connection this computer serves, with the pace its streams
-/// share.
-pub(super) struct Served {
-    connection: Connection,
-    pace: Arc<transfer::Pace>,
-}
-
-/// How often a served connection's round trip feeds its pace.
-const PACE_EVERY: Duration = Duration::from_millis(50);
-
 pub(super) async fn serve_files_connection(shared: Arc<Shared>, connection: Connection) {
     let peer = *connection.remote_id().as_bytes();
     if lock(&shared.state).trust.get(&peer).is_none() {
         connection.close(0u8.into(), b"denied");
         return;
     }
-    let pace = Arc::new(transfer::Pace::default());
     lock(&shared.files_serving)
         .entry(peer)
         .or_default()
-        .push(Served {
-            connection: connection.clone(),
-            pace: pace.clone(),
-        });
-    let pacing = tokio::spawn(follow_path(connection.clone(), pace.clone()));
+        .push(connection.clone());
     let mut streams = tokio::task::JoinSet::new();
     while let Ok((send, recv)) = connection.accept_bi().await {
         while streams.try_join_next().is_some() {}
-        streams.spawn(serve_stream(shared.clone(), peer, pace.clone(), send, recv));
+        streams.spawn(serve_stream(shared.clone(), peer, send, recv));
     }
     streams.abort_all();
-    pacing.abort();
     let mut serving = lock(&shared.files_serving);
     if let Some(connections) = serving.get_mut(&peer) {
-        connections.retain(|kept| kept.connection.stable_id() != connection.stable_id());
+        connections.retain(|kept| kept.stable_id() != connection.stable_id());
         if connections.is_empty() {
             serving.remove(&peer);
         }
     }
 }
 
-/// Feeds `pace` the round trip of the connection's selected path, and
-/// whether it goes through a relay, until the connection ends.
-async fn follow_path(connection: Connection, pace: Arc<transfer::Pace>) {
-    let mut ticks = tokio::time::interval(PACE_EVERY);
-    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut path = None;
-    while connection.close_reason().is_none() {
-        ticks.tick().await;
-        let selected = connection
-            .paths()
-            .iter()
-            .find(|candidate| candidate.is_selected())
-            .map(|selected| (selected.id(), selected.rtt(), selected.is_relay()));
-        let Some((id, rtt, relayed)) = selected else {
-            continue;
-        };
-        let changed = path.replace(id).is_some_and(|before| before != id);
-        pace.observe(rtt, relayed, changed);
-    }
-}
-
 async fn serve_stream(
     shared: Arc<Shared>,
     peer: [u8; 32],
-    pace: Arc<transfer::Pace>,
     mut send: SendStream,
     mut recv: RecvStream,
 ) {
@@ -242,7 +204,6 @@ async fn serve_stream(
                 source,
                 request.offset,
                 request.held,
-                &pace,
                 counters,
                 || super::jobs::still_serving(&shared, &peer, request.job),
                 |position, finished| {
@@ -273,8 +234,8 @@ async fn serve_stream(
 /// end mid-file and the next fetch dials afresh under the new grants.
 pub(super) fn close_peer_files(shared: &Shared, peer: &[u8; 32]) {
     let serving = lock(&shared.files_serving).remove(peer).unwrap_or_default();
-    for served in serving {
-        served.connection.close(0u8.into(), b"denied");
+    for connection in serving {
+        connection.close(0u8.into(), b"denied");
     }
     if let Some(fetching) = lock(&shared.files_fetching).remove(peer) {
         fetching.close(0u8.into(), b"denied");
@@ -287,22 +248,16 @@ pub(super) fn close_peer_files(shared: &Shared, peer: &[u8; 32]) {
 impl Core {
     pub fn files_path_stats(&self) -> Vec<serde_json::Value> {
         let shared = &self.shared;
-        let serving: Vec<(Connection, Option<f64>)> = lock(&shared.files_serving)
+        let serving: Vec<Connection> = lock(&shared.files_serving)
             .values()
             .flatten()
-            .map(|served| (served.connection.clone(), served.pace.rate()))
+            .cloned()
             .collect();
         let fetching: Vec<Connection> = lock(&shared.files_fetching).values().cloned().collect();
-        let roles = serving
-            .iter()
-            .map(|(connection, pace)| ("serving", connection, *pace));
+        let roles = serving.iter().map(|connection| ("serving", connection));
         roles
-            .chain(
-                fetching
-                    .iter()
-                    .map(|connection| ("fetching", connection, None)),
-            )
-            .flat_map(|(role, connection, pace)| {
+            .chain(fetching.iter().map(|connection| ("fetching", connection)))
+            .flat_map(|(role, connection)| {
                 connection
                     .paths()
                     .iter()
@@ -320,7 +275,6 @@ impl Core {
                             "lost_packets": stats.lost_packets,
                             "sent_bytes": stats.udp_tx.bytes,
                             "lost_bytes": stats.lost_bytes,
-                            "pace_bytes_per_s": pace,
                         })
                     })
                     .collect::<Vec<_>>()

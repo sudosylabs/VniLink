@@ -593,7 +593,7 @@ struct Shared {
     file_roots: Mutex<crate::fs::RootSet>,
     /// Incoming files connections by peer, closed on revoke and unpair so
     /// a file being served stops mid-way.
-    files_serving: Mutex<HashMap<[u8; 32], Vec<transfer::Served>>>,
+    files_serving: Mutex<HashMap<[u8; 32], Vec<iroh::endpoint::Connection>>>,
     /// One files connection per peer, kept for the files that follow so a
     /// small file does not pay for a handshake; dropped on revoke/unpair.
     files_fetching: Mutex<HashMap<[u8; 32], iroh::endpoint::Connection>>,
