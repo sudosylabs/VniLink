@@ -148,3 +148,75 @@ fn every_transform_keeps_the_stream_colour() {
         }
     }
 }
+
+/// Coloured text through each H.264 transform (4:2:0) against its source,
+/// as `vnilink-macos`'s `chroma_quality` does for VideoToolbox.
+/// `cargo test -p vnilink-windows --release --lib chroma_quality -- --ignored --nocapture --test-threads=1`.
+#[test]
+#[ignore = "measurement"]
+fn chroma_quality() {
+    use vnilink_media::measure::{chroma_psnr, colour_text_page, edge_psnr, psnr};
+    println!(
+        "| Transform | Size | Target Mb/s | Sent kB/s | Last PSNR | Last chroma | Last edge |"
+    );
+    println!("|---|---|---|---|---|---|---|");
+    for candidate in unsafe { h264_encoders() } {
+        for (width, height) in [(1280u16, 720u16), (1920, 1080)] {
+            for megabits in [2u32, 8] {
+                let bitrate = megabits * 1_000_000;
+                let Ok(mut encoder) =
+                    WindowsEncoder::open_candidate(&candidate, width, height, 30, bitrate)
+                else {
+                    continue;
+                };
+                let mut decoder = WindowsDecoder::new();
+                let (mut bytes, mut last) = (0usize, None);
+                for index in 0..60u64 {
+                    let params = EncodeParams {
+                        force_keyframe: index == 0,
+                        recovery: false,
+                        bitrate_bps: bitrate,
+                        frame_rate: 30,
+                    };
+                    let Ok(sample) =
+                        encoder.encode(&colour_text_page(width, height, index), &params)
+                    else {
+                        continue;
+                    };
+                    bytes += sample.bytes().len();
+                    let frame = EncodedFrame::h264(
+                        sample.keyframe(),
+                        index * 33_333,
+                        sample.bytes().to_vec(),
+                    )
+                    .unwrap();
+                    if let Ok(picture) = decoder.decode(&frame) {
+                        last = Some(picture);
+                    }
+                }
+                let Some(last) = last else {
+                    println!(
+                        "| {} | {width}x{height} | {megabits} | no picture |",
+                        candidate.name
+                    );
+                    continue;
+                };
+                // The decoder may hold one picture back: compare with the
+                // source of the picture it returned.
+                let source = (0..60u64)
+                    .rev()
+                    .map(|index| colour_text_page(width, height, index))
+                    .max_by(|a, b| psnr(a, &last).total_cmp(&psnr(b, &last)))
+                    .unwrap();
+                println!(
+                    "| {} | {width}x{height} | {megabits} | {:.0} | {:.1} | {:.1} | {:.1} |",
+                    candidate.name,
+                    bytes as f64 / 1000.0 / 2.0,
+                    psnr(&source, &last),
+                    chroma_psnr(&source, &last),
+                    edge_psnr(&source, &last),
+                );
+            }
+        }
+    }
+}

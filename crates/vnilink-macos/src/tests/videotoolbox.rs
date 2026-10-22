@@ -838,3 +838,62 @@ fn still_screen_refinement() {
         );
     }
 }
+
+/// Coloured text through VideoToolbox H.264 (4:2:0) against its source:
+/// how close the product's own encoder comes to the 4:2:0 ceiling that
+/// `vnilink-media`'s `chroma_measure` example finds with no codec.
+/// `cargo test -p vnilink-macos --release --lib chroma_quality -- --ignored --nocapture`.
+#[test]
+#[ignore = "measurement"]
+fn chroma_quality() {
+    use vnilink_media::measure::{chroma_psnr, colour_text_page, edge_psnr, psnr};
+    println!("| Size | Target Mb/s | Sent kB/s | Key PSNR | Key chroma | Key edge | Last PSNR | Last chroma | Last edge |");
+    println!("|---|---|---|---|---|---|---|---|---|");
+    for (width, height) in [(1280u16, 720u16), (1920, 1080)] {
+        for megabits in [1u32, 2, 4, 8] {
+            let bitrate = megabits * 1_000_000;
+            let mut encoder = MacEncoder::open(width, height, 30, bitrate, false).unwrap();
+            let mut decoder = MacDecoder::new();
+            let (mut bytes, mut key, mut last) = (0usize, None, None);
+            for index in 0..60u64 {
+                let params = EncodeParams {
+                    force_keyframe: index == 0,
+                    recovery: false,
+                    bitrate_bps: bitrate,
+                    frame_rate: 30,
+                };
+                let sample = match encoder.encode(&colour_text_page(width, height, index), &params)
+                {
+                    Ok(sample) => sample,
+                    Err(error) if error.is_dropped() => continue,
+                    Err(error) => panic!("picture {index}: {error}"),
+                };
+                bytes += sample.bytes().len();
+                let frame =
+                    EncodedFrame::h264(sample.keyframe(), index * 33_333, sample.bytes().to_vec())
+                        .unwrap();
+                let picture = decoder.decode(&frame).unwrap();
+                if key.is_none() {
+                    key = Some(picture.clone());
+                }
+                last = Some((index, picture));
+            }
+            let key = key.unwrap();
+            let (index, last) = last.unwrap();
+            let (source_key, source_last) = (
+                colour_text_page(width, height, 0),
+                colour_text_page(width, height, index),
+            );
+            println!(
+                "| {width}x{height} | {megabits} | {:.0} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} |",
+                bytes as f64 / 1000.0 / 2.0,
+                psnr(&source_key, &key),
+                chroma_psnr(&source_key, &key),
+                edge_psnr(&source_key, &key),
+                psnr(&source_last, &last),
+                chroma_psnr(&source_last, &last),
+                edge_psnr(&source_last, &last),
+            );
+        }
+    }
+}

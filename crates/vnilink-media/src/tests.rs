@@ -14,6 +14,8 @@ mod frame_tests;
 mod host_tests;
 #[path = "tests/impaired_video.rs"]
 mod impaired_video_tests;
+#[path = "tests/measure.rs"]
+mod measure_tests;
 #[path = "tests/nv12.rs"]
 mod nv12_tests;
 #[path = "tests/pump.rs"]
