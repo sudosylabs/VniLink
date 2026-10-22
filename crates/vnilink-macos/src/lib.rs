@@ -17,6 +17,10 @@ mod camera;
 pub use camera::{camera_devices, microphone_authorized, MacCameraFactory};
 mod capture;
 #[cfg(target_os = "macos")]
+mod clock;
+#[cfg(target_os = "macos")]
+pub use clock::{host_time_instant, host_time_now};
+#[cfg(target_os = "macos")]
 mod decode;
 mod encode;
 mod host;

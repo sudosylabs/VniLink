@@ -13,7 +13,7 @@ use vnilink_media::{CapturePlan, ChannelSlot, CursorPolicy, Error, FrameChannel}
 use std::sync::Arc;
 
 #[cfg(target_os = "macos")]
-use screencapturekit::cm::{CMSampleBuffer, CMSampleBufferExt};
+use screencapturekit::cm::{CMSampleBuffer, CMSampleBufferExt, CMSampleBufferSCExt};
 #[cfg(target_os = "macos")]
 use screencapturekit::shareable_content::SCShareableContent;
 #[cfg(target_os = "macos")]
@@ -134,13 +134,18 @@ impl SCStreamOutputTrait for Handler {
             // Idle/status samples have no picture. They do not end capture.
             return;
         };
-        // Timestamp is applied by `poll_frame`; the handler only keeps pixels.
+        // The stream timestamp is applied by `poll_frame`; the handler keeps
+        // the pixels and when the display showed them.
+        let captured_at = sample
+            .display_time()
+            .and_then(crate::clock::host_time_instant);
         match crate::pixels::raw_frame_from_pixel_buffer(&pixel_buffer, 0) {
             Ok(frame) => self.channel.push(ChannelSlot {
                 width: frame.width(),
                 height: frame.height(),
                 stride: usize::from(frame.width()) * 4,
                 bytes: frame.pixels().to_vec(),
+                captured_at,
             }),
             Err(Error::Unsupported(reason)) => self.channel.fail(reason),
             Err(_) => self
@@ -354,6 +359,7 @@ fn poll_channel(
                 timestamp_us,
                 &slot.bytes,
             )
+            .map(|frame| frame.with_captured_at(slot.captured_at))
         })
         .transpose()
 }
@@ -365,16 +371,21 @@ mod idle_tests {
     fn idle_repeats_the_last_picture_without_waiting_but_failure_does_not() {
         let channel = Arc::new(FrameChannel::new());
         assert!(poll_channel(&channel, 1).unwrap().is_none());
+        let shown = std::time::Instant::now();
         channel.push(ChannelSlot {
             width: 2,
             height: 2,
             stride: 8,
             bytes: vec![19; 16],
+            captured_at: Some(shown),
         });
         let first = poll_channel(&channel, 2).unwrap().unwrap();
         let repeated = poll_channel(&channel, 3).unwrap().unwrap();
         assert_eq!(first.pixels(), repeated.pixels());
         assert_eq!(repeated.timestamp_us(), 3);
+        // A repeat is the same capture: it keeps when the display showed it.
+        assert_eq!(first.captured_at(), Some(shown));
+        assert_eq!(repeated.captured_at(), Some(shown));
         use screencapturekit::stream::delegate_trait::SCStreamDelegateTrait;
         failure_delegate(&channel)
             .did_stop_with_error(screencapturekit::error::SCError::internal_error("fixture"));

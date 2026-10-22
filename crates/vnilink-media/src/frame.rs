@@ -1,6 +1,7 @@
 //! One BGRA picture. The bytes are screen content: do not log them.
 
 use std::fmt;
+use std::time::Instant;
 
 use crate::error::Error;
 
@@ -10,6 +11,7 @@ pub struct RawFrame {
     height: u16,
     stride: usize,
     timestamp_us: u64,
+    captured_at: Option<Instant>,
     bgra: Vec<u8>,
 }
 
@@ -45,6 +47,7 @@ impl RawFrame {
             height,
             stride,
             timestamp_us,
+            captured_at: None,
             bgra,
         })
     }
@@ -71,6 +74,17 @@ impl RawFrame {
         self
     }
 
+    /// When the OS captured these pixels. `None` means the source cannot say,
+    /// and the time it was read stands in.
+    pub fn captured_at(&self) -> Option<Instant> {
+        self.captured_at
+    }
+
+    pub fn with_captured_at(mut self, captured_at: Option<Instant>) -> Self {
+        self.captured_at = captured_at;
+        self
+    }
+
     pub fn pixels(&self) -> &[u8] {
         &self.bgra
     }
@@ -89,6 +103,7 @@ impl Clone for RawFrame {
             height: self.height,
             stride: self.stride,
             timestamp_us: self.timestamp_us,
+            captured_at: self.captured_at,
             bgra: self.bgra.clone(),
         }
     }

@@ -119,6 +119,18 @@ struct Sample {
 /// stream is alive.
 const IDLE_KEEPALIVE: Duration = Duration::from_secs(1);
 
+/// Older than this, a source's capture time is not trusted over the read.
+const CAPTURE_AGE_LIMIT: Duration = Duration::from_secs(1);
+
+/// When a newly read picture was captured: the OS's time when the source
+/// gives a plausible one, otherwise when it was read. The host stage of a
+/// frame's latency starts here.
+fn capture_time(captured_at: Option<Instant>, read_at: Instant) -> Instant {
+    captured_at
+        .filter(|at| *at <= read_at && read_at.duration_since(*at) <= CAPTURE_AGE_LIMIT)
+        .unwrap_or(read_at)
+}
+
 struct Control {
     cancel: AtomicBool,
     finished: AtomicBool,
@@ -599,11 +611,16 @@ where
                 last_attested = attested;
                 last_cursor.clone_from(&cursor);
                 last_published = Some(read_started);
+                let captured_at = if unchanged {
+                    read_started
+                } else {
+                    capture_time(frame.captured_at(), read_started)
+                };
                 slot.publish(
                     frame,
                     cursor,
-                    read_started.elapsed().as_micros().min(5_000_000) as u64,
-                    read_started,
+                    captured_at.elapsed().as_micros().min(5_000_000) as u64,
+                    captured_at,
                 );
             }
             // Always wait out the period: a slow read is no reason to read
@@ -708,5 +725,26 @@ mod coherent_slot_tests {
         }
         thread.join().unwrap();
         assert!(slot.wait_newer(seen, Duration::ZERO).is_none());
+    }
+}
+
+#[cfg(test)]
+mod capture_time_tests {
+    use super::*;
+    #[test]
+    fn the_source_capture_time_is_used_only_when_plausible() {
+        let read = Instant::now();
+        let shown = read.checked_sub(Duration::from_millis(40)).unwrap();
+        assert_eq!(capture_time(Some(shown), read), shown);
+        // Unknown, later than the read, or too old: the read stands in.
+        assert_eq!(capture_time(None, read), read);
+        assert_eq!(
+            capture_time(Some(read + Duration::from_millis(1)), read),
+            read
+        );
+        let stale = read
+            .checked_sub(CAPTURE_AGE_LIMIT + Duration::from_millis(1))
+            .unwrap();
+        assert_eq!(capture_time(Some(stale), read), read);
     }
 }

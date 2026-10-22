@@ -20,6 +20,8 @@ pub struct ChannelSlot {
     pub height: u16,
     pub stride: usize,
     pub bytes: Vec<u8>,
+    /// When the OS captured the picture, if the platform says.
+    pub captured_at: Option<Instant>,
 }
 
 /// Newest-picture slot shared between a capture thread and its serve loop.

@@ -1,6 +1,9 @@
 #[cfg(target_os = "macos")]
 #[path = "tests/capture.rs"]
 mod capture_tests;
+#[cfg(target_os = "macos")]
+#[path = "tests/clock.rs"]
+mod clock_tests;
 #[path = "tests/encode.rs"]
 mod encode_tests;
 #[path = "tests/host.rs"]
