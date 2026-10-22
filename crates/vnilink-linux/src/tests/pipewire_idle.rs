@@ -21,7 +21,7 @@ fn idle_portal_keeps_the_picture_and_propagates_capture_failure() {
         width: 2,
         height: 2,
         stride: 8,
-        bytes: vec![40; 16],
+        bytes: std::sync::Arc::new(vec![40; 16]),
         captured_at: None,
     });
     let (first, _) = wait_frame(&mainloop, &shared, 0).unwrap().unwrap();

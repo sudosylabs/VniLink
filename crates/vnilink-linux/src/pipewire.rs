@@ -733,7 +733,7 @@ fn copy_buffer(stream: &pw::stream::Stream, shared: &Shared) {
         width,
         height,
         stride,
-        bytes: bytes[offset..end].to_vec(),
+        bytes: Arc::new(bytes[offset..end].to_vec()),
         captured_at: None,
     });
     record_delivery(shared, false);
@@ -808,7 +808,7 @@ mod timing_tests {
             width: 8,
             height: 8,
             stride: 32,
-            bytes: vec![255; 256],
+            bytes: Arc::new(vec![255; 256]),
             captured_at: None,
         });
         let started = Instant::now();

@@ -7,19 +7,20 @@
 //! them.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::error::Error;
 
 /// One copied picture, still in the capture stride. The platform converts it
-/// to a [`crate::RawFrame`] after receiving.
+/// to a [`crate::RawFrame`] after receiving. The bytes are shared, so taking
+/// the latest picture again does not copy it.
 #[derive(Debug, Clone)]
 pub struct ChannelSlot {
     pub width: u16,
     pub height: u16,
     pub stride: usize,
-    pub bytes: Vec<u8>,
+    pub bytes: Arc<Vec<u8>>,
     /// When the OS captured the picture, if the platform says.
     pub captured_at: Option<Instant>,
 }

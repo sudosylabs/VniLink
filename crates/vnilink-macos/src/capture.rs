@@ -144,7 +144,8 @@ impl SCStreamOutputTrait for Handler {
                 width: frame.width(),
                 height: frame.height(),
                 stride: usize::from(frame.width()) * 4,
-                bytes: frame.pixels().to_vec(),
+                // The one copy out of the IOSurface, shared from here on.
+                bytes: frame.shared_pixels(),
                 captured_at,
             }),
             Err(Error::Unsupported(reason)) => self.channel.fail(reason),
@@ -352,12 +353,12 @@ fn poll_channel(
     channel
         .try_latest()?
         .map(|slot| {
-            crate::pixels::raw_frame_from_bgra(
+            vnilink_media::RawFrame::shared(
                 slot.width,
                 slot.height,
                 slot.stride,
                 timestamp_us,
-                &slot.bytes,
+                slot.bytes,
             )
             .map(|frame| frame.with_captured_at(slot.captured_at))
         })
@@ -376,12 +377,14 @@ mod idle_tests {
             width: 2,
             height: 2,
             stride: 8,
-            bytes: vec![19; 16],
+            bytes: Arc::new(vec![19; 16]),
             captured_at: Some(shown),
         });
         let first = poll_channel(&channel, 2).unwrap().unwrap();
         let repeated = poll_channel(&channel, 3).unwrap().unwrap();
         assert_eq!(first.pixels(), repeated.pixels());
+        // A repeat shares the picture the handler copied; it is not copied again.
+        assert_eq!(first.pixels().as_ptr(), repeated.pixels().as_ptr());
         assert_eq!(repeated.timestamp_us(), 3);
         // A repeat is the same capture: it keeps when the display showed it.
         assert_eq!(first.captured_at(), Some(shown));

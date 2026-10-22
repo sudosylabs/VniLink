@@ -1,18 +1,23 @@
 //! One BGRA picture. The bytes are screen content: do not log them.
 
 use std::fmt;
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::error::Error;
 
 /// Tightly packed or strided BGRA8, origin at the top left.
+///
+/// A frame never changes once made, so its clones share its pixels: a 4K
+/// picture is 33 MB, and the capture channel, the shared capture's
+/// consumers and an idle source's repeats all hold the same one.
 pub struct RawFrame {
     width: u16,
     height: u16,
     stride: usize,
     timestamp_us: u64,
     captured_at: Option<Instant>,
-    bgra: Vec<u8>,
+    bgra: Arc<Vec<u8>>,
 }
 
 impl RawFrame {
@@ -28,6 +33,17 @@ impl RawFrame {
         stride: usize,
         timestamp_us: u64,
         bgra: Vec<u8>,
+    ) -> Result<Self, Error> {
+        Self::shared(width, height, stride, timestamp_us, Arc::new(bgra))
+    }
+
+    /// A frame over pixels another holder keeps too, without copying them.
+    pub fn shared(
+        width: u16,
+        height: u16,
+        stride: usize,
+        timestamp_us: u64,
+        bgra: Arc<Vec<u8>>,
     ) -> Result<Self, Error> {
         if width == 0 || height == 0 {
             return Err(Error::InvalidFrame(
@@ -85,6 +101,11 @@ impl RawFrame {
         self
     }
 
+    /// The pixels, to hand to another frame or holder without a copy.
+    pub fn shared_pixels(&self) -> Arc<Vec<u8>> {
+        Arc::clone(&self.bgra)
+    }
+
     pub fn pixels(&self) -> &[u8] {
         &self.bgra
     }
@@ -104,7 +125,7 @@ impl Clone for RawFrame {
             stride: self.stride,
             timestamp_us: self.timestamp_us,
             captured_at: self.captured_at,
-            bgra: self.bgra.clone(),
+            bgra: Arc::clone(&self.bgra),
         }
     }
 }
