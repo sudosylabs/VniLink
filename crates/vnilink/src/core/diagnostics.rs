@@ -52,6 +52,12 @@ impl Core {
     /// path payload. Export with
     /// [`export_json`](crate::diagnostics::export_json).
     pub fn diagnostic_snapshot(&self) -> Result<DiagnosticSnapshot, Error> {
+        // Jobs come before state in the lock order (`interrupt_orphaned`),
+        // so they are counted before the state lock is taken.
+        let active_jobs = lock(&self.shared.jobs)
+            .values()
+            .filter(|record| super::jobs::ACTIVE_STATES.contains(&record.state))
+            .count() as u32;
         let state = self.alive_state()?;
         let mut connections = Vec::with_capacity(state.incoming.len() + state.outgoing.len());
         for session in state.incoming.values().chain(state.outgoing.values()) {
@@ -124,10 +130,7 @@ impl Core {
             terminal_sessions: lock(&self.shared.terminal_sessions).len() as u32,
             retained_operations: state.system_operations.len() as u32,
             privacy_held: state.privacy.is_some(),
-            active_jobs: lock(&self.shared.jobs)
-                .values()
-                .filter(|record| super::jobs::ACTIVE_STATES.contains(&record.state))
-                .count() as u32,
+            active_jobs,
             paired_devices: state.trust.devices().count() as u32,
             control_connection: state.input_holder(),
         };
@@ -170,5 +173,29 @@ impl Core {
             transfers: self.shared.transfer_counters.summary(),
         });
         Ok(snapshot)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A snapshot waiting for the jobs lock holds no state lock, so a job
+    /// poll that holds jobs and then takes state cannot deadlock with it.
+    #[test]
+    fn a_snapshot_waits_for_jobs_without_holding_state() {
+        let core = crate::tests::support::start_direct();
+        let jobs = lock(&core.shared.jobs);
+        std::thread::scope(|scope| {
+            let snapshot = scope.spawn(|| core.diagnostic_snapshot().map(|_| ()));
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let state_free = core.shared.state.try_lock().is_ok();
+            drop(jobs);
+            snapshot.join().unwrap().unwrap();
+            assert!(
+                state_free,
+                "the snapshot holds state while it waits for jobs"
+            );
+        });
     }
 }
