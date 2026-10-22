@@ -108,7 +108,27 @@ control or the desktop behind it.
    connection still open: revoking closes that connection, so nothing
    fetched after a revoke lands, though a file that had already arrived
    whole when the revoke reached this computer may.
-6. Publication then follows the conflict choice, re-checking cancel,
+6. The receiver holds the files connection's receive window to what its
+   path carries (`transfer/window.rs`), so a transfer yields to the
+   desktop session instead of queueing ahead of it. Through a relay every
+   connection to the peer shares one queue that never drops, and a
+   bottleneck on a direct path queues too; a bulk transfer filled them to
+   seconds ahead of the session's packets.
+   - The connection is dialed with a 1 MiB window, not the endpoint's
+     64 MiB, so the sender cannot have the whole window in flight before
+     the path is known.
+   - From then on the window follows the round trip, as LEDBAT does
+     (RFC 6817). The least round trip of the last two minutes is the
+     path's, and anything above it is queue. Once a round trip, the window
+     grows by up to an eighth with no queue, eases as the queue nears
+     50 ms, and halves beyond 200 ms.
+   - It never falls below 32 KiB, and never grows past twice what the path
+     carried in a base round trip plus the target. A fast path with no
+     queue opens to the full window.
+   - The queue is shared, so the transfer sees the delay it would add to
+     the session. Measurements are in the impaired-network harness's
+     `combined` and `combined-download` scenarios.
+7. Publication then follows the conflict choice, re-checking cancel,
    grant and owner under the commit (see `publish_staged`). Cancelled
    and interrupted jobs keep their partials for resume, within the
    resume retention policy; finished, failed and forgotten jobs remove
