@@ -112,6 +112,12 @@ pub trait VideoEncoder: Send {
     fn refines_still_pictures(&self) -> bool {
         false
     }
+
+    /// Which encoder this is, for diagnostics and for telling the viewer
+    /// whether the host encodes in hardware. Asked when it opens.
+    fn implementation(&self) -> vnilink::EncoderImplementation {
+        vnilink::EncoderImplementation::UNKNOWN
+    }
 }
 
 /// Platform H.264 decoder. The returned picture is what the UI paints.
@@ -344,6 +350,11 @@ impl<E: VideoEncoder> HostVideo<E> {
 
     pub fn push(&mut self, frame: &RawFrame) -> Result<PumpOutput, Error> {
         self.pump.push(frame, &mut self.encoder)
+    }
+
+    /// See [`VideoEncoder::implementation`].
+    pub fn implementation(&self) -> vnilink::EncoderImplementation {
+        self.encoder.implementation()
     }
 
     /// The running encoder takes a new bitrate and frame rate; see

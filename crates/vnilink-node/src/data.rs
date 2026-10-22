@@ -141,6 +141,8 @@ pub struct DataChannel {
     /// The pointer last read by the window.
     cursor_seen: Mutex<Option<vnilink_app::FfiDesktopCursor>>,
     desktop: Mutex<Option<Arc<DesktopOwner>>>,
+    /// Video: the window was told why the picture stopped.
+    end_told: std::sync::atomic::AtomicBool,
     terminal: Mutex<Option<Arc<TerminalService>>>,
     camera: Mutex<Option<Arc<CameraService>>>,
     audio: Mutex<Option<Arc<AudioService>>>,
@@ -270,6 +272,11 @@ impl DataChannel {
         if self.closed.load(std::sync::atomic::Ordering::Acquire) {
             return Err(Error::from_reason("Data channel closed"));
         }
+        // A picture that stopped stays readable until the window closes the
+        // channel: its last packet says why.
+        if self.desktop_end().is_some() {
+            return Ok(());
+        }
         let session = self
             .core
             .controller_session(self.session_id)
@@ -306,6 +313,53 @@ impl DataChannel {
             }
         }
         Ok(())
+    }
+}
+
+impl DataChannel {
+    /// Video: why the picture stopped, once it did.
+    fn desktop_end(&self) -> Option<vnilink_app::FfiDesktopEnd> {
+        if self.kind != "video" {
+            return None;
+        }
+        self.desktop
+            .lock()
+            .ok()?
+            .as_ref()
+            .and_then(|desktop| desktop.service.end())
+    }
+}
+
+fn condition_label(condition: vnilink_app::FfiCondition) -> &'static str {
+    use vnilink_app::FfiCondition as C;
+    match condition {
+        C::LinkBlackout => "link.blackout",
+        C::RelayBacklog => "relay.backlog",
+        C::LinkCongestion => "link.congestion",
+        C::LinkLoss => "link.loss",
+        C::HostSecureDesktop => "host.secureDesktop",
+        C::EncoderSlow => "encoder.slow",
+        C::DecoderSlow => "decoder.slow",
+        C::DecoderRecovering => "decoder.recovering",
+        C::EncoderSoftware => "encoder.software",
+        C::DecoderSoftware => "decoder.software",
+        C::RelayPath => "relay.path",
+    }
+}
+
+fn desktop_end_label(end: vnilink_app::FfiDesktopEnd) -> &'static str {
+    use vnilink_app::FfiDesktopEnd as End;
+    match end {
+        End::HostEncoderFailed => "hostEncoderFailed",
+        End::HostCaptureFailed => "hostCaptureFailed",
+        End::HostPermission => "hostPermission",
+        End::DisplayGone => "displayGone",
+        End::HostStopped => "hostStopped",
+        End::HostShutdown => "hostShutdown",
+        End::Revoked => "revoked",
+        End::PeerClosed => "peerClosed",
+        End::LinkLost => "linkLost",
+        End::RelayUnreachable => "relayUnreachable",
     }
 }
 
@@ -351,11 +405,26 @@ impl DataChannel {
                 .video
                 .lock()
                 .map_err(|_| Error::from_reason("Channel unavailable"))?;
-            return Ok(video.as_ref().and_then(VideoPoller::try_recv).map(|frame| DataEvent {
-                kind: "video".into(),
-                data: Some(frame.payload.into()),
-                metadata: serde_json::json!({"codec":frame.codec.label(),"keyframe":frame.keyframe,"timestampUs":frame.timestamp_us.to_string(),"displayId":frame.display_id.to_string(),"revision":frame.revision.to_string(),"hostUs":frame.timing.host_us,"queuedUs":frame.timing.queued_us}).to_string(),
-            }));
+            if let Some(frame) = video.as_ref().and_then(VideoPoller::try_recv) {
+                return Ok(Some(DataEvent {
+                    kind: "video".into(),
+                    data: Some(frame.payload.into()),
+                    metadata: serde_json::json!({"codec":frame.codec.label(),"keyframe":frame.keyframe,"timestampUs":frame.timestamp_us.to_string(),"displayId":frame.display_id.to_string(),"revision":frame.revision.to_string(),"hostUs":frame.timing.host_us,"queuedUs":frame.timing.queued_us}).to_string(),
+                }));
+            }
+            // The last packet says why the picture stopped, once.
+            return Ok(self
+                .desktop_end()
+                .filter(|_| {
+                    !self
+                        .end_told
+                        .swap(true, std::sync::atomic::Ordering::AcqRel)
+                })
+                .map(|end| DataEvent {
+                    kind: "exited".into(),
+                    data: None,
+                    metadata: serde_json::json!({ "end": desktop_end_label(end) }).to_string(),
+                }));
         }
         if self.kind == "camera" {
             let camera = self
@@ -668,12 +737,14 @@ impl DataChannel {
 
     /// How the picture is doing, as JSON, after reporting how long the
     /// window's decoder spends on a picture while others wait for it
-    /// (microseconds on average, 0 when unknown):
+    /// (microseconds on average, 0 when unknown), whether it decodes in
+    /// software, and how often it restarted from a keyframe in total:
     /// the received frame rate and bitrate, queue times, loss, round trip,
-    /// the other computer's capture and encode times, and why the quality
-    /// is where it is.
+    /// the other computer's capture and encode times, why the quality is
+    /// where it is, and what is wrong with the picture, most severe first.
+    /// `null` once the picture stopped.
     #[napi]
-    pub fn media_status(&self, decode_us: u32) -> Result<String> {
+    pub fn media_status(&self, decode_us: u32, software: bool, recoveries: u32) -> Result<String> {
         self.check()?;
         if self.kind != "video" {
             return Err(Error::from_reason("Invalid media status target"));
@@ -686,9 +757,17 @@ impl DataChannel {
             .as_ref()
             .ok_or_else(|| Error::from_reason("Desktop unavailable"))?
             .service;
+        // A stopped picture has no status; its channel only says why.
+        if service.end().is_some() {
+            return Ok("null".into());
+        }
         if decode_us > 0 {
             let _ = service.report_decode_duration(u64::from(decode_us));
         }
+        // The window counts restarts for this one picture, so the count only
+        // grows; one that went back is the core's to refuse, not a failure
+        // of the status read.
+        let _ = service.report_decoder(software, u64::from(recoveries));
         let status = service.media_status().map_err(core_error)?;
         let reason = match status.reason {
             vnilink_app::FfiAdaptationReason::WarmingUp => "warmingUp",
@@ -709,6 +788,7 @@ impl DataChannel {
             "rttMs": status.rtt_ms,
             "encodeUs": status.encode_us,
             "captureUs": status.capture_us,
+            "conditions": status.conditions.iter().map(|condition| condition_label(*condition)).collect::<Vec<_>>(),
         })
         .to_string())
     }
@@ -730,6 +810,9 @@ impl DataChannel {
             let Some(desktop) = desktop.as_ref() else {
                 return Ok(None);
             };
+            if desktop.service.end().is_some() {
+                return Ok(None);
+            }
             match desktop.service.cursor() {
                 Ok(Some(cursor)) => cursor,
                 Ok(None) => return Ok(None),
@@ -1154,6 +1237,7 @@ impl Task for OpenChannelTask {
             video: Mutex::new(video),
             cursor_seen: Mutex::new(None),
             desktop: Mutex::new(desktop),
+            end_told: std::sync::atomic::AtomicBool::new(false),
             terminal: Mutex::new(terminal),
             camera: Mutex::new(camera),
             audio: Mutex::new(audio),

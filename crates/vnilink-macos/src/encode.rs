@@ -256,6 +256,14 @@ fn low_latency(session: &CompressionSession) {
 }
 
 impl VideoEncoder for MacEncoder {
+    /// VideoToolbox may fall back to its software encoder; the session says.
+    fn implementation(&self) -> vnilink::EncoderImplementation {
+        vnilink::EncoderImplementation {
+            name: "videotoolbox",
+            hardware: Some(self.hardware()),
+        }
+    }
+
     /// Measured with `still_screen_refinement`: H.264 in low-latency mode
     /// took a recovery keyframe of a page of text from 15 to 46 dB over two
     /// seconds of the unchanged page at 30 fps.
@@ -462,6 +470,12 @@ impl VideoEncoder for MacVideoEncoder {
         match self {
             Self::Native(encoder) => encoder.refines_still_pictures(),
             Self::Software(encoder) => encoder.refines_still_pictures(),
+        }
+    }
+    fn implementation(&self) -> vnilink::EncoderImplementation {
+        match self {
+            Self::Native(encoder) => encoder.implementation(),
+            Self::Software(encoder) => encoder.implementation(),
         }
     }
 }

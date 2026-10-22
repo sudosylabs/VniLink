@@ -65,10 +65,10 @@ pub use snapshot::{snapshot_error_outcome, FfiScreenAccess, FfiScreenSnapshot};
 mod system;
 mod terminal;
 pub use services::{
-    DesktopService, FfiAdaptationReason, FfiCloseCause, FfiDesktopControlState, FfiDesktopCursor,
-    FfiDesktopCursorImage, FfiDesktopInfo, FfiDesktopMediaStatus, FfiServiceInfo, FfiServiceKind,
-    FfiServicePermissions, FfiServicePhase, FfiServiceSupport, FfiSharingPolicy,
-    FfiSharingPolicyUpdate, FilesService, ServiceLeasePoller,
+    DesktopService, FfiAdaptationReason, FfiCloseCause, FfiCondition, FfiDesktopControlState,
+    FfiDesktopCursor, FfiDesktopCursorImage, FfiDesktopEnd, FfiDesktopInfo, FfiDesktopMediaStatus,
+    FfiServiceInfo, FfiServiceKind, FfiServicePermissions, FfiServicePhase, FfiServiceSupport,
+    FfiSharingPolicy, FfiSharingPolicyUpdate, FfiStreamFailure, FilesService, ServiceLeasePoller,
 };
 pub use system::{
     FfiHostSystemReport, FfiOperationState, FfiPrivacyState, FfiScheduledSystemAction,

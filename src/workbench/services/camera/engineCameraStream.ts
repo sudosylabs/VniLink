@@ -15,6 +15,8 @@ export interface CameraChunk {
 
 /** The part of a WebCodecs `VideoDecoder` the stream uses. */
 export interface CameraDecoder {
+	/** It fell back from a hardware decoder this computer doesn't have for the codec. */
+	readonly software: boolean;
 	decode(chunk: CameraChunk): void;
 	/** Resolves once at most `limit` pictures wait to be decoded, or the decoder closed. */
 	drained(limit: number): Promise<void>;

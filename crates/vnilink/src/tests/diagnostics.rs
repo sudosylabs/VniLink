@@ -44,6 +44,10 @@ fn connection(id: u64) -> ConnectionSummary {
         rtt_ms: Some(3),
         tx_bytes: 100,
         rx_bytes: 200,
+        cwnd: Some(12_000),
+        congestion_events: Some(0),
+        lost_packets: Some(0),
+        black_holes_detected: Some(0),
     }
 }
 
@@ -86,6 +90,7 @@ fn inputs_pipelines(connections: usize, services: usize, pipelines: usize) -> Sn
         },
         queues: QueueDepths::default(),
         transfers: Default::default(),
+        last_end: None,
     }
 }
 
@@ -144,6 +149,7 @@ fn export_round_trips_small_snapshots_as_expected_keys() {
         [
             "connections",
             "hosting",
+            "last_end",
             "monotonic_ms",
             "pipelines",
             "queues",
@@ -171,6 +177,7 @@ fn export_sheds_lists_to_fit_the_cap_and_says_so() {
         resources: ResourceCounts::default(),
         queues: QueueDepths::default(),
         transfers: Default::default(),
+        last_end: None,
         truncated: false,
     };
     // Sanity: the untrimmed form really exceeds the cap.
@@ -285,6 +292,10 @@ fn live_snapshot_reports_pipeline_path_and_lease() {
     assert!(connection.rtt_ms.is_some());
     assert!(connection.tx_bytes > 0);
     assert!(connection.rx_bytes > 0);
+    // The selected path's own congestion state; loopback loses nothing.
+    assert!(connection.cwnd.is_some_and(|cwnd| cwnd > 0));
+    assert_eq!(connection.lost_packets, Some(0));
+    assert_eq!(connection.black_holes_detected, Some(0));
     assert_eq!(snapshot.resources.control_connection, Some(connection.id));
     let export = export_json(&snapshot).unwrap();
     assert!(export.contains("\"pipelines\""));
@@ -349,4 +360,65 @@ fn live_snapshot_reports_pipeline_path_and_lease() {
         "a clean loopback loses nothing"
     );
     desktop.close();
+}
+
+/// Version 4 names what the coders are and why the last picture ended,
+/// on both computers, after that pipeline left the snapshot.
+#[test]
+fn live_snapshot_names_the_coders_and_the_last_end() {
+    let host = start_direct();
+    host.set_capture(Box::new(ShutdownCapture)).unwrap();
+    let controller = start_direct();
+    pair_for_control(&host, &controller);
+    let pending = controller
+        .begin_connect_services(&host.endpoint_id())
+        .unwrap();
+    wait("connection active", || {
+        controller.controller_session(pending.id).unwrap().phase == SessionPhase::Active
+    });
+    let parent = controller.controller_session(pending.id).unwrap();
+    let owner = controller
+        .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
+        .unwrap();
+    let desktop = controller
+        .open_desktop_service(owner.id, owner.generation)
+        .unwrap();
+    let remote = host
+        .hosted_services()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.kind == ServiceKind::Desktop)
+        .unwrap();
+    assert_eq!(host.diagnostic_snapshot().unwrap().version, 4);
+    host.report_desktop_encoder(
+        remote.id,
+        remote.generation,
+        crate::EncoderImplementation {
+            name: "videotoolbox",
+            hardware: Some(true),
+        },
+    )
+    .unwrap();
+    desktop.report_decoder(true, 3).unwrap();
+    let hosted = host.diagnostic_snapshot().unwrap().pipelines[0].clone();
+    assert_eq!(hosted.encoder.as_deref(), Some("videotoolbox"));
+    assert_eq!(hosted.encoder_hardware, Some(true));
+    assert_eq!(hosted.end, None);
+    let viewing = controller.diagnostic_snapshot().unwrap().pipelines[0].clone();
+    assert_eq!(viewing.decoder_hardware, Some(false));
+    assert_eq!(viewing.decoder_recoveries, 3);
+    assert_eq!(
+        viewing.encoder, None,
+        "the viewer has no encoder of its own"
+    );
+    host.fail_hosted_service(remote.id, remote.generation, crate::StreamFailure::Encoder)
+        .unwrap();
+    wait("the viewer learns the end", || desktop.end().is_some());
+    for (core, hosted) in [(&host, true), (&controller, false)] {
+        let end = core.diagnostic_snapshot().unwrap().last_end.unwrap();
+        assert_eq!(end.reason, "hostEncoderFailed");
+        assert_eq!(end.hosted, hosted);
+    }
+    let export = export_json(&controller.diagnostic_snapshot().unwrap()).unwrap();
+    assert!(export.contains("\"last_end\""));
 }

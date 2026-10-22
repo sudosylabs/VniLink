@@ -33,19 +33,22 @@ pub async fn open_monitor(session: &mut PortalSession) -> Result<OwnedFd, Error>
         .set_sources(BitFlags::from(SourceType::Monitor))
         .set_multiple(false)
         .set_persist_mode(PersistMode::DoNot);
-    proxy
+    let selected = proxy
         .select_sources(&remote, sources)
         .await
         .map_err(|_| Error::CaptureRejected("the screen cast portal rejected the monitor"))?
-        .response()
-        .map_err(|_| Error::CaptureRejected("the screen cast portal rejected the monitor"))?;
+        .response();
+    refused(session, &selected)?;
+    selected.map_err(|_| Error::CaptureRejected("the screen cast portal rejected the monitor"))?;
     session.select_monitor()?;
     let started = proxy
         .start(&remote, None, Default::default())
         .await
         .map_err(|_| Error::CaptureRejected("the screen cast portal did not start"))?
-        .response()
-        .map_err(|_| Error::CaptureRejected("the screen cast portal did not start"))?;
+        .response();
+    refused(session, &started)?;
+    let started =
+        started.map_err(|_| Error::CaptureRejected("the screen cast portal did not start"))?;
     let stream = started.streams().first().ok_or(Error::CaptureRejected(
         "the screen cast portal did not start",
     ))?;
@@ -64,4 +67,17 @@ pub async fn open_monitor(session: &mut PortalSession) -> Result<OwnedFd, Error>
         .open_pipe_wire_remote(&remote, Default::default())
         .await
         .map_err(|_| Error::CaptureRejected("the screen cast portal did not start"))
+}
+
+/// A request the portal answered with a refusal (`Response` code 1 or 2)
+/// is a denial, not a failure: the session records it and capture says so.
+fn refused<T>(
+    session: &mut PortalSession,
+    response: &Result<T, ashpd::Error>,
+) -> Result<(), Error> {
+    if let Err(ashpd::Error::Response(_)) = response {
+        let _ = session.refuse();
+        return Err(Error::CaptureDenied("the screen cast was not allowed"));
+    }
+    Ok(())
 }

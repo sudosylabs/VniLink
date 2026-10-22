@@ -84,7 +84,11 @@ fn capture_portal(
         let mut session = crate::portal::PortalSession::new();
         let remote = runtime
             .block_on(crate::dbus::open_monitor(&mut session))
-            .map_err(|_| SnapshotFailure::NeedsSourceSelection)?;
+            .map_err(|error| match error {
+                // Someone there declined the dialog: permission, not a source.
+                vnilink_media::Error::CaptureDenied(_) => SnapshotFailure::NeedsPermission,
+                _ => SnapshotFailure::NeedsSourceSelection,
+            })?;
         let node = session
             .pipewire_node()
             .ok_or(SnapshotFailure::NeedsSourceSelection)?;

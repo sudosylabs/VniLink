@@ -1504,8 +1504,16 @@ fn measured_media_status_crosses_ffi_without_losing_counters_or_reason() {
         decode_us: 1234,
         encode_us: 5678,
         capture_us: 9012,
+        conditions: [vnilink::Condition::RelayPath, vnilink::Condition::LinkLoss]
+            .into_iter()
+            .collect(),
     };
     let ffi: FfiDesktopMediaStatus = status.into();
+    // From the most severe, whatever order they were held in.
+    assert_eq!(
+        ffi.conditions,
+        [FfiCondition::LinkLoss, FfiCondition::RelayPath]
+    );
     assert_eq!(ffi.reason, FfiAdaptationReason::NetworkPressure);
     assert_eq!((ffi.received_kbps, ffi.received_fps), (12345, 57));
     assert_eq!(

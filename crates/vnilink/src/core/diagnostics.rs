@@ -86,6 +86,10 @@ impl Core {
                 rtt_ms: None,
                 tx_bytes: 0,
                 rx_bytes: 0,
+                cwnd: None,
+                congestion_events: None,
+                lost_packets: None,
+                black_holes_detected: None,
             });
         }
         connections.sort_by_key(|summary| summary.id);
@@ -153,6 +157,10 @@ impl Core {
             }
             .into();
             summary.rtt_ms = selected.map(|path| path.rtt_ms);
+            summary.cwnd = selected.map(|path| path.cwnd);
+            summary.congestion_events = selected.map(|path| path.congestion_events);
+            summary.lost_packets = selected.map(|path| path.lost_packets);
+            summary.black_holes_detected = selected.map(|path| path.black_holes_detected);
             summary.tx_bytes = paths.iter().map(|path| path.tx_bytes).sum();
             summary.rx_bytes = paths.iter().map(|path| path.rx_bytes).sum();
         }
@@ -171,6 +179,7 @@ impl Core {
             resources,
             queues,
             transfers: self.shared.transfer_counters.summary(),
+            last_end: lock(&self.shared.last_desktop_end).clone(),
         });
         Ok(snapshot)
     }

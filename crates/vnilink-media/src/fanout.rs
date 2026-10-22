@@ -10,7 +10,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::ScopedJoinHandle;
 use std::time::{Duration, Instant};
 
-use vnilink::{Core, CoreEvent, CursorState, VideoTarget};
+use vnilink::{Core, CoreEvent, CursorState, StreamFailure, VideoTarget};
 
 use crate::cursor::{composite, for_picture};
 
@@ -214,9 +214,11 @@ fn ended(error: &vnilink::Error) -> bool {
     )
 }
 
-fn close_target(core: &Core, target: &VideoTarget) {
+/// Ends one consumer because its producer failed: a desktop service tells
+/// its viewer what failed; a legacy session peer is stopped.
+fn fail_target(core: &Core, target: &VideoTarget, failure: StreamFailure) {
     if target.service {
-        let _ = core.close_hosted_service(target.id, target.generation);
+        let _ = core.fail_hosted_service(target.id, target.generation, failure);
     } else {
         let _ = core.stop_hosted_peer(target.id);
     }
@@ -246,7 +248,7 @@ fn consume<E, F>(
     let mut session = match opened {
         Ok(session) => session,
         Err(_) => {
-            close_target(core, &target);
+            fail_target(core, &target, StreamFailure::Encoder);
             return;
         }
     };
@@ -258,6 +260,9 @@ fn consume<E, F>(
         capture_revision,
         captured_at: None,
     };
+    if target.service {
+        let _ = core.report_desktop_encoder(target.id, target.generation, session.implementation());
+    }
     let mut applied_quality = target.quality;
     let mut seen = 0u64;
     while !control.cancel.load(Ordering::Acquire) {
@@ -275,7 +280,7 @@ fn consume<E, F>(
                 })
                 .is_err()
             {
-                close_target(core, &target);
+                fail_target(core, &target, StreamFailure::Encoder);
                 return;
             }
             applied_quality = quality;
@@ -290,17 +295,14 @@ fn consume<E, F>(
                         })
                         .is_err()
                     {
-                        close_target(core, &target);
+                        fail_target(core, &target, StreamFailure::Encoder);
                         return;
                     }
                     applied_quality = info.quality;
                 }
                 Ok(_) => {}
-                Err(error) if ended(&error) => return,
-                Err(_) => {
-                    close_target(core, &target);
-                    return;
-                }
+                // The owner ended, or the core shut down: nobody to tell.
+                Err(_) => return,
             }
             if core
                 .take_desktop_keyframe_request(target.id, target.generation)
@@ -317,6 +319,8 @@ fn consume<E, F>(
         }
         if target.service && session.reopens() != reopens {
             let _ = core.report_desktop_encoder_reopen(target.id, target.generation);
+            let _ =
+                core.report_desktop_encoder(target.id, target.generation, session.implementation());
         }
         // On an unchanged screen no new picture comes: a keyframe still
         // owed is made from the last one, and after a keyframe the last one
@@ -365,7 +369,7 @@ fn consume<E, F>(
                 let Ok(cursor) =
                     picture.and_then(|picture| for_picture(&cursor, capture_size, picture))
                 else {
-                    close_target(core, &target);
+                    fail_target(core, &target, StreamFailure::Capture);
                     return;
                 };
                 let published = if target.service {
@@ -377,7 +381,7 @@ fn consume<E, F>(
                     Ok(()) => {}
                     Err(error) if ended(&error) => return,
                     Err(_) => {
-                        close_target(core, &target);
+                        fail_target(core, &target, StreamFailure::Capture);
                         return;
                     }
                 }
@@ -386,7 +390,7 @@ fn consume<E, F>(
             match composite(&frame, cursor) {
                 Ok(composited) => frame = composited,
                 Err(_) => {
-                    close_target(core, &target);
+                    fail_target(core, &target, StreamFailure::Capture);
                     return;
                 }
             }
@@ -405,8 +409,9 @@ fn consume<E, F>(
             }
             Ok(_) => {}
             Err(PublishError::Session(error)) if ended(&error) => return,
+            // The encoder failed, or what it made could not be sent.
             Err(_) => {
-                close_target(core, &target);
+                fail_target(core, &target, StreamFailure::Encoder);
                 return;
             }
         }

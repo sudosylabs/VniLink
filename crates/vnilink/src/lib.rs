@@ -160,8 +160,9 @@ pub use pairing::{PairingFile, PairingPreview, PAIRING_FILE_EXTENSION};
 pub use protocol::{Capabilities, Quality, CODEC_H264, CODEC_H264_HIGH, PROTOCOL_VERSION};
 pub use relay::{CustomRelay, RelaySettings};
 pub use service::{
-    CloseCause, ServiceInfo, ServiceKind, ServiceLease, ServicePermissions, ServicePhase,
-    ServiceSupport, SharingPolicy, SharingPolicyUpdate, MAX_SERVICE_RECORDS,
+    CloseCause, DesktopEnd, ServiceInfo, ServiceKind, ServiceLease, ServicePermissions,
+    ServicePhase, ServiceSupport, SharingPolicy, SharingPolicyUpdate, StreamEnd, StreamFailure,
+    MAX_SERVICE_RECORDS,
 };
 pub use session::{Grants, SessionInfo, SessionPhase, SessionRole};
 pub use system::{
@@ -169,11 +170,12 @@ pub use system::{
     SystemAction, SystemOperation, SystemPolicy, SystemSupport, SYSTEM_ACTION_NOTICE,
 };
 pub use video::{
-    CodecSupport, EncodedFrame, FrameTiming, HostCapture, RecordingVideoTap, VideoCodec,
-    VideoSubscription, MAX_VIDEO_FRAME,
+    CodecSupport, Condition, ConditionEntry, ConditionSet, EncodedFrame, Evidence, FrameTiming,
+    HostCapture, RecordingVideoTap, VideoCodec, VideoSubscription, MAX_VIDEO_FRAME,
 };
 pub use video_caps::{
-    clamp_quality, negotiate as negotiate_video_codec, AgreedCodec, VideoCodecCaps, WindowDecoder,
+    clamp_quality, negotiate as negotiate_video_codec, AgreedCodec, EncoderImplementation,
+    VideoCodecCaps, WindowDecoder,
 };
 
 #[cfg(test)]

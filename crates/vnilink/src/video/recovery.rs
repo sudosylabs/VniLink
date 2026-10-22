@@ -51,6 +51,11 @@ impl KeyframeRequests {
             .map(|asked| asked + patience(rtt, frame))
     }
 
+    /// Whether a keyframe is wanted and has not arrived.
+    pub(crate) fn outstanding(&self) -> bool {
+        self.owed
+    }
+
     /// A keyframe arrived: whatever was owed is answered.
     pub(crate) fn keyframe_arrived(&mut self) {
         self.owed = false;

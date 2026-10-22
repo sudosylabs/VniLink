@@ -1,5 +1,6 @@
 import { Emitter } from '../../src/base/common/event.js';
 import { DisposableStore } from '../../src/base/common/lifecycle.js';
+import type { DesktopCondition } from '../../src/platform/engine/common/dataChannel.js';
 import type { DisplayInfo } from '../../src/platform/engine/common/engine.js';
 import { InstantiationService } from '../../src/platform/instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
@@ -42,6 +43,8 @@ class FakeSession implements IDesktopSession {
 	public readonly presentedPictures: DesktopPicture[] = [];
 	public readonly skippedPictures: DesktopPicture[] = [];
 	public disposed = false;
+	/** What the engine says is wrong with the picture, most severe first. */
+	public conditions: DesktopCondition[] = ['link.congestion', 'relay.path'];
 
 	constructor(public readonly control: boolean) { }
 
@@ -50,7 +53,7 @@ class FakeSession implements IDesktopSession {
 	}
 
 	public stats(): Promise<DesktopStats | undefined> {
-		return Promise.resolve({ codec: 'h264', status: { reason: 'networkPressure', receivedKbps: 9400, receivedFps: 60, receiverQueueMs: 4, hostQueueMs: 2, lossPerMille: 3, rttMs: 18, encodeUs: 4000, captureUs: 1000 }, latency: { host: { p50: 9, p95: 14, count: 60 }, decode: { p50: 3, p95: 5, count: 60 } }, skipped: 0 });
+		return Promise.resolve({ codec: 'h264', status: { reason: 'networkPressure', receivedKbps: 9400, receivedFps: 60, receiverQueueMs: 4, hostQueueMs: 2, lossPerMille: 3, rttMs: 18, encodeUs: 4000, captureUs: 1000, conditions: this.conditions }, latency: { host: { p50: 9, p95: 14, count: 60 }, decode: { p50: 3, p95: 5, count: 60 } }, skipped: 0 });
 	}
 
 	public send(input: DesktopInput): void {
@@ -150,6 +153,16 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		assert(sessions[0].presentedPictures.length === presented + 1 && sessions[0].skippedPictures.length === 2, `Pictures behind the newest were drawn: ${String(sessions[0].presentedPictures.length - presented)} drawn, ${String(sessions[0].skippedPictures.length)} skipped`);
 		// How the picture is doing, once a second.
 		await until(() => view.element.querySelector('.desktop-status-stats')?.textContent === '60 fps · H.264 · 9.4 Mb/s · 18 ms · Lowered for the network', `Wrong stats: ${view.element.querySelector('.desktop-status-stats')?.textContent ?? ''}`, 3000);
+		// What is wrong, beside the stats: the worst in one phrase, all of them on hover and to a screen reader.
+		const condition = view.element.querySelector<HTMLElement>('.desktop-status-condition');
+		assert(condition !== null && !condition.hidden && condition.textContent === 'Slow network: lowered quality', `Wrong condition: ${condition?.textContent ?? ''}`);
+		assert(condition.title === 'Slow network: lowered quality\nConnected through a relay' && condition.tabIndex === 0, `Wrong condition details: ${condition.title}`);
+		assert(condition.getAttribute('aria-label') === 'Slow network: lowered quality. Connected through a relay', 'The conditions are not read out');
+		// A relay alone needs no attention.
+		sessions[0].conditions = ['relay.path'];
+		await until(() => condition.hidden === true, 'A relay alone was shown as a problem', 3000);
+		sessions[0].conditions = ['encoder.software'];
+		await until(() => condition.textContent === 'Sudosy is encoding in software', `Wrong software condition: ${condition.textContent}`, 3000);
 
 		// The pointer's display is chosen once, before anything else is sent.
 		assert(JSON.stringify(sessions[0].sent[0]) === JSON.stringify({ type: 'selectDisplays', ids: ['7'] }), `The shown display was not selected: ${JSON.stringify(sessions[0].sent[0])}`);
@@ -215,23 +228,41 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		assert(sessions[0].sent.at(-1)?.type === 'releaseSessionInput', 'Leaving the screen did not let go of the keys');
 
 		// A dropped connection is tried again by itself, over the last picture, dimmed.
-		sessions[0].end('lost');
+		sessions[0].end('linkLost');
 		await until(() => !overlay.hidden && overlay.textContent.includes('Reconnecting to Sudosy'), 'A lost connection did not say it reconnects');
 		assert(view.element.querySelector('.desktop-stage')?.classList.contains('desktop-dimmed') === true, 'The last picture was not dimmed');
 		await until(() => sessions.length === 2, 'The tab did not reconnect by itself', 4000);
 		sessions[1].picture();
 		await until(() => overlay.hidden === true, 'The reconnected picture did not show');
+		// The other computer's encoder failed: it reconnects at once, and says whose failure it was.
+		sessions[1].end('hostEncoderFailed');
+		await until(() => !overlay.hidden && overlay.textContent.includes('Sudosy couldn’t keep encoding its screen.'), `An encoder failure was not said: ${overlay.textContent}`);
+		await until(() => sessions.length === 3, 'The tab did not reconnect after an encoder failure', 4000);
+		sessions[2].picture();
+		await until(() => overlay.hidden === true, 'The picture after an encoder failure did not show');
+		// Permission withdrawn there: not tried again; it says what someone there must do.
+		sessions[2].end('hostPermission');
+		await until(() => overlay.textContent.includes('Sudosy no longer allows VniLink to record its screen.') && overlay.textContent.includes('system settings'), `A withdrawn permission was not said: ${overlay.textContent}`);
+		// An end interrupts: its overlay is an alert, and the picture's conditions go with it.
+		assert(overlay.getAttribute('role') === 'alert', 'An end is not announced as an alert');
+		assert(view.element.querySelector<HTMLElement>('.desktop-status-condition')?.hidden === true, 'A condition outlived its picture');
+		const opened = sessions.length;
+		assert(opened === 3, 'A withdrawn permission was tried again by itself');
+		overlay.querySelector<HTMLButtonElement>('button.primary')?.click();
+		await until(() => sessions.length === 4, 'Try Again did not open the screen after a withdrawn permission');
+		sessions[3].picture();
+		await until(() => overlay.hidden === true, 'The picture after Try Again did not show');
 		// Refused for good: it says why, and offers to try again or close.
 		answers.push('turnedOff');
-		sessions[1].end('lost');
+		sessions[3].end('linkLost');
 		await until(() => overlay.textContent.includes('Sudosy doesn’t share its screen with this computer.'), 'A refusal is not said', 4000);
 		const buttons = [...overlay.querySelectorAll('button')].map(button => button.textContent);
 		assert(buttons.join() === 'Try Again,Close Tab', `Wrong actions: ${buttons.join()}`);
 		assert(role() === 'Not connected', 'The status bar does not say it is not connected');
 		overlay.querySelector<HTMLButtonElement>('button.primary')?.click();
-		await until(() => sessions.length === 3, 'Try Again did not open the screen');
+		await until(() => sessions.length === 5, 'Try Again did not open the screen');
 		assert(await tabService.close(view.id), 'The tab did not close');
-		assert(sessions[2].disposed, 'Closing the tab did not end the session');
+		assert(sessions[4].disposed, 'Closing the tab did not end the session');
 
 		// Viewing only sends nothing.
 		services.invokeFunction(accessor => {
@@ -240,26 +271,26 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		const viewer = tabService.activeTab;
 		assert(viewer instanceof RemoteDesktopView && !viewer.control, 'View Screen did not open a view-only tab');
 		host.replaceChildren(viewer.element);
-		await until(() => sessions.length === 4, 'The view-only tab did not open the screen');
-		sessions[3].picture();
+		await until(() => sessions.length === 6, 'The view-only tab did not open the screen');
+		sessions[5].picture();
 		await until(() => viewer.element.querySelector('.desktop-status-role')?.textContent === 'Viewing Sudosy', 'Viewing is not said');
 		const screen = viewer.element.querySelector<HTMLCanvasElement>('.desktop-screen');
 		assert(screen !== null, 'The view-only tab has no screen');
 		press(screen, 'keydown', 'KeyA', 'a');
-		assert(sessions[3].sent.length === 0, 'A view-only tab sent input');
+		assert(sessions[5].sent.length === 0, 'A view-only tab sent input');
 		// Viewing, the other pointer is drawn even under this one, which keeps its own shape.
 		screen.dispatchEvent(new MouseEvent('mouseenter'));
-		sessions[3].pointer(100, 100);
+		sessions[5].pointer(100, 100);
 		const viewed = viewer.element.querySelector<HTMLElement>('.desktop-pointer');
 		assert(viewed?.hidden === false && screen.style.cursor === '', 'Viewing did not draw the other pointer');
 		// A picture this computer can't show: once it reconnects by itself, as the
 		// next offer leaves that codec out; the second time it says so.
-		sessions[3].end('cantShow');
-		await until(() => sessions.length === 5, 'The tab did not reconnect after a picture it could not show');
-		sessions[4].end('cantShow');
+		sessions[5].end('cantShow');
+		await until(() => sessions.length === 7, 'The tab did not reconnect after a picture it could not show');
+		sessions[6].end('cantShow');
 		const viewerOverlay = viewer.element.querySelector<HTMLElement>('.desktop-overlay');
 		await until(() => viewerOverlay?.textContent.includes('This computer can’t show the screen of Sudosy.') === true, 'A picture it can never show is not said');
-		assert(sessions.length === 5, 'The tab kept reconnecting to a screen it cannot show');
+		assert(sessions.length === 7, 'The tab kept reconnecting to a screen it cannot show');
 	} finally {
 		host.remove();
 		disposables.dispose();

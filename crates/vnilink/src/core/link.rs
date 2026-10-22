@@ -201,16 +201,7 @@ impl Core {
             .map(|link| {
                 link.paths()
                     .iter()
-                    .map(|path| {
-                        let stats = path.stats();
-                        SessionPath {
-                            relay: path.is_relay(),
-                            selected: path.is_selected(),
-                            rtt_ms: u64::try_from(path.rtt().as_millis()).unwrap_or(u64::MAX),
-                            tx_bytes: stats.udp_tx.bytes,
-                            rx_bytes: stats.udp_rx.bytes,
-                        }
-                    })
+                    .map(|path| session_path(&path))
                     .collect()
             })
             .unwrap_or_default())
@@ -237,17 +228,25 @@ impl Core {
         Ok(link
             .paths()
             .iter()
-            .map(|path| {
-                let stats = path.stats();
-                SessionPath {
-                    relay: path.is_relay(),
-                    selected: path.is_selected(),
-                    rtt_ms: u64::try_from(path.rtt().as_millis()).unwrap_or(u64::MAX),
-                    tx_bytes: stats.udp_tx.bytes,
-                    rx_bytes: stats.udp_rx.bytes,
-                }
-            })
+            .map(|path| session_path(&path))
             .collect())
+    }
+}
+
+/// One path as diagnostics see it: its route, round trip, bytes and this
+/// side's congestion state.
+fn session_path(path: &iroh::endpoint::Path<'_>) -> SessionPath {
+    let stats = path.stats();
+    SessionPath {
+        relay: path.is_relay(),
+        selected: path.is_selected(),
+        rtt_ms: u64::try_from(path.rtt().as_millis()).unwrap_or(u64::MAX),
+        tx_bytes: stats.udp_tx.bytes,
+        rx_bytes: stats.udp_rx.bytes,
+        cwnd: stats.cwnd,
+        congestion_events: stats.congestion_events,
+        lost_packets: stats.lost_packets,
+        black_holes_detected: stats.black_holes_detected,
     }
 }
 

@@ -92,6 +92,11 @@ test('bridge events keep core names and lossless ids', () => {
 	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, kind: 'Hologram' } }), false);
 	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Revoked' } } } }), true);
 	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Abducted' } } } }), false);
+	// A producer failure on this computer says what failed, and only it carries one.
+	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Failed', failure: 'encoder' } } } }), true);
+	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Failed' } } } }), false);
+	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Failed', failure: 'boredom' } } } }), false);
+	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Revoked', failure: 'encoder' } } } }), false);
 	assert.equal(isEngineEvent({ type: 'qualityUpdated', id: '1', quality: { max_bitrate_kbps: 1000, max_frame_rate: 30, max_width: 1920, max_height: 1080 } }), true);
 	assert.equal(isEngineEvent({ type: 'inputFailed', id: '1', message: 'denied' }), true);
 	assert.equal(isEngineEvent({ type: 'topologyChanged', revision: '4' }), true);
@@ -199,4 +204,19 @@ test('presence, peer availability and hosted services cross the bridge exactly',
 	assert.equal(isEngineReply({ type: 'peerAvailability', report: [{ capability: 'camera', status: 'available' }, { capability: 'camera', status: 'turnedOff' }] }), false, 'Repeated capability');
 	assert.equal(isEngineReply({ type: 'services', services: [] }), true);
 	assert.equal(isEngineReply({ type: 'services', services: [{ id: '1' }] }), false);
+});
+
+test('the diagnostic snapshot is one bounded JSON object naming its version', () => {
+	assert.equal(isEngineCommand({ type: 'diagnosticSnapshot' }), true);
+	assert.equal(isEngineCommand({ type: 'diagnosticSnapshot', path: '/tmp/x' }), false);
+	const snapshot = JSON.stringify({ version: 4, pipelines: [], last_end: null });
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot }), true);
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot, extra: 1 }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot: '' }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot: '{not json' }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot: '[4]' }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot: JSON.stringify({ pipelines: [] }) }), false);
+	// The cap counts bytes: 64 KiB of text is the most the engine exports.
+	const padded = JSON.stringify({ version: 4, pad: 'é'.repeat(33 * 1024) });
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot: padded }), false);
 });

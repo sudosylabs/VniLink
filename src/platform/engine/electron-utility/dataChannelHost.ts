@@ -7,7 +7,7 @@ import { record } from '../common/engine.js';
 export interface NativeDataChannel {
 	desktopAudio(operation: string): string;
 	requestKeyframe(): void;
-	mediaStatus(decodeUs: number): string;
+	mediaStatus(decodeUs: number, software: boolean, recoveries: number): string;
 	/** The pointer when it moved or changed shape since the last call, or null. */
 	cursor(): NativeCursor | null;
 	read(): { kind: string; data?: Uint8Array | null; metadata: string } | null;
@@ -152,9 +152,12 @@ export class DataChannelHost {
 				return;
 			}
 			if (message.type === 'mediaStatus' && this.request.kind === 'video' && Number.isSafeInteger(message.id) && Number(message.id) > 0
-				&& Number.isSafeInteger(message.decodeUs) && Number(message.decodeUs) >= 0 && Number(message.decodeUs) <= 0xffffffff) {
-				const status: unknown = JSON.parse(this.native.mediaStatus(Number(message.decodeUs)));
-				if (!isDesktopMediaStatus(status)) {
+				&& Number.isSafeInteger(message.decodeUs) && Number(message.decodeUs) >= 0 && Number(message.decodeUs) <= 0xffffffff
+				&& typeof message.software === 'boolean'
+				&& Number.isSafeInteger(message.recoveries) && Number(message.recoveries) >= 0 && Number(message.recoveries) <= 0xffffffff) {
+				// Null once the picture stopped: its last packet says why.
+				const status: unknown = JSON.parse(this.native.mediaStatus(Number(message.decodeUs), message.software, Number(message.recoveries)));
+				if (status !== null && !isDesktopMediaStatus(status)) {
 					throw new Error('Invalid desktop media status');
 				}
 				this.port.postMessage({ type: 'mediaStatus', id: message.id, status });
@@ -275,6 +278,11 @@ export class DataChannelHost {
 					return;
 				}
 				this.ended = packet.kind === 'exited' || packet.kind === 'failed';
+				// A stopped picture's pointer stops with it.
+				if (this.ended && this.cursorTimer) {
+					clearInterval(this.cursorTimer);
+					this.cursorTimer = undefined;
+				}
 				this.sequence++;
 				this.sentAt = performance.now();
 				this.port.postMessage({

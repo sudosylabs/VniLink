@@ -10,7 +10,7 @@
 use serde::Serialize;
 
 /// Snapshot format version. Bump when fields change meaning.
-pub const SNAPSHOT_VERSION: u32 = 3;
+pub const SNAPSHOT_VERSION: u32 = 4;
 /// Hard cap on exported JSON bytes.
 pub const MAX_EXPORT_BYTES: usize = 64 * 1024;
 /// Per-list cap before `truncated` is set.
@@ -65,6 +65,13 @@ pub struct ConnectionSummary {
     /// Connection totals across all open paths.
     pub tx_bytes: u64,
     pub rx_bytes: u64,
+    /// The selected path's congestion window, and the congestion events,
+    /// lost packets and black holes this side saw on it: its sending
+    /// direction only.
+    pub cwnd: Option<u64>,
+    pub congestion_events: Option<u64>,
+    pub lost_packets: Option<u64>,
+    pub black_holes_detected: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -138,6 +145,51 @@ pub struct PipelineSummary {
     pub selected_display: Option<u64>,
     /// Fixed display-fault label, if the selected source failed.
     pub fault: Option<String>,
+    /// Viewer: what is wrong with the live picture, from the most severe.
+    pub conditions: Vec<ConditionSummary>,
+    /// Why the picture stopped (`DesktopEnd::label`), once it did.
+    pub end: Option<String>,
+    /// Host: the encoder open for this viewer and whether it is hardware.
+    pub encoder: Option<String>,
+    pub encoder_hardware: Option<bool>,
+    /// Viewer: whether the window decodes in hardware, once it said, and how
+    /// often its decoder restarted from a keyframe.
+    pub decoder_hardware: Option<bool>,
+    pub decoder_recoveries: u64,
+}
+
+/// One held condition: its label, since when on [`monotonic_ms`], and the
+/// signal that set it with its value and the threshold it crossed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct ConditionSummary {
+    pub condition: String,
+    pub since_ms: u64,
+    pub signal: String,
+    pub value: u64,
+    pub threshold: u64,
+}
+
+impl From<crate::ConditionEntry> for ConditionSummary {
+    fn from(entry: crate::ConditionEntry) -> Self {
+        Self {
+            condition: entry.condition.label().into(),
+            since_ms: entry.since_ms,
+            signal: entry.evidence.signal.into(),
+            value: entry.evidence.value,
+            threshold: entry.evidence.threshold,
+        }
+    }
+}
+
+/// The last desktop picture that stopped on this computer, kept after its
+/// pipeline left the snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct EndSummary {
+    pub service_id: u64,
+    pub hosted: bool,
+    /// `DesktopEnd::label`.
+    pub reason: String,
+    pub at_ms: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -180,6 +232,7 @@ pub struct DiagnosticSnapshot {
     pub resources: ResourceCounts,
     pub queues: QueueDepths,
     pub transfers: TransferSummary,
+    pub last_end: Option<EndSummary>,
     pub truncated: bool,
 }
 
@@ -195,6 +248,7 @@ pub struct SnapshotInputs {
     pub resources: ResourceCounts,
     pub queues: QueueDepths,
     pub transfers: TransferSummary,
+    pub last_end: Option<EndSummary>,
 }
 
 pub fn build_snapshot(mut inputs: SnapshotInputs) -> DiagnosticSnapshot {
@@ -221,6 +275,7 @@ pub fn build_snapshot(mut inputs: SnapshotInputs) -> DiagnosticSnapshot {
         resources: inputs.resources,
         queues: inputs.queues,
         transfers: inputs.transfers,
+        last_end: inputs.last_end,
         truncated,
     }
 }

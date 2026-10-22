@@ -20,6 +20,8 @@ pub enum PortalPhase {
     SourcesSelected,
     Started,
     Closed,
+    /// The user cancelled the portal's dialog, or the portal refused.
+    Refused,
 }
 
 /// Local record of a portal screen-cast session.
@@ -86,6 +88,20 @@ impl PortalSession {
         )?;
         self.pipewire_node = Some(pipewire_node);
         self.phase = PortalPhase::Started;
+        Ok(())
+    }
+
+    /// The portal answered a request with a refusal: its `Response` code 1
+    /// (the user cancelled) or 2 (it ended the interaction otherwise).
+    pub fn refuse(&mut self) -> Result<(), Error> {
+        if matches!(
+            self.phase,
+            PortalPhase::Idle | PortalPhase::Closed | PortalPhase::Refused
+        ) {
+            return Err(Error::InvalidSetting("portal session is not open"));
+        }
+        self.pipewire_node = None;
+        self.phase = PortalPhase::Refused;
         Ok(())
     }
 

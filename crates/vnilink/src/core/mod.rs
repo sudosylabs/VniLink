@@ -202,6 +202,13 @@ pub struct SessionPath {
     pub tx_bytes: u64,
     /// UDP payload bytes received on this path, cumulative.
     pub rx_bytes: u64,
+    /// This side's congestion window on the path, in bytes.
+    pub cwnd: u64,
+    /// Congestion events, lost packets and black holes this side detected
+    /// on the path, cumulative: its sending direction only.
+    pub congestion_events: u64,
+    pub lost_packets: u64,
+    pub black_holes_detected: u64,
 }
 
 struct LiveSession {
@@ -566,6 +573,11 @@ struct Shared {
     /// each other.
     desktop_gate: tokio::sync::Mutex<()>,
     desktop_streams: AtomicUsize,
+    /// Host-only. The screen is on a desktop the capture cannot read, such
+    /// as a sign-in or elevation prompt; reported by the platform backend.
+    secure_desktop: std::sync::atomic::AtomicBool,
+    /// The last desktop picture that stopped, for diagnostics.
+    last_desktop_end: Mutex<Option<crate::diagnostics::EndSummary>>,
     /// Controller-only. Connections with a live desktop datagram router,
     /// keyed `(connection id, generation)`. One router per key owns
     /// `read_datagram`, so sibling owners never split each other's fragments.

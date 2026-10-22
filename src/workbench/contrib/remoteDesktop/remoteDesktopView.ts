@@ -1,8 +1,10 @@
 import * as nls from '../../../nls.js';
 import { $, addDisposableListener, append, DisposableResizeObserver, EventType, getWindow } from '../../../base/browser/dom.js';
+import { status as announce } from '../../../base/browser/ui/aria/aria.js';
 import { Icons } from '../../../base/common/icons.js';
 import { isMacintosh, isWindows } from '../../../base/common/platform.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../../base/common/lifecycle.js';
+import type { DesktopCondition } from '../../../platform/engine/common/dataChannel.js';
 import type { DisplayInfo } from '../../../platform/engine/common/engine.js';
 import { hidUsage } from '../../../platform/engine/common/keyUsage.js';
 import type { DeviceSummary } from '../../services/devices/deviceService.js';
@@ -13,7 +15,10 @@ import { ITabService, type WorkbenchTab } from '../../services/tabs/tabService.j
 type DesktopProblem = DesktopFailure | DesktopEnd;
 
 /** Problems another attempt may fix, tried again by themselves; the rest need a change on either computer. */
-const retryable: ReadonlySet<DesktopProblem> = new Set(['disconnected', 'unavailable', 'failed', 'lost']);
+const retryable: ReadonlySet<DesktopProblem> = new Set(['disconnected', 'unavailable', 'failed', 'linkLost', 'relayUnreachable', 'peerClosed', 'hostEncoderFailed', 'hostCaptureFailed']);
+
+/** Ends of a running picture that are tried again at once, before any failed attempt. */
+const reconnectAtOnce: ReadonlySet<DesktopProblem> = new Set(['linkLost', 'relayUnreachable', 'peerClosed', 'hostEncoderFailed', 'hostCaptureFailed']);
 
 /** Precise wheel units in one notch, the Windows wheel delta, as the engine counts them. */
 const WHEEL_NOTCH = 120;
@@ -116,6 +121,26 @@ export function statsText(stats: DesktopStats, name: string): string {
 	return parts.join(' · ');
 }
 
+/** One short phrase for what is wrong with the picture, naming whose side it is. */
+export function conditionText(condition: DesktopCondition, name: string): string {
+	switch (condition) {
+		case 'link.blackout': return nls.localize('desktop.condition.blackout', 'No picture from {0}', name);
+		case 'relay.backlog': return nls.localize('desktop.condition.relayBacklog', 'Relayed connection is delayed');
+		case 'link.congestion': return nls.localize('desktop.condition.congestion', 'Slow network: lowered quality');
+		case 'link.loss': return nls.localize('desktop.condition.loss', 'Network is losing data');
+		case 'host.secureDesktop': return nls.localize('desktop.condition.secureDesktop', '{0} is on a sign-in or admin prompt', name);
+		case 'encoder.slow': return nls.localize('desktop.condition.encoderSlow', '{0} can’t encode fast enough', name);
+		case 'decoder.slow': return nls.localize('desktop.condition.decoderSlow', 'This computer can’t decode fast enough');
+		case 'decoder.recovering': return nls.localize('desktop.condition.recovering', 'Picture recovering from a decoding error');
+		case 'encoder.software': return nls.localize('desktop.condition.encoderSoftware', '{0} is encoding in software', name);
+		case 'decoder.software': return nls.localize('desktop.condition.decoderSoftware', 'This computer is decoding in software');
+		case 'relay.path': return nls.localize('desktop.condition.relay', 'Connected through a relay');
+	}
+}
+
+/** Conditions that need no attention while others are absent: a relay is not a problem. */
+const informational: ReadonlySet<DesktopCondition> = new Set(['relay.path']);
+
 /** Each measured stage's typical time, then the time nineteen pictures in twenty beat. */
 export function latencyText(stats: DesktopStats, name: string): string {
 	const labels: Readonly<Record<LatencyStage, string>> = {
@@ -143,8 +168,42 @@ function problemMessage(name: string, problem: DesktopProblem): string {
 		case 'unsupported': return nls.localize('desktop.unsupported', '{0} can’t share its screen.', name);
 		case 'unavailable': return nls.localize('desktop.unavailable', '{0} can’t open its screen right now.', name);
 		case 'failed': return nls.localize('desktop.failed', 'The screen of {0} didn’t start.', name);
-		case 'lost': return nls.localize('desktop.lost', 'The connection to {0} dropped.', name);
+		case 'linkLost': return nls.localize('desktop.lost', 'The connection to {0} dropped.', name);
+		case 'relayUnreachable': return nls.localize('desktop.relayUnreachable', 'The relayed connection to {0} dropped.', name);
+		case 'peerClosed': return nls.localize('desktop.peerClosed', '{0} stopped sending its screen.', name);
+		case 'hostEncoderFailed': return nls.localize('desktop.hostEncoderFailed', '{0} couldn’t keep encoding its screen.', name);
+		case 'hostCaptureFailed': return nls.localize('desktop.hostCaptureFailed', '{0} stopped capturing its screen.', name);
+		case 'hostPermission': return nls.localize('desktop.hostPermission', '{0} no longer allows VniLink to record its screen.', name);
+		case 'displayGone': return nls.localize('desktop.displayGone', 'The display shown from {0} went away.', name);
+		case 'hostStopped': return nls.localize('desktop.hostStopped', '{0} stopped sharing its screen.', name);
+		case 'hostShutdown': return nls.localize('desktop.hostShutdown', 'VniLink quit on {0}.', name);
+		case 'revoked': return nls.localize('desktop.revoked', '{0} no longer shares its screen with this computer.', name);
 		case 'cantShow': return nls.localize('desktop.cantShow', 'This computer can’t show the screen of {0}.', name);
+	}
+}
+
+/** What the user can do about a problem, when the title alone doesn't say. */
+function problemAdvice(name: string, problem: DesktopProblem): string {
+	switch (problem) {
+		case 'hostPermission': return nls.localize('desktop.hostPermissionAdvice', 'Someone at {0} needs to allow VniLink to record the screen in its system settings. Then try again.', name);
+		case 'displayGone': return nls.localize('desktop.displayGoneAdvice', 'Try again to show another display.');
+		case 'hostShutdown': return nls.localize('desktop.hostShutdownAdvice', 'Try again once VniLink is open on {0}.', name);
+		case 'disconnected': case 'turnedOff': case 'needsPermission': case 'unsupported': case 'unavailable': case 'failed':
+		case 'linkLost': case 'relayUnreachable': case 'peerClosed': case 'hostEncoderFailed': case 'hostCaptureFailed':
+		case 'hostStopped': case 'revoked': case 'cantShow':
+			return '';
+	}
+}
+
+/** Why a reconnect is under way, as the overlay's body says it. */
+function reconnectReason(name: string, problem: DesktopProblem | undefined): string {
+	switch (problem) {
+		case 'hostEncoderFailed': case 'hostCaptureFailed': case 'peerClosed': return `${problemMessage(name, problem)} ${nls.localize('desktop.reconnectingHost', 'Keys and the pointer stay here until its screen is back.')}`;
+		case 'relayUnreachable': return nls.localize('desktop.reconnectingRelay', 'The relayed connection dropped. Keys and the pointer stay here until it’s back.');
+		case 'disconnected': case 'turnedOff': case 'needsPermission': case 'unsupported': case 'unavailable': case 'failed':
+		case 'linkLost': case 'hostPermission': case 'displayGone': case 'hostStopped': case 'hostShutdown': case 'revoked': case 'cantShow':
+		case undefined:
+			return nls.localize('desktop.reconnectingBody', 'The connection dropped. Keys and the pointer stay here until it’s back.');
 	}
 }
 
@@ -176,6 +235,10 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	private readonly statusRole: HTMLElement;
 	private readonly statusSize: HTMLElement;
 	private readonly statusStats: HTMLElement;
+	/** What is wrong with the live picture, apart from why one ended. */
+	private readonly statusCondition: HTMLElement;
+	/** The condition last shown and announced. */
+	private shownCondition: DesktopCondition | undefined;
 	private readonly statsTimer = this._register(new MutableDisposable());
 	private readonly session = this._register(new MutableDisposable<IDesktopSession>());
 	private readonly sessionListeners = this._register(new DisposableStore());
@@ -186,6 +249,8 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	/** Whether this tab already reconnected once after a picture it couldn't show. */
 	private retriedCodec = false;
 	private hasPicture = false;
+	/** The end of the running picture that the current reconnect answers. */
+	private reconnectingFor: DesktopProblem | undefined;
 	/** The display shown, and its bounds, as the other computer reports them at the picture's revision. */
 	private shown: { readonly display: string; readonly revision: string } | undefined;
 	/** The shown display's bounds, once the other computer's topology names it at the picture's revision. */
@@ -253,6 +318,8 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		const status = append(this.element, $('footer.desktop-status'));
 		this.statusRole = append(status, $('span.desktop-status-role'));
 		this.statusStats = append(status, $('span.desktop-status-stats'));
+		this.statusCondition = append(status, $('span.desktop-status-condition'));
+		this.statusCondition.hidden = true;
 		append(status, $('span.desktop-status-space'));
 		this.statusSize = append(status, $('span.desktop-status-size'));
 		if (control) {
@@ -657,12 +724,18 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		}
 	}
 
-	private showState(state: 'connecting' | 'reconnecting'): void {
+	/** `why` is the problem a reconnect answers, when one does. */
+	private showState(state: 'connecting' | 'reconnecting', why?: DesktopProblem): void {
 		const name = this.device.name;
+		if (why) {
+			this.reconnectingFor = why;
+		} else if (state === 'connecting') {
+			this.reconnectingFor = undefined;
+		}
 		this.setOverlay(
 			state,
 			state === 'connecting' ? nls.localize('desktop.connecting', 'Connecting to {0}…', name) : nls.localize('desktop.reconnecting', 'Reconnecting to {0}…', name),
-			state === 'reconnecting' ? nls.localize('desktop.reconnectingBody', 'The connection dropped. Keys and the pointer stay here until it’s back.') : '',
+			state === 'reconnecting' ? reconnectReason(name, this.reconnectingFor) : '',
 			[{ label: state === 'connecting' ? nls.localize('desktop.cancel', 'Cancel') : nls.localize('desktop.disconnect', 'Disconnect'), run: () => void this.tabService.close(this.id) }],
 		);
 	}
@@ -676,12 +749,12 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			void this.connect(true);
 			return;
 		}
-		if (retryable.has(problem) && (again || problem === 'lost')) {
-			this.showState('reconnecting');
+		if (retryable.has(problem) && (again || reconnectAtOnce.has(problem))) {
+			this.showState('reconnecting', reconnectAtOnce.has(problem) ? problem : undefined);
 			this.scheduleRetry();
 			return;
 		}
-		this.setOverlay('ended', problemMessage(name, problem), '', [
+		this.setOverlay('ended', problemMessage(name, problem), problemAdvice(name, problem), [
 			{ label: nls.localize('desktop.tryAgain', 'Try Again'), primary: true, run: () => void this.connect() },
 			{ label: nls.localize('desktop.closeTab', 'Close Tab'), run: () => void this.tabService.close(this.id) },
 		]);
@@ -690,6 +763,9 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	private setOverlay(state: string, title: string, body: string, actions: readonly OverlayAction[]): void {
 		this.statsTimer.clear();
 		this.statusStats.textContent = '';
+		this.showConditions([]);
+		// Progress is polite; an end interrupts, once, from the same region.
+		this.overlay.setAttribute('role', state === 'ended' ? 'alert' : 'status');
 		this.overlay.dataset.state = state;
 		this.overlay.hidden = false;
 		this.stage.classList.toggle('desktop-dimmed', this.hasPicture);
@@ -714,13 +790,46 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	private watchStats(): void {
 		const timer = setInterval(() => {
 			void this.session.value?.stats().then(stats => {
+				// The picture may have ended while the engine answered.
+				if (this.overlay.dataset.state) {
+					return;
+				}
 				this.statusStats.textContent = stats ? statsText(stats, this.device.name) : '';
 				this.statusStats.title = stats ? latencyText(stats, this.device.name) : '';
+				this.showConditions(stats?.status.conditions ?? []);
 			});
 		}, 1000);
 		this.statsTimer.value = toDisposable(() => {
 			clearInterval(timer);
 		});
+	}
+
+	/**
+	 * Shows the worst condition that needs attention in one phrase, with
+	 * every held one on hover or focus, and says a new worst one aloud
+	 * once. A relay alone is not shown; it is listed with the others.
+	 */
+	private showConditions(conditions: readonly DesktopCondition[]): void {
+		const name = this.device.name;
+		const worst = conditions.find(condition => !informational.has(condition));
+		const element = this.statusCondition;
+		element.hidden = worst === undefined;
+		element.textContent = worst ? conditionText(worst, name) : '';
+		const all = conditions.map(condition => conditionText(condition, name)).join('\n');
+		element.title = all;
+		element.tabIndex = worst ? 0 : -1;
+		element.setAttribute('aria-label', conditions.map(condition => conditionText(condition, name)).join('. '));
+		if (worst) {
+			element.dataset.condition = worst;
+		} else {
+			delete element.dataset.condition;
+		}
+		if (worst !== this.shownCondition) {
+			this.shownCondition = worst;
+			if (worst) {
+				announce(conditionText(worst, name));
+			}
+		}
 	}
 
 	private hideState(): void {

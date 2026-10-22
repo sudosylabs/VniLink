@@ -26,9 +26,20 @@ pub struct DesktopMediaStatus {
     pub decode_us: u64,
     pub encode_us: u64,
     pub capture_us: u64,
+    /// What is wrong with the picture now, from the most severe; see
+    /// [`crate::Condition`].
+    pub conditions: crate::ConditionSet,
 }
 /// Encoded size of a [`HostFeedback`].
-const HOST_FEEDBACK_LEN: usize = 66;
+const HOST_FEEDBACK_LEN: usize = 75;
+
+/// [`HostFeedback::flags`]: the host knows whether its open encoder is
+/// hardware, and the bit after says which.
+pub(crate) const ENCODER_KNOWN: u8 = 1;
+pub(crate) const ENCODER_HARDWARE: u8 = 2;
+/// The host's screen is on a desktop it cannot capture.
+pub(crate) const SECURE_DESKTOP: u8 = 4;
+const HOST_FLAGS: u8 = ENCODER_KNOWN | ENCODER_HARDWARE | SECURE_DESKTOP;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct HostFeedback {
@@ -45,8 +56,21 @@ pub(crate) struct HostFeedback {
     pub oldest_ms: u64,
     pub encode_us: u64,
     pub capture_us: u64,
+    /// Congestion events on the host's selected path so far: its sending
+    /// side of the link, which the viewer's own path does not see.
+    pub congestion_events: u64,
+    /// [`ENCODER_KNOWN`], [`ENCODER_HARDWARE`] and [`SECURE_DESKTOP`].
+    pub flags: u8,
 }
 impl HostFeedback {
+    /// The host's own state, from [`Self::flags`].
+    pub fn host_state(&self) -> crate::video::HostState {
+        crate::video::HostState {
+            encoder_hardware: (self.flags & ENCODER_KNOWN != 0)
+                .then_some(self.flags & ENCODER_HARDWARE != 0),
+            secure_desktop: self.flags & SECURE_DESKTOP != 0,
+        }
+    }
     pub fn encode(self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(HOST_FEEDBACK_LEN);
         for value in [
@@ -58,10 +82,12 @@ impl HostFeedback {
             self.capture_us,
             self.send_dropped,
             self.backlog_ms,
+            self.congestion_events,
         ] {
             bytes.extend_from_slice(&value.to_be_bytes());
         }
         bytes.extend_from_slice(&self.queued.to_be_bytes());
+        bytes.push(self.flags);
         bytes
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, crate::Error> {
@@ -77,9 +103,13 @@ impl HostFeedback {
             capture_us: u64::from_be_bytes(bytes[40..48].try_into().unwrap()),
             send_dropped: u64::from_be_bytes(bytes[48..56].try_into().unwrap()),
             backlog_ms: u64::from_be_bytes(bytes[56..64].try_into().unwrap()),
-            queued: u16::from_be_bytes(bytes[64..66].try_into().unwrap()),
+            congestion_events: u64::from_be_bytes(bytes[64..72].try_into().unwrap()),
+            queued: u16::from_be_bytes(bytes[72..74].try_into().unwrap()),
+            flags: bytes[74],
         };
         if feedback.queued > 8
+            || feedback.flags & !HOST_FLAGS != 0
+            || (feedback.flags & ENCODER_HARDWARE != 0 && feedback.flags & ENCODER_KNOWN == 0)
             || feedback.encode_us > 5_000_000
             || feedback.capture_us > 5_000_000
             || feedback.backlog_ms > 600_000
@@ -102,7 +132,7 @@ pub(crate) struct Feedback {
     pub decode_us: Option<u64>,
 }
 /// Share of frames missed, per mille, that strains the link.
-const MISSED_PRESSURE: u64 = 50;
+pub(crate) const MISSED_PRESSURE: u64 = 50;
 
 /// Share of frames missed, per mille, at which the bitrate halves.
 const MISSED_SEVERE: u64 = 150;
@@ -118,6 +148,41 @@ const PROBE_AFTER_MS: u64 = 6000;
 /// A rate recovery got back to and held this long is proven again.
 const RESTORE_PROVEN_MS: u64 = 10_000;
 
+/// What one step measured, before deciding: the controller's own inputs
+/// and verdicts, so [`crate::video::Conditions`] explains the picture from
+/// exactly what the controller saw. Reading them changes no decision.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Signals {
+    /// The host's send loss over the interval, per mille of bytes.
+    pub loss_per_mille: u16,
+    /// How long the viewer has been missing frames without a break.
+    pub lasting_loss_ms: u64,
+    /// Frames lost on the way or dropped by the host's send gate, per mille.
+    pub missed_per_mille: u64,
+    /// The host's send gate dropped frames behind the link.
+    pub gate_dropping: bool,
+    pub backlog_ms: u64,
+    /// The host's encode queue is old and deep.
+    pub host_queue_backed_up: bool,
+    pub host_queue_ms: u64,
+    pub rtt_ms: u64,
+    pub rtt_floor_ms: u64,
+    /// The round trip at and above which it counts as inflated.
+    pub inflated_rtt_ms: u64,
+    /// Congestion events on the host's path over the interval.
+    pub congestion_events: u64,
+    pub encoder_pressure: bool,
+    pub encode_us: u64,
+    /// This computer's decoder takes longer than a picture's interval.
+    pub decoder_pressure: bool,
+    pub decode_us: u64,
+    /// Pictures wait, or are dropped, before this computer's decoder.
+    pub receiver_backed_up: bool,
+    pub receiver_queue_ms: u64,
+    /// The time a picture may take at the current frame rate, at the
+    /// three-quarters the controller allows a coder.
+    pub picture_budget_us: u64,
+}
 #[derive(Default)]
 pub(crate) struct Adaptive {
     previous: Option<Feedback>,
@@ -134,6 +199,8 @@ pub(crate) struct Adaptive {
     /// [`RESTORE_PROVEN_MS`] of it says that rate was too much after all.
     since_restore: Option<u64>,
     pub status: DesktopMediaStatus,
+    /// The last step's measurements; `None` while warming up.
+    pub signals: Option<Signals>,
 }
 impl Adaptive {
     pub fn step(
@@ -144,6 +211,7 @@ impl Adaptive {
         next: Feedback,
     ) -> Option<Quality> {
         let previous = self.previous.replace(next);
+        self.signals = None;
         let Some(previous) = previous else {
             self.rtt_floor = next.rtt_ms.max(1);
             return None;
@@ -246,6 +314,7 @@ impl Adaptive {
             decode_us: next.decode_us.unwrap_or(0),
             encode_us: next.host.map_or(0, |host| host.encode_us),
             capture_us: next.host.map_or(0, |host| host.capture_us),
+            conditions: crate::ConditionSet::default(),
         };
         let decode_pressure = frames >= 2
             && next
@@ -257,32 +326,54 @@ impl Adaptive {
                     .saturating_mul(u64::from(current.max_frame_rate))
                     > 750_000
             });
-        let receiver_pressure = decode_pressure
-            || encoder_pressure
-            || next.receiver.oldest_ms >= 150
+        let receiver_backed_up = next.receiver.oldest_ms >= 150
             || next.receiver.queued >= 6
             || (drops >= 3 && next.receiver.oldest_ms >= 60);
+        let receiver_pressure = decode_pressure || encoder_pressure || receiver_backed_up;
         // Sender loss concerns the actual sending connection, not the controller's
         // unrelated outbound input. RTT alone or use of a relay is not congestion.
-        let host_pressure = next.host.is_some_and(|host| {
-            (host.oldest_ms >= 150 && host.queued >= 3) || host.backlog_ms >= 150
-        });
-        let inflated_rtt = next.rtt_ms
-            >= self
-                .rtt_floor
-                .saturating_mul(3)
-                .max(self.rtt_floor.saturating_add(80));
+        let host_queue_backed_up = next
+            .host
+            .is_some_and(|host| host.oldest_ms >= 150 && host.queued >= 3);
+        let host_pressure =
+            host_queue_backed_up || next.host.is_some_and(|host| host.backlog_ms >= 150);
+        let inflated_rtt_ms = self
+            .rtt_floor
+            .saturating_mul(3)
+            .max(self.rtt_floor.saturating_add(80));
+        let inflated_rtt = next.rtt_ms >= inflated_rtt_ms;
         let losing_frames = missing(gate_dropped) || self.lossy_ms >= LOSS_LASTS_MS;
+        self.signals = Some(Signals {
+            loss_per_mille: loss,
+            lasting_loss_ms: self.lossy_ms,
+            missed_per_mille,
+            gate_dropping: missing(gate_dropped),
+            backlog_ms: next.host.map_or(0, |host| host.backlog_ms),
+            host_queue_backed_up,
+            host_queue_ms: self.status.host_queue_ms,
+            rtt_ms: next.rtt_ms,
+            rtt_floor_ms: self.rtt_floor,
+            inflated_rtt_ms,
+            congestion_events: match (next.host, previous.host) {
+                (Some(now), Some(before)) => now
+                    .congestion_events
+                    .saturating_sub(before.congestion_events),
+                _ => 0,
+            },
+            encoder_pressure,
+            encode_us: self.status.encode_us,
+            decoder_pressure: decode_pressure,
+            decode_us: self.status.decode_us,
+            receiver_backed_up,
+            receiver_queue_ms: next.receiver.oldest_ms,
+            picture_budget_us: 750_000 / u64::from(current.max_frame_rate.max(1)),
+        });
         let network_pressure =
             loss >= 20 || host_pressure || (loss >= 5 && inflated_rtt) || losing_frames;
         if receiver_pressure || network_pressure {
             self.healthy_ms = 0;
             self.strained_ms = self.strained_ms.saturating_add(elapsed_ms);
-            self.status.reason = if decode_pressure
-                || next.receiver.oldest_ms >= 150
-                || next.receiver.queued >= 6
-                || (drops >= 3 && next.receiver.oldest_ms >= 60)
-            {
+            self.status.reason = if decode_pressure || receiver_backed_up {
                 AdaptationReason::ReceiverPressure
             } else if encoder_pressure {
                 AdaptationReason::EncoderPressure
@@ -694,12 +785,22 @@ mod tests {
             oldest_ms: 789,
             encode_us: 1234,
             capture_us: 5678,
+            congestion_events: 17,
+            flags: ENCODER_KNOWN | SECURE_DESKTOP,
         };
         let bytes = feedback.encode();
         let decoded = HostFeedback::decode(&bytes).unwrap();
         assert_eq!(decoded.sent_bytes, u64::MAX);
         assert_eq!((decoded.encode_us, decoded.capture_us), (1234, 5678));
         assert_eq!((decoded.send_dropped, decoded.backlog_ms), (42, 150));
+        assert_eq!(decoded.congestion_events, 17);
+        assert_eq!(
+            decoded.host_state(),
+            crate::video::HostState {
+                encoder_hardware: Some(false),
+                secure_desktop: true,
+            }
+        );
         assert_eq!(
             (
                 decoded.lost_bytes,
@@ -712,9 +813,15 @@ mod tests {
         for end in 0..bytes.len() {
             assert!(HostFeedback::decode(&bytes[..end]).is_err());
         }
-        let mut malformed = bytes;
-        malformed[65] = 9;
+        let mut malformed = bytes.clone();
+        malformed[73] = 9;
         assert!(HostFeedback::decode(&malformed).is_err());
+        // An unknown flag, or hardware without knowing the encoder.
+        for flags in [8, ENCODER_HARDWARE] {
+            let mut malformed = bytes.clone();
+            malformed[74] = flags;
+            assert!(HostFeedback::decode(&malformed).is_err(), "{flags}");
+        }
     }
 }
 

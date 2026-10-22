@@ -336,8 +336,10 @@ fn copy_mapped(
 
 fn map_error(err: windows::core::Error) -> Error {
     let code = err.code();
+    // Duplication loses access when the input desktop switches to the
+    // sign-in screen, a lock screen or an elevation prompt.
     if code == DXGI_ERROR_ACCESS_LOST || code == E_ACCESSDENIED {
-        return Error::CaptureRejected("Desktop Duplication cannot read this desktop");
+        return Error::SecureDesktop;
     }
     Error::CaptureFailed(code.0)
 }

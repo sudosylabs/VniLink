@@ -721,6 +721,8 @@ impl VnilinkCore {
                     return;
                 }
             };
+            // Restarts in a row whose capture never started.
+            let mut failed_starts = 0;
             while !worker_stop.load(Ordering::Acquire) {
                 let pending = worker_core.video_targets().unwrap_or_default();
                 if pending.is_empty() {
@@ -788,14 +790,48 @@ impl VnilinkCore {
                         result
                     })
                 })();
-                worker_started.store(false, Ordering::Release);
-                if let Err(error) = result {
-                    if !worker_stop.load(Ordering::Acquire) && !startup.is_cancelled() {
-                        *worker_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
-                            "Screen sharing stopped. Check Screen Recording and try connecting again.".into());
-                        let _ = error;
-                        std::thread::sleep(Duration::from_millis(200));
+                let capture_started = worker_started.swap(false, Ordering::AcqRel);
+                if result.is_err()
+                    && !worker_stop.load(Ordering::Acquire)
+                    && !startup.is_cancelled()
+                {
+                    failed_starts = if capture_started {
+                        0
+                    } else {
+                        failed_starts + 1
+                    };
+                    let loss = capture_loss(vnilink_macos::screen_capture_allowed(), failed_starts);
+                    let message = match loss {
+                        CaptureLoss::Restart => "Screen sharing stopped unexpectedly and is restarting.",
+                        CaptureLoss::Permission => "Screen Recording is off for VniLink. Turn it on in System Settings, then connect again.",
+                        CaptureLoss::Failed => "Screen sharing could not restart. Try connecting again.",
+                    };
+                    *worker_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(message.into());
+                    match loss {
+                        CaptureLoss::Restart => {}
+                        CaptureLoss::Permission => {
+                            let _ = worker_core.report_os_permission(
+                                vnilink::availability::Capability::DesktopView,
+                                true,
+                            );
+                            fail_display_viewers(
+                                &worker_core,
+                                u64::from(display_id),
+                                vnilink::StreamFailure::Permission,
+                            );
+                        }
+                        CaptureLoss::Failed => {
+                            failed_starts = 0;
+                            fail_display_viewers(
+                                &worker_core,
+                                u64::from(display_id),
+                                vnilink::StreamFailure::Capture,
+                            );
+                        }
                     }
+                    std::thread::sleep(Duration::from_millis(200));
+                } else {
+                    failed_starts = 0;
                 }
             }
             // Shared teardown (session, encode caps) belongs to the last
@@ -1613,6 +1649,59 @@ mod viewer_tests {
             .is_err());
         controller.shutdown();
         host.shutdown();
+    }
+}
+
+/// What a capture that stopped means for its viewers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureLoss {
+    /// Start it again; the viewers wait through a short blackout.
+    Restart,
+    /// macOS no longer lets VniLink record the screen.
+    Permission,
+    /// It stopped starting at all.
+    Failed,
+}
+
+/// Restarts in a row that fail to start before the viewers are told.
+const FAILED_STARTS: u32 = 3;
+
+/// Classifies a stopped capture from Screen Recording's actual state, read
+/// after the failure, and how many restarts in a row did not start.
+fn capture_loss(allowed: bool, failed_starts: u32) -> CaptureLoss {
+    if !allowed {
+        CaptureLoss::Permission
+    } else if failed_starts >= FAILED_STARTS {
+        CaptureLoss::Failed
+    } else {
+        CaptureLoss::Restart
+    }
+}
+
+/// Ends the picture of each Desktop viewer this display serves, telling it
+/// what failed. Viewers of other displays keep theirs.
+fn fail_display_viewers(core: &vnilink::Core, display_id: u64, failure: vnilink::StreamFailure) {
+    let Ok(routing) = core.video_routing() else {
+        return;
+    };
+    for target in routing.targets {
+        if target.service && target.serves_source(display_id, routing.default_source) {
+            let _ = core.fail_hosted_service(target.id, target.generation, failure);
+        }
+    }
+}
+
+#[cfg(test)]
+mod capture_loss_tests {
+    use super::{capture_loss, CaptureLoss, FAILED_STARTS};
+
+    #[test]
+    fn a_withdrawn_permission_ends_at_once_and_other_failures_restart_first() {
+        assert_eq!(capture_loss(false, 0), CaptureLoss::Permission);
+        assert_eq!(capture_loss(false, FAILED_STARTS), CaptureLoss::Permission);
+        assert_eq!(capture_loss(true, 0), CaptureLoss::Restart);
+        assert_eq!(capture_loss(true, FAILED_STARTS - 1), CaptureLoss::Restart);
+        assert_eq!(capture_loss(true, FAILED_STARTS), CaptureLoss::Failed);
     }
 }
 

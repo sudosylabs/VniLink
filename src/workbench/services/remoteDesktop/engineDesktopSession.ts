@@ -1,11 +1,11 @@
 import { Emitter, type Event } from '../../../base/common/event.js';
 import { Disposable, MutableDisposable } from '../../../base/common/lifecycle.js';
-import type { DataPacket, DesktopCursor, DesktopCursorImage, DesktopMediaStatus } from '../../../platform/engine/common/dataChannel.js';
+import type { DataPacket, DesktopCursor, DesktopCursorImage, DesktopDecoderReport, DesktopMediaStatus } from '../../../platform/engine/common/dataChannel.js';
 import { record, videoCodecNames, type DisplayInfo, type EngineCommand, type VideoCodec } from '../../../platform/engine/common/engine.js';
 import type { CameraDecoder, CameraDecoderFactory } from '../camera/engineCameraStream.js';
 import { avcCodec } from '../camera/h264.js';
 import { DesktopLatency } from './desktopLatency.js';
-import type { DesktopEnd, DesktopInput, DesktopPicture, DesktopPointerShape, DesktopPointer, DesktopStats, IDesktopSession } from './remoteDesktopService.js';
+import { engineDesktopEnds, type DesktopEnd, type DesktopInput, type DesktopPicture, type DesktopPointerShape, type DesktopPointer, type DesktopStats, type IDesktopSession } from './remoteDesktopService.js';
 
 /** Pictures allowed to wait for the decoder before the channel stops acknowledging. */
 const decodeQueueLimit = 2;
@@ -55,7 +55,7 @@ export interface DesktopVideoChannel {
 	/** The other computer's pointer, when it is left out of the picture. */
 	readonly onCursor: Event<DesktopCursor>;
 	requestKeyframe(): void;
-	mediaStatus(decodeUs: number): Promise<DesktopMediaStatus | undefined>;
+	mediaStatus(decoder: DesktopDecoderReport): Promise<DesktopMediaStatus | undefined>;
 	close(): void;
 }
 
@@ -100,6 +100,10 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 	private ended = false;
 	/** Whether a picture was decoded: after one, a decode error is a lost picture, not a codec this computer can't show. */
 	private decodedAny = false;
+	/** Times the decoder restarted from a keyframe after an error. */
+	private recoveries = 0;
+	/** Whether the current decoder fell back to software. */
+	private software = false;
 
 	constructor(
 		public readonly control: boolean,
@@ -147,7 +151,7 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 		}
 		const { total, count } = this.decodeService;
 		this.decodeService = { total: 0, count: 0 };
-		const status = await video.mediaStatus(count ? total / count * 1000 : 0);
+		const status = await video.mediaStatus({ decodeUs: count ? total / count * 1000 : 0, software: this.software, recoveries: this.recoveries });
 		const skipped = this.skippedPictures;
 		this.skippedPictures = 0;
 		return status && { status, codec, latency: this.latency.take(), skipped };
@@ -170,6 +174,15 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 			return;
 		}
 		const fields: unknown = JSON.parse(packet.metadata);
+		// The channel's last packet says why the picture stopped.
+		if (packet.kind === 'exited') {
+			const end = record(fields) && Object.keys(fields).length === 1 ? engineDesktopEnds.find(known => known === fields.end) : undefined;
+			if (!end) {
+				throw new Error('Invalid desktop end');
+			}
+			this.end(end);
+			return;
+		}
 		if (packet.kind !== 'video' || !packet.data || !record(fields) || typeof fields.codec !== 'string' || typeof fields.keyframe !== 'boolean'
 			|| typeof fields.timestampUs !== 'string' || !/^\d{1,20}$/.test(fields.timestampUs)
 			|| typeof fields.displayId !== 'string' || typeof fields.revision !== 'string'
@@ -211,6 +224,7 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 			this.end('cantShow');
 			return;
 		}
+		this.software = decoder.software;
 		const timestamp = Number(fields.timestampUs);
 		this.taken.set(timestamp, { display: fields.displayId, revision: fields.revision, at: performance.now() });
 		decoder.decode({ key, timestamp, data: packet.data });
@@ -230,6 +244,7 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 			this.end('cantShow');
 			return;
 		}
+		this.recoveries++;
 		void failed.then(decoder => decoder?.close());
 		this.decoder = undefined;
 		this.codec = undefined;
@@ -243,9 +258,9 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 		return this.ended;
 	}
 
-	/** The channel failed or stopped answering. */
+	/** The channel failed or stopped answering without saying why. */
 	public lost(): void {
-		this.end('lost');
+		this.end('linkLost');
 	}
 
 	private deliver(frame: VideoFrame): void {

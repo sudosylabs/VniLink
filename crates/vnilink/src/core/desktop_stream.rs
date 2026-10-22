@@ -24,6 +24,13 @@ const YIELD_CONTROL: u8 = 7;
 const CONTROL_STATE: u8 = 8;
 const MEDIA_FEEDBACK: u8 = 9;
 const RECORDING_STATE: u8 = 10;
+/// The host's last message before it finishes the stream: one byte of
+/// [`crate::StreamEnd`]. A stream finished without it ended for no reason
+/// the host could give.
+const END: u8 = 11;
+/// How long a host waits to say why before finishing anyway: the link
+/// may be the reason.
+const END_PATIENCE: Duration = Duration::from_secs(1);
 
 /// Host-confirmed input ownership. Contention never closes the video stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +89,18 @@ pub(super) struct DesktopRuntime {
     decode_duration: Mutex<Option<(u64, std::time::Instant)>>,
     producer_duration: Mutex<Option<(u64, u64, std::time::Instant)>>,
     host_feedback: Mutex<Option<(crate::adaptation::HostFeedback, std::time::Instant)>>,
+    /// Viewer: what is wrong with the picture now; see [`crate::Condition`].
+    conditions: Mutex<crate::video::Conditions>,
+    /// Viewer: what the window's decoder reports of itself.
+    decoder: Mutex<DecoderState>,
+    /// Host: the encoder open for this viewer, once the producer said.
+    encoder: Mutex<Option<crate::EncoderImplementation>>,
+    /// Why the picture stopped: on the viewer what it concluded, on the
+    /// host what it told the viewer. The first answer stands.
+    end: Mutex<Option<crate::DesktopEnd>>,
+    /// Viewer: whether the selected path went through a relay at the last
+    /// sample, so a lost connection can say which.
+    relayed: std::sync::atomic::AtomicBool,
     input: Arc<InputOutbox>,
     inbox: Arc<VideoInbox>,
     subscriber: Mutex<Weak<()>>,
@@ -116,6 +135,14 @@ pub(super) struct DesktopRuntime {
     pub(super) clipboard: super::desktop_clipboard::ClipboardState,
     #[cfg(test)]
     force_stream: std::sync::atomic::AtomicBool,
+}
+/// The window decoder's own report: whether it decodes in software, and
+/// how often it restarted from a keyframe after an error.
+#[derive(Debug, Clone, Copy, Default)]
+struct DecoderState {
+    /// `None` until the window said.
+    software: Option<bool>,
+    recoveries: u64,
 }
 pub(super) struct DesktopKeyboard {
     pub(super) pointer: crate::input::PointerPlan,
@@ -163,6 +190,11 @@ impl DesktopRuntime {
             decode_duration: Mutex::new(None),
             producer_duration: Mutex::new(None),
             host_feedback: Mutex::new(None),
+            conditions: Mutex::new(Default::default()),
+            decoder: Mutex::new(DecoderState::default()),
+            encoder: Mutex::new(None),
+            end: Mutex::new(None),
+            relayed: std::sync::atomic::AtomicBool::new(false),
             info,
             stamp,
             input: Arc::new(InputOutbox::new()),
@@ -198,6 +230,20 @@ impl DesktopRuntime {
             #[cfg(test)]
             force_stream: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+    /// Records why the picture stopped, unless an earlier answer stands.
+    /// The first answer is also the computer's last end, for diagnostics.
+    fn ended(&self, shared: &Shared, hosted: bool, end: crate::DesktopEnd) {
+        let mut slot = lock(&self.end);
+        if slot.is_none() {
+            *slot = Some(end);
+            *lock(&shared.last_desktop_end) = Some(crate::diagnostics::EndSummary {
+                service_id: self.info.service.id,
+                hosted,
+                reason: end.label().into(),
+                at_ms: crate::diagnostics::monotonic_ms(),
+            });
+        }
     }
     pub(super) fn close(&self) {
         self.retired
@@ -313,6 +359,8 @@ impl DesktopRuntime {
         let inbound = self.inbox.telemetry();
         let counts = self.counters.read();
         let viewer = *lock(&self.viewer_loss);
+        let decoder = *lock(&self.decoder);
+        let encoder = *lock(&self.encoder);
         let reported = viewer.heard.filter(|at| fresh(at)).map(|_| viewer);
         let permille = |share: f64| (share * 1000.0).round() as u32;
         crate::diagnostics::PipelineSummary {
@@ -352,6 +400,16 @@ impl DesktopRuntime {
             viewer_frame_loss_permille: reported.map(|loss| permille(loss.frame_loss)),
             selected_display: lock(&self.selected).first().copied(),
             fault: lock(&self.display_fault).map(str::to_string),
+            conditions: lock(&self.conditions)
+                .entries()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            end: lock(&self.end).map(|end| end.label().into()),
+            encoder: encoder.map(|encoder| encoder.name.into()),
+            encoder_hardware: encoder.and_then(|encoder| encoder.hardware),
+            decoder_hardware: decoder.software.map(|software| !software),
+            decoder_recoveries: decoder.recoveries,
         }
     }
 }
@@ -649,6 +707,26 @@ impl Core {
         *measured = Some((average.0, average.1, now));
         Ok(())
     }
+    /// The encoder the producer opened for this viewer, at open and at every
+    /// reopen; the viewer learns whether it is hardware.
+    pub fn report_desktop_encoder(
+        &self,
+        id: u64,
+        generation: u64,
+        encoder: crate::EncoderImplementation,
+    ) -> Result<(), Error> {
+        *lock(&runtime(&*self.alive_state()?, id, generation, true)?.encoder) = Some(encoder);
+        Ok(())
+    }
+    /// The platform backend's view of whether the screen is on a desktop
+    /// it cannot capture. Every viewer learns it with its next feedback.
+    pub fn report_secure_desktop(&self, active: bool) -> Result<(), Error> {
+        self.ensure_alive()?;
+        self.shared
+            .secure_desktop
+            .store(active, std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
     /// The host opened its encoder again for this viewer's new settings.
     pub fn report_desktop_encoder_reopen(&self, id: u64, generation: u64) -> Result<(), Error> {
         runtime(&*self.alive_state()?, id, generation, true)?
@@ -854,8 +932,37 @@ impl RemoteDesktopService {
         *measured = Some((average, now));
         Ok(())
     }
+    /// The window's decoder reports whether it decodes in software and how
+    /// many times it restarted from a keyframe after an error, in total.
+    /// A count that goes back is refused: it belongs to another decoder.
+    pub fn report_decoder(&self, software: bool, recoveries: u64) -> Result<(), Error> {
+        let desktop = self.active_desktop()?;
+        let mut decoder = lock(&desktop.decoder);
+        if recoveries < decoder.recoveries {
+            return Err(Error::InvalidSetting("decoder recoveries went back"));
+        }
+        *decoder = DecoderState {
+            software: Some(software),
+            recoveries,
+        };
+        Ok(())
+    }
     pub fn media_status(&self) -> Result<crate::DesktopMediaStatus, Error> {
-        Ok(lock(&self.active_desktop()?.adaptive).status)
+        let desktop = self.active_desktop()?;
+        let mut status = lock(&desktop.adaptive).status;
+        status.conditions = lock(&desktop.conditions).active();
+        Ok(status)
+    }
+    /// Why the picture stopped, once it did; `None` while it lives, or when
+    /// this computer closed it. Readable after the service closed.
+    pub fn end(&self) -> Option<crate::DesktopEnd> {
+        self.desktop
+            .as_ref()
+            .and_then(|desktop| *lock(&desktop.end))
+    }
+    /// The conditions held now, with since when and their evidence.
+    pub fn conditions(&self) -> Result<Vec<crate::ConditionEntry>, Error> {
+        Ok(lock(&self.active_desktop()?.conditions).entries())
     }
     /// The one display this desktop stream will show and control.
     pub fn select_displays(&self, ids: &[u64]) -> Result<(), Error> {
@@ -1202,6 +1309,21 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                             }
                         })
                         .await;
+                    // An `END` already said why. Otherwise the symptoms do:
+                    // a lost connection, or a stream finished in silence.
+                    if !lease.is_cancelled() {
+                        desktop.ended(
+                            &shared,
+                            false,
+                            if link.close_reason().is_none() {
+                                crate::DesktopEnd::PeerClosed
+                            } else if desktop.relayed.load(std::sync::atomic::Ordering::Acquire) {
+                                crate::DesktopEnd::RelayUnreachable
+                            } else {
+                                crate::DesktopEnd::LinkLost
+                            },
+                        );
+                    }
                 } else {
                     let _ = ready.send(Err(Error::NoSession));
                 }
@@ -1369,6 +1491,7 @@ async fn client_send(
                     let now = std::time::Instant::now();
                     let elapsed = now.saturating_duration_since(sampled_at).as_millis().min(u64::MAX as u128) as u64;
                     sampled_at = now;
+                    desktop.relayed.store(path.is_relay(), std::sync::atomic::Ordering::Release);
                     let path_changed = last_path.is_some_and(|previous| previous != path.id());
                     last_path = Some(path.id());
                     let host = lock(&desktop.host_feedback).as_ref()
@@ -1384,8 +1507,24 @@ async fn client_send(
                             .filter(|(_, at)| now.saturating_duration_since(*at) <= Duration::from_secs(3))
                             .map(|(us, _)| *us),
                     };
-                    let next = lock(&desktop.adaptive).step(current,
-                        (desktop.info.monitor_width, desktop.info.monitor_height), elapsed, feedback);
+                    let (next, signals) = {
+                        let mut adaptive = lock(&desktop.adaptive);
+                        let next = adaptive.step(current,
+                            (desktop.info.monitor_width, desktop.info.monitor_height), elapsed, feedback);
+                        (next, adaptive.signals)
+                    };
+                    let decoder = *lock(&desktop.decoder);
+                    let observation = crate::video::Observation {
+                        elapsed_ms: elapsed,
+                        signals,
+                        relay: path.is_relay(),
+                        received_frames: feedback.receiver.received_frames,
+                        keyframe_pending: lock(&desktop.keyframe_requests).outstanding(),
+                        host: host.map(|host| host.host_state()),
+                        decoder_software: decoder.software == Some(true),
+                        decoder_recoveries: decoder.recoveries,
+                    };
+                    lock(&desktop.conditions).observe(crate::diagnostics::monotonic_ms(), &observation);
                     if let Some(next) = next {
                         // Controller-side step: monitor clamp only. The host
                         // applies its encoder caps when the update arrives.
@@ -1423,6 +1562,17 @@ async fn client_receive(
                         body[1] == 1,
                         u64::from_be_bytes(body[2..10].try_into().unwrap()),
                     )?;
+                }
+                END => {
+                    if body.len() != 2 {
+                        return Err(Error::Malformed);
+                    }
+                    desktop.ended(
+                        shared,
+                        false,
+                        crate::DesktopEnd::Host(crate::StreamEnd::decode(body[1])?),
+                    );
+                    return Ok(());
                 }
                 MEDIA_FEEDBACK => {
                     let feedback = crate::adaptation::HostFeedback::decode(&body[1..])?;
@@ -1763,9 +1913,37 @@ pub(super) async fn serve(
             _ = host_send(&shared, &desktop, &mut send) => {},
         }
     }
+    let parent_stopped = *parent_stop.borrow();
+    if let Some(end) = host_end(&shared, &desktop, parent_stopped) {
+        desktop.ended(&shared, true, crate::DesktopEnd::Host(end));
+        let _ = tokio::time::timeout(END_PATIENCE, write(&mut send, &[END, end.encode()])).await;
+    }
     desktop.close();
     let _ = send.finish();
     Ok(())
+}
+
+/// What a host tells its viewer as its stream stops: why its record
+/// closed, or that its user stopped the connection. Nothing when the
+/// stream itself failed, as when the viewer left or the link broke.
+fn host_end(
+    shared: &Shared,
+    desktop: &DesktopRuntime,
+    parent_stopped: bool,
+) -> Option<crate::StreamEnd> {
+    let state = lock(&shared.state);
+    let service = &desktop.info.service;
+    let phase = state
+        .hosted_services
+        .get(&service.id)
+        .filter(|record| record.info.generation == service.generation)
+        .map(|record| record.info.phase.clone());
+    match phase {
+        Some(ServicePhase::Closed(cause)) => crate::StreamEnd::for_close(cause),
+        _ if state.shut_down => Some(crate::StreamEnd::Shutdown),
+        _ if parent_stopped => Some(crate::StreamEnd::Stopped),
+        _ => None,
+    }
 }
 
 async fn host_receive(
@@ -2300,6 +2478,25 @@ impl SendGate {
 }
 
 /// The video send backlog allowed at the agreed quality.
+/// What the host says of itself in its feedback: its encoder, and whether
+/// its screen is on a desktop it cannot capture.
+fn host_flags(shared: &Shared, desktop: &DesktopRuntime) -> u8 {
+    use crate::adaptation::{ENCODER_HARDWARE, ENCODER_KNOWN, SECURE_DESKTOP};
+    let encoder = match lock(&desktop.encoder).and_then(|encoder| encoder.hardware) {
+        Some(true) => ENCODER_KNOWN | ENCODER_HARDWARE,
+        Some(false) => ENCODER_KNOWN,
+        None => 0,
+    };
+    let secure = if shared
+        .secure_desktop
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        SECURE_DESKTOP
+    } else {
+        0
+    };
+    encoder | secure
+}
 fn send_budget(desktop: &DesktopRuntime) -> usize {
     let quality = *lock(&desktop.quality);
     backlog_budget(quality.max_bitrate_kbps, quality.max_frame_rate)
@@ -2458,6 +2655,9 @@ async fn host_send(
                         .unwrap_or(0)
                         .min(600_000),
                     capture_us: timing.0, encode_us: timing.1,
+                    congestion_events: link.paths().iter().find(|path| path.is_selected())
+                        .map_or(0, |path| path.stats().congestion_events),
+                    flags: host_flags(shared, desktop),
                 };
                 let mut bytes = vec![MEDIA_FEEDBACK];
                 bytes.extend(feedback.encode());

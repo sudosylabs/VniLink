@@ -1543,3 +1543,200 @@ fn twin_sources_stream_independently_with_exact_stamps() {
     assert_eq!((switched.display_id, switched.revision), (1, 5));
     assert_eq!(host.capture_displays().unwrap(), vec![1]);
 }
+
+/// What the host says of itself, and what this window's decoder reports,
+/// become the viewer's conditions; a clean loopback adds no link strain.
+#[test]
+fn host_and_decoder_reports_become_the_viewers_conditions() {
+    use crate::Condition;
+    let host = start_direct();
+    let controller = start_direct();
+    host.set_desktop(Box::new(RecordingDesktop {
+        events: Arc::new(Mutex::new(Vec::new())),
+    }))
+    .unwrap();
+    pair_for_control(&host, &controller);
+    let pending = controller
+        .begin_connect_services(&host.endpoint_id())
+        .unwrap();
+    wait(|| controller.controller_session(pending.id).unwrap().phase == SessionPhase::Active);
+    let session = controller.controller_session(pending.id).unwrap();
+    let owner = controller
+        .attach_controller_service(session.id, session.generation, ServiceKind::Desktop)
+        .unwrap();
+    let desktop = controller
+        .open_desktop_service(owner.id, owner.generation)
+        .unwrap();
+    let remote = host_owner(&host);
+    host.force_desktop_stream(remote.id, remote.generation);
+    let video = desktop.subscribe_video().unwrap();
+    host.report_desktop_encoder(
+        remote.id,
+        remote.generation,
+        crate::EncoderImplementation {
+            name: "test",
+            hardware: Some(false),
+        },
+    )
+    .unwrap();
+    host.report_secure_desktop(true).unwrap();
+    desktop.report_decoder(true, 0).unwrap();
+    let mut timestamp = 1;
+    let mut stream_until = |done: &dyn Fn(crate::ConditionSet) -> bool| {
+        let until = Instant::now() + Duration::from_secs(10);
+        while !done(desktop.media_status().unwrap().conditions) {
+            assert!(
+                Instant::now() < until,
+                "the conditions did not follow the reports"
+            );
+            host.publish_desktop_video(
+                remote.id,
+                remote.generation,
+                EncodedFrame::h264(true, timestamp, vec![9; 500]).unwrap(),
+            )
+            .unwrap();
+            video.recv_timeout(Duration::from_secs(1)).unwrap();
+            timestamp += 1;
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    stream_until(&|set| {
+        set.contains(Condition::EncoderSoftware) && set.contains(Condition::HostSecureDesktop)
+    });
+    let set = desktop.media_status().unwrap().conditions;
+    assert_eq!(
+        set.iter().collect::<Vec<_>>(),
+        [
+            Condition::HostSecureDesktop,
+            Condition::EncoderSoftware,
+            Condition::DecoderSoftware
+        ]
+    );
+    let signals: Vec<_> = desktop
+        .conditions()
+        .unwrap()
+        .iter()
+        .map(|entry| entry.evidence.signal)
+        .collect();
+    assert_eq!(
+        signals,
+        [
+            "host_secure_desktop",
+            "host_encoder_hardware",
+            "decoder_hardware"
+        ]
+    );
+    host.report_secure_desktop(false).unwrap();
+    desktop.report_decoder(false, 0).unwrap();
+    stream_until(&|set| set.iter().collect::<Vec<_>>() == [Condition::EncoderSoftware]);
+    // The window's decoder restarted twice: it shows as recovering.
+    desktop.report_decoder(false, 2).unwrap();
+    stream_until(&|set| set.contains(Condition::DecoderRecovering));
+    assert!(
+        desktop.report_decoder(false, 1).is_err(),
+        "a restart count that goes back belongs to another decoder"
+    );
+    desktop.close();
+}
+
+/// Each way a host ends a picture reaches the viewer as its own reason;
+/// a picture this computer closed has none.
+#[test]
+fn the_viewer_learns_why_the_host_ended_its_picture() {
+    use crate::{DesktopEnd, StreamEnd, StreamFailure};
+    #[derive(Clone, Copy, Debug)]
+    enum HostAction {
+        Close,
+        Fail(StreamFailure),
+        StopSharing,
+        ViewerCloses,
+    }
+    for (action, expected) in [
+        (
+            HostAction::Close,
+            Some(DesktopEnd::Host(StreamEnd::Stopped)),
+        ),
+        (
+            HostAction::Fail(StreamFailure::Encoder),
+            Some(DesktopEnd::Host(StreamEnd::Failed(StreamFailure::Encoder))),
+        ),
+        (
+            HostAction::Fail(StreamFailure::Permission),
+            Some(DesktopEnd::Host(StreamEnd::Failed(
+                StreamFailure::Permission,
+            ))),
+        ),
+        (
+            HostAction::StopSharing,
+            Some(DesktopEnd::Host(StreamEnd::Revoked)),
+        ),
+        (HostAction::ViewerCloses, None),
+    ] {
+        let host = start_direct();
+        let controller = start_direct();
+        host.set_desktop(Box::new(RecordingDesktop {
+            events: Arc::new(Mutex::new(Vec::new())),
+        }))
+        .unwrap();
+        pair_for_control(&host, &controller);
+        let pending = controller
+            .begin_connect_services(&host.endpoint_id())
+            .unwrap();
+        wait(|| controller.controller_session(pending.id).unwrap().phase == SessionPhase::Active);
+        let session = controller.controller_session(pending.id).unwrap();
+        let owner = controller
+            .attach_controller_service(session.id, session.generation, ServiceKind::Desktop)
+            .unwrap();
+        let desktop = controller
+            .open_desktop_service(owner.id, owner.generation)
+            .unwrap();
+        let remote = host_owner(&host);
+        assert_eq!(desktop.end(), None, "a live picture has no end");
+        match action {
+            HostAction::Close => host
+                .close_hosted_service(remote.id, remote.generation)
+                .unwrap(),
+            HostAction::Fail(failure) => host
+                .fail_hosted_service(remote.id, remote.generation, failure)
+                .unwrap(),
+            HostAction::StopSharing => host
+                .set_service_sharing(ServiceKind::Desktop, false)
+                .unwrap(),
+            HostAction::ViewerCloses => desktop.close(),
+        }
+        wait(|| desktop.is_cancelled());
+        if expected.is_some() {
+            wait(|| desktop.end().is_some());
+        } else {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        assert_eq!(desktop.end(), expected, "{action:?}");
+    }
+}
+
+#[test]
+fn a_stream_end_is_one_known_byte() {
+    use crate::{StreamEnd, StreamFailure};
+    for end in [
+        StreamEnd::Failed(StreamFailure::Encoder),
+        StreamEnd::Failed(StreamFailure::Capture),
+        StreamEnd::Failed(StreamFailure::Permission),
+        StreamEnd::Failed(StreamFailure::DisplayGone),
+        StreamEnd::Stopped,
+        StreamEnd::Shutdown,
+        StreamEnd::Revoked,
+    ] {
+        assert_eq!(StreamEnd::decode(end.encode()).unwrap(), end);
+    }
+    for unknown in [0, 8, 255] {
+        assert!(matches!(
+            StreamEnd::decode(unknown),
+            Err(crate::Error::Malformed)
+        ));
+    }
+    assert_eq!(StreamEnd::for_close(crate::CloseCause::PeerClose), None);
+    assert_eq!(
+        StreamEnd::for_close(crate::CloseCause::DeviceLoss),
+        Some(StreamEnd::Failed(StreamFailure::Capture))
+    );
+}

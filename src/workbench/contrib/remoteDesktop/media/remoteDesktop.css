@@ -157,11 +157,39 @@
 	background: var(--muted);
 }
 
+.desktop-status-condition {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--text);
+}
+
+.desktop-status-condition::before {
+	width: 6px;
+	height: 6px;
+	border-radius: 3px;
+	background: var(--status-pending);
+	content: '';
+}
+
+/* Software coders and recovery explain a slower picture; they are not a fault. */
+.desktop-status-condition:is(
+		[data-condition='encoder.software'],
+		[data-condition='decoder.software'],
+		[data-condition='decoder.recovering']
+	)::before {
+	background: var(--muted);
+}
+
+.desktop-status-condition[hidden] {
+	display: none;
+}
+
 .desktop-status-space {
 	flex: 1;
 }
 
-.desktop-view :is(button, .desktop-screen):focus-visible {
+.desktop-view :is(button, .desktop-screen, .desktop-status-condition):focus-visible {
 	outline: 2px solid var(--accent);
 	outline-offset: -2px;
 }

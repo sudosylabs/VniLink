@@ -13,6 +13,20 @@ use crate::protocol::{Quality, CODEC_H264_HIGH};
 /// H.264 encode/decode abilities of this installation. All `false` and zero
 /// sizes means no usable video path; admission then reports unsupported
 /// instead of a session that can never carry video.
+/// The encoder a host has open for one viewer: a short fixed name for
+/// diagnostics, and whether it is hardware, `None` when it cannot tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EncoderImplementation {
+    pub name: &'static str,
+    pub hardware: Option<bool>,
+}
+impl EncoderImplementation {
+    pub const UNKNOWN: Self = Self {
+        name: "unknown",
+        hardware: None,
+    };
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VideoCodecCaps {
