@@ -697,16 +697,8 @@ impl Core {
             dst_rel: dst_rel.to_owned(),
         };
         job::check_version(offer.v)?;
-        let reply_bytes =
-            self.service_job_round_trip(owner, &peer, job::TAG_JOB_UPLOAD, &job::encode(&offer)?)?;
-        let reply: job::JobReply = job::decode(&reply_bytes)?;
-        if reply.id != offer.id {
-            return Err(Error::Malformed);
-        }
-        match reply.status {
-            status if status == job::STATUS_OK => {}
-            status => return Err(job::error_for_status(status)),
-        }
+        // Serve before announcing: the receiver may ask for the first file
+        // as soon as it accepts, before its reply reaches this side.
         {
             let mut jobs = lock(&self.shared.jobs);
             let state = lock(&self.shared.state);
@@ -721,6 +713,27 @@ impl Core {
             )?;
             record.state = JobState::Serving;
             jobs.insert(id, record);
+        }
+        let announced = (|| {
+            let reply_bytes = self.service_job_round_trip(
+                owner,
+                &peer,
+                job::TAG_JOB_UPLOAD,
+                &job::encode(&offer)?,
+            )?;
+            let reply: job::JobReply = job::decode(&reply_bytes)?;
+            if reply.id != offer.id {
+                return Err(Error::Malformed);
+            }
+            match reply.status {
+                status if status == job::STATUS_OK => Ok(()),
+                status => Err(job::error_for_status(status)),
+            }
+        })();
+        if let Err(error) = announced {
+            // An offer the receiver did not take leaves nothing to serve.
+            lock(&self.shared.jobs).remove(&id);
+            return Err(error);
         }
         save_jobs(&self.shared)?;
         Ok(id)
