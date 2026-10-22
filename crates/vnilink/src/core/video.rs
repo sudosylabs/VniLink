@@ -259,7 +259,10 @@ impl Core {
             if session.phase != SessionPhase::Active || *session.desktop_stop.borrow() {
                 return Err(Error::NoSession);
             }
-            if Some(frame.codec) != crate::VideoCodec::from_wire_id(session.codec) {
+            if frame.role == crate::FrameRole::Still {
+                return Err(Error::Unsupported("still pictures for this viewer"));
+            }
+            if !frame.belongs_to(session.codec, false) {
                 return Err(Error::InvalidSetting(
                     "frame codec differs from negotiated codec",
                 ));
@@ -561,7 +564,7 @@ pub(super) async fn video_recv_loop(
                 };
                 match decode_video_body(&body) {
                     Ok(frame) => {
-                        if Some(frame.codec)!=crate::VideoCodec::from_wire_id(codec) {continue;}
+                        if !frame.belongs_to(codec, false) {continue;}
                         if matches!(inbox.push(frame), VideoPush::KeyframeNeeded) {
                             keyframe.request();
                         }
@@ -595,7 +598,7 @@ pub(super) async fn video_recv_loop(
                         let mut body = vec![0;len];
                         if stream.read_exact(&mut body).await.is_err() { return; }
                         if let Ok(frame) = decode_video_body(&body) {
-                            if Some(frame.codec)!=crate::VideoCodec::from_wire_id(codec) {return;}
+                            if !frame.belongs_to(codec, false) {return;}
                             if matches!(inbox.push(frame), VideoPush::KeyframeNeeded) { keyframe.request(); }
                         }
                         if stream.read_exact(&mut prefix).await.is_err() { return; }

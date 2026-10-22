@@ -88,6 +88,8 @@ mod service_tests;
 
 #[path = "tests/desktop_services.rs"]
 mod desktop_service_tests;
+#[path = "tests/stills.rs"]
+mod stills_tests;
 
 #[cfg(unix)]
 #[path = "tests/terminal.rs"]

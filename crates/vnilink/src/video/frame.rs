@@ -33,9 +33,31 @@ pub struct EncodedFrame {
     pub payload: Vec<u8>,
     pub display_id: u64,
     pub revision: u64,
+    /// What the picture is to the stream: see [`FrameRole`].
+    pub role: FrameRole,
     /// How long the frame took to get here; telemetry, not content.
     pub timing: FrameTiming,
 }
+
+/// What a frame's picture is to its stream.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FrameRole {
+    /// A picture of the screen as it is now; the usual frame.
+    #[default]
+    Changed,
+    /// The same screen again: an idle keepalive or a refinement of the
+    /// last picture. A viewer showing a [`FrameRole::Still`] keeps it.
+    Unchanged,
+    /// The still screen once at full colour, AV1 4:4:4, outside the
+    /// stream's codec: shown until the screen changes, never decoded with
+    /// the stream, recorded or counted as its keyframe.
+    Still,
+}
+
+/// Header flag bits after the keyframe bit.
+const FLAG_KEYFRAME: u8 = 1;
+const FLAG_STILL: u8 = 2;
+const FLAG_UNCHANGED: u8 = 4;
 
 /// Where a frame's time went, for the latency of each stage. Timing is not
 /// part of a frame's identity: frames with the same picture compare equal
@@ -82,8 +104,34 @@ impl EncodedFrame {
             payload,
             display_id: 0,
             revision: 0,
+            role: FrameRole::Changed,
             timing: FrameTiming::default(),
         })
+    }
+
+    /// A still picture: an AV1 4:4:4 keyframe of a still screen.
+    pub fn still(timestamp_us: u64, payload: Vec<u8>) -> Result<Self, Error> {
+        let mut frame = Self::new(VideoCodec::Av1, true, timestamp_us, payload)?;
+        frame.role = FrameRole::Still;
+        Ok(frame)
+    }
+
+    /// Marks the picture as the same screen again.
+    pub fn unchanged(mut self) -> Self {
+        if self.role == FrameRole::Changed {
+            self.role = FrameRole::Unchanged;
+        }
+        self
+    }
+
+    /// Whether this frame belongs to a stream agreed as `codec` (a wire id):
+    /// a picture of that codec, or a still picture where stills were agreed.
+    pub(crate) fn belongs_to(&self, codec: u8, stills: bool) -> bool {
+        if self.role == FrameRole::Still {
+            stills
+        } else {
+            Some(self.codec) == VideoCodec::from_wire_id(codec)
+        }
     }
 
     /// Stamps when the host captured the picture this frame encodes.
@@ -112,6 +160,7 @@ impl fmt::Debug for EncodedFrame {
             .field("timestamp_us", &self.timestamp_us)
             .field("display_id", &self.display_id)
             .field("revision", &self.revision)
+            .field("role", &self.role)
             .field("timing", &self.timing)
             .field("payload_len", &self.payload.len())
             .finish()
@@ -138,7 +187,14 @@ pub(crate) fn check_video_len(len: usize) -> Result<(), Error> {
 pub(crate) fn encode_video_body(frame: &EncodedFrame) -> Vec<u8> {
     let mut body = Vec::with_capacity(VIDEO_HEADER + frame.payload.len());
     body.push(frame.codec.wire_id());
-    body.push(u8::from(frame.keyframe));
+    body.push(
+        if frame.keyframe { FLAG_KEYFRAME } else { 0 }
+            | match frame.role {
+                FrameRole::Changed => 0,
+                FrameRole::Unchanged => FLAG_UNCHANGED,
+                FrameRole::Still => FLAG_STILL,
+            },
+    );
     body.extend_from_slice(&frame.timestamp_us.to_be_bytes());
     body.extend_from_slice(&frame.display_id.to_be_bytes());
     body.extend_from_slice(&frame.revision.to_be_bytes());
@@ -163,14 +219,19 @@ pub(crate) fn decode_video_body(body: &[u8]) -> Result<EncodedFrame, Error> {
     let display_id = u64::from_be_bytes(body[10..18].try_into().expect("8 bytes"));
     let revision = u64::from_be_bytes(body[18..26].try_into().expect("8 bytes"));
     let host_us = u32::from_be_bytes(body[26..30].try_into().expect("4 bytes"));
-    let mut frame = EncodedFrame::new(
-        codec,
-        body[1] & 1 == 1,
-        timestamp_us,
-        body[VIDEO_HEADER..].to_vec(),
-    )
-    .map(|frame| frame.with_source(display_id, revision))
-    .map_err(|_| Error::Malformed)?;
+    let flags = body[1];
+    let keyframe = flags & FLAG_KEYFRAME != 0;
+    let role = match (flags & FLAG_STILL != 0, flags & FLAG_UNCHANGED != 0) {
+        (false, false) => FrameRole::Changed,
+        (false, true) => FrameRole::Unchanged,
+        // A still is one AV1 keyframe and nothing else.
+        (true, false) if keyframe && codec == VideoCodec::Av1 => FrameRole::Still,
+        _ => return Err(Error::Malformed),
+    };
+    let mut frame = EncodedFrame::new(codec, keyframe, timestamp_us, body[VIDEO_HEADER..].to_vec())
+        .map(|frame| frame.with_source(display_id, revision))
+        .map_err(|_| Error::Malformed)?;
+    frame.role = role;
     frame.timing.host_us = host_us;
     Ok(frame)
 }

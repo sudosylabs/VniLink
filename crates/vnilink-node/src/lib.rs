@@ -58,6 +58,7 @@ struct TransferDisplay {
 struct TransferWindowDecoder {
     codec: String,
     hardware: bool,
+    chroma444: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1425,6 +1426,7 @@ impl EngineBridge {
                         Ok(vnilink_app::FfiWindowDecoder {
                             codec,
                             hardware: decoder.hardware,
+                            chroma444: decoder.chroma444,
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;

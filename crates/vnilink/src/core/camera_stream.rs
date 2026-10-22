@@ -256,6 +256,9 @@ impl Core {
                                 _ => {}
                             }
                             let frame = crate::video::decode_video_body(&bytes)?;
+                            if frame.role == crate::FrameRole::Still {
+                                return Err(Error::Malformed);
+                            }
                             if frame.keyframe {
                                 needs_keyframe = false;
                             }

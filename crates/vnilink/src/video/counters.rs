@@ -17,6 +17,9 @@ pub(crate) struct VideoCounters {
     keyframe_bytes: AtomicU64,
     encoder_reopens: AtomicU64,
     send_dropped: AtomicU64,
+    stills_sent: AtomicU64,
+    still_bytes: AtomicU64,
+    stills_dropped: AtomicU64,
 }
 
 /// One reading of [`VideoCounters`].
@@ -28,6 +31,9 @@ pub(crate) struct VideoCounts {
     pub(crate) keyframe_bytes: u64,
     pub(crate) encoder_reopens: u64,
     pub(crate) send_dropped: u64,
+    pub(crate) stills_sent: u64,
+    pub(crate) still_bytes: u64,
+    pub(crate) stills_dropped: u64,
 }
 
 fn add(counter: &AtomicU64, value: u64) {
@@ -64,6 +70,17 @@ impl VideoCounters {
         add(&self.send_dropped, 1);
     }
 
+    /// The host sent a still picture of `bytes` encoded bytes.
+    pub(crate) fn still_sent(&self, bytes: usize) {
+        add(&self.stills_sent, 1);
+        add(&self.still_bytes, bytes as u64);
+    }
+
+    /// The host left a still picture out: the link or the stream was busy.
+    pub(crate) fn still_dropped(&self) {
+        add(&self.stills_dropped, 1);
+    }
+
     pub(crate) fn read(&self) -> VideoCounts {
         let read = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
         VideoCounts {
@@ -78,6 +95,9 @@ impl VideoCounters {
             keyframe_bytes: read(&self.keyframe_bytes),
             encoder_reopens: read(&self.encoder_reopens),
             send_dropped: read(&self.send_dropped),
+            stills_sent: read(&self.stills_sent),
+            still_bytes: read(&self.still_bytes),
+            stills_dropped: read(&self.stills_dropped),
         }
     }
 }

@@ -44,16 +44,19 @@ pub struct VideoCodecCaps {
     pub hardware: bool,
     /// Short backend label, e.g. `videotoolbox`, `vaapi`, `mediafoundation`.
     pub device: String,
-    /// Full-chroma (4:4:4) path. No shipped backend offers one yet; the bit
-    /// exists so negotiation can fall back explicitly when it does.
+    /// This installation's window shows AV1 4:4:4 still pictures
+    /// ([`crate::FrameRole::Still`]). Only the window's own probe sets it
+    /// (see [`Self::for_window`]); a viewer asks for stills with it.
     pub chroma444: bool,
 }
 
-/// A codec the window's own decoder can show, and whether in hardware.
+/// A codec the window's own decoder can show, whether in hardware, and
+/// whether it also takes full chroma (4:4:4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowDecoder {
     pub codec: crate::VideoCodec,
     pub hardware: bool,
+    pub chroma444: bool,
 }
 
 impl VideoCodecCaps {
@@ -118,8 +121,9 @@ impl VideoCodecCaps {
 
     /// The decode side this installation can show in its window: only the
     /// codecs the window's decoder takes, and of those only the ones it
-    /// decodes in hardware when it has any. `None` leaves the caps as the
-    /// native probe registered them.
+    /// decodes in hardware when it has any. It shows still pictures when its
+    /// AV1 decoder takes 4:4:4. `None` leaves the caps as the native probe
+    /// registered them.
     pub fn for_window(&self, decoders: Option<&[WindowDecoder]>) -> Self {
         let Some(decoders) = decoders else {
             return self.clone();
@@ -140,6 +144,9 @@ impl VideoCodecCaps {
         for support in &mut caps.additional {
             support.decode &= shown(support.codec);
         }
+        caps.chroma444 = decoders
+            .iter()
+            .any(|decoder| decoder.codec == crate::VideoCodec::Av1 && decoder.chroma444);
         caps
     }
 

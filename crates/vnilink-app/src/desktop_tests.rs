@@ -1252,6 +1252,7 @@ fn native_camera_callback_and_frame_queue_cross_ffi() {
         payload: vec![9; 300_000],
         display_id: 0,
         revision: 0,
+        role: Default::default(),
         timing: Default::default(),
     };
     source.publish(expected.clone()).unwrap();

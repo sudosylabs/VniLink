@@ -513,7 +513,11 @@ fn offers_keep_to_what_the_window_decodes_in_hardware_when_it_can() {
             hardware: false,
         });
     }
-    let decoder = |codec, hardware| WindowDecoder { codec, hardware };
+    let decoder = |codec, hardware| WindowDecoder {
+        codec,
+        hardware,
+        chroma444: false,
+    };
     assert_eq!(caps.for_window(None), caps, "a window that said nothing");
     // HEVC decodes only in software here, H.264 in hardware: offer H.264.
     let window = [
@@ -554,8 +558,36 @@ fn a_window_lists_each_codec_once() {
     let decoder = WindowDecoder {
         codec: crate::VideoCodec::H264,
         hardware: true,
+        chroma444: false,
     };
     assert!(core.set_window_decoders(vec![decoder, decoder]).is_err());
     core.set_window_decoders(vec![decoder]).unwrap();
     core.shutdown();
+}
+
+#[test]
+fn a_window_shows_stills_only_when_its_av1_decoder_takes_444() {
+    use crate::VideoCodec;
+    let caps = VideoCodecCaps::h264_full(4096, 4096, "test");
+    let decoder = |codec, chroma444| WindowDecoder {
+        codec,
+        hardware: false,
+        chroma444,
+    };
+    assert!(
+        !caps.for_window(None).chroma444,
+        "a window that said nothing"
+    );
+    let av1 = [
+        decoder(VideoCodec::H264, false),
+        decoder(VideoCodec::Av1, true),
+    ];
+    assert!(caps.for_window(Some(&av1)).chroma444);
+    let main_only = [decoder(VideoCodec::Av1, false)];
+    assert!(!caps.for_window(Some(&main_only)).chroma444);
+    let other = [decoder(VideoCodec::H265, true)];
+    assert!(
+        !caps.for_window(Some(&other)).chroma444,
+        "stills are AV1 pictures"
+    );
 }

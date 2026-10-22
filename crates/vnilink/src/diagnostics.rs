@@ -137,6 +137,11 @@ pub struct PipelineSummary {
     pub encoder_reopens: u64,
     /// Frames the host dropped rather than queue behind a slow link.
     pub send_dropped: u64,
+    /// Host: still pictures sent and their bytes, and those left out while
+    /// the link or the stream was busy.
+    pub stills_sent: u64,
+    pub still_bytes: u64,
+    pub stills_dropped: u64,
     /// Host: what its viewer last reported losing, smoothed, in thousandths
     /// of the fragments sent and of the frames after any repair. None
     /// before a fresh report.

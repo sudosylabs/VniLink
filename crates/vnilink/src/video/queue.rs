@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::Notify;
 
-use super::frame::EncodedFrame;
+use super::frame::{EncodedFrame, FrameRole};
 
 /// Keyframe plus seven predicted frames. The next predicted frame is dropped.
 /// Sized to absorb encode/network jitter (~130ms at 60fps, ~260ms at 30fps)
@@ -25,6 +25,8 @@ pub(crate) enum VideoPush {
     Queued,
     StillNeedsKeyframe,
     KeyframeNeeded,
+    /// A still picture was left out: frames were waiting before it.
+    Skipped,
 }
 
 /// Drops predicted frames after the queue fills, until a keyframe arrives.
@@ -64,8 +66,24 @@ impl VideoQueue {
         self.received_bytes = self
             .received_bytes
             .saturating_add(frame.payload.len() as u64);
+        // A still picture waits behind nothing and owes nothing: it is queued
+        // only into an empty queue, and neither answers nor clears the
+        // keyframe the stream waits for. The stream drops it as it would a
+        // picture it replaces, without counting it.
+        if frame.role == FrameRole::Still {
+            if !self.frames.is_empty() {
+                return VideoPush::Skipped;
+            }
+            self.frames.push_back((frame, now));
+            return VideoPush::Queued;
+        }
         if frame.keyframe {
-            self.dropped = self.dropped.saturating_add(self.frames.len() as u64);
+            let replaced = self
+                .frames
+                .iter()
+                .filter(|(frame, _)| frame.role != FrameRole::Still)
+                .count();
+            self.dropped = self.dropped.saturating_add(replaced as u64);
             self.frames.clear();
             self.needs_keyframe = false;
             self.frames.push_back((frame, now));
@@ -90,7 +108,8 @@ impl VideoQueue {
                 .filter(|(frame, _)| !frame.keyframe)
                 .count();
             self.dropped = self.dropped.saturating_add((dropped + 1) as u64);
-            self.frames.retain(|(frame, _)| frame.keyframe);
+            self.frames
+                .retain(|(frame, _)| frame.keyframe && frame.role != FrameRole::Still);
             self.needs_keyframe = true;
             return VideoPush::KeyframeNeeded;
         }
@@ -232,7 +251,9 @@ impl VideoInbox {
     }
 
     pub(crate) fn push(&self, frame: EncodedFrame) -> VideoPush {
-        if !self.closed.load(Ordering::Acquire) {
+        // Recordings keep the stream's one codec: a still picture is shown,
+        // never recorded.
+        if !self.closed.load(Ordering::Acquire) && frame.role != FrameRole::Still {
             let mut taps = self.taps.lock().unwrap_or_else(|e| e.into_inner());
             taps.retain(|tap| tap.strong_count() > 0);
             if !taps.is_empty() {

@@ -123,6 +123,9 @@ impl CameraSource {
             return Err(Error::NoSession);
         }
         frame.check()?;
+        if frame.role == crate::FrameRole::Still {
+            return Err(Error::Unsupported("still pictures from a camera"));
+        }
         if !frame.keyframe && self.needs_keyframe.load(Ordering::Acquire) {
             return Ok(());
         }

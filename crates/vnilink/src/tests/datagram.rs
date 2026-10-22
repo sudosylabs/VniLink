@@ -410,3 +410,32 @@ fn the_largest_frame_fits_the_byte_budget() {
     assert_eq!(whole, [largest]);
     assert_eq!(reasm.take_loss(), Losses::default());
 }
+
+/// A frame's role crosses the wire in its flags; a still is only ever an
+/// AV1 keyframe, and no frame is both a still and unchanged.
+#[test]
+fn a_frames_role_round_trips_and_a_malformed_still_is_refused() {
+    use crate::{FrameRole, VideoCodec};
+    let changed = EncodedFrame::h264(false, 1, vec![9; 40]).unwrap();
+    let unchanged = changed.clone().unchanged();
+    let still = EncodedFrame::still(3, vec![7; 40]).unwrap();
+    for frame in [&changed, &unchanged, &still] {
+        let back = decode_video_body(&encode_video_body(frame)).unwrap();
+        assert_eq!(back.role, frame.role);
+        assert_eq!(back.keyframe, frame.keyframe);
+        assert_eq!(back.codec, frame.codec);
+    }
+    assert_eq!(still.codec, VideoCodec::Av1);
+    assert_eq!(unchanged.role, FrameRole::Unchanged);
+    // A still stays a still when marked unchanged.
+    assert_eq!(still.clone().unchanged().role, FrameRole::Still);
+    let flags = |frame: &EncodedFrame, flags: u8| {
+        let mut body = encode_video_body(frame);
+        body[1] = flags;
+        decode_video_body(&body)
+    };
+    // Still flag on a predicted frame, on H.264, or with the unchanged flag.
+    assert!(flags(&still, 2).is_err());
+    assert!(flags(&EncodedFrame::h264(true, 1, vec![9; 40]).unwrap(), 3).is_err());
+    assert!(flags(&still, 7).is_err());
+}

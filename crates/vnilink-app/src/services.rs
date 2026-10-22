@@ -710,6 +710,7 @@ pub struct FfiDesktopInfo {
     pub codec: u8,
     pub quality: crate::FfiQuality,
     pub separate_cursor: bool,
+    pub stills: bool,
 }
 impl From<vnilink::DesktopInfo> for FfiDesktopInfo {
     fn from(value: vnilink::DesktopInfo) -> Self {
@@ -720,6 +721,7 @@ impl From<vnilink::DesktopInfo> for FfiDesktopInfo {
             codec: value.codec,
             quality: crate::types::quality_record(&value.quality),
             separate_cursor: value.separate_cursor,
+            stills: value.stills,
         }
     }
 }

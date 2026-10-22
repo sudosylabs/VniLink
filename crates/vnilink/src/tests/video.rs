@@ -439,9 +439,10 @@ fn h264_frames_round_trip_and_reject_a_bad_payload() {
     assert_eq!((back.display_id, back.revision), (3, 7));
 
     let mut flags = encode_video_body(&EncodedFrame::h264(true, 7, vec![4]).unwrap());
-    flags[1] = 0xFF;
+    // Bits past the keyframe and role bits are ignored.
+    flags[1] = 0xF9;
     assert!(decode_video_body(&flags).unwrap().keyframe);
-    flags[1] = 0x02;
+    flags[1] = 0xF8;
     assert!(!decode_video_body(&flags).unwrap().keyframe);
 
     assert!(matches!(

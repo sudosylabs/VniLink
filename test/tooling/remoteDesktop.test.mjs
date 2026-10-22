@@ -163,17 +163,18 @@ test('a screen opens only where it is shared: the picture first, then the input 
 	assert.deepEqual(opened, ['video', 'input', 'closed video'], 'a refused input left the picture open');
 });
 
-test('the window says which codecs it decodes, hardware ones marked, each once', async () => {
-	const answers = { 'avc1.640028': ['prefer-hardware', 'no-preference'], 'hev1.1.6.L153.B0': ['no-preference'] };
+test('the window says which codecs it decodes, hardware ones marked, each once, and whether it shows stills', async () => {
+	const answers = { 'avc1.640028': ['prefer-hardware', 'no-preference'], 'hev1.1.6.L153.B0': ['no-preference'], 'av01.0.08M.08': ['no-preference'], 'av01.1.08M.08.0.000': ['prefer-software'] };
 	const decoders = await probeWindowDecoders(async config => (answers[config.codec] ?? []).includes(config.hardwareAcceleration));
-	assert.deepEqual(decoders, [{ codec: 'h264', hardware: true }, { codec: 'h265', hardware: false }]);
+	assert.deepEqual(decoders, [{ codec: 'h264', hardware: true, chroma444: false }, { codec: 'h265', hardware: false, chroma444: false }, { codec: 'av1', hardware: false, chroma444: true }]);
 	assert(isEngineCommand({ type: 'setWindowDecoders', decoders }));
 	assert(isEngineCommand({ type: 'setWindowDecoders', decoders: [] }));
 	for (const bad of [
-		[{ codec: 'h264', hardware: true }, { codec: 'h264', hardware: false }],
-		[{ codec: 'mjpeg', hardware: true }],
-		[{ codec: 'h264' }],
-		[{ codec: 'h264', hardware: true, extra: 1 }],
+		[{ codec: 'h264', hardware: true, chroma444: false }, { codec: 'h264', hardware: false, chroma444: false }],
+		[{ codec: 'mjpeg', hardware: true, chroma444: false }],
+		[{ codec: 'h264', hardware: true }],
+		[{ codec: 'h264', hardware: true, chroma444: 1 }],
+		[{ codec: 'h264', hardware: true, chroma444: false, extra: 1 }],
 	]) {
 		assert(!isEngineCommand({ type: 'setWindowDecoders', decoders: bad }), JSON.stringify(bad));
 	}
@@ -205,7 +206,7 @@ test('a screen offers only what the window decodes, and leaves out a codec it co
 	};
 	const registered = () => calls.filter(command => command.type === 'setWindowDecoders').map(command => command.decoders);
 	const first = await service.open('peer', false);
-	assert.deepEqual(registered(), [[{ codec: 'h264', hardware: true }, { codec: 'h265', hardware: false }]]);
+	assert.deepEqual(registered(), [[{ codec: 'h264', hardware: true, chroma444: false }, { codec: 'h265', hardware: false, chroma444: false }]]);
 	// The decoder this test's window has can show nothing: the H.264 keyframe ends it.
 	const ends = [];
 	first.session.onEnd(end => ends.push(end));
@@ -214,7 +215,7 @@ test('a screen offers only what the window decodes, and leaves out a codec it co
 	assert.deepEqual(ends, ['cantShow']);
 	const asked = probes;
 	const second = await service.open('peer', false);
-	assert.deepEqual(registered().at(-1), [{ codec: 'h265', hardware: false }], 'the codec it could not show was offered again');
+	assert.deepEqual(registered().at(-1), [{ codec: 'h265', hardware: false, chroma444: false }], 'the codec it could not show was offered again');
 	assert.equal(probes, asked, 'the window was asked again');
 	second.session.dispose();
 });

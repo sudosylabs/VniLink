@@ -24,7 +24,7 @@ pub(crate) use datagram::{
 };
 pub(crate) use frame::micros_since;
 pub(crate) use frame::{check_video_len, decode_video_body, encode_video_body};
-pub use frame::{EncodedFrame, FrameTiming};
+pub use frame::{EncodedFrame, FrameRole, FrameTiming};
 pub(crate) use queue::{KeyframeFlag, QueueTelemetry, VideoInbox, VideoOutbox, VideoPush};
 pub use queue::{RecordingVideoTap, VideoSubscription};
 #[cfg(test)]
@@ -35,6 +35,20 @@ pub(crate) use report::{Congestion, ReportTally, VideoReport, ViewerLoss, REPORT
 /// Largest encoded payload, not counting the video header before it.
 pub const MAX_VIDEO_FRAME: usize = 1_048_576;
 
+/// How long a still picture may hold the link: a change right after it
+/// waits behind it.
+pub const STILL_DRAIN: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The largest still picture, in encoded bytes, a link agreed at
+/// `max_bitrate_kbps` carries within [`STILL_DRAIN`]. The host's still
+/// encoder aims below it; a larger one is not sent.
+pub fn still_budget(max_bitrate_kbps: u32) -> usize {
+    let bytes = u64::from(max_bitrate_kbps) * 1000 / 8 * STILL_DRAIN.as_millis() as u64 / 1000;
+    usize::try_from(bytes)
+        .unwrap_or(usize::MAX)
+        .min(MAX_VIDEO_FRAME)
+}
+
 /// Monitor size advertised for capture.
 ///
 /// The platform owns capture and encoding and passes bytes to
@@ -43,6 +57,11 @@ pub trait HostCapture: Send {
     fn monitor(&self) -> (u16, u16);
     /// True when the source can provide a lossless cursor outside video.
     fn separate_cursor(&self) -> bool {
+        false
+    }
+    /// True when the host sends a viewer that shows them AV1 4:4:4 still
+    /// pictures of a still screen ([`crate::FrameRole::Still`]).
+    fn stills(&self) -> bool {
         false
     }
 }

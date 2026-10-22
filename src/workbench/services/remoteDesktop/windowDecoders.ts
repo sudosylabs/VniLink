@@ -13,6 +13,13 @@ const probes: Readonly<Record<VideoCodec, string>> = {
 	av1: 'av01.0.08M.08',
 };
 
+/**
+ * A still picture: AV1 High profile, 8-bit, 4:4:4 (chroma subsampling
+ * `000`), decoded in software. See the host's still pictures in the core's
+ * `FrameRole`.
+ */
+export const stillDecoderConfig: VideoDecoderConfig = { codec: 'av01.1.08M.08.0.000', hardwareAcceleration: 'prefer-software', optimizeForLatency: true };
+
 /** Whether this window can decode with a configuration. */
 export type DecoderSupport = (config: VideoDecoderConfig) => Promise<boolean>;
 
@@ -25,14 +32,18 @@ export const webCodecsSupport: DecoderSupport = async config => {
 	}
 };
 
-/** The codecs this window decodes, each marked when its decoder is hardware. */
+/**
+ * The codecs this window decodes, each marked when its decoder is hardware,
+ * and AV1 when it also shows still pictures at 4:4:4.
+ */
 export async function probeWindowDecoders(supported: DecoderSupport): Promise<WindowDecoder[]> {
 	const answers = await Promise.all(videoCodecNames.map(async codec => {
 		const config = { codec: probes[codec], optimizeForLatency: true };
-		if (await supported({ ...config, hardwareAcceleration: 'prefer-hardware' })) {
-			return { codec, hardware: true };
+		const hardware = await supported({ ...config, hardwareAcceleration: 'prefer-hardware' });
+		if (!hardware && !await supported({ ...config, hardwareAcceleration: 'no-preference' })) {
+			return undefined;
 		}
-		return await supported({ ...config, hardwareAcceleration: 'no-preference' }) ? { codec, hardware: false } : undefined;
+		return { codec, hardware, chroma444: codec === 'av1' && await supported(stillDecoderConfig) };
 	}));
 	return answers.filter(answer => answer !== undefined);
 }

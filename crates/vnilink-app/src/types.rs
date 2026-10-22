@@ -270,7 +270,37 @@ pub struct FfiEncodedFrame {
     pub payload: Vec<u8>,
     pub display_id: u64,
     pub revision: u64,
+    pub role: FfiFrameRole,
     pub timing: FfiFrameTiming,
+}
+
+/// What a frame is to the picture; see [`vnilink::FrameRole`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FfiFrameRole {
+    #[default]
+    Changed,
+    Unchanged,
+    Still,
+}
+
+impl FfiFrameRole {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Changed => "changed",
+            Self::Unchanged => "unchanged",
+            Self::Still => "still",
+        }
+    }
+}
+
+impl From<vnilink::FrameRole> for FfiFrameRole {
+    fn from(value: vnilink::FrameRole) -> Self {
+        match value {
+            vnilink::FrameRole::Changed => Self::Changed,
+            vnilink::FrameRole::Unchanged => Self::Unchanged,
+            vnilink::FrameRole::Still => Self::Still,
+        }
+    }
 }
 
 /// Where a received frame's time went; see [`vnilink::FrameTiming`].
@@ -311,14 +341,22 @@ impl FfiEncodedFrame {
         self
     }
     pub(crate) fn into_core(self) -> Result<vnilink::EncodedFrame, FfiError> {
-        vnilink::EncodedFrame::new(
-            self.codec.into(),
-            self.keyframe,
-            self.timestamp_us,
-            self.payload,
-        )
-        .map(|frame| frame.with_source(self.display_id, self.revision))
-        .map_err(map_error)
+        let frame = match self.role {
+            FfiFrameRole::Still => vnilink::EncodedFrame::still(self.timestamp_us, self.payload),
+            FfiFrameRole::Changed | FfiFrameRole::Unchanged => vnilink::EncodedFrame::new(
+                self.codec.into(),
+                self.keyframe,
+                self.timestamp_us,
+                self.payload,
+            )
+            .map(|frame| match self.role {
+                FfiFrameRole::Unchanged => frame.unchanged(),
+                _ => frame,
+            }),
+        };
+        frame
+            .map(|frame| frame.with_source(self.display_id, self.revision))
+            .map_err(map_error)
     }
 }
 impl From<vnilink::EncodedFrame> for FfiEncodedFrame {
@@ -330,6 +368,7 @@ impl From<vnilink::EncodedFrame> for FfiEncodedFrame {
             payload: value.payload,
             display_id: value.display_id,
             revision: value.revision,
+            role: value.role.into(),
             timing: FfiFrameTiming {
                 host_us: value.timing.host_us,
                 queued_us: value.timing.queued_us,
@@ -345,16 +384,19 @@ impl std::fmt::Debug for FfiEncodedFrame {
             .field("timestamp_us", &self.timestamp_us)
             .field("display_id", &self.display_id)
             .field("revision", &self.revision)
+            .field("role", &self.role)
             .field("payload_len", &self.payload.len())
             .finish()
     }
 }
 
-/// A codec the app's window decodes, and whether in hardware.
+/// A codec the app's window decodes, whether in hardware, and whether at
+/// 4:4:4; see [`vnilink::WindowDecoder`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiWindowDecoder {
     pub codec: FfiVideoCodec,
     pub hardware: bool,
+    pub chroma444: bool,
 }
 
 impl From<FfiWindowDecoder> for vnilink::WindowDecoder {
@@ -362,6 +404,7 @@ impl From<FfiWindowDecoder> for vnilink::WindowDecoder {
         Self {
             codec: value.codec.into(),
             hardware: value.hardware,
+            chroma444: value.chroma444,
         }
     }
 }

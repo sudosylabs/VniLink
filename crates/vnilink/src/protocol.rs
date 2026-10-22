@@ -24,6 +24,10 @@ pub const PROTOCOL_VERSION: u16 = 1;
 /// Accept codec flag: the host sends the cursor as its own stream.
 pub(crate) const SEPARATE_CURSOR: u8 = 0x80;
 
+/// Desktop Accept codec flag: the host sends AV1 4:4:4 still pictures of a
+/// still screen ([`crate::FrameRole::Still`]).
+pub(crate) const STILLS: u8 = 0x40;
+
 /// Agreed H.264 Baseline codec, carried in Accept. Baseline decodes everywhere.
 pub const CODEC_H264: u8 = 1;
 

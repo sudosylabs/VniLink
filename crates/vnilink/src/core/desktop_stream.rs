@@ -64,6 +64,10 @@ impl DesktopControlState {
     }
 }
 const MAGIC: &[u8; 4] = b"DSK1";
+/// Desktop Open request flags (byte 25): the viewer takes a separate cursor,
+/// and its window shows still pictures.
+const OPEN_CURSOR: u8 = 1;
+const OPEN_STILLS: u8 = 2;
 const PREFIX: usize = 20;
 const MAX: usize = crate::cursor::MAX_BODY + 64;
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -76,6 +80,10 @@ pub struct DesktopInfo {
     pub codec: u8,
     pub quality: Quality,
     pub separate_cursor: bool,
+    /// The host sends AV1 4:4:4 still pictures of a still screen: the
+    /// viewer's window shows them and the host's capture sends them. Agreed
+    /// at Open for the owner's lifetime.
+    pub stills: bool,
 }
 
 pub(super) struct DesktopRuntime {
@@ -324,7 +332,8 @@ impl DesktopRuntime {
     /// A frame arrived for the viewer. A keyframe answers the outstanding
     /// request; a full queue asks for one.
     fn receive_video(&self, frame: EncodedFrame) {
-        let keyframe = frame.keyframe;
+        // A still picture is not the stream's keyframe: it answers no request.
+        let keyframe = frame.keyframe && frame.role != crate::FrameRole::Still;
         if matches!(self.inbox.push(frame), VideoPush::KeyframeNeeded) {
             self.keyframe.request();
         }
@@ -396,6 +405,9 @@ impl DesktopRuntime {
             keyframe_bytes: counts.keyframe_bytes,
             encoder_reopens: counts.encoder_reopens,
             send_dropped: counts.send_dropped,
+            stills_sent: counts.stills_sent,
+            still_bytes: counts.still_bytes,
+            stills_dropped: counts.stills_dropped,
             viewer_fragment_loss_permille: reported.map(|loss| permille(loss.fragment_loss)),
             viewer_frame_loss_permille: reported.map(|loss| permille(loss.frame_loss)),
             selected_display: lock(&self.selected).first().copied(),
@@ -583,7 +595,7 @@ async fn route_desktop_datagrams(
             }
             if let Some(body) = body {
                 if let Ok(frame) = crate::video::decode_video_body(&body) {
-                    if Some(frame.codec) != crate::VideoCodec::from_wire_id(desktop.info.codec) {
+                    if !frame.belongs_to(desktop.info.codec, desktop.info.stills) {
                         continue;
                     }
                     desktop.receive_video(frame);
@@ -745,7 +757,10 @@ impl Core {
             let state = self.alive_state()?;
             runtime(&state, id, generation, true)?
         };
-        if Some(frame.codec) != crate::VideoCodec::from_wire_id(desktop.info.codec) {
+        if frame.role == crate::FrameRole::Still && !desktop.info.stills {
+            return Err(Error::Unsupported("still pictures for this viewer"));
+        }
+        if !frame.belongs_to(desktop.info.codec, desktop.info.stills) {
             return Err(Error::InvalidSetting(
                 "frame codec does not match Desktop owner",
             ));
@@ -1123,6 +1138,7 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
             codec: 1,
             quality: offer,
             separate_cursor: false,
+            stills: false,
         },
         SessionStamp::new(0, 0),
     );
@@ -1141,6 +1157,7 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
         .shared
         .cursor_receiver
         .load(std::sync::atomic::Ordering::Relaxed);
+    let stills = decoder_caps.chroma444;
     let shared = core.shared.clone();
     let owner_info = lease.info().clone();
     let (ready, result) = std::sync::mpsc::sync_channel(1);
@@ -1152,7 +1169,9 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                     request.extend_from_slice(&stamp.id.to_be_bytes());
                     request.extend_from_slice(&stamp.generation.to_be_bytes());
                     request.extend_from_slice(&id.to_be_bytes());
-                    request.push(u8::from(cursor));
+                    request.push(
+                        if cursor { OPEN_CURSOR } else { 0 } | if stills { OPEN_STILLS } else { 0 },
+                    );
                     request.extend_from_slice(
                         &ControlMessage::Hello {
                             version: crate::protocol::PROTOCOL_VERSION,
@@ -1209,10 +1228,13 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                         {
                             return Err(Error::Malformed);
                         }
+                        let flags = crate::protocol::SEPARATE_CURSOR | crate::protocol::STILLS;
+                        // Stills the window cannot show were never asked for.
+                        if codec & crate::protocol::STILLS != 0 && !stills {
+                            return Err(Error::Malformed);
+                        }
                         if codec_preference.is_some_and(|c| {
-                            crate::VideoCodec::from_wire_id(
-                                codec & !crate::protocol::SEPARATE_CURSOR,
-                            ) != Some(c)
+                            crate::VideoCodec::from_wire_id(codec & !flags) != Some(c)
                         }) {
                             return Err(Error::IncompatibleVersion);
                         }
@@ -1220,9 +1242,10 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                             service: owner_info.clone(),
                             monitor_width,
                             monitor_height,
-                            codec: codec & !crate::protocol::SEPARATE_CURSOR,
+                            codec: codec & !flags,
                             quality,
                             separate_cursor: codec & crate::protocol::SEPARATE_CURSOR != 0,
+                            stills: codec & crate::protocol::STILLS != 0,
                         };
                         if !decoder_caps.supports_decode(
                             crate::VideoCodec::from_wire_id(info.codec)
@@ -1580,7 +1603,7 @@ async fn client_receive(
                 }
                 VIDEO => {
                     let frame = crate::video::decode_video_body(&body[1..])?;
-                    if Some(frame.codec) != crate::VideoCodec::from_wire_id(desktop.info.codec) {
+                    if !frame.belongs_to(desktop.info.codec, desktop.info.stills) {
                         return Err(Error::Malformed);
                     }
                     desktop.receive_video(frame);
@@ -1730,7 +1753,7 @@ pub(super) async fn serve(
     body: &[u8],
     mut parent_stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(), Error> {
-    if body.len() < 27 || body[0] != VERSION || body[25] > 1 {
+    if body.len() < 27 || body[0] != VERSION || body[25] & !(OPEN_CURSOR | OPEN_STILLS) != 0 {
         write(&mut send, &[VERSION, 5]).await?;
         return Ok(());
     }
@@ -1803,10 +1826,13 @@ pub(super) async fn serve(
                     kind: ServiceKind::Desktop,
                     phase: ServicePhase::Active,
                 };
-                let separate = body[25] == 1
-                    && lock(&shared.capture)
-                        .as_ref()
-                        .is_some_and(|c| c.separate_cursor());
+                let (separate, stills) =
+                    lock(&shared.capture).as_ref().map_or((false, false), |c| {
+                        (
+                            body[25] & OPEN_CURSOR != 0 && c.separate_cursor(),
+                            body[25] & OPEN_STILLS != 0 && c.stills(),
+                        )
+                    });
                 let desktop = DesktopRuntime::new(
                     DesktopInfo {
                         service: info.clone(),
@@ -1815,6 +1841,7 @@ pub(super) async fn serve(
                         codec,
                         quality: crate::session::agree_quality(&quality, monitor, &caps),
                         separate_cursor: separate,
+                        stills,
                     },
                     SessionStamp::new(id, parent.generation),
                 );
@@ -1895,6 +1922,11 @@ pub(super) async fn serve(
             codec: desktop.info.codec
                 | if desktop.info.separate_cursor {
                     crate::protocol::SEPARATE_CURSOR
+                } else {
+                    0
+                }
+                | if desktop.info.stills {
+                    crate::protocol::STILLS
                 } else {
                     0
                 },
@@ -2451,6 +2483,12 @@ impl SendGate {
         };
     }
 
+    /// A still picture went out. The frames behind it may wait for it as for
+    /// a large keyframe; nothing owed changes.
+    fn still_sent(&mut self, wire: usize) {
+        self.draining = self.draining.max(wire);
+    }
+
     /// A frame went out; a keyframe pays what was owed.
     fn sent(&mut self, keyframe: bool, wire: usize) {
         if keyframe {
@@ -2502,6 +2540,11 @@ fn send_budget(desktop: &DesktopRuntime) -> usize {
     backlog_budget(quality.max_bitrate_kbps, quality.max_frame_rate)
 }
 
+/// The largest still picture the link takes at the agreed quality.
+fn still_budget(desktop: &DesktopRuntime) -> usize {
+    crate::video::still_budget(lock(&desktop.quality).max_bitrate_kbps)
+}
+
 /// The interval between frames at the agreed frame rate.
 fn frame_period(desktop: &DesktopRuntime) -> Duration {
     Duration::from_secs(1) / u32::from(lock(&desktop.quality).max_frame_rate.max(1))
@@ -2538,7 +2581,16 @@ async fn host_send(
     loop {
         let notified = desktop.video.notified();
         tokio::pin!(notified);
-        for frame in desktop.video.drain() {
+        let frames = desktop.video.drain();
+        let newest = frames.len();
+        for (index, frame) in frames.into_iter().enumerate() {
+            // A still picture goes only as the newest picture, and never
+            // while the stream owes a keyframe.
+            let still = frame.role == crate::FrameRole::Still;
+            if still && (index + 1 != newest || gate.awaiting) {
+                desktop.counters.still_dropped();
+                continue;
+            }
             // After a frame was dropped, the predicted frames that follow
             // reference it: they go too, until the keyframe owed for it.
             if gate.skips(frame.keyframe) {
@@ -2588,6 +2640,21 @@ async fn host_send(
                 let backlog = super::host::DATAGRAM_SEND_BUFFER
                     .saturating_sub(link.datagram_send_buffer_space());
                 least_backlog = Some(least_backlog.map_or(backlog, |least| least.min(backlog)));
+                if still {
+                    // Only into an idle link, and only as much as it drains
+                    // in a moment: the frames after it wait behind it.
+                    let space = link.datagram_send_buffer_space();
+                    if backlog > 0 || wire > space || wire > still_budget(desktop) {
+                        desktop.counters.still_dropped();
+                        continue;
+                    }
+                    link.send_many_datagrams(&datagrams)
+                        .map_err(Error::network_debug)?;
+                    seq = seq.wrapping_add(1);
+                    gate.still_sent(wire);
+                    desktop.counters.still_sent(frame.payload.len());
+                    continue;
+                }
                 if !gate.admits(
                     link.datagram_send_buffer_space(),
                     wire,
@@ -2608,6 +2675,15 @@ async fn host_send(
                 if frame.keyframe {
                     desktop.counters.keyframe_sent(frame.payload.len());
                 }
+            } else if still {
+                if body.len() > still_budget(desktop) {
+                    desktop.counters.still_dropped();
+                    continue;
+                }
+                let mut bytes = vec![VIDEO];
+                bytes.extend_from_slice(&body);
+                write(send, &bytes).await?;
+                desktop.counters.still_sent(frame.payload.len());
             } else {
                 let mut bytes = vec![VIDEO];
                 bytes.extend_from_slice(&body);
@@ -2807,6 +2883,23 @@ mod tests {
         assert!(!gate.should_ask(buffer - 30_000, budget));
     }
 
+    /// The frames behind a still wait for it rather than drop, and it
+    /// neither pays nor teaches the keyframe owed.
+    #[test]
+    fn the_frames_behind_a_still_go_while_it_drains_and_nothing_owed_changes() {
+        let buffer = crate::core::host::DATAGRAM_SEND_BUFFER;
+        let budget = 64 * 1024;
+        let mut gate = SendGate::default();
+        gate.sent(true, 20_000);
+        gate.still_sent(200_000);
+        assert!(gate.admits(buffer - 190_000, 8_000, budget));
+        assert!(!gate.owed() && !gate.skips(false));
+        gate.dropped(false, 5_000);
+        gate.still_sent(200_000);
+        assert!(gate.skips(false), "a still is not the keyframe owed");
+        assert!(gate.should_ask(buffer - 40_000, budget), "nor its size");
+    }
+
     #[test]
     fn a_small_keyframe_is_asked_for_behind_a_backlog_it_fits_within() {
         let buffer = crate::core::host::DATAGRAM_SEND_BUFFER;
@@ -2832,6 +2925,7 @@ mod tests {
                 codec: crate::CODEC_H264,
                 quality: crate::session::controller_offer(),
                 separate_cursor: false,
+                stills: false,
             },
             SessionStamp::new(1, 3),
         )

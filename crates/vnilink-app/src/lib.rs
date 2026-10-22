@@ -96,10 +96,11 @@ pub use files::{
 };
 pub use types::{
     new_quality, FfiCapabilities, FfiCapabilityStatus, FfiCodecPreference, FfiCodecSupport,
-    FfiControlRequest, FfiDeviceInfo, FfiDisplay, FfiEncodedFrame, FfiEvent, FfiFrameTiming,
-    FfiGrants, FfiKeyboardMode, FfiPairingFile, FfiPairingPreview, FfiPointerButton,
-    FfiPointerSettings, FfiQuality, FfiSessionInfo, FfiSessionPath, FfiSessionPhase,
-    FfiSessionRole, FfiSnapshot, FfiVideoCodec, FfiVideoCodecCaps, FfiWindowDecoder,
+    FfiControlRequest, FfiDeviceInfo, FfiDisplay, FfiEncodedFrame, FfiEvent, FfiFrameRole,
+    FfiFrameTiming, FfiGrants, FfiKeyboardMode, FfiPairingFile, FfiPairingPreview,
+    FfiPointerButton, FfiPointerSettings, FfiQuality, FfiSessionInfo, FfiSessionPath,
+    FfiSessionPhase, FfiSessionRole, FfiSnapshot, FfiVideoCodec, FfiVideoCodecCaps,
+    FfiWindowDecoder,
 };
 
 use std::collections::HashMap;

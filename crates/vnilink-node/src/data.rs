@@ -409,7 +409,7 @@ impl DataChannel {
                 return Ok(Some(DataEvent {
                     kind: "video".into(),
                     data: Some(frame.payload.into()),
-                    metadata: serde_json::json!({"codec":frame.codec.label(),"keyframe":frame.keyframe,"timestampUs":frame.timestamp_us.to_string(),"displayId":frame.display_id.to_string(),"revision":frame.revision.to_string(),"hostUs":frame.timing.host_us,"queuedUs":frame.timing.queued_us}).to_string(),
+                    metadata: serde_json::json!({"codec":frame.codec.label(),"keyframe":frame.keyframe,"timestampUs":frame.timestamp_us.to_string(),"displayId":frame.display_id.to_string(),"revision":frame.revision.to_string(),"hostUs":frame.timing.host_us,"queuedUs":frame.timing.queued_us,"role":frame.role.label()}).to_string(),
                 }));
             }
             // The last packet says why the picture stopped, once.
