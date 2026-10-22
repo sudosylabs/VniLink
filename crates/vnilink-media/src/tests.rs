@@ -14,6 +14,8 @@ mod frame_tests;
 mod host_tests;
 #[path = "tests/impaired_video.rs"]
 mod impaired_video_tests;
+#[path = "tests/measure.rs"]
+mod measure_tests;
 #[path = "tests/nv12.rs"]
 mod nv12_tests;
 #[path = "tests/pump.rs"]
@@ -24,3 +26,5 @@ mod rate_tests;
 mod recording_segments_tests;
 #[path = "tests/recovery.rs"]
 mod recovery_tests;
+#[path = "tests/timecode.rs"]
+mod timecode_tests;

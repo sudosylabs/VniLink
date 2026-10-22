@@ -29,6 +29,7 @@
     "check": "npm run check:product && npm run check:upstream && npm run format:check && npm run lint && npm run typecheck && npm run test:tooling",
     "test:linux": "node build/run.ts test:linux",
     "measure:impaired": "node build/run.ts measure:impaired",
+    "measure:latency": "node build/run.ts measure:latency",
     "test:ui": "node build/run.ts test:ui",
     "test:native": "node --test test/native/*.test.mjs",
     "prepare": "husky",

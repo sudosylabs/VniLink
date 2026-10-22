@@ -437,14 +437,11 @@ fn a_fresh_desktop_frame_is_reused_until_the_user_asks_for_a_new_capture() {
     })))
     .unwrap();
     let session = connect(&controller, &host);
-    host.offer_attested_picture(
-        Instant::now(),
-        8,
-        8,
-        32,
-        &solid(0, 255, 0, 8, 8, 32),
-        "from-desktop",
-    );
+    // A capture asks before reading its pixels: wanted until one is taken.
+    let now = Instant::now();
+    assert!(host.wants_attested_picture(now));
+    host.offer_attested_picture(now, 8, 8, 32, &solid(0, 255, 0, 8, 8, 32), "from-desktop");
+    assert!(!host.wants_attested_picture(Instant::now()));
     let shot = request(&controller, &session).unwrap();
     let ScreenSnapshot::Ready(image) = shot else {
         panic!("expected the attested frame");

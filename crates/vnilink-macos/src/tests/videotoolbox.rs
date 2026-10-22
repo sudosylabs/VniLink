@@ -66,6 +66,51 @@ fn videotoolbox_encodes_and_decodes_a_synthetic_picture() {
     assert!(MacDecoder::new().decode(&junk).is_err());
 }
 
+/// The SPS says BT.709 limited range, and VideoToolbox converts the BGRA
+/// pictures with that matrix: saturated colours come back as they went in.
+/// Tagged BT.601 instead, pure red comes back 9 low (measured 2026-10-22).
+#[test]
+fn videotoolbox_colours_match_the_stream_signal() {
+    let params = EncodeParams {
+        force_keyframe: true,
+        recovery: false,
+        bitrate_bps: 8_000_000,
+        frame_rate: 30,
+    };
+    // (b, g, r)
+    for colour in [
+        [0, 0, 255],
+        [0, 255, 0],
+        [255, 0, 0],
+        [0, 255, 255],
+        [255, 255, 0],
+        [255, 0, 255],
+        [0, 128, 255],
+        [128, 128, 128],
+    ] {
+        let mut encoder = MacEncoder::open(64, 64, 30, 8_000_000, false).unwrap();
+        let picture = solid(64, 64, 0, colour[0], colour[1], colour[2]);
+        let sample = encoder.encode(&picture, &params).unwrap();
+        let parsed = parse_annex_b(sample.bytes()).unwrap();
+        let sps = parsed
+            .units()
+            .iter()
+            .find(|unit| unit.nal_type == 7)
+            .unwrap();
+        assert_eq!(
+            vnilink_media::h264_video_signal(sps.bytes()).unwrap(),
+            Some(vnilink_media::STREAM_SIGNAL)
+        );
+        let encoded = EncodedFrame::h264(true, 0, sample.bytes().to_vec()).unwrap();
+        let decoded = MacDecoder::new().decode(&encoded).unwrap();
+        let pixel = &decoded.row(32)[32 * 4..32 * 4 + 3];
+        for channel in 0..3 {
+            let drift = (i16::from(pixel[channel]) - i16::from(colour[channel])).abs();
+            assert!(drift <= 6, "{colour:?} came back as {pixel:?}");
+        }
+    }
+}
+
 #[test]
 fn the_pump_accepts_a_videotoolbox_keyframe() {
     let quality = Quality::new(500, 30, 64, 64).unwrap();
@@ -635,7 +680,7 @@ fn forced_keyframes(
                         .unwrap();
                 decoder.decode(&frame).unwrap();
             }
-            Err(vnilink_media::Error::EncodeRejected("the encoder produced no frame")) => {
+            Err(error) if error.is_dropped() => {
                 owed = force;
                 dropped += 1;
             }
@@ -711,7 +756,7 @@ fn recovery_keyframe_pictures() {
             };
             let sample = match encoder.encode(&page(1280, 720, index), &params) {
                 Ok(sample) => sample,
-                Err(vnilink_media::Error::EncodeRejected("the encoder produced no frame")) => {
+                Err(error) if error.is_dropped() => {
                     owed = force;
                     continue;
                 }
@@ -792,4 +837,177 @@ fn still_screen_refinement() {
             line.join(", ")
         );
     }
+}
+
+/// Coloured text through VideoToolbox H.264 (4:2:0) against its source:
+/// how close the product's own encoder comes to the 4:2:0 ceiling that
+/// `vnilink-media`'s `chroma_measure` example finds with no codec.
+/// `cargo test -p vnilink-macos --release --lib chroma_quality -- --ignored --nocapture`.
+#[test]
+#[ignore = "measurement"]
+fn chroma_quality() {
+    use vnilink_media::measure::{chroma_psnr, colour_text_page, edge_psnr, psnr};
+    println!("| Size | Target Mb/s | Sent kB/s | Key PSNR | Key chroma | Key edge | Last PSNR | Last chroma | Last edge |");
+    println!("|---|---|---|---|---|---|---|---|---|");
+    for (width, height) in [(1280u16, 720u16), (1920, 1080)] {
+        for megabits in [1u32, 2, 4, 8] {
+            let bitrate = megabits * 1_000_000;
+            let mut encoder = MacEncoder::open(width, height, 30, bitrate, false).unwrap();
+            let mut decoder = MacDecoder::new();
+            let (mut bytes, mut key, mut last) = (0usize, None, None);
+            for index in 0..60u64 {
+                let params = EncodeParams {
+                    force_keyframe: index == 0,
+                    recovery: false,
+                    bitrate_bps: bitrate,
+                    frame_rate: 30,
+                };
+                let sample = match encoder.encode(&colour_text_page(width, height, index), &params)
+                {
+                    Ok(sample) => sample,
+                    Err(error) if error.is_dropped() => continue,
+                    Err(error) => panic!("picture {index}: {error}"),
+                };
+                bytes += sample.bytes().len();
+                let frame =
+                    EncodedFrame::h264(sample.keyframe(), index * 33_333, sample.bytes().to_vec())
+                        .unwrap();
+                let picture = decoder.decode(&frame).unwrap();
+                if key.is_none() {
+                    key = Some(picture.clone());
+                }
+                last = Some((index, picture));
+            }
+            let key = key.unwrap();
+            let (index, last) = last.unwrap();
+            let (source_key, source_last) = (
+                colour_text_page(width, height, 0),
+                colour_text_page(width, height, index),
+            );
+            println!(
+                "| {width}x{height} | {megabits} | {:.0} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} |",
+                bytes as f64 / 1000.0 / 2.0,
+                psnr(&source_key, &key),
+                chroma_psnr(&source_key, &key),
+                edge_psnr(&source_key, &key),
+                psnr(&source_last, &last),
+                chroma_psnr(&source_last, &last),
+                edge_psnr(&source_last, &last),
+            );
+        }
+    }
+}
+
+/// A picture in an IOSurface-backed buffer, as ScreenCaptureKit delivers one.
+fn captured(frame: &vnilink_media::RawFrame) -> vnilink_media::RawFrame {
+    let surface = apple_cf::iosurface::IOSurface::create(
+        usize::from(frame.width()),
+        usize::from(frame.height()),
+        0x4247_5241,
+        4,
+    )
+    .unwrap();
+    {
+        let mut guard = surface.lock_read_write().unwrap();
+        let stride = guard.bytes_per_row();
+        let bytes = unsafe { guard.as_slice_mut() }.unwrap();
+        for y in 0..frame.height() {
+            let row = frame.row(y);
+            bytes[usize::from(y) * stride..usize::from(y) * stride + row.len()]
+                .copy_from_slice(row);
+        }
+    }
+    let buffer = apple_cf::cv::CVPixelBuffer::create_with_io_surface(&surface).unwrap();
+    let picture = crate::pixels::MacPicture::new(buffer).unwrap();
+    vnilink_media::RawFrame::native(frame.timestamp_us(), Box::new(picture)).unwrap()
+}
+
+/// `frame` averaged over `block` x `block` squares: what is where and in
+/// which colour, whatever filter scaled it.
+fn blocks(frame: &vnilink_media::RawFrame, block: u16) -> vnilink_media::RawFrame {
+    let (width, height) = (frame.width() / block, frame.height() / block);
+    let mut out = Vec::new();
+    for y in 0..height {
+        for x in 0..width {
+            for channel in 0..4 {
+                let mut sum = 0u32;
+                for dy in 0..block {
+                    for dx in 0..block {
+                        sum += u32::from(
+                            frame.row(y * block + dy)[usize::from(x * block + dx) * 4 + channel],
+                        );
+                    }
+                }
+                out.push((sum / u32::from(block * block)) as u8);
+            }
+        }
+    }
+    vnilink_media::RawFrame::bgra(width, height, 0, out).unwrap()
+}
+
+/// A captured picture is encoded in place, at its own size and scaled down
+/// on the GPU, and decodes to the page it holds; reading it back gives the
+/// same bytes the CPU path would have encoded. Scaled, it is nearer an even
+/// average of the page than the CPU's nearest-neighbour scale is (measured
+/// 2026-10-22: 20.0 against 14.1 dB, 16.3 against 10.4 at glyph edges),
+/// though the GPU's filter leaves thin dark text a little lighter.
+#[test]
+fn a_captured_picture_is_encoded_in_its_surface_at_any_size() {
+    use vnilink_media::measure::{edge_psnr, psnr, text_page};
+    let page = text_page(1280, 720, 0);
+    assert_eq!(captured(&page).pixels(), page.pixels());
+    let encode = |frame: &vnilink_media::RawFrame, width: u16, height: u16| {
+        let mut host = HostVideo::new(
+            Quality::new(8_000, 30, width, height).unwrap(),
+            MacEncoder::open(width, height, 30, 8_000_000, false).unwrap(),
+        );
+        let PumpOutput::Encoded(frame) = host.push(frame).unwrap() else {
+            panic!("the first picture is encoded");
+        };
+        let decoded = MacDecoder::new().decode(&frame).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (width, height));
+        decoded
+    };
+    // Its own size: the page, as the CPU path encodes it.
+    let same = encode(&captured(&page), 1280, 720);
+    assert!(psnr(&blocks(&page, 8), &blocks(&same, 8)) > 45.0);
+    // Half size: nearer the even average than nearest-neighbour is.
+    let ideal = blocks(&page, 2);
+    let gpu = encode(&captured(&page), 640, 360);
+    let cpu = encode(&page, 640, 360);
+    assert!(psnr(&ideal, &gpu) > psnr(&ideal, &cpu) + 3.0);
+    assert!(edge_psnr(&ideal, &gpu) > edge_psnr(&ideal, &cpu) + 3.0);
+}
+
+/// When the GPU cannot scale, a captured picture is read into memory and
+/// scaled on the CPU: the stream goes on, as before the GPU path.
+#[test]
+fn a_captured_picture_is_scaled_on_the_cpu_when_the_gpu_cannot() {
+    use vnilink_media::measure::{psnr, text_page};
+    let page = text_page(1280, 720, 0);
+    let mut encoder = MacEncoder::open(640, 360, 30, 8_000_000, false).unwrap();
+    assert_eq!(encoder.scales_on_gpu(), None);
+    encoder.refuse_gpu_scaling();
+    let mut host = HostVideo::new(Quality::new(8_000, 30, 640, 360).unwrap(), encoder);
+    let PumpOutput::Encoded(frame) = host.push(&captured(&page)).unwrap() else {
+        panic!("the first picture is encoded");
+    };
+    let decoded = MacDecoder::new().decode(&frame).unwrap();
+    // Nearest-neighbour, as the CPU path scales.
+    let reference = vnilink_media::scale_bgra(&page, 640, 360).unwrap();
+    assert!(psnr(&reference, &decoded) > 30.0);
+    // An encoder that has not been refused scales on the GPU.
+    let mut encoder = MacEncoder::open(640, 360, 30, 8_000_000, false).unwrap();
+    encoder
+        .encode(
+            &captured(&page),
+            &EncodeParams {
+                force_keyframe: true,
+                recovery: false,
+                bitrate_bps: 8_000_000,
+                frame_rate: 30,
+            },
+        )
+        .unwrap();
+    assert_eq!(encoder.scales_on_gpu(), Some(true));
 }

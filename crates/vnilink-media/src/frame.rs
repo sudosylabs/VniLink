@@ -1,16 +1,25 @@
 //! One BGRA picture. The bytes are screen content: do not log them.
 
 use std::fmt;
+use std::time::Instant;
 
 use crate::error::Error;
+use crate::pixels::{NativePicture, Pixels};
 
 /// Tightly packed or strided BGRA8, origin at the top left.
+///
+/// A frame never changes once made, so its clones share its pixels: a 4K
+/// picture is 33 MB, and the capture channel, the shared capture's
+/// consumers and an idle source's repeats all hold the same one. The
+/// pixels may still be the platform's ([`RawFrame::native`]), for an
+/// encoder that reads them there.
 pub struct RawFrame {
     width: u16,
     height: u16,
     stride: usize,
     timestamp_us: u64,
-    bgra: Vec<u8>,
+    captured_at: Option<Instant>,
+    bgra: Pixels,
 }
 
 impl RawFrame {
@@ -27,6 +36,30 @@ impl RawFrame {
         timestamp_us: u64,
         bgra: Vec<u8>,
     ) -> Result<Self, Error> {
+        Self::shared(width, height, stride, timestamp_us, Pixels::from(bgra))
+    }
+
+    /// A packed frame over a picture the platform holds. Its size is the
+    /// picture's; reading its pixels copies them out once.
+    pub fn native(timestamp_us: u64, picture: Box<dyn NativePicture>) -> Result<Self, Error> {
+        let (width, height) = picture.size();
+        Self::shared(
+            width,
+            height,
+            usize::from(width) * 4,
+            timestamp_us,
+            Pixels::native(picture),
+        )
+    }
+
+    /// A frame over pixels another holder keeps too, without copying them.
+    pub fn shared(
+        width: u16,
+        height: u16,
+        stride: usize,
+        timestamp_us: u64,
+        bgra: Pixels,
+    ) -> Result<Self, Error> {
         if width == 0 || height == 0 {
             return Err(Error::InvalidFrame(
                 "frame width and height must be non-zero",
@@ -36,15 +69,25 @@ impl RawFrame {
         if stride < row {
             return Err(Error::InvalidFrame("frame stride is shorter than one row"));
         }
-        let needed = stride.saturating_mul(usize::from(height));
-        if bgra.len() < needed {
-            return Err(Error::InvalidFrame("frame is missing pixels"));
+        match bgra.native_picture() {
+            // Its pixels are read back packed; checking their length would read them.
+            Some(picture) => {
+                if picture.size() != (width, height) || stride != row {
+                    return Err(Error::InvalidFrame("frame does not match its picture"));
+                }
+            }
+            None => {
+                if bgra.len() < stride.saturating_mul(usize::from(height)) {
+                    return Err(Error::InvalidFrame("frame is missing pixels"));
+                }
+            }
         }
         Ok(Self {
             width,
             height,
             stride,
             timestamp_us,
+            captured_at: None,
             bgra,
         })
     }
@@ -71,6 +114,27 @@ impl RawFrame {
         self
     }
 
+    /// When the OS captured these pixels. `None` means the source cannot say,
+    /// and the time it was read stands in.
+    pub fn captured_at(&self) -> Option<Instant> {
+        self.captured_at
+    }
+
+    pub fn with_captured_at(mut self, captured_at: Option<Instant>) -> Self {
+        self.captured_at = captured_at;
+        self
+    }
+
+    /// The pixels, to hand to another frame or holder without a copy.
+    pub fn shared_pixels(&self) -> Pixels {
+        self.bgra.clone()
+    }
+
+    /// The platform's picture, for an encoder that reads it in place.
+    pub fn native_picture(&self) -> Option<&dyn NativePicture> {
+        self.bgra.native_picture()
+    }
+
     pub fn pixels(&self) -> &[u8] {
         &self.bgra
     }
@@ -89,6 +153,7 @@ impl Clone for RawFrame {
             height: self.height,
             stride: self.stride,
             timestamp_us: self.timestamp_us,
+            captured_at: self.captured_at,
             bgra: self.bgra.clone(),
         }
     }
@@ -102,7 +167,7 @@ impl fmt::Debug for RawFrame {
             .field("height", &self.height)
             .field("stride", &self.stride)
             .field("timestamp_us", &self.timestamp_us)
-            .field("bytes", &self.bgra.len())
+            .field("pixels", &self.bgra)
             .finish()
     }
 }

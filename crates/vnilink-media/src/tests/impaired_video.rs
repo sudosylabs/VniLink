@@ -272,7 +272,8 @@ struct Encoder {
 fn picture(index: u64, keyframe: bool, bytes: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes.max(64));
     if keyframe {
-        out.extend_from_slice(&[0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1F]);
+        // A real SPS: hosts give every SPS the stream's VUI.
+        out.extend_from_slice(&[0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1e, 0xda, 0x10, 0x99]);
         out.extend_from_slice(&[0, 0, 0, 1, 0x68, 0xCE, 0x3C, 0x80]);
         out.extend_from_slice(&[0, 0, 0, 1, 0x65]);
     } else {

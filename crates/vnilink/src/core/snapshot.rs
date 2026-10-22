@@ -85,6 +85,15 @@ impl Core {
             .map_err(|_| Error::Timeout)?
     }
 
+    /// Whether [`Self::offer_attested_picture`] would take a picture
+    /// attested `at`. A capture whose pixels cost a copy to read asks first.
+    pub fn wants_attested_picture(&self, at: std::time::Instant) -> bool {
+        crate::snapshot::tap_is_fresh(at, std::time::Instant::now())
+            && !lock(&self.shared.snapshot_tap)
+                .as_ref()
+                .is_some_and(|existing| existing.at.elapsed() < Duration::from_secs(1))
+    }
+
     /// Remember one freshly attested desktop frame for a later thumbnail.
     /// Idle retimestamps must not call this. At most one picture is kept.
     pub fn offer_attested_picture(

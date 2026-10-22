@@ -1,5 +1,9 @@
 //! VideoToolbox H.264 encode of BGRA pictures.
 //!
+//! A ScreenCaptureKit picture is encoded in its own IOSurface, or scaled on
+//! the GPU into the encoder's (`VTPixelTransferSession`); any other picture
+//! is copied into the encoder's surface.
+//!
 //! The session emits length-prefixed NALs. SPS and PPS stay in the format
 //! description, so a keyframe is rewritten as Annex-B with those sets in front.
 //! This encoder does not capture the screen. Callers supply the picture.
@@ -30,12 +34,29 @@ use vnilink_media::{
 #[cfg(target_os = "macos")]
 const BGRA: u32 = 0x4247_5241;
 
+/// Scaling ScreenCaptureKit pictures on the GPU, for one encoder.
+#[cfg(target_os = "macos")]
+enum Scaler {
+    /// No picture of another size yet.
+    Untried,
+    Ready(
+        videotoolbox::transfer::PixelTransferSession,
+        apple_cf::cv::CVPixelBuffer,
+    ),
+    /// The GPU could not scale: pictures are read into memory and scaled on
+    /// the CPU until the encoder is reopened.
+    Unavailable,
+}
+
 pub struct MacEncoder {
     codec: vnilink::VideoCodec,
     #[cfg(target_os = "macos")]
     session: CompressionSession,
     #[cfg(target_os = "macos")]
     surface: IOSurface,
+    /// Scales ScreenCaptureKit pictures into `surface` on the GPU.
+    #[cfg(target_os = "macos")]
+    scaler: Scaler,
     width: u16,
     height: u16,
     #[cfg(target_os = "macos")]
@@ -152,6 +173,7 @@ impl MacEncoder {
                 codec,
                 session,
                 surface,
+                scaler: Scaler::Untried,
                 width,
                 height,
                 frame_rate: i32::from(frame_rate),
@@ -255,6 +277,54 @@ fn low_latency(session: &CompressionSession) {
     set(session, matrix, &bt709);
 }
 
+impl MacEncoder {
+    /// Scales a ScreenCaptureKit picture into the encoder's surface on the
+    /// GPU. `false` once the GPU cannot: the caller scales on the CPU.
+    #[cfg(target_os = "macos")]
+    fn scale(&mut self, picture: &crate::pixels::MacPicture) -> bool {
+        if matches!(self.scaler, Scaler::Untried) {
+            self.scaler = (|| {
+                let session = videotoolbox::transfer::PixelTransferSession::new().ok()?;
+                // Each output pixel averages the pixels it covers: text stays
+                // legible where nearest-neighbour would drop strokes.
+                session
+                    .set_downsampling_mode(videotoolbox::transfer::DownsamplingMode::Average)
+                    .ok()?;
+                session.set_real_time(true).ok()?;
+                let target =
+                    apple_cf::cv::CVPixelBuffer::create_with_io_surface(&self.surface).ok()?;
+                Some(Scaler::Ready(session, target))
+            })()
+            .unwrap_or(Scaler::Unavailable);
+        }
+        let Scaler::Ready(session, target) = &self.scaler else {
+            return false;
+        };
+        if session.transfer(picture.pixel_buffer(), target).is_err() {
+            self.scaler = Scaler::Unavailable;
+            return false;
+        }
+        true
+    }
+
+    /// Whether pictures of another size are scaled on the GPU: `None` before
+    /// the first one.
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn scales_on_gpu(&self) -> Option<bool> {
+        match self.scaler {
+            Scaler::Untried => None,
+            Scaler::Ready(..) => Some(true),
+            Scaler::Unavailable => Some(false),
+        }
+    }
+
+    /// As if the GPU could not scale, to exercise the CPU path.
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn refuse_gpu_scaling(&mut self) {
+        self.scaler = Scaler::Unavailable;
+    }
+}
+
 impl VideoEncoder for MacEncoder {
     /// VideoToolbox may fall back to its software encoder; the session says.
     fn implementation(&self) -> vnilink::EncoderImplementation {
@@ -262,6 +332,10 @@ impl VideoEncoder for MacEncoder {
             name: "videotoolbox",
             hardware: Some(self.hardware()),
         }
+    }
+
+    fn scales_native(&self) -> bool {
+        cfg!(target_os = "macos")
     }
 
     /// Measured with `still_screen_refinement`: H.264 in low-latency mode
@@ -287,14 +361,41 @@ impl VideoEncoder for MacEncoder {
     }
 
     fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
-        if frame.width() != self.width || frame.height() != self.height {
+        #[cfg(target_os = "macos")]
+        let captured = frame
+            .native_picture()
+            .and_then(|picture| picture.as_any().downcast_ref::<crate::pixels::MacPicture>());
+        #[cfg(not(target_os = "macos"))]
+        let captured: Option<()> = None;
+        if captured.is_none() && (frame.width() != self.width || frame.height() != self.height) {
             return Err(Error::InvalidFrame(
                 "the frame size does not match the encoder",
             ));
         }
         #[cfg(target_os = "macos")]
         {
-            paint(&self.surface, frame)?;
+            let same_size = (frame.width(), frame.height()) == (self.width, self.height);
+            let in_surface = captured
+                .filter(|_| same_size)
+                .and_then(|picture| picture.pixel_buffer().io_surface());
+            let scaled_on_gpu = !same_size && captured.is_some_and(|picture| self.scale(picture));
+            let surface = match &in_surface {
+                Some(held) => held,
+                None if scaled_on_gpu => &self.surface,
+                // Not a captured picture, or the GPU could not take it: its
+                // pixels, read into memory and scaled on the CPU if need be.
+                None if same_size => {
+                    paint(&self.surface, frame)?;
+                    &self.surface
+                }
+                None => {
+                    paint(
+                        &self.surface,
+                        &vnilink_media::scale_bgra(frame, self.width, self.height)?,
+                    )?;
+                    &self.surface
+                }
+            };
             let time = CMTime::new(self.frame_index, self.frame_rate);
             let properties = FrameProperties::new().with_force_key_frame(params.force_keyframe);
             let floored = params.force_keyframe
@@ -302,14 +403,17 @@ impl VideoEncoder for MacEncoder {
                 && set_qp_floor(&self.session, i64::from(self.recovery_qp.floor()));
             let encoded = self
                 .session
-                .encode_with_properties(&self.surface, time, properties);
+                .encode_with_properties(surface, time, properties);
             if floored {
                 set_qp_floor(&self.session, NO_QP_FLOOR);
             }
             let encoded =
                 encoded.map_err(|_| Error::EncodeRejected("VideoToolbox rejected the frame"))?;
             if encoded.data.is_empty() {
-                return Err(Error::EncodeRejected("the encoder produced no frame"));
+                // VideoToolbox's rate control dropped the picture; the next
+                // one takes the next presentation time.
+                self.frame_index = self.frame_index.saturating_add(1);
+                return Err(Error::EncodeRejected(vnilink_media::FRAME_DROPPED));
             }
             if floored {
                 self.recovery_qp.observe(encoded.data.len(), params);
@@ -340,22 +444,12 @@ impl VideoEncoder for MacEncoder {
                 );
             }
             let keyframe = contains_idr(&encoded.data, usize::from(nal_length_size));
-            // VideoToolbox writes no VUI, so decoders may hold pictures back
-            // for reordering that never happens; say so in the SPS.
-            let parameter_sets: Vec<Vec<u8>> = sets
-                .parameter_sets
-                .iter()
-                .map(|set| {
-                    set.first()
-                        .filter(|header| *header & 0x1F == 7)
-                        .and_then(|_| vnilink_media::h264_low_delay_sps(set))
-                        .unwrap_or_else(|| set.clone())
-                })
-                .collect();
+            // VideoToolbox writes no VUI; `EncodedSample::annex_b` gives the
+            // SPS the stream's colour and low delay.
             let annex_b = to_annex_b(&AvccAccessUnit {
                 nal_length_size,
                 avcc: &encoded.data,
-                parameter_sets: &parameter_sets,
+                parameter_sets: &sets.parameter_sets,
                 keyframe,
             })?;
             self.frame_index = self.frame_index.saturating_add(1);
@@ -476,6 +570,13 @@ impl VideoEncoder for MacVideoEncoder {
         match self {
             Self::Native(encoder) => encoder.implementation(),
             Self::Software(encoder) => encoder.implementation(),
+        }
+    }
+
+    fn scales_native(&self) -> bool {
+        match self {
+            Self::Native(encoder) => encoder.scales_native(),
+            Self::Software(encoder) => encoder.scales_native(),
         }
     }
 }

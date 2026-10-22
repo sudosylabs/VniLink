@@ -2,13 +2,16 @@
 //!
 //! A keyframe carries SPS, PPS, and an IDR. The picture size comes from the
 //! SPS; those parameter sets open the decoder. Later predicted frames use the
-//! same session. Output is NV12, converted to BGRA for the UI to paint.
+//! same session. Output is NV12, converted to BGRA for the UI to paint in
+//! the colour the SPS says, BT.709 limited range when it says none.
 //! Bitstreams are screen content: do not log them.
 
 use vnilink::EncodedFrame;
+use vnilink_media::{
+    h264_video_signal, parse_annex_b, Error, RawFrame, VideoDecoder, STREAM_SIGNAL,
+};
 #[cfg(windows)]
-use vnilink_media::nv12_to_bgra;
-use vnilink_media::{parse_annex_b, Error, RawFrame, VideoDecoder};
+use vnilink_media::{nv12_to_bgra, VideoSignal};
 
 use crate::bitstream::picture_size;
 
@@ -17,7 +20,8 @@ use windows::Win32::Media::MediaFoundation::{
     CLSID_MSH264DecoderMFT, IMFTransform, MFCreateMemoryBuffer, MFCreateSample, MFStartup,
     MFVideoFormat_H264, MFVideoFormat_NV12, MFSTARTUP_NOSOCKET, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
     MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES,
-    MF_E_TRANSFORM_NEED_MORE_INPUT, MF_LOW_LATENCY, MF_VERSION,
+    MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_STREAM_CHANGE, MF_LOW_LATENCY, MF_MT_SUBTYPE,
+    MF_VERSION,
 };
 #[cfg(windows)]
 use windows::Win32::System::Com::{
@@ -36,6 +40,8 @@ struct OpenDecoder {
     height: u16,
     #[cfg(windows)]
     parameter_sets: Vec<Vec<u8>>,
+    #[cfg(windows)]
+    signal: VideoSignal,
 }
 
 pub struct WindowsDecoder {
@@ -88,7 +94,7 @@ impl VideoDecoder for WindowsDecoder {
         };
         #[cfg(windows)]
         {
-            decode_picture(&open.transform, frame, open.width, open.height)
+            decode_picture(&open.transform, frame, open.width, open.height, open.signal)
         }
         #[cfg(not(windows))]
         {
@@ -115,6 +121,7 @@ impl WindowsDecoder {
                 "a keyframe needs SPS, PPS, and an IDR",
             ))?;
         let (width, height) = picture_size(sps)?;
+        let signal = h264_video_signal(sps)?.unwrap_or(STREAM_SIGNAL);
         #[cfg(windows)]
         {
             let transform = open_transform(width, height)
@@ -124,12 +131,13 @@ impl WindowsDecoder {
                 width,
                 height,
                 parameter_sets: parameter_sets.to_vec(),
+                signal,
             });
             Ok(())
         }
         #[cfg(not(windows))]
         {
-            let _ = (width, height);
+            let _ = (width, height, signal);
             Err(Error::Unsupported("Media Foundation H.264"))
         }
     }
@@ -166,10 +174,11 @@ fn decode_picture(
     frame: &EncodedFrame,
     width: u16,
     height: u16,
+    signal: VideoSignal,
 ) -> Result<RawFrame, Error> {
     let bytes = feed(transform, &frame.payload, frame.timestamp_us)?;
     let (y, uv) = split_nv12(&bytes, width, height)?;
-    nv12_to_bgra(width, height, frame.timestamp_us, y, uv)
+    nv12_to_bgra(width, height, frame.timestamp_us, y, uv, signal)
 }
 
 #[cfg(windows)]
@@ -201,40 +210,70 @@ fn feed(transform: &IMFTransform, annex_b: &[u8], timestamp_us: u64) -> Result<V
         transform
             .ProcessInput(0, &sample, 0)
             .map_err(|_| Error::DecodeRejected(REJECTED))?;
-        let mut buffers = [MFT_OUTPUT_DATA_BUFFER::default()];
-        let info = transform
-            .GetOutputStreamInfo(0)
-            .map_err(|_| Error::DecodeRejected(REJECTED))?;
-        if info.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32) == 0 {
-            let output = MFCreateMemoryBuffer(info.cbSize.max(1))
+        // A keyframe whose SPS describes the stream differently, such as its
+        // colour, changes the output format: take NV12 again and ask again.
+        for _ in 0..2 {
+            let mut buffers = [MFT_OUTPUT_DATA_BUFFER::default()];
+            let info = transform
+                .GetOutputStreamInfo(0)
                 .map_err(|_| Error::DecodeRejected(REJECTED))?;
-            let output_sample = MFCreateSample().map_err(|_| Error::DecodeRejected(REJECTED))?;
-            output_sample
-                .AddBuffer(&output)
-                .map_err(|_| Error::DecodeRejected(REJECTED))?;
-            buffers[0].pSample = std::mem::ManuallyDrop::new(Some(output_sample));
-        }
-        let mut status = 0u32;
-        let processed = transform.ProcessOutput(0, &mut buffers, &mut status);
-        let sample = std::mem::ManuallyDrop::take(&mut buffers[0].pSample);
-        let _events = std::mem::ManuallyDrop::take(&mut buffers[0].pEvents);
-        let sample = match processed {
-            Ok(()) => sample.ok_or(Error::DecodeRejected("the decoder produced no frame"))?,
-            Err(err) if err.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {
-                return Err(Error::DecodeRejected("the decoder produced no frame"));
+            if info.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32) == 0 {
+                let output = MFCreateMemoryBuffer(info.cbSize.max(1))
+                    .map_err(|_| Error::DecodeRejected(REJECTED))?;
+                let output_sample =
+                    MFCreateSample().map_err(|_| Error::DecodeRejected(REJECTED))?;
+                output_sample
+                    .AddBuffer(&output)
+                    .map_err(|_| Error::DecodeRejected(REJECTED))?;
+                buffers[0].pSample = std::mem::ManuallyDrop::new(Some(output_sample));
             }
-            Err(_) => return Err(Error::DecodeRejected(REJECTED)),
-        };
-        sample_bytes(&sample).map_err(|_| Error::DecodeRejected("the decoder produced no frame"))
+            let mut status = 0u32;
+            let processed = transform.ProcessOutput(0, &mut buffers, &mut status);
+            let sample = std::mem::ManuallyDrop::take(&mut buffers[0].pSample);
+            let _events = std::mem::ManuallyDrop::take(&mut buffers[0].pEvents);
+            match processed {
+                Ok(()) => {
+                    let sample =
+                        sample.ok_or(Error::DecodeRejected("the decoder produced no frame"))?;
+                    return sample_bytes(&sample)
+                        .map_err(|_| Error::DecodeRejected("the decoder produced no frame"));
+                }
+                Err(err) if err.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {
+                    return Err(Error::DecodeRejected("the decoder produced no frame"));
+                }
+                Err(err) if err.code() == MF_E_TRANSFORM_STREAM_CHANGE => {
+                    choose_nv12(transform).map_err(|_| Error::DecodeRejected(REJECTED))?;
+                }
+                Err(_) => return Err(Error::DecodeRejected(REJECTED)),
+            }
+        }
+        Err(Error::DecodeRejected(REJECTED))
     }
+}
+
+/// Sets the first NV12 output type the decoder offers after a format change.
+#[cfg(windows)]
+unsafe fn choose_nv12(transform: &IMFTransform) -> windows::core::Result<()> {
+    for index in 0.. {
+        let offered = transform.GetOutputAvailableType(0, index)?;
+        if offered.GetGUID(&MF_MT_SUBTYPE)? == MFVideoFormat_NV12 {
+            return transform.SetOutputType(0, &offered, 0);
+        }
+    }
+    unreachable!("GetOutputAvailableType ends with an error")
 }
 
 /// Splits one contiguous NV12 picture into its planes.
 #[cfg(windows)]
+///
+/// The decoder returns the coded picture: 1080 rows are coded, and returned,
+/// as 1088. Chroma starts after all of the coded luma rows; the rows past
+/// `height` are cropped off.
 fn split_nv12(bytes: &[u8], width: u16, height: u16) -> Result<(&[u8], &[u8]), Error> {
     let (w, h) = (usize::from(width), usize::from(height));
-    if bytes.len() < w * h * 3 / 2 {
+    let coded = (bytes.len() / (w * 3)) * 2;
+    if coded < h || bytes.len() < w * coded * 3 / 2 {
         return Err(Error::DecodeRejected("the decoder produced no frame"));
     }
-    Ok((&bytes[..w * h], &bytes[w * h..w * h * 3 / 2]))
+    Ok((&bytes[..w * h], &bytes[w * coded..w * coded + w * h / 2]))
 }

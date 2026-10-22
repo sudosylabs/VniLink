@@ -36,7 +36,10 @@ use libva::VAEntrypoint;
 use libva::VAProfile;
 use libva::VA_RT_FORMAT_YUV420;
 use vnilink::EncodedFrame;
-use vnilink_media::{nv12_to_bgra, parse_annex_b, Error, RawFrame, VideoDecoder};
+use vnilink_media::{
+    h264_video_signal, nv12_to_bgra, parse_annex_b, Error, RawFrame, VideoDecoder, VideoSignal,
+    STREAM_SIGNAL,
+};
 
 use crate::syntax::{Marking, Pps, Slice, SliceKind, Sps};
 use crate::vaapi::render_nodes;
@@ -81,6 +84,8 @@ struct OpenDecoder {
     visible_height: u16,
     max_refs: usize,
     parameter_key: Vec<u8>,
+    /// The colour the SPS says, BT.709 limited range when it says none.
+    signal: VideoSignal,
     sps: Sps,
     pps: Pps,
     free: Vec<Surface<()>>,
@@ -246,9 +251,11 @@ fn decode_picture(
     // each on a keyframe. Two passes, so a PPS never depends on SPS order
     // inside the access unit.
     let mut fresh_sps = None;
+    let mut signal = STREAM_SIGNAL;
     for set in &parameter_sets {
         if set.first().map(|header| header & 0x1F) == Some(7) {
             fresh_sps = Some(Sps::parse(set)?);
+            signal = h264_video_signal(set)?.unwrap_or(STREAM_SIGNAL);
         }
     }
     let mut fresh_pps = None;
@@ -274,7 +281,7 @@ fn decode_picture(
             }
         };
         let key = parameter_sets.concat();
-        *open = Some(OpenDecoder::open(sps, pps, key)?);
+        *open = Some(OpenDecoder::open(sps, pps, key, signal)?);
     } else if !parameter_sets.is_empty() {
         let (sps, pps) = match (fresh_sps, fresh_pps) {
             (Some(sps), Some(pps)) => (sps, pps),
@@ -285,7 +292,7 @@ fn decode_picture(
         let key = parameter_sets.concat();
         let changed = key != open.as_ref().expect("decoder is open").parameter_key;
         if changed {
-            *open = Some(OpenDecoder::open(sps, pps, key)?);
+            *open = Some(OpenDecoder::open(sps, pps, key, signal)?);
         }
     }
     let open = open.as_mut().expect("decoder is open");
@@ -355,7 +362,7 @@ fn try_open(
 }
 
 impl OpenDecoder {
-    fn open(sps: Sps, pps: Pps, key: Vec<u8>) -> Result<Self, Error> {
+    fn open(sps: Sps, pps: Pps, key: Vec<u8>, signal: VideoSignal) -> Result<Self, Error> {
         if sps.visible.0 % 2 != 0 || sps.visible.1 % 2 != 0 {
             return Err(Error::Unsupported(
                 "odd H.264 picture sizes are not supported",
@@ -376,6 +383,7 @@ impl OpenDecoder {
                     visible_height: sps.visible.1,
                     max_refs: (sps.num_ref_frames as usize).max(1),
                     parameter_key: key,
+                    signal,
                     sps,
                     pps,
                     free: created,
@@ -803,7 +811,14 @@ fn download(
         width,
         height / 2,
     )?;
-    let frame = nv12_to_bgra(open.visible_width, open.visible_height, 0, &y, &uv)?;
+    let frame = nv12_to_bgra(
+        open.visible_width,
+        open.visible_height,
+        0,
+        &y,
+        &uv,
+        open.signal,
+    )?;
     Ok(DecodedPicture {
         width: open.visible_width,
         height: open.visible_height,

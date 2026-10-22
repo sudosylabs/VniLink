@@ -10,11 +10,11 @@
 
 use windows::core::{GUID, PWSTR};
 use windows::Win32::Media::MediaFoundation::{
-    IMFActivate, IMFTransform, MFMediaType_Video, MFTEnumEx, MFT_ENUM_HARDWARE_VENDOR_ID_Attribute,
-    MFT_FRIENDLY_NAME_Attribute, MFVideoFormat_H264, MFVideoFormat_NV12,
-    MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE,
-    MFT_ENUM_FLAG_SORTANDFILTER, MFT_REGISTER_TYPE_INFO, MF_TRANSFORM_ASYNC,
-    MF_TRANSFORM_ASYNC_UNLOCK,
+    IMFActivate, IMFTransform, MFCreateAttributes, MFMediaType_Video, MFTEnum2, MFTEnumEx,
+    MFT_ENUM_HARDWARE_VENDOR_ID_Attribute, MFT_FRIENDLY_NAME_Attribute, MFVideoFormat_H264,
+    MFVideoFormat_NV12, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_ADAPTER_LUID, MFT_ENUM_FLAG_ASYNCMFT,
+    MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER, MFT_REGISTER_TYPE_INFO,
+    MF_TRANSFORM_ASYNC, MF_TRANSFORM_ASYNC_UNLOCK,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_INPROC_SERVER};
 
@@ -161,36 +161,57 @@ impl Drop for CreatedTransform {
     }
 }
 
-/// The H.264 encoders that take NV12, hardware first, Microsoft's software
-/// transform last. A machine whose hardware cannot be enumerated still gets
-/// the software transform.
-pub(crate) unsafe fn h264_encoders() -> Vec<H264Transform> {
-    let mut encoders = hardware_encoders().unwrap_or_default();
-    encoders.push(H264Transform::software());
-    encoders
+/// The hardware H.264 encoders on one adapter (`MFTEnum2` with
+/// `MFT_ENUM_ADAPTER_LUID`), in Media Foundation's order. Empty where the
+/// adapter has none or cannot be asked.
+pub(crate) unsafe fn hardware_encoders_on(
+    adapter: windows::Win32::Foundation::LUID,
+) -> Vec<H264Transform> {
+    (|| {
+        let mut attributes = None;
+        MFCreateAttributes(&mut attributes, 1)?;
+        let attributes = attributes
+            .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?;
+        // The attribute is the LUID itself, as a blob.
+        let bytes = std::slice::from_raw_parts(
+            (&adapter as *const windows::Win32::Foundation::LUID).cast::<u8>(),
+            std::mem::size_of::<windows::Win32::Foundation::LUID>(),
+        );
+        attributes.SetBlob(&MFT_ENUM_ADAPTER_LUID, bytes)?;
+        let (input, output) = h264_types();
+        let mut activates = std::ptr::null_mut::<Option<IMFActivate>>();
+        let mut count = 0u32;
+        MFTEnum2(
+            MFT_CATEGORY_VIDEO_ENCODER,
+            MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_ASYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER,
+            Some(&input),
+            Some(&output),
+            &attributes,
+            &mut activates,
+            &mut count,
+        )?;
+        Ok::<_, windows::core::Error>(take_activates(activates, count))
+    })()
+    .unwrap_or_default()
 }
 
-unsafe fn hardware_encoders() -> windows::core::Result<Vec<H264Transform>> {
-    let input = MFT_REGISTER_TYPE_INFO {
-        guidMajorType: MFMediaType_Video,
-        guidSubtype: MFVideoFormat_NV12,
-    };
-    let output = MFT_REGISTER_TYPE_INFO {
-        guidMajorType: MFMediaType_Video,
-        guidSubtype: MFVideoFormat_H264,
-    };
-    let mut activates = std::ptr::null_mut::<Option<IMFActivate>>();
-    let mut count = 0u32;
-    MFTEnumEx(
-        MFT_CATEGORY_VIDEO_ENCODER,
-        MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_ASYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER,
-        Some(&input),
-        Some(&output),
-        &mut activates,
-        &mut count,
-    )?;
+fn h264_types() -> (MFT_REGISTER_TYPE_INFO, MFT_REGISTER_TYPE_INFO) {
+    (
+        MFT_REGISTER_TYPE_INFO {
+            guidMajorType: MFMediaType_Video,
+            guidSubtype: MFVideoFormat_NV12,
+        },
+        MFT_REGISTER_TYPE_INFO {
+            guidMajorType: MFMediaType_Video,
+            guidSubtype: MFVideoFormat_H264,
+        },
+    )
+}
+
+/// The transforms in an array `MFTEnumEx` or `MFTEnum2` returned, freeing it.
+unsafe fn take_activates(activates: *mut Option<IMFActivate>, count: u32) -> Vec<H264Transform> {
     if activates.is_null() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
     // The array is ours to free; each element is taken, so released once.
     let encoders = std::slice::from_raw_parts_mut(activates, count as usize)
@@ -204,7 +225,31 @@ unsafe fn hardware_encoders() -> windows::core::Result<Vec<H264Transform>> {
         })
         .collect();
     CoTaskMemFree(Some(activates as *const _));
-    Ok(encoders)
+    encoders
+}
+
+/// The H.264 encoders that take NV12, hardware first, Microsoft's software
+/// transform last. A machine whose hardware cannot be enumerated still gets
+/// the software transform.
+pub(crate) unsafe fn h264_encoders() -> Vec<H264Transform> {
+    let mut encoders = hardware_encoders().unwrap_or_default();
+    encoders.push(H264Transform::software());
+    encoders
+}
+
+unsafe fn hardware_encoders() -> windows::core::Result<Vec<H264Transform>> {
+    let (input, output) = h264_types();
+    let mut activates = std::ptr::null_mut::<Option<IMFActivate>>();
+    let mut count = 0u32;
+    MFTEnumEx(
+        MFT_CATEGORY_VIDEO_ENCODER,
+        MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_ASYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER,
+        Some(&input),
+        Some(&output),
+        &mut activates,
+        &mut count,
+    )?;
+    Ok(take_activates(activates, count))
 }
 
 unsafe fn string(activate: &IMFActivate, key: &GUID) -> Option<String> {

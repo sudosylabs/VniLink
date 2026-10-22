@@ -53,6 +53,8 @@ import { registerDevelopmentWindow } from './development.js';
 export interface ApplicationOptions {
 	readonly showWindow?: boolean;
 	readonly temporaryEngine?: boolean;
+	/** Lets the temporary engine host this computer's screen, for the latency measurement. */
+	readonly temporaryEngineCaptures?: boolean;
 	readonly onReady?: (window: BrowserWindowType) => Promise<void>;
 }
 
@@ -316,7 +318,7 @@ export class VniLinkApplication extends Disposable {
 		const configuration = this.instantiationService.invokeFunction(accessor => accessor.get(IConfigurationMainService));
 		const temporary = this.options.temporaryEngine ?? false;
 		try {
-			await engine.start(temporary);
+			await engine.start(temporary, temporary && this.options.temporaryEngineCaptures === true);
 			// Transfers stage here; the engine creates it the first time one does.
 			await engine.execute({ type: 'setTransferDirectory', path: join(app.getPath('userData'), 'Transfers') }).catch((error: unknown) => {
 				this.logService.error('The transfer folder could not be set; Files transfers will fail.', error);
@@ -325,6 +327,9 @@ export class VniLinkApplication extends Disposable {
 				await permissions.synchronize().catch(() => {
 					this.logService.error('Native input backend could not be initialized.');
 				});
+			} else if (this.options.temporaryEngineCaptures === true) {
+				// Screen only: a measuring host is viewed, never controlled.
+				await engine.execute({ type: 'reportNativePermissions', screen: permissions.isGranted('screen'), input: false, camera: false, microphone: false });
 			}
 			await configuration.restoreEngineDefaults(temporary);
 			await engine.refreshRestartRequired();

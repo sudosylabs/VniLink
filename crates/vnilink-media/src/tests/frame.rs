@@ -75,3 +75,16 @@ fn scale_uses_nearest_neighbor_and_ignores_row_padding() {
         ))
     ));
 }
+
+#[test]
+fn clones_and_shared_frames_hold_the_same_pixels() {
+    let frame = solid(64, 32, [1, 2, 3, 255]);
+    let clone = frame.clone().with_timestamp(99);
+    assert_eq!(clone.pixels().as_ptr(), frame.pixels().as_ptr());
+    let shared = RawFrame::shared(64, 32, 64 * 4, 7, frame.shared_pixels()).unwrap();
+    assert_eq!(shared.pixels().as_ptr(), frame.pixels().as_ptr());
+    assert_eq!(shared.timestamp_us(), 7);
+    // The same checks as a frame that owns its pixels.
+    assert!(RawFrame::shared(64, 33, 64 * 4, 0, frame.shared_pixels()).is_err());
+    assert!(RawFrame::shared(64, 32, 63 * 4, 0, frame.shared_pixels()).is_err());
+}

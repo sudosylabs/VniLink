@@ -36,12 +36,18 @@ use windows::Win32::Media::MediaFoundation::{
     CODECAPI_AVEncVideoMinQP, CODECAPI_AVScenarioInfo, ICodecAPI, IMFMediaType, IMFSample,
     IMFTransform, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Video,
     MFNominalRange_16_235, MFStartup, MFVideoFormat_H264, MFVideoFormat_NV12,
-    MFVideoInterlace_Progressive, MFVideoTransferMatrix_BT601, MFSTARTUP_NOSOCKET,
-    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER,
-    MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MF_E_TRANSFORM_NEED_MORE_INPUT, MF_LOW_LATENCY,
-    MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
-    MF_MT_MAX_KEYFRAME_SPACING, MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_SUBTYPE,
-    MF_MT_VIDEO_NOMINAL_RANGE, MF_MT_YUV_MATRIX, MF_VERSION,
+    MFVideoInterlace_Progressive, MFVideoPrimaries_BT709, MFVideoTransFunc_709,
+    MFVideoTransferMatrix_BT709, MFSTARTUP_NOSOCKET, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+    MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES,
+    MF_E_TRANSFORM_NEED_MORE_INPUT, MF_LOW_LATENCY, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE,
+    MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_MAX_KEYFRAME_SPACING,
+    MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_SUBTYPE, MF_MT_TRANSFER_FUNCTION, MF_MT_VIDEO_NOMINAL_RANGE,
+    MF_MT_VIDEO_PRIMARIES, MF_MT_YUV_MATRIX, MF_VERSION,
+};
+#[cfg(windows)]
+use windows::Win32::Media::MediaFoundation::{
+    IMFDXGIDeviceManager, MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer,
+    MFT_MESSAGE_SET_D3D_MANAGER, MF_SA_D3D11_AWARE,
 };
 #[cfg(windows)]
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
@@ -82,6 +88,26 @@ pub struct WindowsEncoder {
     frame_rate: u8,
     #[cfg(windows)]
     recovery_qp: RecoveryQp,
+    /// Whether captured pictures are converted to NV12 on their GPU.
+    #[cfg(windows)]
+    gpu: GpuConversion,
+    /// The device this transform reads textures on, when it was opened on
+    /// the capture's ([`WindowsEncoder::open_on`]): converted pictures are
+    /// handed to it there, never read into memory.
+    #[cfg(windows)]
+    textures: Option<crate::gpu::GpuDevice>,
+}
+
+/// Converting captured pictures on the GPU, for one encoder.
+#[cfg(windows)]
+enum GpuConversion {
+    /// No captured picture yet.
+    Untried,
+    Ready(crate::gpu::Nv12Converter),
+    /// The GPU could not convert (no video processor, as on Microsoft's
+    /// basic render driver or in some virtual machines): pictures are read
+    /// into memory and converted on the CPU until the encoder is reopened.
+    Unavailable,
 }
 
 // The transform is a COM pointer used through `&mut self` only, from the
@@ -118,8 +144,15 @@ impl WindowsEncoder {
         MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)?;
         let mut failure = windows::core::Error::from(windows::Win32::Foundation::E_FAIL);
         for candidate in h264_encoders() {
-            match Self::create_transform(&candidate, width, height, frame_rate, bitrate_bps, false)
-            {
+            match Self::create_transform(
+                &candidate,
+                width,
+                height,
+                frame_rate,
+                bitrate_bps,
+                false,
+                None,
+            ) {
                 Ok(encoder) => return Ok(encoder),
                 Err(err) => failure = err,
             }
@@ -139,7 +172,15 @@ impl WindowsEncoder {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)?;
-            Self::create_transform(candidate, width, height, frame_rate, bitrate_bps, false)
+            Self::create_transform(
+                candidate,
+                width,
+                height,
+                frame_rate,
+                bitrate_bps,
+                false,
+                None,
+            )
         }
     }
 
@@ -182,6 +223,7 @@ impl WindowsEncoder {
             frame_rate,
             bitrate_bps,
             true,
+            None,
         )
         .map_err(|_| Error::Unsupported("Media Foundation camera H.264"))
     }
@@ -194,8 +236,21 @@ impl WindowsEncoder {
         frame_rate: u8,
         bitrate_bps: u32,
         camera: bool,
+        manager: Option<&IMFDXGIDeviceManager>,
     ) -> windows::core::Result<Self> {
         let transform = candidate.create()?;
+        if let Some(manager) = manager {
+            // Before any media type: the transform then reads textures on the
+            // manager's device.
+            let aware = transform
+                .GetAttributes()
+                .and_then(|attributes| attributes.GetUINT32(&MF_SA_D3D11_AWARE))
+                .unwrap_or(0);
+            if aware == 0 {
+                return Err(windows::Win32::Foundation::E_NOINTERFACE.into());
+            }
+            transform.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, manager.as_raw() as usize)?;
+        }
         if let Ok(attributes) = transform.GetAttributes() {
             let _ = attributes.SetUINT32(&MF_LOW_LATENCY, 1);
         }
@@ -274,6 +329,8 @@ impl WindowsEncoder {
             output_size,
             frame_rate,
             recovery_qp: RecoveryQp::default(),
+            gpu: GpuConversion::Untried,
+            textures: None,
         })
     }
 }
@@ -292,6 +349,11 @@ impl VideoEncoder for WindowsEncoder {
         {
             vnilink::EncoderImplementation::UNKNOWN
         }
+    }
+
+    /// A captured picture is converted to NV12 and scaled on its GPU.
+    fn scales_native(&self) -> bool {
+        cfg!(windows)
     }
 
     /// Per transform, as measured ([`Vendor::refines_still_pictures`]).
@@ -345,14 +407,23 @@ impl VideoEncoder for WindowsEncoder {
     }
 
     fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
-        if frame.width() as u32 != self.width || frame.height() as u32 != self.height {
+        #[cfg(windows)]
+        let captured = frame.native_picture().and_then(|picture| {
+            picture
+                .as_any()
+                .downcast_ref::<crate::gpu::WindowsPicture>()
+        });
+        #[cfg(not(windows))]
+        let captured: Option<()> = None;
+        if captured.is_none()
+            && (frame.width() as u32 != self.width || frame.height() as u32 != self.height)
+        {
             return Err(Error::InvalidFrame(
                 "the frame size does not match the encoder",
             ));
         }
         #[cfg(windows)]
         {
-            let nv12 = bgra_to_nv12(frame)?;
             // SAFETY (floor and clear): `transform` is this encoder's live
             // transform, used from the thread that owns it.
             let floored = params.force_keyframe
@@ -366,14 +437,7 @@ impl VideoEncoder for WindowsEncoder {
                     )
                 }
                 .is_ok();
-            let sample = unsafe {
-                self.encode_nv12(
-                    nv12.y_plane(),
-                    nv12.uv_plane(),
-                    frame.timestamp_us(),
-                    params,
-                )
-            };
+            let sample = self.encode_picture(frame, captured, params);
             if floored {
                 let _ = unsafe { set_codec_u32(&self.transform, &CODECAPI_AVEncVideoMinQP, 0) };
             }
@@ -401,6 +465,116 @@ struct MfSample {
 
 #[cfg(windows)]
 impl WindowsEncoder {
+    /// This encoder's converter for `picture`, made for the first; `None`
+    /// once the GPU cannot convert.
+    fn converter_for(
+        &mut self,
+        picture: &crate::gpu::WindowsPicture,
+    ) -> Option<&crate::gpu::Nv12Converter> {
+        use vnilink_media::NativePicture;
+        let fits = match &self.gpu {
+            GpuConversion::Unavailable => return None,
+            GpuConversion::Ready(converter) => converter.fits(picture),
+            GpuConversion::Untried => false,
+        };
+        if !fits {
+            let (width, height) = picture.size();
+            let made = unsafe {
+                crate::gpu::Nv12Converter::new(
+                    picture.device(),
+                    picture.context(),
+                    (u32::from(width), u32::from(height)),
+                    (self.width, self.height),
+                )
+            };
+            self.gpu = made.map_or(GpuConversion::Unavailable, GpuConversion::Ready);
+        }
+        match &self.gpu {
+            GpuConversion::Ready(converter) => Some(converter),
+            _ => None,
+        }
+    }
+
+    /// A captured picture as NV12 at this encoder's size, converted on the
+    /// GPU that holds it; only the NV12 picture is read into memory. `None`
+    /// once the GPU cannot: the caller converts on the CPU instead.
+    fn convert(&mut self, picture: &crate::gpu::WindowsPicture) -> Option<(Vec<u8>, Vec<u8>)> {
+        let converted = unsafe { self.converter_for(picture)?.convert(picture) };
+        converted
+            .map_err(|_| self.gpu = GpuConversion::Unavailable)
+            .ok()
+    }
+
+    /// One picture into the transform: as a texture where this encoder reads
+    /// textures on the picture's device, else as NV12 in memory, converted
+    /// on the GPU where it can be and on the CPU otherwise.
+    fn encode_picture(
+        &mut self,
+        frame: &RawFrame,
+        captured: Option<&crate::gpu::WindowsPicture>,
+        params: &EncodeParams,
+    ) -> Result<MfSample, Error> {
+        let on_device = captured.filter(|picture| {
+            self.textures
+                .as_ref()
+                .is_some_and(|device| device.device().as_raw() == picture.device().as_raw())
+        });
+        if let Some(picture) = on_device {
+            let converted = self
+                .converter_for(picture)
+                .map(|converter| unsafe { converter.convert_texture(picture) });
+            match converted {
+                Some(Ok(texture)) => {
+                    match unsafe { self.encode_texture(&texture, frame.timestamp_us(), params) } {
+                        Ok(sample) => return Ok(sample),
+                        // This transform takes memory too: the rest go that way.
+                        Err(_) => self.textures = None,
+                    }
+                }
+                Some(Err(_)) => self.gpu = GpuConversion::Unavailable,
+                None => {}
+            }
+        }
+        let (y_plane, uv_plane) = match captured.and_then(|picture| self.convert(picture)) {
+            Some(planes) => planes,
+            None => self.convert_on_cpu(frame)?,
+        };
+        unsafe { self.encode_nv12(&y_plane, &uv_plane, frame.timestamp_us(), params) }
+    }
+
+    /// `frame` as NV12 converted on the CPU, scaled first if it is a captured
+    /// picture of another size; reading a captured picture copies it out.
+    fn convert_on_cpu(&self, frame: &RawFrame) -> Result<(Vec<u8>, Vec<u8>), Error> {
+        let size = (u32::from(frame.width()), u32::from(frame.height()));
+        if size == (self.width, self.height) {
+            return Ok(bgra_to_nv12(frame)?.into_planes());
+        }
+        let scaled = vnilink_media::scale_bgra(frame, self.width as u16, self.height as u16)?;
+        Ok(bgra_to_nv12(&scaled)?.into_planes())
+    }
+
+    /// Whether captured pictures are converted on the GPU: `None` before the
+    /// first one.
+    #[cfg(test)]
+    pub(crate) fn converts_on_gpu(&self) -> Option<bool> {
+        match self.gpu {
+            GpuConversion::Untried => None,
+            GpuConversion::Ready(_) => Some(true),
+            GpuConversion::Unavailable => Some(false),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn vendor(&self) -> Vendor {
+        self.vendor
+    }
+
+    /// As if the GPU could not convert, to exercise the CPU path.
+    #[cfg(test)]
+    pub(crate) fn refuse_gpu_conversion(&mut self) {
+        self.gpu = GpuConversion::Unavailable;
+    }
+
     unsafe fn encode_nv12(
         &mut self,
         y_plane: &[u8],
@@ -434,6 +608,42 @@ impl WindowsEncoder {
         })();
         let sample =
             prepared.map_err(|_| Error::EncodeRejected("the encoder rejected the frame"))?;
+        self.submit(&sample, params)
+    }
+
+    /// A converted picture on the device this transform reads textures on.
+    unsafe fn encode_texture(
+        &mut self,
+        texture: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+        timestamp_us: u64,
+        params: &EncodeParams,
+    ) -> Result<MfSample, Error> {
+        let prepared = (|| unsafe {
+            let buffer = MFCreateDXGISurfaceBuffer(
+                &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D::IID,
+                texture,
+                0,
+                false,
+            )?;
+            let sample = MFCreateSample()?;
+            sample.AddBuffer(&buffer)?;
+            sample.SetSampleTime(
+                i64::try_from(timestamp_us.saturating_mul(10)).unwrap_or(i64::MAX),
+            )?;
+            sample.SetSampleDuration(10_000_000i64 / i64::from(params.frame_rate.max(1)))?;
+            Ok::<_, windows::core::Error>(sample)
+        })();
+        let sample =
+            prepared.map_err(|_| Error::EncodeRejected("the encoder rejected the frame"))?;
+        self.submit(&sample, params)
+    }
+
+    /// Hands `sample` to the transform and takes the picture it makes.
+    unsafe fn submit(
+        &mut self,
+        sample: &IMFSample,
+        params: &EncodeParams,
+    ) -> Result<MfSample, Error> {
         if let Some(events) = &mut self.events {
             if events.take_input(std::time::Instant::now() + EVENT_WAIT) != Waited::Ready {
                 return Err(Error::EncodeRejected("the encoder did not take the frame"));
@@ -443,7 +653,7 @@ impl WindowsEncoder {
             if params.force_keyframe {
                 force_idr(&self.transform)?;
             }
-            self.transform.ProcessInput(0, &sample, 0)
+            self.transform.ProcessInput(0, sample, 0)
         })();
         processed.map_err(rejected)?;
         if let Some(events) = &mut self.events {
@@ -490,6 +700,20 @@ impl WindowsEncoder {
 fn rejected(err: windows::core::Error) -> Error {
     let _ = err;
     Error::EncodeRejected("the encoder rejected the frame")
+}
+
+/// A DXGI device manager over `device`, for a transform to read its textures.
+#[cfg(windows)]
+unsafe fn device_manager(
+    device: &crate::gpu::GpuDevice,
+) -> windows::core::Result<IMFDXGIDeviceManager> {
+    let mut token = 0u32;
+    let mut manager = None;
+    MFCreateDXGIDeviceManager(&mut token, &mut manager)?;
+    let manager =
+        manager.ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?;
+    manager.ResetDevice(device.device(), token)?;
+    Ok(manager)
 }
 
 /// Asks the encoder to make its next output picture an IDR, before the input
@@ -567,9 +791,12 @@ pub(crate) unsafe fn video_type(
         // Numerator travels in the high word, denominator in the low word.
         pack_hi_lo(frame_rate, 1),
     )?;
-    // Pictures are converted to NV12 with BT.601 in limited range; say so,
-    // so the bitstream does not leave decoders to guess.
-    media_type.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT601.0 as u32)?;
+    // Pictures are converted to NV12 in the stream's colour, BT.709 in
+    // limited range (`vnilink_media::STREAM_SIGNAL`). Every keyframe's SPS
+    // says so whatever the transform writes; the type tells it the same.
+    media_type.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)?;
+    media_type.SetUINT32(&MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709.0 as u32)?;
+    media_type.SetUINT32(&MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709.0 as u32)?;
     media_type.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)?;
     Ok(media_type)
 }
@@ -590,5 +817,83 @@ impl WindowsEncoder {
         vnilink_media::CodecEncoder::open(codec, w, h, fps, bps, |w, h, fps, bps| {
             Self::open(w, h, fps, bps)
         })
+    }
+
+    /// [`Self::open_codec`] for pictures that live on `device`.
+    #[cfg(windows)]
+    pub fn open_codec_on(
+        w: u16,
+        h: u16,
+        fps: u8,
+        bps: u32,
+        codec: u8,
+        device: &crate::gpu::GpuDevice,
+    ) -> Result<vnilink_media::CodecEncoder<Self>, Error> {
+        vnilink_media::CodecEncoder::open(codec, w, h, fps, bps, |w, h, fps, bps| {
+            Self::open_on(w, h, fps, bps, device)
+        })
+    }
+
+    /// An encoder for pictures captured on `device`. The first that opens of:
+    /// a D3D11-aware hardware transform on `device`'s adapter, which reads
+    /// the converted pictures as textures there and none is read into
+    /// memory; then [`Self::open`], which reads them from memory. Sharing a
+    /// texture with another adapter's encoder is not tried: D3D11 refuses
+    /// it between an integrated and a discrete GPU.
+    #[cfg(windows)]
+    pub fn open_on(
+        width: u16,
+        height: u16,
+        frame_rate: u8,
+        bitrate_bps: u32,
+        device: &crate::gpu::GpuDevice,
+    ) -> Result<Self, Error> {
+        if width % 2 != 0 || height % 2 != 0 {
+            return Err(Error::InvalidFrame("NV12 width and height must be even"));
+        }
+        if let Some(encoder) =
+            unsafe { Self::open_reading_textures(width, height, frame_rate, bitrate_bps, device) }
+        {
+            return Ok(encoder);
+        }
+        Self::open(width, height, frame_rate, bitrate_bps)
+    }
+
+    #[cfg(windows)]
+    unsafe fn open_reading_textures(
+        width: u16,
+        height: u16,
+        frame_rate: u8,
+        bitrate_bps: u32,
+        device: &crate::gpu::GpuDevice,
+    ) -> Option<Self> {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET).ok()?;
+        let manager = device_manager(device).ok()?;
+        let adapter = device.adapter().ok()?;
+        crate::transform::hardware_encoders_on(adapter)
+            .iter()
+            .find_map(|candidate| {
+                Self::create_transform(
+                    candidate,
+                    width,
+                    height,
+                    frame_rate,
+                    bitrate_bps,
+                    false,
+                    Some(&manager),
+                )
+                .ok()
+            })
+            .map(|mut encoder| {
+                encoder.textures = Some(device.clone());
+                encoder
+            })
+    }
+
+    /// Whether this encoder reads converted pictures as textures.
+    #[cfg(windows)]
+    pub fn reads_textures(&self) -> bool {
+        self.textures.is_some()
     }
 }

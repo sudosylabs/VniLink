@@ -21,7 +21,8 @@ fn idle_portal_keeps_the_picture_and_propagates_capture_failure() {
         width: 2,
         height: 2,
         stride: 8,
-        bytes: vec![40; 16],
+        bytes: vec![40; 16].into(),
+        captured_at: None,
     });
     let (first, _) = wait_frame(&mainloop, &shared, 0).unwrap().unwrap();
     // PipeWire can send nothing further when the monitor has no damage.

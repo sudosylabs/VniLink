@@ -8,7 +8,8 @@ fn slot(width: u16, height: u16) -> ChannelSlot {
         width,
         height,
         stride: usize::from(width) * 4,
-        bytes: vec![7; usize::from(width) * usize::from(height) * 4],
+        bytes: vec![7; usize::from(width) * usize::from(height) * 4].into(),
+        captured_at: None,
     }
 }
 

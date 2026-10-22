@@ -1,4 +1,5 @@
 import { mainWindow } from '../../../base/browser/window.js';
+import { ICommandService } from '../../../platform/commands/common/commands.js';
 import { IWorkbenchConfigurationService } from '../configuration/configurationService.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import type { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
@@ -18,6 +19,7 @@ export class BrowserWindowDriver {
 		@INativeHostService public readonly nativeHost: INativeHostService,
 		@IPermissionService public readonly permissions: IPermissionService,
 		@IMainProcessService public readonly mainProcess: IMainProcessService,
+		@ICommandService public readonly commands: ICommandService,
 	) { }
 }
 

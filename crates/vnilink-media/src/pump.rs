@@ -14,6 +14,7 @@ use vnilink::{Core, CoreEvent, EncodedFrame, MAX_VIDEO_FRAME};
 use crate::annexb::parse_annex_b;
 use crate::error::{Error, PublishError};
 use crate::frame::{encoded_size, scale_bgra, RawFrame};
+use crate::sps::h264_stream_sps;
 
 /// Limits passed to the encoder for one picture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +29,9 @@ pub struct EncodeParams {
 }
 
 /// Annex-B bytes an encoder returns. A keyframe must contain SPS, PPS, and an IDR.
+///
+/// Every H.264 SPS is replaced by [`crate::h264_stream_sps`], so each
+/// stream says the same colour and low delay whichever encoder made it.
 pub struct EncodedSample {
     codec: vnilink::VideoCodec,
     keyframe: bool,
@@ -49,6 +53,26 @@ impl EncodedSample {
                 "a keyframe needs SPS, PPS, and an IDR",
             ));
         }
+        let annex_b = if parsed.has_sps() {
+            let mut stream = Vec::with_capacity(annex_b.len() + 16);
+            for unit in parsed.units() {
+                stream.extend_from_slice(&[0, 0, 0, 1]);
+                if unit.nal_type == 7 {
+                    let sps = h264_stream_sps(unit.bytes()).ok_or(Error::EncodeRejected(
+                        "the encoder wrote an SPS that cannot be read",
+                    ))?;
+                    stream.extend_from_slice(&sps);
+                } else {
+                    stream.extend_from_slice(unit.bytes());
+                }
+            }
+            if stream.len() > MAX_VIDEO_FRAME {
+                return Err(Error::InvalidFrame(crate::error::FRAME_TOO_LARGE));
+            }
+            stream
+        } else {
+            annex_b
+        };
         Ok(Self {
             codec: vnilink::VideoCodec::H264,
             keyframe,
@@ -117,6 +141,13 @@ pub trait VideoEncoder: Send {
     /// whether the host encodes in hardware. Asked when it opens.
     fn implementation(&self) -> vnilink::EncoderImplementation {
         vnilink::EncoderImplementation::UNKNOWN
+    }
+
+    /// Whether this encoder reads a picture the platform still holds
+    /// ([`RawFrame::native_picture`]) in place, scaling it itself to the size
+    /// it was opened at. Others get it read back and scaled in memory.
+    fn scales_native(&self) -> bool {
+        false
     }
 }
 
@@ -242,7 +273,8 @@ impl FramePump {
             return Ok(PumpOutput::Skipped);
         }
         let scaled;
-        let input = if width == frame.width() && height == frame.height() {
+        let in_place = frame.native_picture().is_some() && encoder.scales_native();
+        let input = if in_place || (width == frame.width() && height == frame.height()) {
             frame
         } else {
             scaled = scale_bgra(frame, width, height)?;
@@ -256,7 +288,12 @@ impl FramePump {
             )?,
             frame_rate: self.quality.max_frame_rate,
         };
-        let sample = encoder.encode(input, &params)?;
+        let sample = match encoder.encode(input, &params) {
+            // A dropped picture is not a failure: the stream goes on, and a
+            // keyframe still owed is asked of the next picture.
+            Err(error) if error.is_dropped() => return Ok(PumpOutput::Skipped),
+            sample => sample?,
+        };
         let keyframe = sample.keyframe();
         if force && !keyframe {
             return Err(Error::EncodeRejected(

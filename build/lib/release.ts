@@ -81,7 +81,7 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 				throw new Error(`Missing release input: ${name}`);
 			}
 		}
-		if (paths.has('app/smoke.cjs') || paths.has('app/browser-tests.js')) {
+		if (paths.has('app/smoke.cjs') || paths.has('app/latency.cjs') || paths.has('app/browser-tests.js')) {
 			throw new Error('Test bundles must not be distributed');
 		}
 		await writeFile(join(stage, 'build-manifest.json'), JSON.stringify({ source, product: product.appId, version: packageJson.version, electronVersion: packageJson.devDependencies.electron, platform: process.platform, architecture: process.arch, rustTarget: target.rustTarget, profile: 'release', files }, null, 2) + '\n');

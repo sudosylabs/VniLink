@@ -31,10 +31,19 @@ pub enum Error {
 /// Why an encoded frame was refused for its size: larger than one frame may be.
 pub const FRAME_TOO_LARGE: &str = "encoded frame is larger than 1 MiB";
 
+/// The encoder's rate control dropped the picture. Nothing is sent for it;
+/// the next picture is encoded as usual, and an owed keyframe stays owed.
+pub const FRAME_DROPPED: &str = "the encoder dropped the picture";
+
 impl Error {
     /// The encoder produced a frame larger than one frame may be.
     pub fn is_too_large(&self) -> bool {
         matches!(self, Self::InvalidFrame(message) if *message == FRAME_TOO_LARGE)
+    }
+
+    /// The encoder dropped the picture under rate control; see [`FRAME_DROPPED`].
+    pub fn is_dropped(&self) -> bool {
+        matches!(self, Self::EncodeRejected(message) if *message == FRAME_DROPPED)
     }
 }
 
