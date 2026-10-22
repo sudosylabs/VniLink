@@ -136,6 +136,11 @@ impl WindowsCapture {
             .transpose()
     }
 
+    /// The device pictures live on, to open an encoder that reads them there.
+    pub fn device(&self) -> crate::gpu::GpuDevice {
+        self.pool.device()
+    }
+
     /// Whether pictures carry the pointer; on until every viewer draws it.
     pub fn set_embeds_cursor(&self, embeds: bool) {
         self.embeds_cursor.store(embeds, Ordering::Release);

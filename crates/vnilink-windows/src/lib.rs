@@ -27,6 +27,8 @@ mod transform_events;
 mod capture;
 #[cfg(windows)]
 mod gpu;
+#[cfg(windows)]
+pub use gpu::GpuDevice;
 #[cfg(any(windows, test))]
 mod shells;
 #[cfg(windows)]

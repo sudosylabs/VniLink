@@ -153,6 +153,8 @@ fn serve(core: &Arc<Core>, stop: &Arc<AtomicBool>, error: &Mutex<Option<String>>
         };
         let result = (|| -> Result<(), vnilink_media::PublishError> {
             let capture = vnilink_windows::WindowsCapture::open(&startup)?;
+            // Encoders open on the capture's GPU, where its pictures live.
+            let device = capture.device();
             publish_topology(core, &capture);
             set_error(None);
             vnilink_media::serve_shared_capture(
@@ -165,13 +167,14 @@ fn serve(core: &Arc<Core>, stop: &Arc<AtomicBool>, error: &Mutex<Option<String>>
                 |targets| {
                     capture.set_embeds_cursor(targets.iter().any(|target| !target.separate_cursor));
                 },
-                |target, width, height, fps, bps| {
-                    vnilink_windows::WindowsEncoder::open_codec(
+                move |target, width, height, fps, bps| {
+                    vnilink_windows::WindowsEncoder::open_codec_on(
                         width,
                         height,
                         fps,
                         bps,
                         target.codec,
+                        &device,
                     )
                 },
             )

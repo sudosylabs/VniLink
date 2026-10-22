@@ -21,11 +21,11 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D, ID3D11VideoContext1,
     ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator,
     ID3D11VideoProcessorOutputView, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
-    D3D11_CPU_ACCESS_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
-    D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
-    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_STREAM,
-    D3D11_VIDEO_USAGE_OPTIMAL_SPEED, D3D11_VPIV_DIMENSION_TEXTURE2D,
+    D3D11_BIND_VIDEO_ENCODER, D3D11_CPU_ACCESS_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
+    D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
+    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
+    D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE_OPTIMAL_SPEED, D3D11_VPIV_DIMENSION_TEXTURE2D,
     D3D11_VPOV_DIMENSION_TEXTURE2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
@@ -74,6 +74,11 @@ impl TexturePool {
             size,
             textures: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The device pictures are copied on.
+    pub(crate) fn device(&self) -> GpuDevice {
+        GpuDevice::new(self.device.clone())
     }
 
     /// `source` copied on the GPU into a free texture, as a picture.
@@ -176,8 +181,10 @@ pub(crate) struct Nv12Converter {
     video_device: ID3D11VideoDevice,
     enumerator: ID3D11VideoProcessorEnumerator,
     processor: ID3D11VideoProcessor,
-    output: ID3D11Texture2D,
-    output_view: ID3D11VideoProcessorOutputView,
+    /// NV12 pictures in turn: an encoder that takes textures may still be
+    /// reading the last one when the next is converted.
+    outputs: Vec<(ID3D11Texture2D, ID3D11VideoProcessorOutputView)>,
+    next: std::cell::Cell<usize>,
     staging: ID3D11Texture2D,
     input: (u32, u32),
     size: (u32, u32),
@@ -212,19 +219,31 @@ impl Nv12Converter {
         };
         let enumerator = video_device.CreateVideoProcessorEnumerator(&content)?;
         let processor = video_device.CreateVideoProcessor(&enumerator, 0)?;
-        let output = texture(device, size, DXGI_FORMAT_NV12, true)?;
-        let mut output_view = None;
-        video_device.CreateVideoProcessorOutputView(
-            &output,
-            &enumerator,
-            &D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
-                ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
-                ..Default::default()
-            },
-            Some(&mut output_view),
-        )?;
-        let output_view = output_view
-            .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?;
+        let mut outputs = Vec::with_capacity(OUTPUTS);
+        for _ in 0..OUTPUTS {
+            // An encoder may read the texture itself; a driver that refuses
+            // the video-encoder binding gets one without it.
+            let output = texture_bound(
+                device,
+                size,
+                DXGI_FORMAT_NV12,
+                D3D11_BIND_VIDEO_ENCODER.0 as u32,
+            )
+            .or_else(|_| texture(device, size, DXGI_FORMAT_NV12, true))?;
+            let mut view = None;
+            video_device.CreateVideoProcessorOutputView(
+                &output,
+                &enumerator,
+                &D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
+                    ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
+                    ..Default::default()
+                },
+                Some(&mut view),
+            )?;
+            let view =
+                view.ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?;
+            outputs.push((output, view));
+        }
         // Full-range RGB in, the stream's colour out: BT.709, limited range.
         video.VideoProcessorSetStreamColorSpace1(
             &processor,
@@ -256,8 +275,8 @@ impl Nv12Converter {
             video_device,
             enumerator,
             processor,
-            output,
-            output_view,
+            outputs,
+            next: std::cell::Cell::new(0),
             staging,
             input,
             size,
@@ -270,12 +289,15 @@ impl Nv12Converter {
             && (u32::from(picture.size.0), u32::from(picture.size.1)) == self.input
     }
 
-    /// `picture` as packed NV12 at this converter's size: the Y plane, then
-    /// interleaved UV.
-    pub(crate) unsafe fn convert(
+    /// `picture` as NV12 at this converter's size, in one of its textures,
+    /// for an encoder that takes textures on this device.
+    pub(crate) unsafe fn convert_texture(
         &self,
         picture: &WindowsPicture,
-    ) -> windows::core::Result<(Vec<u8>, Vec<u8>)> {
+    ) -> windows::core::Result<ID3D11Texture2D> {
+        let at = self.next.get();
+        self.next.set((at + 1) % self.outputs.len());
+        let (output, view) = &self.outputs[at];
         let mut input_view = None;
         self.video_device.CreateVideoProcessorInputView(
             picture.texture(),
@@ -294,20 +316,76 @@ impl Nv12Converter {
         let mut streams = [stream];
         let blitted = self
             .video
-            .VideoProcessorBlt(&self.processor, &self.output_view, 0, &streams);
+            .VideoProcessorBlt(&self.processor, view, 0, &streams);
         std::mem::ManuallyDrop::drop(&mut streams[0].pInputSurface);
         blitted?;
+        Ok(output.clone())
+    }
+
+    /// `picture` as packed NV12 at this converter's size, read into memory:
+    /// the Y plane, then interleaved UV.
+    pub(crate) unsafe fn convert(
+        &self,
+        picture: &WindowsPicture,
+    ) -> windows::core::Result<(Vec<u8>, Vec<u8>)> {
+        let output = self.convert_texture(picture)?;
         let (width, height) = (self.size.0 as usize, self.size.1 as usize);
-        let bytes = read_rows_from(
-            &self.context,
-            &self.staging,
-            &self.output,
-            width,
-            height * 3 / 2,
-        )?;
+        let bytes = read_rows_from(&self.context, &self.staging, &output, width, height * 3 / 2)?;
         let (y, uv) = bytes.split_at(width * height);
         Ok((y.to_vec(), uv.to_vec()))
     }
+}
+
+/// Converted pictures a converter keeps in turn.
+const OUTPUTS: usize = 3;
+
+/// A device that captured pictures live on, for opening an encoder on it.
+#[derive(Clone)]
+pub struct GpuDevice(ID3D11Device);
+
+unsafe impl Send for GpuDevice {}
+unsafe impl Sync for GpuDevice {}
+
+impl GpuDevice {
+    pub(crate) fn new(device: ID3D11Device) -> Self {
+        Self(device)
+    }
+
+    pub(crate) fn device(&self) -> &ID3D11Device {
+        &self.0
+    }
+
+    /// The adapter the device is on.
+    pub(crate) unsafe fn adapter(&self) -> windows::core::Result<windows::Win32::Foundation::LUID> {
+        let dxgi: windows::Win32::Graphics::Dxgi::IDXGIDevice = self.0.cast()?;
+        Ok(dxgi.GetAdapter()?.GetDesc()?.AdapterLuid)
+    }
+}
+
+unsafe fn texture_bound(
+    device: &ID3D11Device,
+    (width, height): (u32, u32),
+    format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT,
+    extra: u32,
+) -> windows::core::Result<ID3D11Texture2D> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: format,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32 | extra,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+    let mut created = None;
+    device.CreateTexture2D(&desc, None, Some(&mut created))?;
+    created.ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))
 }
 
 unsafe fn texture(
