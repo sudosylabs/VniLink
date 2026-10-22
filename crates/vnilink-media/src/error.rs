@@ -19,6 +19,13 @@ pub enum Error {
     CaptureFailed(i32),
     #[error("{0}")]
     CaptureRejected(&'static str),
+    /// The OS or its user refused screen capture.
+    #[error("{0}")]
+    CaptureDenied(&'static str),
+    /// The screen is on a desktop capture cannot read, such as a sign-in or
+    /// elevation prompt. It passes when that desktop does.
+    #[error("the screen is on a secure desktop")]
+    SecureDesktop,
 }
 
 /// Why an encoded frame was refused for its size: larger than one frame may be.

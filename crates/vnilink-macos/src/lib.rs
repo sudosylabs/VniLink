@@ -43,7 +43,7 @@ pub use pixels::raw_frame_from_bgra;
 #[cfg(target_os = "macos")]
 pub use pixels::raw_frame_from_pixel_buffer;
 #[cfg(target_os = "macos")]
-pub use snapshot::MacSnapshot;
+pub use snapshot::{screen_capture_allowed, MacSnapshot};
 
 #[cfg(test)]
 #[path = "tests.rs"]

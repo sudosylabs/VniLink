@@ -21,6 +21,15 @@ unsafe extern "C" {
     fn CGRequestScreenCaptureAccess() -> bool;
 }
 
+/// Whether macOS currently lets VniLink record the screen. Asks nothing of
+/// the user: a capture that stopped can tell a withdrawn permission from
+/// any other ScreenCaptureKit failure.
+pub fn screen_capture_allowed() -> bool {
+    // SAFETY: CGPreflightScreenCaptureAccess takes no pointer and does not
+    // show a dialog. It only reports the process TCC state.
+    unsafe { CGPreflightScreenCaptureAccess() }
+}
+
 /// What preflight and the explicit Allow action may do. Tests decide this
 /// without calling CoreGraphics.
 pub(crate) enum MacConsent {

@@ -151,6 +151,7 @@ fn serve(core: &Arc<Core>, stop: &Arc<AtomicBool>, error: &Mutex<Option<String>>
                 continue;
             }
         };
+        let opened_at = std::time::Instant::now();
         let result = (|| -> Result<(), vnilink_media::PublishError> {
             let capture = vnilink_windows::WindowsCapture::open(&startup)?;
             publish_topology(core, &capture);
@@ -176,10 +177,50 @@ fn serve(core: &Arc<Core>, stop: &Arc<AtomicBool>, error: &Mutex<Option<String>>
                 },
             )
         })();
+        // Viewers learn of a secure desktop as a condition, not an end: the
+        // capture opens again once the input desktop is the user's.
+        let secure = secure_desktop(&result, opened_at.elapsed());
+        if let Some(active) = secure {
+            let _ = core.report_secure_desktop(active);
+        }
         if result.is_err() && !stop.load(Ordering::Acquire) && !startup.is_cancelled() {
-            set_error(Some("Screen sharing stopped. Try connecting again.".into()));
+            if secure != Some(true) {
+                set_error(Some("Screen sharing stopped. Try connecting again.".into()));
+            }
             std::thread::sleep(Duration::from_millis(200));
         }
+    }
+}
+
+/// Whether a capture run says the screen is, or is no longer, on a secure
+/// desktop: its failure names one, and a run that served a second or ended
+/// by itself was on the user's. `None` when it says neither.
+fn secure_desktop(
+    result: &Result<(), vnilink_media::PublishError>,
+    served: Duration,
+) -> Option<bool> {
+    match result {
+        Err(vnilink_media::PublishError::Media(vnilink_media::Error::SecureDesktop)) => Some(true),
+        Ok(()) => Some(false),
+        Err(_) if served >= Duration::from_secs(1) => Some(false),
+        Err(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod secure_desktop_tests {
+    use super::secure_desktop;
+    use std::time::Duration;
+    use vnilink_media::{Error, PublishError};
+
+    #[test]
+    fn a_secure_desktop_is_reported_and_cleared_by_a_run_on_the_users() {
+        let secure = Err(PublishError::Media(Error::SecureDesktop));
+        assert_eq!(secure_desktop(&secure, Duration::ZERO), Some(true));
+        assert_eq!(secure_desktop(&Ok(()), Duration::ZERO), Some(false));
+        let other = Err(PublishError::Media(Error::CaptureFailed(5)));
+        assert_eq!(secure_desktop(&other, Duration::from_millis(10)), None);
+        assert_eq!(secure_desktop(&other, Duration::from_secs(2)), Some(false));
     }
 }
 
