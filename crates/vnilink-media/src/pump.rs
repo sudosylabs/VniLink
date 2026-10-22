@@ -250,7 +250,12 @@ impl FramePump {
             )?,
             frame_rate: self.quality.max_frame_rate,
         };
-        let sample = encoder.encode(input, &params)?;
+        let sample = match encoder.encode(input, &params) {
+            // A dropped picture is not a failure: the stream goes on, and a
+            // keyframe still owed is asked of the next picture.
+            Err(error) if error.is_dropped() => return Ok(PumpOutput::Skipped),
+            sample => sample?,
+        };
         let keyframe = sample.keyframe();
         if force && !keyframe {
             return Err(Error::EncodeRejected(

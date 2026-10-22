@@ -301,7 +301,10 @@ impl VideoEncoder for MacEncoder {
             let encoded =
                 encoded.map_err(|_| Error::EncodeRejected("VideoToolbox rejected the frame"))?;
             if encoded.data.is_empty() {
-                return Err(Error::EncodeRejected("the encoder produced no frame"));
+                // VideoToolbox's rate control dropped the picture; the next
+                // one takes the next presentation time.
+                self.frame_index = self.frame_index.saturating_add(1);
+                return Err(Error::EncodeRejected(vnilink_media::FRAME_DROPPED));
             }
             if floored {
                 self.recovery_qp.observe(encoded.data.len(), params);

@@ -51,7 +51,7 @@ pub use annexb::{parse_annex_b, to_annex_b, AvccAccessUnit, NalUnit, ParsedAcces
 pub use channel::{ChannelSlot, FrameChannel};
 pub use controller::{serve_controller, ControllerOutput, ControllerVideo, DecodedFrame};
 pub use desktop::{CapturePlan, CursorPolicy, DesktopKind, MonitorSize};
-pub use error::{Error, PublishError};
+pub use error::{Error, PublishError, FRAME_DROPPED};
 pub use fanout::serve_shared_capture;
 pub use frame::{encoded_size, scale_bgra, RawFrame};
 pub use host::{serve_capture, serve_desktop_capture, FrameSource, HostSession, OpenEncoder};

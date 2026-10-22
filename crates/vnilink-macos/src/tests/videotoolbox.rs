@@ -635,7 +635,7 @@ fn forced_keyframes(
                         .unwrap();
                 decoder.decode(&frame).unwrap();
             }
-            Err(vnilink_media::Error::EncodeRejected("the encoder produced no frame")) => {
+            Err(error) if error.is_dropped() => {
                 owed = force;
                 dropped += 1;
             }
@@ -711,7 +711,7 @@ fn recovery_keyframe_pictures() {
             };
             let sample = match encoder.encode(&page(1280, 720, index), &params) {
                 Ok(sample) => sample,
-                Err(vnilink_media::Error::EncodeRejected("the encoder produced no frame")) => {
+                Err(error) if error.is_dropped() => {
                     owed = force;
                     continue;
                 }

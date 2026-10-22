@@ -12,6 +12,8 @@ use crate::pump::{
 
 struct Log {
     honor_force: bool,
+    /// Pictures to drop before encoding again, as rate control does.
+    drop_next: u32,
     calls: Vec<EncodeParams>,
     sizes: Vec<(u16, u16)>,
 }
@@ -24,6 +26,7 @@ impl Scripted {
     fn honoring() -> (Self, Arc<Mutex<Log>>) {
         let log = Arc::new(Mutex::new(Log {
             honor_force: true,
+            drop_next: 0,
             calls: Vec::new(),
             sizes: Vec::new(),
         }));
@@ -41,6 +44,10 @@ impl VideoEncoder for Scripted {
         let mut log = self.log.lock().unwrap();
         log.calls.push(*params);
         log.sizes.push((frame.width(), frame.height()));
+        if log.drop_next > 0 {
+            log.drop_next -= 1;
+            return Err(Error::EncodeRejected(crate::FRAME_DROPPED));
+        }
         let keyframe = log.honor_force && params.force_keyframe;
         drop(log);
         sample(keyframe)
@@ -286,6 +293,33 @@ fn a_delta_is_rejected_when_a_keyframe_was_required() {
     log.lock().unwrap().honor_force = true;
     let frame = encoded(host.push(&picture(16, 16, 1)).unwrap());
     assert!(frame.keyframe);
+}
+
+#[test]
+fn a_dropped_picture_is_skipped_and_an_owed_keyframe_stays_owed() {
+    let (encoder, log) = Scripted::honoring();
+    log.lock().unwrap().drop_next = 2;
+    let mut host = HostVideo::new(quality(30, 16, 16), encoder);
+    // The first picture's keyframe is dropped twice; the stream goes on.
+    assert_eq!(host.push(&picture(16, 16, 0)).unwrap(), PumpOutput::Skipped);
+    assert_eq!(host.push(&picture(16, 16, 1)).unwrap(), PumpOutput::Skipped);
+    let frame = encoded(host.push(&picture(16, 16, 2)).unwrap());
+    assert!(frame.keyframe);
+    assert!(log
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .all(|call| call.force_keyframe));
+    // A dropped predicted picture leaves the next one due at once.
+    log.lock().unwrap().drop_next = 1;
+    assert_eq!(
+        host.push(&picture(16, 16, 40_000)).unwrap(),
+        PumpOutput::Skipped
+    );
+    let next = encoded(host.push(&picture(16, 16, 41_000)).unwrap());
+    assert!(!next.keyframe);
+    assert!(!log.lock().unwrap().calls.last().unwrap().force_keyframe);
 }
 
 #[test]
