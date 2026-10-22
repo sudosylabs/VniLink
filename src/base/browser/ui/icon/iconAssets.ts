@@ -79,6 +79,8 @@ import fillViewOutlined from '@phosphor-icons/core/assets/regular/arrows-out-sim
 import fillViewFilled from '@phosphor-icons/core/assets/fill/arrows-out-simple-fill.svg';
 import fitToViewOutlined from '@phosphor-icons/core/assets/regular/arrows-in-simple.svg';
 import fitToViewFilled from '@phosphor-icons/core/assets/fill/arrows-in-simple-fill.svg';
+import diagnosticsOutlined from '@phosphor-icons/core/assets/regular/pulse.svg';
+import diagnosticsFilled from '@phosphor-icons/core/assets/fill/pulse-fill.svg';
 import stopOutlined from '@phosphor-icons/core/assets/regular/stop.svg';
 import stopFilled from '@phosphor-icons/core/assets/fill/stop-fill.svg';
 import checkOutlined from '@phosphor-icons/core/assets/regular/check.svg';
@@ -129,6 +131,7 @@ const assets: Record<IconId, Record<IconVariant, string>> = {
 	error: { outlined: errorOutlined, filled: errorFilled },
 	fillView: { outlined: fillViewOutlined, filled: fillViewFilled },
 	fitToView: { outlined: fitToViewOutlined, filled: fitToViewFilled },
+	diagnostics: { outlined: diagnosticsOutlined, filled: diagnosticsFilled },
 	stop: { outlined: stopOutlined, filled: stopFilled },
 	check: { outlined: checkOutlined, filled: checkFilled },
 	file: { outlined: fileOutlined, filled: fileFilled },

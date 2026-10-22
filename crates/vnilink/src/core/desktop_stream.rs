@@ -140,7 +140,8 @@ pub(super) struct DesktopRuntime {
 /// how often it restarted from a keyframe after an error.
 #[derive(Debug, Clone, Copy, Default)]
 struct DecoderState {
-    software: bool,
+    /// `None` until the window said.
+    software: Option<bool>,
     recoveries: u64,
 }
 pub(super) struct DesktopKeyboard {
@@ -231,8 +232,18 @@ impl DesktopRuntime {
         })
     }
     /// Records why the picture stopped, unless an earlier answer stands.
-    fn ended(&self, end: crate::DesktopEnd) {
-        lock(&self.end).get_or_insert(end);
+    /// The first answer is also the computer's last end, for diagnostics.
+    fn ended(&self, shared: &Shared, hosted: bool, end: crate::DesktopEnd) {
+        let mut slot = lock(&self.end);
+        if slot.is_none() {
+            *slot = Some(end);
+            *lock(&shared.last_desktop_end) = Some(crate::diagnostics::EndSummary {
+                service_id: self.info.service.id,
+                hosted,
+                reason: end.label().into(),
+                at_ms: crate::diagnostics::monotonic_ms(),
+            });
+        }
     }
     pub(super) fn close(&self) {
         self.retired
@@ -348,6 +359,8 @@ impl DesktopRuntime {
         let inbound = self.inbox.telemetry();
         let counts = self.counters.read();
         let viewer = *lock(&self.viewer_loss);
+        let decoder = *lock(&self.decoder);
+        let encoder = *lock(&self.encoder);
         let reported = viewer.heard.filter(|at| fresh(at)).map(|_| viewer);
         let permille = |share: f64| (share * 1000.0).round() as u32;
         crate::diagnostics::PipelineSummary {
@@ -387,6 +400,16 @@ impl DesktopRuntime {
             viewer_frame_loss_permille: reported.map(|loss| permille(loss.frame_loss)),
             selected_display: lock(&self.selected).first().copied(),
             fault: lock(&self.display_fault).map(str::to_string),
+            conditions: lock(&self.conditions)
+                .entries()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            end: lock(&self.end).map(|end| end.label().into()),
+            encoder: encoder.map(|encoder| encoder.name.into()),
+            encoder_hardware: encoder.and_then(|encoder| encoder.hardware),
+            decoder_hardware: decoder.software.map(|software| !software),
+            decoder_recoveries: decoder.recoveries,
         }
     }
 }
@@ -919,7 +942,7 @@ impl RemoteDesktopService {
             return Err(Error::InvalidSetting("decoder recoveries went back"));
         }
         *decoder = DecoderState {
-            software,
+            software: Some(software),
             recoveries,
         };
         Ok(())
@@ -1289,13 +1312,17 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                     // An `END` already said why. Otherwise the symptoms do:
                     // a lost connection, or a stream finished in silence.
                     if !lease.is_cancelled() {
-                        desktop.ended(if link.close_reason().is_none() {
-                            crate::DesktopEnd::PeerClosed
-                        } else if desktop.relayed.load(std::sync::atomic::Ordering::Acquire) {
-                            crate::DesktopEnd::RelayUnreachable
-                        } else {
-                            crate::DesktopEnd::LinkLost
-                        });
+                        desktop.ended(
+                            &shared,
+                            false,
+                            if link.close_reason().is_none() {
+                                crate::DesktopEnd::PeerClosed
+                            } else if desktop.relayed.load(std::sync::atomic::Ordering::Acquire) {
+                                crate::DesktopEnd::RelayUnreachable
+                            } else {
+                                crate::DesktopEnd::LinkLost
+                            },
+                        );
                     }
                 } else {
                     let _ = ready.send(Err(Error::NoSession));
@@ -1487,16 +1514,17 @@ async fn client_send(
                         (next, adaptive.signals)
                     };
                     let decoder = *lock(&desktop.decoder);
-                    lock(&desktop.conditions).observe(crate::diagnostics::monotonic_ms(), &crate::video::Observation {
+                    let observation = crate::video::Observation {
                         elapsed_ms: elapsed,
                         signals,
                         relay: path.is_relay(),
                         received_frames: feedback.receiver.received_frames,
                         keyframe_pending: lock(&desktop.keyframe_requests).outstanding(),
                         host: host.map(|host| host.host_state()),
-                        decoder_software: decoder.software,
+                        decoder_software: decoder.software == Some(true),
                         decoder_recoveries: decoder.recoveries,
-                    });
+                    };
+                    lock(&desktop.conditions).observe(crate::diagnostics::monotonic_ms(), &observation);
                     if let Some(next) = next {
                         // Controller-side step: monitor clamp only. The host
                         // applies its encoder caps when the update arrives.
@@ -1539,7 +1567,11 @@ async fn client_receive(
                     if body.len() != 2 {
                         return Err(Error::Malformed);
                     }
-                    desktop.ended(crate::DesktopEnd::Host(crate::StreamEnd::decode(body[1])?));
+                    desktop.ended(
+                        shared,
+                        false,
+                        crate::DesktopEnd::Host(crate::StreamEnd::decode(body[1])?),
+                    );
                     return Ok(());
                 }
                 MEDIA_FEEDBACK => {
@@ -1883,7 +1915,7 @@ pub(super) async fn serve(
     }
     let parent_stopped = *parent_stop.borrow();
     if let Some(end) = host_end(&shared, &desktop, parent_stopped) {
-        desktop.ended(crate::DesktopEnd::Host(end));
+        desktop.ended(&shared, true, crate::DesktopEnd::Host(end));
         let _ = tokio::time::timeout(END_PATIENCE, write(&mut send, &[END, end.encode()])).await;
     }
     desktop.close();

@@ -571,6 +571,8 @@ enum Command {
         endpoint_id: String,
     },
     Snapshot,
+    /// The bounded diagnostic snapshot as JSON; see `vnilink::diagnostics`.
+    DiagnosticSnapshot,
     Endpoint,
     Capabilities,
     VideoCodecs,
@@ -1067,6 +1069,11 @@ enum Reply {
     },
     Snapshot {
         snapshot: vnilink_app::FfiSnapshot,
+    },
+    /// At most `vnilink::diagnostics::MAX_EXPORT_BYTES` of JSON, carried as
+    /// a string so the window saves exactly what the engine exported.
+    DiagnosticSnapshot {
+        snapshot: String,
     },
     Invitation {
         token: String,
@@ -2132,6 +2139,9 @@ impl EngineBridge {
             Command::Snapshot => Reply::Snapshot {
                 snapshot: core.snapshot().map_err(core_error)?,
             },
+            Command::DiagnosticSnapshot => Reply::DiagnosticSnapshot {
+                snapshot: core.diagnostic_snapshot_json().map_err(core_error)?,
+            },
             Command::Endpoint => Reply::Endpoint {
                 endpoint_id: core.endpoint_id(),
             },
@@ -2353,6 +2363,7 @@ impl EngineBridge {
     fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
         match command {
             Command::Snapshot
+            | Command::DiagnosticSnapshot
             | Command::Endpoint
             | Command::Capabilities
             | Command::VideoCodecs
@@ -2573,7 +2584,7 @@ impl CommandShape {
             return false;
         }
         let expected: &[&str] = match kind {
-            "snapshot" | "disconnect" | "shutdown" => &["type"],
+            "snapshot" | "diagnosticSnapshot" | "disconnect" | "shutdown" => &["type"],
             "endpoint"
             | "capabilities"
             | "videoCodecs"

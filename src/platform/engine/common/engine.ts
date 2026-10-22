@@ -181,6 +181,8 @@ export interface EngineSnapshot {
 export type EngineCommand =
 	| { type: 'beginConnectServices'; endpointId: string }
 	| { type: 'snapshot' }
+	/** The engine's bounded diagnostic snapshot, as the JSON it exports. */
+	| { type: 'diagnosticSnapshot' }
 	| { type: 'endpoint' | 'capabilities' | 'videoCodecs' | 'clipboardOwnerSession' | 'subscribeEvents' | 'subscribeVideo' }
 	| { type: 'setVideoCodecs'; codecs: VideoCodecCaps }
 	| { type: 'saveCustomRelays'; relays: RelayInput[] }
@@ -289,6 +291,8 @@ export type EngineCommand =
 export type EngineReply =
 	| { type: 'restartRequired'; required: boolean }
 	| { type: 'snapshot'; snapshot: EngineSnapshot }
+	/** At most {@link MAX_DIAGNOSTIC_BYTES} of JSON: stages, phases, counts and labels, no payload. */
+	| { type: 'diagnosticSnapshot'; snapshot: string }
 	| { type: 'invitation'; token: string }
 	| { type: 'pairingFile'; file: { bytes: number[]; check: string; expires_at_ms: string } }
 	| { type: 'pairingPreview'; preview: { id: string; endpoint_id: string; check: string; expires_at_ms: string } }
@@ -647,6 +651,22 @@ function session(value: unknown): value is SessionInfo | null {
 		&& ((typeof value.phase === 'string' && ['Connecting', 'Authenticated', 'Authorized', 'Negotiating', 'Active', 'Reconnecting', 'Stopping', 'Closed'].includes(value.phase)) || (record(value.phase) && record(value.phase.Failed) && text(value.phase.Failed.message))));
 }
 
+/** The engine's export cap for a diagnostic snapshot, `MAX_EXPORT_BYTES`. */
+export const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
+
+/** A diagnostic snapshot as the engine exports it: one JSON object within the cap, naming its schema version. */
+function diagnosticSnapshot(value: unknown): value is string {
+	if (typeof value !== 'string' || value.length === 0 || new TextEncoder().encode(value).length > MAX_DIAGNOSTIC_BYTES) {
+		return false;
+	}
+	try {
+		const parsed: unknown = JSON.parse(value);
+		return record(parsed) && Number.isSafeInteger(parsed.version) && Number(parsed.version) >= 1;
+	} catch {
+		return false;
+	}
+}
+
 export function isEngineCommand(value: unknown): value is EngineCommand {
 	if (!record(value)) {
 		return false;
@@ -655,7 +675,7 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 	let valid = false;
 	switch (value.type) {
 		case 'beginConnectServices': keys = ['endpointId']; valid = text(value.endpointId); break;
-		case 'snapshot': keys = []; valid = true; break;
+		case 'snapshot': case 'diagnosticSnapshot': keys = []; valid = true; break;
 		case 'endpoint': case 'capabilities': case 'videoCodecs': case 'clipboardOwnerSession':
 		case 'subscribeEvents': case 'subscribeVideo': keys = []; valid = true; break;
 		case 'setVideoCodecs': keys = ['codecs']; valid = videoCodecs(value.codecs); break;
@@ -770,6 +790,7 @@ export function isEngineReply(value: unknown): value is EngineReply {
 	}
 	switch (value.type) {
 		case 'snapshot': return record(value.snapshot) && text(value.snapshot.endpoint_id) && typeof value.snapshot.hosting === 'boolean' && typeof value.snapshot.public_relay === 'boolean' && strings(value.snapshot.relay_urls) && Array.isArray(value.snapshot.devices) && value.snapshot.devices.every((item: unknown) => device(item)) && capabilities(value.snapshot.capabilities) && session(value.snapshot.incoming) && session(value.snapshot.outgoing);
+		case 'diagnosticSnapshot': return diagnosticSnapshot(value.snapshot) && Object.keys(value).length === 2;
 		case 'invitation': return text(value.token);
 		case 'pairingFile': return record(value.file) && bytes(value.file.bytes) && text(value.file.check) && decimal(value.file.expires_at_ms);
 		case 'pairingPreview': return record(value.preview) && decimal(value.preview.id) && text(value.preview.endpoint_id) && text(value.preview.check) && decimal(value.preview.expires_at_ms);

@@ -205,3 +205,18 @@ test('presence, peer availability and hosted services cross the bridge exactly',
 	assert.equal(isEngineReply({ type: 'services', services: [] }), true);
 	assert.equal(isEngineReply({ type: 'services', services: [{ id: '1' }] }), false);
 });
+
+test('the diagnostic snapshot is one bounded JSON object naming its version', () => {
+	assert.equal(isEngineCommand({ type: 'diagnosticSnapshot' }), true);
+	assert.equal(isEngineCommand({ type: 'diagnosticSnapshot', path: '/tmp/x' }), false);
+	const snapshot = JSON.stringify({ version: 4, pipelines: [], last_end: null });
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot }), true);
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot, extra: 1 }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot: '' }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot: '{not json' }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot: '[4]' }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot: JSON.stringify({ pipelines: [] }) }), false);
+	// The cap counts bytes: 64 KiB of text is the most the engine exports.
+	const padded = JSON.stringify({ version: 4, pad: 'é'.repeat(33 * 1024) });
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot: padded }), false);
+});
