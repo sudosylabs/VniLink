@@ -330,6 +330,23 @@ impl DataChannel {
     }
 }
 
+fn condition_label(condition: vnilink_app::FfiCondition) -> &'static str {
+    use vnilink_app::FfiCondition as C;
+    match condition {
+        C::LinkBlackout => "link.blackout",
+        C::RelayBacklog => "relay.backlog",
+        C::LinkCongestion => "link.congestion",
+        C::LinkLoss => "link.loss",
+        C::HostSecureDesktop => "host.secureDesktop",
+        C::EncoderSlow => "encoder.slow",
+        C::DecoderSlow => "decoder.slow",
+        C::DecoderRecovering => "decoder.recovering",
+        C::EncoderSoftware => "encoder.software",
+        C::DecoderSoftware => "decoder.software",
+        C::RelayPath => "relay.path",
+    }
+}
+
 fn desktop_end_label(end: vnilink_app::FfiDesktopEnd) -> &'static str {
     use vnilink_app::FfiDesktopEnd as End;
     match end {
@@ -720,12 +737,14 @@ impl DataChannel {
 
     /// How the picture is doing, as JSON, after reporting how long the
     /// window's decoder spends on a picture while others wait for it
-    /// (microseconds on average, 0 when unknown):
+    /// (microseconds on average, 0 when unknown), whether it decodes in
+    /// software, and how often it restarted from a keyframe in total:
     /// the received frame rate and bitrate, queue times, loss, round trip,
-    /// the other computer's capture and encode times, and why the quality
-    /// is where it is.
+    /// the other computer's capture and encode times, why the quality is
+    /// where it is, and what is wrong with the picture, most severe first.
+    /// `null` once the picture stopped.
     #[napi]
-    pub fn media_status(&self, decode_us: u32) -> Result<String> {
+    pub fn media_status(&self, decode_us: u32, software: bool, recoveries: u32) -> Result<String> {
         self.check()?;
         if self.kind != "video" {
             return Err(Error::from_reason("Invalid media status target"));
@@ -745,6 +764,10 @@ impl DataChannel {
         if decode_us > 0 {
             let _ = service.report_decode_duration(u64::from(decode_us));
         }
+        // The window counts restarts for this one picture, so the count only
+        // grows; one that went back is the core's to refuse, not a failure
+        // of the status read.
+        let _ = service.report_decoder(software, u64::from(recoveries));
         let status = service.media_status().map_err(core_error)?;
         let reason = match status.reason {
             vnilink_app::FfiAdaptationReason::WarmingUp => "warmingUp",
@@ -765,6 +788,7 @@ impl DataChannel {
             "rttMs": status.rtt_ms,
             "encodeUs": status.encode_us,
             "captureUs": status.capture_us,
+            "conditions": status.conditions.iter().map(|condition| condition_label(*condition)).collect::<Vec<_>>(),
         })
         .to_string())
     }

@@ -1,5 +1,5 @@
 import { isDesktopAudioOperation, isDesktopAudioStatus, isDesktopCursor, isDesktopMediaStatus, isDataPacket, isChannelRequest, MAX_FILE_OPERATIONS } from '../common/dataChannel.js';
-import type { DataChannelRequest, DataPacket, DataChannelMetrics, DesktopAudioOperation, DesktopAudioStatus, DesktopCursor, DesktopMediaStatus } from '../common/dataChannel.js';
+import type { DataChannelRequest, DataPacket, DataChannelMetrics, DesktopAudioOperation, DesktopAudioStatus, DesktopCursor, DesktopDecoderReport, DesktopMediaStatus } from '../common/dataChannel.js';
 import { Emitter } from '../../../base/common/event.js';
 import { isFileAnswer, type FileAnswer, type FileOperation } from '../common/files.js';
 import { ipcMessagePort } from '../../../base/parts/sandbox/electron-browser/globals.js';
@@ -325,11 +325,11 @@ export class DataChannelClient {
 	}
 
 	/**
-	 * How the picture is doing, after telling the engine how long this
-	 * window takes to decode it. One request at a time; a newer one stands
-	 * in for an older one that has not been answered.
+	 * How the picture is doing, after telling the engine how this window's
+	 * decoder is doing. One request at a time; a newer one stands in for
+	 * an older one that has not been answered.
 	 */
-	public mediaStatus(decodeUs: number): Promise<DesktopMediaStatus | undefined> {
+	public mediaStatus(decoder: DesktopDecoderReport): Promise<DesktopMediaStatus | undefined> {
 		if (this.closed || this.nextWrite >= Number.MAX_SAFE_INTEGER) {
 			return Promise.resolve(undefined);
 		}
@@ -337,7 +337,8 @@ export class DataChannelClient {
 		return new Promise(resolve => {
 			const id = ++this.nextWrite;
 			this.statusPending = { id, resolve };
-			this.port.postMessage({ type: 'mediaStatus', id, decodeUs: Math.max(0, Math.min(0xffffffff, Math.round(decodeUs))) });
+			const bound = (value: number): number => Math.max(0, Math.min(0xffffffff, Math.round(value)));
+			this.port.postMessage({ type: 'mediaStatus', id, decodeUs: bound(decoder.decodeUs), software: decoder.software, recoveries: bound(decoder.recoveries) });
 		});
 	}
 

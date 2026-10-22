@@ -116,7 +116,15 @@ export interface DesktopAudioStatus {
 	error: { code: string; message: string } | null;
 }
 
-/** How a desktop picture is doing, from the engine's adaptation: what arrives, what waits, and why the quality is where it is. */
+/** Something wrong with a live picture, as the engine names it; see `vnilink::Condition`. */
+export type DesktopCondition =
+	| 'link.blackout' | 'relay.backlog' | 'link.congestion' | 'link.loss' | 'host.secureDesktop'
+	| 'encoder.slow' | 'decoder.slow' | 'decoder.recovering' | 'encoder.software' | 'decoder.software' | 'relay.path';
+
+/** Every condition, from the most to the least severe: the engine's order. */
+export const desktopConditions: readonly DesktopCondition[] = ['link.blackout', 'relay.backlog', 'link.congestion', 'link.loss', 'host.secureDesktop', 'encoder.slow', 'decoder.slow', 'decoder.recovering', 'encoder.software', 'decoder.software', 'relay.path'];
+
+/** How a desktop picture is doing, from the engine's adaptation: what arrives, what waits, why the quality is where it is, and what is wrong. */
 export interface DesktopMediaStatus {
 	reason: 'warmingUp' | 'stable' | 'receiverPressure' | 'encoderPressure' | 'networkPressure' | 'recovering' | 'idle';
 	receivedKbps: number;
@@ -127,13 +135,35 @@ export interface DesktopMediaStatus {
 	rttMs: number;
 	encodeUs: number;
 	captureUs: number;
+	/** Most severe first; empty when nothing is wrong. */
+	conditions: DesktopCondition[];
+}
+
+/** Held conditions: known, each once, in the engine's order. */
+function conditions(value: unknown): value is DesktopCondition[] {
+	if (!Array.isArray(value)) {
+		return false;
+	}
+	const ranks = value.map((condition: unknown) => desktopConditions.indexOf(condition as DesktopCondition));
+	return ranks.every((rank, index) => rank >= 0 && (index === 0 || rank > ranks[index - 1]));
 }
 
 export function isDesktopMediaStatus(value: unknown): value is DesktopMediaStatus {
 	const counts = ['receivedKbps', 'receivedFps', 'receiverQueueMs', 'hostQueueMs', 'lossPerMille', 'rttMs', 'encodeUs', 'captureUs'] as const;
-	return record(value) && Object.keys(value).length === 9
+	return record(value) && Object.keys(value).length === 10
 		&& ['warmingUp', 'stable', 'receiverPressure', 'encoderPressure', 'networkPressure', 'recovering', 'idle'].includes(String(value.reason))
-		&& counts.every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0);
+		&& counts.every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0)
+		&& conditions(value.conditions);
+}
+
+/** What the window's decoder says of itself with each status read. */
+export interface DesktopDecoderReport {
+	/** Its time per picture while others wait for it, in microseconds on average; 0 when unknown. */
+	readonly decodeUs: number;
+	/** It fell back from a hardware decoder. */
+	readonly software: boolean;
+	/** Times it restarted from a keyframe after an error, in this session. */
+	readonly recoveries: number;
 }
 
 /** The other computer's pointer, in the pixels of the picture it is shown on. */

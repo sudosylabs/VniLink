@@ -1003,7 +1003,40 @@ pub enum FfiAdaptationReason {
     Recovering,
     Idle,
 }
+/// See [`vnilink::Condition`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiCondition {
+    LinkBlackout,
+    RelayBacklog,
+    LinkCongestion,
+    LinkLoss,
+    HostSecureDesktop,
+    EncoderSlow,
+    DecoderSlow,
+    DecoderRecovering,
+    EncoderSoftware,
+    DecoderSoftware,
+    RelayPath,
+}
+impl From<vnilink::Condition> for FfiCondition {
+    fn from(condition: vnilink::Condition) -> Self {
+        use vnilink::Condition as C;
+        match condition {
+            C::LinkBlackout => Self::LinkBlackout,
+            C::RelayBacklog => Self::RelayBacklog,
+            C::LinkCongestion => Self::LinkCongestion,
+            C::LinkLoss => Self::LinkLoss,
+            C::HostSecureDesktop => Self::HostSecureDesktop,
+            C::EncoderSlow => Self::EncoderSlow,
+            C::DecoderSlow => Self::DecoderSlow,
+            C::DecoderRecovering => Self::DecoderRecovering,
+            C::EncoderSoftware => Self::EncoderSoftware,
+            C::DecoderSoftware => Self::DecoderSoftware,
+            C::RelayPath => Self::RelayPath,
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiDesktopMediaStatus {
     pub reason: FfiAdaptationReason,
     pub received_kbps: u32,
@@ -1015,6 +1048,8 @@ pub struct FfiDesktopMediaStatus {
     pub decode_us: u64,
     pub encode_us: u64,
     pub capture_us: u64,
+    /// What is wrong with the picture now, from the most severe.
+    pub conditions: Vec<FfiCondition>,
 }
 impl From<vnilink::DesktopMediaStatus> for FfiDesktopMediaStatus {
     fn from(status: vnilink::DesktopMediaStatus) -> Self {
@@ -1038,6 +1073,7 @@ impl From<vnilink::DesktopMediaStatus> for FfiDesktopMediaStatus {
             decode_us: status.decode_us,
             encode_us: status.encode_us,
             capture_us: status.capture_us,
+            conditions: status.conditions.iter().map(Into::into).collect(),
         }
     }
 }
@@ -1083,6 +1119,12 @@ impl DesktopService {
     pub fn report_decode_duration(&self, microseconds: u64) -> Result<(), FfiError> {
         self.inner
             .report_decode_duration(microseconds)
+            .map_err(map_error)
+    }
+    /// Whether the window decodes in software, and its decoder restarts in total.
+    pub fn report_decoder(&self, software: bool, recoveries: u64) -> Result<(), FfiError> {
+        self.inner
+            .report_decoder(software, recoveries)
             .map_err(map_error)
     }
     pub fn media_status(&self) -> Result<FfiDesktopMediaStatus, FfiError> {

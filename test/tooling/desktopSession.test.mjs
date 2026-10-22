@@ -40,6 +40,7 @@ function fixture({ control = true, decodes = true } = {}) {
 			return undefined;
 		}
 		return {
+			software: false,
 			decode: chunk => {
 				decoded.push(chunk);
 				output({ timestamp: chunk.timestamp, close() { } });
@@ -49,11 +50,17 @@ function fixture({ control = true, decodes = true } = {}) {
 		};
 	};
 	const session = new EngineDesktopSession(control, { id: '4', generation: '2' }, createDecoder, () => Promise.resolve([]));
+	const reports = [];
 	const inputs = [];
 	const keyframes = [];
 	const cursors = new Emitter();
 	session.attach({
-		video: { onCursor: cursors.event, requestKeyframe: () => keyframes.push(true), mediaStatus: () => Promise.resolve({ reason: 'stable', receivedKbps: 1, receivedFps: 1, receiverQueueMs: 0, hostQueueMs: 0, lossPerMille: 0, rttMs: 20, encodeUs: 0, captureUs: 0 }), close() { } },
+		video: {
+			onCursor: cursors.event, requestKeyframe: () => keyframes.push(true), mediaStatus: decoder => {
+				reports.push(decoder);
+				return Promise.resolve({ reason: 'stable', receivedKbps: 1, receivedFps: 1, receiverQueueMs: 0, hostQueueMs: 0, lossPerMille: 0, rttMs: 20, encodeUs: 0, captureUs: 0, conditions: [] });
+			}, close() { }
+		},
 		input: control ? { input: command => inputs.push(command), close() { } } : undefined,
 	});
 	const pictures = [];
@@ -61,7 +68,7 @@ function fixture({ control = true, decodes = true } = {}) {
 	session.onPicture(picture => pictures.push(picture));
 	session.onEnd(end => ends.push(end));
 	const packet = (fields, data = keyframe) => ({ type: 'data', sequence: 1, kind: 'video', data, metadata: JSON.stringify({ codec: 'h264', keyframe: true, timestampUs: '1000', displayId: '7', revision: '3', hostUs: 0, queuedUs: 0, ...fields }) });
-	return { session, codecs, decoded, closed, inputs, pictures, ends, packet, failures, keyframes, cursors };
+	return { session, codecs, decoded, closed, inputs, pictures, ends, packet, failures, keyframes, cursors, reports };
 }
 
 test('a picture is decoded with its own codec and keeps the display and revision it was taken on', async () => {
@@ -143,6 +150,33 @@ test('a decoder that loses the picture asks for a keyframe and starts again from
 	assert.deepEqual(pictures.map(picture => picture.frame.timestamp), [1000, 3000]);
 });
 
+test('the engine hears each decoder restart and whether this computer decodes in software', async () => {
+	const { session, packet, failures, reports } = fixture();
+	await session.consume(packet({}));
+	await session.stats();
+	assert.deepEqual(reports.at(-1), { decodeUs: 0, software: false, recoveries: 0 });
+	failures.at(-1)();
+	await new Promise(resolve => setImmediate(resolve));
+	await session.consume(packet({ timestampUs: '3000' }));
+	await session.stats();
+	assert.equal(reports.at(-1).recoveries, 1, 'a restart after a picture is a recovery');
+	// A decoder that fell back from hardware says so.
+	const fallback = fixture();
+	const software = new EngineDesktopSession(true, { id: '4', generation: '2' }, async (_codec, output) => ({ software: true, decode: chunk => output({ timestamp: chunk.timestamp, close() { } }), drained: () => Promise.resolve(), close() { } }), () => Promise.resolve([]));
+	const heard = [];
+	software.attach({
+		video: {
+			onCursor: () => ({ dispose() { } }), requestKeyframe() { }, mediaStatus: decoder => {
+				heard.push(decoder);
+				return Promise.resolve(undefined);
+			}, close() { }
+		}, input: undefined
+	});
+	await software.consume(fallback.packet({}));
+	await software.stats();
+	assert.equal(heard.at(-1).software, true);
+});
+
 test('the other pointer keeps its shape across moves, unpremultiplied for a canvas', () => {
 	const { session, cursors } = fixture();
 	const pointers = [];
@@ -199,12 +233,12 @@ test('the engine hears how fast the decoder works, not how long a picture waits 
 	let output;
 	const createDecoder = async (_codec, emit) => {
 		output = emit;
-		return { decode: chunk => held.push(chunk), drained: () => Promise.resolve(), close() { } };
+		return { software: false, decode: chunk => held.push(chunk), drained: () => Promise.resolve(), close() { } };
 	};
 	const reported = [];
 	const session = new EngineDesktopSession(true, { id: '4', generation: '2' }, createDecoder, () => Promise.resolve([]));
-	const status = { reason: 'stable', receivedKbps: 1, receivedFps: 1, receiverQueueMs: 0, hostQueueMs: 0, lossPerMille: 0, rttMs: 20, encodeUs: 0, captureUs: 0 };
-	const mediaStatus = decodeUs => {
+	const status = { reason: 'stable', receivedKbps: 1, receivedFps: 1, receiverQueueMs: 0, hostQueueMs: 0, lossPerMille: 0, rttMs: 20, encodeUs: 0, captureUs: 0, conditions: [] };
+	const mediaStatus = ({ decodeUs }) => {
 		reported.push(decodeUs);
 		return Promise.resolve(status);
 	};

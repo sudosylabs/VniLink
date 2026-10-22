@@ -4,7 +4,7 @@ import type { CameraChunk, CameraDecoder, CameraDecoderFactory } from './engineC
 class WebCodecsDecoder implements CameraDecoder {
 	private readonly waiting = new Set<() => void>();
 
-	constructor(private readonly decoder: VideoDecoder) {
+	constructor(private readonly decoder: VideoDecoder, public readonly software: boolean) {
 		decoder.addEventListener('dequeue', () => {
 			this.settle();
 		});
@@ -68,7 +68,7 @@ export const createWebCodecsDecoder: CameraDecoderFactory = async (codec, output
 		}
 		const decoder = new VideoDecoder({ output, error });
 		decoder.configure(config);
-		return new WebCodecsDecoder(decoder);
+		return new WebCodecsDecoder(decoder, hardwareAcceleration === 'no-preference');
 	}
 	return undefined;
 };

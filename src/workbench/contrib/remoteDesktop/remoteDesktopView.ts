@@ -1,8 +1,10 @@
 import * as nls from '../../../nls.js';
 import { $, addDisposableListener, append, DisposableResizeObserver, EventType, getWindow } from '../../../base/browser/dom.js';
+import { status as announce } from '../../../base/browser/ui/aria/aria.js';
 import { Icons } from '../../../base/common/icons.js';
 import { isMacintosh, isWindows } from '../../../base/common/platform.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../../base/common/lifecycle.js';
+import type { DesktopCondition } from '../../../platform/engine/common/dataChannel.js';
 import type { DisplayInfo } from '../../../platform/engine/common/engine.js';
 import { hidUsage } from '../../../platform/engine/common/keyUsage.js';
 import type { DeviceSummary } from '../../services/devices/deviceService.js';
@@ -119,6 +121,26 @@ export function statsText(stats: DesktopStats, name: string): string {
 	return parts.join(' · ');
 }
 
+/** One short phrase for what is wrong with the picture, naming whose side it is. */
+export function conditionText(condition: DesktopCondition, name: string): string {
+	switch (condition) {
+		case 'link.blackout': return nls.localize('desktop.condition.blackout', 'No picture from {0}', name);
+		case 'relay.backlog': return nls.localize('desktop.condition.relayBacklog', 'Relayed connection is delayed');
+		case 'link.congestion': return nls.localize('desktop.condition.congestion', 'Slow network: lowered quality');
+		case 'link.loss': return nls.localize('desktop.condition.loss', 'Network is losing data');
+		case 'host.secureDesktop': return nls.localize('desktop.condition.secureDesktop', '{0} is on a sign-in or admin prompt', name);
+		case 'encoder.slow': return nls.localize('desktop.condition.encoderSlow', '{0} can’t encode fast enough', name);
+		case 'decoder.slow': return nls.localize('desktop.condition.decoderSlow', 'This computer can’t decode fast enough');
+		case 'decoder.recovering': return nls.localize('desktop.condition.recovering', 'Picture recovering from a decoding error');
+		case 'encoder.software': return nls.localize('desktop.condition.encoderSoftware', '{0} is encoding in software', name);
+		case 'decoder.software': return nls.localize('desktop.condition.decoderSoftware', 'This computer is decoding in software');
+		case 'relay.path': return nls.localize('desktop.condition.relay', 'Connected through a relay');
+	}
+}
+
+/** Conditions that need no attention while others are absent: a relay is not a problem. */
+const informational: ReadonlySet<DesktopCondition> = new Set(['relay.path']);
+
 /** Each measured stage's typical time, then the time nineteen pictures in twenty beat. */
 export function latencyText(stats: DesktopStats, name: string): string {
 	const labels: Readonly<Record<LatencyStage, string>> = {
@@ -213,6 +235,10 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	private readonly statusRole: HTMLElement;
 	private readonly statusSize: HTMLElement;
 	private readonly statusStats: HTMLElement;
+	/** What is wrong with the live picture, apart from why one ended. */
+	private readonly statusCondition: HTMLElement;
+	/** The condition last shown and announced. */
+	private shownCondition: DesktopCondition | undefined;
 	private readonly statsTimer = this._register(new MutableDisposable());
 	private readonly session = this._register(new MutableDisposable<IDesktopSession>());
 	private readonly sessionListeners = this._register(new DisposableStore());
@@ -292,6 +318,8 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		const status = append(this.element, $('footer.desktop-status'));
 		this.statusRole = append(status, $('span.desktop-status-role'));
 		this.statusStats = append(status, $('span.desktop-status-stats'));
+		this.statusCondition = append(status, $('span.desktop-status-condition'));
+		this.statusCondition.hidden = true;
 		append(status, $('span.desktop-status-space'));
 		this.statusSize = append(status, $('span.desktop-status-size'));
 		if (control) {
@@ -735,6 +763,9 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	private setOverlay(state: string, title: string, body: string, actions: readonly OverlayAction[]): void {
 		this.statsTimer.clear();
 		this.statusStats.textContent = '';
+		this.showConditions([]);
+		// Progress is polite; an end interrupts, once, from the same region.
+		this.overlay.setAttribute('role', state === 'ended' ? 'alert' : 'status');
 		this.overlay.dataset.state = state;
 		this.overlay.hidden = false;
 		this.stage.classList.toggle('desktop-dimmed', this.hasPicture);
@@ -759,13 +790,46 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	private watchStats(): void {
 		const timer = setInterval(() => {
 			void this.session.value?.stats().then(stats => {
+				// The picture may have ended while the engine answered.
+				if (this.overlay.dataset.state) {
+					return;
+				}
 				this.statusStats.textContent = stats ? statsText(stats, this.device.name) : '';
 				this.statusStats.title = stats ? latencyText(stats, this.device.name) : '';
+				this.showConditions(stats?.status.conditions ?? []);
 			});
 		}, 1000);
 		this.statsTimer.value = toDisposable(() => {
 			clearInterval(timer);
 		});
+	}
+
+	/**
+	 * Shows the worst condition that needs attention in one phrase, with
+	 * every held one on hover or focus, and says a new worst one aloud
+	 * once. A relay alone is not shown; it is listed with the others.
+	 */
+	private showConditions(conditions: readonly DesktopCondition[]): void {
+		const name = this.device.name;
+		const worst = conditions.find(condition => !informational.has(condition));
+		const element = this.statusCondition;
+		element.hidden = worst === undefined;
+		element.textContent = worst ? conditionText(worst, name) : '';
+		const all = conditions.map(condition => conditionText(condition, name)).join('\n');
+		element.title = all;
+		element.tabIndex = worst ? 0 : -1;
+		element.setAttribute('aria-label', conditions.map(condition => conditionText(condition, name)).join('. '));
+		if (worst) {
+			element.dataset.condition = worst;
+		} else {
+			delete element.dataset.condition;
+		}
+		if (worst !== this.shownCondition) {
+			this.shownCondition = worst;
+			if (worst) {
+				announce(conditionText(worst, name));
+			}
+		}
 	}
 
 	private hideState(): void {
