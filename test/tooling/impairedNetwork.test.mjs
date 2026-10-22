@@ -147,7 +147,7 @@ test('each scenario receives only its own settings', () => {
 	// Only relay mode names a relay; direct cores keep their dead one.
 	assert.equal(transfer.VNILINK_IMPAIRED_RELAY_URL, undefined);
 	const relayed = resolveOptions({ path: 'relay' });
-	for (const name of ['transfer', 'video', 'combined', 'combined-download']) {
+	for (const name of ['transfer', 'video', 'combined', 'combined-download', 'stills']) {
 		assert.equal(scenarioEnvironment(name, relayed, paths, link).VNILINK_IMPAIRED_RELAY_URL, relayUrl());
 	}
 });
@@ -174,6 +174,29 @@ test('the summary reports refusals, recovery and failed runs', () => {
 	assert.match(summary, /\| rate-5 \| download \| failed \|/);
 	assert.doesNotMatch(summary, /Path: relay/);
 	assert.match(renderSummary({ started: 'now', commit: 'abc', path: 'relay', runs: [] }), /Path: relay\. .*not a public relay or an internet path/);
+});
+
+test('the summary sets a change\'s wait with still pictures beside its wait without', () => {
+	const half = (first, host) => ({
+		changes: 7,
+		changes_unshown: host ? 0 : 1,
+		first_picture_latency_ms: first,
+		latency_ms: { p50: 5, p95: 20 },
+		stills_received: host ? 6 : 0,
+		still_after_ms: host ? { p50: 2100, max: 2400 } : undefined,
+		host,
+	});
+	const summary = renderSummary({
+		started: 'now',
+		commit: 'abc',
+		runs: [
+			{ profile: 'rate-2', scenario: 'stills', status: 'passed', result: { off: half({ p50: 10, p95: 30, max: 40 }, null), on: half({ p50: 12, p95: 90, max: 180 }, { stills_sent: 6, still_bytes: 1_200_000, stills_dropped: 2 }), paths: {} } },
+			{ profile: 'loss-1', scenario: 'stills', status: 'failed', error: 'cargo exited (101)', result: null },
+		],
+	});
+	assert.match(summary, /## Still pictures/);
+	assert.match(summary, /\| rate-2 \| 10\.0\/30\.0\/40\.0 \| 12\.0\/90\.0\/180\.0 \| 20\.0\/20\.0 \| 6\/7\/7\/7 \| 6\/2\/6 \| 200 \| 2100\/2400 \|/);
+	assert.match(summary, /\| loss-1 \| failed \| – \| – \| – \| – \| – \| – \|$/m);
 });
 
 test('relay counters and socket samples become per-run deltas and peaks', () => {

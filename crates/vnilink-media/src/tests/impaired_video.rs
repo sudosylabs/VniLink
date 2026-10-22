@@ -1149,3 +1149,334 @@ fn the_dominant_condition_is_the_worst_one_held_most_often() {
         .collect();
     assert!(condition_summary(&mostly_clean)["dominant"].is_null());
 }
+
+/// Pages of coloured text, so a still picture of them is as large as one of
+/// a real screen of text.
+const STILLS_WIDTH: u16 = 1920;
+const STILLS_HEIGHT: u16 = 1080;
+
+/// How long the scenario's screen stays the same, then moves. A still
+/// picture is made `STILL_AFTER` into the still period and takes a moment
+/// to encode and send: the screen moves again while it is on the wire, the
+/// worst moment for a change.
+const STILL_PERIOD: Duration = Duration::from_millis(2_250);
+const MOVING_PERIOD: Duration = Duration::from_millis(750);
+
+/// A screen that stays the same for `still`, then moves for `moving`, over
+/// and over. Each still period shows the other of two pages, so each still
+/// picture differs from the one before.
+struct Alternating {
+    started: Instant,
+    still: Duration,
+    moving: Duration,
+    pages: [RawFrame; 2],
+}
+
+impl Alternating {
+    fn new(started: Instant, still: Duration, moving: Duration) -> Self {
+        let page = |index| crate::measure::colour_text_page(STILLS_WIDTH, STILLS_HEIGHT, index);
+        Self {
+            started,
+            still,
+            moving,
+            pages: [page(0), page(40)],
+        }
+    }
+
+    /// The period `at` falls in, and whether the screen is moving then.
+    fn phase(&self, at: Instant) -> (u64, bool) {
+        let cycle = (self.still + self.moving).as_micros() as u64;
+        let since = at.saturating_duration_since(self.started).as_micros() as u64;
+        (
+            since / cycle,
+            since % cycle >= self.still.as_micros() as u64,
+        )
+    }
+
+    /// When the screen starts moving in each period before `end`.
+    fn onsets(&self, end: Instant) -> Vec<Instant> {
+        (0..)
+            .map(|period| self.started + (self.still + self.moving) * period + self.still)
+            .take_while(|onset| *onset < end)
+            .collect()
+    }
+}
+
+impl FrameSource for Alternating {
+    fn size(&self) -> (u16, u16) {
+        (STILLS_WIDTH, STILLS_HEIGHT)
+    }
+
+    fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
+        let (period, _) = self.phase(Instant::now());
+        Ok(Some(
+            self.pages[period as usize % 2]
+                .clone()
+                .with_timestamp(timestamp_us),
+        ))
+    }
+
+    /// A new attestation for every read while moving; the start of the
+    /// still period while still.
+    fn attested_at(&self) -> Option<Instant> {
+        let now = Instant::now();
+        let (period, moving) = self.phase(now);
+        Some(if moving {
+            now
+        } else {
+            self.started + (self.still + self.moving) * period as u32
+        })
+    }
+}
+
+/// A host whose capture sends still pictures or not.
+struct StillsHost(bool);
+
+impl vnilink::HostCapture for StillsHost {
+    fn monitor(&self) -> (u16, u16) {
+        (STILLS_WIDTH, STILLS_HEIGHT)
+    }
+    fn stills(&self) -> bool {
+        self.0
+    }
+}
+
+/// One stream of a screen that alternates still and moving, with still
+/// pictures `on` or not: how soon each change after a still period shows,
+/// and what the stills cost.
+fn run_stills(stream: &Stream, on: bool) -> Value {
+    let host = Arc::new(boot_in(std::env::var("VNILINK_IMPAIRED_HOST_NS").ok()));
+    let viewer = boot_in(std::env::var("VNILINK_IMPAIRED_VIEW_NS").ok());
+    host.set_capture(Box::new(StillsHost(on))).unwrap();
+    for core in [&*host, &viewer] {
+        core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
+            .unwrap();
+    }
+    let decoder = |codec, chroma444| vnilink::WindowDecoder {
+        codec,
+        hardware: false,
+        chroma444,
+    };
+    viewer
+        .set_window_decoders(vec![
+            decoder(vnilink::VideoCodec::H264, false),
+            decoder(vnilink::VideoCodec::Av1, on),
+        ])
+        .unwrap();
+    // The app's Smooth preset by default: the largest still pictures, so
+    // the longest a change can wait behind one.
+    let kbps = env_u64("VNILINK_IMPAIRED_STILLS_KBPS", 12_000) as u32;
+    viewer
+        .set_desktop_quality_defaults(
+            vnilink::Quality::new(kbps, 60, STILLS_WIDTH, STILLS_HEIGHT).expect("a valid quality"),
+        )
+        .unwrap();
+    viewer
+        .accept_invitation(&host.create_invitation(Duration::from_secs(60)).unwrap())
+        .unwrap();
+    host.accept_invitation(&viewer.create_invitation(Duration::from_secs(60)).unwrap())
+        .unwrap();
+    host.set_desktop_sharing(Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: false,
+    })
+    .unwrap();
+    host.start_hosting().unwrap();
+    let parent = viewer.begin_connect_services(&host.endpoint_id()).unwrap();
+    wait_active(&viewer, parent.id);
+    let parent = viewer.controller_session(parent.id).unwrap();
+    let owner = viewer
+        .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
+        .unwrap();
+    let handle = viewer
+        .open_desktop_service(owner.id, owner.generation)
+        .unwrap();
+    assert_eq!(handle.desktop_info().unwrap().stills, on, "stills agreed");
+    let frames = handle.subscribe_video().unwrap();
+    let connected = json!({ "host": selected_paths(&host), "viewer": selected_paths(&viewer) });
+
+    let started = Instant::now();
+    let source = Arc::new(Alternating::new(started, STILL_PERIOD, MOVING_PERIOD));
+    let record = Arc::new(Host::new());
+    let stop = Arc::new(AtomicBool::new(false));
+    let capture = {
+        let (host, record, stop, source) = (
+            Arc::clone(&host),
+            Arc::clone(&record),
+            Arc::clone(&stop),
+            Arc::clone(&source),
+        );
+        std::thread::spawn(move || {
+            crate::serve_shared_capture(
+                &*source,
+                &host,
+                &stop,
+                false,
+                0,
+                |_| {},
+                move |_, _, _, _, _| {
+                    Ok(Encoder {
+                        host: Arc::clone(&record),
+                        opened: false,
+                        since_keyframe: 0,
+                    })
+                },
+            )
+        })
+    };
+    let schedule = std::thread::spawn({
+        let stream = Stream {
+            duration: stream.duration,
+            warmup: stream.warmup,
+            bursts: stream.bursts,
+            burst: stream.burst,
+            burst_start: stream.burst_start.clone(),
+            burst_end: stream.burst_end.clone(),
+            policy: stream.policy,
+            transfer: None,
+        };
+        move || impair(&stream, started)
+    });
+    // Changed pictures as they arrived, and the stills.
+    let mut changed: Vec<(Instant, Instant)> = Vec::new();
+    let mut stills: Vec<(Instant, usize)> = Vec::new();
+    while started.elapsed() < stream.duration {
+        let Some(frame) = frames.recv_timeout(Duration::from_millis(20)) else {
+            continue;
+        };
+        let at = Instant::now();
+        match frame.role {
+            vnilink::FrameRole::Still => stills.push((at, frame.payload.len())),
+            vnilink::FrameRole::Changed => {
+                let index = picture_index(&frame.payload).expect("a sequence marker");
+                if let Some(produced) = record.produced_at(index) {
+                    changed.push((at, produced));
+                }
+            }
+            vnilink::FrameRole::Unchanged => {}
+        }
+    }
+    let end = started + stream.duration;
+    let bursts = schedule.join().expect("impairment schedule");
+    stop.store(true, Ordering::Release);
+    capture
+        .join()
+        .expect("capture thread")
+        .expect("shared capture");
+    let hosted = host
+        .diagnostic_snapshot()
+        .expect("diagnostic snapshot")
+        .pipelines
+        .into_iter()
+        .find(|pipeline| pipeline.hosted);
+    let finished = json!({ "host": selected_paths(&host), "viewer": selected_paths(&viewer) });
+    handle.close();
+
+    // Each change after the warm-up: when its first picture showed, from
+    // the change and from when that picture was made.
+    let onsets: Vec<Value> = source
+        .onsets(end)
+        .into_iter()
+        .filter(|onset| *onset >= started + stream.warmup)
+        .map(|onset| {
+            let first = changed.iter().find(|(_, produced)| *produced >= onset);
+            json!({
+                "at_ms": millis(onset - started),
+                "shown_after_ms": first.map(|(at, _)| millis(*at - onset)),
+                "latency_ms": first.map(|(at, produced)| millis(*at - *produced)),
+                "in_burst": bursts.iter().any(|(began, ended)| onset >= *began && onset <= *ended),
+            })
+        })
+        .collect();
+    let sorted = |values: Vec<f64>| {
+        let mut values = values;
+        values.sort_by(f64::total_cmp);
+        json!({
+            "p50": percentile(&values, 0.50),
+            "p95": percentile(&values, 0.95),
+            "max": values.last().copied(),
+        })
+    };
+    let first_latency: Vec<f64> = onsets
+        .iter()
+        .filter_map(|onset| onset["latency_ms"].as_f64())
+        .collect();
+    let latency: Vec<f64> = changed
+        .iter()
+        .map(|(at, produced)| millis(*at - *produced))
+        .collect();
+    json!({
+        "stills": on,
+        "changes": onsets.len(),
+        "changes_unshown": onsets.iter().filter(|onset| onset["shown_after_ms"].is_null()).count(),
+        "first_picture_latency_ms": sorted(first_latency),
+        "latency_ms": sorted(latency),
+        "stills_received": stills.len(),
+        "still_bytes_received": stills.iter().map(|(_, bytes)| bytes).sum::<usize>(),
+        // From the screen going still to its still picture arriving.
+        "still_after_ms": sorted(
+            stills
+                .iter()
+                .map(|(at, _)| {
+                    let (period, _) = source.phase(*at);
+                    millis(*at - (started + (STILL_PERIOD + MOVING_PERIOD) * period as u32))
+                })
+                .collect()
+        ),
+        "paths": { "connected": connected, "finished": finished },
+        "host": hosted.map(|pipeline| json!({
+            "stills_sent": pipeline.stills_sent,
+            "still_bytes": pipeline.still_bytes,
+            "stills_dropped": pipeline.stills_dropped,
+            "send_dropped": pipeline.send_dropped,
+            "keyframes_sent": pipeline.keyframes_sent,
+        })),
+        "onsets": onsets,
+    })
+}
+
+/// A screen that alternates still and moving, streamed without still
+/// pictures and then with them over the same link.
+#[test]
+#[ignore = "impaired-network harness: run through `npm run measure:impaired`"]
+fn impaired_desktop_stills() {
+    let stream = Stream::from_env();
+    let off = run_stills(&stream, false);
+    let on = run_stills(&stream, true);
+    let report = json!({
+        "scenario": "stills",
+        "duration_s": stream.duration.as_secs_f64(),
+        // The harness checks the paths of the run with still pictures.
+        "paths": on["paths"].clone(),
+        "off": off,
+        "on": on,
+    });
+    let text = serde_json::to_string_pretty(&report).unwrap();
+    match std::env::var_os("VNILINK_IMPAIRED_OUT") {
+        Some(path) => std::fs::write(path, text).expect("result file"),
+        None => eprintln!("{text}"),
+    }
+}
+
+/// The stills scenario on loopback, briefly: one still picture per still
+/// period, every change shown.
+#[test]
+fn stills_run_on_loopback() {
+    let stream = Stream {
+        duration: Duration::from_secs(9),
+        warmup: Duration::from_secs(1),
+        bursts: 0,
+        burst: Duration::ZERO,
+        burst_start: None,
+        burst_end: None,
+        policy: ViewerPolicy::Passive,
+        transfer: None,
+    };
+    let on = run_stills(&stream, true);
+    assert_eq!(on["changes_unshown"], 0, "{on}");
+    assert!(on["stills_received"].as_u64().unwrap() >= 1, "{on}");
+    let off = run_stills(&stream, false);
+    assert_eq!(off["stills_received"], 0, "{off}");
+}

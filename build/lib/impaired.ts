@@ -24,6 +24,8 @@ export const SCENARIOS = Object.freeze({
 	combined: Object.freeze({ crate: 'vnilink-media', test: 'tests::impaired_video_tests::impaired_desktop_stream_during_upload' }),
 	/** The desktop stream while the viewer downloads one large file from the host, the video's way. */
 	'combined-download': Object.freeze({ crate: 'vnilink-media', test: 'tests::impaired_video_tests::impaired_desktop_stream_during_download' }),
+	/** A screen that alternates still and moving, streamed without still pictures and then with them. */
+	stills: Object.freeze({ crate: 'vnilink-media', test: 'tests::impaired_video_tests::impaired_desktop_stills' }),
 });
 
 export type ScenarioName = keyof typeof SCENARIOS;
@@ -464,6 +466,23 @@ function videoCells(result: VideoResult): string[] {
 	];
 }
 
+/** One half of a stills run: without still pictures or with them. */
+interface StillsRun {
+	changes: number;
+	changes_unshown: number;
+	first_picture_latency_ms: { p50: number | null; p95: number | null; max: number | null };
+	latency_ms: { p50: number | null; p95: number | null };
+	stills_received: number;
+	still_after_ms?: { p50: number | null; max: number | null };
+	host: { stills_sent: number; still_bytes: number; stills_dropped: number } | null;
+}
+
+/** First changed picture's latency p50/p95/max, then all changed pictures' p95, as summary cells. */
+function stillsCells(run: StillsRun): string[] {
+	const first = run.first_picture_latency_ms;
+	return [`${cell(first.p50)}/${cell(first.p95)}/${cell(first.max)}`, cell(run.latency_ms.p95), `${String(run.changes - run.changes_unshown)}/${String(run.changes)}`];
+}
+
 /** A short Markdown summary of `report`. */
 export function renderSummary(report: ImpairedReport): string {
 	const lines = [
@@ -527,6 +546,32 @@ export function renderSummary(report: ImpairedReport): string {
 			const transfer = result.transfer;
 			const outcome = transfer ? `${transfer.outcome}, ${(transfer.elapsed_ms / 1000).toFixed(1)} s` : '–';
 			lines.push(`| ${run.profile} | ${direction} | ${cell(result.delivery_ratio * 100)}% | ${videoCells(result).join(' | ')} | ${cell(result.longest_freeze_ms, 0)} | ${cell(result.session_interruptions, 0)} | ${cell(sessionRtt(result), 0)} | ${outcome} | ${cell(transfer?.mb_per_s, 2)} |`);
+		}
+		lines.push('');
+	}
+	const stills = report.runs.filter(run => run.scenario === 'stills');
+	if (stills.length) {
+		lines.push(
+			'## Still pictures',
+			'',
+			'A screen of coloured text stays the same for 2.25 s, then moves for 0.75 s, over and over, at the Smooth preset (12 Mb/s): the largest still pictures, and each change lands while one is on the wire, so this is the longest a change can wait behind one. Each profile streams it without still pictures, then with them. The first picture of a change is the one a change waits for; its latency runs from when it was made to when it arrived. A still arrives this long after the screen went still.',
+			'',
+			'| Profile | First picture of a change, off p50/p95/max ms | On p50/p95/max ms | Every changed picture p95 off/on ms | Changes shown off/on | Stills sent/dropped/received | Still kB | Still arrives after, p50/max ms |',
+			'|---|---|---|---|---|---|---|---|',
+		);
+		for (const run of stills) {
+			const result = run.result as { off: StillsRun; on: StillsRun } | null;
+			if (!result) {
+				lines.push(`| ${run.profile} | ${run.status} | – | – | – | – | – | – |`);
+				continue;
+			}
+			const [offFirst, offP95, offShown] = stillsCells(result.off);
+			const [onFirst, onP95, onShown] = stillsCells(result.on);
+			const host = result.on.host;
+			const sent = host ? `${String(host.stills_sent)}/${String(host.stills_dropped)}/${String(result.on.stills_received)}` : '–';
+			const size = host?.stills_sent ? cell(host.still_bytes / host.stills_sent / 1000, 0) : '–';
+			const after = result.on.still_after_ms;
+			lines.push(`| ${run.profile} | ${offFirst} | ${onFirst} | ${offP95}/${onP95} | ${offShown}/${onShown} | ${sent} | ${size} | ${cell(after?.p50, 0)}/${cell(after?.max, 0)} |`);
 		}
 		lines.push('');
 	}
@@ -654,7 +699,8 @@ async function runScenario(context: RunContext, item: NetemProfile, scenario: Sc
 		if (mismatch) {
 			throw new Error(`Wrong transport path: ${mismatch}`);
 		}
-		if (scenario !== 'transfer') {
+		// The stills scenario measures changes, not the viewer's conditions over time.
+		if (scenario !== 'transfer' && scenario !== 'stills') {
 			const wrong = conditionMismatch(run.result, expectedConditions(item.name, options.path, options.burstMs, options.bursts));
 			if (wrong) {
 				throw new Error(`Wrong condition: ${wrong}`);
