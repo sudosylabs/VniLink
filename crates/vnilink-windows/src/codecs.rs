@@ -14,7 +14,8 @@ pub fn probe_video_codecs() -> vnilink::VideoCodecCaps {
     }
     #[cfg(windows)]
     {
-        let encode = WindowsEncoder::open(64, 64, 30, 500_000).is_ok();
+        let encoder = WindowsEncoder::open(64, 64, 30, 500_000).ok();
+        let encode = encoder.is_some();
         vnilink::VideoCodecCaps {
             encode_baseline: encode,
             encode_high: false,
@@ -22,8 +23,7 @@ pub fn probe_video_codecs() -> vnilink::VideoCodecCaps {
             decode_high: encode,
             max_width: 4096,
             max_height: 4096,
-            // The Microsoft H.264 transform is a software encoder.
-            hardware: false,
+            hardware: encoder.as_ref().is_some_and(WindowsEncoder::hardware),
             device: "mediafoundation".into(),
             chroma444: false,
             additional: Vec::new(),

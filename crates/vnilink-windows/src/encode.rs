@@ -1,5 +1,10 @@
 //! Media Foundation H.264. Input is NV12. Output is Annex-B.
 //!
+//! The desktop encoder is the first H.264 transform that opens, hardware
+//! first ([`crate::transform`]); the camera uses Microsoft's software
+//! transform. Hardware transforms are asynchronous: input and output wait
+//! for their events ([`TransformEvents`]).
+//!
 //! The Microsoft transform writes 4-byte length prefixes. SPS and PPS are
 //! read from the output media type and prefixed onto an IDR. A sample is a
 //! keyframe only when those three NAL units are present. Forcing the next
@@ -10,11 +15,13 @@
 //!
 //! A recovery keyframe is encoded under a quantiser floor
 //! (`AVEncVideoMinQP`) that [`RecoveryQp`] moves until it fits a few
-//! pictures' bytes, and the floor is cleared once its picture is drained.
-//! A floor rather than a higher `AVEncVideoMaxQP`: on VideoToolbox, the only
-//! encoder this was measured on, raising the ceiling left a forced keyframe
-//! as large, and a floor shrank it. The transform here is synchronous and
-//! drained after each input, so no other picture is encoded under the floor.
+//! pictures' bytes, and the floor is cleared once its picture is drained;
+//! the transform is drained after each input, so no other picture is
+//! encoded under the floor. Only transforms not measured to ignore the
+//! floor get one ([`Vendor::takes_qp_floor`]). On those measured, a
+//! keyframe is as small as the transform's constant-bitrate control makes
+//! it: near the budget on the hardware ones, several times over it on
+//! Microsoft's.
 
 #[cfg(windows)]
 use vnilink_media::{bgra_to_nv12, RecoveryQp};
@@ -37,22 +44,33 @@ use windows::Win32::Media::MediaFoundation::{
     MF_MT_VIDEO_NOMINAL_RANGE, MF_MT_YUV_MATRIX, MF_VERSION,
 };
 #[cfg(windows)]
-use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
-};
+use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 #[cfg(windows)]
 use windows::Win32::System::Variant::{VARIANT, VT_UI4};
 
 #[cfg(windows)]
 use crate::bitstream::h264_access_unit;
-
 #[cfg(windows)]
-const CLSID_MSH264_ENCODER: windows::core::GUID =
-    windows::core::GUID::from_u128(0x6ca5_0344_051a_4ded_9779_a433_0516_5e35);
+use crate::transform::{h264_encoders, CreatedTransform, H264Transform, Vendor};
+#[cfg(windows)]
+use crate::transform_events::{TransformEvents, Waited};
+
+/// How long an asynchronous transform may take to accept a picture or
+/// return one; longer than any hardware encode, short enough that a
+/// transform that holds pictures back fails the frame, not the session.
+#[cfg(windows)]
+const EVENT_WAIT: std::time::Duration = std::time::Duration::from_millis(200);
 
 pub struct WindowsEncoder {
     #[cfg(windows)]
-    transform: IMFTransform,
+    transform: CreatedTransform,
+    /// Present when the transform is asynchronous.
+    #[cfg(windows)]
+    events: Option<TransformEvents>,
+    #[cfg(windows)]
+    vendor: Vendor,
+    #[cfg(windows)]
+    hardware: bool,
     width: u32,
     height: u32,
     #[cfg(windows)]
@@ -98,7 +116,51 @@ impl WindowsEncoder {
     ) -> windows::core::Result<Self> {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)?;
-        Self::create_transform(width, height, frame_rate, bitrate_bps, false)
+        let mut failure = windows::core::Error::from(windows::Win32::Foundation::E_FAIL);
+        for candidate in h264_encoders() {
+            match Self::create_transform(&candidate, width, height, frame_rate, bitrate_bps, false)
+            {
+                Ok(encoder) => return Ok(encoder),
+                Err(err) => failure = err,
+            }
+        }
+        Err(failure)
+    }
+
+    /// Opens `candidate` only, for measuring one transform.
+    #[cfg(all(windows, test))]
+    pub(crate) fn open_candidate(
+        candidate: &H264Transform,
+        width: u16,
+        height: u16,
+        frame_rate: u8,
+        bitrate_bps: u32,
+    ) -> windows::core::Result<Self> {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)?;
+            Self::create_transform(candidate, width, height, frame_rate, bitrate_bps, false)
+        }
+    }
+
+    /// Whether the transform takes the `ICodecAPI` setting `key`.
+    #[cfg(all(windows, test))]
+    pub(crate) fn supports(&self, key: &windows::core::GUID) -> bool {
+        self.transform
+            .cast::<ICodecAPI>()
+            .is_ok_and(|api| unsafe { api.IsSupported(key) }.is_ok())
+    }
+
+    /// Sets the `ICodecAPI` value `key` on the transform, for measuring.
+    #[cfg(all(windows, test))]
+    pub(crate) fn set_codec(&self, key: &windows::core::GUID, value: u32) -> bool {
+        unsafe { set_codec_u32(&self.transform, key, value) }.is_ok()
+    }
+
+    /// Whether the open transform is a hardware encoder.
+    #[cfg(windows)]
+    pub(crate) fn hardware(&self) -> bool {
+        self.hardware
     }
 
     /// The caller must own an MTA apartment and Media Foundation startup on
@@ -113,20 +175,27 @@ impl WindowsEncoder {
         if width % 2 != 0 || height % 2 != 0 {
             return Err(Error::InvalidFrame("NV12 width and height must be even"));
         }
-        Self::create_transform(width, height, frame_rate, bitrate_bps, true)
-            .map_err(|_| Error::Unsupported("Media Foundation camera H.264"))
+        Self::create_transform(
+            &H264Transform::software(),
+            width,
+            height,
+            frame_rate,
+            bitrate_bps,
+            true,
+        )
+        .map_err(|_| Error::Unsupported("Media Foundation camera H.264"))
     }
 
     #[cfg(windows)]
     unsafe fn create_transform(
+        candidate: &H264Transform,
         width: u16,
         height: u16,
         frame_rate: u8,
         bitrate_bps: u32,
         camera: bool,
     ) -> windows::core::Result<Self> {
-        let transform: IMFTransform =
-            CoCreateInstance(&CLSID_MSH264_ENCODER, None, CLSCTX_INPROC_SERVER)?;
+        let transform = candidate.create()?;
         if let Ok(attributes) = transform.GetAttributes() {
             let _ = attributes.SetUINT32(&MF_LOW_LATENCY, 1);
         }
@@ -158,10 +227,12 @@ impl WindowsEncoder {
         // periodic one is only a backstop, every ten seconds.
         let spacing = if camera { rate } else { rate * 10 };
         output.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, spacing)?;
-        if camera {
-            // Baseline excludes B pictures. Prefer the explicit constrained
-            // profile; older transforms accept Baseline only. The camera
-            // publisher still checks emitted SPS constraint flags before use.
+        if camera || candidate.hardware() {
+            // Baseline excludes B pictures, and is the H.264 every viewer
+            // decodes; hardware transforms default to a higher profile.
+            // Prefer the explicit constrained profile; older transforms
+            // accept Baseline only. The camera publisher still checks
+            // emitted SPS constraint flags before use.
             use windows::Win32::Media::MediaFoundation::{
                 eAVEncH264VProfile_Base, eAVEncH264VProfile_ConstrainedBase, MF_MT_MPEG2_PROFILE,
             };
@@ -178,6 +249,11 @@ impl WindowsEncoder {
         }
         let input = video_type(MFVideoFormat_NV12, width, height, rate)?;
         transform.SetInputType(0, &input, 0)?;
+        let events = if candidate.hardware() {
+            Some(TransformEvents::listen(&transform)?)
+        } else {
+            None
+        };
         transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
         transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
         let info = transform.GetOutputStreamInfo(0)?;
@@ -189,6 +265,9 @@ impl WindowsEncoder {
         };
         Ok(Self {
             transform,
+            events,
+            vendor: candidate.vendor,
+            hardware: candidate.hardware(),
             width: u32::from(width),
             height: u32::from(height),
             provides_samples,
@@ -200,12 +279,24 @@ impl WindowsEncoder {
 }
 
 impl VideoEncoder for WindowsEncoder {
-    /// The mean bitrate changes while encoding; a new frame rate needs a
-    /// new transform.
+    /// Per transform, as measured ([`Vendor::refines_still_pictures`]).
+    fn refines_still_pictures(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.vendor.refines_still_pictures()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
+
+    /// The mean bitrate changes while encoding, on a transform that honours
+    /// it ([`Vendor::retunes`]); a new frame rate needs a new transform.
     fn retune(&mut self, bitrate_bps: u32, frame_rate: u8) -> Result<bool, Error> {
         #[cfg(windows)]
         {
-            if frame_rate != self.frame_rate || bitrate_bps == 0 {
+            if frame_rate != self.frame_rate || bitrate_bps == 0 || !self.vendor.retunes() {
                 return Ok(false);
             }
             let rate = u32::from(frame_rate.max(1));
@@ -251,6 +342,7 @@ impl VideoEncoder for WindowsEncoder {
             // transform, used from the thread that owns it.
             let floored = params.force_keyframe
                 && params.recovery
+                && self.vendor.takes_qp_floor()
                 && unsafe {
                     set_codec_u32(
                         &self.transform,
@@ -295,7 +387,7 @@ struct MfSample {
 #[cfg(windows)]
 impl WindowsEncoder {
     unsafe fn encode_nv12(
-        &self,
+        &mut self,
         y_plane: &[u8],
         uv_plane: &[u8],
         timestamp_us: u64,
@@ -323,13 +415,27 @@ impl WindowsEncoder {
             )?;
             let duration = 10_000_000i64 / i64::from(params.frame_rate.max(1));
             sample.SetSampleDuration(duration)?;
+            Ok::<_, windows::core::Error>(sample)
+        })();
+        let sample =
+            prepared.map_err(|_| Error::EncodeRejected("the encoder rejected the frame"))?;
+        if let Some(events) = &mut self.events {
+            if events.take_input(std::time::Instant::now() + EVENT_WAIT) != Waited::Ready {
+                return Err(Error::EncodeRejected("the encoder did not take the frame"));
+            }
+        }
+        let processed = (|| unsafe {
             if params.force_keyframe {
                 force_idr(&self.transform)?;
             }
-            self.transform.ProcessInput(0, &sample, 0)?;
-            Ok::<_, windows::core::Error>(sample)
+            self.transform.ProcessInput(0, &sample, 0)
         })();
-        prepared.map_err(|_| Error::EncodeRejected("the encoder rejected the frame"))?;
+        processed.map_err(rejected)?;
+        if let Some(events) = &mut self.events {
+            if events.take_output(std::time::Instant::now() + EVENT_WAIT) != Waited::Ready {
+                return Err(Error::EncodeRejected("the encoder produced no frame"));
+            }
+        }
         self.drain()
     }
 
