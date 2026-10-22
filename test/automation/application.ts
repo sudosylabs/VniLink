@@ -6,6 +6,14 @@ import { join } from 'node:path';
 import { VniLinkApplication } from '../../src/code/electron-main/app.js';
 import { WindowDriver } from './driver.js';
 
+export interface TestApplicationOptions {
+	/** Show the workbench window, for a run that measures what is on screen. */
+	readonly showWindow?: boolean;
+	/** Let the temporary engine host this computer's screen. */
+	readonly capture?: boolean;
+	readonly timeoutMs?: number;
+}
+
 export class TestApplication {
 	public readonly profile = process.env.VNILINK_TEST_PROFILE ?? mkdtempSync(join(tmpdir(), 'vnilink-test-'));
 	public readonly output = join(__dirname, '../.build/test-runs', `${String(Date.now())}-${String(process.pid)}`);
@@ -18,7 +26,7 @@ export class TestApplication {
 		return this.container ? args.filter(arg => arg !== '--no-sandbox') : args;
 	}
 
-	constructor() {
+	constructor(private readonly options: TestApplicationOptions = {}) {
 		// The scenarios wait on animation frames and timers. Chromium stops
 		// both for a window macOS reports as covered or off screen, as when
 		// the display sleeps during a run, so a test window renders as if seen.
@@ -31,14 +39,15 @@ export class TestApplication {
 	}
 
 	public async run(verify: (window: BrowserWindow, driver: WindowDriver) => Promise<void>): Promise<void> {
+		const timeout = this.options.timeoutMs ?? 120000;
 		this.timer = setTimeout(() => {
 			// Said, so a hang is not mistaken for a crash.
-			const message = 'The scenarios did not finish within 120 s; the last screenshot shows how far they got.';
+			const message = `The scenarios did not finish within ${String(timeout / 1000)} s; the last screenshot shows how far they got.`;
 			appendFileSync(join(this.output, 'failure.log'), message);
 			console.error(message);
 			this.cleanup();
 			app.exit(1);
-		}, 120000);
+		}, timeout);
 		app.once('quit', () => {
 			this.cleanup();
 		});
@@ -58,7 +67,10 @@ export class TestApplication {
 			});
 		});
 		await new VniLinkApplication({
-			showWindow: false, temporaryEngine: true, onReady: async window => {
+			showWindow: this.options.showWindow ?? false,
+			temporaryEngine: true,
+			temporaryEngineCaptures: this.options.capture ?? false,
+			onReady: async window => {
 				const driver = new WindowDriver(window, this.output);
 				try {
 					await driver.ready();

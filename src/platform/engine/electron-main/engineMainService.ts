@@ -55,12 +55,13 @@ export class EngineMainService extends Disposable {
 		return this.connected && !this.closing;
 	}
 
-	public async start(temporary = false): Promise<void> {
+	/** `capture` lets a temporary engine host this computer's screen; only the latency measurement asks for it. */
+	public async start(temporary = false, capture = false): Promise<void> {
 		if (this.started || this.closing) {
 			throw new Error('Engine already started');
 		}
 		this.started = true;
-		const child = utilityProcess.fork(join(__dirname, 'engine.cjs'), temporary ? ['--temporary'] : [], { serviceName: 'VniLink Engine', stdio: 'ignore' });
+		const child = utilityProcess.fork(join(__dirname, 'engine.cjs'), temporary ? ['--temporary', ...(capture ? ['--capture'] : [])] : [], { serviceName: 'VniLink Engine', stdio: 'ignore' });
 		this.child = child;
 		await new Promise<void>((resolve, reject) => {
 			const timeout = setTimeout(() => {

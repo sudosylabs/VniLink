@@ -1231,6 +1231,9 @@ pub struct OpenedEngine {
 }
 pub struct OpenTask {
     temporary: bool,
+    /// A temporary engine that may host this computer's screen, for the
+    /// latency measurement. Only video is prepared: no input, files or shell.
+    capture: bool,
 }
 impl Task for OpenTask {
     type Output = OpenedEngine;
@@ -1244,7 +1247,17 @@ impl Task for OpenTask {
             ))
         };
         let core = result.map_err(core_error)?;
-        let backends = if self.temporary {
+        let backends = if self.temporary && self.capture {
+            let video = core.prepare_native_video();
+            vec![vnilink_app::FfiNativeBackend {
+                name: "video".into(),
+                ready: video.is_ok(),
+                error: video
+                    .err()
+                    .map(|_| "The native video backend could not be initialized".into()),
+            }
+            .into()]
+        } else if self.temporary {
             vec![]
         } else {
             core.initialize_native_backends()
@@ -1279,12 +1292,19 @@ impl Task for OpenTask {
 }
 #[napi]
 pub fn open_engine() -> AsyncTask<OpenTask> {
-    AsyncTask::new(OpenTask { temporary: false })
+    AsyncTask::new(OpenTask {
+        temporary: false,
+        capture: false,
+    })
 }
 // Explicit isolated test/preview mode; never a fallback for unavailable storage.
+// `capture` lets it host this computer's screen, for the latency measurement.
 #[napi]
-pub fn open_temporary_engine() -> AsyncTask<OpenTask> {
-    AsyncTask::new(OpenTask { temporary: true })
+pub fn open_temporary_engine(capture: Option<bool>) -> AsyncTask<OpenTask> {
+    AsyncTask::new(OpenTask {
+        temporary: true,
+        capture: capture.unwrap_or(false),
+    })
 }
 
 impl EngineBridge {
