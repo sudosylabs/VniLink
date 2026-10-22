@@ -72,9 +72,16 @@ export type DesktopEnd =
 export const engineDesktopEnds: readonly DesktopEnd[] = ['linkLost', 'relayUnreachable', 'peerClosed', 'hostEncoderFailed', 'hostCaptureFailed', 'hostPermission', 'displayGone', 'hostStopped', 'hostShutdown', 'revoked'];
 
 /** One picture of a display on the other computer, at the topology revision it was taken with. */
+/**
+ * What a picture is to the screen: a change, the same screen again, or a
+ * still picture of it, sharper than the stream, shown until it changes.
+ */
+export type DesktopPictureRole = 'changed' | 'unchanged' | 'still';
+
 export interface DesktopPicture {
 	/** Belongs to the listener, which closes it once drawn. */
 	readonly frame: VideoFrame;
+	readonly role: DesktopPictureRole;
 	readonly display: string;
 	readonly revision: string;
 	/** When it came out of the decoder, on `performance.now()`. */

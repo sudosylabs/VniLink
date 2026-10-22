@@ -8,7 +8,7 @@ import '../../src/workbench/contrib/remoteDesktop/remoteDesktop.contribution.js'
 import { OpenRemoteDesktopAction, ViewScreenAction } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopActions.js';
 import { RemoteDesktopView } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopView.js';
 import { IDeviceService, type DeviceSummary } from '../../src/workbench/services/devices/deviceService.js';
-import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopPointer, type DesktopStats, type IDesktopSession } from '../../src/workbench/services/remoteDesktop/remoteDesktopService.js';
+import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopPictureRole, type DesktopPointer, type DesktopStats, type IDesktopSession } from '../../src/workbench/services/remoteDesktop/remoteDesktopService.js';
 import { ITabService } from '../../src/workbench/services/tabs/tabService.js';
 import { TabService } from '../../src/workbench/services/tabs/tabServiceImpl.js';
 
@@ -70,15 +70,15 @@ class FakeSession implements IDesktopSession {
 		this.skippedPictures.push(picture);
 	}
 
-	/** A 1920 × 1080 picture of display 7 at revision 3. */
-	public picture(): void {
+	/** A 1920 × 1080 picture of display 7 at revision 3, in one colour. */
+	public picture(role: DesktopPictureRole = 'changed', colour = '#1d4b6c'): void {
 		const canvas = new OffscreenCanvas(1920, 1080);
 		const context = canvas.getContext('2d');
 		if (context) {
-			context.fillStyle = '#1d4b6c';
+			context.fillStyle = colour;
 			context.fillRect(0, 0, 1920, 1080);
 		}
-		this.pictures.fire({ frame: new VideoFrame(canvas, { timestamp: 0 }), display: '7', revision: '3', decodedAt: performance.now() });
+		this.pictures.fire({ frame: new VideoFrame(canvas, { timestamp: 0 }), role, display: '7', revision: '3', decodedAt: performance.now() });
 	}
 
 	/** The other computer's pointer at `x`, `y` in the picture: a white 4 × 4 square, its hot spot at the top left. */
@@ -151,6 +151,24 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		await until(() => sessions[0].presentedPictures.length === presented + 1, 'The newest picture was not drawn');
 		await new Promise(resolve => requestAnimationFrame(resolve));
 		assert(sessions[0].presentedPictures.length === presented + 1 && sessions[0].skippedPictures.length === 2, `Pictures behind the newest were drawn: ${String(sessions[0].presentedPictures.length - presented)} drawn, ${String(sessions[0].skippedPictures.length)} skipped`);
+		// A still picture stays until the screen changes: the stream's pictures of the same screen are not drawn over it.
+		const shownColour = (): string => {
+			const [red, green, blue] = canvas.getContext('2d')?.getImageData(960, 540, 1, 1).data ?? [];
+			return `${String(red)},${String(green)},${String(blue)}`;
+		};
+		const frame = (): Promise<unknown> => new Promise(resolve => requestAnimationFrame(resolve));
+		sessions[0].picture('still', '#ff8000');
+		await frame();
+		await frame();
+		assert(shownColour() === '255,128,0', `The still was not drawn: ${shownColour()}`);
+		sessions[0].picture('unchanged', '#808080');
+		await frame();
+		await frame();
+		assert(shownColour() === '255,128,0', `A picture of the same screen was drawn over the still: ${shownColour()}`);
+		sessions[0].picture('changed', '#0000ff');
+		await frame();
+		await frame();
+		assert(shownColour() === '0,0,255', `A changed screen did not replace the still: ${shownColour()}`);
 		// How the picture is doing, once a second.
 		await until(() => view.element.querySelector('.desktop-status-stats')?.textContent === '60 fps · H.264 · 9.4 Mb/s · 18 ms · Lowered for the network', `Wrong stats: ${view.element.querySelector('.desktop-status-stats')?.textContent ?? ''}`, 3000);
 		// What is wrong, beside the stats: the worst in one phrase, all of them on hover and to a screen reader.

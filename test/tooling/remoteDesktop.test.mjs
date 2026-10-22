@@ -164,7 +164,7 @@ test('a screen opens only where it is shared: the picture first, then the input 
 });
 
 test('the window says which codecs it decodes, hardware ones marked, each once, and whether it shows stills', async () => {
-	const answers = { 'avc1.640028': ['prefer-hardware', 'no-preference'], 'hev1.1.6.L153.B0': ['no-preference'], 'av01.0.08M.08': ['no-preference'], 'av01.1.08M.08.0.000': ['prefer-software'] };
+	const answers = { 'avc1.640028': ['prefer-hardware', 'no-preference'], 'hev1.1.6.L153.B0': ['no-preference'], 'av01.0.08M.08': ['no-preference'], 'av01.1.08M.08.0.000': ['no-preference'] };
 	const decoders = await probeWindowDecoders(async config => (answers[config.codec] ?? []).includes(config.hardwareAcceleration));
 	assert.deepEqual(decoders, [{ codec: 'h264', hardware: true, chroma444: false }, { codec: 'h265', hardware: false, chroma444: false }, { codec: 'av1', hardware: false, chroma444: true }]);
 	assert(isEngineCommand({ type: 'setWindowDecoders', decoders }));
@@ -211,7 +211,7 @@ test('a screen offers only what the window decodes, and leaves out a codec it co
 	const ends = [];
 	first.session.onEnd(end => ends.push(end));
 	const keyframe = new Uint8Array([0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28, 0xac]);
-	await consume({ type: 'data', sequence: 1, kind: 'video', data: keyframe, metadata: JSON.stringify({ codec: 'h264', keyframe: true, timestampUs: '1', displayId: '7', revision: '3', hostUs: 0, queuedUs: 0 }) });
+	await consume({ type: 'data', sequence: 1, kind: 'video', data: keyframe, metadata: JSON.stringify({ codec: 'h264', keyframe: true, timestampUs: '1', displayId: '7', revision: '3', hostUs: 0, queuedUs: 0, role: 'changed' }) });
 	assert.deepEqual(ends, ['cantShow']);
 	const asked = probes;
 	const second = await service.open('peer', false);

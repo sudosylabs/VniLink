@@ -41,11 +41,15 @@ interface OverlayAction {
 /**
  * Holds the newest decoded picture until the screen's next frame, then
  * draws it: pictures that arrive faster than the screen refreshes replace
- * the one waiting, so the shown picture is never behind the decoder.
+ * the one waiting, so the shown picture is never behind the decoder. A
+ * still picture stays until the screen changes: the stream's pictures of
+ * the same screen behind it are not drawn over it.
  */
 class NextFramePresenter extends Disposable {
 	private pending: DesktopPicture | undefined;
 	private handle: number | undefined;
+	/** The newest picture taken is a still. */
+	private still = false;
 
 	constructor(
 		private readonly targetWindow: Window,
@@ -56,6 +60,13 @@ class NextFramePresenter extends Disposable {
 	}
 
 	public show(picture: DesktopPicture): void {
+		if (picture.role === 'unchanged' && this.still) {
+			picture.frame.close();
+			return;
+		}
+		if (picture.role !== 'unchanged') {
+			this.still = picture.role === 'still';
+		}
 		if (this.pending) {
 			this.pending.frame.close();
 			this.skip(this.pending);

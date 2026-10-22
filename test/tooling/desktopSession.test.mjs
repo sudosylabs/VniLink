@@ -67,7 +67,7 @@ function fixture({ control = true, decodes = true } = {}) {
 	const ends = [];
 	session.onPicture(picture => pictures.push(picture));
 	session.onEnd(end => ends.push(end));
-	const packet = (fields, data = keyframe) => ({ type: 'data', sequence: 1, kind: 'video', data, metadata: JSON.stringify({ codec: 'h264', keyframe: true, timestampUs: '1000', displayId: '7', revision: '3', hostUs: 0, queuedUs: 0, ...fields }) });
+	const packet = (fields, data = keyframe) => ({ type: 'data', sequence: 1, kind: 'video', data, metadata: JSON.stringify({ codec: 'h264', keyframe: true, timestampUs: '1000', displayId: '7', revision: '3', hostUs: 0, queuedUs: 0, role: 'changed', ...fields }) });
 	return { session, codecs, decoded, closed, inputs, pictures, ends, packet, failures, keyframes, cursors, reports };
 }
 
@@ -243,7 +243,7 @@ test('the engine hears how fast the decoder works, not how long a picture waits 
 		return Promise.resolve(status);
 	};
 	session.attach({ video: { onCursor: () => ({ dispose() { } }), requestKeyframe() { }, mediaStatus, close() { } }, input: undefined });
-	const packet = (timestampUs, keyframe) => ({ type: 'data', sequence: 1, kind: 'video', data: keyframe ? new Uint8Array([0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28, 0xac]) : new Uint8Array([1]), metadata: JSON.stringify({ codec: 'h264', keyframe, timestampUs: String(timestampUs), displayId: '7', revision: '3', hostUs: 0, queuedUs: 0 }) });
+	const packet = (timestampUs, keyframe) => ({ type: 'data', sequence: 1, kind: 'video', data: keyframe ? new Uint8Array([0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28, 0xac]) : new Uint8Array([1]), metadata: JSON.stringify({ codec: 'h264', keyframe, timestampUs: String(timestampUs), displayId: '7', revision: '3', hostUs: 0, queuedUs: 0, role: 'changed' }) });
 	const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 	// One picture at a time, each out long after it went in: latency, not load.
 	await session.consume(packet(1, true));
@@ -276,4 +276,63 @@ test('the channel\'s last packet says why the picture stopped, and an unknown re
 	const silent = fixture();
 	silent.session.lost();
 	assert.deepEqual(silent.ends, ['linkLost'], 'a channel that fails without a reason is a lost connection');
+});
+
+test('a still picture has a decoder of its own, and the stream\'s decoder survives it', async () => {
+	const { session, codecs, closed, pictures, packet } = fixture();
+	await session.consume(packet({}));
+	await session.consume(packet({ codec: 'av1', role: 'still', timestampUs: '1500' }, new Uint8Array([1, 2])));
+	await session.consume(packet({ keyframe: false, timestampUs: '2000', role: 'unchanged' }));
+	assert.deepEqual(codecs, ['avc1.640028', 'av01.1.08M.08.0.000']);
+	assert.deepEqual(closed, [], 'a still closed a decoder');
+	assert.deepEqual(pictures.map(picture => [picture.frame.timestamp, picture.role, picture.display]), [[1000, 'changed', '7'], [1500, 'still', '7'], [2000, 'unchanged', '7']]);
+	await assert.rejects(session.consume(packet({ role: 'refined' })), /Invalid desktop packet/);
+	await assert.rejects(session.consume(packet({ role: undefined })), /Invalid desktop packet/);
+});
+
+test('a still decoded after the screen changed is not shown, and a failing still decoder ends nothing', async () => {
+	let release;
+	let fail;
+	const pictures = [];
+	const ends = [];
+	const createDecoder = async (codec, output, error) => {
+		const still = codec.startsWith('av01.1');
+		if (still) {
+			fail = error;
+		}
+		return {
+			software: true,
+			decode: chunk => {
+				const frame = {
+					timestamp: chunk.timestamp, closed: false, close() {
+						this.closed = true;
+					}
+				};
+				if (still) {
+					release = () => output(frame);
+				} else {
+					output(frame);
+				}
+			},
+			drained: () => Promise.resolve(),
+			close() { },
+		};
+	};
+	const session = new EngineDesktopSession(false, { id: '4', generation: '2' }, createDecoder, () => Promise.resolve([]));
+	const video = { onCursor: new Emitter().event, requestKeyframe() { }, mediaStatus: () => Promise.resolve(undefined), close() { } };
+	session.attach({ video, input: undefined });
+	session.onPicture(picture => pictures.push(picture));
+	session.onEnd(end => ends.push(end));
+	const packet = (role, timestampUs, data = keyframe) => ({ type: 'data', sequence: 1, kind: 'video', data, metadata: JSON.stringify({ codec: role === 'still' ? 'av1' : 'h264', keyframe: true, timestampUs, displayId: '7', revision: '3', hostUs: 0, queuedUs: 0, role }) });
+	await session.consume(packet('changed', '1'));
+	await session.consume(packet('still', '2', new Uint8Array([1])));
+	await session.consume(packet('changed', '3'));
+	release();
+	assert.deepEqual(pictures.map(picture => picture.role), ['changed', 'changed'], 'a stale still was shown');
+	await session.consume(packet('still', '4', new Uint8Array([1])));
+	release();
+	assert.deepEqual(pictures.map(picture => picture.role), ['changed', 'changed', 'still']);
+	fail();
+	await session.consume(packet('still', '5', new Uint8Array([1])));
+	assert.deepEqual(ends, [], 'a failed still decoder ended the picture');
 });

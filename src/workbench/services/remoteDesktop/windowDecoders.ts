@@ -15,10 +15,10 @@ const probes: Readonly<Record<VideoCodec, string>> = {
 
 /**
  * A still picture: AV1 High profile, 8-bit, 4:4:4 (chroma subsampling
- * `000`), decoded in software. See the host's still pictures in the core's
- * `FrameRole`.
+ * `000`), asked about as the session's decoder opens it. See the host's
+ * still pictures in the core's `FrameRole`.
  */
-export const stillDecoderConfig: VideoDecoderConfig = { codec: 'av01.1.08M.08.0.000', hardwareAcceleration: 'prefer-software', optimizeForLatency: true };
+export const stillDecoderConfig: VideoDecoderConfig = { codec: 'av01.1.08M.08.0.000', hardwareAcceleration: 'no-preference', optimizeForLatency: true };
 
 /** Whether this window can decode with a configuration. */
 export type DecoderSupport = (config: VideoDecoderConfig) => Promise<boolean>;

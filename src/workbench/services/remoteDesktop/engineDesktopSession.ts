@@ -5,10 +5,13 @@ import { record, videoCodecNames, type DisplayInfo, type EngineCommand, type Vid
 import type { CameraDecoder, CameraDecoderFactory } from '../camera/engineCameraStream.js';
 import { avcCodec } from '../camera/h264.js';
 import { DesktopLatency } from './desktopLatency.js';
-import { engineDesktopEnds, type DesktopEnd, type DesktopInput, type DesktopPicture, type DesktopPointerShape, type DesktopPointer, type DesktopStats, type IDesktopSession } from './remoteDesktopService.js';
+import { stillDecoderConfig } from './windowDecoders.js';
+import { engineDesktopEnds, type DesktopEnd, type DesktopPictureRole, type DesktopInput, type DesktopPicture, type DesktopPointerShape, type DesktopPointer, type DesktopStats, type IDesktopSession } from './remoteDesktopService.js';
 
 /** Pictures allowed to wait for the decoder before the channel stops acknowledging. */
 const decodeQueueLimit = 2;
+
+const pictureRoles: readonly DesktopPictureRole[] = ['changed', 'unchanged', 'still'];
 
 function isVideoCodec(value: string | undefined): value is VideoCodec {
 	return videoCodecNames.includes(value as VideoCodec);
@@ -85,7 +88,17 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 	private decoder: Promise<CameraDecoder | undefined> | undefined;
 	private codec: string | undefined;
 	/** Where each picture waiting in the decoder was taken, by its timestamp. */
-	private readonly taken = new Map<number, { readonly display: string; readonly revision: string; readonly at: number }>();
+	private readonly taken = new Map<number, { readonly display: string; readonly revision: string; readonly role: DesktopPictureRole; readonly at: number }>();
+	/**
+	 * Still pictures' own decoder, apart from the stream's so a still never
+	 * replaces it: `undefined` until the first still, then for good, even
+	 * when this computer can't decode them.
+	 */
+	private stillDecoder: Promise<CameraDecoder | undefined> | undefined;
+	/** Each still waiting in its decoder, by timestamp, and the changed pictures received before it. */
+	private readonly stills = new Map<number, { readonly display: string; readonly revision: string; readonly changes: number }>();
+	/** Changed pictures received: a still decoded after another came is stale. */
+	private changes = 0;
 	/**
 	 * The decoder's time per picture while others wait behind it, since
 	 * stats were last read: how fast this computer can decode, which the
@@ -183,11 +196,19 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 			this.end(end);
 			return;
 		}
+		const role = record(fields) ? pictureRoles.find(known => known === fields.role) : undefined;
 		if (packet.kind !== 'video' || !packet.data || !record(fields) || typeof fields.codec !== 'string' || typeof fields.keyframe !== 'boolean'
 			|| typeof fields.timestampUs !== 'string' || !/^\d{1,20}$/.test(fields.timestampUs)
 			|| typeof fields.displayId !== 'string' || typeof fields.revision !== 'string'
-			|| !micros(fields.hostUs) || !micros(fields.queuedUs)) {
+			|| !micros(fields.hostUs) || !micros(fields.queuedUs) || !role) {
 			throw new Error('Invalid desktop packet');
+		}
+		if (role === 'still') {
+			await this.consumeStill(packet.data, Number(fields.timestampUs), fields.displayId, fields.revision);
+			return;
+		}
+		if (role === 'changed') {
+			this.changes++;
 		}
 		// Zero is a picture sent without its capture time.
 		if (fields.hostUs > 0) {
@@ -226,9 +247,50 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 		}
 		this.software = decoder.software;
 		const timestamp = Number(fields.timestampUs);
-		this.taken.set(timestamp, { display: fields.displayId, revision: fields.revision, at: performance.now() });
+		this.taken.set(timestamp, { display: fields.displayId, revision: fields.revision, role, at: performance.now() });
 		decoder.decode({ key, timestamp, data: packet.data });
 		await decoder.drained(decodeQueueLimit);
+	}
+
+	/**
+	 * A still picture, decoded apart from the stream and shown unless a
+	 * changed picture came meanwhile. It is not the stream's: it counts in
+	 * no latency, and its decoder failing ends nothing.
+	 */
+	private async consumeStill(data: Uint8Array, timestamp: number, display: string, revision: string): Promise<void> {
+		this.stillDecoder ??= this.createDecoder(stillDecoderConfig.codec, frame => {
+			this.stillDecoded(frame);
+		}, () => {
+			const failed = this.stillDecoder;
+			this.stillDecoder = Promise.resolve(undefined);
+			void failed?.then(decoder => decoder?.close());
+		});
+		const decoder = await this.stillDecoder;
+		if (!decoder || this.isEnded()) {
+			return;
+		}
+		this.stills.set(timestamp, { display, revision, changes: this.changes });
+		decoder.decode({ key: true, timestamp, data });
+		await decoder.drained(0);
+	}
+
+	private stillDecoded(frame: VideoFrame): void {
+		const still = this.stills.get(frame.timestamp);
+		for (const timestamp of this.stills.keys()) {
+			if (timestamp <= frame.timestamp) {
+				this.stills.delete(timestamp);
+			}
+		}
+		if (!still) {
+			frame.close();
+			return;
+		}
+		// A still is stale once a changed picture came after it.
+		if (still.changes !== this.changes || this.ended || !this.pictureEmitter.hasListeners()) {
+			frame.close();
+			return;
+		}
+		this.pictureEmitter.fire({ frame, role: 'still', display: still.display, revision: still.revision, decodedAt: performance.now() });
 	}
 
 	/**
@@ -289,7 +351,7 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 			frame.close();
 			return;
 		}
-		this.pictureEmitter.fire({ frame, display: taken.display, revision: taken.revision, decodedAt });
+		this.pictureEmitter.fire({ frame, role: taken.role, display: taken.display, revision: taken.revision, decodedAt });
 	}
 
 	public presented(picture: DesktopPicture): void {
@@ -315,7 +377,11 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 		this.channels?.input?.close();
 		this.channels = undefined;
 		this.taken.clear();
+		this.stills.clear();
 		void this.decoder?.then(decoder => {
+			decoder?.close();
+		});
+		void this.stillDecoder?.then(decoder => {
 			decoder?.close();
 		});
 	}
