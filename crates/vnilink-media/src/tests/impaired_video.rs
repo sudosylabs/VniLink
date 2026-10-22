@@ -1460,8 +1460,11 @@ fn impaired_desktop_stills() {
     }
 }
 
-/// The stills scenario on loopback, briefly: one still picture per still
-/// period, every change shown.
+/// The stills scenario on loopback, briefly: every change shown, and every
+/// still sent received. Whether a still of the dense page fits depends on
+/// what the link is estimated to carry, which a lightly loaded loopback
+/// sender leaves low; `an_unchanged_screen_brings_one_still_picture` shows a
+/// still going end to end.
 #[test]
 fn stills_run_on_loopback() {
     let stream = Stream {
@@ -1476,7 +1479,7 @@ fn stills_run_on_loopback() {
     };
     let on = run_stills(&stream, true);
     assert_eq!(on["changes_unshown"], 0, "{on}");
-    assert!(on["stills_received"].as_u64().unwrap() >= 1, "{on}");
+    assert_eq!(on["stills_received"], on["host"]["stills_sent"], "{on}");
     let off = run_stills(&stream, false);
     assert_eq!(off["stills_received"], 0, "{off}");
 }
