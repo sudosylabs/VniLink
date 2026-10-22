@@ -265,10 +265,15 @@ unsafe fn choose_nv12(transform: &IMFTransform) -> windows::core::Result<()> {
 
 /// Splits one contiguous NV12 picture into its planes.
 #[cfg(windows)]
+///
+/// The decoder returns the coded picture: 1080 rows are coded, and returned,
+/// as 1088. Chroma starts after all of the coded luma rows; the rows past
+/// `height` are cropped off.
 fn split_nv12(bytes: &[u8], width: u16, height: u16) -> Result<(&[u8], &[u8]), Error> {
     let (w, h) = (usize::from(width), usize::from(height));
-    if bytes.len() < w * h * 3 / 2 {
+    let coded = (bytes.len() / (w * 3)) * 2;
+    if coded < h || bytes.len() < w * coded * 3 / 2 {
         return Err(Error::DecodeRejected("the decoder produced no frame"));
     }
-    Ok((&bytes[..w * h], &bytes[w * h..w * h * 3 / 2]))
+    Ok((&bytes[..w * h], &bytes[w * coded..w * coded + w * h / 2]))
 }
