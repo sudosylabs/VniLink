@@ -21,6 +21,11 @@
 //! Optional executables in `VNILINK_IMPAIRED_BURST_START` and
 //! `VNILINK_IMPAIRED_BURST_END` black out the link for each loss burst; the
 //! harness measures how long the viewer takes to show a clean picture again.
+//!
+//! `impaired_desktop_stream_during_upload` streams the same desktop while the
+//! viewer's core uploads one large file to the host's over the Files
+//! connection, both cores' only other traffic. In relay mode the upload and
+//! the stream share each core's one relay connection.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -29,8 +34,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use vnilink::{
-    Core, CoreConfig, CustomRelay, EncodedFrame, Grants, Listen, RelaySettings, ServiceKind,
-    SessionPhase,
+    Core, CoreConfig, CustomRelay, EncodedFrame, Grants, JobState, Listen, RelaySettings,
+    RemoteFilesService, ServiceKind, SessionInfo, SessionPhase,
 };
 
 use crate::error::Error;
@@ -76,6 +81,9 @@ struct Stream {
     burst_start: Option<PathBuf>,
     burst_end: Option<PathBuf>,
     policy: ViewerPolicy,
+    /// Bytes of the one file the viewer uploads to the host while the
+    /// stream runs, if any.
+    upload: Option<u64>,
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
@@ -115,6 +123,7 @@ impl Stream {
                     "VNILINK_IMPAIRED_VIEWER must be passive or request-while-corrupt, got {other:?}"
                 ),
             },
+            upload: None,
         }
     }
 }
@@ -363,10 +372,12 @@ const SAMPLE_EVERY: Duration = Duration::from_millis(100);
 
 /// The engines' running counters every [`SAMPLE_EVERY`] until `done`: when
 /// the host dropped frames at its send gate or sent keyframes, against the
-/// round trip, the encoder's rate and what the viewer lost.
+/// round trip, the encoder's rate, what the viewer lost and the phase of
+/// the viewer's session `session`.
 fn sample_timeline(
     host: &Core,
     viewer: &Core,
+    session: u64,
     record: &Host,
     started: Instant,
     done: &AtomicBool,
@@ -384,6 +395,9 @@ fn sample_timeline(
     let mut samples = Vec::new();
     while !done.load(Ordering::Acquire) {
         let at = millis(started.elapsed());
+        let phase = viewer
+            .controller_session(session)
+            .map_or_else(|_| "gone".to_owned(), |info| phase_label(&info.phase));
         if let (Some((host, rtt)), Some((viewer, _))) = (read(host), read(viewer)) {
             let lost = ["lost_expired", "lost_evicted", "lost_gap", "lost_stale"]
                 .iter()
@@ -398,6 +412,7 @@ fn sample_timeline(
                 .map(|open| open.1);
             samples.push(json!({
                 "ms": at,
+                "session": phase,
                 "rtt_ms": rtt,
                 "bps": bps,
                 "send_dropped": host["send_dropped"],
@@ -411,6 +426,37 @@ fn sample_timeline(
         std::thread::sleep(SAMPLE_EVERY);
     }
     samples
+}
+
+fn phase_label(phase: &SessionPhase) -> String {
+    match phase {
+        SessionPhase::Failed(_) => "failed".to_owned(),
+        other => format!("{other:?}").to_lowercase(),
+    }
+}
+
+/// How often the viewer's session left the active phase in `timeline`.
+fn session_interruptions(timeline: &[Value]) -> u64 {
+    let active: Vec<bool> = timeline
+        .iter()
+        .map(|sample| sample["session"] == "active")
+        .collect();
+    active.windows(2).filter(|pair| pair[0] && !pair[1]).count() as u64
+}
+
+/// The longest time the viewer showed no new clean picture, from its first
+/// clean picture until `end`: a freeze, whatever its cause.
+fn longest_freeze(arrivals: &[Arrival], end: Instant) -> Option<Duration> {
+    let clean: Vec<Instant> = arrivals
+        .iter()
+        .filter(|arrival| arrival.clean)
+        .map(|arrival| arrival.at)
+        .chain(std::iter::once(end))
+        .collect();
+    if clean.len() < 2 {
+        return None;
+    }
+    clean.windows(2).map(|pair| pair[1] - pair[0]).max()
 }
 
 fn percentile(sorted: &[f64], fraction: f64) -> Option<f64> {
@@ -433,9 +479,209 @@ fn wait_active(controller: &Core, id: u64) {
     }
 }
 
+/// A fixture directory below `VNILINK_IMPAIRED_SCRATCH`, removed on drop.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(tag: &str) -> Self {
+        let base = std::env::var_os("VNILINK_IMPAIRED_SCRATCH")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        // Tests in one process run concurrently: each stream gets its own tree.
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let path = base.join(format!(
+            "vnilink-impaired-video-{tag}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("scratch directory");
+        Self(path)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Incompressible, repeatable bytes.
+fn write_file(path: &Path, bytes: u64) {
+    use std::io::Write;
+    let mut file = std::io::BufWriter::new(std::fs::File::create(path).expect("fixture file"));
+    let mut state = 0x1A26E_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    let mut left = bytes;
+    let mut block = vec![0u8; 1 << 20];
+    while left > 0 {
+        let take = left.min(block.len() as u64) as usize;
+        for chunk in block[..take].chunks_mut(8) {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            chunk.copy_from_slice(&state.to_le_bytes()[..chunk.len()]);
+        }
+        file.write_all(&block[..take]).expect("fixture write");
+        left -= take as u64;
+    }
+    file.flush().expect("fixture flush");
+}
+
+/// `path` as one of `core`'s file roots and a path relative to it.
+fn file_location(core: &Core, path: &Path) -> (u64, String) {
+    let path = std::fs::canonicalize(path).expect("fixture exists");
+    core.file_roots()
+        .unwrap()
+        .into_iter()
+        .find_map(|(id, root)| {
+            let relative = path.strip_prefix(root).ok()?;
+            let parts: Vec<_> = relative
+                .components()
+                .map(|part| part.as_os_str().to_str().expect("UTF-8 fixture path"))
+                .collect();
+            Some((id, parts.join("/")))
+        })
+        .expect("fixture belongs to an advertised filesystem root")
+}
+
+/// The upload the viewer runs beside the stream.
+struct Upload {
+    job: u64,
+    bytes: u64,
+    _service: RemoteFilesService,
+    _fixtures: [Scratch; 2],
+}
+
+/// Gives both cores a file area, which they accept only before they
+/// connect, and writes `bytes` of fixture on the viewer.
+fn prepare_upload(host: &Core, viewer: &Core, bytes: u64) -> [Scratch; 2] {
+    let fixtures = [Scratch::new("host"), Scratch::new("viewer")];
+    for (core, scratch) in [host, viewer].into_iter().zip(&fixtures) {
+        core.set_transfer_directory(scratch.0.join("transfer"))
+            .unwrap();
+        core.enable_filesystem_access().unwrap();
+        std::fs::create_dir_all(scratch.0.join("root")).unwrap();
+    }
+    write_file(&fixtures[1].0.join("root/upload.bin"), bytes);
+    fixtures
+}
+
+/// Opens a Files service beside the desktop on the viewer's session
+/// `parent`, as the app does, and submits the upload of the prepared
+/// fixture to the host through it. Submission hashes the file before it
+/// returns, so this runs before the stream starts.
+fn submit_upload(
+    host: &Core,
+    viewer: &Core,
+    parent: &SessionInfo,
+    fixtures: [Scratch; 2],
+    bytes: u64,
+) -> Upload {
+    let owner = viewer
+        .attach_controller_service(parent.id, parent.generation, ServiceKind::Files)
+        .unwrap();
+    let service = viewer
+        .open_files_service(owner.id, owner.generation)
+        .unwrap();
+    let (from_root, from) = file_location(viewer, &fixtures[1].0.join("root"));
+    let (to_root, to) = file_location(host, &fixtures[0].0.join("root"));
+    let job = viewer
+        .files_service_upload(
+            owner.id,
+            owner.generation,
+            from_root,
+            &from,
+            &["upload.bin".to_owned()],
+            to_root,
+            &format!("{to}/arrived"),
+        )
+        .expect("upload submitted");
+    Upload {
+        job,
+        bytes,
+        _service: service,
+        _fixtures: fixtures,
+    }
+}
+
+/// Drives `upload` until `done`, cancelling it then if it still runs, and
+/// reports its progress with what QUIC saw on each core's Files connections
+/// once a second. The receiving host advances back to back; the sending
+/// viewer only asks for state, every 100 ms.
+fn drive_upload(
+    host: &Core,
+    viewer: &Core,
+    upload: &Upload,
+    started: Instant,
+    done: &AtomicBool,
+) -> Value {
+    let stop = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        for (core, pause) in [(host, Duration::ZERO), (viewer, Duration::from_millis(100))] {
+            let stop = &stop;
+            scope.spawn(move || {
+                while !stop.load(Ordering::Acquire) {
+                    let idle = core.drive_jobs().map_or(true, |jobs| jobs.is_empty());
+                    std::thread::sleep(if idle {
+                        pause.max(Duration::from_millis(1))
+                    } else {
+                        pause
+                    });
+                }
+            });
+        }
+        let mut files_paths = Vec::new();
+        let mut next_sample = started;
+        let mut ended = None;
+        let mut snapshot = host.job_snapshot(upload.job).expect("receiver record");
+        while !done.load(Ordering::Acquire) {
+            snapshot = host.job_snapshot(upload.job).expect("receiver record");
+            let now = Instant::now();
+            if snapshot.state.is_terminal() {
+                ended.get_or_insert(now);
+            }
+            if now >= next_sample {
+                files_paths.push(json!({
+                    "ms": millis(now - started),
+                    "done_bytes": snapshot.done_bytes,
+                    "host": host.files_path_stats(),
+                    "viewer": viewer.files_path_stats(),
+                }));
+                next_sample += Duration::from_secs(1);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let ended = ended.unwrap_or_else(Instant::now);
+        if !snapshot.state.is_terminal() {
+            for core in [host, viewer] {
+                let _ = core.job_cancel(upload.job);
+            }
+        }
+        stop.store(true, Ordering::Release);
+        let elapsed = (ended - started).as_secs_f64().max(1e-9);
+        json!({
+            "bytes": upload.bytes,
+            "outcome": match snapshot.state {
+                JobState::Complete => "complete",
+                state if state.is_terminal() => "failed",
+                _ => "timed-out",
+            },
+            "state": format!("{:?}", snapshot.state),
+            "error": snapshot.error,
+            "elapsed_ms": millis(ended - started),
+            "done_bytes": snapshot.done_bytes,
+            "mb_per_s": snapshot.done_bytes as f64 / 1e6 / elapsed,
+            "files_paths": files_paths,
+        })
+    })
+}
+
 fn run_stream(stream: &Stream) -> Value {
     let host = Arc::new(boot_in(std::env::var("VNILINK_IMPAIRED_HOST_NS").ok()));
     let viewer = boot_in(std::env::var("VNILINK_IMPAIRED_VIEW_NS").ok());
+    let fixtures = stream
+        .upload
+        .map(|bytes| (prepare_upload(&host, &viewer, bytes), bytes));
     host.set_capture(Box::new(Source)).unwrap();
     for core in [&*host, &viewer] {
         core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
@@ -450,9 +696,20 @@ fn run_stream(stream: &Stream) -> Value {
         view: true,
         control: true,
         clipboard: false,
-        transfer: false,
+        transfer: stream.upload.is_some(),
     })
     .unwrap();
+    if stream.upload.is_some() {
+        // The host fetches the upload from the viewer, which grants that.
+        viewer
+            .set_desktop_sharing(Grants {
+                view: false,
+                control: false,
+                clipboard: false,
+                transfer: true,
+            })
+            .unwrap();
+    }
     host.start_hosting().unwrap();
     let parent = viewer.begin_connect_services(&host.endpoint_id()).unwrap();
     wait_active(&viewer, parent.id);
@@ -465,6 +722,8 @@ fn run_stream(stream: &Stream) -> Value {
         .unwrap();
     let frames = handle.subscribe_video().unwrap();
     let connected = json!({ "host": selected_paths(&host), "viewer": selected_paths(&viewer) });
+    let upload =
+        fixtures.map(|(fixtures, bytes)| submit_upload(&host, &viewer, &parent, fixtures, bytes));
 
     let record = Arc::new(Host::new());
     let stop = Arc::new(AtomicBool::new(false));
@@ -496,7 +755,11 @@ fn run_stream(stream: &Stream) -> Value {
     let sampling = AtomicBool::new(false);
     let bursts = std::thread::scope(|scope| {
         let schedule = scope.spawn(|| impair(stream, started));
-        let timeline = scope.spawn(|| sample_timeline(&host, &viewer, &record, started, &sampling));
+        let timeline =
+            scope.spawn(|| sample_timeline(&host, &viewer, parent.id, &record, started, &sampling));
+        let transfer = upload
+            .as_ref()
+            .map(|upload| scope.spawn(|| drive_upload(&host, &viewer, upload, started, &sampling)));
         let mut decoder = Decoder::default();
         let mut arrivals = Vec::new();
         let mut keyframes = 0u64;
@@ -530,8 +793,9 @@ fn run_stream(stream: &Stream) -> Value {
         let bursts = schedule.join().expect("impairment schedule");
         sampling.store(true, Ordering::Release);
         let timeline = timeline.join().expect("timeline sampler");
+        let transfer = transfer.map(|driver| driver.join().expect("upload driver"));
         (
-            (bursts, timeline),
+            (bursts, timeline, transfer),
             decoder,
             arrivals,
             keyframes,
@@ -539,8 +803,14 @@ fn run_stream(stream: &Stream) -> Value {
             first_picture,
         )
     });
-    let ((bursts, timeline), decoder, arrivals, keyframes_received, requests, first_picture) =
-        bursts;
+    let (
+        (bursts, timeline, transfer),
+        decoder,
+        arrivals,
+        keyframes_received,
+        requests,
+        first_picture,
+    ) = bursts;
     stop.store(true, Ordering::Release);
     capture
         .join()
@@ -600,7 +870,7 @@ fn run_stream(stream: &Stream) -> Value {
         .filter(|burst| burst["time_to_picture_ms"].is_null())
         .count();
     json!({
-        "scenario": "video",
+        "scenario": if upload.is_some() { "combined" } else { "video" },
         "viewer_policy": stream.policy.label(),
         "duration_s": stream.duration.as_secs_f64(),
         "gop_frames": GOP,
@@ -622,6 +892,8 @@ fn run_stream(stream: &Stream) -> Value {
         "viewer_keyframe_requests": requests,
         "viewer_lagged": frames.lagged(),
         "first_picture_ms": first_picture.map(millis),
+        "longest_freeze_ms": longest_freeze(&arrivals, started + stream.duration).map(millis),
+        "session_interruptions": session_interruptions(&timeline),
         "latency_ms": {
             "p50": percentile(&latency, 0.50),
             "p95": percentile(&latency, 0.95),
@@ -635,6 +907,7 @@ fn run_stream(stream: &Stream) -> Value {
         "paths": { "connected": connected, "finished": finished },
         "bursts": burst_reports,
         "unrecovered_bursts": unrecovered,
+        "upload": transfer,
         "timeline": timeline,
     })
 }
@@ -651,6 +924,47 @@ fn impaired_desktop_stream() {
 }
 
 #[test]
+#[ignore = "impaired-network harness: run through `npm run measure:impaired`"]
+fn impaired_desktop_stream_during_upload() {
+    let stream = Stream {
+        upload: Some(env_u64("VNILINK_IMPAIRED_LARGE_BYTES", 1 << 30)),
+        ..Stream::from_env()
+    };
+    let report = run_stream(&stream);
+    let text = serde_json::to_string_pretty(&report).unwrap();
+    match std::env::var_os("VNILINK_IMPAIRED_OUT") {
+        Some(path) => std::fs::write(path, text).expect("result file"),
+        None => eprintln!("{text}"),
+    }
+}
+
+#[test]
+fn desktop_stream_runs_beside_an_upload_on_loopback() {
+    let report = run_stream(&Stream {
+        duration: Duration::from_secs(4),
+        warmup: Duration::ZERO,
+        bursts: 0,
+        burst: Duration::ZERO,
+        burst_start: None,
+        burst_end: None,
+        policy: ViewerPolicy::Passive,
+        upload: Some(8 << 20),
+    });
+    assert!(report["first_picture_ms"].as_f64().is_some(), "{report}");
+    assert!(
+        report["frames_received"].as_u64().unwrap() >= 30,
+        "{report}"
+    );
+    let upload = &report["upload"];
+    assert_eq!(upload["outcome"], "complete", "{upload}");
+    assert_eq!(upload["done_bytes"], 8 << 20);
+    assert!(upload["files_paths"]
+        .as_array()
+        .is_some_and(|samples| !samples.is_empty()));
+    assert_eq!(report["session_interruptions"], 0, "{report}");
+}
+
+#[test]
 fn desktop_stream_delivers_clean_pictures_on_loopback() {
     let report = run_stream(&Stream {
         duration: Duration::from_secs(3),
@@ -660,12 +974,14 @@ fn desktop_stream_delivers_clean_pictures_on_loopback() {
         burst_start: None,
         burst_end: None,
         policy: ViewerPolicy::Passive,
+        upload: None,
     });
     assert!(report["first_picture_ms"].as_f64().is_some(), "{report}");
     assert!(
         report["frames_received"].as_u64().unwrap() >= 30,
         "{report}"
     );
+    assert!(report["upload"].is_null());
     assert_eq!(report["keyframes_produced"]["open"], 1, "{report}");
     assert_eq!(report["reference_gaps"], 0, "{report}");
     assert!(report["latency_ms"]["p50"].as_f64().is_some());

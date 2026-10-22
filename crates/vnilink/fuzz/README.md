@@ -9,7 +9,7 @@ off.
 | Target | Parser | What it checks |
 |---|---|---|
 | `control_message` | `ControlMessage::decode` | A decoded message encodes to a frame that decodes to the same message. |
-| `file_request` | `FileRequest::decode` (`vnilink/files/1`) | Exactly 20 bytes decode, back to themselves. |
+| `file_request` | `FileRequest::decode` (`vnilink/files/1`) | Exactly 28 bytes decode, back to themselves. |
 | `transfer_receive` | the receiver's stream parser (`transfer/receive.rs`) | An honest stream lands as the file however it is chunked; an edited one never lands. |
 | `video_reassemble` | `Reassembler::push`, then `decode_video_body` | Forged and honest fragments never panic; an honest frame comes back exactly when at least its data count of shards arrived. |
 | `video_report` | `VideoReport::decode` and the host's smoothing | Reports decode back to their bytes; the parity share stays within its bounds. |

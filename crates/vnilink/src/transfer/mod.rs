@@ -10,7 +10,9 @@
 //! value; the receiver checks each segment as it lands, syncs it and
 //! journals its value beside the partial (`partial`). A bad segment costs
 //! that segment again, not the file, and a resume continues after the last
-//! journaled segment without either side reading earlier bytes again.
+//! journaled segment without either side reading earlier bytes again. The
+//! bytes of the next segment that already arrived are kept and named in the
+//! request, so an interrupted attempt costs only what was in flight.
 //!
 //! This module owns the protocol: the wire format, sending a held source,
 //! receiving into a partial. Which job and file a peer may read, where

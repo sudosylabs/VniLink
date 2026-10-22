@@ -60,22 +60,26 @@ enum Piece {
     Failed,
 }
 
-/// Sends `source` segment by segment from `offset`, a segment boundary.
-/// The file is read on a blocking thread a few chunks ahead of the
-/// network, and nothing before `offset` is read. `may_send` is asked every
+/// Sends `source` segment by segment from `offset`, a segment boundary,
+/// leaving out the first `held` bytes, which the receiver holds: they are
+/// read and hashed for the segment's value, not sent. The file is read on
+/// a blocking thread a few chunks ahead of the network, and nothing before
+/// `offset` is read. `may_send` is asked every
 /// few megabytes; once it says no, the stream is reset, so a cancel or
 /// revoke stops a file mid-way. `sent_to` hears how far into the
 /// file the stream has taken bytes, and finally that the file was sent. A source that changed while it was read
 /// is reset as changed instead of carrying on.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn send(
     send: &mut SendStream,
     source: Source,
     offset: u64,
+    held: u64,
     counters: &TransferCounters,
     mut may_send: impl FnMut() -> bool,
     mut sent_to: impl FnMut(u64, bool),
 ) {
-    if offset > source.size || offset % SEGMENT_LEN != 0 {
+    if !holds_within_segment(offset, held, source.size) {
         refuse(send, STATUS_DENIED).await;
         return;
     }
@@ -83,9 +87,9 @@ pub(crate) async fn send(
         return;
     }
     let (pieces, mut arriving) = tokio::sync::mpsc::channel(READ_AHEAD);
-    let reader = tokio::task::spawn_blocking(move || read_source(source, offset, pieces));
+    let reader = tokio::task::spawn_blocking(move || read_source(source, offset, held, pieces));
     let mut sent: u64 = 0;
-    let mut position = offset;
+    let mut position = offset + held;
     while let Some(piece) = arriving.recv().await {
         match piece {
             Piece::Bytes(bytes) => {
@@ -133,10 +137,22 @@ pub(crate) async fn send(
     let _ = reader.await;
 }
 
+/// Whether `offset` is a segment boundary of a `size`-byte file and `held`
+/// bytes fit in the segment there.
+fn holds_within_segment(offset: u64, held: u64, size: u64) -> bool {
+    offset <= size && offset % SEGMENT_LEN == 0 && held <= segment_len(offset, size, SEGMENT_LEN)
+}
+
 /// Reads the held source from `offset` to its end once, segment by
-/// segment. Each segment's value follows its bytes only while the source
-/// still has the expected size and time, checked as each segment ends.
-fn read_source(mut source: Source, offset: u64, pieces: tokio::sync::mpsc::Sender<Piece>) {
+/// segment, handing on all but the first `held` bytes. Each segment's value
+/// follows its bytes only while the source still has the expected size and
+/// time, checked as each segment ends.
+fn read_source(
+    mut source: Source,
+    offset: u64,
+    held: u64,
+    pieces: tokio::sync::mpsc::Sender<Piece>,
+) {
     if source.file.seek(SeekFrom::Start(offset)).is_err() {
         let _ = pieces.blocking_send(Piece::Failed);
         return;
@@ -163,11 +179,14 @@ fn read_source(mut source: Source, offset: u64, pieces: tokio::sync::mpsc::Sende
                 return;
             }
             hasher.update(&chunk);
+            let unsent = (offset + held).saturating_sub(at).min(chunk.len() as u64) as usize;
             at += chunk.len() as u64;
-            if pieces
-                .blocking_send(Piece::Bytes(Bytes::from(chunk)))
-                .is_err()
-            {
+            if unsent == chunk.len() {
+                continue;
+            }
+            let mut bytes = Bytes::from(chunk);
+            let _ = bytes.split_to(unsent);
+            if pieces.blocking_send(Piece::Bytes(bytes)).is_err() {
                 return;
             }
         }
@@ -219,8 +238,12 @@ mod tests {
     }
 
     fn pieces_of(source: Source, offset: u64) -> Vec<Piece> {
+        held_pieces_of(source, offset, 0)
+    }
+
+    fn held_pieces_of(source: Source, offset: u64, held: u64) -> Vec<Piece> {
         let (pieces, mut arriving) = tokio::sync::mpsc::channel(1024);
-        read_source(source, offset, pieces);
+        read_source(source, offset, held, pieces);
         std::iter::from_fn(|| arriving.try_recv().ok()).collect()
     }
 
@@ -295,6 +318,53 @@ mod tests {
             [Piece::Bytes(_), Piece::Changed]
         ));
         let _ = std::fs::remove_file(path);
+    }
+
+    /// Held bytes are read for the segment's value but not sent: the rest
+    /// of the segment follows, then the value of the whole segment, then
+    /// the next segment. A whole segment held sends its value alone.
+    #[test]
+    fn held_bytes_count_toward_the_value_but_are_not_sent() {
+        let seg = SEGMENT_LEN as usize;
+        let whole: Vec<u8> = (0..seg + 9).map(|n| (n * 13) as u8).collect();
+        let (path, file) = scratch("held", &whole);
+        let mut first = SegmentHasher::at(0);
+        first.update(&whole[..seg]);
+        let first = first.finalize();
+        for held in [1, CHUNK as u64 + 5, SEGMENT_LEN] {
+            let source = Source {
+                file: file.try_clone().unwrap(),
+                size: whole.len() as u64,
+                mtime_ms: 0,
+            };
+            let mut sent = Vec::new();
+            let mut values = Vec::new();
+            for piece in held_pieces_of(source, 0, held) {
+                match piece {
+                    Piece::Bytes(bytes) => sent.extend_from_slice(&bytes),
+                    Piece::Value(value) => values.push(value),
+                    Piece::End => {}
+                    Piece::Changed | Piece::Failed => panic!("the source is unchanged"),
+                }
+            }
+            assert_eq!(sent, whole[held as usize..], "held {held}");
+            assert_eq!(values.len(), 2);
+            assert_eq!(values[0], first, "held {held}");
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn held_bytes_stay_within_the_segment_at_the_offset() {
+        let size = 2 * SEGMENT_LEN + 9;
+        assert!(holds_within_segment(0, SEGMENT_LEN, size));
+        assert!(holds_within_segment(2 * SEGMENT_LEN, 9, size));
+        assert!(holds_within_segment(2 * SEGMENT_LEN, 0, 2 * SEGMENT_LEN));
+        assert!(!holds_within_segment(2 * SEGMENT_LEN, 1, 2 * SEGMENT_LEN));
+        assert!(!holds_within_segment(0, SEGMENT_LEN + 1, size));
+        assert!(!holds_within_segment(2 * SEGMENT_LEN, 10, size));
+        assert!(!holds_within_segment(5, 0, size));
+        assert!(!holds_within_segment(3 * SEGMENT_LEN, 0, size));
     }
 
     #[test]

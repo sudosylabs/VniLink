@@ -1866,6 +1866,7 @@ impl Core {
                         job: wire_job,
                         file,
                         offset: 0,
+                        held: 0,
                     },
                     size,
                     &staged,

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { NETEM_PROFILES, RELAY_PATH, blackoutArguments, creationCommands, netemArguments, profileCommands, qdiscCommands, relayPathCommands, selectProfiles, shellScript, statisticsDelta, topology } from '../../build/lib/netem.ts';
-import { DEFAULT_OPTIONS, checkoutVolume, parseImpairedArguments, parseSize, pathMismatch, relayUrl, renderSummary, resolveOptions, scenarioEnvironment } from '../../build/lib/impaired.ts';
+import { DEFAULT_OPTIONS, checkoutVolume, observeRelay, parseImpairedArguments, parseSize, parseSocketSample, pathMismatch, relayUrl, renderSummary, resolveOptions, scenarioEnvironment } from '../../build/lib/impaired.ts';
 
 const named = name => NETEM_PROFILES.find(item => item.name === name);
 
@@ -139,10 +139,14 @@ test('each scenario receives only its own settings', () => {
 	assert.equal(video.VNILINK_IMPAIRED_BURST_START, '/start');
 	assert.equal(video.VNILINK_IMPAIRED_VIEWER, 'passive');
 	assert.equal(video.VNILINK_IMPAIRED_SMALL_FILES, undefined);
+	assert.equal(video.VNILINK_IMPAIRED_LARGE_BYTES, undefined);
+	// The combined stream uploads the large-file case beside the video.
+	const combined = scenarioEnvironment('combined', options, paths, link);
+	assert.deepEqual(combined, { ...video, VNILINK_IMPAIRED_LARGE_BYTES: String(1024 ** 3) });
 	// Only relay mode names a relay; direct cores keep their dead one.
 	assert.equal(transfer.VNILINK_IMPAIRED_RELAY_URL, undefined);
 	const relayed = resolveOptions({ path: 'relay' });
-	for (const name of ['transfer', 'video']) {
+	for (const name of ['transfer', 'video', 'combined']) {
 		assert.equal(scenarioEnvironment(name, relayed, paths, link).VNILINK_IMPAIRED_RELAY_URL, relayUrl());
 	}
 });
@@ -154,7 +158,8 @@ test('the summary reports refusals, recovery and failed runs', () => {
 		runs: [
 			{ profile: 'loss-1', scenario: 'transfer', status: 'passed', result: { cases: [{ case: 'small', outcome: 'complete', elapsed_ms: 2500, mb_per_s: 1.6384, files_per_s: 400 }, { case: 'large', outcome: 'refused', error: 'the transfer exceeds its limits' }] } },
 			{ profile: 'loss-1', scenario: 'video', status: 'passed', result: { delivery_ratio: 0.9, clean_ratio: 0.5, keyframes_produced: { open: 1, forced: 2, periodic: 7 }, bursts: [{ time_to_picture_ms: 300 }, { time_to_picture_ms: 1200 }, { time_to_picture_ms: null }], unrecovered_bursts: 1, latency_ms: { p50: 12.34, p95: 40 }, engine: { host: { pipelines: [{ keyframes_sent: 9 }] }, viewer: { pipelines: [{ lost_gap: 3, lost_expired: 1, keyframes_requested: 4 }] } } } },
-			{ profile: 'rate-2', scenario: 'video', status: 'failed', error: 'cargo exited (101)', result: null }
+			{ profile: 'rate-2', scenario: 'video', status: 'failed', error: 'cargo exited (101)', result: null },
+			{ profile: 'loss-1', scenario: 'combined', status: 'passed', result: { delivery_ratio: 0.5, clean_ratio: 0.4, keyframes_produced: { open: 1, forced: 0, periodic: 2 }, bursts: [{ time_to_picture_ms: 700 }], unrecovered_bursts: 0, latency_ms: { p50: 80, p95: 2500 }, longest_freeze_ms: 4210.6, session_interruptions: 1, upload: { outcome: 'timed-out', elapsed_ms: 30000, done_bytes: 15e6, mb_per_s: 0.5 } } }
 		]
 	});
 	assert.match(summary, /Linux container evidence only/);
@@ -162,8 +167,31 @@ test('the summary reports refusals, recovery and failed runs', () => {
 	assert.match(summary, /\| loss-1 \| large \| refused: the transfer exceeds its limits \|/);
 	assert.match(summary, /\| loss-1 \| 90\.0% \| 50\.0% \| 1\/2\/7 \| 4\/4\/9 \| 300\/1200 \| 1\/3 \| 12\.3\/40\.0 \|/);
 	assert.match(summary, /- rate-2 video: cargo exited \(101\)/);
+	assert.match(summary, /## Desktop video during an upload/);
+	assert.match(summary, /\| loss-1 \| 50\.0% \| 700\/700 \| 0\/1 \| 80\.0\/2500\.0 \| 4211 \| 1 \| timed-out, 30\.0 s \| 0\.50 \|/);
 	assert.doesNotMatch(summary, /Path: relay/);
 	assert.match(renderSummary({ started: 'now', commit: 'abc', path: 'relay', runs: [] }), /Path: relay\. .*not a public relay or an internet path/);
+});
+
+test('relay counters and socket samples become per-run deltas and peaks', () => {
+	const text = [
+		'ESTAB 0      4194304 127.0.0.3:41000 127.0.0.2:3340',
+		'\t cubic wscale:7,7 rto:1200 rtt:950.5/40 mss:1448 cwnd:4 bytes_sent:9 retrans:1/37 notsent:3000000',
+		'ESTAB 0      0       127.0.0.3:41002 127.0.0.2:3340',
+		'\t cubic rtt:20/5 cwnd:10',
+	].join('\n');
+	const first = parseSocketSample('vnl-view', text);
+	assert.deepEqual(first[0], { namespace: 'vnl-view', local: '127.0.0.3:41000', peer: '127.0.0.2:3340', sendQueue: 4194304, rttMs: 950.5, cwnd: 4, retransmitted: 37 });
+	assert.equal(first[1].retransmitted, null);
+	const later = parseSocketSample('vnl-view', 'ESTAB 0 1000 127.0.0.3:41000 127.0.0.2:3340\n\t rtt:30/5 cwnd:20 retrans:0/40');
+	const base = { bytes_recv: 0, bytes_sent: 0, frames_recv: 10, frames_sent: 5, frames_dropped: 1, accepts: 2, disconnects: 0 };
+	const observed = observeRelay(base, { ...base, frames_recv: 110, frames_sent: 60, frames_dropped: 3, accepts: 5, disconnects: 3 }, [...first, ...later]);
+	assert.equal(observed.queueDiscarded, 100 - 55 - 2);
+	assert.deepEqual(observed.counters.accepts, 3);
+	assert.deepEqual(observed.sockets[0], { namespace: 'vnl-view', local: '127.0.0.3:41000', peer: '127.0.0.2:3340', peakSendQueue: 4194304, peakRttMs: 950.5, retransmitted: 40 });
+	assert.equal(observeRelay(null, base, []).queueDiscarded, null);
+	const summary = renderSummary({ started: 'now', commit: 'abc', path: 'relay', runs: [{ profile: 'loss-1', scenario: 'transfer', status: 'passed', result: null, relay: observed }] });
+	assert.match(summary, /\| loss-1 \| transfer \| 100\/55 \| 2\/43 \| 3\/3 \| 4\.19 MB, 951 ms \| – \|/);
 });
 
 test('each checkout caches its build in a volume of its own', () => {

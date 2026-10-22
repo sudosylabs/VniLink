@@ -30,10 +30,10 @@ On a Linux machine, run the inner task as root: `sudo node build/run.ts measure:
 | Option | Default | Meaning |
 |---|---|---|
 | `--profiles` | `all` | Comma-separated names, `quick` or `all`. |
-| `--scenarios` | `transfer,video` | Which scenarios run under each profile. |
+| `--scenarios` | `transfer,video` | Which scenarios run under each profile: `transfer`, `video` or `combined`. |
 | `--seed` | `17` | netem loss seed. The same seed drops the same packet positions. |
 | `--small-files`, `--small-size` | `1000`, `4096` | The many-small-files case. |
-| `--large-size` | `1GiB` | The large-file case, e.g. `256MiB` for a quicker run or `10GiB`. |
+| `--large-size` | `1GiB` | The large-file case, e.g. `256MiB` for a quicker run or `10GiB`. The combined scenario uploads a file this size. |
 | `--transfer-timeout` | `120` | Seconds per case, from submit. At the deadline the job is cancelled on both sides and reported with the bytes and files done so far. |
 | `--driver` | `tight` | `tight` advances the receiver back to back. `background` uses only the app's background job driver. |
 | `--video-seconds`, `--bursts`, `--burst-ms` | `30`, `5`, `250` | Stream length and the blackouts inside it. |
@@ -76,6 +76,12 @@ npm run measure:impaired -- --profiles quick --path relay
 - **Routes.** The host core reaches the relay over its own loopback. The viewer's core reaches it from `127.0.0.3` across the veth, so each relayed packet crosses netem once, as a direct packet does. Only the viewer's leg is impaired; the relay's TCP connection, not QUIC, carries that leg's loss recovery.
 - **No direct path.** A `clsact` egress filter on each veth drops every UDP packet before it reaches the netem qdisc. The `udpBlocked` counter in `results.json` counts what it kept off the link.
 - **Verification.** Each scenario reports the selected path of every connection, from the cores' diagnostics, once connected and once finished. A run fails unless every core finishes on a connection over the expected path, in either mode. The Files connection is not in those diagnostics; with UDP blocked it can only use the relay too.
+- **Relay evidence.** The relay prints its cumulative counters once a second. Each run's `relay` entry in `results.json`, and the summary's Relay table, give their difference over the run:
+  - datagram frames taken from and written to clients;
+  - frames dropped for a gone recipient or a failed write;
+  - frames its per-client queues discarded. The server does not count these, so the harness derives them, give or take one queue still waiting at the end;
+  - client connections opened and closed. A client reconnects after a relay health-check ping times out, and the server closes one whose writes outlast its timeout.
+- **Relay sockets.** During each run, the harness samples every TCP connection to or from the relay with `ss -tin` once a second. `<profile>/<scenario>.relay-sockets.jsonl` holds each sample's Send-Q (bytes not yet acknowledged), TCP round trip, congestion window and retransmissions. The summary gives each leg's peak Send-Q and round trip. A backlog queued inside the clients, ahead of their sockets, does not show in Send-Q. It shows as the QUIC round trip in the transfer scenario's `files_paths`.
 
 This is a local relay on the same Linux host as both engines, over netem. It says nothing about the public n0 relays, their load or distance, TLS, or internet paths.
 
@@ -88,6 +94,8 @@ This is a local relay on the same Linux host as both engines, over netem. It say
 - a mixed tree of 200 files from 1 KiB to 4 MiB, up to four folders deep, with empty folders.
 
 Each case reports outcome, submit time, elapsed time from submit to completion, MB/s (10⁶ bytes) and files per second. A complete case is compared byte for byte with its source. The report also gives each core's selected path once connected and once finished.
+
+`files_paths` samples each core's Files connections once a second during a case: the receiver's progress, and for every QUIC path its round trip, congestion window, congestion events, packets lost, and datagrams and bytes sent. The sender is the viewer core (`serving`). A path that disappears between samples is a connection that ended and was dialled again.
 
 **Video** (`crates/vnilink-media/src/tests/impaired_video.rs`) runs the real shared-capture fanout with a synthetic source and encoder:
 
@@ -104,7 +112,13 @@ The report includes:
 - one-way latency percentiles, measured on one clock in the same process;
 - each core's selected path once connected and once finished.
 
-Both scenarios run as ignored tests through the harness. A small version of each runs in ordinary `cargo test` over plain loopback so the scenario code stays working.
+**Combined** (`impaired_desktop_stream_during_upload`, beside the video scenario) runs the video scenario while the viewer's core uploads one file of `--large-size` to the host's core. The viewer opens a Files service beside its desktop service on the same session, as the app does, and the upload crosses the Files connection. In relay mode the stream, the Files connection and the session's control all share each core's one relay connection.
+
+- The upload starts with the stream and runs until it completes or the stream ends, when it is cancelled. Its outcome, the bytes it moved and the time it took are reported with the video results, with `files_paths` as in the transfer scenario.
+- `longest_freeze_ms` is the longest time without a new clean picture after the first one, whatever caused it. `session_interruptions` counts how often the viewer's session left the active phase, sampled every 100 ms with the timeline. The video scenario reports both too.
+- The Relay table's client connections opened and closed show the relay clients reconnecting.
+
+Every scenario runs as an ignored test through the harness. A small version of each runs in ordinary `cargo test` over plain loopback so the scenario code stays working.
 
 ## Baseline tests
 

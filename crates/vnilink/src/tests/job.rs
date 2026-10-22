@@ -494,8 +494,9 @@ fn conflicts_follow_explicit_choices() {
 }
 
 /// A partial resumes after its last journaled segment, without the sender
-/// reading that segment again; bytes no journal vouches for are fetched
-/// afresh. Either way the file lands exactly.
+/// reading that segment again; bytes of the next segment that arrived,
+/// with or without a journal, are kept and checked with the rest of their
+/// segment. Either way the file lands exactly.
 #[test]
 fn a_partial_resumes_after_its_journaled_segments() {
     use crate::transfer::{SegmentHasher, SEGMENT_LEN};
@@ -555,8 +556,8 @@ fn a_partial_resumes_after_its_journaled_segments() {
     assert_eq!(receiver.state, JobState::Complete);
     assert_eq!(sender.state, JobState::Complete);
     assert_eq!(
-        receiver.resumed_files, 1,
-        "only the journaled partial resumes"
+        receiver.resumed_files, 2,
+        "both partials resume from the bytes they hold"
     );
     manifest::assert_trees_equal(
         &host_scratch.join("root"),

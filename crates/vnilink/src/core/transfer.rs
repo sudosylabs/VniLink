@@ -203,6 +203,7 @@ async fn serve_stream(
                 &mut send,
                 source,
                 request.offset,
+                request.held,
                 counters,
                 || super::jobs::still_serving(&shared, &peer, request.job),
                 |position, finished| {
@@ -241,6 +242,47 @@ pub(super) fn close_peer_files(shared: &Shared, peer: &[u8; 32]) {
     }
 }
 
+/// What QUIC sees on each path of this computer's files connections,
+/// serving and fetching, for the impaired-network harness.
+#[cfg(any(test, feature = "test-probes"))]
+impl Core {
+    pub fn files_path_stats(&self) -> Vec<serde_json::Value> {
+        let shared = &self.shared;
+        let serving: Vec<Connection> = lock(&shared.files_serving)
+            .values()
+            .flatten()
+            .cloned()
+            .collect();
+        let fetching: Vec<Connection> = lock(&shared.files_fetching).values().cloned().collect();
+        let roles = serving.iter().map(|connection| ("serving", connection));
+        roles
+            .chain(fetching.iter().map(|connection| ("fetching", connection)))
+            .flat_map(|(role, connection)| {
+                connection
+                    .paths()
+                    .iter()
+                    .map(|path| {
+                        let stats = path.stats();
+                        serde_json::json!({
+                            "role": role,
+                            "relay": path.is_relay(),
+                            "selected": path.is_selected(),
+                            "rtt_ms": path.rtt().as_secs_f64() * 1e3,
+                            "cwnd": stats.cwnd,
+                            "congestion_events": stats.congestion_events,
+                            "spurious_congestion_events": stats.spurious_congestion_events,
+                            "sent_datagrams": stats.udp_tx.datagrams,
+                            "lost_packets": stats.lost_packets,
+                            "sent_bytes": stats.udp_tx.bytes,
+                            "lost_bytes": stats.lost_bytes,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+}
+
 impl Core {
     /// Fetches file `file` of the peer's sending job `job` into the
     /// partial at `partial`, whose segment journal is `journal`, continuing
@@ -268,6 +310,7 @@ impl Core {
                 job,
                 file,
                 offset: 0,
+                held: 0,
             },
             size,
             partial,
@@ -289,8 +332,8 @@ pub(super) fn peer_addr(shared: &Shared, peer: &[u8; 32]) -> Result<EndpointAddr
 }
 
 /// Fetches one file of a sending job into its partial, continuing after
-/// its last checked segment; `request` names the job and file, and its
-/// offset is taken from the partial. `via` learns which connection the
+/// the bytes it holds; `request` names the job and file, and its offset and
+/// held bytes are taken from the partial. `via` learns which connection the
 /// file arrived on. Run where blocking file writes are fine: the caller's
 /// own thread or a blocking worker, never a runtime worker.
 #[allow(clippy::too_many_arguments)]
@@ -307,7 +350,7 @@ pub(super) async fn fetch_file(
     via: &mut Option<usize>,
 ) -> Result<Received, Error> {
     let mut partial = Partial::open(partial, journal, size)?;
-    let from = partial.checked();
+    let from = partial.written();
     let mut mismatches = 0;
     loop {
         if *cancel.borrow() {
@@ -315,6 +358,7 @@ pub(super) async fn fetch_file(
         }
         let request = FileRequest {
             offset: partial.checked(),
+            held: partial.held(),
             ..request
         };
         let received = match ask_kept(shared, peer, addr.clone(), request).await {
@@ -340,8 +384,12 @@ pub(super) async fn fetch_file(
                 if matches!(other, Ok(Received::Stalled)) {
                     shared.transfer_counters.stalled();
                 }
-                // Unchecked bytes never outlive the attempt.
-                partial.drop_unchecked()?;
+                // Bytes that arrived stay for the next attempt, which asks
+                // only for the rest: a link that keeps dropping still makes
+                // progress. A source that changed makes them stale.
+                if matches!(other, Ok(Received::Changed)) {
+                    partial.drop_unchecked()?;
+                }
                 return other;
             }
         }

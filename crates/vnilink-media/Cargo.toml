@@ -19,6 +19,8 @@ vnilink-hevc = { path = "../vnilink-hevc" }
 
 [dev-dependencies]
 serde_json = "=1.0.151"
+# The impaired-network harness reads each core's Files connection paths.
+vnilink = { path = "../vnilink", features = ["test-probes"] }
 
 # The impaired-network harness boots each test core inside its own network namespace.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
