@@ -451,9 +451,9 @@ pub(super) struct Fetching {
 /// How often a fetching connection's path feeds its receive window.
 const WINDOW_EVERY: Duration = Duration::from_millis(50);
 
-/// Holds `connection`'s receive window to what its selected path carries
-/// through a relay, from its round trip and the bytes it received, until
-/// the connection ends; see [`transfer::Window`].
+/// Holds `connection`'s receive window to what its selected path carries,
+/// from its round trip and the bytes it received, until the connection
+/// ends; see [`transfer::Window`].
 async fn follow_window(connection: Connection, shown: Arc<std::sync::atomic::AtomicU64>) {
     let mut window = transfer::Window::new(u64::from(super::host::CONNECTION_RECEIVE_WINDOW));
     let mut ticks = tokio::time::interval(WINDOW_EVERY);
@@ -469,9 +469,9 @@ async fn follow_window(connection: Connection, shown: Arc<std::sync::atomic::Ato
             .find(|candidate| candidate.is_selected())
             .map(|selected| {
                 let bytes = selected.stats().udp_rx.bytes;
-                (selected.id(), selected.rtt(), selected.is_relay(), bytes)
+                (selected.id(), selected.rtt(), bytes)
             });
-        let Some((id, rtt, relayed, bytes)) = selected else {
+        let Some((id, rtt, bytes)) = selected else {
             continue;
         };
         let now = tokio::time::Instant::now();
@@ -487,7 +487,7 @@ async fn follow_window(connection: Connection, shown: Arc<std::sync::atomic::Ato
             }
             _ => 0.0,
         };
-        window.observe(rtt, relayed, changed, rate, now);
+        window.observe(rtt, changed, rate, now);
         if window.window() != set {
             set = window.window();
             connection.set_receive_window(VarInt::from_u64(set).unwrap_or(VarInt::MAX));

@@ -3,7 +3,8 @@
 //!
 //! Through a relay, every connection to a peer shares one queue that never
 //! drops: QUIC sees no loss, only delay, and a bulk transfer grows that
-//! queue to seconds ahead of the desktop session's packets. The receiver
+//! queue to seconds ahead of the desktop session's packets. A direct path
+//! with a deep bottleneck queue does the same on a smaller scale. The receiver
 //! bounds it with QUIC flow control: its connection's receive window is all
 //! the sender may have outstanding, whatever the sender has buffered. The
 //! window follows the connection's round trip as LEDBAT does (RFC 6817):
@@ -11,9 +12,6 @@
 //! queue, and the window moves to keep that queue near [`TARGET_QUEUE`].
 //! The queue is shared, so the transfer sees the very delay it would add to
 //! the session, and yields without knowing it is there.
-//!
-//! On a direct path the window is the full one and QUIC's congestion
-//! control decides alone.
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -27,11 +25,11 @@ pub(crate) const TARGET_QUEUE: Duration = Duration::from_millis(50);
 /// Queueing at which the window halves rather than easing down.
 const HALVE_AT: u32 = 4;
 
-/// The least window, so a transfer always progresses.
-pub(crate) const MIN_WINDOW: u64 = 128 * 1024;
+/// The least window, so a transfer always progresses: about the target's
+/// worth of queue at 5 Mb/s.
+pub(crate) const MIN_WINDOW: u64 = 32 * 1024;
 
-/// The window a relayed connection starts from, and the one it is dialed
-/// with before its path is known.
+/// The window a files connection is dialed with and starts from.
 pub(crate) const INITIAL_WINDOW: u64 = 1024 * 1024;
 
 /// The base delay is the least round trip over [`BASE_WINDOW`], kept as one
@@ -101,16 +99,9 @@ impl Window {
     }
 
     /// One sample of the connection's selected path: its round trip,
-    /// whether it is `relayed`, whether it `changed` since the last, and
-    /// the bytes per second received over the last interval.
-    pub(crate) fn observe(
-        &mut self,
-        rtt: Duration,
-        relayed: bool,
-        changed: bool,
-        received: f64,
-        now: Instant,
-    ) {
+    /// whether it `changed` since the last, and the bytes per second
+    /// received over the last interval.
+    pub(crate) fn observe(&mut self, rtt: Duration, changed: bool, received: f64, now: Instant) {
         if changed {
             self.base = BaseDelay::default();
         }
@@ -119,14 +110,6 @@ impl Window {
         } else {
             self.received * 0.8 + received * 0.2
         };
-        if !relayed {
-            self.window = self.full;
-            return;
-        }
-        if self.window == self.full {
-            // A path that turned relayed starts from a window it can drain.
-            self.window = INITIAL_WINDOW.min(self.full);
-        }
         if rtt.is_zero() {
             return;
         }
@@ -174,25 +157,25 @@ mod tests {
     const MS: Duration = Duration::from_millis(1);
     const FULL: u64 = 64 << 20;
 
-    /// Samples every 50 ms from `start`, relayed, at `received` B/s.
+    /// Samples every 50 ms from `start` at `received` B/s.
     fn run(window: &mut Window, start: Instant, rtts: &[u64], received: f64) -> Instant {
         let mut at = start;
         for rtt in rtts {
             at += MS * 50;
-            window.observe(MS * *rtt as u32, true, false, received, at);
+            window.observe(MS * *rtt as u32, false, received, at);
         }
         at
     }
 
+    /// A fast path with no queue opens the window to the full one, within
+    /// a few seconds of round trips.
     #[test]
-    fn a_direct_path_gets_the_full_window_and_a_relayed_one_starts_small() {
+    fn a_fast_path_opens_to_the_full_window() {
         let now = Instant::now();
         let mut window = Window::new(FULL);
         assert_eq!(window.window(), INITIAL_WINDOW);
-        window.observe(MS * 20, false, false, 0.0, now);
+        run(&mut window, now, &[20; 200], 1e9);
         assert_eq!(window.window(), FULL);
-        window.observe(MS * 20, true, true, 0.0, now + MS * 50);
-        assert_eq!(window.window(), INITIAL_WINDOW);
     }
 
     #[test]
@@ -204,7 +187,7 @@ mod tests {
         let mut last = window.window();
         for _ in 0..40 {
             at += MS * 500;
-            window.observe(MS * 400, true, false, 1e6, at);
+            window.observe(MS * 400, false, 1e6, at);
             assert!(window.window() <= last);
             last = window.window();
         }
@@ -234,7 +217,7 @@ mod tests {
         let at = run(&mut window, now, &[40; 4], 20e6);
         let before = window.window();
         // 75 ms of queue: one round trip later, a little less.
-        window.observe(MS * 115, true, false, 20e6, at + MS * 200);
+        window.observe(MS * 115, false, 20e6, at + MS * 200);
         let after = window.window();
         assert!(after < before && after > before / 2, "{before} -> {after}");
     }
@@ -243,18 +226,18 @@ mod tests {
     fn the_base_delay_follows_a_new_or_longer_path() {
         let now = Instant::now();
         let mut window = Window::new(FULL);
-        window.observe(MS * 20, true, false, 1e6, now);
+        window.observe(MS * 20, false, 1e6, now);
         // A new path's own round trip is not queue.
-        window.observe(MS * 300, true, true, 1e6, now + MS * 500);
+        window.observe(MS * 300, true, 1e6, now + MS * 500);
         let kept = window.window();
-        window.observe(MS * 310, true, false, 1e6, now + MS * 1000);
+        window.observe(MS * 310, false, 1e6, now + MS * 1000);
         assert!(window.window() >= kept, "{kept} -> {}", window.window());
         // Without a path change, an old least ages out.
         let mut aged = Window::new(FULL);
-        aged.observe(MS * 20, true, false, 1e6, now);
+        aged.observe(MS * 20, false, 1e6, now);
         let later = now + BASE_WINDOW + MS * 1;
-        aged.observe(MS * 300, true, false, 1e6, later);
-        aged.observe(MS * 300, true, false, 1e6, later + MS * 400);
+        aged.observe(MS * 300, false, 1e6, later);
+        aged.observe(MS * 300, false, 1e6, later + MS * 400);
         assert!(aged.window() >= INITIAL_WINDOW, "{}", aged.window());
     }
 }
