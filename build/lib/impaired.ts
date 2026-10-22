@@ -226,6 +226,8 @@ interface VideoResult {
 	session_interruptions?: number;
 	/** The combined scenarios only. */
 	transfer?: { direction: string; outcome: string; elapsed_ms: number; done_bytes: number; mb_per_s: number } | null;
+	/** The viewer's conditions over the timeline: the worst held most often, and all held. */
+	conditions?: { dominant: string | null; seen: string[] };
 	/** Sampled every 100 ms; `rtt_ms` is the session connection's round trip. */
 	timeline?: readonly { rtt_ms?: number | null }[];
 }
@@ -272,6 +274,64 @@ export function pathMismatch(result: unknown, expected: LinkPath): string | null
 		}
 	}
 	return null;
+}
+
+/** What the viewer's conditions must show for one profile; see `vnilink::Condition`. */
+export interface ConditionExpectation {
+	/** The condition held as worst most often; `null` for none. Unasserted when absent. */
+	readonly dominant?: string | null;
+	/** Conditions held at least once. */
+	readonly seen: readonly string[];
+}
+
+/**
+ * The plan's expectation per profile: loss profiles from 2% lose, a 2 Mb/s link
+ * congests, an unimpaired or merely delayed link shows nothing, a blackout
+ * of seconds is one, and a relayed path says so. Profiles not named, such
+ * as rate-5, are recorded but not asserted.
+ */
+export function expectedConditions(profile: string, path: LinkPath, burstMs: number, bursts: number): ConditionExpectation {
+	const seen = [
+		...path === 'relay' ? ['relay.path'] : [],
+		...bursts > 0 && burstMs >= 2500 ? ['link.blackout'] : [],
+	];
+	// Blackouts of seconds fill much of the stream: they are asserted as
+	// held, and the dominant condition is theirs, not the profile's.
+	if (seen.includes('link.blackout')) {
+		return { seen };
+	}
+	if (profile === 'clean' || profile.startsWith('delay-')) {
+		return { dominant: null, seen };
+	}
+	// 0.5% and 1% random loss sit under the rate controller's own loss
+	// threshold (2%), so the condition derived from it holds only briefly.
+	if (profile === 'loss-0.5' || profile === 'loss-1') {
+		return { seen };
+	}
+	// Relayed, the impaired leg is the relay's TCP connection: it repairs
+	// the loss, so QUIC sees none while its round trip grows to seconds,
+	// the relay backlog.
+	if (profile.startsWith('loss-')) {
+		return { dominant: path === 'relay' ? 'relay.backlog' : 'link.loss', seen };
+	}
+	if (profile === 'rate-2') {
+		return { dominant: 'link.congestion', seen };
+	}
+	return { seen };
+}
+
+/** Why a video scenario's conditions do not meet `expected`, or null when they do. */
+export function conditionMismatch(result: unknown, expected: ConditionExpectation): string | null {
+	const conditions = (result as { conditions?: { dominant?: unknown; seen?: unknown } } | null)?.conditions;
+	if (!conditions || !Array.isArray(conditions.seen)) {
+		return 'the scenario reported no conditions';
+	}
+	if (expected.dominant !== undefined && conditions.dominant !== expected.dominant) {
+		const held = typeof conditions.dominant === 'string' ? conditions.dominant : 'none';
+		return `the dominant condition was ${held}, not ${expected.dominant ?? 'none'}`;
+	}
+	const missing = expected.seen.filter(condition => !(conditions.seen as unknown[]).includes(condition));
+	return missing.length ? `the viewer never held ${missing.join(', ')}` : null;
 }
 
 export interface ScenarioRun {
@@ -433,16 +493,17 @@ export function renderSummary(report: ImpairedReport): string {
 	}
 	const video = report.runs.filter(run => run.scenario === 'video');
 	if (video.length) {
-		const header = '| Profile | Delivered | Clean | Keyframes open/forced/periodic | Engine lost/requested/sent | Time to picture median/max ms | Unrecovered bursts | Latency p50/p95 ms |';
-		lines.push('## Desktop video', '', header, '|---|---|---|---|---|---|---|---|');
+		const header = '| Profile | Delivered | Clean | Keyframes open/forced/periodic | Engine lost/requested/sent | Time to picture median/max ms | Unrecovered bursts | Latency p50/p95 ms | Dominant condition (held) |';
+		lines.push('## Desktop video', '', header, '|---|---|---|---|---|---|---|---|---|');
 		for (const run of video) {
 			const result = run.result as VideoResult | null;
 			if (!result) {
-				lines.push(`| ${run.profile} | ${run.status} | – | – | – | – | – | – |`);
+				lines.push(`| ${run.profile} | ${run.status} | – | – | – | – | – | – | – |`);
 				continue;
 			}
 			const keyframes = result.keyframes_produced;
-			lines.push(`| ${run.profile} | ${cell(result.delivery_ratio * 100)}% | ${cell(result.clean_ratio * 100)}% | ${String(keyframes.open)}/${String(keyframes.forced)}/${String(keyframes.periodic)} | ${engineCounts(result)} | ${videoCells(result).join(' | ')} |`);
+			const conditions = result.conditions ? `${result.conditions.dominant ?? 'none'} (${result.conditions.seen.join(', ') || 'none'})` : '–';
+			lines.push(`| ${run.profile} | ${cell(result.delivery_ratio * 100)}% | ${cell(result.clean_ratio * 100)}% | ${String(keyframes.open)}/${String(keyframes.forced)}/${String(keyframes.periodic)} | ${engineCounts(result)} | ${videoCells(result).join(' | ')} | ${conditions} |`);
 		}
 		lines.push('');
 	}
@@ -592,6 +653,12 @@ async function runScenario(context: RunContext, item: NetemProfile, scenario: Sc
 		const mismatch = pathMismatch(run.result, options.path);
 		if (mismatch) {
 			throw new Error(`Wrong transport path: ${mismatch}`);
+		}
+		if (scenario !== 'transfer') {
+			const wrong = conditionMismatch(run.result, expectedConditions(item.name, options.path, options.burstMs, options.bursts));
+			if (wrong) {
+				throw new Error(`Wrong condition: ${wrong}`);
+			}
 		}
 	} catch (error) {
 		signal.throwIfAborted();

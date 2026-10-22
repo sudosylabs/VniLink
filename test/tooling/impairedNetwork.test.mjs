@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { NETEM_PROFILES, RELAY_PATH, blackoutArguments, creationCommands, netemArguments, profileCommands, qdiscCommands, relayPathCommands, selectProfiles, shellScript, statisticsDelta, topology } from '../../build/lib/netem.ts';
-import { DEFAULT_OPTIONS, checkoutVolume, observeRelay, parseImpairedArguments, parseSize, parseSocketSample, pathMismatch, relayUrl, renderSummary, resolveOptions, scenarioEnvironment } from '../../build/lib/impaired.ts';
+import { DEFAULT_OPTIONS, checkoutVolume, observeRelay, parseImpairedArguments, parseSize, parseSocketSample, conditionMismatch, expectedConditions, pathMismatch, relayUrl, renderSummary, resolveOptions, scenarioEnvironment } from '../../build/lib/impaired.ts';
 
 const named = name => NETEM_PROFILES.find(item => item.name === name);
 
@@ -203,4 +203,21 @@ test('each checkout caches its build in a volume of its own', () => {
 	assert.match(main, /^vnilink-impaired-release-target-[0-9a-f]{12}$/);
 	assert.notEqual(main, worktree);
 	assert.equal(main, checkoutVolume('vnilink-impaired-release-target', '/work/vnilink'));
+});
+
+test('each profile expects its dominant condition, and a mismatch says what the viewer held', () => {
+	assert.deepEqual(expectedConditions('clean', 'direct', 250, 5), { dominant: null, seen: [] });
+	assert.deepEqual(expectedConditions('loss-5', 'relay', 250, 5), { dominant: 'relay.backlog', seen: ['relay.path'] }, 'TCP repairs a relayed leg\'s loss');
+	assert.deepEqual(expectedConditions('loss-5', 'direct', 250, 5), { dominant: 'link.loss', seen: [] });
+	assert.deepEqual(expectedConditions('rate-2', 'direct', 3000, 5), { seen: ['link.blackout'] }, 'long blackouts dominate by construction');
+	assert.deepEqual(expectedConditions('rate-2', 'direct', 250, 5), { dominant: 'link.congestion', seen: [] });
+	assert.deepEqual(expectedConditions('rate-5', 'direct', 3000, 0), { seen: [] });
+	assert.deepEqual(expectedConditions('loss-1', 'direct', 250, 5), { seen: [] }, 'under the controller\'s loss threshold');
+	assert.deepEqual(expectedConditions('loss-burst', 'direct', 250, 5), { dominant: 'link.loss', seen: [] });
+	const result = (dominant, seen) => ({ conditions: { dominant, seen } });
+	assert.equal(conditionMismatch(result('link.loss', ['link.loss']), { dominant: 'link.loss', seen: [] }), null);
+	assert.equal(conditionMismatch(result(null, []), { dominant: 'link.loss', seen: [] }), 'the dominant condition was none, not link.loss');
+	assert.equal(conditionMismatch(result(null, ['relay.path']), { dominant: null, seen: ['relay.path', 'link.blackout'] }), 'the viewer never held link.blackout');
+	assert.equal(conditionMismatch(result('encoder.slow', []), { seen: [] }), null);
+	assert.equal(conditionMismatch({}, { seen: [] }), 'the scenario reported no conditions');
 });

@@ -446,11 +446,57 @@ fn sample_timeline(
                 "fragment_loss_permille": host["viewer_fragment_loss_permille"],
                 "viewer_lost": lost,
                 "viewer_in_dropped": viewer["in_dropped"],
+                "conditions": viewer["conditions"]
+                    .as_array()
+                    .map(|held| held.iter().map(|entry| entry["condition"].clone()).collect::<Vec<_>>())
+                    .unwrap_or_default(),
             }));
         }
         std::thread::sleep(SAMPLE_EVERY);
     }
     samples
+}
+
+/// Conditions that need no attention by themselves.
+const INFORMATIONAL: [&str; 1] = ["relay.path"];
+
+/// Which condition the viewer held as its worst most often over the
+/// timeline, and every condition it held at all. Dominant is `null` when
+/// no condition was worst in at least a fifth of the samples.
+fn condition_summary(timeline: &[Value]) -> Value {
+    let mut worst: Vec<(String, u64)> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for sample in timeline {
+        let held: Vec<&str> = sample["conditions"]
+            .as_array()
+            .map(|held| held.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        for label in &held {
+            if !seen.iter().any(|known| known == label) {
+                seen.push((*label).to_owned());
+            }
+        }
+        if let Some(label) = held.iter().find(|label| !INFORMATIONAL.contains(label)) {
+            match worst.iter_mut().find(|(known, _)| known == label) {
+                Some((_, count)) => *count += 1,
+                None => worst.push(((*label).to_owned(), 1)),
+            }
+        }
+    }
+    let dominant = worst
+        .iter()
+        .max_by_key(|(_, count)| *count)
+        .filter(|(_, count)| *count * 5 >= timeline.len() as u64)
+        .map(|(label, _)| label.clone());
+    json!({
+        "dominant": dominant,
+        "worst_samples": worst
+            .iter()
+            .map(|(label, count)| (label.clone(), json!(count)))
+            .collect::<serde_json::Map<_, _>>(),
+        "seen": seen,
+        "samples": timeline.len(),
+    })
 }
 
 fn phase_label(phase: &SessionPhase) -> String {
@@ -947,6 +993,7 @@ fn run_stream(stream: &Stream) -> Value {
         "first_picture_ms": first_picture.map(millis),
         "longest_freeze_ms": longest_freeze(&arrivals, started + stream.duration).map(millis),
         "session_interruptions": session_interruptions(&timeline),
+        "conditions": condition_summary(&timeline),
         "latency_ms": {
             "p50": percentile(&latency, 0.50),
             "p95": percentile(&latency, 0.95),
@@ -1070,4 +1117,34 @@ fn pictures_carry_a_sequence_number_without_start_codes() {
         assert_eq!(parsed.has_idr(), keyframe);
         assert_eq!(parsed.has_sps() && parsed.has_pps(), keyframe);
     }
+}
+
+#[test]
+fn the_dominant_condition_is_the_worst_one_held_most_often() {
+    let sample = |held: &[&str]| json!({ "conditions": held });
+    let timeline = [
+        sample(&["relay.path"]),
+        sample(&["link.loss", "relay.path"]),
+        sample(&["link.loss"]),
+        sample(&["link.congestion", "link.loss"]),
+        sample(&[]),
+    ];
+    let summary = condition_summary(&timeline);
+    assert_eq!(summary["dominant"], "link.loss");
+    assert_eq!(summary["worst_samples"]["link.congestion"], 1);
+    assert_eq!(
+        summary["seen"],
+        json!(["relay.path", "link.loss", "link.congestion"])
+    );
+    // A relay alone, or a condition in under a fifth of the samples, dominates nothing.
+    let mostly_clean: Vec<Value> = (0..10)
+        .map(|index| {
+            sample(if index == 0 {
+                &["link.loss"]
+            } else {
+                &["relay.path"]
+            })
+        })
+        .collect();
+    assert!(condition_summary(&mostly_clean)["dominant"].is_null());
 }
