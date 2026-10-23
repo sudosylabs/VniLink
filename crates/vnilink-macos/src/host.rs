@@ -120,6 +120,13 @@ impl FrameSource for SharedSource<'_> {
         }
         self.inner.poll_frame(timestamp_us)
     }
+
+    /// The capture's own: without it the shared capture could never tell an
+    /// unchanged screen, and would encode it at the full frame rate and
+    /// never send a still picture of it.
+    fn attested_at(&self) -> Option<std::time::Instant> {
+        self.inner.attested_at()
+    }
 }
 
 /// Encode for one admitted Desktop service, stopping when that owner ends.

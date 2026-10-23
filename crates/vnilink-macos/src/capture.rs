@@ -127,6 +127,10 @@ impl ScreenPlan {
 #[cfg(target_os = "macos")]
 struct Handler {
     channel: Arc<FrameChannel>,
+    /// The picture last pushed: a frame with the same pixels is not a new
+    /// one. Without this an unchanged screen would read as changing at the
+    /// frame rate (see `pixels::same_picture`).
+    previous: std::sync::Mutex<Option<apple_cf::cv::CVPixelBuffer>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -139,6 +143,22 @@ impl SCStreamOutputTrait for Handler {
             // Idle/status samples have no picture. They do not end capture.
             return;
         };
+        // The same pixels again leave the channel as it is: its picture and
+        // when the source attested it do not change, so the shared capture
+        // sees an unchanged screen.
+        if let Some(kept) = sample.pixel_buffer() {
+            let mut previous = self
+                .previous
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            if previous
+                .as_ref()
+                .is_some_and(|previous| crate::pixels::same_picture(previous, &kept))
+            {
+                return;
+            }
+            *previous = Some(kept);
+        }
         // The stream timestamp is applied by `poll_frame`; the handler keeps
         // the pixels and when the display showed them.
         let captured_at = sample
@@ -267,6 +287,7 @@ impl ScreenCapture {
             .add_output_handler(
                 Handler {
                     channel: Arc::clone(&channel),
+                    previous: std::sync::Mutex::new(None),
                 },
                 SCStreamOutputType::Screen,
             )
@@ -301,7 +322,8 @@ impl ScreenCapture {
         (self.width, self.height)
     }
 
-    /// When ScreenCaptureKit last pushed a picture. Idle polls do not move this.
+    /// When ScreenCaptureKit last delivered a picture whose pixels changed.
+    /// Idle polls and frames with the same pixels do not move this.
     pub fn attested_at(&self) -> Option<std::time::Instant> {
         self.channel.pushed_at()
     }
