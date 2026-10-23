@@ -28,6 +28,16 @@ const holdMs = Number(process.env.VNILINK_LATENCY_HOLD_MS ?? '0');
 /** Hold mode: how long the stimulus moves between holds. */
 const MOVE_MS = 2000;
 
+/**
+ * Whether the stimulus and the viewer stay above other windows: in hold
+ * mode, and on Linux, where GNOME places a window shown inactive below the
+ * focused one.
+ */
+const ON_TOP = holdMs > 0 || process.platform === 'linux';
+
+/** How long someone at this computer may take to answer the desktop portal's dialog; only Linux asks. */
+const CONSENT_MS = process.platform === 'linux' ? 5 * 60000 : 0;
+
 if ((role !== 'host' && role !== 'viewer') || !directory || !output) {
 	throw new Error('VNILINK_LATENCY_ROLE (host or viewer), VNILINK_LATENCY_DIR and VNILINK_LATENCY_OUTPUT are required');
 }
@@ -123,6 +133,29 @@ async function screenRecording(driver: WindowDriver): Promise<boolean> {
 	return granted === true;
 }
 
+/**
+ * Waits for the desktop portal's grant on Linux, which someone at this
+ * computer gives in its dialog; the engine asked when it started hosting.
+ */
+async function portalGrant(driver: WindowDriver): Promise<void> {
+	const deadline = Date.now() + CONSENT_MS;
+	for (; ;) {
+		const reply = await engine(driver, { type: 'nativeSharingStatus' });
+		const displays = Array.isArray(reply.displays) ? reply.displays.filter(record) : [];
+		if (displays.some(display => display.phase === 'Sharing')) {
+			return;
+		}
+		const failed = displays.find(display => display.phase === 'Failed');
+		if (failed) {
+			throw new Error(`The screen was not shared: ${String(failed.error)}`);
+		}
+		if (Date.now() > deadline) {
+			throw new Error(`No one allowed screen sharing in the desktop portal dialog within ${String(CONSENT_MS / 60000)} minutes.`);
+		}
+		await new Promise(resolve => setTimeout(resolve, 250));
+	}
+}
+
 /** The pipelines the host's diagnostics hold for the screens it serves. */
 async function hostedPipelines(driver: WindowDriver): Promise<Record<string, unknown>[]> {
 	const reply = await engine(driver, { type: 'diagnosticSnapshot' });
@@ -132,7 +165,7 @@ async function hostedPipelines(driver: WindowDriver): Promise<Record<string, unk
 }
 
 async function host(driver: WindowDriver): Promise<void> {
-	if (!await screenRecording(driver)) {
+	if (process.platform !== 'linux' && !await screenRecording(driver)) {
 		throw new Error('Screen Recording is not granted to the development VniLink (.build/electron/VniLink.app). Allow it in System Settings › Privacy & Security › Screen & System Audio Recording, then run again.');
 	}
 	const snapshot = await engine(driver, { type: 'snapshot' });
@@ -145,13 +178,17 @@ async function host(driver: WindowDriver): Promise<void> {
 	await engine(driver, { type: 'acceptInvitation', token: viewer.token });
 	// Sharing is a setting; main writes it to the engine, as the Settings tab does.
 	await driver.window.webContents.executeJavaScript(`window.driver.mainProcess.getChannel('configuration').call('updateValue', { key: 'sharing.screen', value: true })`);
+	// On Linux turning it on asks the desktop portal.
+	if (process.platform === 'linux') {
+		await portalGrant(driver);
+	}
 	const { cell, height, area } = stripGeometry();
 	const stimulus = new BrowserWindow({
 		x: area.x, y: area.y, width: area.width, height,
 		frame: false, resizable: false, hasShadow: false, show: false,
 		webPreferences: { backgroundThrottling: false },
 	});
-	if (holdMs > 0) {
+	if (ON_TOP) {
 		stimulus.setAlwaysOnTop(true, 'screen-saver');
 	}
 	try {
@@ -216,16 +253,22 @@ async function viewer(driver: WindowDriver): Promise<void> {
 	publish('viewer', { token: await invitation(driver) });
 	const host = await expect('host', 60000);
 	await engine(driver, { type: 'acceptInvitation', token: host.token });
-	await expect('host-ready', 60000);
+	await expect('host-ready', 60000 + CONSENT_MS);
 	// As the Devices page does before it shows a computer's screen.
 	await engine(driver, { type: 'beginConnectServices', endpointId: host.endpoint });
 	// That only starts the connection; the view shows "not connected" if
-	// it opens before the connection is up.
+	// it opens before the connection is up, and "can't share its screen"
+	// if it opens before the host's report says it can: the link may have
+	// come up before a Linux host's portal grant, and the host reports
+	// again only on its next check.
 	const connected = Date.now() + 30000;
 	for (; ;) {
 		const snapshot = await engine(driver, { type: 'snapshot' });
 		const devices = record(snapshot.snapshot) && Array.isArray(snapshot.snapshot.devices) ? snapshot.snapshot.devices : [];
-		if (devices.some(device => record(device) && device.endpoint_id === host.endpoint && device.presence === 'connected')) {
+		const availability = await engine(driver, { type: 'peerAvailability', endpointId: host.endpoint }).catch(() => undefined);
+		const report: unknown[] = Array.isArray(availability?.report) ? availability.report : [];
+		if (devices.some(device => record(device) && device.endpoint_id === host.endpoint && device.presence === 'connected')
+			&& report.some(entry => record(entry) && entry.capability === 'desktopView' && entry.status === 'available')) {
 			break;
 		}
 		if (Date.now() > connected) {
@@ -235,7 +278,7 @@ async function viewer(driver: WindowDriver): Promise<void> {
 	}
 	const { viewerTop, area } = stripGeometry();
 	driver.window.setBounds({ x: area.x, y: area.y + viewerTop, width: area.width, height: area.height - viewerTop });
-	if (holdMs > 0) {
+	if (ON_TOP) {
 		driver.window.setAlwaysOnTop(true, 'screen-saver', 1);
 	}
 	driver.window.showInactive();
@@ -267,6 +310,8 @@ async function viewer(driver: WindowDriver): Promise<void> {
 			await new Promise(resolve => setTimeout(resolve, 250));
 			return {
 				role: document.querySelector('.desktop-status-role')?.textContent ?? '',
+				// What the view says when it cannot show the screen.
+				problem: [...document.querySelectorAll('.desktop-overlay:not([hidden]) :is(.desktop-overlay-title, .desktop-overlay-body)')].map(element => element.textContent).join(' '),
 				// The stats line fills once pictures are drawn and stays empty otherwise.
 				stats: document.querySelector('.desktop-status-stats')?.textContent ?? '',
 				events: window.latencyEvents.splice(0),
@@ -342,15 +387,15 @@ async function viewer(driver: WindowDriver): Promise<void> {
 }
 
 // The host prepares native video to capture and encode, and only it turns
-// screen sharing on. The viewer prepares it on Windows only, where nothing
-// else gives its engine a decoder and it would refuse the screen. On macOS
+// screen sharing on. The viewer prepares it on Windows and Linux, where
+// nothing else gives its engine a decoder and it would refuse the screen. On macOS
 // the window's own decoders admit it, and a viewer engine with native video
 // on the same Mac as the host made the host's capture reads about 19 ms
 // slower (glass to glass 133 against 116 ms p50): a cost of measuring on
 // one computer, not of either side.
 const application = new TestApplication({
 	showWindow: false,
-	nativeVideo: role === 'host' || process.platform === 'win32',
+	nativeVideo: role === 'host' || process.platform !== 'darwin',
 	timeoutMs: 30 * 60000,
 });
 

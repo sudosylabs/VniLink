@@ -1,10 +1,11 @@
 /**
- * Glass-to-glass latency on one Mac or Windows computer: a host and a
- * viewer, each a temporary VniLink with its own identity, stream this
+ * Glass-to-glass latency on one Mac, Windows or Linux computer: a host and
+ * a viewer, each a temporary VniLink with its own identity, stream this
  * computer's screen to each other over loopback. The host shows a strip
  * carrying its frame time across the top of the main display; the viewer
  * shows the stream below it; a reader (ScreenCaptureKit on macOS, Desktop
- * Duplication on Windows) decodes both strips from the same picture.
+ * Duplication on Windows, the ScreenCast portal on Linux) decodes both
+ * strips from the same picture.
  *
  * It proves capture-to-composited-picture latency through the real path:
  * the platform's capture and encoder, QUIC, the utility process, WebCodecs
@@ -317,6 +318,8 @@ interface LatencyPlatform {
 	/** The crate whose `glass_latency` example reads this platform's display. */
 	readonly readerCrate: string;
 	readonly reader: string;
+	/** How long someone at this computer may take to answer a consent dialog, for the host and for the reader. */
+	readonly consentMs: number;
 	/** Starts one side; its result settles when the side has quit. */
 	launch(role: 'host' | 'viewer', environment: Readonly<Record<string, string>>, log: string): LaunchedProcess;
 }
@@ -329,6 +332,8 @@ async function latencyPlatform(root: string, options: LatencyOptions, processes:
 		return {
 			readerCrate: 'vnilink-macos',
 			reader: join(root, 'target/release/examples/glass_latency'),
+			// macOS asks before the run; a refusal stops it.
+			consentMs: 0,
 			// Launched through LaunchServices, each side is its own responsible
 			// application, so macOS asks Screen Recording of the development
 			// VniLink and not of whatever started this task. `open -W` waits for it.
@@ -340,28 +345,42 @@ async function latencyPlatform(root: string, options: LatencyOptions, processes:
 			]),
 		};
 	}
-	if (process.platform === 'win32') {
-		if (options.app !== undefined) {
-			throw new Error('--app names a macOS application');
+	if (options.app !== undefined) {
+		throw new Error('--app names a macOS application');
+	}
+	const electron = await electronExecutable(root, signal);
+	const direct = (args: readonly string[]): LatencyPlatform['launch'] => (_role, environment, log) => {
+		const output = openSync(log, 'a');
+		try {
+			return processes.start(electron, [...args, entry], { env: { ...process.env, ...environment }, stdio: ['ignore', output, output] });
+		} finally {
+			closeSync(output);
 		}
+	};
+	if (process.platform === 'win32') {
 		// Windows asks no permission to capture; Desktop Duplication needs the
 		// signed-in desktop, which a process started over SSH is not in.
 		const { target } = defaultNativeOptions();
-		const electron = await electronExecutable(root, signal);
 		return {
 			readerCrate: 'vnilink-windows',
 			reader: join(root, 'target', ...(target ? [target] : []), 'release/examples/glass_latency.exe'),
-			launch: (_role, environment, log) => {
-				const output = openSync(log, 'a');
-				try {
-					return processes.start(electron, [entry], { env: { ...process.env, ...environment }, stdio: ['ignore', output, output] });
-				} finally {
-					closeSync(output);
-				}
-			},
+			consentMs: 0,
+			launch: direct([]),
 		};
 	}
-	throw new Error('measure:latency reads a macOS or Windows display');
+	if (process.platform === 'linux') {
+		// The portal asks someone at this computer twice, for the host's
+		// screen and for the reader's, and needs the graphical session's
+		// bus. The sides run under XWayland: a Wayland client cannot place
+		// the stimulus at the top of the display or the viewer below it.
+		return {
+			readerCrate: 'vnilink-linux',
+			reader: join(root, 'target/release/examples/glass_latency'),
+			consentMs: 5 * 60000,
+			launch: direct(['--ozone-platform=x11']),
+		};
+	}
+	throw new Error('measure:latency reads a macOS, Windows or Linux display');
 }
 
 export async function measureLatency(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
@@ -394,7 +413,7 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 				exited = true;
 			}));
 		}
-		await arrival(rendezvous, 'viewer-streaming', 120000, () => exited, signal).catch(async (error: unknown) => {
+		await arrival(rendezvous, 'viewer-streaming', 120000 + platform.consentMs, () => exited, signal).catch(async (error: unknown) => {
 			// Each side says why in its log.
 			const logs = await Promise.all(['host', 'viewer'].map(async role => `${role}:\n${(await readFile(join(options.output, `${role}.log`), 'utf8').catch(() => '')).slice(-1500)}`));
 			throw new Error(`${error instanceof Error ? error.message : String(error)}\n${logs.join('\n')}`);
@@ -403,7 +422,7 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 		const samples = join(options.output, 'samples.jsonl');
 		// The host runs the reader, under its own Screen Recording permission.
 		await publish(rendezvous, 'read', { reader: platform.reader, seconds: options.seconds, samples });
-		await arrival(rendezvous, 'read-done', (options.seconds + 60) * 1000, () => exited, signal);
+		await arrival(rendezvous, 'read-done', (options.seconds + 60) * 1000 + platform.consentMs, () => exited, signal);
 		const read: unknown = JSON.parse(await readFile(join(rendezvous, 'read-done.json'), 'utf8'));
 		if (typeof read !== 'object' || read === null || !('code' in read) || read.code !== 0) {
 			throw new Error(`The reader failed: ${JSON.stringify(read)}`);

@@ -422,7 +422,8 @@ fn wait_frame(
         slot.stride,
         timestamp_us,
         &slot.bytes,
-    )?;
+    )?
+    .with_captured_at(slot.captured_at);
     Ok(Some((frame, delivery)))
 }
 
@@ -734,7 +735,9 @@ fn copy_buffer(stream: &pw::stream::Stream, shared: &Shared) {
         height,
         stride,
         bytes: bytes[offset..end].to_vec().into(),
-        captured_at: None,
+        // When PipeWire handed the picture over: the compositor's own
+        // presentation time is not read.
+        captured_at: Some(Instant::now()),
     });
     record_delivery(shared, false);
 }
@@ -804,12 +807,13 @@ mod timing_tests {
                 .unwrap()
                 .is_none());
         }
+        let delivered = Instant::now();
         shared.channel.push(ChannelSlot {
             width: 8,
             height: 8,
             stride: 32,
             bytes: vec![255; 256].into(),
-            captured_at: None,
+            captured_at: Some(delivered),
         });
         let started = Instant::now();
         for timestamp_us in 0..20 {
@@ -826,6 +830,8 @@ mod timing_tests {
                 .unwrap()
                 .unwrap();
             assert_eq!((frame.width(), frame.height()), (8, 8));
+            // A cached picture keeps the time PipeWire delivered it.
+            assert_eq!(frame.captured_at(), Some(delivered));
         }
         let elapsed = started.elapsed();
         tx.send(Command::Stop).unwrap();

@@ -1,6 +1,6 @@
 # Glass-to-glass latency on one computer
 
-`npm run measure:latency` measures how long a change on this computer's screen takes to appear in a VniLink viewer on the same screen. It runs on macOS and Windows. Use it to record numbers before and after a capture, encode, transport, decode or drawing change.
+`npm run measure:latency` measures how long a change on this computer's screen takes to appear in a VniLink viewer on the same screen. It runs on macOS, Windows and Linux. Use it to record numbers before and after a capture, encode, transport, decode or drawing change.
 
 ## How it works
 
@@ -8,14 +8,14 @@ Two temporary VniLink instances, each with its own identity and profile, pair an
 
 - The **host** hosts the screen from a temporary engine that may capture. It opens a stimulus window across the top of the main display. On every animation frame the stimulus draws a strip of black and white cells carrying that frame's time in ms.
 - The **viewer** shows the host's screen in a real workbench window below the strip. Its picture contains a copy of the strip, older by the latency.
-- The **reader** captures the display and decodes every strip in each picture (`vnilink_media::measure::glass`). On macOS it is `crates/vnilink-macos/examples/glass_latency.rs`, which captures with ScreenCaptureKit and times a picture by its `displayTime`. On Windows it is `crates/vnilink-windows/examples/glass_latency.rs`, which captures with Desktop Duplication and times a picture by its `LastPresentTime`, the QueryPerformanceCounter time the desktop was presented. The live strip and its copy come from the same composited picture, so their difference is the latency, with no clocks to align. The display's scan-out and the reader's own capture delay are shared by both strips and cancel out.
+- The **reader** captures the display and decodes every strip in each picture (`vnilink_media::measure::glass`). On macOS it is `crates/vnilink-macos/examples/glass_latency.rs`, which captures with ScreenCaptureKit and times a picture by its `displayTime`. On Windows it is `crates/vnilink-windows/examples/glass_latency.rs`, which captures with Desktop Duplication and times a picture by its `LastPresentTime`, the QueryPerformanceCounter time the desktop was presented. On Linux it is `crates/vnilink-linux/examples/glass_latency.rs`, which captures through the ScreenCast portal and times a picture by when PipeWire handed it over. The live strip and its copy come from the same composited picture, so their difference is the latency, with no clocks to align. The display's scan-out and the reader's own capture delay are shared by both strips and cancel out.
 
 The viewer shows the display it is on, so its picture holds smaller copies of itself. Those copies are older still, and the reader ignores them. The strip layout is in `vnilink_media::measure::timecode`; `test/latency/stimulus.ts` draws the same layout, and `test/tooling/latency.test.mjs` keeps the two in step.
 
 ## What it proves and what it does not
 
 It proves the time from a picture on this screen to the same picture shown by a viewer, through the product's path:
-- the platform's capture and encoder on the host (ScreenCaptureKit and VideoToolbox; Desktop Duplication and Media Foundation);
+- the platform's capture and encoder on the host (ScreenCaptureKit and VideoToolbox; Desktop Duplication and Media Foundation; the RemoteDesktop portal, PipeWire and VA-API or a software encoder);
 - QUIC on loopback;
 - the utility process, WebCodecs and the canvas in the viewer;
 - the compositor.
@@ -45,11 +45,25 @@ macOS grants an ad-hoc signed application by its code hash, so each checkout's d
 
 The host's sharing allows view and control, but its engine prepares video only, so the viewer cannot control this Mac. Leave the display awake and uncovered while it runs.
 
-Only the host prepares native video on macOS; the viewer's window decodes with its own decoders. A viewer engine that also prepared native video, on the same Mac as the host, made the host's capture reads about 19 ms slower (133 against 116 ms p50 on an M1): a cost of measuring both sides on one computer, which a real viewer on another computer does not add. On Windows the viewer prepares it, as its engine admits a screen only with a decoder of its own.
+Only the host prepares native video on macOS; the viewer's window decodes with its own decoders. A viewer engine that also prepared native video, on the same Mac as the host, made the host's capture reads about 19 ms slower (133 against 116 ms p50 on an M1): a cost of measuring both sides on one computer, which a real viewer on another computer does not add. On Windows and Linux the viewer prepares it, as its engine admits a screen only with a decoder of its own.
 
 ### Windows
 
 Run it in the signed-in desktop: Desktop Duplication fails in the session SSH opens (session 0). From SSH, start it through a temporary interactive scheduled task (`schtasks /Create ... /IT`), and delete the task afterwards. Windows asks no permission to capture. The sides start the development Electron in `.build/electron` directly; `--app` is macOS only. The reader is `target/x86_64-pc-windows-gnu/release/examples/glass_latency.exe`, built with the GNU toolchain `scripts/test-windows.ps1` sets up.
+
+### Linux
+
+Run it in the graphical session: the sides and the reader need its session bus and the desktop portal. From SSH, start it as a transient user unit, which runs in the user's session environment:
+
+```bash
+systemd-run --user --wait --collect --working-directory="$PWD" npm run measure:latency -- --seconds 20
+```
+
+The desktop portal asks someone at this computer twice: once for the host and once for the reader. Choose the display both times; the host is only viewed, so it needs no remote interaction. The host and the reader each wait up to five minutes for an answer. The sides run under XWayland (`--ozone-platform=x11`), because a Wayland window cannot place itself: the stimulus must sit at the top of the display and the viewer below it. Both stay above other windows.
+
+Turn on Do Not Disturb first. GNOME announces a window that opens without focus with a banner ("VniLink is ready") across the top of the display, over the strip, and no picture can then be read.
+
+The reader times a picture by when PipeWire delivered it, not by when the compositor presented it. Both strips share that delay, so the latency is unaffected, but hold mode's showing times are a little late.
 
 ### Evidence
 
