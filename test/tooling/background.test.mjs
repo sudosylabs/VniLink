@@ -231,7 +231,7 @@ test('the Linux autostart entry quotes the executable and is removed when disabl
 	}
 });
 
-test('the screen host follows the primary display, macOS consent and engine restarts', async () => {
+test('the screen host follows the primary display, macOS consent and engine restarts; Linux follows screen sharing and keeps its portal grant', async () => {
 	const consent = new Emitter();
 	const availability = new Emitter();
 	const calls = [];
@@ -246,6 +246,14 @@ test('the screen host follows the primary display, macOS consent and engine rest
 		},
 	};
 	const permissions = { isGranted: kind => kind === 'screen' && granted, onDidChangeConsent: consent.event };
+	const settings = new Emitter();
+	let sharing = false;
+	const configuration = {
+		get snapshot() {
+			return { values: { 'sharing.screen': sharing } };
+		},
+		onDidChangeConfiguration: settings.event,
+	};
 	const environment = (platform) => ({
 		platform, primaryDisplay: () => display, onDidChangeDisplays: listener => {
 			displaysChanged = listener;
@@ -253,7 +261,7 @@ test('the screen host follows the primary display, macOS consent and engine rest
 		},
 	});
 	const types = () => calls.map(command => command.type);
-	const mac = new ScreenHostingMainService(engine, permissions, { warn: () => undefined }, environment('darwin'));
+	const mac = new ScreenHostingMainService(engine, permissions, { warn: () => undefined }, configuration, environment('darwin'));
 	try {
 		await mac.start();
 		assert.deepEqual(types(), [], 'macOS shared the screen without Screen Recording');
@@ -278,7 +286,7 @@ test('the screen host follows the primary display, macOS consent and engine rest
 	}
 	calls.length = 0;
 	granted = false;
-	const windows = new ScreenHostingMainService(engine, permissions, { warn: () => undefined }, environment('win32'));
+	const windows = new ScreenHostingMainService(engine, permissions, { warn: () => undefined }, configuration, environment('win32'));
 	try {
 		await windows.start();
 		assert.deepEqual(types(), ['startNativeScreenSharing'], 'Windows waited for a consent it does not have');
@@ -286,11 +294,29 @@ test('the screen host follows the primary display, macOS consent and engine rest
 		windows.dispose();
 	}
 	calls.length = 0;
-	const linux = new ScreenHostingMainService(engine, permissions, { warn: () => undefined }, environment('other'));
+	displaysChanged = undefined;
+	const linux = new ScreenHostingMainService(engine, permissions, { warn: () => undefined }, configuration, environment('linux'));
 	try {
 		await linux.start();
-		assert.deepEqual(types(), [], 'A platform without a native host was asked to share');
+		assert.deepEqual(types(), [], 'Linux showed the portal dialog while screen sharing was off');
+		sharing = true;
+		settings.fire();
+		await settle();
+		assert.deepEqual(types(), ['startNativeScreenSharing'], 'Linux did not ask the portal once sharing was on');
+		assert.equal(displaysChanged, undefined, 'A display change would restart the host and show the portal dialog again');
+		sharing = false;
+		settings.fire();
+		await settle();
+		assert.deepEqual(types(), ['startNativeScreenSharing', 'stopNativeScreenSharing'], 'Turning sharing off kept the portal grant');
 	} finally {
 		linux.dispose();
+	}
+	calls.length = 0;
+	const other = new ScreenHostingMainService(engine, permissions, { warn: () => undefined }, configuration, environment('other'));
+	try {
+		await other.start();
+		assert.deepEqual(types(), [], 'A platform without a native host was asked to share');
+	} finally {
+		other.dispose();
 	}
 });

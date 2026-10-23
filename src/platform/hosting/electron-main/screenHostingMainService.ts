@@ -1,6 +1,8 @@
 import { screen } from 'electron';
 import { Disposable } from '../../../base/common/lifecycle.js';
-import { isMacintosh, isWindows } from '../../../base/common/platform.js';
+import { isLinux, isMacintosh, isWindows } from '../../../base/common/platform.js';
+import { IConfigurationMainService } from '../../configuration/electron-main/configurationMainService.js';
+import type { ConfigurationMainService } from '../../configuration/electron-main/configurationMainService.js';
 import { isNativeScreenSource, type NativeScreenSource } from '../../engine/common/engine.js';
 import { IEngineMainService } from '../../engine/electron-main/engineMainService.js';
 import type { EngineMainService } from '../../engine/electron-main/engineMainService.js';
@@ -16,13 +18,13 @@ export type ScreenHostingTarget = NativeScreenSource | undefined;
 
 /** The OS facts a screen host depends on, replaceable in tests. */
 export interface ScreenHostingEnvironment {
-	readonly platform: 'darwin' | 'win32' | 'other';
+	readonly platform: 'darwin' | 'win32' | 'linux' | 'other';
 	primaryDisplay(): ScreenHostingTarget;
 	onDidChangeDisplays(listener: () => void): () => void;
 }
 
 const electronEnvironment: ScreenHostingEnvironment = {
-	platform: isMacintosh ? 'darwin' : isWindows ? 'win32' : 'other',
+	platform: isMacintosh ? 'darwin' : isWindows ? 'win32' : isLinux ? 'linux' : 'other',
 	primaryDisplay: () => {
 		const display = screen.getPrimaryDisplay();
 		const source = {
@@ -46,12 +48,17 @@ const electronEnvironment: ScreenHostingEnvironment = {
 	},
 };
 
+/** Whether paired computers may view and control this screen. */
+const SHARING_SETTING = 'sharing.screen';
+
 /**
  * Keeps the native screen host running for the primary display, so paired
  * computers can view and control this one. The host is idle until a viewer
  * connects; capture runs only while someone watches. macOS needs Screen
- * Recording first; Windows asks for no consent. Sharing policy and peer
- * grants in the engine still decide who may view.
+ * Recording first; Windows asks for no consent; on Linux the engine asks
+ * the desktop portal, whose dialog someone at this computer answers once
+ * per host, so Linux hosts only while screen sharing is turned on. Sharing
+ * policy and peer grants in the engine still decide who may view.
  */
 export class ScreenHostingMainService extends Disposable {
 	declare public readonly _serviceBrand: undefined;
@@ -64,6 +71,7 @@ export class ScreenHostingMainService extends Disposable {
 		@IEngineMainService private readonly engine: EngineMainService,
 		@IPermissionsMainService private readonly permissions: PermissionsMainService,
 		@ILogService private readonly logService: ILogService,
+		@IConfigurationMainService private readonly configuration: ConfigurationMainService,
 		private readonly environment: ScreenHostingEnvironment = electronEnvironment,
 	) {
 		super();
@@ -73,11 +81,18 @@ export class ScreenHostingMainService extends Disposable {
 	public start(): Promise<void> {
 		if (!this.started) {
 			this.started = true;
-			const stopListening = this.environment.onDidChangeDisplays(() => {
-				void this.apply();
-			});
-			this._register({ dispose: stopListening });
+			// On Linux the host serves the monitor chosen in the portal
+			// dialog, whatever the displays do; a restart would ask again.
+			if (this.environment.platform !== 'linux') {
+				const stopListening = this.environment.onDidChangeDisplays(() => {
+					void this.apply();
+				});
+				this._register({ dispose: stopListening });
+			}
 			this._register(this.permissions.onDidChangeConsent(() => {
+				void this.apply();
+			}));
+			this._register(this.configuration.onDidChangeConfiguration(() => {
 				void this.apply();
 			}));
 			this._register(this.engine.onDidChangeAvailability(available => {
@@ -93,7 +108,8 @@ export class ScreenHostingMainService extends Disposable {
 
 	private wanted(): ScreenHostingTarget {
 		const { platform } = this.environment;
-		if (platform === 'other' || (platform === 'darwin' && !this.permissions.isGranted('screen'))) {
+		if (platform === 'other' || (platform === 'darwin' && !this.permissions.isGranted('screen'))
+			|| (platform === 'linux' && this.configuration.snapshot.values[SHARING_SETTING] !== true)) {
 			return undefined;
 		}
 		return this.environment.primaryDisplay();

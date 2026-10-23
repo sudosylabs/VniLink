@@ -141,7 +141,11 @@ export class VniLinkApplication extends Disposable {
 			this.checkRunning();
 			this.instantiationService.invokeFunction(accessor => {
 				accessor.get(IHostingMainService).start();
-				void accessor.get(IScreenHostingMainService).start();
+				// A temporary engine shares the screen only when it may
+				// capture; on Linux asking shows the desktop portal's dialog.
+				if (!this.options.temporaryEngine || this.options.temporaryEngineCaptures === true) {
+					void accessor.get(IScreenHostingMainService).start();
+				}
 				// A paired computer may ask this one to restart or shut down; its user sees and answers it.
 				accessor.get(ISystemActionNoticeMainService).start();
 			});

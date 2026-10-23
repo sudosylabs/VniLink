@@ -37,9 +37,9 @@ const services = {
 	hostingMainService: `import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js'; import { state } from 'electron';
 		export const IHostingMainService = createDecorator('hostingMainService');
 		export class HostingMainService { start() { state.hosting = (state.hosting ?? 0) + 1; } }`,
-	screenHostingMainService: `import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js';
+	screenHostingMainService: `import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js'; import { state } from 'electron';
 		export const IScreenHostingMainService = createDecorator('screenHostingMainService');
-		export class ScreenHostingMainService { async start() { } }`,
+		export class ScreenHostingMainService { async start() { state.screenHosting = (state.screenHosting ?? 0) + 1; } }`,
 	systemSettings: `import { state } from 'electron';
 		export function setRunInBackground(value) { state.background = value; }
 		export function launchedAtLogin() { return state.atLogin === true; }`,
@@ -151,6 +151,15 @@ test('relaunching or activating without a window opens exactly one window', asyn
 	state.requestWindow();
 	await new Promise(resolve => setImmediate(resolve));
 	assert.equal(state.windows, 3, "The tray's Open did not reopen the window");
+	assert.equal(state.screenHosting, undefined, 'A temporary engine that may not capture shared the screen');
+	application.dispose();
+});
+
+test('a temporary engine that may capture shares the screen', async () => {
+	const { VniLinkApplication, state } = await load('./src/code/electron-main/app.ts', 'VniLinkApplication');
+	const application = new VniLinkApplication({ temporaryEngine: true, temporaryEngineCaptures: true, showWindow: false });
+	await application.start();
+	assert.equal(state.screenHosting, 1);
 	application.dispose();
 });
 
@@ -176,6 +185,7 @@ test('a login launch that runs in the background hosts without opening a window'
 	await application.start();
 	assert.equal(state.windows, 0);
 	assert.equal(state.hosting, 1);
+	assert.equal(state.screenHosting, 1, 'The installed application did not share the screen');
 	app.emit('activate');
 	await new Promise(resolve => setImmediate(resolve));
 	assert.equal(state.windows, 1, 'Activation after a hidden start did not open the window');

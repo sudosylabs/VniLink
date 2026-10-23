@@ -100,6 +100,9 @@ pub(super) struct NativeRuntimeState {
     /// The primary output; Windows hosts one desktop for every viewer.
     #[cfg(windows)]
     windows_host: Option<(u32, vnilink_app::WindowsHost)>,
+    /// The monitor chosen in the portal dialog, served to every viewer.
+    #[cfg(target_os = "linux")]
+    linux_host: Option<(u32, vnilink_app::LinuxHost)>,
     input_ready: bool,
 }
 impl NativeRuntimeState {
@@ -118,6 +121,8 @@ impl NativeRuntimeState {
             screen_hosts: HashMap::new(),
             #[cfg(windows)]
             windows_host: None,
+            #[cfg(target_os = "linux")]
+            linux_host: None,
             input_ready: false,
         }
     }
@@ -171,7 +176,24 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                 }
                 Ok(Reply::Done)
             }
-            #[cfg(not(any(target_os = "macos", windows)))]
+            #[cfg(target_os = "linux")]
+            {
+                // The portal dialog chooses the monitor; the geometry only names it.
+                let _ = (width, height, pixel_width, pixel_height);
+                // A declined or ended grant is asked for again; a live or
+                // pending one is kept, so no second dialog appears.
+                if state
+                    .native
+                    .linux_host
+                    .as_ref()
+                    .is_none_or(|(_, host)| host.has_ended())
+                {
+                    let host = state.core.linux_host().map_err(core_error)?;
+                    state.native.linux_host = Some((*display_id, host));
+                }
+                Ok(Reply::Done)
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
             {
                 let _ = (display_id, width, height, pixel_width, pixel_height);
                 Err(Error::from_reason(
@@ -191,11 +213,16 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
             {
                 state.native.windows_host = None;
             }
-            #[cfg(any(target_os = "macos", windows))]
+            #[cfg(target_os = "linux")]
+            {
+                // Closes the portal session, and with it the grant.
+                state.native.linux_host = None;
+            }
+            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
             {
                 Ok(Reply::Done)
             }
-            #[cfg(not(any(target_os = "macos", windows)))]
+            #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
             {
                 Err(Error::from_reason(
                     "Native screen sharing is not connected on this platform",
@@ -237,7 +264,25 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                     error: host.error(),
                 })
                 .collect();
-            #[cfg(not(any(target_os = "macos", windows)))]
+            #[cfg(target_os = "linux")]
+            let displays = state
+                .native
+                .linux_host
+                .iter()
+                .map(|(id, host)| TransferSharingStatus {
+                    display_id: *id,
+                    phase: if host.error().is_some() {
+                        "Failed"
+                    } else if host.is_started() {
+                        "Sharing"
+                    } else {
+                        "Starting"
+                    }
+                    .into(),
+                    error: host.error(),
+                })
+                .collect();
+            #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
             let displays = vec![];
             Ok(Reply::NativeSharingStatus { displays })
         }
@@ -597,6 +642,12 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
             Ok(Reply::Done)
         }
         Command::EnableNativeInput => {
+            // On Linux the portal grant carries input; X11 injection would
+            // reach only X clients under Wayland.
+            #[cfg(target_os = "linux")]
+            if state.native.linux_host.is_some() {
+                return Ok(Reply::Done);
+            }
             if !state.native.input_ready {
                 let result = state.core.enable_native_input_without_prompt();
                 state.native.backends.retain(|b| b.name != "input");
@@ -630,6 +681,10 @@ pub(super) fn shutdown(state: &mut State) -> Result<()> {
     #[cfg(target_os = "macos")]
     for (_, host) in state.native.screen_hosts.drain() {
         host.stop();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        state.native.linux_host = None;
     }
     state.core.shutdown();
     Ok(())

@@ -112,10 +112,13 @@ impl HostDesktop for WaylandInput {
 }
 
 /// Capture and input share the same consent and are revoked together.
+/// Someone may allow the screen without remote interaction: the grant is
+/// then view-only, and its session still ends the capture when revoked.
 pub struct WaylandCapture {
     capture: PortalCapture,
     input: WaylandInput,
     cursor_metadata: bool,
+    control: bool,
 }
 impl WaylandCapture {
     pub fn open(startup: vnilink::BackendStartup) -> Result<Self, Error> {
@@ -136,7 +139,7 @@ impl WaylandCapture {
             .map_err(|_| Error::CaptureRejected("the Wayland input worker could not start"))?;
         // Consent may need human interaction. Cancellation in the GTK layer
         // fences installation; a lost receiver makes the worker close its grant.
-        let (fd, node, logical, cursor_metadata) = match startup.receive(&ready_rx) {
+        let (fd, node, logical, cursor_metadata, control) = match startup.receive(&ready_rx) {
             Ok(result) => result?,
             Err(error) => {
                 connection.close();
@@ -164,6 +167,7 @@ impl WaylandCapture {
             capture,
             input,
             cursor_metadata,
+            control,
         };
         startup.check().map_err(startup_error)?;
         Ok(source)
@@ -178,8 +182,14 @@ impl WaylandCapture {
             None
         }
     }
-    pub fn desktop(&self) -> WaylandInput {
-        self.input.clone()
+    /// Input through the grant, when it allowed remote interaction.
+    pub fn desktop(&self) -> Option<WaylandInput> {
+        self.control.then(|| self.input.clone())
+    }
+    /// Whether the grant has ended: revoked from the compositor's sharing
+    /// controls, refused input, or closed here. It is never granted again.
+    pub fn revoked(&self) -> bool {
+        self.input.connection.closed.load(Ordering::Acquire)
     }
 }
 impl FrameSource for WaylandCapture {
@@ -194,8 +204,12 @@ impl FrameSource for WaylandCapture {
         "portal"
     }
 
+    fn cursor(&self) -> Option<vnilink::CursorState> {
+        WaylandCapture::cursor(self)
+    }
+
     fn poll_frame(&self, time: u64) -> Result<Option<RawFrame>, Error> {
-        if self.input.connection.closed.load(Ordering::Acquire) {
+        if self.revoked() {
             return Err(Error::CaptureRejected(
                 "the Wayland control permission session ended",
             ));
@@ -209,7 +223,7 @@ impl Drop for WaylandCapture {
     }
 }
 
-type Ready = Result<(OwnedFd, u32, (i32, i32), bool), Error>;
+type Ready = Result<(OwnedFd, u32, (i32, i32), bool, bool), Error>;
 struct Grant {
     proxy: RemoteDesktop,
     session: Session<RemoteDesktop>,
@@ -217,6 +231,8 @@ struct Grant {
     node: u32,
     logical: (i32, i32),
     cursor_metadata: bool,
+    /// Keyboard and pointer were granted with the screen.
+    control: bool,
 }
 fn startup_error(_: vnilink::Error) -> Error {
     Error::CaptureRejected("desktop capture startup cancelled or expired")
@@ -230,7 +246,7 @@ async fn open_grant(startup: &vnilink::BackendStartup) -> Result<Grant, Error> {
     startup.check().map_err(startup_error)?;
     let proxy = RemoteDesktop::new()
         .await
-        .map_err(|_| Error::Unsupported("the RemoteDesktop portal is unavailable"))?;
+        .map_err(|_| Error::Unsupported("the RemoteDesktop portal"))?;
     let session = proxy
         .create_session(Default::default())
         .await
@@ -275,12 +291,9 @@ async fn open_grant(startup: &vnilink::BackendStartup) -> Result<Grant, Error> {
             .start(&session, None, Default::default())
             .await?
             .response()?;
-        if !response
+        let control = response
             .devices()
-            .contains(DeviceType::Keyboard | DeviceType::Pointer)
-        {
-            return Err(ashpd::Error::Response(ashpd::desktop::ResponseError::Other));
-        }
+            .contains(DeviceType::Keyboard | DeviceType::Pointer);
         let streams = response.streams();
         let stream = streams
             .first()
@@ -299,7 +312,7 @@ async fn open_grant(startup: &vnilink::BackendStartup) -> Result<Grant, Error> {
         let fd = cast
             .open_pipe_wire_remote(&session, Default::default())
             .await?;
-        Ok::<_, ashpd::Error>((fd, node, logical, cursor_metadata))
+        Ok::<_, ashpd::Error>((fd, node, logical, cursor_metadata, control))
     };
     let result = tokio::select! {
         biased;
@@ -307,20 +320,29 @@ async fn open_grant(startup: &vnilink::BackendStartup) -> Result<Grant, Error> {
         result = work => result,
     };
     match result {
-        Ok((fd, node, logical, cursor_metadata)) => Ok(Grant {
+        Ok((fd, node, logical, cursor_metadata, control)) => Ok(Grant {
             proxy,
             session,
             fd,
             node,
             logical,
             cursor_metadata,
+            control,
         }),
-        Err(_) => {
+        Err(error) => {
             let _ = tokio::time::timeout(INPUT_TIMEOUT, session.close()).await;
-            Err(Error::CaptureRejected(
-                "allow one screen, keyboard and pointer in the RemoteDesktop permission dialog",
-            ))
+            Err(grant_error(&error))
         }
+    }
+}
+/// Someone at this computer declining the dialog is a denial; anything
+/// else, including a grant without exactly one screen, is not.
+fn grant_error(error: &ashpd::Error) -> Error {
+    match error {
+        ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled) => {
+            Error::CaptureDenied("screen sharing was declined on this computer")
+        }
+        _ => Error::CaptureRejected("choose one screen in the RemoteDesktop permission dialog"),
     }
 }
 fn worker_main(
@@ -355,6 +377,7 @@ fn worker_main(
         node,
         logical,
         cursor_metadata,
+        control,
     } = grant;
     let mut closed = match runtime.block_on(session.receive_closed()) {
         Ok(closed) => Box::pin(closed),
@@ -366,7 +389,11 @@ fn worker_main(
             return;
         }
     };
-    if startup.check().is_ok() && ready.send(Ok((fd, node, logical, cursor_metadata))).is_ok() {
+    if startup.check().is_ok()
+        && ready
+            .send(Ok((fd, node, logical, cursor_metadata, control)))
+            .is_ok()
+    {
         while !connection.closed.load(Ordering::Acquire) {
             // Pump D-Bus even with no input queued, and notice compositor-side
             // revocation instead of keeping a cached picture alive indefinitely.

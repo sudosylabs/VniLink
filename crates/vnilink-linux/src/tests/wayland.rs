@@ -469,6 +469,7 @@ fn real_portal_notify_transport_preserves_all_events() {
                 .await
                 .unwrap();
             assert!(grant.cursor_metadata);
+            assert!(grant.control);
             assert_eq!(grant.logical, (1920, 1080));
             assert_eq!(grant.node, 42);
             grant.session.close().await.unwrap();
@@ -491,11 +492,12 @@ fn real_portal_notify_transport_preserves_all_events() {
                             vnilink::BackendStartup::new(Duration::from_secs(5)),
                         )
                     });
-                    let (_fd, node, logical, _) = ready_rx
+                    let (_fd, node, logical, _, control) = ready_rx
                         .recv_timeout(Duration::from_secs(2))
                         .unwrap()
                         .unwrap();
                     assert_eq!(node, 42);
+                    assert!(control);
                     let mut input = WaylandInput {
                         connection,
                         pixels: (3840, 2160),
@@ -524,17 +526,16 @@ fn real_portal_notify_transport_preserves_all_events() {
                 .unwrap();
             }
             assert_eq!(closed.load(Ordering::Relaxed), 3);
+            // The screen without keyboard and pointer is a view-only grant,
+            // kept open so its revocation still ends the capture.
             granted.store(false, Ordering::Relaxed);
-            assert!(
-                open_grant(&vnilink::BackendStartup::new(Duration::from_secs(5)))
-                    .await
-                    .is_err()
-            );
-            assert_eq!(
-                closed.load(Ordering::Relaxed),
-                4,
-                "partial grants must be closed"
-            );
+            let view_only = open_grant(&vnilink::BackendStartup::new(Duration::from_secs(5)))
+                .await
+                .unwrap();
+            assert!(!view_only.control);
+            assert_eq!(closed.load(Ordering::Relaxed), 3);
+            view_only.session.close().await.unwrap();
+            assert_eq!(closed.load(Ordering::Relaxed), 4);
             granted.store(true, Ordering::Relaxed);
             cursor_modes.store(2, Ordering::Relaxed);
             let embedded = open_grant(&vnilink::BackendStartup::new(Duration::from_secs(5)))
@@ -583,4 +584,18 @@ fn fractional_scroll_relative_motion_and_side_buttons_map_without_rounding() {
         vec![Notify::Button(277, false)]
     );
     assert!(notifications(InputEvent::precise_wheel(9000, 0), (1, 1), (1, 1), (0, 0)).is_err());
+}
+
+#[test]
+fn a_declined_dialog_is_a_denial_and_any_other_failure_is_not() {
+    use ashpd::desktop::ResponseError;
+    assert!(matches!(
+        grant_error(&ashpd::Error::Response(ResponseError::Cancelled)),
+        Error::CaptureDenied(_)
+    ));
+    // Cancellation from here and an incomplete grant both answer `Other`.
+    assert!(matches!(
+        grant_error(&ashpd::Error::Response(ResponseError::Other)),
+        Error::CaptureRejected(_)
+    ));
 }

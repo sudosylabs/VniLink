@@ -48,6 +48,8 @@ pub use clipboard::{
 mod error;
 mod events;
 mod files;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 mod power;
@@ -81,6 +83,8 @@ pub use terminal::{
 };
 mod storage;
 mod types;
+#[cfg(target_os = "linux")]
+pub use linux::LinuxHost;
 #[cfg(target_os = "macos")]
 pub use macos::{MacFrame, MacHost, MacViewer};
 pub use storage::{CredentialStore, FfiRelay, FfiRelayInput};
