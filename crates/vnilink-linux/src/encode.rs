@@ -4,9 +4,9 @@
 //! Intel, AMD and the other Mesa drivers: H.264 (High when the session
 //! negotiates it and the driver offers it, else Constrained Baseline) and
 //! H.265 Main. NVENC is tried first, as Windows ranks NVIDIA's encoder
-//! first. The GPU converts the capture to NV12 where a VA-API node has a
-//! video processor; elsewhere, NVENC included, the CPU does. This build does
-//! not link a software H.264
+//! first. The GPU converts the capture to NV12 on NVENC and where a VA-API
+//! node has a video processor; elsewhere the CPU does. This build does not
+//! link a software H.264
 //! encoder: Cisco's OpenH264 patent grant covers Cisco's binary, not a
 //! source build compiled here, and x264 is GPL. Other codecs fall back to
 //! the shared software encoders ([`vnilink_media::CodecEncoder`]).
@@ -124,8 +124,9 @@ impl VideoEncoder for LinuxEncoder {
             hardware: Some(true),
             #[cfg(target_os = "linux")]
             input: Some(match &self.backend {
+                Backend::Nvenc(_) => vnilink::EncoderInput::GpuUpload,
                 Backend::Vaapi(session) if session.converts() => vnilink::EncoderInput::GpuUpload,
-                _ => vnilink::EncoderInput::Cpu,
+                Backend::Vaapi(_) => vnilink::EncoderInput::Cpu,
             }),
             #[cfg(not(target_os = "linux"))]
             input: None,
@@ -141,10 +142,7 @@ impl VideoEncoder for LinuxEncoder {
         #[cfg(target_os = "linux")]
         {
             return match &mut self.backend {
-                Backend::Nvenc(encoder) => {
-                    let (y, uv) = bgra_to_nv12(frame)?.into_planes();
-                    encoder.encode(&y, &uv, params.force_keyframe)
-                }
+                Backend::Nvenc(encoder) => encoder.encode(frame, params.force_keyframe),
                 Backend::Vaapi(session) => {
                     let input = if session.converts() {
                         Input::Bgra(frame.clone())
