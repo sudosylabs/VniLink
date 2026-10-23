@@ -9,13 +9,15 @@
 //! picture is encoded synchronously, without B pictures or lookahead, and
 //! a keyframe carries its parameter sets or sequence header.
 //!
-//! Sessions do not use this encoder yet. Inside the Electron engine process
-//! NVIDIA's driver (595, RTX 5060 Laptop GPU) crashed in a worker thread of
-//! its own (`libnvcuvid`) about a minute into most streaming runs, while the
-//! same encoding in a plain process, under a perturbed allocator and with
-//! the sessions the startup probe opens, ran clean. Keeping the session's
-//! structs alive and giving each session its own CUDA context did not stop
-//! it. Its tests still exercise it directly.
+//! While any session is open, a small anchor session opened before it stays
+//! open too ([`Anchor`]). NVIDIA's driver (seen on 595) starts one thread per
+//! process that recalibrates the GPU clock every 10 s through the device of
+//! the first session initialized, and keeps that device until the last
+//! session closes, even when its own session closed long before. A host
+//! reopens its encoder by opening the new one first, so without the anchor
+//! the thread soon reads a freed device. Where the allocator keeps freed
+//! memory mapped that goes unnoticed; Electron's allocator unmaps it, and
+//! the engine crashed about a minute into a stream.
 
 #[allow(
     dead_code,
@@ -31,7 +33,7 @@ mod bindings;
 mod guid;
 
 use std::ffi::c_void;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use bindings::*;
 use vnilink::VideoCodec;
@@ -176,6 +178,25 @@ pub(crate) fn offers(codec: VideoCodec) -> bool {
     Encoder::open(codec, 256, 144, 30, 1_000_000, false).is_ok()
 }
 
+/// The session initialized before every other open session and closed after
+/// them, so the driver's clock thread only ever holds its device.
+struct Anchor {
+    sessions: usize,
+    encoder: Option<Encoder>,
+}
+
+static ANCHOR: Mutex<Anchor> = Mutex::new(Anchor {
+    sessions: 0,
+    encoder: None,
+});
+
+/// Sessions counted by the anchor, and whether the anchor is open.
+#[cfg(test)]
+pub(crate) fn anchor_state() -> (usize, bool) {
+    let anchor = ANCHOR.lock().unwrap_or_else(|e| e.into_inner());
+    (anchor.sessions, anchor.encoder.is_some())
+}
+
 /// One NVENC session and its two buffers.
 pub(crate) struct Encoder {
     api: &'static Api,
@@ -186,6 +207,8 @@ pub(crate) struct Encoder {
     width: u16,
     height: u16,
     pictures: u32,
+    /// Counted in [`ANCHOR`]; false for the anchor itself.
+    anchored: bool,
 }
 
 // SAFETY: a session and its buffers are used from one thread at a time
@@ -194,6 +217,42 @@ unsafe impl Send for Encoder {}
 
 impl Encoder {
     pub(crate) fn open(
+        codec: VideoCodec,
+        width: u16,
+        height: u16,
+        frame_rate: u8,
+        bitrate_bps: u32,
+        high: bool,
+    ) -> Result<Self, Error> {
+        // Held while the session opens, so no other session is initialized
+        // between the anchor and this one.
+        let mut anchor = ANCHOR.lock().unwrap_or_else(|e| e.into_inner());
+        if anchor.encoder.is_none() {
+            anchor.encoder = Some(Self::open_session(
+                VideoCodec::H264,
+                256,
+                144,
+                30,
+                1_000_000,
+                false,
+            )?);
+        }
+        match Self::open_session(codec, width, height, frame_rate, bitrate_bps, high) {
+            Ok(mut encoder) => {
+                encoder.anchored = true;
+                anchor.sessions += 1;
+                Ok(encoder)
+            }
+            Err(error) => {
+                if anchor.sessions == 0 {
+                    anchor.encoder = None;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn open_session(
         codec: VideoCodec,
         width: u16,
         height: u16,
@@ -233,6 +292,7 @@ impl Encoder {
             width,
             height,
             pictures: 0,
+            anchored: false,
         };
         encoder.initialize(encode_guid, frame_rate, bitrate_bps, high)?;
         Ok(encoder)
@@ -481,14 +541,14 @@ impl Encoder {
     }
 }
 
-impl Drop for Encoder {
-    fn drop(&mut self) {
+impl Encoder {
+    /// Releases this session's buffers, then the session.
+    fn close(&mut self) {
         let api = self.api;
         let Ok(_current) = Current::new(api) else {
             return;
         };
-        // SAFETY: releases this session's buffers, then the session; each
-        // was created by it and is not used again.
+        // SAFETY: each was created by this session and is not used again.
         unsafe {
             if let (false, Some(destroy)) =
                 (self.input.is_null(), api.functions.nvEncDestroyInputBuffer)
@@ -503,6 +563,20 @@ impl Drop for Encoder {
             }
             if let Some(destroy) = api.functions.nvEncDestroyEncoder {
                 destroy(self.session);
+            }
+        }
+    }
+}
+
+impl Drop for Encoder {
+    fn drop(&mut self) {
+        self.close();
+        if self.anchored {
+            let mut anchor = ANCHOR.lock().unwrap_or_else(|e| e.into_inner());
+            anchor.sessions -= 1;
+            if anchor.sessions == 0 {
+                // The last session is closed: the anchor closes last.
+                anchor.encoder = None;
             }
         }
     }

@@ -1,10 +1,12 @@
 //! Linux hardware encode.
 //!
-//! VA-API reaches Intel, AMD and the other Mesa drivers: H.264 (High when
-//! the session negotiates it and the driver offers it, else Constrained
-//! Baseline) and H.265 Main. The GPU converts the capture to NV12 where the
-//! node has a video processor; elsewhere the CPU does. NVIDIA GPUs are not used yet: see
-//! `crate::nvenc`. This build does not link a software H.264
+//! NVENC reaches NVIDIA GPUs: H.264, H.265 Main and AV1 Main. VA-API reaches
+//! Intel, AMD and the other Mesa drivers: H.264 (High when the session
+//! negotiates it and the driver offers it, else Constrained Baseline) and
+//! H.265 Main. NVENC is tried first, as Windows ranks NVIDIA's encoder
+//! first. The GPU converts the capture to NV12 where a VA-API node has a
+//! video processor; elsewhere, NVENC included, the CPU does. This build does
+//! not link a software H.264
 //! encoder: Cisco's OpenH264 patent grant covers Cisco's binary, not a
 //! source build compiled here, and x264 is GPL. Other codecs fall back to
 //! the shared software encoders ([`vnilink_media::CodecEncoder`]).
@@ -20,7 +22,13 @@ pub struct LinuxEncoder {
     width: u16,
     height: u16,
     #[cfg(target_os = "linux")]
-    session: Session,
+    backend: Backend,
+}
+
+#[cfg(target_os = "linux")]
+enum Backend {
+    Nvenc(crate::nvenc::Encoder),
+    Vaapi(Session),
 }
 
 impl LinuxEncoder {
@@ -51,16 +59,35 @@ impl LinuxEncoder {
         }
         #[cfg(target_os = "linux")]
         {
-            let codec = match codec {
-                vnilink::VideoCodec::H264 => VaCodec::H264 { high },
-                vnilink::VideoCodec::H265 => VaCodec::H265,
-                _ => return Err(Error::Unsupported("VA-API for this codec")),
+            let backend = match crate::nvenc::Encoder::open(
+                codec,
+                width,
+                height,
+                frame_rate,
+                bitrate_bps,
+                high,
+            ) {
+                Ok(encoder) => Backend::Nvenc(encoder),
+                // No NVIDIA GPU, or one without this codec or these settings.
+                Err(_) => {
+                    let codec = match codec {
+                        vnilink::VideoCodec::H264 => VaCodec::H264 { high },
+                        vnilink::VideoCodec::H265 => VaCodec::H265,
+                        _ => return Err(Error::Unsupported("VA-API for this codec")),
+                    };
+                    Backend::Vaapi(Session::open(
+                        codec,
+                        width,
+                        height,
+                        frame_rate,
+                        bitrate_bps,
+                    )?)
+                }
             };
-            let session = Session::open(codec, width, height, frame_rate, bitrate_bps)?;
             return Ok(Self {
                 width,
                 height,
-                session,
+                backend,
             });
         }
         #[cfg(not(target_os = "linux"))]
@@ -87,13 +114,18 @@ impl LinuxEncoder {
 impl VideoEncoder for LinuxEncoder {
     fn implementation(&self) -> vnilink::EncoderImplementation {
         vnilink::EncoderImplementation {
+            #[cfg(target_os = "linux")]
+            name: match self.backend {
+                Backend::Nvenc(_) => "nvenc",
+                Backend::Vaapi(_) => "vaapi",
+            },
+            #[cfg(not(target_os = "linux"))]
             name: "vaapi",
             hardware: Some(true),
             #[cfg(target_os = "linux")]
-            input: Some(if self.session.converts() {
-                vnilink::EncoderInput::GpuUpload
-            } else {
-                vnilink::EncoderInput::Cpu
+            input: Some(match &self.backend {
+                Backend::Vaapi(session) if session.converts() => vnilink::EncoderInput::GpuUpload,
+                _ => vnilink::EncoderInput::Cpu,
             }),
             #[cfg(not(target_os = "linux"))]
             input: None,
@@ -108,13 +140,21 @@ impl VideoEncoder for LinuxEncoder {
         }
         #[cfg(target_os = "linux")]
         {
-            let input = if self.session.converts() {
-                Input::Bgra(frame.clone())
-            } else {
-                let (y, uv) = bgra_to_nv12(frame)?.into_planes();
-                Input::Nv12 { y, uv }
+            return match &mut self.backend {
+                Backend::Nvenc(encoder) => {
+                    let (y, uv) = bgra_to_nv12(frame)?.into_planes();
+                    encoder.encode(&y, &uv, params.force_keyframe)
+                }
+                Backend::Vaapi(session) => {
+                    let input = if session.converts() {
+                        Input::Bgra(frame.clone())
+                    } else {
+                        let (y, uv) = bgra_to_nv12(frame)?.into_planes();
+                        Input::Nv12 { y, uv }
+                    };
+                    session.encode(input, params.force_keyframe)
+                }
             };
-            return self.session.encode(input, params.force_keyframe);
         }
         #[cfg(not(target_os = "linux"))]
         {
