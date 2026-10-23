@@ -81,8 +81,9 @@ impl WindowsCapture {
         })
     }
 
-    /// When Desktop Duplication last attested the picture, including a timeout
-    /// that means the desktop has not changed. Access loss clears it.
+    /// When Desktop Duplication last delivered a new picture: a timeout or a
+    /// pointer-only update leaves it, as the desktop did not change. Access
+    /// loss clears it.
     pub fn attested_at(&self) -> Option<std::time::Instant> {
         *self
             .attested
@@ -111,16 +112,12 @@ impl WindowsCapture {
         // Check the native source even when pixels are cached: access loss or
         // permission denial must not be hidden by an old picture.
         let acquired = unsafe { self.acquire(timestamp_us) };
-        if acquired.is_ok() {
-            *self
+        {
+            let mut attested = self
                 .attested
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner()) = Some(std::time::Instant::now());
-        } else {
-            *self
-                .attested
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner()) = None;
+                .unwrap_or_else(|poison| poison.into_inner());
+            *attested = crate::idle::attestation(*attested, &acquired, std::time::Instant::now());
         }
         let frame = crate::idle::picture(acquired, &mut last, timestamp_us)?;
         if !self.embeds_cursor.load(Ordering::Acquire) {
