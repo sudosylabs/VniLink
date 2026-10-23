@@ -1382,11 +1382,19 @@ fn run_stills(stream: &Stream, on: bool) -> Value {
         .filter(|onset| *onset >= started + stream.warmup)
         .map(|onset| {
             let first = changed.iter().find(|(_, produced)| *produced >= onset);
+            // The still of this still period, if one arrived: when, against
+            // the change, and how large. A change whose first picture
+            // arrives just after it waited behind it.
+            let still = stills.iter().rev().find(|(at, _)| {
+                *at >= onset - STILL_PERIOD && first.is_none_or(|(shown, _)| at <= shown)
+            });
             json!({
                 "at_ms": millis(onset - started),
                 "shown_after_ms": first.map(|(at, _)| millis(*at - onset)),
                 "latency_ms": first.map(|(at, produced)| millis(*at - *produced)),
                 "in_burst": bursts.iter().any(|(began, ended)| onset >= *began && onset <= *ended),
+                "still_arrived_ms": still.map(|(at, _)| millis(*at - onset)),
+                "still_bytes": still.map(|(_, bytes)| bytes),
             })
         })
         .collect();

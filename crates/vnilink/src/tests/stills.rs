@@ -207,37 +207,40 @@ fn a_still_fits_what_the_link_drains_in_a_moment() {
 }
 
 /// An idle link's round trip is its floor while its window is still sized
-/// for the loaded link: the rate is the window over the loaded round trip.
+/// for the loaded link: the rate is the window over the round trip the link
+/// showed lately, and a lone spike is not that.
 #[test]
 fn the_link_carries_its_window_over_its_loaded_round_trip() {
     use crate::video::LinkRate;
     let start = Instant::now();
+    let at = |ms: u64| start + Duration::from_millis(ms);
     let mut link = LinkRate::default();
     assert_eq!(link.bits_per_second(), None, "nothing read yet");
-    // 10 Mb/s with 270 ms of round trip under load: a 337.5 kB window.
-    link.observe(337_500, Duration::from_millis(270), start);
+    // A second of motion at 30 fps on 10 Mb/s with 270 ms of round trip
+    // under load: a 337.5 kB window.
+    for frame in 0..30 {
+        link.observe(337_500, Duration::from_millis(270), at(frame * 33));
+    }
     assert_eq!(link.bits_per_second(), Some(10_000_000));
-    // Still, the queue drains: the round trip falls, the rate does not rise.
-    link.observe(
-        337_500,
-        Duration::from_millis(20),
-        start + Duration::from_secs(3),
-    );
+    // Then still for two seconds: the queue drains and the round trip
+    // falls to its floor, but the rate does not rise.
+    for second in 1..=2 {
+        link.observe(337_500, Duration::from_millis(20), at(1_000 * second));
+    }
     assert_eq!(link.bits_per_second(), Some(10_000_000));
     // A smaller window after a loss lowers it at once.
-    link.observe(
-        168_750,
-        Duration::from_millis(20),
-        start + Duration::from_secs(4),
-    );
+    link.observe(168_750, Duration::from_millis(20), at(2_500));
     assert_eq!(link.bits_per_second(), Some(5_000_000));
     // Long after the load, the idle round trip is what the link shows.
-    link.observe(
-        25_000,
-        Duration::from_millis(20),
-        start + Duration::from_secs(15),
-    );
+    link.observe(25_000, Duration::from_millis(20), at(15_000));
     assert_eq!(link.bits_per_second(), Some(10_000_000));
+    // A lone spike on an idle link is not its load.
+    let mut idle = LinkRate::default();
+    for frame in 0..40 {
+        idle.observe(13_200, Duration::from_millis(1), at(frame * 33));
+    }
+    idle.observe(13_200, Duration::from_millis(30), at(1_400));
+    assert_eq!(idle.bits_per_second(), Some(105_600_000));
     link.reset();
     assert_eq!(link.bits_per_second(), None, "a new path is unknown");
 }
