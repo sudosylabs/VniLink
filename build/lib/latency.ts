@@ -152,11 +152,11 @@ function percentiles(values: number[]): Percentiles | undefined {
 /**
  * Hold mode's summary from the stimulus `schedule` (`origin`, `moveMs`,
  * `holdMs`, wall-clock ms), the viewer's `stills` lines (`at`, `shown`) and
- * the reader's `samples`. A hold shows in the samples as a run of pictures
- * whose newest strip does not change, or, where the capture delivers no
- * picture of an unchanged screen, as a second or more without any; the
- * first picture with both strips after it is the first change after the
- * hold.
+ * the reader's `samples`. A hold shows in the samples as a second or more
+ * of the reader's time in which the newest strip does not change, however
+ * many pictures the capture delivers meanwhile (macOS none, Windows a few a
+ * second); the first picture with both strips after it is the first change
+ * after the hold.
  */
 export function summariseHolds(schedule: HoldSchedule, stills: string, samples: string): HoldSummary {
 	const shown = lines(stills).filter((line): line is { at: number; shown: number } => typeof line === 'object' && line !== null
@@ -190,18 +190,18 @@ export function summariseHolds(schedule: HoldSchedule, stills: string, samples: 
 	});
 	const afterHold: number[] = [];
 	const others: number[] = [];
-	// Pictures in a row whose newest strip did not change: a hold, once
-	// they span a good part of it at the reader's pace.
-	let unchanged = 0;
+	// When the newest strip last changed, on the reader's clock: a second
+	// without a change is a hold.
+	let since: number | undefined;
 	let waiting = false;
 	for (let index = 0; index < pictures.length; index++) {
 		const picture = pictures[index];
 		const changed = index > 0 && picture.newest !== pictures[index - 1].newest;
-		unchanged = changed || index === 0 ? 0 : unchanged + 1;
-		const quiet = index > 0 && picture.shown !== undefined && pictures[index - 1].shown !== undefined
-			&& picture.shown - (pictures[index - 1].shown ?? 0) >= 1000;
-		if (unchanged >= 30 || quiet) {
+		if (changed && since !== undefined && picture.shown !== undefined && picture.shown - since >= 1000) {
 			waiting = true;
+		}
+		if (changed || index === 0) {
+			since = picture.shown;
 		}
 		if (picture.latency === undefined) {
 			continue;

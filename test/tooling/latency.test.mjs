@@ -93,19 +93,21 @@ test('hold mode says when each still showed and what the first change after a ho
 		const shown = (at >= 4300 ? 1 : 0) + (at >= 12500 ? 1 : 0);
 		stills.push(JSON.stringify({ at, shown }));
 	}
-	// The reader: moving pictures 30 ms late, a hold of 40 pictures without
-	// a new strip, then the first change 90 ms late, then 30 ms again.
+	// The reader: moving pictures 30 ms late, a 6 s hold without a new
+	// strip, then the first change 90 ms late, then 30 ms again.
+	// Windows-like: pictures keep coming while the stimulus holds, a few a second.
 	const samples = [];
 	let value = 100;
+	let shown = 0;
 	for (let index = 0; index < 20; index++) {
-		samples.push(JSON.stringify({ shownMs: index, codes: [{ value: value += 16 }, { value: value - 30 }], latencyMs: 30 }));
+		samples.push(JSON.stringify({ shownMs: shown += 33, codes: [{ value: value += 16 }, { value: value - 30 }], latencyMs: 30 }));
 	}
 	for (let index = 0; index < 40; index++) {
-		samples.push(JSON.stringify({ shownMs: index, codes: [{ value }, { value }], latencyMs: null }));
+		samples.push(JSON.stringify({ shownMs: shown += 150, codes: [{ value }, { value }], latencyMs: null }));
 	}
-	samples.push(JSON.stringify({ shownMs: 0, codes: [{ value: value += 6000 }, { value: value - 90 }], latencyMs: 90 }));
+	samples.push(JSON.stringify({ shownMs: shown += 33, codes: [{ value: value += 6000 }, { value: value - 90 }], latencyMs: 90 }));
 	for (let index = 0; index < 5; index++) {
-		samples.push(JSON.stringify({ shownMs: index, codes: [{ value: value += 16 }, { value: value - 30 }], latencyMs: 30 }));
+		samples.push(JSON.stringify({ shownMs: shown += 33, codes: [{ value: value += 16 }, { value: value - 30 }], latencyMs: 30 }));
 	}
 	const hold = summariseHolds(schedule, stills.join('\n'), samples.join('\n'));
 	assert.equal(hold.holds, 3);
