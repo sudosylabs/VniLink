@@ -45,6 +45,8 @@ macOS grants an ad-hoc signed application by its code hash, so each checkout's d
 
 The host's sharing allows view and control, but its engine prepares video only, so the viewer cannot control this Mac. Leave the display awake and uncovered while it runs.
 
+Only the host prepares native video on macOS; the viewer's window decodes with its own decoders. A viewer engine that also prepared native video, on the same Mac as the host, made the host's capture reads about 19 ms slower (133 against 116 ms p50 on an M1): a cost of measuring both sides on one computer, which a real viewer on another computer does not add. On Windows the viewer prepares it, as its engine admits a screen only with a decoder of its own.
+
 ### Windows
 
 Run it in the signed-in desktop: Desktop Duplication fails in the session SSH opens (session 0). From SSH, start it through a temporary interactive scheduled task (`schtasks /Create ... /IT`), and delete the task afterwards. Windows asks no permission to capture. The sides start the development Electron in `.build/electron` directly; `--app` is macOS only. The reader is `target/x86_64-pc-windows-gnu/release/examples/glass_latency.exe`, built with the GNU toolchain `scripts/test-windows.ps1` sets up.

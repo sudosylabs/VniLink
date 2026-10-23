@@ -341,8 +341,17 @@ async function viewer(driver: WindowDriver): Promise<void> {
 	}
 }
 
-// Both sides prepare native video: the viewer's engine admits a screen only
-// with a decoder of its own. Only the host turns screen sharing on.
-const application = new TestApplication({ showWindow: false, nativeVideo: true, timeoutMs: 30 * 60000 });
+// The host prepares native video to capture and encode, and only it turns
+// screen sharing on. The viewer prepares it on Windows only, where nothing
+// else gives its engine a decoder and it would refuse the screen. On macOS
+// the window's own decoders admit it, and a viewer engine with native video
+// on the same Mac as the host made the host's capture reads about 19 ms
+// slower (glass to glass 133 against 116 ms p50): a cost of measuring on
+// one computer, not of either side.
+const application = new TestApplication({
+	showWindow: false,
+	nativeVideo: role === 'host' || process.platform === 'win32',
+	timeoutMs: 30 * 60000,
+});
 
 void application.run((_window, driver) => role === 'host' ? host(driver) : viewer(driver));
