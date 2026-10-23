@@ -162,9 +162,14 @@ fn drive_to_end(
     receiver: &Core,
     receiver_id: u64,
 ) -> (crate::job::JobSnapshot, crate::job::JobSnapshot) {
+    // Bounded by time, not by polls: a poll made while another caller
+    // drives the same job returns without advancing it, so on a loaded
+    // machine many polls can pass before the transfer moves.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let mut last_sender = sender.job_snapshot(sender_id).unwrap();
     let mut last_receiver = receiver.job_snapshot(receiver_id).unwrap();
-    for _ in 0..200 {
+    while std::time::Instant::now() < deadline {
+        let before = (last_sender.clone(), last_receiver.clone());
         if !last_receiver.state.is_terminal() {
             last_receiver = receiver.job_poll(receiver_id).unwrap();
         }
@@ -176,6 +181,9 @@ fn drive_to_end(
         }
         if last_receiver.state == JobState::WaitingDecision {
             break;
+        }
+        if (&last_sender, &last_receiver) == (&before.0, &before.1) {
+            std::thread::sleep(Duration::from_millis(1));
         }
     }
     (last_sender, last_receiver)
