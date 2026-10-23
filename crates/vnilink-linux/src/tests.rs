@@ -2,6 +2,8 @@
 mod decode_tests;
 #[path = "tests/encode.rs"]
 mod encode_tests;
+#[path = "tests/hevc_parameter_set.rs"]
+mod hevc_parameter_set_tests;
 #[path = "tests/host.rs"]
 mod host_tests;
 #[path = "tests/owners.rs"]

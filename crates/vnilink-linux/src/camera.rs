@@ -559,6 +559,7 @@ fn capture(
     };
     config.validate()?;
     let mut encoder = LinuxEncoder::open(
+        vnilink::VideoCodec::H264,
         config.width,
         config.height,
         config.fps as u8,

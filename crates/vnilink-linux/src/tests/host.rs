@@ -14,9 +14,14 @@ fn the_host_encoder_is_unavailable() {
     let quality = Quality::new(500, 30, 64, 64).unwrap();
     assert!(matches!(
         HostSession::open(64, 64, quality, |w, h, fps, bps| LinuxEncoder::open(
-            w, h, fps, bps, false
+            vnilink::VideoCodec::H264,
+            w,
+            h,
+            fps,
+            bps,
+            false
         )),
-        Err(Error::Unsupported("VA-API H.264"))
+        Err(Error::Unsupported("VA-API"))
     ));
 }
 
@@ -27,7 +32,7 @@ fn the_platform_encoder_plugs_into_the_generic_session() {
 
     let quality = Quality::new(500, 30, 32, 32).unwrap();
     let mut session = match HostSession::open(64, 64, quality, |w, h, fps, bps| {
-        LinuxEncoder::open(w, h, fps, bps, false)
+        LinuxEncoder::open(vnilink::VideoCodec::H264, w, h, fps, bps, false)
     }) {
         Ok(session) => session,
         Err(Error::Unsupported("VA-API H.264")) => return,

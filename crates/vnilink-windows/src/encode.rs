@@ -837,6 +837,15 @@ fn pack_hi_lo(high: u32, low: u32) -> u64 {
     u64::from(low) | (u64::from(high) << 32)
 }
 
+/// Media Foundation encodes H.264 here; other codecs use software.
+fn h264_only(codec: vnilink::VideoCodec) -> Result<(), Error> {
+    if codec == vnilink::VideoCodec::H264 {
+        Ok(())
+    } else {
+        Err(Error::Unsupported("Media Foundation for this codec"))
+    }
+}
+
 impl WindowsEncoder {
     pub fn open_codec(
         w: u16,
@@ -845,7 +854,8 @@ impl WindowsEncoder {
         bps: u32,
         codec: u8,
     ) -> Result<vnilink_media::CodecEncoder<Self>, Error> {
-        vnilink_media::CodecEncoder::open(codec, w, h, fps, bps, |w, h, fps, bps| {
+        vnilink_media::CodecEncoder::open(codec, w, h, fps, bps, |codec, w, h, fps, bps| {
+            h264_only(codec)?;
             Self::open(w, h, fps, bps)
         })
     }
@@ -860,7 +870,8 @@ impl WindowsEncoder {
         codec: u8,
         device: &crate::gpu::GpuDevice,
     ) -> Result<vnilink_media::CodecEncoder<Self>, Error> {
-        vnilink_media::CodecEncoder::open(codec, w, h, fps, bps, |w, h, fps, bps| {
+        vnilink_media::CodecEncoder::open(codec, w, h, fps, bps, |codec, w, h, fps, bps| {
+            h264_only(codec)?;
             Self::open_on(w, h, fps, bps, device)
         })
     }

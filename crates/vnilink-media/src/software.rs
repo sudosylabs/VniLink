@@ -404,6 +404,40 @@ fn probe(codec: VideoCodec) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A platform encoder that only ever opens; it is never asked to encode.
+    struct Platform;
+    impl VideoEncoder for Platform {
+        fn encode(&mut self, _: &RawFrame, _: &EncodeParams) -> Result<EncodedSample, Error> {
+            Err(Error::EncodeRejected("not used"))
+        }
+    }
+
+    #[test]
+    fn the_platform_encoder_takes_any_codec_and_only_h264_has_no_fallback() {
+        let opened = |codec: VideoCodec, platform: bool| {
+            CodecEncoder::open(codec.wire_id(), 64, 64, 30, 500_000, |asked, _, _, _, _| {
+                assert_eq!(asked, codec);
+                if platform {
+                    Ok(Platform)
+                } else {
+                    Err(Error::Unsupported("platform encoder"))
+                }
+            })
+        };
+        assert!(matches!(
+            opened(VideoCodec::H265, true),
+            Ok(CodecEncoder::Native(_))
+        ));
+        assert!(matches!(
+            opened(VideoCodec::Av1, false),
+            Ok(CodecEncoder::Software(_))
+        ));
+        assert!(matches!(
+            opened(VideoCodec::H264, false),
+            Err(Error::Unsupported("platform encoder"))
+        ));
+    }
     #[test]
     fn hevc_owners_keep_separate_references_and_recover_at_a_forced_keyframe() {
         let mut first = SoftwareEncoder::open(VideoCodec::H265, 64, 64, 30, 500_000).unwrap();
@@ -501,28 +535,32 @@ mod tests {
     }
 }
 
-/// Native H.264 and shared software encoders behind the same negotiated interface.
+/// The platform's encoders and the shared software ones behind the same
+/// negotiated interface.
 pub enum CodecEncoder<N> {
     Native(N),
     Software(SoftwareEncoder),
 }
 impl<N: VideoEncoder> CodecEncoder<N> {
+    /// The platform's encoder for the negotiated codec when it opens one,
+    /// else the software encoder. H.264 has no software encoder, so its
+    /// platform failure is final; any other codec falls back to software.
     pub fn open(
         codec: u8,
         w: u16,
         h: u16,
         fps: u8,
         bps: u32,
-        native: impl FnOnce(u16, u16, u8, u32) -> Result<N, Error>,
+        native: impl FnOnce(vnilink::VideoCodec, u16, u16, u8, u32) -> Result<N, Error>,
     ) -> Result<Self, Error> {
         let codec = vnilink::VideoCodec::from_wire_id(codec)
             .ok_or(Error::Unsupported("negotiated codec"))?;
-        if codec == vnilink::VideoCodec::H264 {
-            Ok(Self::Native(native(w, h, fps, bps)?))
-        } else {
-            Ok(Self::Software(SoftwareEncoder::open(
+        match native(codec, w, h, fps, bps) {
+            Ok(encoder) => Ok(Self::Native(encoder)),
+            Err(error) if codec == vnilink::VideoCodec::H264 => Err(error),
+            Err(_) => Ok(Self::Software(SoftwareEncoder::open(
                 codec, w, h, fps, bps,
-            )?))
+            )?)),
         }
     }
 }

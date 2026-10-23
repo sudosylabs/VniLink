@@ -133,8 +133,8 @@ pub(crate) fn parameter_sets(
     pps.trailing();
 
     let mut out = Vec::new();
-    push_nal(&mut out, 0x67, &sps.finish());
-    push_nal(&mut out, 0x68, &pps.finish());
+    push_nal(&mut out, &[0x67], &sps.finish());
+    push_nal(&mut out, &[0x68], &pps.finish());
     Ok(out)
 }
 
@@ -164,8 +164,11 @@ pub(crate) fn level_idc(macroblocks: u32) -> u8 {
     }
 }
 
-fn push_nal(out: &mut Vec<u8>, header: u8, rbsp: &[u8]) {
-    out.extend_from_slice(&[0, 0, 0, 1, header]);
+/// Appends one Annex-B NAL unit: start code, `header`, then `rbsp` with
+/// emulation prevention bytes.
+pub(crate) fn push_nal(out: &mut Vec<u8>, header: &[u8], rbsp: &[u8]) {
+    out.extend_from_slice(&[0, 0, 0, 1]);
+    out.extend_from_slice(header);
     let mut zeros = 0u8;
     for &byte in rbsp {
         if zeros == 2 && byte <= 3 {
@@ -177,27 +180,28 @@ fn push_nal(out: &mut Vec<u8>, header: u8, rbsp: &[u8]) {
     }
 }
 
+/// Most significant bit first, as H.264 and H.265 syntax is written.
 #[derive(Default)]
-struct Bits {
+pub(crate) struct Bits {
     bytes: Vec<u8>,
     acc: u64,
     bits: u32,
 }
 
 impl Bits {
-    fn bit(&mut self, value: u32) {
+    pub(crate) fn bit(&mut self, value: u32) {
         self.bits(value, 1);
     }
 
-    fn u8(&mut self, value: u8) {
+    pub(crate) fn u8(&mut self, value: u8) {
         self.bits(u32::from(value), 8);
     }
 
-    fn u32(&mut self, value: u32) {
+    pub(crate) fn u32(&mut self, value: u32) {
         self.bits(value, 32);
     }
 
-    fn bits(&mut self, value: u32, width: u32) {
+    pub(crate) fn bits(&mut self, value: u32, width: u32) {
         self.acc = (self.acc << width) | u64::from(value);
         self.bits += width;
         while self.bits >= 8 {
@@ -212,14 +216,14 @@ impl Bits {
         }
     }
 
-    fn ue(&mut self, value: u32) {
+    pub(crate) fn ue(&mut self, value: u32) {
         let code = value + 1;
         let width = 32 - code.leading_zeros();
         self.bits(0, width - 1);
         self.bits(code, width);
     }
 
-    fn se(&mut self, value: i32) {
+    pub(crate) fn se(&mut self, value: i32) {
         let mapped = if value > 0 {
             ((value as u32) << 1) - 1
         } else {
@@ -228,14 +232,14 @@ impl Bits {
         self.ue(mapped);
     }
 
-    fn trailing(&mut self) {
+    pub(crate) fn trailing(&mut self) {
         self.bit(1);
         if self.bits > 0 {
             self.bits(0, 8 - self.bits);
         }
     }
 
-    fn finish(self) -> Vec<u8> {
+    pub(crate) fn finish(self) -> Vec<u8> {
         self.bytes
     }
 }

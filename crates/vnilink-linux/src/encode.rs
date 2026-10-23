@@ -1,18 +1,18 @@
-//! Linux H.264 encode.
+//! Linux hardware encode.
 //!
-//! The hardware path is VA-API, High profile when the session negotiates it
-//! and the render node offers the entrypoint, else Constrained Baseline.
-//! This build does not link a software encoder. Cisco's OpenH264 patent grant
-//! covers Cisco's binary, not a source build compiled here, and x264 is GPL.
-//! A machine where no DRM render node offers the VA-API entrypoint reports
-//! that the hardware encoder is unavailable.
+//! VA-API reaches Intel, AMD and the other Mesa drivers: H.264 (High when
+//! the session negotiates it and the driver offers it, else Constrained
+//! Baseline) and H.265 Main. This build does not link a software H.264
+//! encoder: Cisco's OpenH264 patent grant covers Cisco's binary, not a
+//! source build compiled here, and x264 is GPL. Other codecs fall back to
+//! the shared software encoders ([`vnilink_media::CodecEncoder`]).
 
 #[cfg(target_os = "linux")]
 use vnilink_media::bgra_to_nv12;
 use vnilink_media::{EncodeParams, EncodedSample, Error, RawFrame, VideoEncoder};
 
 #[cfg(target_os = "linux")]
-use crate::vaapi::Session;
+use crate::vaapi::{Session, VaCodec};
 
 pub struct LinuxEncoder {
     width: u16,
@@ -22,7 +22,9 @@ pub struct LinuxEncoder {
 }
 
 impl LinuxEncoder {
+    /// A hardware encoder for `codec`; `high` asks for H.264 High.
     pub fn open(
+        codec: vnilink::VideoCodec,
         width: u16,
         height: u16,
         frame_rate: u8,
@@ -35,7 +37,7 @@ impl LinuxEncoder {
             ));
         }
         if width % 2 != 0 || height % 2 != 0 {
-            return Err(Error::InvalidFrame("H.264 width and height must be even"));
+            return Err(Error::InvalidFrame("width and height must be even"));
         }
         if frame_rate == 0 {
             return Err(Error::InvalidSetting("frame rate must be non-zero"));
@@ -47,7 +49,12 @@ impl LinuxEncoder {
         }
         #[cfg(target_os = "linux")]
         {
-            let session = Session::open(width, height, frame_rate, bitrate_bps, high)?;
+            let codec = match codec {
+                vnilink::VideoCodec::H264 => VaCodec::H264 { high },
+                vnilink::VideoCodec::H265 => VaCodec::H265,
+                _ => return Err(Error::Unsupported("VA-API for this codec")),
+            };
+            let session = Session::open(codec, width, height, frame_rate, bitrate_bps)?;
             return Ok(Self {
                 width,
                 height,
@@ -56,9 +63,22 @@ impl LinuxEncoder {
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = (width, height, frame_rate, bitrate_bps, high);
-            Err(Error::Unsupported("VA-API H.264"))
+            let _ = (codec, high);
+            Err(Error::Unsupported("VA-API"))
         }
+    }
+
+    /// The hardware encoder for a negotiated codec, else software.
+    pub fn open_codec(
+        w: u16,
+        h: u16,
+        fps: u8,
+        bps: u32,
+        codec: u8,
+    ) -> Result<vnilink_media::CodecEncoder<Self>, Error> {
+        vnilink_media::CodecEncoder::open(codec, w, h, fps, bps, |kind, w, h, fps, bps| {
+            Self::open(kind, w, h, fps, bps, codec == vnilink::CODEC_H264_HIGH)
+        })
     }
 }
 
@@ -86,21 +106,7 @@ impl VideoEncoder for LinuxEncoder {
         #[cfg(not(target_os = "linux"))]
         {
             let _ = params;
-            Err(Error::Unsupported("VA-API H.264"))
+            Err(Error::Unsupported("VA-API"))
         }
-    }
-}
-
-impl LinuxEncoder {
-    pub fn open_codec(
-        w: u16,
-        h: u16,
-        fps: u8,
-        bps: u32,
-        codec: u8,
-    ) -> Result<vnilink_media::CodecEncoder<Self>, Error> {
-        vnilink_media::CodecEncoder::open(codec, w, h, fps, bps, |w, h, fps, bps| {
-            Self::open(w, h, fps, bps, codec == vnilink::CODEC_H264_HIGH)
-        })
     }
 }

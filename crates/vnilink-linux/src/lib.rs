@@ -1,14 +1,15 @@
-//! Linux capture and H.264 for VniLink.
+//! Linux capture and hardware video for VniLink.
 //!
 //! X11 and the Wayland portal are separate. [`X11Capture`] reads the current
 //! X session. [`PortalSession`] is the ScreenCast permission sequence, and
 //! [`PortalCapture`] reads BGRA or BGRx from the PipeWire node that sequence
 //! starts using shared-memory buffers. One started session is
-//! not universal unattended access. [`LinuxEncoder`] encodes H.264 with
-//! VA-API on the first DRM render node that offers the negotiated profile
-//! (High when the session agrees it, else Constrained Baseline),
-//! and [`LinuxDecoder`] decodes it back on the first node that offers
-//! variable-length decode. Tests do not connect to an X server or a session
+//! not universal unattended access. [`LinuxEncoder`] encodes H.264 and
+//! H.265 with VA-API on the first DRM render node that offers the
+//! negotiated codec (for H.264, High when the session agrees it, else
+//! Constrained Baseline); [`video_codec_caps`] offers H.265 only once a
+//! picture encoded on the GPU decodes. [`LinuxDecoder`] decodes H.264 on
+//! the first node that offers variable-length decode. Tests do not connect to an X server or a session
 //! bus. The encoder test and the DMA-BUF test open a render node when one
 //! is present.
 
@@ -27,7 +28,11 @@ mod dmabuf;
 pub use camera::camera_devices;
 #[cfg(any(target_os = "linux", test))]
 pub use camera::LinuxCameraFactory;
+#[cfg(target_os = "linux")]
+mod codecs;
 mod encode;
+#[cfg(any(target_os = "linux", test))]
+mod hevc_parameter_set;
 mod host;
 mod owners;
 mod parameter_set;
@@ -44,10 +49,10 @@ mod wayland;
 mod x11;
 
 #[cfg(target_os = "linux")]
+pub use codecs::video_codec_caps;
+#[cfg(target_os = "linux")]
 pub use decode::LinuxDecoder;
 pub use encode::LinuxEncoder;
-#[cfg(target_os = "linux")]
-pub use vaapi::video_codec_caps;
 /// The caps probe reports nothing where VA-API cannot exist. The Linux build
 /// above replaces this with the render-node check.
 #[cfg(not(target_os = "linux"))]

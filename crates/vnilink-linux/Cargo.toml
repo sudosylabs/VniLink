@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "X11 capture, the Wayland portal, and VA-API H.264 for VniLink"
+description = "X11 capture, the Wayland portal, and VA-API video for VniLink"
 publish = false
 
 [dependencies]

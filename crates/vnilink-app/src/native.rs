@@ -45,7 +45,18 @@ impl VnilinkCore {
         #[cfg(target_os = "linux")]
         {
             let mut caps = vnilink_linux::video_codec_caps();
+            // Codecs the GPU encodes keep the software decoder's answer.
+            let hardware = std::mem::take(&mut caps.additional);
             caps.additional = vnilink_media::probe_software_codecs();
+            for native in hardware {
+                match caps.additional.iter_mut().find(|c| c.codec == native.codec) {
+                    Some(software) => {
+                        software.encode = true;
+                        software.hardware = true;
+                    }
+                    None => caps.additional.push(native),
+                }
+            }
             if caps.can_encode() && (caps.max_width == 0 || caps.max_height == 0) {
                 caps.max_width = caps.max_width.max(4096);
                 caps.max_height = caps.max_height.max(4096);
