@@ -675,10 +675,7 @@ impl FilesService {
         expected: Option<crate::FfiEntryToken>,
         new_name: String,
     ) -> Result<(), FfiError> {
-        let expected = expected.map(|token| vnilink::EntryToken {
-            dev: token.dev,
-            ino: token.ino,
-        });
+        let expected = expected.map(crate::files::to_entry_token);
         self.inner
             .rename(root, &path, &name, expected, &new_name)
             .map_err(map_error)
@@ -692,10 +689,7 @@ impl FilesService {
         expected: Option<crate::FfiEntryToken>,
         trash: bool,
     ) -> Result<(), FfiError> {
-        let expected = expected.map(|token| vnilink::EntryToken {
-            dev: token.dev,
-            ino: token.ino,
-        });
+        let expected = expected.map(crate::files::to_entry_token);
         self.inner
             .delete(root, &path, &name, expected, trash)
             .map_err(map_error)

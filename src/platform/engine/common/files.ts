@@ -13,10 +13,11 @@ export interface FilePlaces {
 	readonly folders: readonly { readonly kind: FileFolderKind; readonly root: string; readonly path: string }[];
 }
 
-/** An entry's identity; the engine refuses to rename or delete a replaced item. */
+/** An entry's identity; the engine refuses to rename or delete a replaced item. `born` is its creation time in nanoseconds, where the filesystem keeps one. */
 export interface FileToken {
 	readonly dev: string | null;
 	readonly ino: string | null;
+	readonly born: string | null;
 }
 
 export interface FileEntry {
@@ -141,7 +142,7 @@ export function isFilePlaces(value: unknown): value is FilePlaces {
 }
 
 export function isFileToken(value: unknown): value is FileToken {
-	return record(value) && keys(value, ['dev', 'ino']) && (value.dev === null || decimal(value.dev)) && (value.ino === null || decimal(value.ino));
+	return record(value) && keys(value, ['dev', 'ino', 'born']) && (value.dev === null || decimal(value.dev)) && (value.ino === null || decimal(value.ino)) && (value.born === null || decimal(value.born));
 }
 
 function fileEntry(value: unknown): value is FileEntry {

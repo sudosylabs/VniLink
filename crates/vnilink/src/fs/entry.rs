@@ -1,7 +1,10 @@
 //! Directory entries with filesystem identity.
 //!
-//! The token carries the object's device and inode on Unix so a rename can
-//! prove it still names the listed object instead of a replacement. Names
+//! The token carries the object's device, inode and creation time so a
+//! rename, delete or move to the Trash can prove it still names the listed
+//! object instead of a replacement. A deleted file's inode number is given
+//! to the next file made, at once on ext4 and overlayfs; its creation time
+//! tells the two apart. Names
 //! never appear in `Debug`: listings are sensitive the same way transfer
 //! names are.
 
@@ -16,13 +19,16 @@ pub enum EntryKind {
     Other,
 }
 
-/// Filesystem identity for stale-mutation protection. `None` fields mean
-/// the platform could not report an identity; the caller must treat the
-/// token as weak (see the architecture note).
+/// Filesystem identity for stale-mutation protection. `None` device or
+/// inode means the platform could not report an identity; the caller must
+/// treat the token as weak (see the architecture note). `born` is the
+/// creation time in nanoseconds since 1970, `None` where the filesystem
+/// keeps none: there a recycled inode number is not detected.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct EntryToken {
     pub dev: Option<u64>,
     pub ino: Option<u64>,
+    pub born: Option<u64>,
 }
 
 impl EntryToken {
@@ -30,13 +36,15 @@ impl EntryToken {
     pub const NONE: Self = Self {
         dev: None,
         ino: None,
+        born: None,
     };
 
-    /// True when both sides carry a real identity and agree.
+    /// True when both sides carry a real identity and agree, creation
+    /// time included: the same inode number made again is another object.
     pub fn same_object(self, other: Self) -> bool {
         match (self.dev, self.ino, other.dev, other.ino) {
             (Some(a_dev), Some(a_ino), Some(b_dev), Some(b_ino)) => {
-                a_dev == b_dev && a_ino == b_ino
+                a_dev == b_dev && a_ino == b_ino && self.born == other.born
             }
             _ => false,
         }
@@ -123,21 +131,35 @@ fn mtime_ms(meta: &std::fs::Metadata) -> u64 {
         .unwrap_or(0)
 }
 
+/// When `meta`'s object was made, in nanoseconds since 1970: statx's
+/// birth time on Linux, `st_birthtime` on macOS, the creation time on
+/// Windows. `None` where the filesystem keeps none.
+fn born(meta: &std::fs::Metadata) -> Option<u64> {
+    let age = meta
+        .created()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    age.as_nanos().try_into().ok()
+}
+
 #[cfg(unix)]
 fn identity(_path: &std::path::Path, meta: &std::fs::Metadata) -> EntryToken {
     use std::os::unix::fs::MetadataExt;
     EntryToken {
         dev: Some(meta.dev()),
         ino: Some(meta.ino()),
+        born: born(meta),
     }
 }
 
 #[cfg(windows)]
-fn identity(path: &std::path::Path, _meta: &std::fs::Metadata) -> EntryToken {
+fn identity(path: &std::path::Path, meta: &std::fs::Metadata) -> EntryToken {
     match vnilink_rename::windows::entry_identity(path) {
         Ok((dev, ino)) => EntryToken {
             dev: Some(dev),
             ino: Some(ino),
+            born: born(meta),
         },
         Err(_) => EntryToken::NONE,
     }

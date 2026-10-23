@@ -351,7 +351,7 @@ test('a file operation outside its shape never reaches the engine', async () => 
 	assert(!isFileOperation({ type: 'list', root: '0', path: 'Users/../etc', offset: '0' }), 'a parent step');
 	assert(!isFileOperation({ type: 'mkdir', root: '0', path: '', name: 'a/b' }), 'a name with a separator');
 	assert(!isFileOperation({ type: 'rename', root: '0', path: '', name: 'a', newName: 'b' }), 'no token field');
-	assert(isFileOperation({ type: 'rename', root: '0', path: '', name: 'a', token: { dev: '1', ino: null }, newName: 'b' }));
+	assert(isFileOperation({ type: 'rename', root: '0', path: '', name: 'a', token: { dev: '1', ino: null, born: '7' }, newName: 'b' }));
 	assert(isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: '', names: ['a.txt', 'Photos'], dstRoot: '0', dstPath: 'x' }), 'entries of a whole disk');
 	assert(!isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: '', names: [], dstRoot: '0', dstPath: 'x' }), 'copying a whole root');
 	assert(!isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: 'Users', names: ['a', 'a'], dstRoot: '0', dstPath: 'x' }), 'an item twice');

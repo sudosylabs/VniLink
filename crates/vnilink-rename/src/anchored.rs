@@ -175,8 +175,19 @@ pub fn fstat_dev_ino(fd: BorrowedFd) -> io::Result<(u64, u64)> {
     Ok((st.st_dev as u64, st.st_ino as u64))
 }
 
-/// `fstatat` with `AT_SYMLINK_NOFOLLOW`: kind/size/mtime plus identity for
-/// one entry under `parent` without following it.
+/// What names one filesystem object: its device and inode, and its creation
+/// time in nanoseconds since 1970 where the filesystem keeps one. A freed
+/// inode number is given to the next object made, at once on ext4 and
+/// overlayfs; only the creation time tells the two apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Identity {
+    pub dev: u64,
+    pub ino: u64,
+    pub born: Option<u64>,
+}
+
+/// Kind/size/mtime plus identity for one entry under `parent`, not
+/// followed: `statx` on Linux, `fstatat` elsewhere.
 pub struct EntryStat {
     pub is_symlink: bool,
     pub is_dir: bool,
@@ -185,10 +196,25 @@ pub struct EntryStat {
     pub mtime_ms: u64,
     pub dev: u64,
     pub ino: u64,
+    pub born: Option<u64>,
+}
+
+impl EntryStat {
+    pub fn identity(&self) -> Identity {
+        Identity {
+            dev: self.dev,
+            ino: self.ino,
+            born: self.born,
+        }
+    }
 }
 
 pub fn stat_at(parent: BorrowedFd, name: &str) -> io::Result<EntryStat> {
     let c = cstr_name(name)?;
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    if let Some(stat) = statx_at(parent, &c) {
+        return stat;
+    }
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
     // SAFETY: `fstatat` takes a borrowed dir fd plus a borrowed name.
     let r = unsafe {
@@ -211,7 +237,75 @@ pub fn stat_at(parent: BorrowedFd, name: &str) -> io::Result<EntryStat> {
         mtime_ms: mtime_ms(&st),
         dev: st.st_dev as u64,
         ino: st.st_ino as u64,
+        born: born(&st),
     })
+}
+
+/// `statx` for one entry, with its birth time where the filesystem keeps
+/// one; `None` where the kernel or a seccomp policy refuses the call, so
+/// the caller falls back to `fstatat`.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn statx_at(parent: BorrowedFd, name: &CString) -> Option<io::Result<EntryStat>> {
+    let mut st: libc::statx = unsafe { std::mem::zeroed() };
+    // SAFETY: `statx` takes a borrowed dir fd plus a borrowed name and
+    // writes the struct it is given.
+    let r = unsafe {
+        libc::statx(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+            libc::STATX_BASIC_STATS | libc::STATX_BTIME,
+            &mut st,
+        )
+    };
+    if r != 0 {
+        let error = io::Error::last_os_error();
+        return match error.raw_os_error() {
+            Some(libc::ENOSYS) | Some(libc::EPERM) => None,
+            _ => Some(Err(error)),
+        };
+    }
+    let mode = libc::mode_t::from(st.stx_mode);
+    let nanos = |time: libc::statx_timestamp| {
+        u64::try_from(time.tv_sec)
+            .ok()
+            .and_then(|seconds| seconds.checked_mul(1_000_000_000))
+            .and_then(|nanos| nanos.checked_add(u64::from(time.tv_nsec)))
+    };
+    Some(Ok(EntryStat {
+        is_symlink: (mode & libc::S_IFMT) == libc::S_IFLNK,
+        is_dir: (mode & libc::S_IFMT) == libc::S_IFDIR,
+        is_file: (mode & libc::S_IFMT) == libc::S_IFREG,
+        size: st.stx_size,
+        mtime_ms: nanos(st.stx_mtime).map_or(0, |nanos| nanos / 1_000_000),
+        // As `st_dev` and `std` compose it.
+        dev: libc::makedev(st.stx_dev_major, st.stx_dev_minor) as u64,
+        ino: st.stx_ino,
+        born: if st.stx_mask & libc::STATX_BTIME != 0 {
+            nanos(st.stx_btime)
+        } else {
+            None
+        },
+    }))
+}
+
+/// `fstatat` reports no birth time on Linux; `statx_at` does.
+#[cfg(target_os = "linux")]
+fn born(_st: &libc::stat) -> Option<u64> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn born(st: &libc::stat) -> Option<u64> {
+    u64::try_from(st.st_birthtime)
+        .ok()
+        .and_then(|seconds| seconds.checked_mul(1_000_000_000))
+        .and_then(|nanos| nanos.checked_add(u64::try_from(st.st_birthtime_nsec).ok()?))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn born(_st: &libc::stat) -> Option<u64> {
+    None
 }
 
 #[cfg(target_os = "linux")]
@@ -685,7 +779,7 @@ fn remove_tree_inner(
     name: &str,
     depth: usize,
     remaining: &mut usize,
-    expected: Option<(u64, u64)>,
+    expected: Option<Identity>,
 ) -> io::Result<()> {
     if depth > 64 || *remaining == 0 {
         return Err(io::Error::new(
@@ -695,7 +789,7 @@ fn remove_tree_inner(
     }
     *remaining -= 1;
     let before = stat_at(parent, name)?;
-    if expected.is_some_and(|identity| identity != (before.dev, before.ino)) {
+    if expected.is_some_and(|identity| identity != before.identity()) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "managed subtree changed",
@@ -851,10 +945,10 @@ pub struct DeleteCandidate {
     parent: OwnedFd,
     private: OwnedFd,
     name: String,
-    expected: (u64, u64),
+    expected: Identity,
 }
 impl DeleteCandidate {
-    pub fn stage(parent: BorrowedFd<'_>, name: &str, expected: (u64, u64)) -> io::Result<Self> {
+    pub fn stage(parent: BorrowedFd<'_>, name: &str, expected: Identity) -> io::Result<Self> {
         use std::{io::Read, os::fd::AsFd};
         let original = cstr_name(name)?;
         let parent = parent.try_clone_to_owned()?;
@@ -897,7 +991,7 @@ impl DeleteCandidate {
             &child,
         )?;
         let actual = stat_at(candidate.private.as_fd(), "candidate")?;
-        if actual.is_symlink || (actual.dev, actual.ino) != expected {
+        if actual.is_symlink || actual.identity() != expected {
             // No replacement is destroyed. Restore without overwriting another
             // public entry; a collision leaves the object recoverable inside.
             crate::recording_retention::rename(
@@ -965,7 +1059,7 @@ mod delete_candidate_tests {
         let parent = open_root(&path).unwrap();
         let before = stat_at(parent.as_fd(), "selected").unwrap();
         let candidate =
-            DeleteCandidate::stage(parent.as_fd(), "selected", (before.dev, before.ino)).unwrap();
+            DeleteCandidate::stage(parent.as_fd(), "selected", before.identity()).unwrap();
         let namespace = std::fs::read_dir(&path)
             .unwrap()
             .next()
@@ -997,9 +1091,7 @@ mod delete_candidate_tests {
         std::fs::rename(path.join("selected"), path.join("original")).unwrap();
         std::fs::create_dir(path.join("selected")).unwrap();
         std::fs::write(path.join("selected/sentinel"), b"replacement").unwrap();
-        assert!(
-            DeleteCandidate::stage(parent.as_fd(), "selected", (before.dev, before.ino)).is_err()
-        );
+        assert!(DeleteCandidate::stage(parent.as_fd(), "selected", before.identity()).is_err());
         assert_eq!(
             std::fs::read(path.join("selected/sentinel")).unwrap(),
             b"replacement"

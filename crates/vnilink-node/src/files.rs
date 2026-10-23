@@ -30,6 +30,8 @@ pub(crate) struct TransferPlaces {
 pub(crate) struct TransferToken {
     dev: Option<String>,
     ino: Option<String>,
+    /// Creation time in nanoseconds since 1970, where the filesystem keeps one.
+    born: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -100,6 +102,7 @@ pub(crate) fn transfer_page(page: vnilink_app::FfiDirPage) -> TransferDirPage {
                 token: TransferToken {
                     dev: entry.token.dev.map(|dev| dev.to_string()),
                     ino: entry.token.ino.map(|ino| ino.to_string()),
+                    born: entry.token.born.map(|born| born.to_string()),
                 },
             })
             .collect(),
@@ -124,5 +127,6 @@ pub(crate) fn entry_token(token: &TransferToken) -> Result<vnilink_app::FfiEntry
     Ok(vnilink_app::FfiEntryToken {
         dev: part(&token.dev)?,
         ino: part(&token.ino)?,
+        born: part(&token.born)?,
     })
 }

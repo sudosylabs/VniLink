@@ -320,6 +320,7 @@ fn stat_anchored(dir_fd: &std::os::unix::io::OwnedFd, name: &str) -> FsEntry {
                 token: super::entry::EntryToken {
                     dev: Some(st.dev),
                     ino: Some(st.ino),
+                    born: st.born,
                 },
             }
         }

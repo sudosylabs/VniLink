@@ -145,6 +145,7 @@ fn stat_anchored(
                 token: EntryToken {
                     dev: Some(st.dev),
                     ino: Some(st.ino),
+                    born: st.born,
                 },
             })
         }

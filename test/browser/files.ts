@@ -32,7 +32,7 @@ async function until(condition: () => boolean, message: string): Promise<void> {
 	}
 }
 
-const token = { dev: '1', ino: '1' } as const;
+const token = { dev: '1', ino: '1', born: '7' } as const;
 
 function entry(name: string, kind: 'file' | 'dir' = 'file', size = 0): FileEntry {
 	return { name, kind, size: String(size), mtimeMs: String(Date.UTC(2026, 9, 1)), token };

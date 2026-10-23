@@ -117,10 +117,15 @@ fn stage_anchored(
     let parent = roots.open_dir_fd(id, rel)?;
     let (kind, token) = listed_at(&parent, name)?;
     accept_listed(kind, token, expected)?;
-    let expected = token
+    let (dev, ino) = token
         .dev
         .zip(token.ino)
         .ok_or(Error::InvalidSetting(DELETE_FAILED))?;
+    let expected = vnilink_rename::anchored::Identity {
+        dev,
+        ino,
+        born: token.born,
+    };
     vnilink_rename::anchored::DeleteCandidate::stage(parent.as_fd(), name, expected)
         .map(DeleteWork::Isolated)
         .map_err(|error| {
@@ -155,6 +160,7 @@ fn listed_at(
         EntryToken {
             dev: Some(st.dev),
             ino: Some(st.ino),
+            born: st.born,
         },
     ))
 }

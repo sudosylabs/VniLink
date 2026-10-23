@@ -415,6 +415,7 @@ pub(crate) fn encode_list_body(page: &DirPage) -> Result<Vec<u8>, Error> {
         bytes.push(u8::from(token.is_strong()));
         push_u64(&mut bytes, token.dev.unwrap_or(0));
         push_u64(&mut bytes, token.ino.unwrap_or(0));
+        push_born(&mut bytes, token.born);
     }
     Ok(bytes)
 }
@@ -452,6 +453,7 @@ pub(crate) fn decode_list_body(bytes: &[u8]) -> Result<DirPage, WireError> {
         let strong = take_byte(&mut cursor).ok_or(error("the listing body is malformed"))?;
         let dev = take_u64(&mut cursor).ok_or(error("the listing body is malformed"))?;
         let ino = take_u64(&mut cursor).ok_or(error("the listing body is malformed"))?;
+        let born = take_born(&mut cursor).ok_or(error("the listing body is malformed"))?;
         if strong != 0 && strong != 1 {
             return Err(error("the listing body is malformed"));
         }
@@ -464,6 +466,7 @@ pub(crate) fn decode_list_body(bytes: &[u8]) -> Result<DirPage, WireError> {
             token: EntryToken {
                 dev: (strong == 1).then_some(dev),
                 ino: (strong == 1).then_some(ino),
+                born,
             },
         });
     }
@@ -569,8 +572,27 @@ fn push_expected(bytes: &mut Vec<u8>, expected: Option<EntryToken>) {
             push_u64(bytes, token.dev.unwrap_or(0));
             push_u64(bytes, token.ino.unwrap_or(0));
             bytes.push(u8::from(token.is_strong()));
+            push_born(bytes, token.born);
         }
         None => bytes.push(0),
+    }
+}
+
+/// A creation time: whether there is one, then its nanoseconds.
+fn push_born(bytes: &mut Vec<u8>, born: Option<u64>) {
+    bytes.push(u8::from(born.is_some()));
+    push_u64(bytes, born.unwrap_or(0));
+}
+
+/// `None` inside when the frame says there is no creation time; `None`
+/// outside when the frame is malformed.
+fn take_born(cursor: &mut &[u8]) -> Option<Option<u64>> {
+    let present = take_byte(cursor)?;
+    let born = take_u64(cursor)?;
+    match present {
+        0 => Some(None),
+        1 => Some(Some(born)),
+        _ => None,
     }
 }
 
@@ -582,12 +604,14 @@ fn take_expected(cursor: &mut &[u8]) -> Result<Option<EntryToken>, WireError> {
             let dev = take_u64(cursor).ok_or_else(error)?;
             let ino = take_u64(cursor).ok_or_else(error)?;
             let strong = take_byte(cursor).ok_or_else(error)?;
+            let born = take_born(cursor).ok_or_else(error)?;
             if strong != 0 && strong != 1 {
                 return Err(error());
             }
             Ok(Some(EntryToken {
                 dev: (dev != 0).then_some(dev),
                 ino: (ino != 0).then_some(ino),
+                born,
             }))
         }
         _ => Err(error()),

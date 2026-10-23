@@ -885,7 +885,7 @@ export class FilesPaneView extends Disposable {
 			(names.has(arrival.name) ? decorating : arriving).set(arrival.name, arrival);
 		}
 		// Not there yet: placed as an entry of its size, modified now, would be.
-		const placeholders = [...arriving.values()].map((arrival): FileEntry => ({ name: arrival.name, kind: arrival.folder ? 'dir' : 'file', size: String(arrival.bytes ?? 0), mtimeMs: String(Date.now()), token: { dev: null, ino: null } }));
+		const placeholders = [...arriving.values()].map((arrival): FileEntry => ({ name: arrival.name, kind: arrival.folder ? 'dir' : 'file', size: String(arrival.bytes ?? 0), mtimeMs: String(Date.now()), token: { dev: null, ino: null, born: null } }));
 		const placed = new Set(placeholders);
 		this.rows = sortEntries([...this.shown, ...placeholders], this.sort, this.descending).flatMap((entry): PaneRow[] => {
 			const arrival = placed.has(entry) ? arriving.get(entry.name) : decorating.get(entry.name);

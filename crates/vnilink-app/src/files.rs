@@ -57,12 +57,14 @@ pub enum FfiEntryKind {
     Other,
 }
 
-/// Listing identity for rename fencing. Absent fields mean the platform
-/// could not report an identity; the core treats the token as weak.
+/// Listing identity for rename fencing. Absent device or inode means the
+/// platform could not report an identity; the core treats the token as
+/// weak. `born` is the creation time in nanoseconds, where kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiEntryToken {
     pub dev: Option<u64>,
     pub ino: Option<u64>,
+    pub born: Option<u64>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -199,6 +201,7 @@ pub(crate) fn entry_token(token: vnilink::EntryToken) -> FfiEntryToken {
     FfiEntryToken {
         dev: token.dev,
         ino: token.ino,
+        born: token.born,
     }
 }
 
@@ -206,6 +209,7 @@ pub(crate) fn to_entry_token(token: FfiEntryToken) -> vnilink::EntryToken {
     vnilink::EntryToken {
         dev: token.dev,
         ino: token.ino,
+        born: token.born,
     }
 }
 
@@ -650,9 +654,11 @@ mod tests {
         let token = to_entry_token(FfiEntryToken {
             dev: Some(3),
             ino: Some(9),
+            born: Some(11),
         });
         assert!(token.is_strong());
         assert_eq!(entry_token(token).dev, Some(3));
+        assert_eq!(entry_token(token).born, Some(11));
     }
 }
 

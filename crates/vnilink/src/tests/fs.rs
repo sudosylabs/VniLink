@@ -722,12 +722,15 @@ fn a_strong_listing_token_decodes_whole() {
     body.push(1);
     body.extend_from_slice(&0u64.to_be_bytes());
     body.extend_from_slice(&5u64.to_be_bytes());
+    body.push(1);
+    body.extend_from_slice(&7u64.to_be_bytes());
     let page = crate::fs::decode_list_body(&body).unwrap();
     assert_eq!(
         page.entries[0].token,
         EntryToken {
             dev: Some(0),
             ino: Some(5),
+            born: Some(7),
         }
     );
     let encoded = crate::fs::encode_list_body(&page).unwrap();
@@ -763,6 +766,7 @@ fn wire_codec_round_trips_and_rejects() {
             expected: Some(EntryToken {
                 dev: Some(3),
                 ino: Some(9),
+                born: Some(1_792_781_822_915_157_352),
             }),
             new_name: "b.txt".to_string(),
         },
@@ -784,6 +788,7 @@ fn wire_codec_round_trips_and_rejects() {
             expected: Some(EntryToken {
                 dev: Some(3),
                 ino: Some(9),
+                born: None,
             }),
             trash: false,
         },
@@ -1738,6 +1743,11 @@ fn moving_to_the_trash_refuses_what_changed_since_it_was_listed() {
         .unwrap()
         .entries[0]
         .token;
+    // ext4 and overlayfs give the freed inode number to the replacement at
+    // once; its creation time is what differs. On a kernel with coarse inode
+    // timestamps a replacement made in the original's clock tick would carry
+    // its creation time too, so the original is let age past one first.
+    std::thread::sleep(Duration::from_millis(20));
     std::fs::remove_file(folder.join("a.txt")).unwrap();
     std::fs::write(folder.join("a.txt"), b"replacement").unwrap();
     assert!(matches!(
@@ -1748,6 +1758,40 @@ fn moving_to_the_trash_refuses_what_changed_since_it_was_listed() {
     assert!(core
         .trash_entry(location.root, &location.path(""), "missing.txt", None)
         .is_err());
+}
+
+/// A file deleted and made again under its name, so the filesystem may give
+/// the new one the freed inode number (ext4 and overlayfs do at once), is
+/// not the listed file: renaming or deleting it with the listed token is
+/// refused. Where inode numbers are not reused this holds trivially.
+#[test]
+fn a_file_made_again_under_its_name_is_not_the_listed_file() {
+    let scratch = Scratch::new();
+    let folder = scratch.join("recycled");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("a.txt"), b"first").unwrap();
+    let core = start_direct();
+    core.enable_filesystem_access().unwrap();
+    let location = FilesystemLocation::new(core.file_roots().unwrap(), &folder);
+    let listed = token_of(&core, location.root, &location.path(""), "a.txt");
+    assert!(listed.born.is_some(), "the listing carries a creation time");
+    // As in `moving_to_the_trash_refuses_what_changed_since_it_was_listed`:
+    // past one tick of a coarse inode clock.
+    std::thread::sleep(Duration::from_millis(20));
+    std::fs::remove_file(folder.join("a.txt")).unwrap();
+    std::fs::write(folder.join("a.txt"), b"replacement").unwrap();
+    let renamed = core.rename_entry(
+        location.root,
+        &location.path(""),
+        "a.txt",
+        Some(listed),
+        "b.txt",
+    );
+    assert!(renamed.as_ref().is_err_and(is_stale), "{renamed:?}");
+    let deleted = core.delete_entry(location.root, &location.path(""), "a.txt", Some(listed));
+    assert!(deleted.as_ref().is_err_and(is_stale), "{deleted:?}");
+    assert_eq!(std::fs::read(folder.join("a.txt")).unwrap(), b"replacement");
+    assert!(!folder.join("b.txt").exists());
 }
 
 /// A watched folder on this computer says when an entry comes or goes,
