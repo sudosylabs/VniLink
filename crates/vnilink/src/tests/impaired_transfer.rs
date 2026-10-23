@@ -481,30 +481,29 @@ fn transfer_matrix_completes_on_loopback() {
 #[test]
 fn a_case_past_its_timeout_is_cancelled_at_the_deadline() {
     let started = Instant::now();
+    // A deadline already past when driving starts: no case can finish
+    // before it however fast the machine, so every one must time out.
     let report = run_matrix(&Matrix {
         small_files: 300,
         small_bytes: 4_096,
         large_bytes: 64 << 20,
         mixed_files: 40,
         mixed_max_bytes: 1 << 20,
-        timeout: Duration::from_millis(300),
+        timeout: Duration::ZERO,
         driver: Driver::Tight,
     });
     for case in report["cases"].as_array().unwrap() {
-        assert!(
-            case["outcome"] == "timed-out" || case["outcome"] == "complete",
-            "{case}"
-        );
-        // Submission scans and hashes synchronously, so it may itself pass
-        // the budget; the transfer never runs past it by more than a poll.
-        let budget = case["submit_ms"].as_u64().unwrap().max(300);
+        assert_eq!(case["outcome"], "timed-out", "{case}");
+        // Submission scans and hashes synchronously, so it passes the
+        // deadline itself; the transfer never runs past it by more than a poll.
+        let budget = case["submit_ms"].as_u64().unwrap();
         assert!(
             case["elapsed_ms"].as_u64().unwrap() <= budget + 100,
             "{case}"
         );
     }
-    assert_eq!(report["cases"][0]["outcome"], "timed-out");
-    // A receiver poll blocks for a whole file; cancelling must interrupt it
-    // rather than wait for the large file to finish.
+    // The receiver starts fetching as the drivers start, and a poll blocks
+    // for a whole file; cancelling must interrupt it rather than wait for the
+    // large file to finish.
     assert!(started.elapsed() < Duration::from_secs(60));
 }
