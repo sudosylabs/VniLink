@@ -1259,6 +1259,22 @@ mod v12_replacement_drop_probe {
                 .unwrap();
         }
     }
+    /// Whether a Core operation can take State while a destructor is parked.
+    ///
+    /// Core's own tasks, such as the power ticker and the accept loop, take
+    /// State for moments, so a failed `try_lock` proves nothing. A snapshot
+    /// that completes within the bound shows the destructor does not hold
+    /// State; one queued behind it cannot answer until the destructor is
+    /// released. Join the probe after releasing it.
+    fn state_available(core: &Arc<Core>) -> (bool, std::thread::JoinHandle<()>) {
+        let (answered, answer) = std::sync::mpsc::channel();
+        let prober = core.clone();
+        let probe = std::thread::spawn(move || {
+            let _ = answered.send(prober.snapshot().is_ok());
+        });
+        let available = answer.recv_timeout(std::time::Duration::from_secs(2)) == Ok(true);
+        (available, probe)
+    }
     struct New;
     impl HostDesktop for New {
         fn monitor(&self) -> (u16, u16) {
@@ -1283,14 +1299,14 @@ mod v12_replacement_drop_probe {
         ready
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap();
-        let available = core.shared.state.try_lock().is_ok();
+        let (available, probe) = state_available(&core);
         let fenced =
             core.shared.desktop.try_lock().is_err() && core.shared.desktop_gate.try_lock().is_err();
         if available {
-            core.snapshot().unwrap();
             assert!(matches!(core.set_desktop(Box::new(New)), Err(Error::Busy)));
         }
         proceed.send(()).unwrap();
+        probe.join().unwrap();
         replacement.join().unwrap().unwrap();
         assert!(core.shared.desktop.try_lock().is_ok());
         assert!(core.shared.desktop_gate.try_lock().is_ok());
@@ -1318,12 +1334,10 @@ mod v12_replacement_drop_probe {
         ready
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap();
-        let available = core.shared.state.try_lock().is_ok();
-        if available {
-            core.snapshot().unwrap();
-        }
+        let (available, probe) = state_available(&core);
         let intact = core.shared.desktop.try_lock().unwrap().is_some();
         proceed.send(()).unwrap();
+        probe.join().unwrap();
         assert!(matches!(replacement.join().unwrap(), Err(Error::Busy)));
         core.shared.input_cleanup.store(0, Ordering::Release);
         core.shutdown();
