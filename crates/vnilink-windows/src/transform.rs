@@ -238,37 +238,57 @@ unsafe fn take_activates(activates: *mut Option<IMFActivate>, count: u32) -> Vec
 
 /// The H.264 encoders that take NV12 for pictures captured on the first
 /// DXGI adapter, the one capture opens ([`h264_encoders_for`]).
-pub(crate) unsafe fn h264_encoders() -> Vec<H264Transform> {
-    let adapters = adapters();
-    match adapters.first() {
-        Some(&capture) => h264_encoders_for(capture),
-        None => {
-            let mut encoders = hardware_encoders().unwrap_or_default();
-            encoders.push(H264Transform::software());
-            encoders
-        }
-    }
+pub(crate) unsafe fn h264_encoders() -> impl Iterator<Item = H264Transform> {
+    h264_encoders_for(None)
 }
 
 /// The H.264 encoders that take NV12 for pictures captured on the adapter
-/// `capture`, in the order they are tried: its hardware encoders, then each
-/// other adapter's in DXGI's order, then Microsoft's software transform. A
-/// machine whose adapters list no hardware encoder gets Media Foundation's
-/// own list of them; one whose hardware cannot be enumerated still gets
-/// the software transform.
-pub(crate) unsafe fn h264_encoders_for(capture: LUID) -> Vec<H264Transform> {
-    let others = adapters()
-        .into_iter()
-        .filter(|adapter| !same(*adapter, capture));
-    let mut encoders: Vec<_> = std::iter::once(capture)
-        .chain(others)
-        .flat_map(|adapter| hardware_encoders_on(adapter))
-        .collect();
-    if encoders.is_empty() {
-        encoders = hardware_encoders().unwrap_or_default();
+/// `capture` (DXGI's first when `None`, the adapter capture opens), in the
+/// order they are tried: its hardware encoders, then each other adapter's
+/// in DXGI's order, then Microsoft's software transform. A machine whose
+/// adapters list no hardware encoder gets Media Foundation's own list of
+/// them; one whose hardware cannot be enumerated still gets the software
+/// transform.
+///
+/// Each adapter is asked only when the encoders before it are used up: on
+/// the laptop measured, listing the other adapter's (NVIDIA's, its panel on
+/// Intel's) took 0.8 to 1 s, 3 s the first time, and an encoder that reopens
+/// froze the picture that long.
+pub(crate) unsafe fn h264_encoders_for(
+    capture: Option<LUID>,
+) -> impl Iterator<Item = H264Transform> {
+    let mut adapters = adapters();
+    if let Some(capture) = capture {
+        adapters.retain(|adapter| !same(*adapter, capture));
+        adapters.insert(0, capture);
     }
-    encoders.push(H264Transform::software());
-    encoders
+    candidates(adapters)
+}
+
+/// The encoders of `adapters` in turn, each adapter listed when it is
+/// reached, then Media Foundation's list if none listed any, then
+/// Microsoft's software transform.
+unsafe fn candidates(adapters: Vec<LUID>) -> impl Iterator<Item = H264Transform> {
+    // The caller owns COM and Media Foundation startup on this thread while
+    // it takes candidates: they are listed as they are taken.
+    let mut hardware = adapters
+        .into_iter()
+        .flat_map(|adapter| hardware_encoders_on(adapter));
+    let (mut listed, mut fallback, mut software) = (false, None, Some(H264Transform::software()));
+    std::iter::from_fn(move || {
+        if let Some(candidate) = hardware.next() {
+            listed = true;
+            return Some(candidate);
+        }
+        if !listed {
+            listed = true;
+            fallback = Some(hardware_encoders().unwrap_or_default().into_iter());
+        }
+        fallback
+            .as_mut()
+            .and_then(Iterator::next)
+            .or_else(|| software.take())
+    })
 }
 
 /// The LUIDs of this machine's adapters, in DXGI's order; empty where DXGI
