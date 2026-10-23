@@ -288,14 +288,14 @@ impl Stills {
             && self.changed_at.elapsed() >= STILL_AFTER
     }
 
-    fn make(&mut self, frame: RawFrame, budget: usize) {
+    fn make(&mut self, frame: RawFrame, size: (u16, u16), budget: usize) {
         if self.worker.is_none() {
             self.worker = StillWorker::new().ok();
         }
         if self
             .worker
             .as_ref()
-            .is_some_and(|worker| worker.make(self.change, frame, budget))
+            .is_some_and(|worker| worker.make(self.change, frame, size, budget))
         {
             self.asked = Some(self.change);
         }
@@ -435,7 +435,14 @@ fn consume<E, F>(
                     let budget = core
                         .desktop_still_budget(target.id, target.generation)
                         .unwrap_or(0);
-                    stills.make(frame, budget);
+                    let size = encoded_size(
+                        capture_size.0,
+                        capture_size.1,
+                        applied_quality.max_width,
+                        applied_quality.max_height,
+                    )
+                    .unwrap_or(capture_size);
+                    stills.make(frame, size, budget);
                 }
             }
         }

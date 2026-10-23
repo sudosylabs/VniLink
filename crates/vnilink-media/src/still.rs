@@ -149,6 +149,8 @@ pub(crate) struct StillWorker {
 struct Job {
     change: u64,
     frame: RawFrame,
+    /// The stream's encoded size: the still matches its picture.
+    size: (u16, u16),
     budget: usize,
 }
 
@@ -169,7 +171,17 @@ impl StillWorker {
             .spawn(move || {
                 let encoder = StillEncoder::new();
                 for job in inbox {
-                    let picture = encoder.encode(&job.frame, job.budget).ok().flatten();
+                    // The stream's own size, so the still overlays its
+                    // picture exactly; averaged, so text stays clean.
+                    let frame = if (job.frame.width(), job.frame.height()) == job.size {
+                        Ok(job.frame.clone())
+                    } else {
+                        area_scale(&job.frame, job.size)
+                    };
+                    let picture = frame
+                        .and_then(|frame| encoder.encode(&frame, job.budget))
+                        .ok()
+                        .flatten();
                     let made = Made {
                         change: job.change,
                         timestamp_us: job.frame.timestamp_us(),
@@ -190,11 +202,18 @@ impl StillWorker {
 
     /// Asks for a still of `frame` within `budget` bytes; false while the
     /// last one asked for is still being made.
-    pub(crate) fn make(&self, change: u64, frame: RawFrame, budget: usize) -> bool {
+    pub(crate) fn make(
+        &self,
+        change: u64,
+        frame: RawFrame,
+        size: (u16, u16),
+        budget: usize,
+    ) -> bool {
         self.jobs.as_ref().is_some_and(|jobs| {
             jobs.try_send(Job {
                 change,
                 frame,
+                size,
                 budget,
             })
             .is_ok()
@@ -265,6 +284,47 @@ fn decode_i444(picture: &[u8]) -> Result<RawFrame, Error> {
         }
     }
     RawFrame::bgra(width as u16, height as u16, 0, bgra)
+}
+
+/// `frame` scaled to `(width, height)` by averaging the source pixels each
+/// destination pixel covers: a box filter, exact for whole ratios such as a
+/// 4K screen at 1080p, which keeps text clean where nearest-neighbour would
+/// drop strokes.
+pub(crate) fn area_scale(frame: &RawFrame, (width, height): (u16, u16)) -> Result<RawFrame, Error> {
+    if width == 0 || height == 0 || width > frame.width() || height > frame.height() {
+        return Err(Error::InvalidFrame("a still only scales down"));
+    }
+    // The source columns and rows each destination pixel covers.
+    let spans = |from: u16, to: u16| -> Vec<(usize, usize)> {
+        (0..usize::from(to))
+            .map(|at| {
+                let start = at * usize::from(from) / usize::from(to);
+                let end = ((at + 1) * usize::from(from) / usize::from(to)).max(start + 1);
+                (start, end)
+            })
+            .collect()
+    };
+    let (columns, rows) = (spans(frame.width(), width), spans(frame.height(), height));
+    let mut bgra = Vec::with_capacity(usize::from(width) * usize::from(height) * 4);
+    let mut sums = vec![[0u32; 4]; usize::from(width)];
+    for &(top, bottom) in &rows {
+        sums.iter_mut().for_each(|sum| *sum = [0; 4]);
+        for row in top..bottom {
+            let source = frame.row(row as u16);
+            for (sum, &(left, right)) in sums.iter_mut().zip(&columns) {
+                for pixel in source[left * 4..right * 4].chunks_exact(4) {
+                    for channel in 0..4 {
+                        sum[channel] += u32::from(pixel[channel]);
+                    }
+                }
+            }
+        }
+        for (sum, &(left, right)) in sums.iter().zip(&columns) {
+            let count = ((right - left) * (bottom - top)) as u32;
+            bgra.extend(sum.iter().map(|total| ((total + count / 2) / count) as u8));
+        }
+    }
+    RawFrame::bgra(width, height, frame.timestamp_us(), bgra)
 }
 
 /// BGRA to BT.709 limited-range planar 4:4:4: one chroma sample per pixel.

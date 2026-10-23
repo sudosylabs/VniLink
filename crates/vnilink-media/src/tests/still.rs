@@ -200,3 +200,27 @@ fn a_still_of_grey_text_is_not_worth_sending() {
         "coloured text is"
     );
 }
+
+/// A still is scaled to the stream's size by averaging: each destination
+/// pixel is the mean of the source pixels it covers.
+#[test]
+fn a_still_is_scaled_down_by_averaging() {
+    // 4 x 2 pixels: two 2 x 2 boxes, one of black and white, one of grey.
+    let pixel = |value: u8| [value, value, value, 255];
+    let rows = [
+        [pixel(0), pixel(255), pixel(100), pixel(100)],
+        [pixel(255), pixel(0), pixel(100), pixel(100)],
+    ];
+    let bgra: Vec<u8> = rows.iter().flatten().flatten().copied().collect();
+    let frame = RawFrame::bgra(4, 2, 7, bgra).unwrap();
+    let scaled = crate::still::area_scale(&frame, (2, 1)).unwrap();
+    assert_eq!(
+        (scaled.width(), scaled.height(), scaled.timestamp_us()),
+        (2, 1, 7)
+    );
+    assert_eq!(scaled.row(0), &[128, 128, 128, 255, 100, 100, 100, 255]);
+    assert!(
+        crate::still::area_scale(&frame, (8, 4)).is_err(),
+        "it only scales down"
+    );
+}
