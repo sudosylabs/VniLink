@@ -57,10 +57,17 @@ fn availability_probes_do_not_fail_without_hardware() {
 /// probe would otherwise keep it from sessions without saying why.
 #[test]
 fn h265_from_a_node_that_offers_it_decodes_in_software() {
-    if !crate::vaapi::offers(crate::vaapi::VaCodec::H265) {
+    use crate::codecs::{decodes, PROBE_SIDE};
+    use crate::vaapi::{Session, VaCodec};
+
+    if !crate::vaapi::offers(VaCodec::H265) {
         return;
     }
-    assert!(crate::codecs::round_trips(vnilink::VideoCodec::H265));
+    let session = Session::open(VaCodec::H265, PROBE_SIDE, PROBE_SIDE, 30, 1_000_000).unwrap();
+    assert!(decodes(vnilink::VideoCodec::H265, |picture, key| {
+        let (y, uv) = vnilink_media::bgra_to_nv12(picture)?.into_planes();
+        session.encode(y, uv, key)
+    }));
     assert!(crate::video_codec_caps().additional.iter().any(|codec| {
         codec.codec == vnilink::VideoCodec::H265 && codec.encode && codec.hardware
     }));

@@ -5,6 +5,7 @@ libaom 3.13.2: BSD 2-Clause; see libaom-license.txt and libaom-patents.txt.
 Kvazaar 2.3.2: BSD 3-Clause; see kvazaar.txt.
 libde265 1.1.3: LGPL version 3; see libde265-lgpl.txt and libde265-gpl.txt.
 Rust wrappers shiguredo_libvpx and shiguredo_aom 2026.1.0: Apache 2.0.
+NVIDIA Video Codec SDK header nvEncodeAPI.h 12.1: MIT; see nvenc.txt.
 
 libde265 is linked into the native module. Its exact library source and the
 corresponding application source needed to rebuild that module are included

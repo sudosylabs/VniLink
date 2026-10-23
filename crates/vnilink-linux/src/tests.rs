@@ -6,6 +6,9 @@ mod encode_tests;
 mod hevc_parameter_set_tests;
 #[path = "tests/host.rs"]
 mod host_tests;
+#[cfg(target_os = "linux")]
+#[path = "tests/nvenc.rs"]
+mod nvenc_tests;
 #[path = "tests/owners.rs"]
 mod owners_tests;
 #[path = "tests/parameter_set.rs"]

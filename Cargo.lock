@@ -5773,6 +5773,7 @@ dependencies = [
  "ashpd",
  "futures-util",
  "jpeg-decoder",
+ "libloading 0.9.0",
  "libva",
  "pipewire",
  "tokio",
