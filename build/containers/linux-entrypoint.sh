@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${1:-}" == --desktop ]]; then
+    # Xvfb has no window manager: nothing would minimise, restore or make a
+    # window fullscreen. Openbox does, as a desktop would; the scenarios
+    # start once it has claimed the display.
+    shift
+    openbox &
+    for _ in $(seq 100); do
+        xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q 'window id' && exec "$@"
+        sleep 0.1
+    done
+    echo 'Openbox did not start on the virtual display' >&2
+    exit 1
+fi
 if [[ "${1:-}" != --prepared ]]; then
     mkdir -p /work /evidence
     # Source remains read-only; OS-specific dependencies and outputs are isolated from the Mac checkout.
@@ -24,4 +37,4 @@ npm run check
 cargo fmt --all -- --check
 npm run test:rust
 # Real secret-service smoke is separate from unavailable-store fixtures.
-dbus-run-session -- bash -c 'printf "\n" | gnome-keyring-daemon --daemonize --unlock --components=secrets; xvfb-run -a npm test'
+dbus-run-session -- bash -c 'printf "\n" | gnome-keyring-daemon --daemonize --unlock --components=secrets; xvfb-run -a /usr/local/bin/vnilink-tests --desktop npm test'

@@ -23,6 +23,8 @@ gnome-keyring
 dbus-x11
 xvfb
 xauth
+openbox
+x11-utils
 iproute2
 
 libgbm-dev
