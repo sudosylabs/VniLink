@@ -5,6 +5,29 @@ import { copyFile, cp, mkdir, rename, rm, stat } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 import { bundleOptions, resources, type Resource } from './bundles.ts';
 
+/** Errors Windows gives renaming over a file another process has open, for a moment. */
+const IN_USE = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
+/**
+ * Renames `from` over `to`, in one step. Windows refuses while another
+ * process has `to` open, as a window reloading the page does for a moment;
+ * the rename is tried again, waiting a little longer each time, for about
+ * two seconds. Any other error is final.
+ */
+export async function replaceFile(from: string, to: string, renameFile: (from: string, to: string) => Promise<void> = rename): Promise<void> {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			await renameFile(from, to);
+			return;
+		} catch (error) {
+			if (attempt >= 20 || !IN_USE.has(String((error as NodeJS.ErrnoException).code))) {
+				throw error;
+			}
+			await new Promise(resolve => setTimeout(resolve, attempt * 10));
+		}
+	}
+}
+
 export class ApplicationWatcher {
 	readonly #root: string;
 	readonly #onError: (error: unknown) => void;
@@ -90,7 +113,7 @@ export class ApplicationWatcher {
 					// finds no page; the renamed copy replaces it in one step.
 					const partial = `${resource.output}.partial`;
 					await copyFile(resource.source, partial);
-					await rename(partial, resource.output);
+					await replaceFile(partial, resource.output);
 				}
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {

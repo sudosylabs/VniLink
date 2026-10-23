@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rename, rm, access } from 'node:fs
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { build } from 'esbuild';
-import { watchApplication } from '../../build/lib/watch.ts';
+import { replaceFile, watchApplication } from '../../build/lib/watch.ts';
 
 async function until(predicate) {
 	const deadline = Date.now() + 10000;
@@ -122,4 +122,29 @@ test('Reload Window and DevTools shortcuts are enabled only in source-checkout d
 			process.env.VNILINK_DEV = previous;
 		}
 	}
+});
+
+test('a resource is renamed into place again while Windows holds it open, and any other error is final', async () => {
+	const failing = (codes) => {
+		const calls = [];
+		return {
+			calls,
+			rename: async (from, to) => {
+				calls.push([from, to]);
+				const code = codes.shift();
+				if (code) {
+					throw Object.assign(new Error(code), { code });
+				}
+			},
+		};
+	};
+	const busy = failing(['EPERM', 'EBUSY', 'EACCES']);
+	await replaceFile('a.partial', 'a', busy.rename);
+	assert.equal(busy.calls.length, 4, 'tried again until the file was free');
+	const missing = failing(['ENOENT']);
+	await assert.rejects(replaceFile('a.partial', 'a', missing.rename), /ENOENT/);
+	assert.equal(missing.calls.length, 1);
+	const held = failing(Array(25).fill('EPERM'));
+	await assert.rejects(replaceFile('a.partial', 'a', held.rename), /EPERM/);
+	assert.equal(held.calls.length, 20, 'it gives up after about two seconds');
 });
