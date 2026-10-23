@@ -4,11 +4,15 @@
 //! Render nodes under `/dev/dri` are opened in name order; low-power slice
 //! encode is preferred to slice encode. A node without the codec is skipped.
 //! libva's context is not [`Send`]: this module's thread is its only caller
-//! and the encoder handle on the other side is a channel. Pictures are NV12.
+//! and the encoder handle on the other side is a channel. Pictures arrive as
+//! BGRA and the GPU converts them to NV12 (BT.709, limited range) where the
+//! node offers video processing; elsewhere they arrive as NV12 converted on
+//! the CPU.
 //! Each codec's module fills the driver's parameters and writes the
 //! parameter sets a driver may leave out of a keyframe. No software encoder
 //! is linked.
 
+mod convert;
 mod h264;
 mod hevc;
 
@@ -35,8 +39,9 @@ use libva::VAEntrypoint;
 use libva::VAProfile;
 use libva::VA_FOURCC_NV12;
 use libva::VA_RT_FORMAT_YUV420;
-use vnilink_media::{EncodedSample, Error};
+use vnilink_media::{EncodedSample, Error, RawFrame};
 
+use self::convert::Converter;
 use crate::hevc_parameter_set::Layout;
 
 /// A codec this module encodes.
@@ -126,10 +131,15 @@ impl Syntax {
     }
 }
 
+/// A picture for the encoder: NV12 planes, or BGRA the GPU converts.
+pub(crate) enum Input {
+    Nv12 { y: Vec<u8>, uv: Vec<u8> },
+    Bgra(RawFrame),
+}
+
 enum Job {
     Encode {
-        y: Vec<u8>,
-        uv: Vec<u8>,
+        input: Input,
         force_keyframe: bool,
         reply: Sender<Result<EncodedSample, Error>>,
     },
@@ -139,6 +149,7 @@ enum Job {
 pub(crate) struct Session {
     tx: Sender<Job>,
     thread: Option<JoinHandle<()>>,
+    converts: bool,
 }
 
 impl Session {
@@ -156,9 +167,10 @@ impl Session {
             .spawn(move || worker(codec, width, height, frame_rate, bitrate_bps, rx, ready_tx))
             .map_err(|_| Error::Unsupported(codec.name()))?;
         match ready_rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(Ok(())) => Ok(Self {
+            Ok(Ok(converts)) => Ok(Self {
                 tx,
                 thread: Some(thread),
+                converts,
             }),
             Ok(Err(err)) => {
                 let _ = thread.join();
@@ -171,17 +183,21 @@ impl Session {
         }
     }
 
+    /// Whether this session takes BGRA ([`Input::Bgra`]) and converts it on
+    /// the GPU; otherwise it takes NV12.
+    pub(crate) fn converts(&self) -> bool {
+        self.converts
+    }
+
     pub(crate) fn encode(
         &self,
-        y: Vec<u8>,
-        uv: Vec<u8>,
+        input: Input,
         force_keyframe: bool,
     ) -> Result<EncodedSample, Error> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.tx
             .send(Job::Encode {
-                y,
-                uv,
+                input,
                 force_keyframe,
                 reply: reply_tx,
             })
@@ -208,11 +224,11 @@ fn worker(
     frame_rate: u8,
     bitrate_bps: u32,
     jobs: Receiver<Job>,
-    ready: Sender<Result<(), Error>>,
+    ready: Sender<Result<bool, Error>>,
 ) {
     let mut encoder = match Encoder::open(codec, width, height, frame_rate, bitrate_bps) {
         Ok(encoder) => {
-            let _ = ready.send(Ok(()));
+            let _ = ready.send(Ok(encoder.converter.is_some()));
             encoder
         }
         Err(err) => {
@@ -224,12 +240,11 @@ fn worker(
         match job {
             Job::Stop => break,
             Job::Encode {
-                y,
-                uv,
+                input,
                 force_keyframe,
                 reply,
             } => {
-                let result = encoder.encode(&y, &uv, force_keyframe);
+                let result = encoder.encode(input, force_keyframe);
                 let _ = reply.send(result);
             }
         }
@@ -240,6 +255,7 @@ struct Encoder {
     context: Rc<libva::Context>,
     surfaces: [Option<Surface<()>>; 2],
     format: libva::VAImageFormat,
+    converter: Option<Converter>,
     syntax: Syntax,
     visible_width: u32,
     visible_height: u32,
@@ -273,12 +289,7 @@ impl Encoder {
         Err(Error::Unsupported(codec.name()))
     }
 
-    fn encode(
-        &mut self,
-        y: &[u8],
-        uv: &[u8],
-        force_keyframe: bool,
-    ) -> Result<EncodedSample, Error> {
+    fn encode(&mut self, input: Input, force_keyframe: bool) -> Result<EncodedSample, Error> {
         if self.poisoned {
             return Err(Error::EncodeRejected("VA-API rejected the frame"));
         }
@@ -290,24 +301,33 @@ impl Encoder {
             force_keyframe || self.previous.is_none() || self.frames_since_key >= MAX_P_FRAMES;
         let index = self.cursor;
         let surface = self.surfaces[index]
-            .as_ref()
-            .ok_or(Error::EncodeRejected("VA-API rejected the frame"))?;
-        if let Err(err) = upload_nv12(
-            surface,
-            self.format,
-            self.visible_width,
-            self.visible_height,
-            self.coded_width,
-            self.coded_height,
-            y,
-            uv,
-        ) {
-            self.poisoned = true;
-            return Err(err);
-        }
-        let surface = self.surfaces[index]
             .take()
             .ok_or(Error::EncodeRejected("VA-API rejected the frame"))?;
+        let prepared = match input {
+            Input::Nv12 { y, uv } => upload_nv12(
+                &surface,
+                self.format,
+                self.visible_width,
+                self.visible_height,
+                self.coded_width,
+                self.coded_height,
+                &y,
+                &uv,
+            )
+            .map(|()| surface),
+            Input::Bgra(frame) => match &self.converter {
+                Some(converter) => converter.convert(&frame, surface),
+                None => Err(Error::EncodeRejected("VA-API converts no BGRA here")),
+            },
+        };
+        let surface = match prepared {
+            Ok(surface) => surface,
+            Err(err) => {
+                // The surface went with the failure: the pool is short now.
+                self.poisoned = true;
+                return Err(err);
+            }
+        };
         let reference = self
             .previous
             .and_then(|previous| self.surfaces[previous].as_ref())
@@ -446,7 +466,8 @@ fn try_open(
             Some(VA_FOURCC_NV12),
             coded_width,
             coded_height,
-            Some(UsageHint::USAGE_HINT_ENCODER),
+            // The video processor writes them when it converts the capture.
+            Some(UsageHint::USAGE_HINT_ENCODER | UsageHint::USAGE_HINT_VPP_WRITE),
             vec![(), ()],
         )
         .ok()?;
@@ -458,6 +479,13 @@ fn try_open(
         .ok()?
         .into_iter()
         .find(|format| format.fourcc == VA_FOURCC_NV12)?;
+    let converter = Converter::open(
+        &display,
+        u32::from(width),
+        u32::from(height),
+        (coded_width, coded_height),
+        &surfaces,
+    );
     let mut stored = [None, None];
     for (slot, surface) in stored.iter_mut().zip(surfaces) {
         *slot = Some(surface);
@@ -466,6 +494,7 @@ fn try_open(
         context,
         surfaces: stored,
         format,
+        converter,
         syntax,
         visible_width: u32::from(width),
         visible_height: u32::from(height),

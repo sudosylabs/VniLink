@@ -58,7 +58,7 @@ fn availability_probes_do_not_fail_without_hardware() {
 #[test]
 fn h265_from_a_node_that_offers_it_decodes_in_software() {
     use crate::codecs::{decodes, PROBE_SIDE};
-    use crate::vaapi::{Session, VaCodec};
+    use crate::vaapi::{Input, Session, VaCodec};
 
     if !crate::vaapi::offers(VaCodec::H265) {
         return;
@@ -66,9 +66,61 @@ fn h265_from_a_node_that_offers_it_decodes_in_software() {
     let session = Session::open(VaCodec::H265, PROBE_SIDE, PROBE_SIDE, 30, 1_000_000).unwrap();
     assert!(decodes(vnilink::VideoCodec::H265, |picture, key| {
         let (y, uv) = vnilink_media::bgra_to_nv12(picture)?.into_planes();
-        session.encode(y, uv, key)
+        session.encode(Input::Nv12 { y, uv }, key)
     }));
     assert!(crate::video_codec_caps().additional.iter().any(|codec| {
         codec.codec == vnilink::VideoCodec::H265 && codec.encode && codec.hardware
     }));
+}
+
+/// The GPU converts to the stream's colour as the CPU does
+/// ([`vnilink_media::bgra_to_nv12`]): flat pictures, black, white and the
+/// primaries included, decode to the same pixels either way.
+#[test]
+fn gpu_conversion_matches_the_cpu_conversion() {
+    use vnilink_media::{RawFrame, SoftwareDecoder, VideoDecoder};
+
+    use crate::codecs::PROBE_SIDE;
+    use crate::vaapi::{Input, Session, VaCodec};
+
+    if !crate::vaapi::offers(VaCodec::H265) {
+        return;
+    }
+    let session = Session::open(VaCodec::H265, PROBE_SIDE, PROBE_SIDE, 30, 8_000_000).unwrap();
+    if !session.converts() {
+        return;
+    }
+    let side = usize::from(PROBE_SIDE);
+    let shown = |input: Input| {
+        let sample = session.encode(input, true).unwrap();
+        let frame =
+            vnilink::EncodedFrame::new(vnilink::VideoCodec::H265, true, 0, sample.bytes().to_vec())
+                .unwrap();
+        let decoded = SoftwareDecoder::open(vnilink::VideoCodec::H265)
+            .unwrap()
+            .decode(&frame)
+            .unwrap();
+        let middle = side / 2 * decoded.stride() + side / 2 * 4;
+        decoded.pixels()[middle..middle + 3].to_vec()
+    };
+    for bgra in [
+        [200, 120, 40, 255],
+        [0, 0, 0, 255],
+        [255, 255, 255, 255],
+        [128, 128, 128, 255],
+        [0, 0, 255, 255],
+        [0, 255, 0, 255],
+        [255, 0, 0, 255],
+    ] {
+        let picture = RawFrame::bgra(PROBE_SIDE, PROBE_SIDE, 0, bgra.repeat(side * side)).unwrap();
+        let gpu = shown(Input::Bgra(picture.clone()));
+        let (y, uv) = vnilink_media::bgra_to_nv12(&picture).unwrap().into_planes();
+        let cpu = shown(Input::Nv12 { y, uv });
+        assert!(
+            gpu.iter()
+                .zip(&cpu)
+                .all(|(gpu, cpu)| gpu.abs_diff(*cpu) <= 2),
+            "{bgra:?} decoded as {gpu:?} from the GPU, {cpu:?} from the CPU"
+        );
+    }
 }

@@ -2,7 +2,8 @@
 //!
 //! VA-API reaches Intel, AMD and the other Mesa drivers: H.264 (High when
 //! the session negotiates it and the driver offers it, else Constrained
-//! Baseline) and H.265 Main. NVIDIA GPUs are not used yet: see
+//! Baseline) and H.265 Main. The GPU converts the capture to NV12 where the
+//! node has a video processor; elsewhere the CPU does. NVIDIA GPUs are not used yet: see
 //! `crate::nvenc`. This build does not link a software H.264
 //! encoder: Cisco's OpenH264 patent grant covers Cisco's binary, not a
 //! source build compiled here, and x264 is GPL. Other codecs fall back to
@@ -13,7 +14,7 @@ use vnilink_media::bgra_to_nv12;
 use vnilink_media::{EncodeParams, EncodedSample, Error, RawFrame, VideoEncoder};
 
 #[cfg(target_os = "linux")]
-use crate::vaapi::{Session, VaCodec};
+use crate::vaapi::{Input, Session, VaCodec};
 
 pub struct LinuxEncoder {
     width: u16,
@@ -88,6 +89,13 @@ impl VideoEncoder for LinuxEncoder {
         vnilink::EncoderImplementation {
             name: "vaapi",
             hardware: Some(true),
+            #[cfg(target_os = "linux")]
+            input: Some(if self.session.converts() {
+                vnilink::EncoderInput::GpuUpload
+            } else {
+                vnilink::EncoderInput::Cpu
+            }),
+            #[cfg(not(target_os = "linux"))]
             input: None,
         }
     }
@@ -100,9 +108,13 @@ impl VideoEncoder for LinuxEncoder {
         }
         #[cfg(target_os = "linux")]
         {
-            let nv12 = bgra_to_nv12(frame)?;
-            let (y, uv) = nv12.into_planes();
-            return self.session.encode(y, uv, params.force_keyframe);
+            let input = if self.session.converts() {
+                Input::Bgra(frame.clone())
+            } else {
+                let (y, uv) = bgra_to_nv12(frame)?.into_planes();
+                Input::Nv12 { y, uv }
+            };
+            return self.session.encode(input, params.force_keyframe);
         }
         #[cfg(not(target_os = "linux"))]
         {

@@ -41,6 +41,9 @@ pub enum EncoderInput {
     /// Converted (and scaled) on the GPU that captured it, then read into
     /// memory for the encoder.
     GpuReadBack,
+    /// Read into memory, then uploaded to the encoder's GPU and converted
+    /// there.
+    GpuUpload,
     /// Read into memory, then scaled and converted on the CPU.
     Cpu,
 }
@@ -51,6 +54,7 @@ impl EncoderInput {
         match self {
             Self::GpuTexture => "gpu-texture",
             Self::GpuReadBack => "gpu-readback",
+            Self::GpuUpload => "gpu-upload",
             Self::Cpu => "cpu",
         }
     }
