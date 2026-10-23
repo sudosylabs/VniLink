@@ -163,6 +163,8 @@ pub struct PipelineSummary {
     /// often its decoder restarted from a keyframe.
     pub decoder_hardware: Option<bool>,
     pub decoder_recoveries: u64,
+    /// Viewer: still pictures the window showed.
+    pub stills_shown: u64,
 }
 
 /// One held condition: its label, since when on [`monotonic_ms`], and the

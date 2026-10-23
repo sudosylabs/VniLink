@@ -154,7 +154,7 @@ test('the engine hears each decoder restart and whether this computer decodes in
 	const { session, packet, failures, reports } = fixture();
 	await session.consume(packet({}));
 	await session.stats();
-	assert.deepEqual(reports.at(-1), { decodeUs: 0, software: false, recoveries: 0 });
+	assert.deepEqual(reports.at(-1), { decodeUs: 0, software: false, recoveries: 0, stillsShown: 0 });
 	failures.at(-1)();
 	await new Promise(resolve => setImmediate(resolve));
 	await session.consume(packet({ timestampUs: '3000' }));
@@ -279,9 +279,11 @@ test('the channel\'s last packet says why the picture stopped, and an unknown re
 });
 
 test('a still picture has a decoder of its own, and the stream\'s decoder survives it', async () => {
-	const { session, codecs, closed, pictures, packet } = fixture();
+	const { session, codecs, closed, pictures, packet, reports } = fixture();
 	await session.consume(packet({}));
 	await session.consume(packet({ codec: 'av1', role: 'still', timestampUs: '1500' }, new Uint8Array([1, 2])));
+	await session.stats();
+	assert.equal(reports.at(-1).stillsShown, 1, 'the engine hears of the still shown');
 	await session.consume(packet({ keyframe: false, timestampUs: '2000', role: 'unchanged' }));
 	assert.deepEqual(codecs, ['avc1.640028', 'av01.1.08M.08.0.000']);
 	assert.deepEqual(closed, [], 'a still closed a decoder');

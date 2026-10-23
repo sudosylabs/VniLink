@@ -7,7 +7,7 @@ import { record } from '../common/engine.js';
 export interface NativeDataChannel {
 	desktopAudio(operation: string): string;
 	requestKeyframe(): void;
-	mediaStatus(decodeUs: number, software: boolean, recoveries: number): string;
+	mediaStatus(decodeUs: number, software: boolean, recoveries: number, stillsShown: number): string;
 	/** The pointer when it moved or changed shape since the last call, or null. */
 	cursor(): NativeCursor | null;
 	read(): { kind: string; data?: Uint8Array | null; metadata: string } | null;
@@ -154,9 +154,11 @@ export class DataChannelHost {
 			if (message.type === 'mediaStatus' && this.request.kind === 'video' && Number.isSafeInteger(message.id) && Number(message.id) > 0
 				&& Number.isSafeInteger(message.decodeUs) && Number(message.decodeUs) >= 0 && Number(message.decodeUs) <= 0xffffffff
 				&& typeof message.software === 'boolean'
-				&& Number.isSafeInteger(message.recoveries) && Number(message.recoveries) >= 0 && Number(message.recoveries) <= 0xffffffff) {
+				&& Number.isSafeInteger(message.recoveries) && Number(message.recoveries) >= 0 && Number(message.recoveries) <= 0xffffffff
+				&& Number.isSafeInteger(message.stillsShown) && Number(message.stillsShown) >= 0 && Number(message.stillsShown) <= 0xffffffff) {
 				// Null once the picture stopped: its last packet says why.
-				const status: unknown = JSON.parse(this.native.mediaStatus(Number(message.decodeUs), message.software, Number(message.recoveries)));
+				const report = this.native.mediaStatus(Number(message.decodeUs), message.software, Number(message.recoveries), Number(message.stillsShown));
+				const status: unknown = JSON.parse(report);
 				if (status !== null && !isDesktopMediaStatus(status)) {
 					throw new Error('Invalid desktop media status');
 				}

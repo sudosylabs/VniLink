@@ -1123,10 +1123,16 @@ impl DesktopService {
             .report_decode_duration(microseconds)
             .map_err(map_error)
     }
-    /// Whether the window decodes in software, and its decoder restarts in total.
-    pub fn report_decoder(&self, software: bool, recoveries: u64) -> Result<(), FfiError> {
+    /// Whether the window decodes in software, its decoder restarts in
+    /// total, and the still pictures it showed in total.
+    pub fn report_decoder(
+        &self,
+        software: bool,
+        recoveries: u64,
+        stills_shown: u64,
+    ) -> Result<(), FfiError> {
         self.inner
-            .report_decoder(software, recoveries)
+            .report_decoder(software, recoveries, stills_shown)
             .map_err(map_error)
     }
     pub fn media_status(&self) -> Result<FfiDesktopMediaStatus, FfiError> {

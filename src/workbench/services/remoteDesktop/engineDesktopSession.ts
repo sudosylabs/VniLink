@@ -115,6 +115,8 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 	private decodedAny = false;
 	/** Times the decoder restarted from a keyframe after an error. */
 	private recoveries = 0;
+	/** Still pictures handed to the screen. */
+	private stillsShown = 0;
 	/** Whether the current decoder fell back to software. */
 	private software = false;
 
@@ -164,7 +166,8 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 		}
 		const { total, count } = this.decodeService;
 		this.decodeService = { total: 0, count: 0 };
-		const status = await video.mediaStatus({ decodeUs: count ? total / count * 1000 : 0, software: this.software, recoveries: this.recoveries });
+		const decodeUs = count ? total / count * 1000 : 0;
+		const status = await video.mediaStatus({ decodeUs, software: this.software, recoveries: this.recoveries, stillsShown: this.stillsShown });
 		const skipped = this.skippedPictures;
 		this.skippedPictures = 0;
 		return status && { status, codec, latency: this.latency.take(), skipped };
@@ -290,6 +293,7 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 			frame.close();
 			return;
 		}
+		this.stillsShown++;
 		this.pictureEmitter.fire({ frame, role: 'still', display: still.display, revision: still.revision, decodedAt: performance.now() });
 	}
 

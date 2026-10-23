@@ -738,13 +738,20 @@ impl DataChannel {
     /// How the picture is doing, as JSON, after reporting how long the
     /// window's decoder spends on a picture while others wait for it
     /// (microseconds on average, 0 when unknown), whether it decodes in
-    /// software, and how often it restarted from a keyframe in total:
+    /// software, how often it restarted from a keyframe in total, and the
+    /// still pictures it showed in total:
     /// the received frame rate and bitrate, queue times, loss, round trip,
     /// the other computer's capture and encode times, why the quality is
     /// where it is, and what is wrong with the picture, most severe first.
     /// `null` once the picture stopped.
     #[napi]
-    pub fn media_status(&self, decode_us: u32, software: bool, recoveries: u32) -> Result<String> {
+    pub fn media_status(
+        &self,
+        decode_us: u32,
+        software: bool,
+        recoveries: u32,
+        stills_shown: u32,
+    ) -> Result<String> {
         self.check()?;
         if self.kind != "video" {
             return Err(Error::from_reason("Invalid media status target"));
@@ -767,7 +774,7 @@ impl DataChannel {
         // The window counts restarts for this one picture, so the count only
         // grows; one that went back is the core's to refuse, not a failure
         // of the status read.
-        let _ = service.report_decoder(software, u64::from(recoveries));
+        let _ = service.report_decoder(software, u64::from(recoveries), u64::from(stills_shown));
         let status = service.media_status().map_err(core_error)?;
         let reason = match status.reason {
             vnilink_app::FfiAdaptationReason::WarmingUp => "warmingUp",

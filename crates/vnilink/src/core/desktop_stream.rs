@@ -153,6 +153,8 @@ struct DecoderState {
     /// `None` until the window said.
     software: Option<bool>,
     recoveries: u64,
+    /// Still pictures the window showed.
+    stills_shown: u64,
 }
 pub(super) struct DesktopKeyboard {
     pub(super) pointer: crate::input::PointerPlan,
@@ -435,6 +437,7 @@ impl DesktopRuntime {
                 .map(|input| input.label().into()),
             decoder_hardware: decoder.software.map(|software| !software),
             decoder_recoveries: decoder.recoveries,
+            stills_shown: decoder.stills_shown,
         }
     }
 }
@@ -969,15 +972,21 @@ impl RemoteDesktopService {
     /// The window's decoder reports whether it decodes in software and how
     /// many times it restarted from a keyframe after an error, in total.
     /// A count that goes back is refused: it belongs to another decoder.
-    pub fn report_decoder(&self, software: bool, recoveries: u64) -> Result<(), Error> {
+    pub fn report_decoder(
+        &self,
+        software: bool,
+        recoveries: u64,
+        stills_shown: u64,
+    ) -> Result<(), Error> {
         let desktop = self.active_desktop()?;
         let mut decoder = lock(&desktop.decoder);
-        if recoveries < decoder.recoveries {
-            return Err(Error::InvalidSetting("decoder recoveries went back"));
+        if recoveries < decoder.recoveries || stills_shown < decoder.stills_shown {
+            return Err(Error::InvalidSetting("decoder counts went back"));
         }
         *decoder = DecoderState {
             software: Some(software),
             recoveries,
+            stills_shown,
         };
         Ok(())
     }

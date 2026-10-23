@@ -400,7 +400,7 @@ fn live_snapshot_names_the_coders_and_the_last_end() {
         },
     )
     .unwrap();
-    desktop.report_decoder(true, 3).unwrap();
+    desktop.report_decoder(true, 3, 2).unwrap();
     let hosted = host.diagnostic_snapshot().unwrap().pipelines[0].clone();
     assert_eq!(hosted.encoder.as_deref(), Some("videotoolbox"));
     assert_eq!(hosted.encoder_hardware, Some(true));
@@ -409,6 +409,7 @@ fn live_snapshot_names_the_coders_and_the_last_end() {
     let viewing = controller.diagnostic_snapshot().unwrap().pipelines[0].clone();
     assert_eq!(viewing.decoder_hardware, Some(false));
     assert_eq!(viewing.decoder_recoveries, 3);
+    assert_eq!(viewing.stills_shown, 2);
     assert_eq!(
         viewing.encoder, None,
         "the viewer has no encoder of its own"

@@ -338,7 +338,7 @@ export class DataChannelClient {
 			const id = ++this.nextWrite;
 			this.statusPending = { id, resolve };
 			const bound = (value: number): number => Math.max(0, Math.min(0xffffffff, Math.round(value)));
-			this.port.postMessage({ type: 'mediaStatus', id, decodeUs: bound(decoder.decodeUs), software: decoder.software, recoveries: bound(decoder.recoveries) });
+			this.port.postMessage({ type: 'mediaStatus', id, decodeUs: bound(decoder.decodeUs), software: decoder.software, recoveries: bound(decoder.recoveries), stillsShown: bound(decoder.stillsShown) });
 		});
 	}
 

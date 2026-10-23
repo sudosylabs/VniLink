@@ -164,6 +164,8 @@ export interface DesktopDecoderReport {
 	readonly software: boolean;
 	/** Times it restarted from a keyframe after an error, in this session. */
 	readonly recoveries: number;
+	/** Still pictures shown, in this session. */
+	readonly stillsShown: number;
 }
 
 /** The other computer's pointer, in the pixels of the picture it is shown on. */
