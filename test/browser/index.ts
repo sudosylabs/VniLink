@@ -13,6 +13,7 @@ import { verifyHomeLifecycle } from './home.js';
 import { verifyIcons } from './icons.js';
 import { verifyRemoteDesktop } from './remoteDesktop.js';
 import { verifyRemoteDesktopSession } from './remoteDesktopSession.js';
+import { verifyRemoteDesktopStill } from './remoteDesktopStill.js';
 import { verifySettingsPages } from './settings.js';
 import { verifyTabs } from './tabs.js';
 import { verifyTerminal } from './terminal.js';
@@ -84,7 +85,7 @@ export class BrowserScenarios {
 	private readonly scenarios = new Map<string, () => unknown>([
 		['workbench', verifyWorkbenchLifecycle], ['access', verifyAccess], ['camera', verifyCamera], ['connection', verifyConnection], ['context-menu', verifyContextMenu], ['data-channels', verifyDataChannels],
 		['devices', verifyDevices], ['dialogs', verifyDialogs], ['files', verifyFiles], ['device-pairing', verifyPairingPopover], ['device-screenshot', verifyDeviceScreenshot], ['home', verifyHomeLifecycle], ['icons', verifyIcons],
-		['media-settings', verifyMediaSettings], ['remote-desktop', verifyRemoteDesktop], ['remote-desktop-session', verifyRemoteDesktopSession], ['settings', verifySettingsPages], ['tabs', verifyTabs], ['terminal', verifyTerminal],
+		['media-settings', verifyMediaSettings], ['remote-desktop', verifyRemoteDesktop], ['remote-desktop-session', verifyRemoteDesktopSession], ['remote-desktop-still', verifyRemoteDesktopStill], ['settings', verifySettingsPages], ['tabs', verifyTabs], ['terminal', verifyTerminal],
 	]);
 
 	public async run(name: string): Promise<boolean> {

@@ -5810,6 +5810,7 @@ dependencies = [
 name = "vnilink-media"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "nix 0.28.0",
  "serde_json",
  "shiguredo_aom",
