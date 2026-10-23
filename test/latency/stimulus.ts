@@ -22,8 +22,23 @@ export function cells(value: number): boolean[] {
 	return [...strip, ...bits, ...bits.map(set => !set), true, true];
 }
 
+/**
+ * Hold mode (`measure:latency --hold`): the strip moves for `moveMs`, then
+ * holds for `holdMs`, over and over from `origin` (`Date.now()`), and a
+ * panel of coloured text fills the page below it. Holding, the page draws
+ * nothing, so the screen does not change: the host's still picture comes,
+ * and the first change after it is the one a still may hold up. Coloured
+ * text is what a still is for: 4:2:0 blurs it, and the host sends a still
+ * only when it beats 4:2:0.
+ */
+export interface StimulusHold {
+	readonly origin: number;
+	readonly moveMs: number;
+	readonly holdMs: number;
+}
+
 /** A self-contained page drawing the strip at `cell` CSS pixels a cell. */
-export function stimulusPage(cell: number): string {
+export function stimulusPage(cell: number, hold?: StimulusHold): string {
 	// The page cannot import, so it carries its own copy of `cells`;
 	// `test/tooling/latency.test.mjs` keeps the copies and the reader alike.
 	const script = `
@@ -40,12 +55,48 @@ const canvas = document.querySelector('canvas');
 const context = canvas.getContext('2d', { alpha: false });
 const scale = window.devicePixelRatio;
 const cell = ${String(cell)};
+const hold = ${JSON.stringify(hold ?? null)};
 canvas.width = Math.round(innerWidth * scale);
 canvas.height = Math.round(innerHeight * scale);
+const band = hold ? Math.round(cell * 2 * scale) : canvas.height;
+function holding() {
+	return hold !== null && (Date.now() - hold.origin) % (hold.moveMs + hold.holdMs) >= hold.moveMs;
+}
+// Holding, the page asks for no frames at all until it moves again: a
+// window that only asks for one may present a new picture anyway.
+function resume() {
+	const cycle = hold.moveMs + hold.holdMs;
+	return cycle - (Date.now() - hold.origin) % cycle;
+}
+if (hold) {
+	// Coloured words on white, the same on every run.
+	const colours = ['#c62828', '#1565c0', '#2e7d32', '#ef6c00', '#6a1b9a', '#00838f'];
+	const words = ['const', 'value', 'stream', 'picture', 'colour', 'still', 'return', 'match', 'frame', 'link'];
+	const size = Math.round(14 * scale);
+	context.fillStyle = '#fff';
+	context.fillRect(0, band, canvas.width, canvas.height - band);
+	context.font = String(size) + 'px Menlo, monospace';
+	context.textBaseline = 'top';
+	let seed = 7;
+	const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648);
+	// The top half: the viewer covers the bottom half.
+	for (let y = band + size; y < canvas.height / 2 - size; y += Math.round(size * 1.5)) {
+		for (let x = size; x < canvas.width - size * 8;) {
+			const word = words[next() % words.length];
+			context.fillStyle = colours[next() % colours.length];
+			context.fillText(word, x, y);
+			x += context.measureText(word + ' ').width;
+		}
+	}
+}
 function draw(time) {
+	if (holding()) {
+		setTimeout(() => requestAnimationFrame(draw), resume());
+		return;
+	}
 	const strip = cells(Math.round(time));
 	context.fillStyle = '#fff';
-	context.fillRect(0, 0, canvas.width, canvas.height);
+	context.fillRect(0, 0, canvas.width, band);
 	context.fillStyle = '#000';
 	const top = Math.round(cell * 0.25 * scale);
 	const height = Math.round(cell * 1.5 * scale);

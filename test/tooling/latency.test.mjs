@@ -3,7 +3,7 @@ import test from 'node:test';
 import { join, resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { build } from 'esbuild';
-import { latencyOptions } from '../../build/lib/latency.ts';
+import { latencyOptions, renderHoldSummary, summariseHolds } from '../../build/lib/latency.ts';
 
 async function load(entry) {
 	const output = await build({ entryPoints: [entry], bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json', external: ['electron'] });
@@ -36,7 +36,10 @@ test('the page carries the same strip as the module', () => {
 test('latency options are bounded', () => {
 	const options = latencyOptions('/root', ['--seconds', '5', '--settle', '1', '--output', '/out']);
 	// Paths resolve the platform's way: `/out` is `C:\out` on Windows.
-	assert.deepEqual(options, { seconds: 5, settleSeconds: 1, output: resolve('/out'), app: undefined });
+	assert.deepEqual(options, { seconds: 5, settleSeconds: 1, output: resolve('/out'), app: undefined, holdSeconds: 0 });
+	assert.equal(latencyOptions('/root', ['--hold', '6']).holdSeconds, 6);
+	assert.throws(() => latencyOptions('/root', ['--hold', '61']));
+	assert.throws(() => latencyOptions('/root', ['--hold', '1.5']));
 	assert.equal(latencyOptions('/root', ['--app', '/x/VniLink.app']).app, '/x/VniLink.app');
 	assert.throws(() => latencyOptions('/root', ['--app', '/x/VniLink']));
 	assert.ok(latencyOptions('/root', []).output.startsWith(resolve('/root', '.build', 'latency')));
@@ -79,4 +82,47 @@ test('the summary names the encoder the host had open and what it read', async (
 	assert.match(text, /Host encoder: mf-intel, hardware, input gpu-texture\./);
 	assert.match(renderLatencySummary(summariseLatency('', ''), undefined, {}), /Host encoder: unknown, kind unknown, input unknown\./);
 	assert.doesNotMatch(renderLatencySummary(summariseLatency('', '')), /Host encoder/);
+});
+
+test('hold mode says when each still showed and what the first change after a hold took', () => {
+	const schedule = { origin: 0, moveMs: 2000, holdMs: 6000 };
+	// The viewer reads its count every 100 ms; a still shows 2.3 s into the
+	// first hold and 2.5 s into the second; the third brings none.
+	const stills = [];
+	for (let at = 1000; at <= 25000; at += 100) {
+		const shown = (at >= 4300 ? 1 : 0) + (at >= 12500 ? 1 : 0);
+		stills.push(JSON.stringify({ at, shown }));
+	}
+	// The reader: moving pictures 30 ms late, a hold of 40 pictures without
+	// a new strip, then the first change 90 ms late, then 30 ms again.
+	const samples = [];
+	let value = 100;
+	for (let index = 0; index < 20; index++) {
+		samples.push(JSON.stringify({ shownMs: index, codes: [{ value: value += 16 }, { value: value - 30 }], latencyMs: 30 }));
+	}
+	for (let index = 0; index < 40; index++) {
+		samples.push(JSON.stringify({ shownMs: index, codes: [{ value }, { value }], latencyMs: null }));
+	}
+	samples.push(JSON.stringify({ shownMs: 0, codes: [{ value: value += 6000 }, { value: value - 90 }], latencyMs: 90 }));
+	for (let index = 0; index < 5; index++) {
+		samples.push(JSON.stringify({ shownMs: index, codes: [{ value: value += 16 }, { value: value - 30 }], latencyMs: 30 }));
+	}
+	const hold = summariseHolds(schedule, stills.join('\n'), samples.join('\n'));
+	assert.equal(hold.holds, 3);
+	assert.deepEqual(hold.stillAfterMs, [2300, 2500]);
+	assert.deepEqual([hold.afterHold?.p50, hold.afterHold?.count], [90, 1]);
+	assert.deepEqual([hold.others?.max, hold.others?.count], [30, 25]);
+	const text = renderHoldSummary(hold);
+	assert.match(text, /a still showed in 2, after 2300 to 2500 ms/);
+	assert.match(text, /\| First change after a hold \| 90 \| 90 \| 90 \| 1 \|/);
+});
+
+test('a hold the capture shows as no pictures at all is a hold too', () => {
+	const schedule = { origin: 0, moveMs: 2000, holdMs: 6000 };
+	const picture = (shownMs, value, latencyMs) => JSON.stringify({ shownMs, codes: [{ value }, { value: value - latencyMs }], latencyMs });
+	// Moving pictures 30 ms late, then nothing for 6 s, then the first change 70 ms late.
+	const samples = [picture(0, 1000, 30), picture(33, 1033, 30), picture(66, 1066, 30), picture(6100, 7100, 70), picture(6133, 7133, 30)];
+	const hold = summariseHolds(schedule, '', samples.join('\n'));
+	assert.deepEqual([hold.afterHold?.p50, hold.afterHold?.count], [70, 1]);
+	assert.deepEqual([hold.others?.max, hold.others?.count], [30, 4]);
 });

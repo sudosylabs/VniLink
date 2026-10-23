@@ -34,12 +34,19 @@ export interface LatencyOptions {
 	 * only hosts Electron; the code it runs is this checkout's `out/`.
 	 */
 	readonly app: string | undefined;
+	/**
+	 * Hold mode, in seconds; 0 when off. The stimulus moves for 2 s and
+	 * holds for this long, over and over, above a panel of coloured text,
+	 * so the host sends still pictures; the summary adds when each showed
+	 * and what the first change after a hold took.
+	 */
+	readonly holdSeconds: number;
 }
 
 export function latencyOptions(root: string, args: readonly string[]): LatencyOptions {
 	const { values } = parseArgs({
 		args: [...args],
-		options: { seconds: { type: 'string', default: '20' }, settle: { type: 'string', default: '3' }, output: { type: 'string' }, app: { type: 'string' } },
+		options: { seconds: { type: 'string', default: '20' }, settle: { type: 'string', default: '3' }, output: { type: 'string' }, app: { type: 'string' }, hold: { type: 'string', default: '0' } },
 		strict: true,
 	});
 	const seconds = Number(values.seconds);
@@ -47,12 +54,16 @@ export function latencyOptions(root: string, args: readonly string[]): LatencyOp
 	if (!Number.isInteger(seconds) || seconds < 1 || seconds > 600 || !Number.isFinite(settleSeconds) || settleSeconds < 0) {
 		throw new Error('--seconds must be 1..600 and --settle at least 0');
 	}
+	const holdSeconds = Number(values.hold);
+	if (!Number.isInteger(holdSeconds) || holdSeconds < 0 || holdSeconds > 60) {
+		throw new Error('--hold must be 0..60 seconds');
+	}
 	if (values.app !== undefined && !/\.app\/?$/.test(values.app)) {
 		throw new Error('--app must name a .app bundle');
 	}
 	// Absolute: the two sides run from another directory.
 	const output = resolve(values.output ?? join(root, '.build/latency', new Date().toISOString().replaceAll(':', '-')));
-	return { seconds, settleSeconds, output, app: values.app };
+	return { seconds, settleSeconds, output, app: values.app, holdSeconds };
 }
 
 export interface Percentiles {
@@ -112,6 +123,115 @@ export function summariseLatency(samples: string, stages: string): LatencySummar
 		total,
 		stages: new Map([...windows].map(([name, stage]) => [name, { p50: median(stage.p50), p95: median(stage.p95), windows: stage.p50.length }])),
 	};
+}
+
+/** When the stimulus moves and holds: from `origin` (wall-clock ms), `moveMs` then `holdMs`, over and over. */
+export interface HoldSchedule {
+	readonly origin: number;
+	readonly moveMs: number;
+	readonly holdMs: number;
+}
+
+/** Hold mode's results: when each still showed, and what the first change after a hold took. */
+export interface HoldSummary {
+	readonly holds: number;
+	/** From the stimulus holding to the viewer showing a still, for each hold that brought one. */
+	readonly stillAfterMs: readonly number[];
+	/** Glass to glass of the first picture read after each hold, against every other picture. */
+	readonly afterHold: Percentiles | undefined;
+	readonly others: Percentiles | undefined;
+}
+
+function percentiles(values: number[]): Percentiles | undefined {
+	const sorted = [...values].sort((a, b) => a - b);
+	return sorted.length
+		? { p50: rank(sorted, 0.5), p95: rank(sorted, 0.95), p99: rank(sorted, 0.99), max: sorted[sorted.length - 1], count: sorted.length }
+		: undefined;
+}
+
+/**
+ * Hold mode's summary from the stimulus `schedule` (`origin`, `moveMs`,
+ * `holdMs`, wall-clock ms), the viewer's `stills` lines (`at`, `shown`) and
+ * the reader's `samples`. A hold shows in the samples as a run of pictures
+ * whose newest strip does not change, or, where the capture delivers no
+ * picture of an unchanged screen, as a second or more without any; the
+ * first picture with both strips after it is the first change after the
+ * hold.
+ */
+export function summariseHolds(schedule: HoldSchedule, stills: string, samples: string): HoldSummary {
+	const shown = lines(stills).filter((line): line is { at: number; shown: number } => typeof line === 'object' && line !== null
+		&& 'at' in line && typeof line.at === 'number' && 'shown' in line && typeof line.shown === 'number');
+	const cycle = schedule.moveMs + schedule.holdMs;
+	const stillAfterMs: number[] = [];
+	let holds = 0;
+	if (shown.length) {
+		const first = shown[0].at;
+		const last = shown[shown.length - 1].at;
+		for (let start = schedule.origin + schedule.moveMs; start + schedule.holdMs <= last; start += cycle) {
+			if (start < first) {
+				continue;
+			}
+			holds++;
+			const before = shown.filter(line => line.at <= start).at(-1)?.shown ?? 0;
+			const came = shown.find(line => line.at > start && line.at < start + schedule.holdMs && line.shown > before);
+			if (came) {
+				stillAfterMs.push(came.at - start);
+			}
+		}
+	}
+	const pictures = lines(samples).flatMap(line => {
+		if (typeof line !== 'object' || line === null || !('codes' in line) || !Array.isArray(line.codes)) {
+			return [];
+		}
+		const values = line.codes.flatMap((code: unknown) => typeof code === 'object' && code !== null && 'value' in code && typeof code.value === 'number' ? [code.value] : []);
+		const latency = 'latencyMs' in line && typeof line.latencyMs === 'number' ? line.latencyMs : undefined;
+		const shown = 'shownMs' in line && typeof line.shownMs === 'number' ? line.shownMs : undefined;
+		return values.length ? [{ newest: Math.max(...values), latency, shown }] : [];
+	});
+	const afterHold: number[] = [];
+	const others: number[] = [];
+	// Pictures in a row whose newest strip did not change: a hold, once
+	// they span a good part of it at the reader's pace.
+	let unchanged = 0;
+	let waiting = false;
+	for (let index = 0; index < pictures.length; index++) {
+		const picture = pictures[index];
+		const changed = index > 0 && picture.newest !== pictures[index - 1].newest;
+		unchanged = changed || index === 0 ? 0 : unchanged + 1;
+		const quiet = index > 0 && picture.shown !== undefined && pictures[index - 1].shown !== undefined
+			&& picture.shown - (pictures[index - 1].shown ?? 0) >= 1000;
+		if (unchanged >= 30 || quiet) {
+			waiting = true;
+		}
+		if (picture.latency === undefined) {
+			continue;
+		}
+		if (waiting && changed) {
+			afterHold.push(picture.latency);
+			waiting = false;
+		} else if (!waiting) {
+			others.push(picture.latency);
+		}
+	}
+	return { holds, stillAfterMs, afterHold: percentiles(afterHold), others: percentiles(others) };
+}
+
+export function renderHoldSummary(hold: HoldSummary): string {
+	const after = [...hold.stillAfterMs].sort((a, b) => a - b);
+	const row = (name: string, value: Percentiles | undefined): string => value
+		? `| ${name} | ${String(value.p50)} | ${String(value.p95)} | ${String(value.max)} | ${String(value.count)} |`
+		: `| ${name} | - | - | - | 0 |`;
+	return [
+		'## Still pictures (hold mode)',
+		'',
+		`Holds: ${String(hold.holds)}; a still showed in ${String(after.length)}${after.length ? `, after ${String(after[0])} to ${String(after[after.length - 1])} ms (median ${String(rank(after, 0.5))} ms)` : ''}.`,
+		'',
+		'| Glass to glass | p50 ms | p95 ms | max ms | Pictures |',
+		'|---|---|---|---|---|',
+		row('First change after a hold', hold.afterHold),
+		row('Every other picture', hold.others),
+		'',
+	].join('\n');
 }
 
 /** Cores each side's processes used while the reader ran, by kind. */
@@ -267,6 +387,7 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 				VNILINK_LATENCY_ROLE: role,
 				VNILINK_LATENCY_DIR: rendezvous,
 				VNILINK_LATENCY_OUTPUT: options.output,
+				VNILINK_LATENCY_HOLD_MS: String(options.holdSeconds * 1000),
 			};
 			const side = platform.launch(role, environment, join(options.output, `${role}.log`));
 			sides.push(side.result.catch(() => undefined).finally(() => {
@@ -287,7 +408,10 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 		if (typeof read !== 'object' || read === null || !('code' in read) || read.code !== 0) {
 			throw new Error(`The reader failed: ${JSON.stringify(read)}`);
 		}
-		const run = { seconds: options.seconds, settle: options.settleSeconds, platform: process.platform, arch: process.arch, date: new Date().toISOString() };
+		const run = {
+			seconds: options.seconds, settle: options.settleSeconds, hold: options.holdSeconds,
+			platform: process.platform, arch: process.arch, date: new Date().toISOString(),
+		};
 		await writeFile(join(options.output, 'run.json'), JSON.stringify(run, null, 2));
 		// The viewer samples once a second: let it report before it is told to quit.
 		await arrival(rendezvous, 'viewer-cpu', 5000, () => false, signal).catch(() => undefined);
@@ -302,7 +426,12 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 		const pipeline: unknown = JSON.parse(await readFile(join(rendezvous, 'host-pipeline.json'), 'utf8').catch(() => '{}'));
 		await writeFile(join(options.output, 'host-pipeline.json'), JSON.stringify(pipeline, null, 2));
 		const encoder = latencyEncoder(pipeline);
-		const summary = renderLatencySummary(summariseLatency(await readFile(samples, 'utf8'), stages), cpu, encoder);
+		let summary = renderLatencySummary(summariseLatency(await readFile(samples, 'utf8'), stages), cpu, encoder);
+		if (options.holdSeconds > 0) {
+			const schedule = JSON.parse(await readFile(join(options.output, 'schedule.json'), 'utf8')) as HoldSchedule;
+			const stills = await readFile(join(options.output, 'stills.jsonl'), 'utf8').catch(() => '');
+			summary += `\n${renderHoldSummary(summariseHolds(schedule, stills, await readFile(samples, 'utf8')))}`;
+		}
 		await writeFile(join(options.output, 'summary.md'), summary);
 		console.log(summary);
 		console.log(`Evidence: ${options.output}`);

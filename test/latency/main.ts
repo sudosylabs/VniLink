@@ -22,6 +22,12 @@ const directory = process.env.VNILINK_LATENCY_DIR;
 
 const output = process.env.VNILINK_LATENCY_OUTPUT;
 
+/** Hold mode: how long the stimulus holds still, in ms; 0 when it never does. */
+const holdMs = Number(process.env.VNILINK_LATENCY_HOLD_MS ?? '0');
+
+/** Hold mode: how long the stimulus moves between holds. */
+const MOVE_MS = 2000;
+
 if ((role !== 'host' && role !== 'viewer') || !directory || !output) {
 	throw new Error('VNILINK_LATENCY_ROLE (host or viewer), VNILINK_LATENCY_DIR and VNILINK_LATENCY_OUTPUT are required');
 }
@@ -85,11 +91,22 @@ async function invitation(driver: WindowDriver): Promise<string> {
 	return reply.token;
 }
 
-/** The strip's cell width in CSS pixels and the strip's window height. */
-function stripGeometry(): { cell: number; height: number; area: Electron.Rectangle } {
-	const area = screen.getPrimaryDisplay().workArea;
+/**
+ * The strip's cell width in CSS pixels, the stimulus window's height and
+ * where the viewer's window starts. The stimulus is the strip, the viewer
+ * below it. In hold mode the stimulus fills the display, its strip above a
+ * panel of coloured text in the top half, and the viewer covers the bottom
+ * half: hidden while the stimulus holds, it leaves a screen that does not
+ * change. In hold mode both cover the whole display, menu bar and Dock
+ * included, above floating windows: anything else that moves there, an
+ * animated desktop picture behind the Dock or a call's video, is a change.
+ */
+function stripGeometry(): { cell: number; height: number; viewerTop: number; area: Electron.Rectangle } {
+	const area = holdMs > 0 ? screen.getPrimaryDisplay().bounds : screen.getPrimaryDisplay().workArea;
 	const cell = Math.floor(area.width / (CELLS + 4));
-	return { cell, height: Math.ceil(cell * 2), area };
+	return holdMs > 0
+		? { cell, height: area.height, viewerTop: Math.floor(area.height / 2), area }
+		: { cell, height: Math.ceil(cell * 2), viewerTop: Math.ceil(cell * 2), area };
 }
 
 /** Whether this application may record the screen; asks macOS once when not. Windows asks no one. */
@@ -134,8 +151,15 @@ async function host(driver: WindowDriver): Promise<void> {
 		frame: false, resizable: false, hasShadow: false, show: false,
 		webPreferences: { backgroundThrottling: false },
 	});
+	if (holdMs > 0) {
+		stimulus.setAlwaysOnTop(true, 'screen-saver');
+	}
 	try {
-		await stimulus.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(stimulusPage(cell))}`);
+		const hold = holdMs > 0 ? { origin: Date.now(), moveMs: MOVE_MS, holdMs } : undefined;
+		if (hold) {
+			writeFileSync(join(evidence, 'schedule.json'), JSON.stringify(hold));
+		}
+		await stimulus.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(stimulusPage(cell, hold))}`);
 		stimulus.showInactive();
 		publish('host-ready', {});
 		// The native host's state while the viewer starts, for a start that fails.
@@ -175,7 +199,20 @@ async function host(driver: WindowDriver): Promise<void> {
 	}
 }
 
+/** The still pictures the viewer's diagnostics say it showed. */
+async function stillsShown(driver: WindowDriver): Promise<number | undefined> {
+	const reply = await engine(driver, { type: 'diagnosticSnapshot' });
+	const snapshot: unknown = typeof reply.snapshot === 'string' ? JSON.parse(reply.snapshot) : undefined;
+	const pipelines: unknown[] = record(snapshot) && Array.isArray(snapshot.pipelines) ? snapshot.pipelines : [];
+	const viewing = pipelines.find((pipeline): pipeline is Record<string, unknown> => record(pipeline) && pipeline.hosted === false);
+	return typeof viewing?.stills_shown === 'number' ? viewing.stills_shown : undefined;
+}
+
 async function viewer(driver: WindowDriver): Promise<void> {
+	if (holdMs > 0) {
+		// The Smooth preset: stills of a 4K screen fit only a fast stream's budget.
+		await driver.window.webContents.executeJavaScript(`window.driver.mainProcess.getChannel('configuration').call('updateValue', { key: 'desktop.quality', value: { max_bitrate_kbps: 12000, max_frame_rate: 60, max_width: 1920, max_height: 1080 } })`);
+	}
 	publish('viewer', { token: await invitation(driver) });
 	const host = await expect('host', 60000);
 	await engine(driver, { type: 'acceptInvitation', token: host.token });
@@ -196,8 +233,11 @@ async function viewer(driver: WindowDriver): Promise<void> {
 		}
 		await new Promise(resolve => setTimeout(resolve, 200));
 	}
-	const { height, area } = stripGeometry();
-	driver.window.setBounds({ x: area.x, y: area.y + height, width: area.width, height: area.height - height });
+	const { viewerTop, area } = stripGeometry();
+	driver.window.setBounds({ x: area.x, y: area.y + viewerTop, width: area.width, height: area.height - viewerTop });
+	if (holdMs > 0) {
+		driver.window.setAlwaysOnTop(true, 'screen-saver', 1);
+	}
 	driver.window.showInactive();
 	// The device list learns of the pairing from an engine event; the view
 	// opens once it has.
@@ -244,14 +284,49 @@ async function viewer(driver: WindowDriver): Promise<void> {
 			throw new Error('The viewer did not show a picture within 30 s');
 		}
 	}
+	if (holdMs > 0) {
+		// The status bar changes every second, and it is on the captured
+		// screen: hidden, the screen can hold still.
+		await driver.window.webContents.executeJavaScript(`(() => {
+			const style = document.createElement('style');
+			style.textContent = '.desktop-status { visibility: hidden !important; }';
+			document.head.append(style);
+		})()`);
+	}
 	await driver.screenshot('viewer-streaming');
 	publish('viewer-streaming', {});
 	// The view's own stage times, once a second, as it shows them: the
 	// runner sets them against the total read from the screen.
 	const stages = join(evidence, 'stages.jsonl');
+	const stills = join(evidence, 'stills.jsonl');
 	// CPU over the reader's run, as the host measures its own.
 	let cpuStart: [Record<string, number>, number] | undefined;
+	let lastStages = 0;
+	const schedule = holdMs > 0 ? JSON.parse(readFileSync(join(evidence, 'schedule.json'), 'utf8')) as { origin: number; moveMs: number; holdMs: number } : undefined;
 	while (!existsSync(join(rendezvous, 'done.json'))) {
+		// Hold mode: when each still showed, to a tenth of a second; and
+		// while the stimulus holds, this window, which redraws every
+		// picture it receives, is hidden: on the captured screen each of
+		// its pictures is a change, and the screen would never hold still.
+		// ScreenCaptureKit captures a content-protected window regardless.
+		// Hidden, it still receives and decodes its pictures.
+		if (schedule) {
+			const holding = (Date.now() - schedule.origin) % (schedule.moveMs + schedule.holdMs) >= schedule.moveMs;
+			if (holding && driver.window.isVisible()) {
+				driver.window.hide();
+			} else if (!holding && !driver.window.isVisible()) {
+				driver.window.showInactive();
+			}
+			const shown = await stillsShown(driver);
+			if (shown !== undefined) {
+				appendFileSync(stills, `${JSON.stringify({ at: Date.now(), shown })}\n`);
+			}
+			if (Date.now() - lastStages < 1000) {
+				await new Promise(resolve => setTimeout(resolve, 100));
+				continue;
+			}
+		}
+		lastStages = Date.now();
 		if (!cpuStart && existsSync(join(rendezvous, 'read.json'))) {
 			cpuStart = [cpuSeconds(), Date.now()];
 		}
@@ -262,7 +337,7 @@ async function viewer(driver: WindowDriver): Promise<void> {
 		if (typeof text === 'string' && text.length > 0) {
 			appendFileSync(stages, `${JSON.stringify({ at: Date.now(), text })}\n`);
 		}
-		await new Promise(resolve => setTimeout(resolve, 1000));
+		await new Promise(resolve => setTimeout(resolve, holdMs > 0 ? 100 : 1000));
 	}
 }
 

@@ -58,7 +58,8 @@ Evidence lands in `.build/latency/<time>/`:
 - `host-start.log`, `viewer-start.log`: what each side saw while the stream started, for a run that fails there;
 - `host.log`, `viewer.log`: each side's output;
 - `host-pipeline.json`: the viewer's pipeline as the host's diagnostics hold it at the end of the run: the encoder, whether it is hardware and what it read pictures from (also in `summary.md`), keyframes, encoder reopens and drops;
-- `run.json`: the options and machine.
+- `run.json`: the options and machine;
+- hold mode only: `schedule.json`, when the stimulus moves and holds, and `stills.jsonl`, the still pictures the viewer had shown, sampled every 100 ms.
 
 The reader prints the p50, p95, p99 and maximum when it finishes.
 
@@ -68,5 +69,18 @@ The reader prints the p50, p95, p99 and maximum when it finishes.
 | `--settle` | `3` | Seconds between the first picture and sampling. |
 | `--output` | `.build/latency/<time>` | Where the evidence goes. |
 | `--app` | this checkout's development VniLink | macOS: the `.app` that runs both sides. |
+| `--hold` | `0` | Hold mode: seconds the stimulus holds still after each 2 s of motion; `0` is off. |
+
+### Hold mode
+
+`--hold <seconds>` measures still pictures: when one shows after the screen stops changing, and whether the first change after it is held up. The summary adds both.
+
+For the host to see a still screen, nothing on the captured display may change during a hold:
+- The stimulus fills the display, its strip above a panel of coloured text (what a still is for: the host sends one only when it beats 4:2:0). It covers the menu bar and the Dock above floating windows, since an animated desktop picture behind the Dock is a change.
+- The viewer covers the lower half. It is hidden while the stimulus holds: every picture it draws is a change on the captured screen, and ScreenCaptureKit captures a content-protected window regardless. Hidden, it still receives and decodes, and counts the stills it shows.
+- The viewer's status bar, which changes every second, is hidden for the run.
+- The viewer runs at the Smooth preset (12 Mb/s), whose budget a 1080p still of this panel fits.
+
+What the measurement cannot cover is still a change: another application's window above everything, such as a video call's floating window, keeps the screen from holding. `examples/sck_changes` in `vnilink-macos` shows which application changes the display. On Windows hold mode runs as on macOS but is unmeasured.
 
 `build/lib/latency.ts` owns the task; `test/latency/main.ts` is the host and viewer.
