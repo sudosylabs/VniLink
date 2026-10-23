@@ -77,6 +77,14 @@ export class TestApplication {
 			onReady: async window => {
 				const driver = new WindowDriver(window, this.output);
 				try {
+					// macOS and Windows draw a hidden window. On Linux a window
+					// never mapped gets no frames: its animation frames never
+					// come and a page capture fails. It is shown unfocused, and
+					// the scenarios start once it has drawn twice.
+					if (process.platform === 'linux' && !window.isVisible()) {
+						window.showInactive();
+						await window.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+					}
 					await driver.ready();
 					await verify(window, driver);
 					console.log(`PASS: test scenarios; artifacts: ${this.output}`);
