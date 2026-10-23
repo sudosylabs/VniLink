@@ -8,6 +8,14 @@
 //! VA-API encoder uses, so colour does not depend on the encoder. Each
 //! picture is encoded synchronously, without B pictures or lookahead, and
 //! a keyframe carries its parameter sets or sequence header.
+//!
+//! Sessions do not use this encoder yet. Inside the Electron engine process
+//! NVIDIA's driver (595, RTX 5060 Laptop GPU) crashed in a worker thread of
+//! its own (`libnvcuvid`) about a minute into most streaming runs, while the
+//! same encoding in a plain process, under a perturbed allocator and with
+//! the sessions the startup probe opens, ran clean. Keeping the session's
+//! structs alive and giving each session its own CUDA context did not stop
+//! it. Its tests still exercise it directly.
 
 #[allow(
     dead_code,

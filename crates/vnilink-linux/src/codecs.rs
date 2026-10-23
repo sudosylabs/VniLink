@@ -1,10 +1,10 @@
 //! What this machine encodes in hardware, for session negotiation.
 //!
-//! H.264 is offered when NVENC opens a session for it or a render node has
-//! the entrypoint; its encoders are exercised by every session. H.265 and
-//! AV1 are offered only after a round trip: a test picture encoded on the
-//! GPU must decode, in the right colour, with the shared software decoder.
-//! A driver whose output does not decode is never chosen over software.
+//! H.264 is offered when a render node has the entrypoint; its encoder is
+//! exercised by every session. H.265 is offered only after a round trip: a
+//! test picture encoded on the GPU must decode, in the right colour, with
+//! the shared software decoder. A driver whose output does not decode is
+//! never chosen over software.
 
 use vnilink::{CodecSupport, VideoCodec, VideoCodecCaps};
 use vnilink_media::{
@@ -12,18 +12,16 @@ use vnilink_media::{
 };
 
 use crate::encode::LinuxEncoder;
-use crate::nvenc;
 use crate::vaapi::{self, VaCodec};
 
 /// Probe-validated hardware encode of this machine. Sizes are the
 /// conservative documented ceiling: offers above it clamp instead of
 /// failing, and a weaker driver still fails its owner at encoder open.
 pub fn video_codec_caps() -> VideoCodecCaps {
-    let nvidia = nvenc::offers(VideoCodec::H264);
-    let encode = nvidia || vaapi::offers(VaCodec::H264 { high: false });
-    let high = nvidia || (encode && vaapi::offers(VaCodec::H264 { high: true }));
+    let encode = vaapi::offers(VaCodec::H264 { high: false });
+    let high = encode && vaapi::offers(VaCodec::H264 { high: true });
     let decode = vaapi::offers_h264_decode();
-    let additional: Vec<CodecSupport> = [VideoCodec::H265, VideoCodec::Av1]
+    let additional: Vec<CodecSupport> = [VideoCodec::H265]
         .into_iter()
         .filter(|codec| round_trips(*codec))
         .map(|codec| CodecSupport {
@@ -42,7 +40,7 @@ pub fn video_codec_caps() -> VideoCodecCaps {
         max_width: 4096,
         max_height: 4096,
         hardware: encode || decode || !additional.is_empty(),
-        device: if nvidia { "nvenc" } else { "vaapi" }.into(),
+        device: "vaapi".into(),
         chroma444: false,
         additional,
     }
