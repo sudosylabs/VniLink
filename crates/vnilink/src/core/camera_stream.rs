@@ -49,7 +49,8 @@ impl RemoteCameraService {
         Ok(tap)
     }
     /// Why the stream ended, after the frames sent before the end. Reported
-    /// once; `None` while it runs.
+    /// once; `None` while it runs. When reported, this service has finished
+    /// and no longer counts as the connection's camera owner.
     pub fn take_end(&self) -> Option<CameraEnd> {
         lock(&self.end).take()
     }
@@ -214,6 +215,7 @@ impl Core {
                 })
                 .await;
             let mut phase = ServicePhase::Closed(CloseCause::PeerClose);
+            let mut end_reason = None;
             match opened {
                 Err(error) => {
                     phase = ServicePhase::Failed(error.to_string());
@@ -280,8 +282,7 @@ impl Core {
                     } else if lease.is_cancelled() {
                         phase = ServicePhase::Closed(CloseCause::OwnerClose);
                     }
-                    // A viewer that closed the stream itself no longer reads this.
-                    *lock(&ended) = Some(reason);
+                    end_reason = Some(reason);
                     let _ = send.finish();
                 }
             }
@@ -297,6 +298,13 @@ impl Core {
                         service: record.info.clone(),
                     });
                 }
+            }
+            drop(state);
+            // Reported only once the owner record has finished, so a viewer
+            // that reacts to the end can attach a new owner at once. A viewer
+            // that closed the stream itself no longer reads this.
+            if let Some(reason) = end_reason {
+                *lock(&ended) = Some(reason);
             }
         });
         let config = result

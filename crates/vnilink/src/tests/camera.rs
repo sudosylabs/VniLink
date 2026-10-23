@@ -545,6 +545,11 @@ fn camera_viewer_learns_why_the_picture_stopped() {
             end.is_some()
         });
         assert_eq!(camera.take_end(), None, "the reason is reported once");
+        let owner = controller.controller_service(camera.info().id).unwrap();
+        assert!(
+            owner.phase.finished(),
+            "an ended camera still holds its owner"
+        );
         end.unwrap()
     };
     // The host's capture fails, or its camera stops delivering.
