@@ -13,7 +13,7 @@ use crate::transform::h264_encoders;
 /// probe says which kind a peer will get.
 #[test]
 fn prefers_a_hardware_transform_that_opens() {
-    let encoders = unsafe { h264_encoders() };
+    let encoders: Vec<_> = unsafe { h264_encoders() }.collect();
     assert!(!encoders.last().unwrap().hardware());
     let hardware_opens = encoders
         .iter()
@@ -41,7 +41,7 @@ fn the_capture_adapter_decides_the_encoder() {
             .into_iter()
             .map(|candidate| candidate.name)
             .collect();
-        let listed: Vec<_> = unsafe { crate::transform::h264_encoders_for(adapter) }
+        let listed: Vec<_> = unsafe { crate::transform::h264_encoders_for(Some(adapter)) }
             .into_iter()
             .map(|candidate| candidate.name)
             .collect();
@@ -632,6 +632,79 @@ fn capture_to_encode_cost() {
             at(0.95),
             used.as_secs_f64() / started.elapsed().as_secs_f64()
         );
+    }
+}
+
+/// An encoder reopened as the pump reopens it, the new one opening while
+/// the old is alive, three times a way: reading the captured texture (path
+/// 1) and reading NV12 from memory (path 3). Prints the time to open, to
+/// drop the old one, and to encode the first pictures; the picture freezes
+/// that long. Listing every adapter's encoders before opening the first
+/// took 0.8 to 1 s here (2026-10-23), now the capture adapter's are tried
+/// before the next adapter is asked. Needs the interactive session:
+/// `cargo test -p vnilink-windows --release --lib reopen_cost -- --ignored --nocapture`.
+#[test]
+#[ignore = "measurement"]
+fn reopen_cost() {
+    use std::time::{Duration, Instant};
+    let startup = vnilink::BackendStartup::new(Duration::from_secs(10));
+    let capture = crate::WindowsCapture::open(&startup).unwrap();
+    capture.set_embeds_cursor(false);
+    let device = capture.device();
+    let adapter = unsafe { device.adapter().unwrap() };
+    let frame = loop {
+        if let Some(frame) = capture.poll_frame(0).unwrap() {
+            break frame;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let params = |force_keyframe| EncodeParams {
+        force_keyframe,
+        recovery: false,
+        bitrate_bps: 4_000_000,
+        frame_rate: 30,
+    };
+    let open = |mode: &str| -> WindowsEncoder {
+        if mode == "texture" {
+            return WindowsEncoder::open_on(1280, 720, 30, 4_000_000, &device).unwrap();
+        }
+        // As `open_on` once no texture is read: candidates as they are listed.
+        unsafe { crate::transform::h264_encoders_for(Some(adapter)) }
+            .find_map(|candidate| {
+                WindowsEncoder::open_candidate(&candidate, 1280, 720, 30, 4_000_000).ok()
+            })
+            .unwrap()
+    };
+    for mode in ["texture", "memory", "texture", "memory"] {
+        let mut encoder = open(mode);
+        for index in 0..10 {
+            let _ = encoder.encode(&frame, &params(index == 0));
+        }
+        for reopen in 0..3 {
+            let started = Instant::now();
+            let next = open(mode);
+            let opened = started.elapsed();
+            let started = Instant::now();
+            drop(std::mem::replace(&mut encoder, next));
+            let dropped = started.elapsed();
+            let pictures: Vec<String> = (0..6)
+                .map(|index| {
+                    let started = Instant::now();
+                    let encoded = encoder.encode(&frame, &params(index == 0));
+                    format!(
+                        "{}{:.0}",
+                        if encoded.is_ok() { "" } else { "failed " },
+                        started.elapsed().as_secs_f64() * 1000.0
+                    )
+                })
+                .collect();
+            println!(
+                "{mode} reopen {reopen}: {:?} {:?}, open {opened:.0?}, old dropped {dropped:.0?}, pictures ms {}",
+                encoder.vendor(),
+                encoder.implementation().input,
+                pictures.join(", ")
+            );
+        }
     }
 }
 

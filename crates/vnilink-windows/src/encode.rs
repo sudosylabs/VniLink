@@ -144,10 +144,11 @@ impl WindowsEncoder {
     }
 
     /// The first of `candidates` that opens, reading NV12 from memory.
-    /// They are listed once Media Foundation has started.
+    /// They are listed once Media Foundation has started, and only as far as
+    /// the first that opens.
     #[cfg(windows)]
-    unsafe fn open_first(
-        candidates: impl FnOnce() -> Vec<H264Transform>,
+    unsafe fn open_first<I: IntoIterator<Item = H264Transform>>(
+        candidates: impl FnOnce() -> I,
         width: u16,
         height: u16,
         frame_rate: u8,
@@ -889,10 +890,7 @@ impl WindowsEncoder {
             return Ok(encoder);
         }
         unsafe {
-            let candidates = || match device.adapter() {
-                Ok(adapter) => h264_encoders_for(adapter),
-                Err(_) => h264_encoders(),
-            };
+            let candidates = || h264_encoders_for(device.adapter().ok());
             Self::open_first(candidates, width, height, frame_rate, bitrate_bps)
         }
         .map_err(|_| Error::Unsupported("Media Foundation H.264"))
