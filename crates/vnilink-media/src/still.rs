@@ -11,7 +11,7 @@ use std::thread::JoinHandle;
 
 use shiguredo_aom as aom;
 
-use crate::colour::STREAM_SIGNAL;
+use crate::colour::{ToRgb, STREAM_SIGNAL};
 use crate::error::Error;
 use crate::frame::RawFrame;
 
@@ -19,6 +19,11 @@ use crate::frame::RawFrame;
 /// the stream's own refinement of a still screen ends then.
 pub const STILL_AFTER: std::time::Duration =
     std::time::Duration::from_micros(crate::pump::REFINE_FOR_US);
+
+/// How much closer to the source than the best 4:2:0 picture a still must
+/// be, in dB of PSNR, to be worth sending: less is not a visible gain, and a
+/// still that loses would make the picture worse.
+const BETTER_BY: f64 = 1.0;
 
 /// AV1 quantizer levels tried, finest first, until a picture fits. On a
 /// 1080p page of coloured text they give about 40, 36 and 32 dB, against
@@ -45,16 +50,40 @@ impl StillEncoder {
     }
 
     /// One AV1 4:4:4 keyframe of `frame` of at most `budget` bytes, at the
-    /// finest quality that fits; `None` when even the coarsest does not.
+    /// finest quality that fits, when it is worth sending: closer to `frame`
+    /// by [`BETTER_BY`] than a 4:2:0 round trip of it, the best any stream
+    /// can show. On mostly grey text 4:2:0 loses little, and only a fine
+    /// still beats the stream. `None` when no level fits, or the one that
+    /// fits is not better; a coarser one would not be either.
     pub fn encode(&self, frame: &RawFrame, budget: usize) -> Result<Option<Vec<u8>>, Error> {
         let (y, u, v) = bgra_to_i444(frame);
         for level in LEVELS {
             let picture = self.encode_at(frame.width(), frame.height(), &y, &u, &v, level)?;
             if picture.len() <= budget {
-                return Ok(Some(picture));
+                return Ok(self.beats_subsampling(frame, &picture)?.then_some(picture));
             }
         }
         Ok(None)
+    }
+
+    /// Whether `picture`, decoded, is closer to `frame` by [`BETTER_BY`] than
+    /// a 4:2:0 round trip of it in the stream's colour. A frame 4:2:0 cannot
+    /// hold, of odd size, has no such bound: any still beats it.
+    fn beats_subsampling(&self, frame: &RawFrame, picture: &[u8]) -> Result<bool, Error> {
+        let Ok(nv12) = crate::bgra_to_nv12(frame) else {
+            return Ok(true);
+        };
+        let subsampled = crate::nv12_to_bgra(
+            frame.width(),
+            frame.height(),
+            0,
+            nv12.y_plane(),
+            nv12.uv_plane(),
+            STREAM_SIGNAL,
+        )?;
+        let shown = decode_i444(picture)?;
+        Ok(crate::measure::psnr(frame, &shown)
+            > crate::measure::psnr(frame, &subsampled) + BETTER_BY)
     }
 
     fn encode_at(
@@ -197,6 +226,45 @@ fn drain(encoder: &mut aom::Encoder, picture: &mut Vec<u8>) -> Result<(), Error>
         );
     }
     Ok(())
+}
+
+/// One AV1 4:4:4 picture back to BGRA in the stream's colour, as a viewer
+/// shows it.
+fn decode_i444(picture: &[u8]) -> Result<RawFrame, Error> {
+    let rejected = |_| Error::EncodeRejected("libaom could not decode its still picture");
+    let mut decoder = aom::Decoder::new(aom::DecoderConfig::new()).map_err(rejected)?;
+    decoder.decode(picture).map_err(rejected)?;
+    let decoded = decoder
+        .next_frame()
+        .ok_or(Error::EncodeRejected("libaom decoded no still picture"))?;
+    let (width, height) = (decoded.width(), decoded.height());
+    let planes = (
+        decoded.y_plane().map_err(rejected)?,
+        decoded.u_plane().map_err(rejected)?,
+        decoded.v_plane().map_err(rejected)?,
+    );
+    let strides = (
+        decoded.y_stride().map_err(rejected)?,
+        decoded.u_stride().map_err(rejected)?,
+        decoded.v_stride().map_err(rejected)?,
+    );
+    let to_rgb = ToRgb::of(STREAM_SIGNAL);
+    let clamp = |value: i32| (value >> 8).clamp(0, 255) as u8;
+    let mut bgra = Vec::with_capacity(width * height * 4);
+    for row in 0..height {
+        for col in 0..width {
+            let c = to_rgb.luma * (i32::from(planes.0[row * strides.0 + col]) - to_rgb.luma_offset);
+            let d = i32::from(planes.1[row * strides.1 + col]) - 128;
+            let e = i32::from(planes.2[row * strides.2 + col]) - 128;
+            bgra.extend_from_slice(&[
+                clamp(c + to_rgb.cb_blue * d + 128),
+                clamp(c + to_rgb.cb_green * d + to_rgb.cr_green * e + 128),
+                clamp(c + to_rgb.cr_red * e + 128),
+                255,
+            ]);
+        }
+    }
+    RawFrame::bgra(width as u16, height as u16, 0, bgra)
 }
 
 /// BGRA to BT.709 limited-range planar 4:4:4: one chroma sample per pixel.

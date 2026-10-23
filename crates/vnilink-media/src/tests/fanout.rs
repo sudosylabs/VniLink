@@ -1024,12 +1024,35 @@ fn an_encoder_failing_mid_stream_tells_the_viewer_why() {
     worker.join().unwrap().unwrap();
 }
 
+/// Coloured text, which 4:2:0 blurs: a still of it is worth sending.
+const COLOURED: (u16, u16) = (64, 64);
+
+/// A source of unchanged coloured text, attested once.
+struct ColouredStill {
+    at: Instant,
+    page: RawFrame,
+}
+
+impl FrameSource for ColouredStill {
+    fn size(&self) -> (u16, u16) {
+        COLOURED
+    }
+
+    fn poll_frame(&self, timestamp: u64) -> Result<Option<RawFrame>, Error> {
+        Ok(Some(self.page.clone().with_timestamp(timestamp)))
+    }
+
+    fn attested_at(&self) -> Option<Instant> {
+        Some(self.at)
+    }
+}
+
 /// A host whose capture sends still pictures.
 struct StillsCapture;
 
 impl vnilink::HostCapture for StillsCapture {
     fn monitor(&self) -> (u16, u16) {
-        (64, 64)
+        COLOURED
     }
     fn stills(&self) -> bool {
         true
@@ -1078,7 +1101,10 @@ fn roles_of_an_unchanged_screen(shows: bool, watch: Duration) -> Vec<vnilink::Fr
     let (worker_stop, worker_host) = (Arc::clone(&stop), Arc::clone(&host));
     let worker = std::thread::spawn(move || {
         crate::serve_shared_capture(
-            &Still { at: Instant::now() },
+            &ColouredStill {
+                at: Instant::now(),
+                page: crate::measure::colour_text_page(COLOURED.0, COLOURED.1, 0),
+            },
             &worker_host,
             &worker_stop,
             false,

@@ -176,3 +176,27 @@ fn the_still_fixture_keeps_its_coloured_glyph() {
         "{kept:.1} dB against {subsampled:.1} at 4:2:0"
     );
 }
+
+/// A still of grey text is not sent: 4:2:0 loses almost nothing there, and
+/// the stream's own picture is as good.
+#[test]
+fn a_still_of_grey_text_is_not_worth_sending() {
+    let coloured = colour_text_page(640, 360, 0);
+    let grey: Vec<u8> = coloured
+        .pixels()
+        .chunks_exact(4)
+        .flat_map(|pixel| {
+            let luma =
+                ((u32::from(pixel[2]) * 54 + u32::from(pixel[1]) * 183 + u32::from(pixel[0]) * 19)
+                    >> 8) as u8;
+            [luma, luma, luma, 255]
+        })
+        .collect();
+    let grey = RawFrame::bgra(640, 360, 0, grey).unwrap();
+    let encoder = StillEncoder::new();
+    assert!(encoder.encode(&grey, 1_048_576).unwrap().is_none());
+    assert!(
+        encoder.encode(&coloured, 1_048_576).unwrap().is_some(),
+        "coloured text is"
+    );
+}
