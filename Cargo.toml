@@ -47,6 +47,7 @@ napi-build = { path = "vendor/napi-build" }
 iroh = { path = "vendor/iroh" }
 enigo = { path = "vendor/enigo" }
 cpal = { path = "vendor/cpal" }
+portable-pty = { path = "vendor/portable-pty" }
 
 shiguredo_libvpx = { path = "vendor/shiguredo-libvpx" }
 shiguredo_aom = { path = "vendor/shiguredo-aom" }

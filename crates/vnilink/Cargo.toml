@@ -45,8 +45,10 @@ jpeg-decoder = "=0.3.2"
 iroh-relay = { version = "=1.3.0", features = ["server"] }
 
 # The impaired-network harness boots each test core inside its own network namespace.
+# `tests/terminal_owned_descriptors.rs` replaces `close` as Chromium does.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 nix = { version = "=0.28.0", features = ["sched"] }
+libc = "=0.2.189"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 x11rb = "=0.14.0"
