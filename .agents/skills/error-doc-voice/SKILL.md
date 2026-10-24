@@ -30,3 +30,5 @@ Comments explain reasons, invariants and traps rather than narrating obvious cod
 Comments, docs, skills and fixtures describe the project, so they read true in any contributor's checkout. State behaviour and constraints by platform or hardware class: "on a hybrid Intel+NVIDIA laptop", "on Apple silicon". A measured number keeps its hardware class, the date it was measured and where the evidence lives (a test, a `build/*.md` record, or the commit that measured it).
 
 Name what a contributor supplies by its role: "a VS Code checkout at the ref in `build/vscode-source.json`", "the remote computer's SSH destination". Fixtures use neutral placeholders: `/Users/someone`, `C:\Users\someone`, `/home/someone`, and a device such as `Studio PC`. Product identity (app id, publisher, repository, support address) is read from `product.json`; only the contact documents `SECURITY.md`, `CODE_OF_CONDUCT.md` and `CONTRIBUTING.md` spell it out.
+
+`npm run check:hygiene` rejects home directories other than the placeholders, git authors' handles and product identity outside those files.

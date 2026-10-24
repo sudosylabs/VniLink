@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { buildApplication } from './lib/bundles.ts';
 import { DevelopmentSession, startApplication } from './lib/development.ts';
 import { allowLinuxSandbox } from './lib/electron.ts';
+import { checkHygiene } from './lib/hygiene.ts';
 import { measureImpaired, measureImpairedInContainer } from './lib/impaired.ts';
 import { measureLatency } from './lib/latency.ts';
 import { buildInstallers } from './lib/installers.ts';
@@ -41,6 +42,7 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 	'measure:impaired:linux': (root, signal, args) => measureImpaired(root, signal, args),
 	'measure:latency': (root, signal, args) => measureLatency(root, signal, args),
 	'check:product': root => checkProduct(root),
+	'check:hygiene': root => checkHygiene(root),
 	'assets:tray': (root, signal) => renderTrayAssets(root, signal),
 	'check:upstream': () => verifyUpstream(),
 	'format': (_root, _signal, args) => formatFiles(args),
