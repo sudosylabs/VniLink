@@ -642,6 +642,10 @@
     "doctor": {
       "description": "Report what every task needs here",
       "requires": []
+    },
+    "docs:prerequisites": {
+      "description": "Write the setup section of CONTRIBUTING.md",
+      "requires": ["node"]
     }
   },
   "downloads": [

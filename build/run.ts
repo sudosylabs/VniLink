@@ -15,6 +15,7 @@ import { buildInstallers } from './lib/installers.ts';
 import { renderTrayAssets } from './lib/trayAssets.ts';
 import { packageApplication } from './lib/package.ts';
 import { assertTaskReady } from './lib/prerequisites.ts';
+import { updatePrerequisiteDocs } from './lib/prerequisitesDocs.ts';
 import { checkProduct } from './lib/product.ts';
 import { buildRelease } from './lib/release.ts';
 import { runUiTests, testRust, validateLinux } from './lib/test.ts';
@@ -50,6 +51,7 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 	'format': (_root, _signal, args) => formatFiles(args),
 	'vscode': (_root, _signal, args) => vscodeCommand(args),
 	'doctor': (root, _signal, args) => doctor(root, args),
+	'docs:prerequisites': (root, _signal, args) => updatePrerequisiteDocs(root, args),
 };
 
 const [name = '', ...args] = process.argv.slice(2);

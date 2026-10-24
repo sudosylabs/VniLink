@@ -7,11 +7,12 @@ description: "Write or change build, packaging, verification and test tasks in b
 
 ## Shape
 
-The build is TypeScript run directly by Node (type stripping): `node build/run.ts <task> [arguments]`. `package.json` scripts call it; nothing else is an entry point except `scripts/test-windows.ps1` for Windows CI.
+The build is TypeScript run directly by Node (type stripping): `node build/run.ts <task> [arguments]`. `package.json` scripts call it. The other entry points prepare a checkout before it: `build/npm/preinstall.ts` and `postinstall.ts` (npm), `build/lib/preLaunch.ts` with the launchers `scripts/code.{sh,bat}` and `scripts/test.{sh,bat}` (after VS Code's), and `scripts/test-windows.ps1` for the Windows suite.
 
 | File | Owns |
 |---|---|
 | `build/run.ts` | The task table and one `AbortController` wired to SIGINT/SIGTERM |
+| `build/prerequisites.json`, `build/lib/prerequisites.ts` | What each task needs per OS, the checks, and the package lists the container, CI and CONTRIBUTING.md read; `doctor.ts` reports them |
 | `build/lib/task.ts` | `define`, `series`, `parallel`, `execute`, adapted from VS Code `build/lib/gulp/task.ts` |
 | `build/lib/bundles.ts` | esbuild entry points, staged resources, `buildApplication` |
 | `build/lib/native.ts` | Addon identity, `compileNative`, `stageNative`, `assertNativeFresh` |
@@ -43,6 +44,13 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 - **Tests replace collaborators through options** (`ReleaseOptions.buildApplication`, `InstallerOptions.runBuilder`), never by subclassing or monkey-patching.
 - **Publication is atomic.** Build in a temporary sibling, verify, then rename over the output under a `.lock` directory; never delete another build's files.
 - **Imports** name the `.ts` file (`./native.ts`) and use `import type` for types; `build/tsconfig.json` (`erasableSyntaxOnly`, `verbatimModuleSyntax`) rejects syntax Node cannot strip.
+
+## Prerequisites
+
+- A task's needs are declared in `build/prerequisites.json` (every `run.ts` task has an entry; a tooling test enforces it) and checked by `assertTaskReady` before the task runs. A new tool, library or service a task calls goes there, with its Debian, Fedora, macOS or Windows source, not into an ad-hoc check inside the task.
+- `prerequisites.ts`, `preinstall.ts` and `preLaunch.ts` (until it installs) import only Node's own modules: they run before or without `node_modules`, and the Linux image copies `prerequisites.ts` alone.
+- `postinstall` prepares only idempotent, local state (Rust toolchain and target, branded Electron), skips it via the install-state hash and never fails the install; the task that needs it checks again.
+- The CONTRIBUTING.md setup section is generated (`node build/run.ts docs:prerequisites`); edit the manifest instead.
 
 ## Build and dev contracts
 

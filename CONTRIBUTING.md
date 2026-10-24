@@ -24,22 +24,115 @@ and create a branch from the current upstream `main`. Branch names should
 describe the change, for example `feat/device-status`, `fix/input-cleanup`, or
 `docs/platform-setup`. Open pull requests against `main`.
 
-Install Rust through rustup. The repository's `rust-toolchain.toml` selects
-Rust **1.91.0**; Cargo uses the committed lockfile.
+Install what your OS needs, then, from the repository root:
 
 ```sh
-rustup component add rustfmt clippy --toolchain 1.91.0
-cargo test --locked -p vnilink -p vnilink-media
+npm ci            # checks this computer, installs, prepares Rust and Electron
+npm run doctor    # what each task needs here: ready, missing (and how to get it), unsupported
+npm run dev       # builds what is missing and launches the development app
 ```
 
-Platform work requires the native host and libraries for that platform.
-macOS capture and codec work requires Xcode's developer tools; Windows work
-requires the MSVC toolchain and Windows SDK. Linux capture and media builds
-require the development libraries for PipeWire, VA-API, GBM, and their build
-dependencies. The shared desktop application uses Electron and vanilla TypeScript/CSS.
-Install Node 22.19 or later, run `npm ci` from the repository root, then
-`npm start`. `npm run build` and `npm test` verify the shell; the Rust control bridge
-runs in an Electron utility process; streaming remains deferred.
+`scripts/code.sh` (`scripts\code.bat` on Windows) does the same as `npm run dev`,
+and `scripts/test.sh` (`scripts\test.bat`) runs the UI scenarios; like VS Code's
+scripts of those names, they install and build what is missing first. Every
+`node build/run.ts` task checks what it needs before it starts and names the
+command that installs anything missing; `VNILINK_SKIP_PREFLIGHT=1` skips that
+check for setups it misjudges. `build/prerequisites.json` lists each OS's needs
+per task; the doctor, `npm ci`, the Linux container, CI and the section below are
+all read from it.
+
+On Ubuntu 23.10 and later, AppArmor stops Chromium's sandbox until a profile
+allows it: run `npm run sandbox:linux` once per checkout (it asks for sudo).
+Normal startup on Linux reads its key from the desktop's Secret Service, such
+as GNOME Keyring.
+
+<!-- prerequisites:start -->
+<!-- Generated from build/prerequisites.json by `node build/run.ts docs:prerequisites`; edit the manifest, not this section. -->
+
+Every OS needs Node.js 22.19.0 (`.nvmrc`; npm refuses other versions) and Rust 1.91.0 through rustup (`rust-toolchain.toml`). After installing what your OS lists below, `npm ci` installs the dependencies and prepares the Rust toolchain and the development Electron, and `npm run doctor` reports what each task still needs. Every task checks its own needs before it starts.
+
+### macOS
+
+Architectures: arm64 supported; x64 unsupported (Intel Macs cannot build VniLink: the vendored AV1 and VP8/VP9 build scripts accept only Apple silicon (`vendor/shiguredo-aom/build.rs`, `vendor/shiguredo-libvpx/build.rs`)).
+
+- **Node.js**: Install the version in `.nvmrc` with a version manager: `nvm install` (macOS, Linux), `nvm install $(Get-Content .nvmrc)` (nvm-windows), or Volta, which takes it from `package.json`; or from https://nodejs.org.
+- **Rust toolchain**: Builds the native addon (crates/vnilink-node). Install rustup from https://rustup.rs; `npm ci` then installs the toolchain `rust-toolchain.toml` names.
+- **Xcode Command Line Tools**: Clang, the SDK and the system frameworks the addon links. `xcode-select --install`.
+- **git and curl**: The first native build clones and downloads codec and CMake sources with them. `xcode-select --install`.
+- **CMake**: Builds Opus for the audio codec (opusic-sys); the AV1 build downloads its own CMake. `brew install cmake`.
+- **Liquid Glass prebuild (@vnilink/elg)**: The optional npm dependency the main process loads for window material. `npm ci` prepares it.
+- **Xcode (actool)** (optional): Compiles the Icon Composer icon of the development app; without it the flat icon is used. Install Xcode from the App Store, then `sudo xcode-select -s /Applications/Xcode.app`.
+
+Some tasks need more:
+
+| Task | Also needs |
+| --- | --- |
+| `npm run test:linux` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
+| `npm run measure:impaired` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
+| `npm run measure:latency` | OpenSSH client: included in macOS |
+| `npm run assets:tray` | rsvg-convert: `brew install librsvg` |
+
+### Windows
+
+Architectures: x64 supported; arm64 unsupported (Windows on Arm has no GNU (MinGW) build of the native addon). VniLink builds with the GNU toolchain (`x86_64-pc-windows-gnu`, MSYS2's MinGW-w64); Visual Studio and the MSVC toolchain are not needed when rustup's host is GNU.
+
+- **Node.js**: Install the version in `.nvmrc` with a version manager: `nvm install` (macOS, Linux), `nvm install $(Get-Content .nvmrc)` (nvm-windows), or Volta, which takes it from `package.json`; or from https://nodejs.org.
+- **Rust toolchain**: Builds the native addon (crates/vnilink-node). Install rustup from https://rustup.rs; `npm ci` then installs the toolchain `rust-toolchain.toml` names.
+- **Rust GNU Windows target**: The addon builds for x86_64-pc-windows-gnu with MSYS2's MinGW, not MSVC. `npm ci` prepares it.
+- **Rust host toolchain without MSVC**: Build scripts run on the host toolchain: a GNU host needs only MinGW, an MSVC host also needs Visual Studio's linker. `rustup set default-host x86_64-pc-windows-gnu`, then `rustup toolchain install`.
+- **MSYS2 MinGW-w64 tools**: Links the addon and builds its C dependencies (gcc, dlltool, libclang, nasm, mingw32-make). `winget install MSYS2.MSYS2`, then in the MSYS2 shell `pacman -S --needed mingw-w64-x86_64-gcc mingw-w64-x86_64-clang mingw-w64-x86_64-nasm mingw-w64-x86_64-make`. Put `C:\msys64\mingw64\bin` on PATH or set `VNILINK_MSYS_ROOT` to the MSYS2 root.
+- **git and curl**: The first native build clones and downloads codec and CMake sources with them. `winget install Git.Git`; included in Windows 10 and later.
+- **CMake**: Builds Opus for the audio codec (opusic-sys); the AV1 build downloads its own CMake. `pacman -S mingw-w64-x86_64-cmake` in the MSYS2 shell, or `winget install Kitware.CMake`.
+
+Some tasks need more:
+
+| Task | Also needs |
+| --- | --- |
+| `npm run test:linux` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
+| `npm run measure:impaired` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
+| `npm run measure:latency` | OpenSSH client: Settings > System > Optional features > OpenSSH Client |
+| `npm run assets:tray` | rsvg-convert: `pacman -S mingw-w64-x86_64-librsvg` in the MSYS2 shell |
+
+### Linux
+
+Architectures: x64 supported; arm64 unverified (it builds in the Linux container on Apple silicon but has not run on an arm64 desktop). Distributions: Ubuntu and Debian, Fedora; others are unverified, and the doctor names the pkg-config modules, libraries and commands to find. Screen capture and input go through the XDG desktop portal; only GNOME's has been exercised. Other desktops are unverified.
+
+Ubuntu and Debian (Debian 13 (the Linux test container) and Ubuntu 26.04; CI runs Ubuntu 24.04):
+
+```bash
+sudo apt-get install --no-install-recommends build-essential cmake curl dbus-daemon dbus-x11 git gnome-keyring libasound2-dev libasound2t64 libatspi2.0-0 libclang-dev libdbus-1-dev libdrm2 libegl-dev libgbm-dev libgtk-3-0 libnotify4 libnss3 libpipewire-0.3-dev libsecret-1-0 libspa-0.2-dev libva-dev libwayland-dev libxcb1 libxkbcommon0 libxss1 libxtst6 nasm openbox perl pkg-config x11-utils xauth xdg-utils xvfb
+```
+
+Fedora (CI runs Fedora 43):
+
+```bash
+sudo dnf install alsa-lib alsa-lib-devel at-spi2-core clang-devel cmake curl dbus-daemon dbus-devel dbus-x11 gcc gcc-c++ git gnome-keyring gtk3 libXScrnSaver libXtst libdrm libglvnd-devel libnotify libsecret libva-devel libxcb libxkbcommon make mesa-libgbm-devel nasm nss openbox perl pipewire-devel pkgconf-pkg-config wayland-devel xdg-utils xorg-x11-server-Xvfb xorg-x11-xauth xprop
+```
+
+- **Desktop session**: The application opens windows on an X11 or Wayland display. Run it from a graphical session (`DISPLAY` or `WAYLAND_DISPLAY` set).
+- **Secret Service**: Normal startup reads the installation key from the desktop's Secret Service (org.freedesktop.secrets). Install and unlock a Secret Service provider such as GNOME Keyring or KeePassXC.
+- **Chromium sandbox**: Where AppArmor restricts unprivileged user namespaces (Ubuntu 23.10 and later), the development Electron needs a profile allowing them. `npm run sandbox:linux` (asks for sudo, once per checkout).
+- **UI tests without a display**: `scripts/test.sh` runs them on Xvfb with Openbox and a temporary keyring.
+
+Some tasks need more:
+
+| Task | Also needs |
+| --- | --- |
+| `npm run test:linux` | Docker: Ubuntu and Debian: `sudo apt-get install docker.io && sudo usermod -aG docker $USER`, then log in again; Fedora: `sudo dnf install moby-engine && sudo systemctl enable --now docker && sudo usermod -aG docker $USER`, then log in again |
+| `npm run measure:impaired` | Docker: Ubuntu and Debian: `sudo apt-get install docker.io && sudo usermod -aG docker $USER`, then log in again; Fedora: `sudo dnf install moby-engine && sudo systemctl enable --now docker && sudo usermod -aG docker $USER`, then log in again |
+| `npm run measure:impaired:linux` | ip and tc: Ubuntu and Debian: `iproute2`; Fedora: `iproute iproute-tc` |
+| `npm run measure:latency` | OpenSSH client: Ubuntu and Debian: `openssh-client`; Fedora: `openssh-clients` |
+| `npm run package:installers` | rpmbuild: Ubuntu and Debian: `rpm`; Fedora: `rpm-build` |
+| `npm run assets:tray` | rsvg-convert: Ubuntu and Debian: `librsvg2-bin`; Fedora: `librsvg2-tools` |
+| `npm run sandbox:linux` | AppArmor |
+
+The first native build downloads, once:
+
+- macOS, Windows, Linux: CMake 4.4 (about 50 MB), into `~/.cache/shiguredo_cmake`.
+- macOS: libvpx and libaom prebuilt archives from github.com/shiguredo, into `target/electron`.
+- Windows: libvpx prebuilt archive from github.com/shiguredo and the libaom sources from aomedia.googlesource.com, into `target/electron`.
+- Linux: the libvpx and libaom sources from chromium.googlesource.com and aomedia.googlesource.com, into `target/electron`.
+<!-- prerequisites:end -->
 
 ## Find the owning component
 
@@ -53,9 +146,8 @@ runs in an Electron utility process; streaming remains deferred.
 | `crates/vnilink-app/`, `crates/vnilink-node/` | Shared application adapters and Node-API control bindings |
 | `src/code/`, `src/platform/` | Electron lifecycle, windows, IPC and desktop service boundaries |
 | `src/workbench/`, `src/base/browser/` | Browser interface and reusable DOM controls |
-| `build/`, `scripts/`, `test/` | Build tasks (`node build/run.ts <task>`), the Windows validation script, and tests |
+| `build/`, `scripts/`, `test/` | Build tasks (`node build/run.ts <task>`), prerequisites (`build/prerequisites.json`), launchers, the Windows suite, and tests |
 | `assets/` | Branding and icons |
-| `docs/validation/` | Reproducible validation methods, results, and remaining cases |
 
 The shared Electron application hosts the Rust library through a Node-API control bridge. Keep platform capture,
 rendering, and credential-store integration in their owning adapters or apps.
@@ -108,13 +200,16 @@ of reaching across those boundaries. The rule covers imports, re-exports,
 dynamic imports and literal require calls. Layer tests include deliberately
 invalid dependencies; formatter tests check idempotence and literal preservation.
 
-`npm ci` installs the Husky pre-commit hook automatically. It runs lint-staged
-with its default backup and partial-staging safeguards: supported staged files
-are lint-fixed and formatted without staging unrelated edits. It then runs the
-full `npm run check`, Rust formatting checks and `npm test` (native bridge plus
-Electron smoke). Any failure blocks the commit. Fix errors and retry; the hook
-requires the same native build dependencies as the app. Rust files are checked
-but not automatically rewritten; use `cargo fmt --all` before committing.
+`npm ci` installs the Husky hooks. The pre-commit hook checks only what is
+staged, with lint-staged's backup and partial-staging safeguards: supported staged
+files are lint-fixed and formatted without staging unrelated edits, staged
+TypeScript runs `npm run typecheck`, and staged Rust runs `cargo fmt --all -- --check`
+(it reports but does not rewrite; run `cargo fmt --all`), then `npm run check:hygiene`
+rejects personal home paths and author handles anywhere. CI runs the full
+suite on macOS, Windows, Ubuntu, Fedora and the Debian container. To run that
+suite before each push as well, opt in with `git config vnilink.prePush full`;
+`npm run validate` runs it by hand (checks, Rust formatting and tests, native
+bridge and UI scenarios).
 Ignored docs, vendor files and generated output stay outside formatting scope.
 
 Workspace editor settings recommend ESLint, Prettier and Stylelint integrations.
@@ -221,9 +316,8 @@ OS permissions; use a test environment you control.
 A build on macOS does not exercise Windows or Linux native code. Synthetic
 frames and loopback sessions do not prove an interactive remote desktop across
 the internet. For integration changes, record hardware, OS, desktop session,
-network path, steps, and actual outcomes in the
-[validation matrix](docs/validation/matrix.md). Clearly distinguish implemented,
-tested, proposed, unsupported, and blocked behavior.
+network path, steps, and actual outcomes in the pull request. Clearly
+distinguish implemented, tested, proposed, unsupported, and blocked behavior.
 
 For documentation-only changes, check relative links, paths, examples, and
 claims against the source, and run `git diff --check`. Runtime tests are not
