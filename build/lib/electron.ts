@@ -6,11 +6,14 @@
  * product's name and artwork, in the layout of the packaged application.
  */
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
+import { ProcessRunner } from './processes.ts';
 import { loadProduct, type Product } from './product.ts';
 import { fileSha256, releaseInventory } from './verify.ts';
 
@@ -28,8 +31,24 @@ interface Branding {
 	brand(output: string, work: string): Promise<void>;
 }
 
-/** Returns the branded Electron executable, preparing it when it is missing or stale. */
-export async function electronExecutable(root: string, signal: AbortSignal): Promise<string> {
+export interface ElectronOptions {
+	/** Whether it will run with Chromium's sandbox; the Linux test container turns it off. */
+	readonly sandboxed?: boolean;
+}
+
+/**
+ * Returns the branded Electron executable, preparing it when it is missing or
+ * stale. One that will be sandboxed is first checked to be allowed its sandbox.
+ */
+export async function electronExecutable(root: string, signal: AbortSignal, options: ElectronOptions = {}): Promise<string> {
+	const executable = await preparedElectron(root, signal);
+	if (process.platform === 'linux' && options.sandboxed !== false) {
+		await assertLinuxSandbox(executable, signal);
+	}
+	return executable;
+}
+
+async function preparedElectron(root: string, signal: AbortSignal): Promise<string> {
 	const product = await loadProduct(root);
 	const branding = platformBranding(root, product, signal);
 	const output = join(root, '.build/electron');
@@ -158,6 +177,77 @@ async function brandWin32(root: string, product: Product, output: string, execut
 			ProductName: product.nameLong,
 		},
 	});
+}
+
+/**
+ * Where AppArmor restricts unprivileged user namespaces (Ubuntu 23.10 and
+ * later), Chromium's sandbox has them only through a profile that grants
+ * them to its executable, as Ubuntu's own `code` and `chrome` profiles do,
+ * or else needs the setuid `chrome-sandbox` helper; with neither, every
+ * launch aborts. The helper's root ownership is lost whenever
+ * `.build/electron` is prepared again, so the development Electron is
+ * allowed by a profile, which `sandbox:linux` installs for its path.
+ */
+async function assertLinuxSandbox(executable: string, signal: AbortSignal): Promise<void> {
+	const restricted = await readFile('/proc/sys/kernel/apparmor_restrict_unprivileged_userns', 'utf8').catch(() => '0');
+	if (restricted.trim() !== '1') {
+		return;
+	}
+	const helper = await stat(join(dirname(executable), 'chrome-sandbox')).catch(() => undefined);
+	if (helper?.uid === 0 && (helper.mode & 0o4755) === 0o4755) {
+		return;
+	}
+	// A profile attaches by path when the executable starts: as Node it reads
+	// its own label, `unconfined` when none did.
+	const { stdout } = await run(executable, ['-e', `process.stdout.write(require('node:fs').readFileSync('/proc/self/attr/current', 'utf8'))`], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, signal });
+	if (!stdout.trim().startsWith('unconfined')) {
+		return;
+	}
+	throw new Error(`Electron's sandbox cannot start: AppArmor restricts unprivileged user namespaces here, and no profile allows them for ${executable}. Run \`node build/run.ts sandbox:linux\` once; it asks for sudo to install that profile.`);
+}
+
+/**
+ * Installs the AppArmor profile that lets this checkout's development
+ * Electron use Chromium's sandbox, named after the checkout so several can
+ * be allowed. It grants user namespaces and nothing else is confined, as
+ * Ubuntu's profile for Visual Studio Code does; it holds across preparing
+ * `.build/electron` again because it names the path.
+ */
+export async function allowLinuxSandbox(root: string, signal: AbortSignal): Promise<void> {
+	if (process.platform !== 'linux') {
+		throw new Error('sandbox:linux allows the development Electron on Linux');
+	}
+	const product = await loadProduct(root);
+	const executable = join(root, '.build/electron', product.platforms.linux.executableName);
+	if (/["\n]/.test(executable)) {
+		throw new Error(`An AppArmor profile cannot name ${JSON.stringify(executable)}`);
+	}
+	const name = `vnilink-development-${createHash('sha256').update(root).digest('hex').slice(0, 12)}`;
+	const profile = [
+		`# The VniLink development Electron in ${root}: user namespaces for`,
+		'# Chromium\'s sandbox, and nothing confined, as Ubuntu\'s profile for Visual',
+		'# Studio Code. Written by `node build/run.ts sandbox:linux`.',
+		'abi <abi/4.0>,',
+		'include <tunables/global>',
+		'',
+		`profile ${name} "${executable}" flags=(unconfined) {`,
+		'  userns,',
+		'}',
+		'',
+	].join('\n');
+	const work = await mkdtemp(join(tmpdir(), 'vnilink-apparmor-'));
+	const processes = new ProcessRunner(signal);
+	try {
+		const source = join(work, name);
+		await writeFile(source, profile);
+		const installed = `/etc/apparmor.d/${name}`;
+		await processes.run('sudo', ['install', '-m', '0644', source, installed]);
+		await processes.run('sudo', ['apparmor_parser', '--replace', installed]);
+		console.log(`[electron] ${installed} allows the sandbox for ${executable}`);
+	} finally {
+		await processes.stop();
+		await rm(work, { recursive: true, force: true });
+	}
 }
 
 /** Linux window managers show the executable name and the window's icon, read from the packaged path. */

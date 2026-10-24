@@ -6,6 +6,7 @@
 import { fileURLToPath } from 'node:url';
 import { buildApplication } from './lib/bundles.ts';
 import { DevelopmentSession, startApplication } from './lib/development.ts';
+import { allowLinuxSandbox } from './lib/electron.ts';
 import { measureImpaired, measureImpairedInContainer } from './lib/impaired.ts';
 import { measureLatency } from './lib/latency.ts';
 import { buildInstallers } from './lib/installers.ts';
@@ -35,6 +36,7 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 	'test:ui': (root, signal, args) => runUiTests(root, signal, args),
 	'test:rust': (root, signal) => testRust(root, signal),
 	'test:linux': (root, signal) => validateLinux(root, signal),
+	'sandbox:linux': (root, signal) => allowLinuxSandbox(root, signal),
 	'measure:impaired': (root, signal, args) => measureImpairedInContainer(root, signal, args),
 	'measure:impaired:linux': (root, signal, args) => measureImpaired(root, signal, args),
 	'measure:latency': (root, signal, args) => measureLatency(root, signal, args),
