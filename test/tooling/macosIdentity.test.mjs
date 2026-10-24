@@ -48,10 +48,10 @@ test('each architecture\'s UUID is found in thin and universal executables', () 
 
 test('a bundle identifier gets its own UUID, the same on every build', () => {
 	const stock = Buffer.alloc(16, 0x4c);
-	const release = derivedUuid('fr.sudosy.vnilink', stock);
-	assert.deepEqual(derivedUuid('fr.sudosy.vnilink', stock), release);
-	assert.notDeepEqual(derivedUuid('fr.sudosy.vnilink.dev', stock), release);
-	assert.notDeepEqual(derivedUuid('fr.sudosy.vnilink', Buffer.alloc(16, 0x4d)), release);
+	const release = derivedUuid(product.appId, stock);
+	assert.deepEqual(derivedUuid(product.appId, stock), release);
+	assert.notDeepEqual(derivedUuid(`${product.appId}.dev`, stock), release);
+	assert.notDeepEqual(derivedUuid(product.appId, Buffer.alloc(16, 0x4d)), release);
 	// RFC 9562 version 8, variant 10.
 	assert.match(formatUuid(release), /^[0-9A-F]{8}-[0-9A-F]{4}-8[0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}$/);
 });
@@ -62,8 +62,8 @@ test('assigning changes only each architecture\'s UUID', async () => {
 		const path = join(directory, 'Electron');
 		const original = fat(thin(0x11), thin(0x22));
 		await writeFile(path, original);
-		const expected = await executableUuids(path, 'fr.sudosy.vnilink');
-		assert.deepEqual(await assignExecutableUuids(path, 'fr.sudosy.vnilink'), expected);
+		const expected = await executableUuids(path, product.appId);
+		assert.deepEqual(await assignExecutableUuids(path, product.appId), expected);
 		assert.equal(new Set(expected).size, 2);
 		const changed = await readFile(path);
 		assert.deepEqual(machoUuids(changed).map(slice => formatUuid(slice.uuid)), expected);
@@ -79,7 +79,7 @@ test('assigning changes only each architecture\'s UUID', async () => {
 
 test('the stock Electron executable has a UUID to replace', { skip: process.platform !== 'darwin' }, async () => {
 	const stock = createRequire(import.meta.url)('electron');
-	const uuids = await executableUuids(stock, 'fr.sudosy.vnilink');
+	const uuids = await executableUuids(stock, product.appId);
 	assert.ok(uuids.length >= 1);
 	assert.notDeepEqual(uuids, machoUuids(await readFile(stock)).map(slice => formatUuid(slice.uuid)));
 });

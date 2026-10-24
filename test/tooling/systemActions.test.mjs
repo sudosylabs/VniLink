@@ -56,7 +56,7 @@ test('system commands, replies and events carry only what they name', () => {
 });
 
 test('a window shows only a short message box with a few plain buttons', () => {
-	assert(isMessageBoxOptions({ type: 'warning', message: 'Restart Sudosy?', detail: 'Unsaved work may be lost.', buttons: ['Restart', 'Shut Down', 'Cancel'], defaultId: 2, cancelId: 2 }, 3));
+	assert(isMessageBoxOptions({ type: 'warning', message: 'Restart Studio PC?', detail: 'Unsaved work may be lost.', buttons: ['Restart', 'Shut Down', 'Cancel'], defaultId: 2, cancelId: 2 }, 3));
 	assert(!isMessageBoxOptions({ message: 'x', buttons: ['1', '2', '3', '4', '5'] }, 3), 'five buttons');
 	assert(!isMessageBoxOptions({ message: 'x'.repeat(501) }, 3), 'a long message');
 	assert(!isMessageBoxOptions({ message: 'x', buttons: ['OK'], cancelId: 1 }, 3), 'a cancel id past the buttons');

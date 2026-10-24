@@ -93,7 +93,7 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 		if (state === 'populated' || state === 'selected') {
 			this.devices = [
 				{ id: 'a'.repeat(64), name: 'Studio Mac', os: 'macos', presence: 'connected', hostname: 'studio.local', direct: 2, relays: 1 },
-				{ id: 'b'.repeat(64), name: 'Sudosy', os: 'linux', presence: 'disconnected', hostname: null, direct: 0, relays: 1 },
+				{ id: 'b'.repeat(64), name: 'Lab Laptop', os: 'linux', presence: 'disconnected', hostname: null, direct: 0, relays: 1 },
 				{ id: 'c'.repeat(64), name: 'Office PC', os: 'windows', presence: 'reconnecting', hostname: 'DESKTOP-7Q2M', direct: 1, relays: 0 },
 			];
 		} else if (state === 'unavailable') {
@@ -316,7 +316,7 @@ export async function verifyDevices(): Promise<void> {
 		renameAction().click();
 		assert(page.querySelector<HTMLElement>('.device-rename')?.hidden === false && page.querySelector<HTMLElement>('.device-panel h2')?.hidden === true, 'Rename… did not edit the name in place');
 		const field = page.querySelector<HTMLInputElement>('.device-rename input');
-		assert(field && document.activeElement === field && field.value === 'Sudosy', 'Rename did not focus the current name');
+		assert(field && document.activeElement === field && field.value === 'Lab Laptop', 'Rename did not focus the current name');
 		pressKey(field, 'Escape', 27);
 		assert(page.querySelector<HTMLElement>('.device-rename')?.hidden === true && !page.querySelector<HTMLElement>('.device-panel')?.hidden && document.activeElement === renameAction(), 'Escape in the name field closed the panel or lost focus');
 		renameAction().click();

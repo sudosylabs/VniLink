@@ -188,22 +188,22 @@ function press(target: Element, key: string, keyCode: number, shiftKey = false):
 /** The Files tab's services over two in-memory disks, and a host it fills. */
 function filesFixture(width: number, height: number) {
 	const disposables = new DisposableStore();
-	const device: DeviceSummary = { id: 'studio', name: 'Sudosy', os: 'windows', presence: 'connected', hostname: 'sudosy', direct: 1, relays: 0 };
-	const localDisk = new MemoryDisk({ roots: [{ id: '0', name: '/' }], folders: [{ kind: 'home', root: '0', path: 'Users/hammed' }, { kind: 'downloads', root: '0', path: 'Users/hammed/Downloads' }] }, new Map([
-		['0:Users/hammed', [entry('Downloads', 'dir'), entry('Documents', 'dir'), entry('.zshrc', 'file', 40)]],
-		['0:Users/hammed/Downloads', [entry('vnilink-demo.mov', 'file', 412_000_000), entry('invoice.pdf', 'file', 184_000), entry('Screenshots', 'dir'), entry('notes.md', 'file', 4000)]],
-		['0:Users/hammed/Downloads/Screenshots', []],
-		['0:Users/hammed/Documents', []],
+	const device: DeviceSummary = { id: 'studio', name: 'Studio PC', os: 'windows', presence: 'connected', hostname: 'studio-pc', direct: 1, relays: 0 };
+	const localDisk = new MemoryDisk({ roots: [{ id: '0', name: '/' }], folders: [{ kind: 'home', root: '0', path: 'Users/someone' }, { kind: 'downloads', root: '0', path: 'Users/someone/Downloads' }] }, new Map([
+		['0:Users/someone', [entry('Downloads', 'dir'), entry('Documents', 'dir'), entry('.zshrc', 'file', 40)]],
+		['0:Users/someone/Downloads', [entry('vnilink-demo.mov', 'file', 412_000_000), entry('invoice.pdf', 'file', 184_000), entry('Screenshots', 'dir'), entry('notes.md', 'file', 4000)]],
+		['0:Users/someone/Downloads/Screenshots', []],
+		['0:Users/someone/Documents', []],
 	]));
-	const remoteDisk = new MemoryDisk({ roots: [{ id: '2', name: 'C:' }, { id: '3', name: 'D:' }], folders: [{ kind: 'home', root: '2', path: 'Users/abass' }] }, new Map([
-		['2:Users/abass', [entry('Downloads', 'dir'), entry('Desktop', 'dir')]],
-		['2:Users/abass/Downloads', [entry('report-q3.xlsx', 'file', 2_300_000), entry('Installers', 'dir')]],
-		['2:Users/abass/Downloads/Installers', Array.from({ length: 60 }, (_, index) => entry(`setup-${String(index).padStart(2, '0')}.exe`, 'file', 1000))],
+	const remoteDisk = new MemoryDisk({ roots: [{ id: '2', name: 'C:' }, { id: '3', name: 'D:' }], folders: [{ kind: 'home', root: '2', path: 'Users/someone' }] }, new Map([
+		['2:Users/someone', [entry('Downloads', 'dir'), entry('Desktop', 'dir')]],
+		['2:Users/someone/Downloads', [entry('report-q3.xlsx', 'file', 2_300_000), entry('Installers', 'dir')]],
+		['2:Users/someone/Downloads/Installers', Array.from({ length: 60 }, (_, index) => entry(`setup-${String(index).padStart(2, '0')}.exe`, 'file', 1000))],
 		['2:', [entry('Users', 'dir')]],
 	]));
 	const session = new FakeSession(localDisk, remoteDisk);
 	const openings: (FilesFailure | undefined)[] = [];
-	const state = new Map<UIStateKey, unknown>([['files.lastFolder.studio.local', { root: '0', path: 'Users/hammed/Downloads' }]]);
+	const state = new Map<UIStateKey, unknown>([['files.lastFolder.studio.local', { root: '0', path: 'Users/someone/Downloads' }]]);
 	const dialogs: IDialogOptions[] = [];
 	const answers: (IDialogResult | Promise<IDialogResult>)[] = [];
 	const noActions: readonly IAction[] = [];
@@ -275,13 +275,13 @@ export async function verifyFiles(): Promise<void> {
 			new OpenFilesAction().run(accessor, device.id);
 		});
 		const view = tabService.activeTab;
-		assert(view instanceof FilesView && view.id === 'files:studio' && view.label === 'Sudosy', 'Files did not open a tab for the computer');
+		assert(view instanceof FilesView && view.id === 'files:studio' && view.label === 'Studio PC', 'Files did not open a tab for the computer');
 		host.append(view.element);
 		const [local, remote] = panes(view);
 		// This computer reopens at its last folder; the other, never opened, at home.
 		await until(() => names(local).includes('vnilink-demo.mov'), 'This computer did not reopen its last folder');
 		await until(() => names(remote).includes('Downloads'), 'The other computer did not open at home');
-		assert(crumbs(local).join('/') === 'Users/hammed/Downloads' && crumbs(remote).join('/') === 'C:/Users/abass', `Wrong locations: ${crumbs(local).join('/')} | ${crumbs(remote).join('/')}`);
+		assert(crumbs(local).join('/') === 'Users/someone/Downloads' && crumbs(remote).join('/') === 'C:/Users/someone', `Wrong locations: ${crumbs(local).join('/')} | ${crumbs(remote).join('/')}`);
 		// Folders first, natural order; dotfiles hidden until asked for.
 		assert(names(local).join(',') === 'Screenshots,invoice.pdf,notes.md,vnilink-demo.mov', `Wrong order: ${names(local).join(',')}`);
 		const status = view.element.querySelector('.files-status-selection')?.textContent ?? '';
@@ -308,33 +308,33 @@ export async function verifyFiles(): Promise<void> {
 		run('files.root.2');
 		await until(() => crumbs(remote).join('/') === 'C:', 'The drive did not open');
 		remote.querySelector<HTMLButtonElement>('.files-icon-button[aria-label="Back"]')?.click();
-		await until(() => crumbs(remote).join('/') === 'C:/Users/abass', 'Back did not return home');
+		await until(() => crumbs(remote).join('/') === 'C:/Users/someone', 'Back did not return home');
 		list(remote).focus();
 		press(list(remote), 'ArrowDown', 40);
 		press(list(remote), 'Enter', 13);
-		await until(() => crumbs(remote).join('/') === 'C:/Users/abass/Downloads', 'Enter did not open the folder');
-		assert(JSON.stringify(state.get('files.lastFolder.studio.remote')) === JSON.stringify({ root: '2', path: 'Users/abass/Downloads' }), 'The other computer\'s folder was not remembered');
+		await until(() => crumbs(remote).join('/') === 'C:/Users/someone/Downloads', 'Enter did not open the folder');
+		assert(JSON.stringify(state.get('files.lastFolder.studio.remote')) === JSON.stringify({ root: '2', path: 'Users/someone/Downloads' }), 'The other computer\'s folder was not remembered');
 
 		// Arrows select, Shift extends; the copy button names what and where.
 		list(local).focus();
 		press(list(local), 'ArrowDown', 40);
 		press(list(local), 'ArrowDown', 40, true);
 		await until(() => !copyButton.disabled, 'Selecting did not offer copy');
-		assert(copyButton.getAttribute('aria-label') === 'Copy 2 to Downloads on Sudosy', `Wrong copy label: ${copyButton.getAttribute('aria-label') ?? ''}`);
+		assert(copyButton.getAttribute('aria-label') === 'Copy 2 to Downloads on Studio PC', `Wrong copy label: ${copyButton.getAttribute('aria-label') ?? ''}`);
 		assert(local.classList.contains('active') && !remote.classList.contains('active'), 'The pane being worked in is not marked');
 		copyButton.click();
 		await until(() => session.copies.length === 1, 'Copy did not start');
-		assert(session.copies[0].from === 'local' && session.copies[0].items.map(item => item.name).join(',') === 'invoice.pdf,notes.md' && session.copies[0].to.path === 'Users/abass/Downloads', `Wrong copy: ${JSON.stringify(session.copies[0])}`);
+		assert(session.copies[0].from === 'local' && session.copies[0].items.map(item => item.name).join(',') === 'invoice.pdf,notes.md' && session.copies[0].to.root === '2' && session.copies[0].to.path === 'Users/someone/Downloads', `Wrong copy: ${JSON.stringify(session.copies[0])}`);
 		// What is copied shows where it lands, at its place in that folder, before it has arrived.
 		await until(() => remote.querySelectorAll('.files-row.arriving').length === 2, 'The copies did not show in the folder they land in');
 		assert(names(remote).join(',') === 'Installers,invoice.pdf,notes.md,report-q3.xlsx', `Arriving rows are out of place: ${names(remote).join(',')}`);
 		const arriving = remote.querySelector('.files-row.arriving');
 		// The selection is one transfer: each of its rows shows how far the transfer got.
 		assert(arriving?.querySelector('.files-ring') !== null && arriving?.querySelector('.files-cell-modified')?.textContent === '0 of 2 files', `An arriving row does not show its progress: ${arriving?.textContent ?? ''}`);
-		assert(view.element.querySelector('.files-status-transfers')?.textContent.startsWith('Copying to Sudosy') === true, 'The status bar does not sum up the copy');
+		assert(view.element.querySelector('.files-status-transfers')?.textContent.startsWith('Copying to Studio PC') === true, 'The status bar does not sum up the copy');
 		// A change the watch sees and a file landing, together, list the folder once; what follows waits a second.
 		const listed = remoteDisk.lists.length;
-		remoteDisk.watchers.get('2:Users/abass/Downloads')?.();
+		remoteDisk.watchers.get('2:Users/someone/Downloads')?.();
 		session.set(session.jobs.map(item => ({ ...item, files_done: '1' })));
 		await new Promise(resolve => setTimeout(resolve, 600));
 		assert(remoteDisk.lists.length === listed + 1, `The watch and a landing listed the folder ${String(remoteDisk.lists.length - listed)} times`);
@@ -347,10 +347,10 @@ export async function verifyFiles(): Promise<void> {
 		await until(() => remote.querySelectorAll('.files-row.arriving').length === 0 && remote.querySelectorAll('.files-row[data-tone="landed"]').length === 2, 'What arrived did not become ordinary rows, tinted for a moment');
 
 		// A name already there asks under that name: answered in place, or with Enter.
-		const downloads = { root: '0', path: 'Users/hammed/Downloads' };
+		const downloads = { root: '0', path: 'Users/someone/Downloads' };
 		session.set([job('21', 'WaitingDecision', { direction: 'Download', label: 'notes.md', waiting_file: 'notes.md', files_total: '1', destination: { ...downloads, items: [{ name: 'notes.md', folder: false }] } })]);
 		await until(() => local.querySelector('.files-decision') !== null, 'The clash did not ask under the name');
-		assert(local.querySelector('.files-decision-text')?.textContent === 'Sudosy is sending another “notes.md”', `Wrong question: ${local.querySelector('.files-decision-text')?.textContent ?? ''}`);
+		assert(local.querySelector('.files-decision-text')?.textContent === 'Studio PC is sending another “notes.md”', `Wrong question: ${local.querySelector('.files-decision-text')?.textContent ?? ''}`);
 		assert(local.querySelector('.files-decision-same')?.hasAttribute('hidden') === true, 'One file offers the same answer for others');
 		const namesake = [...local.querySelectorAll('.files-row')].find(row => row.querySelector('.files-row-name')?.textContent === 'notes.md');
 		assert(namesake?.querySelector('.files-ring') === null, 'The file already there looks like it is being replaced');
@@ -367,7 +367,7 @@ export async function verifyFiles(): Promise<void> {
 		assert(session.resolutions[1][1] === 'keepBoth', `Wrong answer from the dialog: ${JSON.stringify(session.resolutions[1])}`);
 
 		// The status bar opens every transfer, the finished ones too; Escape closes it where it opened.
-		session.set([job('20', 'Interrupted', { files_total: '1', destination: { root: '2', path: 'Users/abass/Downloads', items: [{ name: 'big.iso', folder: false }] } }), job('22', 'Complete', { label: 'Screenshots', done_bytes: '1000000' })]);
+		session.set([job('20', 'Interrupted', { files_total: '1', destination: { root: '2', path: 'Users/someone/Downloads', items: [{ name: 'big.iso', folder: false }] } }), job('22', 'Complete', { label: 'Screenshots', done_bytes: '1000000' })]);
 		const summary = view.element.querySelector<HTMLButtonElement>('.files-status-transfers');
 		assert(summary?.textContent === '1 stopped', `A stopped transfer is not said: ${summary?.textContent ?? ''}`);
 		summary.click();
@@ -447,10 +447,10 @@ export async function verifyFiles(): Promise<void> {
 		assert(state.get('files.showHidden') === true, 'Show Hidden Files was not remembered');
 
 		// What changes outside VniLink, as a file deleted in Finder or Explorer, shows without a refresh.
-		localDisk.removeOutside({ root: '0', path: 'Users/hammed/Downloads' }, 'vnilink-demo.mov');
+		localDisk.removeOutside({ root: '0', path: 'Users/someone/Downloads' }, 'vnilink-demo.mov');
 		await until(() => !names(local).includes('vnilink-demo.mov'), 'A file removed outside VniLink stayed listed here');
-		const remoteFolder = crumbs(remote).join('/') === 'C:/Users/abass/Downloads' ? { root: '2', path: 'Users/abass/Downloads' } : undefined;
-		assert(remoteFolder !== undefined && remoteDisk.watchers.has('2:Users/abass/Downloads'), 'The other computer\'s open folder is not watched');
+		const remoteFolder = crumbs(remote).join('/') === 'C:/Users/someone/Downloads' ? { root: '2', path: 'Users/someone/Downloads' } : undefined;
+		assert(remoteFolder !== undefined && remoteDisk.watchers.has('2:Users/someone/Downloads'), 'The other computer\'s open folder is not watched');
 		remoteDisk.removeOutside(remoteFolder, 'invoice.pdf');
 		await until(() => !names(remote).includes('invoice.pdf'), 'A file removed on the other computer stayed listed');
 
@@ -459,7 +459,7 @@ export async function verifyFiles(): Promise<void> {
 		press(list(remote), 'Home', 36);
 		press(list(remote), 'Enter', 13);
 		await until(() => crumbs(remote).at(-1) === 'Installers', 'Installers did not open');
-		assert(remoteDisk.watchers.has('2:Users/abass/Downloads/Installers') && !remoteDisk.watchers.has('2:Users/abass/Downloads'), 'The watch did not follow the open folder');
+		assert(remoteDisk.watchers.has('2:Users/someone/Downloads/Installers') && !remoteDisk.watchers.has('2:Users/someone/Downloads'), 'The watch did not follow the open folder');
 		// A path longer than its bar scrolls, keeping whole names and the open folder in view.
 		remote.style.maxWidth = '380px';
 		await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -479,15 +479,15 @@ export async function verifyFiles(): Promise<void> {
 
 		// The other computer turned Files off, then the connection ends.
 		session.end();
-		await until(() => (remote.querySelector('.files-state-title')?.textContent ?? '') === 'Not connected to Sudosy.', 'A lost connection did not show in the pane');
+		await until(() => (remote.querySelector('.files-state-title')?.textContent ?? '') === 'Not connected to Studio PC.', 'A lost connection did not show in the pane');
 		// Once the computer can be reached again, the pane comes back by itself.
 		session.ended = false;
 		await until(() => remote.querySelector('.files-state:not([hidden])') === null && names(remote).length > 0, 'The pane did not reconnect by itself');
 		session.end();
-		await until(() => (remote.querySelector('.files-state-title')?.textContent ?? '') === 'Not connected to Sudosy.', 'The second loss did not show');
+		await until(() => (remote.querySelector('.files-state-title')?.textContent ?? '') === 'Not connected to Studio PC.', 'The second loss did not show');
 		openings.push('turnedOff');
 		remote.querySelector<HTMLButtonElement>('.files-state-action')?.click();
-		await until(() => (remote.querySelector('.files-state-title')?.textContent ?? '') === 'Sudosy doesn’t share its files.', 'Files turned off there is not said');
+		await until(() => (remote.querySelector('.files-state-title')?.textContent ?? '') === 'Studio PC doesn’t share its files.', 'Files turned off there is not said');
 		assert(names(local).length > 0, 'This computer\'s pane stopped working with the other');
 		assert(await tabService.close(view.id), 'The tab did not close');
 		assert(session.released >= 1, 'Closing the tab did not let go of the connection');
@@ -520,10 +520,10 @@ export async function showFilesFixture(width: number, height: number): Promise<{
 	localList?.focus();
 	press(localList ?? local, 'ArrowDown', 40);
 	press(localList ?? local, 'ArrowDown', 40, true);
-	const into = { root: '2', path: 'Users/abass/Downloads' };
+	const into = { root: '2', path: 'Users/someone/Downloads' };
 	session.set([
 		job('20', 'Transferring', { label: 'vnilink-demo.mov', files_total: '1', done_bytes: '412000', total_bytes: '1500000', destination: { ...into, items: [{ name: 'vnilink-demo.mov', folder: false }] } }),
-		job('21', 'WaitingDecision', { direction: 'Download', waiting_file: 'notes.md', label: 'notes.md', files_total: '1', destination: { root: '0', path: 'Users/hammed/Downloads', items: [{ name: 'notes.md', folder: false }] } }),
+		job('21', 'WaitingDecision', { direction: 'Download', waiting_file: 'notes.md', label: 'notes.md', files_total: '1', destination: { root: '0', path: 'Users/someone/Downloads', items: [{ name: 'notes.md', folder: false }] } }),
 		job('22', 'Complete', { label: 'Screenshots', done_bytes: '1000000', destination: { ...into, items: [{ name: 'Screenshots', folder: true }] } }),
 	]);
 	view.element.querySelector<HTMLButtonElement>('.files-status-transfers')?.click();

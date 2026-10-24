@@ -8,6 +8,8 @@ import { build } from 'esbuild';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
+const product = JSON.parse(await readFile(join(root, 'product.json'), 'utf8'));
+
 const bundle = await build({
 	stdin: {
 		contents: `export { HostingMainService } from './src/platform/hosting/electron-main/hostingMainService.js';
@@ -217,7 +219,7 @@ test('the Linux autostart entry quotes the executable and is removed when disabl
 	assert.match(autostartEntry('/opt/Vni "Link"/$HOME/50%/a\\b'), /^Exec="\/opt\/Vni \\\\"Link\\\\"\/\\\\\$HOME\/50%%\/a\\\\\\\\b" --hidden$/m);
 	const directory = await mkdtemp(join(tmpdir(), 'vnilink-autostart-'));
 	try {
-		const path = join(directory, 'autostart', 'fr.sudosy.vnilink.desktop');
+		const path = join(directory, 'autostart', product.platforms.linux.desktopFileName);
 		const item = new AutostartLoginItem(path, '/opt/VniLink/vnilink');
 		assert.equal(await item.read(), false);
 		await item.write(true);

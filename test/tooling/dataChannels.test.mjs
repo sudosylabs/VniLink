@@ -345,7 +345,7 @@ test('file operations run side by side, a refusal is an answer, and job changes 
 
 test('a file operation outside its shape never reaches the engine', async () => {
 	const { isFileOperation } = await load('../../src/platform/engine/common/files.ts');
-	assert(isFileOperation({ type: 'list', root: '0', path: 'Users/hammed', offset: '0' }));
+	assert(isFileOperation({ type: 'list', root: '0', path: 'Users/someone', offset: '0' }));
 	assert(isFileOperation({ type: 'list', root: '2', path: '', offset: '500' }));
 	assert(!isFileOperation({ type: 'list', root: '0', path: '/Users', offset: '0' }), 'a leading slash');
 	assert(!isFileOperation({ type: 'list', root: '0', path: 'Users/../etc', offset: '0' }), 'a parent step');
@@ -356,12 +356,12 @@ test('a file operation outside its shape never reaches the engine', async () => 
 	assert(!isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: '', names: [], dstRoot: '0', dstPath: 'x' }), 'copying a whole root');
 	assert(!isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: 'Users', names: ['a', 'a'], dstRoot: '0', dstPath: 'x' }), 'an item twice');
 	assert(!isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: 'Users', names: ['a/b'], dstRoot: '0', dstPath: 'x' }), 'a path for a name');
-	assert(!isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: 'Users/a.txt', dstRoot: '0', dstPath: 'x' }), 'no names');
+	assert(!isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: 'Users/someone/a.txt', dstRoot: '0', dstPath: 'x' }), 'no names');
 	assert(isFileOperation({ type: 'resolve', jobId: '3', choice: 'keepBoth', applyToRemaining: true }));
 	assert(!isFileOperation({ type: 'resolve', jobId: '3', choice: 'overwrite', applyToRemaining: true }));
 	assert(!isFileOperation({ type: 'poll', jobId: '3' }), 'progress is pushed, never polled');
 	assert(isFileOperation({ type: 'adopt' }));
-	assert(isFileOperation({ type: 'watch', folder: { root: '2', path: 'Users/abass/Downloads' } }));
+	assert(isFileOperation({ type: 'watch', folder: { root: '2', path: 'Users/someone/Downloads' } }));
 	assert(isFileOperation({ type: 'watch', folder: null }), 'watching nothing');
 	assert(!isFileOperation({ type: 'watch', folder: { root: '2', path: '../etc' } }), 'a watch is a path like any other');
 	assert(!isFileOperation({ type: 'adopt', jobId: '3' }), 'adoption names no job: it takes over every interrupted one');

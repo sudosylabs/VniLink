@@ -139,11 +139,11 @@ test('service commands validate kinds, policies, sessions and jobs exactly', () 
 	assert.equal(isEngineCommand({ type: 'closeTerminalSession', id: 'abc' }), true);
 	assert.equal(isEngineCommand({ type: 'subscribeFilesJobs', sessionId: '1', generation: '2' }), false, 'transfers report on the files channel');
 	assert.equal(isEngineCommand({ type: 'localPlaces' }), true);
-	assert.equal(isEngineCommand({ type: 'listLocal', root: '0', path: 'Users/hammed', offset: '0' }), true);
+	assert.equal(isEngineCommand({ type: 'listLocal', root: '0', path: 'Users/someone', offset: '0' }), true);
 	assert.equal(isEngineCommand({ type: 'listLocal', root: '0', path: '../etc', offset: '0' }), false);
-	assert.equal(isEngineCommand({ type: 'locateLocal', path: '/Users/hammed/Desktop/a.txt' }), true);
+	assert.equal(isEngineCommand({ type: 'locateLocal', path: '/Users/someone/Desktop/a.txt' }), true);
 	assert.equal(isEngineCommand({ type: 'locateLocal', path: '' }), false, 'an empty path names nothing');
-	assert.equal(isEngineCommand({ type: 'watchLocal', root: '0', path: 'Users/hammed' }), true);
+	assert.equal(isEngineCommand({ type: 'watchLocal', root: '0', path: 'Users/someone' }), true);
 	assert.equal(isEngineCommand({ type: 'unwatchLocal', watch: '3' }), true);
 	assert.equal(isEngineCommand({ type: 'unwatchLocal', watch: 'three' }), false);
 	assert.equal(isEngineCommand({ type: 'createLocalDir', root: '0', path: '', name: 'New Folder' }), true);
@@ -156,9 +156,9 @@ test('service commands validate kinds, policies, sessions and jobs exactly', () 
 	assert.equal(isEngineReply({ type: 'terminalPolicy', policy }), true);
 	assert.equal(isEngineReply({ type: 'terminalSessions', sessions: [] }), true);
 	assert.equal(isEngineReply({ type: 'terminalSessions', sessions: [{ id: 'a', process_id: 42, shell: '/bin/zsh', rows: 24, columns: 80, persistent: true, attached: true }] }), true);
-	const places = { roots: [{ id: '2', name: 'C:' }], folders: [{ kind: 'home', root: '2', path: 'Users/abass' }] };
+	const places = { roots: [{ id: '2', name: 'C:' }], folders: [{ kind: 'home', root: '2', path: 'Users/someone' }] };
 	assert.equal(isEngineReply({ type: 'places', places }), true);
-	assert.equal(isEngineReply({ type: 'location', location: { root: '0', path: 'Users/hammed', name: 'a.txt' } }), true);
+	assert.equal(isEngineReply({ type: 'location', location: { root: '0', path: 'Users/someone', name: 'a.txt' } }), true);
 	assert.equal(isEngineReply({ type: 'location', location: null }), true, 'a path outside what is shared');
 	assert.equal(isEngineReply({ type: 'watching', watch: '3' }), true);
 	assert.equal(isEngineReply({ type: 'location', location: { root: '0', path: '/Users', name: 'a.txt' } }), false);

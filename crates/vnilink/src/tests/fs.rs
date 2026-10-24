@@ -872,12 +872,12 @@ fn places_body_round_trips_and_refuses_unsafe_folders() {
             crate::fs::Place {
                 kind: crate::fs::FolderKind::Home,
                 root: 2,
-                path: "Users/abass".to_owned(),
+                path: "Users/someone".to_owned(),
             },
             crate::fs::Place {
                 kind: crate::fs::FolderKind::Downloads,
                 root: 2,
-                path: "Users/abass/Downloads".to_owned(),
+                path: "Users/someone/Downloads".to_owned(),
             },
             crate::fs::Place {
                 kind: crate::fs::FolderKind::Volume,

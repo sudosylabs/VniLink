@@ -133,18 +133,18 @@ fn bundled_sqlite_is_the_pinned_351_release() {
 #[cfg(unix)]
 #[test]
 fn linux_paths_follow_absolute_xdg_then_home() {
-    let home = Path::new("/home/me");
+    let home = Path::new("/home/someone");
     assert_eq!(
         linux_app_dir(Some(home), Some(std::ffi::OsStr::new("/var/data"))).unwrap(),
         PathBuf::from("/var/data/vnilink")
     );
     assert_eq!(
         linux_app_dir(Some(home), Some(std::ffi::OsStr::new(""))).unwrap(),
-        PathBuf::from("/home/me/.local/share/vnilink")
+        PathBuf::from("/home/someone/.local/share/vnilink")
     );
     assert_eq!(
         linux_app_dir(Some(home), Some(std::ffi::OsStr::new("relative"))).unwrap(),
-        PathBuf::from("/home/me/.local/share/vnilink")
+        PathBuf::from("/home/someone/.local/share/vnilink")
     );
     assert_eq!(
         linux_app_dir(None, Some(std::ffi::OsStr::new("/var/data"))).unwrap(),
@@ -184,7 +184,7 @@ fn linux_mountinfo_uses_the_longest_match() {
         Some("nfs")
     );
     assert_eq!(
-        linux_mount_fstype(info, Path::new("/home/engine")).as_deref(),
+        linux_mount_fstype(info, Path::new("/home/someone/engine")).as_deref(),
         Some("ext4")
     );
     assert!(linux_mount_fstype("", Path::new("/home")).is_none());

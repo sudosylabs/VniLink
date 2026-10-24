@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { build } from 'esbuild';
+
+const product = JSON.parse(await readFile(new URL('../../product.json', import.meta.url), 'utf8'));
 
 async function launchFixture(windows) {
 	const output = await build({
@@ -22,7 +25,7 @@ test('launch establishes identity before construction and smoke isolation is exp
 		process.argv = ['vnilink'];
 		const { VniLinkMain } = await launchFixture(true);
 		await new VniLinkMain().main();
-		assert.deepEqual(globalThis.launchEvents, [['name', 'VniLink'], ['id', 'fr.sudosy.vnilink'], ['construct', { temporaryEngine: false }], ['start']]);
+		assert.deepEqual(globalThis.launchEvents, [['name', product.nameLong], ['id', product.appId], ['construct', { temporaryEngine: false }], ['start']]);
 		globalThis.launchEvents = [];
 		process.argv = ['vnilink', '--smoke-test'];
 		delete process.env.VNILINK_TEST_PROFILE;

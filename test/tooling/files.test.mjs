@@ -98,20 +98,20 @@ test('tabs for one computer share its connection, and its transfers report thems
 test('a refusal from the other computer is an error naming its reason, and the connection lives', async () => {
 	const { service, asked } = fixture({ answer: operation => operation.type === 'rename' ? { error: 'FileExists: the name is taken' } : undefined });
 	const { session } = await service.open('peer');
-	const folder = { root: '0', path: 'Users/abass' };
+	const folder = { root: '0', path: 'Users/someone' };
 	const entry = { name: 'a.txt', kind: 'file', size: '1', mtimeMs: '0', token: { dev: '1', ino: '2', born: '7' } };
 	const error = await session.remote.rename(folder, entry, 'b.txt').catch(failure => failure);
 	assert.equal(engineErrorCategory(error), 'FileExists');
 	assert(!session.ended);
-	await session.copy('local', [{ folder, name: 'a.txt' }, { folder, name: 'Photos' }, { folder, name: 'a.txt' }], { root: '2', path: 'Users/hammed/Downloads' });
+	await session.copy('local', [{ folder, name: 'a.txt' }, { folder, name: 'Photos' }, { folder, name: 'a.txt' }], { root: '2', path: 'Users/someone/Downloads' });
 	assert.deepEqual(asked.filter(operation => operation.type === 'submit').map(operation => [operation.direction, operation.srcPath, operation.names, operation.dstPath]), [
-		['upload', 'Users/abass', ['a.txt', 'Photos'], 'Users/hammed/Downloads'],
+		['upload', 'Users/someone', ['a.txt', 'Photos'], 'Users/someone/Downloads'],
 	], 'a selection is one transfer, each item once');
 	await session.copy('remote', [{ folder: { root: '2', path: '' }, name: 'x' }], folder);
-	assert.deepEqual(asked.at(-1), { type: 'submit', direction: 'download', srcRoot: '2', srcPath: '', names: ['x'], dstRoot: '0', dstPath: 'Users/abass' });
+	assert.deepEqual(asked.at(-1), { type: 'submit', direction: 'download', srcRoot: '2', srcPath: '', names: ['x'], dstRoot: '0', dstPath: 'Users/someone' });
 	// Items dropped from two folders are a transfer each.
-	await session.copy('local', [{ folder, name: 'a.txt' }, { folder: { root: '0', path: 'Users/abass/Desktop' }, name: 'b.txt' }, { folder, name: 'c.txt' }], { root: '2', path: '' });
-	assert.deepEqual(asked.slice(-2).map(operation => [operation.srcPath, operation.names]), [['Users/abass', ['a.txt', 'c.txt']], ['Users/abass/Desktop', ['b.txt']]]);
+	await session.copy('local', [{ folder, name: 'a.txt' }, { folder: { root: '0', path: 'Users/someone/Desktop' }, name: 'b.txt' }, { folder, name: 'c.txt' }], { root: '2', path: '' });
+	assert.deepEqual(asked.slice(-2).map(operation => [operation.srcPath, operation.names]), [['Users/someone', ['a.txt', 'c.txt']], ['Users/someone/Desktop', ['b.txt']]]);
 	session.release();
 });
 
@@ -135,9 +135,9 @@ test('sizes, folders and transfers read as a file manager says them', () => {
 	assert.equal(formatSize(412_000_000), '412 MB');
 	assert.equal(formatSize(1_100_000_000), '1.1 GB');
 	const places = { roots: [{ id: '0', name: '/' }, { id: '2', name: 'C:' }], folders: [] };
-	assert.equal(folderName({ root: '0', path: 'Users/hammed/Downloads' }, places, 'This Mac'), 'Downloads');
+	assert.equal(folderName({ root: '0', path: 'Users/someone/Downloads' }, places, 'This Mac'), 'Downloads');
 	assert.equal(folderName({ root: '0', path: '' }, places, 'This Mac'), 'This Mac', 'the whole disk takes its computer\'s name');
-	assert.equal(folderName({ root: '2', path: '' }, places, 'Sudosy'), 'C:');
+	assert.equal(folderName({ root: '2', path: '' }, places, 'Studio PC'), 'C:');
 	assert.equal(itemCount(1), '1 item');
 	assert.equal(itemCount(3), '3 items');
 	const running = job('1', 'Transferring');

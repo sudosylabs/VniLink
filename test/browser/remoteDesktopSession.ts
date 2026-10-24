@@ -98,7 +98,7 @@ class FakeSession implements IDesktopSession {
 
 export async function verifyRemoteDesktopSession(): Promise<void> {
 	const disposables = new DisposableStore();
-	const device: DeviceSummary = { id: 'studio', name: 'Sudosy', os: 'windows', presence: 'connected', hostname: 'sudosy', direct: 1, relays: 0 };
+	const device: DeviceSummary = { id: 'studio', name: 'Studio PC', os: 'windows', presence: 'connected', hostname: 'studio-pc', direct: 1, relays: 0 };
 	const sessions: FakeSession[] = [];
 	const answers: (DesktopFailure | undefined)[] = [];
 	const tabService = disposables.add(new TabService());
@@ -129,7 +129,7 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 			new OpenRemoteDesktopAction().run(accessor, device.id);
 		});
 		const view = tabService.activeTab;
-		assert(view instanceof RemoteDesktopView && view.id === 'desktop:studio' && view.label === 'Sudosy' && view.control, 'Remote desktop did not open a tab for the computer');
+		assert(view instanceof RemoteDesktopView && view.id === 'desktop:studio' && view.label === 'Studio PC' && view.control, 'Remote desktop did not open a tab for the computer');
 		host.append(view.element);
 		const overlay = view.element.querySelector<HTMLElement>('.desktop-overlay');
 		const canvas = view.element.querySelector<HTMLCanvasElement>('.desktop-screen');
@@ -137,9 +137,9 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		assert(overlay !== null && canvas !== null, 'The tab has no screen');
 		// Connecting until the first picture, which then fills the tab and takes the keyboard.
 		await until(() => sessions.length === 1, 'The tab did not open the screen');
-		assert(!overlay.hidden && overlay.textContent.includes('Connecting to Sudosy'), 'Connecting is not said');
+		assert(!overlay.hidden && overlay.textContent.includes('Connecting to Studio PC'), 'Connecting is not said');
 		sessions[0].picture();
-		await until(() => overlay.hidden === true && role() === 'Controlling Sudosy', 'The first picture did not show');
+		await until(() => overlay.hidden === true && role() === 'Controlling Studio PC', 'The first picture did not show');
 		await until(() => view.element.querySelector('.desktop-status-size')?.textContent === '1920 × 1080', 'The display size is not shown');
 		assert(canvas.width === 1920 && canvas.height === 1080, 'The picture was not drawn at its size');
 		assert(document.activeElement === canvas, 'The screen did not take the keyboard');
@@ -180,7 +180,7 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		sessions[0].conditions = ['relay.path'];
 		await until(() => condition.hidden === true, 'A relay alone was shown as a problem', 3000);
 		sessions[0].conditions = ['encoder.software'];
-		await until(() => condition.textContent === 'Sudosy is encoding in software', `Wrong software condition: ${condition.textContent}`, 3000);
+		await until(() => condition.textContent === 'Studio PC is encoding in software', `Wrong software condition: ${condition.textContent}`, 3000);
 
 		// The pointer's display is chosen once, before anything else is sent.
 		assert(JSON.stringify(sessions[0].sent[0]) === JSON.stringify({ type: 'selectDisplays', ids: ['7'] }), `The shown display was not selected: ${JSON.stringify(sessions[0].sent[0])}`);
@@ -247,20 +247,20 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 
 		// A dropped connection is tried again by itself, over the last picture, dimmed.
 		sessions[0].end('linkLost');
-		await until(() => !overlay.hidden && overlay.textContent.includes('Reconnecting to Sudosy'), 'A lost connection did not say it reconnects');
+		await until(() => !overlay.hidden && overlay.textContent.includes('Reconnecting to Studio PC'), 'A lost connection did not say it reconnects');
 		assert(view.element.querySelector('.desktop-stage')?.classList.contains('desktop-dimmed') === true, 'The last picture was not dimmed');
 		await until(() => sessions.length === 2, 'The tab did not reconnect by itself', 4000);
 		sessions[1].picture();
 		await until(() => overlay.hidden === true, 'The reconnected picture did not show');
 		// The other computer's encoder failed: it reconnects at once, and says whose failure it was.
 		sessions[1].end('hostEncoderFailed');
-		await until(() => !overlay.hidden && overlay.textContent.includes('Sudosy couldn’t keep encoding its screen.'), `An encoder failure was not said: ${overlay.textContent}`);
+		await until(() => !overlay.hidden && overlay.textContent.includes('Studio PC couldn’t keep encoding its screen.'), `An encoder failure was not said: ${overlay.textContent}`);
 		await until(() => sessions.length === 3, 'The tab did not reconnect after an encoder failure', 4000);
 		sessions[2].picture();
 		await until(() => overlay.hidden === true, 'The picture after an encoder failure did not show');
 		// Permission withdrawn there: not tried again; it says what someone there must do.
 		sessions[2].end('hostPermission');
-		await until(() => overlay.textContent.includes('Sudosy no longer allows VniLink to record its screen.') && overlay.textContent.includes('system settings'), `A withdrawn permission was not said: ${overlay.textContent}`);
+		await until(() => overlay.textContent.includes('Studio PC no longer allows VniLink to record its screen.') && overlay.textContent.includes('system settings'), `A withdrawn permission was not said: ${overlay.textContent}`);
 		// An end interrupts: its overlay is an alert, and the picture's conditions go with it.
 		assert(overlay.getAttribute('role') === 'alert', 'An end is not announced as an alert');
 		assert(view.element.querySelector<HTMLElement>('.desktop-status-condition')?.hidden === true, 'A condition outlived its picture');
@@ -273,7 +273,7 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		// Refused for good: it says why, and offers to try again or close.
 		answers.push('turnedOff');
 		sessions[3].end('linkLost');
-		await until(() => overlay.textContent.includes('Sudosy doesn’t share its screen with this computer.'), 'A refusal is not said', 4000);
+		await until(() => overlay.textContent.includes('Studio PC doesn’t share its screen with this computer.'), 'A refusal is not said', 4000);
 		const buttons = [...overlay.querySelectorAll('button')].map(button => button.textContent);
 		assert(buttons.join() === 'Try Again,Close Tab', `Wrong actions: ${buttons.join()}`);
 		assert(role() === 'Not connected', 'The status bar does not say it is not connected');
@@ -291,7 +291,7 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		host.replaceChildren(viewer.element);
 		await until(() => sessions.length === 6, 'The view-only tab did not open the screen');
 		sessions[5].picture();
-		await until(() => viewer.element.querySelector('.desktop-status-role')?.textContent === 'Viewing Sudosy', 'Viewing is not said');
+		await until(() => viewer.element.querySelector('.desktop-status-role')?.textContent === 'Viewing Studio PC', 'Viewing is not said');
 		const screen = viewer.element.querySelector<HTMLCanvasElement>('.desktop-screen');
 		assert(screen !== null, 'The view-only tab has no screen');
 		press(screen, 'keydown', 'KeyA', 'a');
@@ -307,7 +307,7 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		await until(() => sessions.length === 7, 'The tab did not reconnect after a picture it could not show');
 		sessions[6].end('cantShow');
 		const viewerOverlay = viewer.element.querySelector<HTMLElement>('.desktop-overlay');
-		await until(() => viewerOverlay?.textContent.includes('This computer can’t show the screen of Sudosy.') === true, 'A picture it can never show is not said');
+		await until(() => viewerOverlay?.textContent.includes('This computer can’t show the screen of Studio PC.') === true, 'A picture it can never show is not said');
 		assert(sessions.length === 7, 'The tab kept reconnecting to a screen it cannot show');
 	} finally {
 		host.remove();

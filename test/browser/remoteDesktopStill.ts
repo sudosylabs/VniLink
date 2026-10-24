@@ -56,7 +56,7 @@ function psnr(left: Uint8Array | Uint8ClampedArray, right: Uint8Array | Uint8Cla
  */
 export async function verifyRemoteDesktopStill(): Promise<void> {
 	const disposables = new DisposableStore();
-	const device: DeviceSummary = { id: 'studio', name: 'Sudosy', os: 'windows', presence: 'connected', hostname: 'sudosy', direct: 1, relays: 0 };
+	const device: DeviceSummary = { id: 'studio', name: 'Studio PC', os: 'windows', presence: 'connected', hostname: 'studio-pc', direct: 1, relays: 0 };
 	const sessions: EngineDesktopSession[] = [];
 	const tabService = disposables.add(new TabService());
 	const services = disposables.add(new InstantiationService(new ServiceCollection(

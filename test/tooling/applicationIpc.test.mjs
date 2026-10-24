@@ -345,7 +345,7 @@ test('windows remember only known UI state, in its own shape, in the state file'
 		state.setItem('windowsState', { main: true });
 		const channel = new UIStateChannel(state);
 		const lastFolder = 'files.lastFolder.k51qzi5uqu5d-studio_2.remote';
-		const folderValue = { root: '0', path: 'Users/sam/Documents' };
+		const folderValue = { root: '0', path: 'Users/someone/Documents' };
 		await assert.rejects(channel.call('renderer', 'set', { key: 'files.showHidden', value: true }), /window/i);
 		await channel.call('window:1', 'set', { key: lastFolder, value: folderValue });
 		await channel.call('window:1', 'set', { key: 'files.showHidden', value: true });

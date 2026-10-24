@@ -50,7 +50,7 @@ export function folderName(folder: FolderLocation, places: FilePlaces | undefine
 	return !root || root.name === '/' ? computer : root.name;
 }
 
-/** "Downloads on Sudosy". */
+/** "Downloads on Studio PC". */
 export function folderOn(folder: FolderLocation, places: FilePlaces | undefined, computer: string): string {
 	return nls.localize('files.folderOn', '{0} on {1}', folderName(folder, places, computer), computer);
 }

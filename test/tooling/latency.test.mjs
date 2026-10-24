@@ -133,13 +133,13 @@ test('a two-computer run names the other computer, its checkout and which one ho
 	assert.equal(latencyOptions('/root', ['--fps', '30']).frameRate, 30);
 	assert.throws(() => latencyOptions('/root', ['--fps', '0']));
 	assert.throws(() => latencyOptions('/root', ['--fps', '29.97']));
-	const options = latencyOptions('/root', ['--remote', 'lx', '--remote-root', '/home/a/vnilink', '--hosts', 'remote', '--ssh-config', '/c']);
-	assert.deepEqual(options.remote, { destination: 'lx', root: '/home/a/vnilink', hosts: 'remote', sshConfig: resolve('/c') });
-	assert.equal(latencyOptions('/root', ['--remote', 'lx', '--remote-root', '/r']).remote?.hosts, 'here');
-	assert.throws(() => latencyOptions('/root', ['--remote', 'lx']), /--remote-root/);
-	assert.throws(() => latencyOptions('/root', ['--remote', 'lx', '--remote-root', 'relative']), /--remote-root/);
-	assert.throws(() => latencyOptions('/root', ['--remote', 'lx', '--remote-root', '/r', '--hosts', 'both']));
-	assert.throws(() => latencyOptions('/root', ['--remote', 'lx', '--remote-root', '/r', '--hold', '5']), /--hold/);
+	const options = latencyOptions('/root', ['--remote', 'someone@studio.local', '--remote-root', '/home/someone/vnilink', '--hosts', 'remote', '--ssh-config', '/c']);
+	assert.deepEqual(options.remote, { destination: 'someone@studio.local', root: '/home/someone/vnilink', hosts: 'remote', sshConfig: resolve('/c') });
+	assert.equal(latencyOptions('/root', ['--remote', 'someone@studio.local', '--remote-root', '/r']).remote?.hosts, 'here');
+	assert.throws(() => latencyOptions('/root', ['--remote', 'someone@studio.local']), /--remote-root/);
+	assert.throws(() => latencyOptions('/root', ['--remote', 'someone@studio.local', '--remote-root', 'relative']), /--remote-root/);
+	assert.throws(() => latencyOptions('/root', ['--remote', 'someone@studio.local', '--remote-root', '/r', '--hosts', 'both']));
+	assert.throws(() => latencyOptions('/root', ['--remote', 'someone@studio.local', '--remote-root', '/r', '--hold', '5']), /--hold/);
 	assert.throws(() => latencyOptions('/root', ['--hosts', 'remote']), /need --remote/);
 });
 

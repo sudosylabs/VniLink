@@ -104,8 +104,8 @@ test('the GNU Windows target finds its MinGW tools without shell setup', () => {
 
 	// A plain MSYS2 install needs no shell setup.
 	const bin = 'C:\\msys64\\mingw64\\bin';
-	const plain = nativeEnvironment(options, { Path: 'C:\\Windows;C:\\Users\\me\\.cargo\\bin' }, files(`${bin}\\dlltool.exe`));
-	assert.equal(plain.Path, `${bin};C:\\Windows;C:\\Users\\me\\.cargo\\bin`);
+	const plain = nativeEnvironment(options, { Path: 'C:\\Windows;C:\\Users\\someone\\.cargo\\bin' }, files(`${bin}\\dlltool.exe`));
+	assert.equal(plain.Path, `${bin};C:\\Windows;C:\\Users\\someone\\.cargo\\bin`);
 	assert.equal(plain.PATH, undefined, 'A second PATH key leaves the winner to the spawn');
 	assert.equal(plain.LIBCLANG_PATH, undefined, 'LIBCLANG_PATH named a folder without libclang');
 

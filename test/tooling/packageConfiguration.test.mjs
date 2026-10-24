@@ -9,7 +9,7 @@ test('directory packaging keeps the engine and native module adjacent outside AS
 	for (const platform of ['darwin', 'win32', 'linux']) {
 		const config = packageConfiguration('/repo', '/stage', '/output', product, { platform, electronVersion: '44.7.0' });
 		assert.deepEqual(config.asarUnpack, ['native/**', 'engine.cjs']);
-		assert.equal(config.appId, 'fr.sudosy.vnilink');
+		assert.equal(config.appId, product.appId);
 		assert.equal(config.electronVersion, '44.7.0');
 		assert.equal(config.npmRebuild, false);
 		assert.equal(config.publish, null);
