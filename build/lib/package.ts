@@ -4,6 +4,7 @@ import { constants } from 'node:fs';
 import { access, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join, relative } from 'node:path';
+import { assignExecutableUuids, darwinUsageDescriptions } from './macos/identity.ts';
 import { ProcessRunner } from './processes.ts';
 import { validateProduct, type Product, type ProductPlatform } from './product.ts';
 import { packageInventory, verifyReleaseFiles, type ReleaseManifest } from './verify.ts';
@@ -57,11 +58,7 @@ export function packageConfiguration(root: string, stage: string, output: string
 			notarize: false,
 			darkModeSupport: true,
 			category: 'public.app-category.utilities',
-			extendInfo: {
-				NSCameraUsageDescription: 'Share your camera with computers you have paired and allowed.',
-				NSMicrophoneUsageDescription: 'Share your microphone with computers you have paired and allowed.',
-				NSAudioCaptureUsageDescription: 'Share this computer’s sound with computers you have paired and allowed.',
-			},
+			extendInfo: darwinUsageDescriptions,
 		},
 		win: { executableName: product.platforms.win32.executableName, icon: icon('win32'), signExecutable: false },
 		linux: { executableName: product.platforms.linux.executableName, icon: icon('linux'), category: 'Network' },
@@ -142,6 +139,13 @@ export async function packageApplication(root: string, signal: AbortSignal): Pro
 		}
 		const directory = candidates[0];
 		const layout = packagedLayout(directory, process.platform, product);
+		if (process.platform === 'darwin') {
+			// Its own executable UUID, so local network privacy decides for VniLink
+			// alone; the changed executable and its bundle are sealed again.
+			await assignExecutableUuids(layout.executable, product.appId);
+			await processes.run('codesign', ['--force', '--sign', '-', layout.executable]);
+			await processes.run('codesign', ['--force', '--sign', '-', join(directory, `${product.nameLong}.app`)]);
+		}
 		const nativeSha256 = manifest.files.find(file => file.path === 'app/native/vnilink.node')?.sha256;
 		if (!nativeSha256 || createHash('sha256').update(await readFile(layout.native)).digest('hex') !== nativeSha256) {
 			throw new Error('Packager changed or omitted the staged native addon');

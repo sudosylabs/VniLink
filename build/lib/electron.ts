@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { ProcessRunner } from './processes.ts';
+import { assignExecutableUuids, darwinUsageDescriptions, executableUuids } from './macos/identity.ts';
 import { loadProduct, type Product } from './product.ts';
 import { fileSha256, releaseInventory } from './verify.ts';
 
@@ -105,7 +106,11 @@ async function brandingFingerprint(root: string, product: Product): Promise<Reco
 		const path = join(root, platform.icon);
 		icons[platform.icon] = (await stat(path)).isDirectory() ? JSON.stringify(await releaseInventory(path)) : await fileSha256(path);
 	}
-	return { electron, platform: `${process.platform}-${process.arch}`, product: JSON.stringify(product), icons: JSON.stringify(icons) };
+	// macOS: what the bundle asks for and the executable UUIDs it identifies by.
+	const darwin: Record<string, string> = process.platform === 'darwin'
+		? { usage: JSON.stringify(darwinUsageDescriptions), uuids: JSON.stringify(await executableUuids(require('electron') as string, developmentBundleIdentifier(product))) }
+		: {};
+	return { electron, platform: `${process.platform}-${process.arch}`, product: JSON.stringify(product), icons: JSON.stringify(icons), ...darwin };
 }
 
 async function current(stamp: string, executable: string, fingerprint: string): Promise<boolean> {
@@ -115,6 +120,10 @@ async function current(stamp: string, executable: string, fingerprint: string): 
 	} catch {
 		return false;
 	}
+}
+
+function developmentBundleIdentifier(product: Product): string {
+	return `${product.appId}.dev`;
 }
 
 /** macOS names the menu bar, Dock and permission prompts after the bundle's Info.plist. */
@@ -127,14 +136,20 @@ async function brandDarwin(root: string, product: Product, bundle: string, work:
 		['CFBundleName', product.nameLong],
 		['CFBundleDisplayName', product.nameLong],
 		// A development identifier keeps TCC grants and Launch Services apart from an installed release.
-		['CFBundleIdentifier', `${product.appId}.dev`],
+		['CFBundleIdentifier', developmentBundleIdentifier(product)],
 		['CFBundleIconFile', iconName],
 		['CFBundleIconName', iconName],
+		...Object.entries(darwinUsageDescriptions),
 	];
 	for (const [key, value] of values) {
 		await run('plutil', ['-replace', key, '-string', value, plist], { signal });
 	}
-	// Editing Info.plist invalidates the outer ad-hoc seal; nested helpers keep their own signatures.
+	// Its own executable UUID, so local network privacy decides for this bundle alone.
+	const executable = join(bundle, 'Contents/MacOS/Electron');
+	await assignExecutableUuids(executable, developmentBundleIdentifier(product));
+	// The executable and Info.plist changed, which breaks their ad-hoc seals;
+	// nested helpers keep their own signatures.
+	await run('codesign', ['--force', '--sign', '-', executable], { signal });
 	await run('codesign', ['--force', '--sign', '-', bundle], { signal });
 }
 
