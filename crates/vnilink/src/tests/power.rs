@@ -1,8 +1,10 @@
-use super::support::{pair_for_control, start_direct, take_matching, ShutdownCapture};
+use super::support::{
+    pair_for_control, start_direct, take_matching, RecordingDesktop, ShutdownCapture,
+};
 use crate::power::*;
 use crate::{
     BackendStartup, Core, CoreEvent, DesktopControlState, Error, HostSessionState,
-    HostSystemActions, RemoteDesktopService, ServiceKind, SessionPhase, SystemSupport,
+    HostSystemActions, InputEvent, RemoteDesktopService, ServiceKind, SessionPhase, SystemSupport,
 };
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -311,44 +313,109 @@ fn actual_input_refreshes_only_its_hosted_desktop_idle_clock() {
     );
 }
 
-/// Pure policy, no network: the machine never fires unarmed, fires once on
+/// Pure policy, no network: the machine never fires unused, fires once on
 /// an explicit end with a live parent, waits out the grace without one, and
 /// a redial inside the window resumes instead of locking.
 #[test]
 fn lock_machine_fires_once_and_graces_parent_loss() {
     let start = Instant::now();
     let mut machine = LockAfterControl::default();
-    assert_eq!(machine.tick(start, true, false, false), LockDecision::Idle);
-    assert_eq!(machine.tick(start, true, true, true), LockDecision::Idle);
-    assert_eq!(machine.tick(start, false, false, true), LockDecision::Idle);
-    assert_eq!(machine.tick(start, true, true, true), LockDecision::Idle);
-    assert_eq!(machine.tick(start, true, false, true), LockDecision::Fire);
-    assert_eq!(machine.tick(start, true, false, true), LockDecision::Idle);
-    assert_eq!(machine.tick(start, true, true, false), LockDecision::Idle);
-    assert_eq!(machine.tick(start, true, false, false), LockDecision::Wait);
+    // tick(now, enabled, controlling, used, parent_live)
     assert_eq!(
-        machine.tick(start + Duration::from_secs(29), true, false, false),
-        LockDecision::Wait
-    );
-    assert_eq!(
-        machine.tick(start + Duration::from_secs(30), true, false, false),
-        LockDecision::Fire
-    );
-    assert_eq!(machine.tick(start, true, true, false), LockDecision::Idle);
-    assert_eq!(machine.tick(start, true, false, false), LockDecision::Wait);
-    assert_eq!(
-        machine.tick(start + Duration::from_secs(5), true, true, true),
+        machine.tick(start, true, false, false, false),
         LockDecision::Idle
     );
     assert_eq!(
-        machine.tick(start + Duration::from_secs(31), true, false, true),
+        machine.tick(start, true, true, true, true),
+        LockDecision::Idle
+    );
+    assert_eq!(
+        machine.tick(start, false, false, false, true),
+        LockDecision::Idle
+    );
+    assert_eq!(
+        machine.tick(start, true, true, true, true),
+        LockDecision::Idle
+    );
+    assert_eq!(
+        machine.tick(start, true, false, false, true),
         LockDecision::Fire
     );
-    // Synchronous grant arming: a grant-and-end cycle briefer than a tick
-    // still fires on the next sample.
+    assert_eq!(
+        machine.tick(start, true, false, false, true),
+        LockDecision::Idle
+    );
+    assert_eq!(
+        machine.tick(start, true, true, true, false),
+        LockDecision::Idle
+    );
+    assert_eq!(
+        machine.tick(start, true, false, false, false),
+        LockDecision::Wait
+    );
+    assert_eq!(
+        machine.tick(start + Duration::from_secs(29), true, false, false, false),
+        LockDecision::Wait
+    );
+    assert_eq!(
+        machine.tick(start + Duration::from_secs(30), true, false, false, false),
+        LockDecision::Fire
+    );
+    assert_eq!(
+        machine.tick(start, true, true, true, false),
+        LockDecision::Idle
+    );
+    assert_eq!(
+        machine.tick(start, true, false, false, false),
+        LockDecision::Wait
+    );
+    assert_eq!(
+        machine.tick(start + Duration::from_secs(5), true, true, false, true),
+        LockDecision::Idle
+    );
+    assert_eq!(
+        machine.tick(start + Duration::from_secs(31), true, false, false, true),
+        LockDecision::Fire
+    );
+    // A use and an end within one tick still fire on the next sample.
     let mut quick = LockAfterControl::default();
-    quick.note_controlling();
-    assert_eq!(quick.tick(start, true, false, true), LockDecision::Fire);
+    assert_eq!(
+        quick.tick(start, true, false, true, true),
+        LockDecision::Fire
+    );
+}
+
+/// Control granted but never used, such as a viewer cancelled while still
+/// connecting, ends without locking; using it once arms the lock until
+/// control ends.
+#[test]
+fn lock_machine_ignores_control_that_was_never_used() {
+    let start = Instant::now();
+    let mut machine = LockAfterControl::default();
+    assert_eq!(
+        machine.tick(start, true, true, false, true),
+        LockDecision::Idle
+    );
+    assert_eq!(
+        machine.tick(start, true, false, false, true),
+        LockDecision::Idle
+    );
+    assert_eq!(
+        machine.tick(start, true, false, false, false),
+        LockDecision::Idle
+    );
+    assert_eq!(
+        machine.tick(start, true, true, true, true),
+        LockDecision::Idle
+    );
+    assert_eq!(
+        machine.tick(start, true, true, false, true),
+        LockDecision::Idle
+    );
+    assert_eq!(
+        machine.tick(start, true, false, false, true),
+        LockDecision::Fire
+    );
 }
 
 #[derive(Default)]
@@ -400,24 +467,58 @@ fn controlling(desktop: &RemoteDesktopService) -> bool {
     desktop.control_state().unwrap() == DesktopControlState::Controlling
 }
 
-/// Explicit owner close with a live parent locks at once; relinquished
-/// control locks too; a disabled policy locks never; an OS failure
-/// reports `locked: false` and consumes the edge.
-#[test]
-fn lock_after_control_fires_on_close_yield_and_reports_failure() {
+/// Lock-after-control hosts with a desktop that records the input it
+/// applies, so a test can use control and know it arrived.
+fn lock_host(actions: &Arc<LockCounter>) -> (Core, Arc<Mutex<Vec<InputEvent>>>) {
     let host = start_direct();
     host.set_capture(Box::new(ShutdownCapture)).unwrap();
-    let actions = Arc::new(LockCounter::default());
+    let applied = Arc::new(Mutex::new(Vec::new()));
+    host.set_desktop(Box::new(RecordingDesktop {
+        events: applied.clone(),
+    }))
+    .unwrap();
     host.set_system_actions(Some(actions.clone())).unwrap();
     host.set_power_policy(PowerPolicy {
         lock_after_control: true,
         ..Default::default()
     })
     .unwrap();
+    (host, applied)
+}
+
+/// Uses control: one key press reaches the host's desktop.
+fn use_control(desktop: &RemoteDesktopService, applied: &Mutex<Vec<InputEvent>>) {
+    wait(|| controlling(desktop));
+    let before = applied.lock().unwrap().len();
+    desktop
+        .submit_input(InputEvent::key_down(crate::input::usage::A))
+        .unwrap();
+    desktop
+        .submit_input(InputEvent::key_up(crate::input::usage::A))
+        .unwrap();
+    wait(|| applied.lock().unwrap().len() >= before + 2);
+}
+
+/// Control granted and never used ends without locking. Used, an explicit
+/// owner close with a live parent locks at once; relinquished control locks
+/// too; a disabled policy locks never; an OS failure reports
+/// `locked: false` and consumes the edge.
+#[test]
+fn lock_after_control_fires_on_close_yield_and_reports_failure() {
+    let actions = Arc::new(LockCounter::default());
+    let (host, applied) = lock_host(&actions);
     let events = host.subscribe().unwrap();
+    // A viewer that never used control, such as one cancelled while
+    // still connecting, leaves this computer unlocked.
+    let watcher = start_direct();
+    let unused = open(&host, &watcher);
+    wait(|| controlling(&unused));
+    unused.close();
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(actions.locks.load(Ordering::SeqCst), 0);
     let controller = start_direct();
     let desktop = open(&host, &controller);
-    wait(|| controlling(&desktop));
+    use_control(&desktop, &applied);
     desktop.close();
     wait(|| actions.locks.load(Ordering::SeqCst) == 1);
     take_matching(&events, |event| {
@@ -426,7 +527,7 @@ fn lock_after_control_fires_on_close_yield_and_reports_failure() {
     // Relinquishing control with the owner still viewing ends control.
     let second = start_direct();
     let viewing = open(&host, &second);
-    wait(|| controlling(&viewing));
+    use_control(&viewing, &applied);
     viewing.yield_control().unwrap();
     wait(|| actions.locks.load(Ordering::SeqCst) == 2);
     viewing.close();
@@ -434,7 +535,7 @@ fn lock_after_control_fires_on_close_yield_and_reports_failure() {
     host.set_power_policy(PowerPolicy::default()).unwrap();
     let third = start_direct();
     let last = open(&host, &third);
-    wait(|| controlling(&last));
+    use_control(&last, &applied);
     last.close();
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(actions.locks.load(Ordering::SeqCst), 2);
@@ -447,7 +548,7 @@ fn lock_after_control_fires_on_close_yield_and_reports_failure() {
     actions.fail.store(true, Ordering::SeqCst);
     let fourth = start_direct();
     let failed = open(&host, &fourth);
-    wait(|| controlling(&failed));
+    use_control(&failed, &applied);
     failed.close();
     take_matching(&events, |event| {
         matches!(event, CoreEvent::HostLocked { locked: false })
@@ -456,24 +557,44 @@ fn lock_after_control_fires_on_close_yield_and_reports_failure() {
     assert_eq!(actions.locks.load(Ordering::SeqCst), 2);
 }
 
+/// A picture that reached a controlling viewer is use too: closing the
+/// owner afterwards locks, though no input was sent.
+#[test]
+fn lock_after_control_counts_a_delivered_picture_as_use() {
+    let actions = Arc::new(LockCounter::default());
+    let (host, _applied) = lock_host(&actions);
+    let controller = start_direct();
+    let desktop = open(&host, &controller);
+    wait(|| controlling(&desktop));
+    let video = desktop.subscribe_video().unwrap();
+    let owner = host
+        .hosted_services()
+        .unwrap()
+        .into_iter()
+        .find(|service| service.kind == ServiceKind::Desktop)
+        .unwrap();
+    host.publish_desktop_video(
+        owner.id,
+        owner.generation,
+        crate::EncodedFrame::h264(true, 1, vec![42; 64]).unwrap(),
+    )
+    .unwrap();
+    video.recv_timeout(Duration::from_secs(5)).unwrap();
+    desktop.close();
+    wait(|| actions.locks.load(Ordering::SeqCst) == 1);
+}
+
 /// Control ending with no live parent (full disconnect) waits out the
 /// reconnect grace instead of locking at once. The 30-second expiry is
 /// proven by the pure machine test; here only the wait is live.
 #[test]
 fn lock_after_control_waits_when_the_parent_is_gone() {
-    let host = start_direct();
-    host.set_capture(Box::new(ShutdownCapture)).unwrap();
     let actions = Arc::new(LockCounter::default());
-    host.set_system_actions(Some(actions.clone())).unwrap();
-    host.set_power_policy(PowerPolicy {
-        lock_after_control: true,
-        ..Default::default()
-    })
-    .unwrap();
+    let (host, applied) = lock_host(&actions);
     let events = host.subscribe().unwrap();
     let controller = start_direct();
     let desktop = open(&host, &controller);
-    wait(|| controlling(&desktop));
+    use_control(&desktop, &applied);
     controller.disconnect().unwrap();
     wait(|| {
         host.hosted_sessions()

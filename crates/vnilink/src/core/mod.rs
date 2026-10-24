@@ -548,6 +548,9 @@ struct Shared {
     camera_factory: Mutex<Option<Arc<dyn crate::camera::HostCameraFactory>>>,
     /// The host's user turned the camera off; it has a backend it could offer.
     camera_turned_off: std::sync::atomic::AtomicBool,
+    /// Control was used since the lock watch last looked; see
+    /// [`power::note_control_used`].
+    control_used: AtomicBool,
     snapshot_factory: Mutex<Option<Arc<dyn crate::snapshot::HostSnapshotFactory>>>,
     /// One attested desktop picture, replaced at most once a second.
     snapshot_tap: Mutex<Option<Arc<snapshot::AttestedShot>>>,

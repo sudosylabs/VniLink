@@ -71,6 +71,13 @@ impl Core {
     }
 }
 
+/// Control was used: a controller's input was applied here, or a picture of
+/// this computer reached a controlling viewer. Only used control locks this
+/// computer when it ends; see [`LockAfterControl`].
+pub(super) fn note_control_used(shared: &Shared) {
+    shared.control_used.store(true, Ordering::Release);
+}
+
 pub(super) fn start(shared: Weak<Shared>) {
     tokio::spawn(async move {
         let mut slots = [Slot::new(0), Slot::new(0)];
@@ -120,18 +127,20 @@ pub(super) fn start(shared: Weak<Shared>) {
                 // Lock-after-control decision: any live remote control, and
                 // any live parent session to tell explicit close from
                 // network loss. Sampled after synchronize/expire on the
-                // same tick; the machine lives in State so grant sites
-                // arm it synchronously.
+                // same tick. A use noted since the last tick arms it even
+                // when control already ended within the tick.
                 let controlling = state.input_holder().is_some();
                 let parent_live = state
                     .incoming
                     .values()
                     .any(|s| s.phase == SessionPhase::Active);
                 let lock_enabled = state.power_policy.lock_after_control;
-                let lock_fire = state
-                    .lock_watch
-                    .tick(now, lock_enabled, controlling, parent_live)
-                    == LockDecision::Fire;
+                let used = core.control_used.swap(false, Ordering::AcqRel);
+                let lock_fire =
+                    state
+                        .lock_watch
+                        .tick(now, lock_enabled, controlling, used, parent_live)
+                        == LockDecision::Fire;
                 (
                     consumers,
                     factory.revision,

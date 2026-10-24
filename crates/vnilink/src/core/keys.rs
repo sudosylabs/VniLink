@@ -836,6 +836,7 @@ fn apply_legacy_input(
         let late_releases = {
             let mut held = lock(&held);
             if result.is_ok() {
+                super::power::note_control_used(shared);
                 if let LegacyInput::Event(event) = command {
                     held.observe(event);
                 }

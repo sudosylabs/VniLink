@@ -31,7 +31,10 @@ pub struct PowerPolicy {
     /// explicit owner close with a live parent locks at once; an end with
     /// no live parent waits out the reconnect grace so temporary network
     /// loss does not lock a session that is about to resume. Yielding and
-    /// grant-narrowing count as control ends. Viewing alone never arms it.
+    /// grant-narrowing count as control ends. Only control that was used
+    /// arms it: input applied here, or a picture delivered while
+    /// controlling. Viewing alone, or control ended before it was used,
+    /// never arms it.
     pub lock_after_control: bool,
 }
 impl PowerPolicy {
@@ -81,6 +84,9 @@ pub(crate) const LOCK_GRACE: std::time::Duration = std::time::Duration::from_sec
 /// power tick; pure over its inputs so the policy is unit-testable.
 #[derive(Debug, Default)]
 pub(crate) struct LockAfterControl {
+    /// Control was used: input from it was applied, or a picture reached
+    /// it. A grant that was never used, such as a viewer cancelled while
+    /// still connecting, does not lock this computer when it ends.
     armed: bool,
     grace_until: Option<std::time::Instant>,
 }
@@ -96,22 +102,17 @@ pub(crate) enum LockDecision {
 }
 
 impl LockAfterControl {
-    /// Arms synchronously on a control grant. Grant sites call this with
-    /// the state lock held so a grant-and-end cycle briefer than a tick
-    /// still locks; ends are observed by [`Self::tick`].
-    pub(crate) fn note_controlling(&mut self) {
-        self.armed = true;
-        self.grace_until = None;
-    }
-
     /// `controlling` is any live remote-control owner (hosted Controlling
-    /// or legacy control session); `parent_live` is any Active incoming
-    /// session. Disabling the policy disarms immediately.
+    /// or legacy control session); `used` is whether control was used since
+    /// the last tick, which arms even when control already ended within
+    /// it; `parent_live` is any Active incoming session. Disabling the
+    /// policy disarms immediately.
     pub(crate) fn tick(
         &mut self,
         now: std::time::Instant,
         enabled: bool,
         controlling: bool,
+        used: bool,
         parent_live: bool,
     ) -> LockDecision {
         if !enabled {
@@ -119,8 +120,10 @@ impl LockAfterControl {
             self.grace_until = None;
             return LockDecision::Idle;
         }
-        if controlling {
+        if used {
             self.armed = true;
+        }
+        if controlling {
             self.grace_until = None;
             return LockDecision::Idle;
         }

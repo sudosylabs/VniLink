@@ -294,6 +294,7 @@ impl Core {
             clipboard: Mutex::new(None),
             camera_factory: Mutex::new(None),
             camera_turned_off: std::sync::atomic::AtomicBool::new(false),
+            control_used: std::sync::atomic::AtomicBool::new(false),
             snapshot_factory: Mutex::new(None),
             snapshot_tap: Mutex::new(None),
             camera_open: Mutex::new(std::collections::HashSet::new()),

@@ -707,7 +707,6 @@ impl Core {
             .ok_or(Error::Busy)?;
         release_desktop_input(&self.shared, &from);
         state.desktop_control = Some(to.stamp);
-        state.lock_watch.note_controlling();
         let old_epoch = from.control_state.borrow().1.saturating_add(1);
         from.control_state
             .send_replace((DesktopControlState::Viewing, old_epoch));
@@ -1912,7 +1911,6 @@ pub(super) async fn serve(
                         .send_replace((DesktopControlState::Viewing, 0));
                 } else if state.input_holder().is_none() {
                     state.desktop_control = Some(desktop.stamp);
-                    state.lock_watch.note_controlling();
                     desktop
                         .control_state
                         .send_replace((DesktopControlState::Controlling, 1));
@@ -2249,7 +2247,6 @@ fn process_host_command(
         };
         if status == DesktopControlState::Controlling {
             state.desktop_control = Some(desktop.stamp);
-            state.lock_watch.note_controlling();
         }
         desktop.control_state.send_replace((status, next_epoch));
         return Ok(());
@@ -2339,6 +2336,7 @@ fn process_host_command(
                 *held = HeldInput::default();
             } else {
                 lock(&desktop.activity).input(event, std::time::Instant::now());
+                super::power::note_control_used(shared);
             }
         }
         ControlMessage::SelectDisplays { stamp, displays } if stamp == desktop.stamp => {
@@ -2391,6 +2389,7 @@ fn process_host_command(
             result?;
             if !stale && !text.0.is_empty() {
                 lock(&desktop.activity).touch(std::time::Instant::now());
+                super::power::note_control_used(shared);
             }
         }
         ControlMessage::Chord { stamp, text } if stamp == desktop.stamp => {
@@ -2421,6 +2420,7 @@ fn process_host_command(
             result?;
             if !stale && !text.0.is_empty() {
                 lock(&desktop.activity).touch(std::time::Instant::now());
+                super::power::note_control_used(shared);
             }
         }
         ControlMessage::Keyframe { stamp } if stamp == desktop.stamp => desktop.keyframe.request(),
@@ -2626,6 +2626,7 @@ async fn host_send(
         let notified = desktop.video.notified();
         tokio::pin!(notified);
         let frames = desktop.video.drain();
+        let mut pictured = false;
         let last_change = frames
             .iter()
             .rposition(|frame| frame.role == crate::FrameRole::Changed);
@@ -2710,6 +2711,7 @@ async fn host_send(
                     seq = seq.wrapping_add(1);
                     gate.still_sent(wire);
                     desktop.counters.still_sent(frame.payload.len());
+                    pictured = true;
                     continue;
                 }
                 if !gate.admits(
@@ -2729,6 +2731,7 @@ async fn host_send(
                     .map_err(Error::network_debug)?;
                 seq = seq.wrapping_add(1);
                 gate.sent(frame.keyframe, wire);
+                pictured = true;
                 if frame.keyframe {
                     desktop.counters.keyframe_sent(frame.payload.len());
                 }
@@ -2741,15 +2744,20 @@ async fn host_send(
                 bytes.extend_from_slice(&body);
                 write(send, &bytes).await?;
                 desktop.counters.still_sent(frame.payload.len());
+                pictured = true;
             } else {
                 let mut bytes = vec![VIDEO];
                 bytes.extend_from_slice(&body);
                 write(send, &bytes).await?;
                 gate.sent(frame.keyframe, bytes.len());
+                pictured = true;
                 if frame.keyframe {
                     desktop.counters.keyframe_sent(frame.payload.len());
                 }
             }
+        }
+        if pictured && control_rx.borrow().0 == DesktopControlState::Controlling {
+            super::power::note_control_used(shared);
         }
         if gate.should_ask(link.datagram_send_buffer_space(), send_budget(desktop)) {
             desktop.keyframe.request();
