@@ -52,6 +52,9 @@ pub struct MacEncoder {
     codec: vnilink::VideoCodec,
     #[cfg(target_os = "macos")]
     session: CompressionSession,
+    /// VideoToolbox opened the session requiring a hardware encoder.
+    #[cfg(target_os = "macos")]
+    required_hardware: bool,
     #[cfg(target_os = "macos")]
     surface: IOSurface,
     /// Scales ScreenCaptureKit pictures into `surface` on the GPU.
@@ -69,14 +72,25 @@ pub struct MacEncoder {
 
 impl MacEncoder {
     /// Inspect the actual session rather than assuming native means hardware.
+    /// A session opened requiring hardware is hardware: VideoToolbox's
+    /// low-latency H.264 encoder on Apple silicon (`h264.rtvc`) does not
+    /// answer whether it uses hardware, and is not marked either way in the
+    /// encoder list, so asking it read as software and every viewer was told
+    /// this computer encoded in software while it did not. A session opened
+    /// without the requirement says what VideoToolbox answers, or software.
     pub fn hardware(&self) -> bool {
         #[cfg(target_os = "macos")]
         unsafe {
-            self.session.copy_property(videotoolbox::ffi::kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder)
-                .ok().flatten().is_some_and(|value| {
-                    value.type_id() as u64 == apple_cf::raw::CFBooleanGetTypeID()
-                        && apple_cf::raw::CFBooleanGetValue(value.as_ptr().cast()) != 0
-                })
+            self.required_hardware
+                || self
+                    .session
+                    .copy_property(videotoolbox::ffi::kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|value| {
+                        value.type_id() as u64 == apple_cf::raw::CFBooleanGetTypeID()
+                            && apple_cf::raw::CFBooleanGetValue(value.as_ptr().cast()) != 0
+                    })
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -139,7 +153,7 @@ impl MacEncoder {
             } else {
                 ProfileLevel::H264ConstrainedBaselineAutoLevel
             };
-            let builder = || {
+            let builder = |hardware| {
                 CompressionSession::builder(
                     i32::from(width),
                     i32::from(height),
@@ -150,6 +164,7 @@ impl MacEncoder {
                     },
                 )
                 .with_profile_level(profile)
+                .with_hardware_acceleration(hardware)
                 .with_real_time(true)
                 .with_allow_frame_reordering(false)
                 .with_average_bit_rate(bitrate)
@@ -159,11 +174,21 @@ impl MacEncoder {
             // one in and one out, and keeps sizes near the target; keyframes
             // then come only when asked for, as the viewer does after a loss.
             // An encoder that refuses it keeps the ordinary rate control with
-            // a keyframe every 120 pictures.
-            let session = builder()
-                .with_low_latency_rate_control(true)
-                .build()
-                .or_else(|_| builder().with_max_keyframe_interval(120).build())
+            // a keyframe every 120 pictures. Hardware is required first, so
+            // a session that opens is known to be hardware; only then is any
+            // encoder VideoToolbox offers taken.
+            let open = |hardware| {
+                builder(hardware)
+                    .with_low_latency_rate_control(true)
+                    .build()
+                    .or_else(|_| builder(hardware).with_max_keyframe_interval(120).build())
+            };
+            let (session, required_hardware) = open(videotoolbox::HardwareAcceleration::Required)
+                .map(|session| (session, true))
+                .or_else(|_| {
+                    open(videotoolbox::HardwareAcceleration::Preferred)
+                        .map(|session| (session, false))
+                })
                 .map_err(|_| Error::Unsupported("VideoToolbox H.264"))?;
             low_latency(&session);
             set_rate(&session, bitrate, frame_rate);
@@ -172,6 +197,7 @@ impl MacEncoder {
             Ok(Self {
                 codec,
                 session,
+                required_hardware,
                 surface,
                 scaler: Scaler::Untried,
                 width,
