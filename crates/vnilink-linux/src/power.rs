@@ -9,16 +9,32 @@ struct SystemInhibitor {
 }
 impl PowerInhibitor for SystemInhibitor {}
 struct DisplayInhibitor {
-    proxy: Proxy<'static>,
+    proxy: Option<Proxy<'static>>,
     cookie: u32,
     release: &'static str,
 }
 impl PowerInhibitor for DisplayInhibitor {}
 impl Drop for DisplayInhibitor {
     fn drop(&mut self) {
-        // Do not wait for a desktop reply during teardown. The private bus
-        // connection is also dropped, allowing owner-loss cleanup after crash.
-        let _ = self.proxy.call_noreply(self.release, &self.cookie);
+        let Some(proxy) = self.proxy.take() else {
+            return;
+        };
+        let (release, cookie) = (self.release, self.cookie);
+        // zbus's blocking calls, and the proxy's own drop, block on a runtime
+        // of their own, which Tokio refuses on a thread that drives one: the
+        // core releases inhibitors from its runtime, and the panic in this
+        // destructor aborted the engine. A thread of their own does both. The
+        // release does not wait for the desktop's reply, and dropping the
+        // private bus connection lets owner-loss cleanup run after a crash.
+        // Should no thread start, the proxy is leaked rather than dropped
+        // here, and the bus ends the inhibition with this process.
+        let proxy = std::mem::ManuallyDrop::new(proxy);
+        let _ = std::thread::Builder::new()
+            .name("vnilink-display-inhibit".into())
+            .spawn(move || {
+                let proxy = std::mem::ManuallyDrop::into_inner(proxy);
+                let _ = proxy.call_noreply(release, &cookie);
+            });
     }
 }
 #[derive(Default)]
@@ -65,7 +81,7 @@ impl LinuxPowerFactory {
                 );
                 let owned = match result {
                     Ok(cookie) => DisplayInhibitor {
-                        proxy: gnome,
+                        proxy: Some(gnome),
                         cookie,
                         release: "Uninhibit",
                     },
@@ -91,7 +107,7 @@ impl LinuxPowerFactory {
                             .call("Inhibit", &("VniLink", "Remote desktop session"))
                             .map_err(|_| Error::Unsupported("Linux rejected display inhibition"))?;
                         DisplayInhibitor {
-                            proxy,
+                            proxy: Some(proxy),
                             cookie,
                             release: "UnInhibit",
                         }
@@ -213,6 +229,42 @@ mod bus_tests {
         tokio::task::spawn_blocking(move || drop(lease))
             .await
             .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while count.load(Ordering::SeqCst) != 0 {
+            assert!(std::time::Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+    /// The core releases an inhibitor on its runtime: on a worker thread, not
+    /// in `spawn_blocking`. Released there, it used to panic in its destructor
+    /// ("Cannot start a runtime from within a runtime") and abort the engine
+    /// whenever a Linux viewer closed a remote screen.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "run explicitly inside dbus-run-session; no real desktop service"]
+    async fn a_display_inhibition_is_released_from_the_runtime_itself() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let _server = zbus::connection::Builder::session()
+            .unwrap()
+            .name("org.freedesktop.ScreenSaver")
+            .unwrap()
+            .serve_at("/org/freedesktop/ScreenSaver", ScreenSaver(count.clone()))
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let lease = tokio::task::spawn_blocking(|| {
+            LinuxPowerFactory
+                .acquire(
+                    PowerKind::Display,
+                    &BackendStartup::new(Duration::from_secs(5)),
+                )
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        // Dropped here, on a runtime worker, as `Slot::clear` drops it.
+        tokio::spawn(async move { drop(lease) }).await.unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         while count.load(Ordering::SeqCst) != 0 {
             assert!(std::time::Instant::now() < deadline);
