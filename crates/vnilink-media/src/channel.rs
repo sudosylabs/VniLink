@@ -25,6 +25,26 @@ pub struct ChannelSlot {
     pub captured_at: Option<Instant>,
 }
 
+impl ChannelSlot {
+    /// Whether `other` has this picture's size and pixels, whatever either
+    /// stride. Only each row's pixels are compared, not its padding.
+    fn same_picture(&self, other: &Self) -> bool {
+        if (self.width, self.height) != (other.width, other.height) {
+            return false;
+        }
+        let row = usize::from(self.width) * 4;
+        (0..usize::from(self.height)).all(|y| {
+            match (
+                self.bytes.get(y * self.stride..y * self.stride + row),
+                other.bytes.get(y * other.stride..y * other.stride + row),
+            ) {
+                (Some(left), Some(right)) => left == right,
+                _ => false,
+            }
+        })
+    }
+}
+
 /// Newest-picture slot shared between a capture thread and its serve loop.
 pub struct FrameChannel {
     slot: Mutex<Option<ChannelSlot>>,
@@ -49,6 +69,25 @@ impl FrameChannel {
     /// Store `slot` as the latest picture. Overwrites whatever is waiting.
     pub fn push(&self, slot: ChannelSlot) {
         *self.slot.lock().expect("frame channel") = Some(slot);
+        self.stored();
+    }
+
+    /// Store `slot` unless it shows the same picture as the one stored, and
+    /// say whether it was stored. A compositor may hand over an unchanged
+    /// screen again, at the full frame rate while anything else on it moves;
+    /// that is no change, and must not move [`Self::pushed_at`].
+    pub fn push_if_changed(&self, slot: ChannelSlot) -> bool {
+        let mut stored = self.slot.lock().expect("frame channel");
+        if stored.as_ref().is_some_and(|last| last.same_picture(&slot)) {
+            return false;
+        }
+        *stored = Some(slot);
+        drop(stored);
+        self.stored();
+        true
+    }
+
+    fn stored(&self) {
         *self.pushed_at.lock().expect("frame channel") = Some(Instant::now());
         self.generation.fetch_add(1, Ordering::Relaxed);
     }

@@ -72,3 +72,36 @@ fn cached_receives_pump_changes_and_do_not_hide_failures() {
         Err(Error::Unsupported("stream closed"))
     ));
 }
+
+/// A compositor may deliver the same screen again; storing it would say the
+/// screen changed. A changed pixel, or another size, is stored.
+#[test]
+fn the_same_picture_again_is_not_a_change() {
+    let channel = FrameChannel::new();
+    assert!(channel.push_if_changed(slot(4, 4)));
+    let pushed = channel.pushed_at();
+    let first = channel.recv_timeout(Duration::from_secs(1), || {}).unwrap();
+    // The same pixels in a wider stride are the same picture.
+    let mut padded = vec![0; 4 * 32];
+    for y in 0..4 {
+        padded[y * 32..y * 32 + 16].copy_from_slice(&first.bytes[y * 16..y * 16 + 16]);
+    }
+    let again = ChannelSlot {
+        stride: 32,
+        bytes: padded.into(),
+        ..slot(4, 4)
+    };
+    assert!(!channel.push_if_changed(again));
+    assert_eq!(channel.pushed_at(), pushed);
+    assert!(channel
+        .recv_timeout(Duration::from_millis(20), || {})
+        .is_err());
+    let mut changed = vec![7; 4 * 4 * 4];
+    changed[37] = 8;
+    assert!(channel.push_if_changed(ChannelSlot {
+        bytes: changed.into(),
+        ..slot(4, 4)
+    }));
+    assert!(channel.pushed_at() > pushed);
+    assert!(channel.push_if_changed(slot(2, 2)));
+}

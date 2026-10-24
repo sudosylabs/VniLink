@@ -175,7 +175,8 @@ impl PortalCapture {
         (self.width, self.height)
     }
 
-    /// When PipeWire last pushed a picture. Idle polls do not move this.
+    /// When PipeWire last delivered a changed picture. Idle polls, and the
+    /// same picture delivered again, do not move this.
     pub fn attested_at(&self) -> Option<std::time::Instant> {
         self.shared.channel.pushed_at()
     }
@@ -730,7 +731,10 @@ fn copy_buffer(stream: &pw::stream::Stream, shared: &Shared) {
     } else {
         stride
     };
-    shared.channel.push(ChannelSlot {
+    // Mutter hands the whole screen over again at the frame rate while
+    // anything on it moves, so an unchanged picture comes too: it is no
+    // change, and the host must still see the screen as still.
+    shared.channel.push_if_changed(ChannelSlot {
         width,
         height,
         stride,
