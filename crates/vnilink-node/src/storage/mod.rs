@@ -115,6 +115,11 @@ impl EncryptedInstallationStore {
         self.paths.screen_grant.clone()
     }
 
+    /// Where its screenshots keep their grant, beside the host's.
+    pub fn screenshot_grant(&self) -> std::path::PathBuf {
+        self.paths.screenshot_grant.clone()
+    }
+
     pub fn open_production() -> Result<Self, FfiError> {
         let paths = paths::production_paths()?;
         open_at(paths, Arc::new(KeyringVault::production()), false).map_err(FfiError::from)

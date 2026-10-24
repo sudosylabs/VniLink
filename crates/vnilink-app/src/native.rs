@@ -9,7 +9,12 @@ pub struct FfiNativeBackend {
     pub error: Option<String>,
 }
 impl VnilinkCore {
-    pub fn initialize_native_backends(&self) -> Vec<FfiNativeBackend> {
+    /// `screenshot_grant` is where screenshots keep the system's grant to
+    /// read the screen, where one is kept (the desktop portal's, on Linux).
+    pub fn initialize_native_backends(
+        &self,
+        screenshot_grant: Option<std::path::PathBuf>,
+    ) -> Vec<FfiNativeBackend> {
         let operations = [
             ("system", self.enable_native_system_actions()),
             ("terminal", self.enable_default_native_terminal()),
@@ -17,7 +22,7 @@ impl VnilinkCore {
             ("clipboard", self.enable_native_clipboard()),
             ("video", self.prepare_native_video()),
             ("filesystem", self.enable_filesystem_access()),
-            ("snapshot", self.enable_native_snapshot()),
+            ("snapshot", self.enable_native_snapshot(screenshot_grant)),
         ];
         operations
             .into_iter()
@@ -97,13 +102,19 @@ impl VnilinkCore {
         }
     }
     /// Installs the one-shot screenshot capture. Registration does not prompt or capture.
-    pub fn enable_native_snapshot(&self) -> Result<(), FfiError> {
+    pub fn enable_native_snapshot(
+        &self,
+        screenshot_grant: Option<std::path::PathBuf>,
+    ) -> Result<(), FfiError> {
         #[cfg(target_os = "macos")]
         let factory = Arc::new(vnilink_macos::MacSnapshot);
         #[cfg(target_os = "linux")]
-        let factory = Arc::new(vnilink_linux::LinuxSnapshot);
+        let factory = Arc::new(vnilink_linux::LinuxSnapshot::new(screenshot_grant));
         #[cfg(windows)]
         let factory = Arc::new(vnilink_windows::WindowsSnapshot);
+        // macOS and Windows keep their own consent; they need no file.
+        #[cfg(not(target_os = "linux"))]
+        let _ = screenshot_grant;
         #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         {
             self.inner

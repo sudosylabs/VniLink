@@ -15,6 +15,7 @@ use super::StoreFailure;
 const DATABASE_NAME: &str = "installation.sqlite3";
 const LOCK_NAME: &str = "installation.lock";
 const SCREEN_GRANT_NAME: &str = "screen-grant";
+const SCREENSHOT_GRANT_NAME: &str = "screenshot-grant";
 
 pub(crate) struct InstallationPaths {
     pub(crate) engine_dir: PathBuf,
@@ -26,6 +27,9 @@ pub(crate) struct InstallationPaths {
     /// The desktop portal's restore token for sharing this screen
     /// (`vnilink_linux::ScreenGrant`), private as the database is.
     pub(crate) screen_grant: PathBuf,
+    /// The same for screenshots, which ask the ScreenCast portal: its
+    /// grants are its own, not the RemoteDesktop host's.
+    pub(crate) screenshot_grant: PathBuf,
 }
 
 impl InstallationPaths {
@@ -37,6 +41,7 @@ impl InstallationPaths {
             shm: sibling(&database, "-shm"),
             lock_file: engine_dir.join(LOCK_NAME),
             screen_grant: engine_dir.join(SCREEN_GRANT_NAME),
+            screenshot_grant: engine_dir.join(SCREENSHOT_GRANT_NAME),
             database,
             engine_dir,
         }

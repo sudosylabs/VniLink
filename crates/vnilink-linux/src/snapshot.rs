@@ -23,17 +23,33 @@ pub enum LinuxPlan {
     NeedsSourceSelection,
 }
 
-pub fn linux_plan(has_display: bool, prompt: bool) -> LinuxPlan {
-    if has_display {
+/// An X11 session reads its root window. Elsewhere, Wayland included, only
+/// the ScreenCast portal reads the screen: with a kept grant it shares the
+/// same screen without asking, and without one it asks someone there, so a
+/// plain refresh asks for a source to be chosen first.
+pub fn linux_plan(x11: bool, granted: bool, prompt: bool) -> LinuxPlan {
+    if x11 {
         LinuxPlan::X11
-    } else if prompt {
+    } else if granted || prompt {
         LinuxPlan::Portal
     } else {
         LinuxPlan::NeedsSourceSelection
     }
 }
 
-pub struct LinuxSnapshot;
+/// Screenshots of this computer's screen. `grant` is where the portal's
+/// consent is kept ([`crate::ScreenGrant`]), as RustDesk keeps its own:
+/// once someone here has chosen the screen, later screenshots need no one.
+/// Revoked in the system's privacy settings, the next one asks again.
+pub struct LinuxSnapshot {
+    grant: Option<std::path::PathBuf>,
+}
+
+impl LinuxSnapshot {
+    pub fn new(grant: Option<std::path::PathBuf>) -> Self {
+        Self { grant }
+    }
+}
 
 impl HostSnapshotFactory for LinuxSnapshot {
     fn capture(
@@ -43,10 +59,12 @@ impl HostSnapshotFactory for LinuxSnapshot {
         prompt: bool,
     ) -> Result<ScreenImage, SnapshotFailure> {
         watch_cancel(deadline, cancel)?;
-        match linux_plan(std::env::var_os("DISPLAY").is_some(), prompt) {
+        let grant = self.grant.as_ref().map(crate::ScreenGrant::at);
+        let granted = grant.as_ref().and_then(crate::ScreenGrant::token).is_some();
+        match linux_plan(crate::session::is_x11(), granted, prompt) {
             LinuxPlan::NeedsSourceSelection => Err(SnapshotFailure::NeedsSourceSelection),
             LinuxPlan::X11 => capture_x11(deadline, cancel),
-            LinuxPlan::Portal => capture_portal(deadline, cancel),
+            LinuxPlan::Portal => capture_portal(deadline, cancel, grant.as_ref()),
         }
     }
 }
@@ -73,6 +91,7 @@ fn capture_x11(deadline: Instant, cancel: &AtomicBool) -> Result<ScreenImage, Sn
 fn capture_portal(
     deadline: Instant,
     cancel: &Arc<AtomicBool>,
+    grant: Option<&crate::ScreenGrant>,
 ) -> Result<ScreenImage, SnapshotFailure> {
     #[cfg(target_os = "linux")]
     {
@@ -83,8 +102,9 @@ fn capture_portal(
             .map_err(|_| SnapshotFailure::Unavailable)?;
         let mut session = crate::portal::PortalSession::new();
         let remote = runtime
-            // A screenshot is one look: its grant is not kept.
-            .block_on(crate::dbus::open_monitor(&mut session, None))
+            // Answered after the viewer has given up, the dialog's grant is
+            // still kept, so the viewer's next refresh shows the screen.
+            .block_on(crate::dbus::open_monitor(&mut session, grant))
             .map_err(|error| match error {
                 // Someone there declined the dialog: permission, not a source.
                 vnilink_media::Error::CaptureDenied(_) => SnapshotFailure::NeedsPermission,
@@ -124,7 +144,7 @@ fn capture_portal(
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (deadline, cancel);
+        let _ = (deadline, cancel, grant);
         Err(SnapshotFailure::NeedsSourceSelection)
     }
 }
@@ -135,9 +155,20 @@ mod tests {
 
     #[test]
     fn selection_does_not_open_a_portal_and_choose_does() {
-        assert_eq!(linux_plan(true, false), LinuxPlan::X11);
-        assert_eq!(linux_plan(true, true), LinuxPlan::X11);
-        assert_eq!(linux_plan(false, false), LinuxPlan::NeedsSourceSelection);
-        assert_eq!(linux_plan(false, true), LinuxPlan::Portal);
+        assert_eq!(linux_plan(true, false, false), LinuxPlan::X11);
+        assert_eq!(linux_plan(true, true, true), LinuxPlan::X11);
+        assert_eq!(
+            linux_plan(false, false, false),
+            LinuxPlan::NeedsSourceSelection
+        );
+        assert_eq!(linux_plan(false, false, true), LinuxPlan::Portal);
+    }
+
+    /// Wayland, XWayland's `DISPLAY` set or not: a kept grant reads the
+    /// screen through the portal on a plain refresh.
+    #[test]
+    fn a_kept_grant_reads_the_screen_without_asking() {
+        assert_eq!(linux_plan(false, true, false), LinuxPlan::Portal);
+        assert_eq!(linux_plan(false, true, true), LinuxPlan::Portal);
     }
 }

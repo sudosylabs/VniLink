@@ -1267,18 +1267,20 @@ impl Task for OpenTask {
     type Output = OpenedEngine;
     type JsValue = Engine;
     fn compute(&mut self) -> Result<Self::Output> {
-        let (result, screen_grant) = if self.temporary {
+        let (result, screen_grant, screenshot_grant) = if self.temporary {
             (
                 VnilinkCore::create(true, vec![]),
                 self.screen_grant.clone().filter(|_| self.capture),
+                None,
             )
         } else {
             let store =
                 storage::EncryptedInstallationStore::open_production().map_err(core_error)?;
-            let screen_grant = store.screen_grant();
+            let (screen_grant, screenshot_grant) = (store.screen_grant(), store.screenshot_grant());
             (
                 VnilinkCore::open_persistent(Box::new(store)),
                 Some(screen_grant),
+                Some(screenshot_grant),
             )
         };
         let core = result.map_err(core_error)?;
@@ -1295,7 +1297,7 @@ impl Task for OpenTask {
         } else if self.temporary {
             vec![]
         } else {
-            core.initialize_native_backends()
+            core.initialize_native_backends(screenshot_grant)
                 .into_iter()
                 .map(Into::into)
                 .collect()
