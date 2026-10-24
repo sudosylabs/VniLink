@@ -73,7 +73,7 @@ pub use pointer::{
 };
 mod grant;
 mod session;
-pub use grant::ScreenGrant;
+pub use grant::{GrantedScreen, ScreenGrant};
 pub use portal::{PortalPhase, PortalSession, ONE_PORTAL_SESSION_IS_UNIVERSAL};
 pub use x11::{raw_frame_from_ximage, X11Capture, X11Image, X11Plan};
 mod snapshot;

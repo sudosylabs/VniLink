@@ -23,6 +23,19 @@ pub struct ScreenGrant {
     path: PathBuf,
 }
 
+/// What a kept grant shares, learned when it was last opened, so a host can
+/// offer the screen without opening the portal, and without the compositor
+/// announcing a share no one is watching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GrantedScreen {
+    pub width: u16,
+    pub height: u16,
+    /// The compositor reports the pointer apart from the picture.
+    pub separate_cursor: bool,
+    /// Remote interaction was allowed with the screen.
+    pub control: bool,
+}
+
 impl ScreenGrant {
     pub fn at(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
@@ -39,30 +52,69 @@ impl ScreenGrant {
     /// Keeps the token the portal answered a start with, replacing the last
     /// whole: readers see the old token or the new one, never part of one.
     pub fn keep(&self, token: &str) -> Result<(), Error> {
-        let failed = |_| Error::InvalidSetting("the screen sharing grant could not be kept");
         if token.is_empty() || token.contains('\n') {
             return Err(Error::InvalidSetting(
                 "the portal's restore token is malformed",
             ));
         }
-        let directory = self.path.parent().unwrap_or(Path::new("."));
-        let temporary = directory.join(format!(
-            ".{}.{}",
-            self.path
-                .file_name()
-                .map_or("screen-grant".into(), |name| name.to_string_lossy()),
-            std::process::id()
-        ));
-        let mut file = private_file(&temporary).map_err(failed)?;
-        let written = file
-            .write_all(token.as_bytes())
-            .and_then(|()| file.sync_all())
-            .and_then(|()| std::fs::rename(&temporary, &self.path));
-        if written.is_err() {
-            let _ = std::fs::remove_file(&temporary);
-        }
-        written.map_err(failed)
+        replace_private(&self.path, token)
     }
+
+    /// The screen this grant shared when last opened, if kept.
+    pub fn screen(&self) -> Option<GrantedScreen> {
+        let text = std::fs::read_to_string(self.screen_path()).ok()?;
+        let mut fields = text.split_whitespace();
+        let mut next = || fields.next()?.parse::<u16>().ok();
+        let (width, height, cursor, control) = (next()?, next()?, next()?, next()?);
+        (width > 0 && height > 0 && cursor <= 1 && control <= 1).then_some(GrantedScreen {
+            width,
+            height,
+            separate_cursor: cursor == 1,
+            control: control == 1,
+        })
+    }
+
+    /// Keeps what the grant shares, beside its token.
+    pub fn keep_screen(&self, screen: GrantedScreen) -> Result<(), Error> {
+        replace_private(
+            &self.screen_path(),
+            &format!(
+                "{} {} {} {}",
+                screen.width,
+                screen.height,
+                u8::from(screen.separate_cursor),
+                u8::from(screen.control)
+            ),
+        )
+    }
+
+    fn screen_path(&self) -> PathBuf {
+        let mut name = self.path.file_name().unwrap_or_default().to_os_string();
+        name.push(".screen");
+        self.path.with_file_name(name)
+    }
+}
+
+/// Replaces `path` whole with `contents`, readable by this user only:
+/// readers see the old contents or the new, never part of either.
+fn replace_private(path: &Path, contents: &str) -> Result<(), Error> {
+    let failed = |_| Error::InvalidSetting("the screen sharing grant could not be kept");
+    let directory = path.parent().unwrap_or(Path::new("."));
+    let temporary = directory.join(format!(
+        ".{}.{}",
+        path.file_name()
+            .map_or("screen-grant".into(), |name| name.to_string_lossy()),
+        std::process::id()
+    ));
+    let mut file = private_file(&temporary).map_err(failed)?;
+    let written = file
+        .write_all(contents.as_bytes())
+        .and_then(|()| file.sync_all())
+        .and_then(|()| std::fs::rename(&temporary, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    written.map_err(failed)
 }
 
 /// A new file that only this user can read or write.

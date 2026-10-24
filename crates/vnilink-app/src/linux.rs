@@ -8,13 +8,16 @@
 //! meanwhile. PipeWire delivers pictures only when the screen changes, and
 //! nothing is encoded while no one watches. Sharing the screen without
 //! allowing remote interaction, which GNOME's dialog leaves off by default,
-//! shares it view-only. Declining the dialog, or ending the share from the
-//! compositor's own controls, ends the host.
+//! shares it view-only. Declining the dialog ends the host.
 //!
 //! Given a grant file, the portal keeps the consent until it is revoked in
-//! the system's privacy settings, as RustDesk's does: a later host shares
-//! the same screen, with the same interaction, without asking. Only the
-//! first host, and the first after a revocation, asks.
+//! the system's privacy settings, as RustDesk's does: a later portal session
+//! shares the same screen, with the same interaction, without asking. The
+//! host then shares the screen only while someone watches, so the
+//! compositor's notice that it is shared means someone is, and a session
+//! the compositor ends, a locked screen included, opens again for the next
+//! viewer. Without a grant file, the first session is held for the host's
+//! life, and ending it from the compositor's controls ends the host.
 use crate::{FfiError, VnilinkCore};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -189,8 +192,81 @@ fn refusal(error: &vnilink_media::Error) -> String {
     }
 }
 
+/// How long the screen stays shared after its last viewer leaves, with a
+/// kept grant: a viewer reconnecting at once finds it still open.
+const IDLE_RELEASE: Duration = Duration::from_secs(3);
+
+/// Input for whichever portal session is open now. The core takes one
+/// input adapter, and refuses another while a viewer is connected; the
+/// session behind it closes when no one watches and opens again for the
+/// next viewer.
+struct SessionInput {
+    current: Arc<Mutex<Option<vnilink_linux::WaylandInput>>>,
+    size: (u16, u16),
+}
+impl SessionInput {
+    fn with<T>(
+        &self,
+        apply: impl FnOnce(&mut vnilink_linux::WaylandInput) -> Result<T, vnilink::Error>,
+    ) -> Result<T, vnilink::Error> {
+        match self
+            .current
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+        {
+            Some(input) => apply(input),
+            None => Err(vnilink::Error::InputFailed(
+                "the screen is not being shared right now",
+            )),
+        }
+    }
+}
+impl vnilink::HostDesktop for SessionInput {
+    fn apply(&mut self, event: vnilink::InputEvent) -> Result<(), vnilink::Error> {
+        self.with(|input| vnilink::HostDesktop::apply(input, event))
+    }
+    fn type_text(&mut self, text: &str) -> Result<(), vnilink::Error> {
+        self.with(|input| vnilink::HostDesktop::type_text(input, text))
+    }
+    fn monitor(&self) -> (u16, u16) {
+        self.size
+    }
+}
+
+/// What an open portal session shares, as a kept grant remembers it.
+fn described(capture: &WaylandCapture) -> vnilink_linux::GrantedScreen {
+    let (width, height) = capture.size();
+    vnilink_linux::GrantedScreen {
+        width,
+        height,
+        separate_cursor: capture.separate_cursor(),
+        control: capture.desktop().is_some(),
+    }
+}
+
+/// Opens the portal session: with a kept grant, without asking anyone.
+fn open(
+    stop: &Arc<AtomicBool>,
+    grant: &Option<std::path::PathBuf>,
+) -> Result<WaylandCapture, vnilink_media::Error> {
+    let startup = vnilink::BackendStartup::with_stop(Arc::clone(stop), CONSENT_TIMEOUT);
+    WaylandCapture::open(startup, grant.as_ref().map(vnilink_linux::ScreenGrant::at))
+}
+
 /// Asks for the grant, installs it, and serves each run of viewers until
 /// stopped or until the grant ends.
+///
+/// With a kept grant the portal session, and the compositor's notice that
+/// the screen is shared, lasts only while someone watches: it closes
+/// [`IDLE_RELEASE`] after the last viewer leaves and opens again, without
+/// asking, for the next. A grant that remembers what it shares offers the
+/// screen without opening a session at all until a viewer comes; each
+/// session opened brings what it remembers up to date. A session the
+/// compositor ends, from its own controls or because the screen locked,
+/// opens again the same way. Without a kept grant, reopening would ask
+/// every time, so the first session is held for the host's life and its
+/// end ends the host.
 fn serve(
     core: &Arc<Core>,
     stop: &Arc<AtomicBool>,
@@ -200,24 +276,40 @@ fn serve(
     let set = |granted: bool, error: Option<String>| {
         *status.lock().unwrap_or_else(|e| e.into_inner()) = Status { granted, error };
     };
-    let startup = vnilink::BackendStartup::with_stop(Arc::clone(stop), CONSENT_TIMEOUT);
-    let capture = match WaylandCapture::open(startup, grant.map(vnilink_linux::ScreenGrant::at)) {
-        Ok(capture) => capture,
-        Err(error) => {
-            if !stop.load(Ordering::Acquire) {
-                if matches!(error, vnilink_media::Error::CaptureDenied(_)) {
-                    report_consent(core, false, false);
-                }
-                set(false, Some(refusal(&error)));
-            }
-            return;
+    let kept = grant.as_ref().map(vnilink_linux::ScreenGrant::at);
+    let remember = |screen| {
+        if let Some(kept) = &kept {
+            let _ = kept.keep_screen(screen);
         }
     };
-    let size = capture.size();
+    let remembered = kept
+        .as_ref()
+        .filter(|kept| kept.token().is_some())
+        .and_then(vnilink_linux::ScreenGrant::screen);
+    let (screen, mut capture) = match remembered {
+        Some(screen) => (screen, None),
+        None => match open(stop, &grant) {
+            Ok(opened) => {
+                let screen = described(&opened);
+                remember(screen);
+                (screen, Some(opened))
+            }
+            Err(error) => {
+                if !stop.load(Ordering::Acquire) {
+                    if matches!(error, vnilink_media::Error::CaptureDenied(_)) {
+                        report_consent(core, false, false);
+                    }
+                    set(false, Some(refusal(&error)));
+                }
+                return;
+            }
+        },
+    };
+    let size = (screen.width, screen.height);
     match core.set_capture(Box::new(LinuxCaptureDescriptor {
         width: size.0,
         height: size.1,
-        cursor: capture.separate_cursor(),
+        cursor: screen.separate_cursor,
     })) {
         // A live viewer pins the descriptor; the capture it describes is the same monitor.
         Ok(()) | Err(vnilink::Error::Busy) => {}
@@ -227,11 +319,17 @@ fn serve(
         }
     }
     // Input travels the portal session the user granted, never X11.
-    let input = capture.desktop();
-    let control = input.is_some();
-    let desktop: Box<dyn vnilink::HostDesktop> = match input {
-        Some(input) => Box::new(input),
-        None => Box::new(ViewOnly(size)),
+    let control = screen.control;
+    let input = Arc::new(Mutex::new(
+        capture.as_ref().and_then(WaylandCapture::desktop),
+    ));
+    let desktop: Box<dyn vnilink::HostDesktop> = if control {
+        Box::new(SessionInput {
+            current: Arc::clone(&input),
+            size,
+        })
+    } else {
+        Box::new(ViewOnly(size))
     };
     match core.set_desktop(desktop) {
         Ok(()) | Err(vnilink::Error::Busy) => {}
@@ -243,13 +341,63 @@ fn serve(
     publish_topology(core, size);
     report_consent(core, true, control);
     set(true, None);
-    while !stop.load(Ordering::Acquire) && !capture.revoked() {
+    let releases = grant.is_some();
+    let mut idle_since = std::time::Instant::now();
+    while !stop.load(Ordering::Acquire) {
+        if capture.as_ref().is_some_and(WaylandCapture::revoked) {
+            // Ended on this computer: by its own controls, or the screen
+            // locked. Without a kept grant that ends the host.
+            capture = None;
+            *input.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            if !releases {
+                report_consent(core, false, false);
+                set(
+                    false,
+                    Some("Screen sharing was ended on this computer.".into()),
+                );
+                return;
+            }
+        }
         if core.video_targets().unwrap_or_default().is_empty() {
+            if releases && capture.is_some() && idle_since.elapsed() >= IDLE_RELEASE {
+                // No one watches: the compositor stops saying the screen is shared.
+                capture = None;
+                *input.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            }
             std::thread::sleep(Duration::from_millis(100));
             continue;
         }
+        if capture.is_none() {
+            match open(stop, &grant) {
+                Ok(opened) => {
+                    // The screen as it is now, for the next start. A size
+                    // changed since is not applied while this viewer is
+                    // connected: the core keeps the one it admitted it with.
+                    let now = described(&opened);
+                    if now != screen {
+                        remember(now);
+                    }
+                    *input.lock().unwrap_or_else(|e| e.into_inner()) = opened.desktop();
+                    capture = Some(opened);
+                    set(true, None);
+                }
+                Err(error) => {
+                    if stop.load(Ordering::Acquire) {
+                        break;
+                    }
+                    // A locked screen cannot be shared; the next request
+                    // tries again once it is unlocked.
+                    set(true, Some(refusal(&error)));
+                    std::thread::sleep(Duration::from_secs(1));
+                    continue;
+                }
+            }
+        }
+        let Some(open_capture) = capture.as_ref() else {
+            continue;
+        };
         let result = vnilink_media::serve_shared_capture(
-            &capture,
+            open_capture,
             core,
             stop,
             true,
@@ -260,9 +408,10 @@ fn serve(
                 vnilink_linux::LinuxEncoder::open_codec(width, height, fps, bps, target.codec)
             },
         );
+        idle_since = std::time::Instant::now();
         match result {
             Ok(()) => set(true, None),
-            Err(_) if !stop.load(Ordering::Acquire) && !capture.revoked() => {
+            Err(_) if !stop.load(Ordering::Acquire) && !open_capture.revoked() => {
                 set(
                     true,
                     Some("Screen sharing stopped. Try connecting again.".into()),
@@ -271,13 +420,6 @@ fn serve(
             }
             Err(_) => {}
         }
-    }
-    if capture.revoked() && !stop.load(Ordering::Acquire) {
-        report_consent(core, false, false);
-        set(
-            false,
-            Some("Screen sharing was ended on this computer.".into()),
-        );
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::ScreenGrant;
+use crate::{GrantedScreen, ScreenGrant};
 
 /// A directory of its own under the system's temporary one, removed after.
 struct Scratch(std::path::PathBuf);
@@ -52,4 +52,36 @@ fn an_empty_or_malformed_token_is_no_grant() {
     assert_eq!(grant.token(), None);
     std::fs::write(&path, "\n").unwrap();
     assert_eq!(grant.token(), None);
+}
+
+/// What the grant shares is kept beside its token, privately, and read back
+/// as kept; nothing kept, or anything malformed, is nothing remembered.
+#[test]
+fn the_shared_screen_is_remembered_beside_the_token() {
+    let scratch = Scratch::new("screen");
+    let grant = ScreenGrant::at(scratch.0.join("screen-grant"));
+    assert_eq!(grant.screen(), None);
+    let screen = GrantedScreen {
+        width: 1920,
+        height: 1080,
+        separate_cursor: true,
+        control: false,
+    };
+    grant.keep_screen(screen).unwrap();
+    grant.keep("token").unwrap();
+    assert_eq!(grant.screen(), Some(screen));
+    assert_eq!(grant.token().as_deref(), Some("token"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(scratch.0.join("screen-grant.screen"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    std::fs::write(scratch.0.join("screen-grant.screen"), "0 1080 1 0").unwrap();
+    assert_eq!(grant.screen(), None);
+    std::fs::write(scratch.0.join("screen-grant.screen"), "1920 1080 2 0").unwrap();
+    assert_eq!(grant.screen(), None);
 }
