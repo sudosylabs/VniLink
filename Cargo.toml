@@ -49,3 +49,4 @@ enigo = { path = "vendor/enigo" }
 cpal = { path = "vendor/cpal" }
 
 shiguredo_libvpx = { path = "vendor/shiguredo-libvpx" }
+shiguredo_aom = { path = "vendor/shiguredo-aom" }

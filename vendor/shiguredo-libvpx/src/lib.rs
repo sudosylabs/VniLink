@@ -330,6 +330,32 @@ impl DecodedFrame<'_> {
     pub fn height(&self) -> usize {
         self.0.d_h as usize
     }
+
+    /// The colour space the bitstream declares, when it names BT.601 or
+    /// BT.709. VP8 declares none; VP9 may leave it unknown.
+    pub fn color_space(&self) -> Option<ColorSpace> {
+        match self.0.cs {
+            sys::vpx_color_space_VPX_CS_BT_601 | sys::vpx_color_space_VPX_CS_SMPTE_170 => {
+                Some(ColorSpace::Bt601)
+            }
+            sys::vpx_color_space_VPX_CS_BT_709 => Some(ColorSpace::Bt709),
+            _ => None,
+        }
+    }
+
+    /// Whether the bitstream declares full range rather than studio range.
+    pub fn full_range(&self) -> bool {
+        self.0.range == sys::vpx_color_range_VPX_CR_FULL_RANGE
+    }
+}
+
+/// A VP9 colour space, declared by the encoder and read back by the decoder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorSpace {
+    /// BT.601 (and SMPTE 170M, which shares its matrix)
+    Bt601,
+    /// BT.709
+    Bt709,
 }
 
 /// エンコーダーの入力画像フォーマット
@@ -638,6 +664,12 @@ pub struct Vp9Config {
 
     /// コンテンツタイプ最適化
     pub tune_content: Option<ContentType>,
+
+    /// The colour space declared in the bitstream (VP9E_SET_COLOR_SPACE)
+    pub color_space: Option<ColorSpace>,
+
+    /// Full range rather than studio range (VP9E_SET_COLOR_RANGE)
+    pub full_range: Option<bool>,
 }
 
 /// VP8 固有の設定
@@ -997,6 +1029,37 @@ impl Encoder {
                     &mut self.ctx,
                     sys::vp8e_enc_control_id_VP9E_SET_TUNE_CONTENT as c_int,
                     content_type as c_int,
+                )
+            };
+            Error::check(code, "vpx_codec_control_", Some(&self.ctx))?;
+        }
+
+        if let Some(color_space) = vp9_config.color_space {
+            let color_space = match color_space {
+                ColorSpace::Bt601 => sys::vpx_color_space_VPX_CS_BT_601,
+                ColorSpace::Bt709 => sys::vpx_color_space_VPX_CS_BT_709,
+            };
+            let code = unsafe {
+                sys::vpx_codec_control_(
+                    &mut self.ctx,
+                    sys::vp8e_enc_control_id_VP9E_SET_COLOR_SPACE as c_int,
+                    color_space as c_int,
+                )
+            };
+            Error::check(code, "vpx_codec_control_", Some(&self.ctx))?;
+        }
+
+        if let Some(full_range) = vp9_config.full_range {
+            let range = if full_range {
+                sys::vpx_color_range_VPX_CR_FULL_RANGE
+            } else {
+                sys::vpx_color_range_VPX_CR_STUDIO_RANGE
+            };
+            let code = unsafe {
+                sys::vpx_codec_control_(
+                    &mut self.ctx,
+                    sys::vp8e_enc_control_id_VP9E_SET_COLOR_RANGE as c_int,
+                    range as c_int,
                 )
             };
             Error::check(code, "vpx_codec_control_", Some(&self.ctx))?;

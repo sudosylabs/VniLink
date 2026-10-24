@@ -1,7 +1,7 @@
 use vnilink::VideoCodec;
 use vnilink_media::{
     bgra_to_nv12, nv12_to_bgra, parse_annex_b, RawFrame, SoftwareDecoder, VideoDecoder,
-    VideoSignal, STREAM_SIGNAL,
+    STREAM_SIGNAL,
 };
 
 use crate::codecs::{decodes, PROBE_SIDE};
@@ -92,10 +92,8 @@ fn nvenc_anchor_outlives_overlapping_sessions() {
 
 /// NVENC converts BGRA to the colour the stream declares as the CPU
 /// conversion does ([`bgra_to_nv12`]): flat pictures, black, white and the
-/// primaries included, decode to the same pixels. The software decoder reads
-/// every stream back as BT.601 whatever it declares, so the CPU conversion
-/// is read back the same way. The conversion comes before the codec; H.264
-/// has no software decoder here.
+/// primaries included, decode to the same pixels. The conversion comes
+/// before the codec; H.264 has no software decoder here.
 #[test]
 fn nvenc_conversion_matches_the_cpu_conversion() {
     for codec in [VideoCodec::H265, VideoCodec::Av1] {
@@ -126,11 +124,7 @@ fn nvenc_conversion_matches_the_cpu_conversion() {
             let middle = side / 2 * decoded.stride() + side / 2 * 4;
             let gpu = &decoded.pixels()[middle..middle + 3];
             let (y, uv) = bgra_to_nv12(&picture).unwrap().into_planes();
-            let as_decoded = VideoSignal {
-                matrix: 6,
-                ..STREAM_SIGNAL
-            };
-            let cpu = nv12_to_bgra(PROBE_SIDE, PROBE_SIDE, 0, &y, &uv, as_decoded).unwrap();
+            let cpu = nv12_to_bgra(PROBE_SIDE, PROBE_SIDE, 0, &y, &uv, STREAM_SIGNAL).unwrap();
             let cpu = &cpu.pixels()[middle..middle + 3];
             assert!(
                 gpu.iter()

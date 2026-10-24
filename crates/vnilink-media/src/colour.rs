@@ -11,6 +11,12 @@
 //! BT.709 is what VideoToolbox converts BGRA with and what Chromium assumes
 //! for an untagged high-definition stream. Limited range is what H.264
 //! decoders, Media Foundation's included, handle most consistently.
+//!
+//! The software codecs follow the same rule: they convert to BT.709, and
+//! H.265, AV1 and VP9 declare it. VP8 cannot declare a colour; Chromium
+//! shows an undeclared VP8 picture as BT.709 too (Electron 44, Chromium 152).
+//! Their decoder shows each picture in the colour its stream declares
+//! ([`declared_signal`]).
 
 /// A stream's colour, as H.264 VUI and ITU-T H.273 code it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +35,20 @@ pub const STREAM_SIGNAL: VideoSignal = VideoSignal {
     matrix: 1,
     full_range: false,
 };
+
+/// The colour a decoder shows a picture in: the matrix and range its stream
+/// declares, or [`STREAM_SIGNAL`] when the matrix is unspecified (H.273
+/// code 2), not handled, or cannot be declared, as in VP8.
+pub(crate) fn declared_signal(matrix: Option<u8>, full_range: bool) -> VideoSignal {
+    match matrix {
+        Some(matrix @ (1 | 5 | 6)) => VideoSignal {
+            matrix,
+            full_range,
+            ..STREAM_SIGNAL
+        },
+        _ => STREAM_SIGNAL,
+    }
+}
 
 /// The matrix that turns Y'CbCr back into R'G'B'.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,5 +103,42 @@ impl ToRgb {
             cr_green,
             cb_blue,
         }
+    }
+}
+
+/// Fixed-point (x256) R'G'B' → limited-range Y'CbCr for one matrix. Each
+/// chroma row sums to 0 so grey stays at 128; with eight-bit RGB the
+/// results stay within 16..=235 and 16..=240 without clamping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ToYuv {
+    luma: [i32; 3],
+    cb: [i32; 3],
+    cr: [i32; 3],
+}
+
+impl ToYuv {
+    pub(crate) fn of(matrix: YuvMatrix) -> Self {
+        match matrix {
+            YuvMatrix::Bt709 => Self {
+                luma: [47, 157, 16],
+                cb: [-26, -86, 112],
+                cr: [112, -102, -10],
+            },
+            YuvMatrix::Bt601 => Self {
+                luma: [66, 129, 25],
+                cb: [-38, -74, 112],
+                cr: [112, -94, -18],
+            },
+        }
+    }
+
+    pub(crate) fn convert(&self, red: u8, green: u8, blue: u8) -> (u8, u8, u8) {
+        let rgb = [i32::from(red), i32::from(green), i32::from(blue)];
+        let dot = |row: [i32; 3]| (row[0] * rgb[0] + row[1] * rgb[1] + row[2] * rgb[2] + 128) >> 8;
+        (
+            (dot(self.luma) + 16) as u8,
+            (dot(self.cb) + 128) as u8,
+            (dot(self.cr) + 128) as u8,
+        )
     }
 }
