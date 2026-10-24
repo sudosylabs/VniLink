@@ -17,6 +17,8 @@ mod encode;
 mod host;
 #[cfg(any(windows, test))]
 mod idle;
+#[cfg(any(windows, test))]
+mod outputs;
 mod plan;
 #[cfg(windows)]
 mod transform;

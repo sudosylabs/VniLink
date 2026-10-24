@@ -7,6 +7,8 @@ mod decode_tests;
 mod encode_tests;
 #[path = "tests/host.rs"]
 mod host_tests;
+#[path = "tests/outputs.rs"]
+mod outputs_tests;
 #[path = "tests/plan.rs"]
 mod plan_tests;
 #[cfg(windows)]

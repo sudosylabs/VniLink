@@ -3,6 +3,10 @@
 //! The secure UAC desktop is a different desktop. DuplicateOutput fails there,
 //! and this module reports that instead of pretending the picture is available.
 //!
+//! The output captured is the primary display's, on whichever adapter it is
+//! attached to ([`crate::outputs`]), and the capture device is created on
+//! that adapter.
+//!
 //! Pictures stay on the GPU that captured them ([`crate::gpu`]): the encoder
 //! converts and scales them there, and anything else that reads their pixels
 //! copies them out once.
@@ -20,10 +24,13 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM};
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, IDXGIAdapter1, IDXGIFactory1, IDXGIOutput1, IDXGIOutputDuplication,
-    IDXGIResource, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT,
+    CreateDXGIFactory1, IDXGIAdapter1, IDXGIFactory1, IDXGIOutput, IDXGIOutput1,
+    IDXGIOutputDuplication, IDXGIResource, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_NOT_FOUND,
+    DXGI_ERROR_WAIT_TIMEOUT,
 };
+use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFO};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
 
 use crate::plan::frame_size;
 
@@ -57,7 +64,7 @@ struct UnvalidatedDesktop {
 }
 
 impl WindowsCapture {
-    /// Opens the first output of the first adapter. Monitor index is always 0.
+    /// Opens the primary display's output, on the adapter it is attached to.
     pub fn open(startup: &vnilink::BackendStartup) -> Result<Self, Error> {
         check_startup(startup)?;
         let desktop = unsafe { Self::open_desktop(startup) }?;
@@ -159,7 +166,18 @@ impl WindowsCapture {
         check_startup(startup)?;
         let factory: IDXGIFactory1 = CreateDXGIFactory1().map_err(map_error)?;
         check_startup(startup)?;
-        let adapter: IDXGIAdapter1 = factory.EnumAdapters1(0).map_err(map_error)?;
+        let listed = list_outputs(&factory, startup)?;
+        let descriptions: Vec<_> = listed.iter().map(|(_, _, output)| *output).collect();
+        let chosen = crate::outputs::primary(&descriptions).ok_or(Error::CaptureRejected(
+            "no display is attached to the desktop",
+        ))?;
+        let Some((adapter, output, _)) =
+            listed.into_iter().find(|(_, _, output)| *output == chosen)
+        else {
+            return Err(Error::CaptureRejected(
+                "no display is attached to the desktop",
+            ));
+        };
         let mut device = None;
         let mut context = None;
         check_startup(startup)?;
@@ -192,8 +210,6 @@ impl WindowsCapture {
         let context =
             context.ok_or_else(|| map_error(windows::core::Error::from_hresult(E_FAIL)))?;
         crate::gpu::protect(&device).map_err(map_error)?;
-        let output = adapter.EnumOutputs(0).map_err(map_error)?;
-        let bounds = output.GetDesc().map_err(map_error)?.DesktopCoordinates;
         let output: IDXGIOutput1 = output.cast().map_err(map_error)?;
         check_startup(startup)?;
         let duplication = output.DuplicateOutput(&device).map_err(map_error)?;
@@ -206,7 +222,7 @@ impl WindowsCapture {
             format: desc.ModeDesc.Format,
             width: desc.ModeDesc.Width,
             height: desc.ModeDesc.Height,
-            origin: (bounds.left, bounds.top),
+            origin: chosen.origin,
         })
     }
 
@@ -310,6 +326,54 @@ impl WindowsCapture {
         let picture = self.pool.picture(&source).map_err(map_error)?;
         RawFrame::native(timestamp_us, Box::new(picture)).map(Some)
     }
+}
+
+/// Every output of every adapter, in DXGI's order, with what it shows.
+unsafe fn list_outputs(
+    factory: &IDXGIFactory1,
+    startup: &vnilink::BackendStartup,
+) -> Result<Vec<(IDXGIAdapter1, IDXGIOutput, crate::outputs::Output)>, Error> {
+    let mut listed = Vec::new();
+    for adapter_index in 0.. {
+        check_startup(startup)?;
+        let adapter = match factory.EnumAdapters1(adapter_index) {
+            Ok(adapter) => adapter,
+            Err(err) if err.code() == DXGI_ERROR_NOT_FOUND => break,
+            Err(err) => return Err(map_error(err)),
+        };
+        for output_index in 0.. {
+            let output = match adapter.EnumOutputs(output_index) {
+                Ok(output) => output,
+                Err(err) if err.code() == DXGI_ERROR_NOT_FOUND => break,
+                Err(err) => return Err(map_error(err)),
+            };
+            let desc = output.GetDesc().map_err(map_error)?;
+            let bounds = desc.DesktopCoordinates;
+            listed.push((
+                adapter.clone(),
+                output,
+                crate::outputs::Output {
+                    adapter: adapter_index,
+                    output: output_index,
+                    attached: desc.AttachedToDesktop.as_bool(),
+                    primary: is_primary(desc.Monitor),
+                    origin: (bounds.left, bounds.top),
+                },
+            ));
+        }
+    }
+    Ok(listed)
+}
+
+/// Whether Windows names `monitor` the primary one.
+fn is_primary(monitor: HMONITOR) -> bool {
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `info` is a valid MONITORINFO with its size set.
+    unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool()
+        && info.dwFlags & MONITORINFOF_PRIMARY != 0
 }
 
 /// When the desktop was last presented, from Desktop Duplication's

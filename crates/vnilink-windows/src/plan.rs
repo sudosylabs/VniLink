@@ -9,10 +9,10 @@ use vnilink_media::{CapturePlan, Error};
 /// The secure credential and UAC desktop is never this adapter.
 pub const SECURE_DESKTOP_SUPPORTED: bool = false;
 
-/// Screenshot display. Windows capture reads the first output only.
+/// Screenshot display. Windows capture reads the primary display only.
 pub const SNAPSHOT_DISPLAY_ID: &str = "0";
 
-/// Windows has no screen-capture consent call. Allow retries the first output.
+/// Windows has no screen-capture consent call. Allow retries the primary display.
 pub fn snapshot_prompts_for_consent(_prompt: bool) -> bool {
     false
 }

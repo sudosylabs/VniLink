@@ -107,9 +107,9 @@ impl VnilinkCore {
     }
 }
 
-/// The one display this host captures: the first output of the first
-/// adapter. Never 0, which names no display, so a viewer can select it and
-/// place its pointer on it.
+/// The one display this host captures: the primary display, on whichever
+/// adapter it is attached to. Never 0, which names no display, so a viewer
+/// can select it and place its pointer on it.
 const DISPLAY: u64 = 1;
 
 static TOPOLOGY_REVISION: AtomicU64 = AtomicU64::new(0);

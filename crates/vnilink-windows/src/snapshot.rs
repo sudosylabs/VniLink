@@ -1,8 +1,9 @@
 //! One Desktop Duplication frame for a remote screenshot.
 //!
-//! Opens the first output of the first adapter, the same output the desktop
-//! stream uses. This does not choose among monitors. The secure UAC desktop
-//! is not captured. The duplication is released when this function returns.
+//! Opens the primary display's output, on the adapter it is attached to,
+//! the same output the desktop stream uses. This does not choose among
+//! monitors. The secure UAC desktop is not captured. The duplication is
+//! released when this function returns.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -23,7 +24,7 @@ impl HostSnapshotFactory for WindowsSnapshot {
         cancel: &Arc<AtomicBool>,
         _prompt: bool,
     ) -> Result<ScreenImage, SnapshotFailure> {
-        // Windows has no consent dialog. Allow retries this first output.
+        // Windows has no consent dialog. Allow retries the primary display.
         watch_cancel(deadline, cancel)?;
         let startup = vnilink::BackendStartup::with_stop(
             Arc::clone(cancel),
