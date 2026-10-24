@@ -3,7 +3,7 @@
 //! meant to be still. A delivery advances the host's attestation, so one
 //! without a change keeps the host from seeing a still screen.
 //!
-//! `cargo run -p vnilink-linux --release --example portal_changes -- [seconds]`
+//! `cargo run -p vnilink-linux --release --example portal_changes -- [seconds] [grant file]`
 
 /// Milliseconds since 1970, to line changes up with other logs.
 #[cfg(target_os = "linux")]
@@ -20,11 +20,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seconds: u64 = std::env::args()
         .nth(1)
         .map_or(Ok(20), |text| text.parse())?;
+    let grant = std::env::args().nth(2).map(vnilink_linux::ScreenGrant::at);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
     let mut session = vnilink_linux::PortalSession::new();
-    let remote = runtime.block_on(vnilink_linux::open_monitor(&mut session))?;
+    let remote = runtime.block_on(vnilink_linux::open_monitor(&mut session, grant.as_ref()))?;
     let node = session
         .pipewire_node()
         .ok_or("the portal started no stream")?;

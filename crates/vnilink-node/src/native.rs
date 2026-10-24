@@ -103,6 +103,9 @@ pub(super) struct NativeRuntimeState {
     /// The monitor chosen in the portal dialog, served to every viewer.
     #[cfg(target_os = "linux")]
     linux_host: Option<(u32, vnilink_app::LinuxHost)>,
+    /// Where the host keeps the portal's grant between starts.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    screen_grant: Option<std::path::PathBuf>,
     input_ready: bool,
 }
 impl NativeRuntimeState {
@@ -110,6 +113,7 @@ impl NativeRuntimeState {
         backends: Vec<TransferNativeBackend>,
         desktops: Arc<data::DesktopChannels>,
         cameras: Arc<data::CameraChannels>,
+        screen_grant: Option<std::path::PathBuf>,
     ) -> Self {
         Self {
             backends,
@@ -123,6 +127,7 @@ impl NativeRuntimeState {
             windows_host: None,
             #[cfg(target_os = "linux")]
             linux_host: None,
+            screen_grant,
             input_ready: false,
         }
     }
@@ -188,7 +193,10 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                     .as_ref()
                     .is_none_or(|(_, host)| host.has_ended())
                 {
-                    let host = state.core.linux_host().map_err(core_error)?;
+                    let host = state
+                        .core
+                        .linux_host(state.native.screen_grant.clone())
+                        .map_err(core_error)?;
                     state.native.linux_host = Some((*display_id, host));
                 }
                 Ok(Reply::Done)

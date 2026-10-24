@@ -14,6 +14,7 @@ use super::StoreFailure;
 
 const DATABASE_NAME: &str = "installation.sqlite3";
 const LOCK_NAME: &str = "installation.lock";
+const SCREEN_GRANT_NAME: &str = "screen-grant";
 
 pub(crate) struct InstallationPaths {
     pub(crate) engine_dir: PathBuf,
@@ -22,6 +23,9 @@ pub(crate) struct InstallationPaths {
     pub(crate) wal: PathBuf,
     pub(crate) shm: PathBuf,
     pub(crate) lock_file: PathBuf,
+    /// The desktop portal's restore token for sharing this screen
+    /// (`vnilink_linux::ScreenGrant`), private as the database is.
+    pub(crate) screen_grant: PathBuf,
 }
 
 impl InstallationPaths {
@@ -32,6 +36,7 @@ impl InstallationPaths {
             wal: sibling(&database, "-wal"),
             shm: sibling(&database, "-shm"),
             lock_file: engine_dir.join(LOCK_NAME),
+            screen_grant: engine_dir.join(SCREEN_GRANT_NAME),
             database,
             engine_dir,
         }

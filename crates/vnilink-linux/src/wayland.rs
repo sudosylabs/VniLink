@@ -16,7 +16,7 @@ use ashpd::desktop::{
 use vnilink::{HostDesktop, InputEvent, PointerButton};
 use vnilink_media::{Error, FrameSource, RawFrame};
 
-use crate::PortalCapture;
+use crate::{PortalCapture, ScreenGrant};
 use futures_util::StreamExt;
 
 const INPUT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -114,6 +114,8 @@ impl HostDesktop for WaylandInput {
 /// Capture and input share the same consent and are revoked together.
 /// Someone may allow the screen without remote interaction: the grant is
 /// then view-only, and its session still ends the capture when revoked.
+/// With a [`ScreenGrant`], the portal keeps the consent until it is revoked
+/// in the system's settings: only the first start asks.
 pub struct WaylandCapture {
     capture: PortalCapture,
     input: WaylandInput,
@@ -121,7 +123,10 @@ pub struct WaylandCapture {
     control: bool,
 }
 impl WaylandCapture {
-    pub fn open(startup: vnilink::BackendStartup) -> Result<Self, Error> {
+    pub fn open(
+        startup: vnilink::BackendStartup,
+        grant: Option<ScreenGrant>,
+    ) -> Result<Self, Error> {
         startup.check().map_err(startup_error)?;
         let (tx, rx) = mpsc::sync_channel(64);
         let connection = Arc::new(Connection {
@@ -134,7 +139,7 @@ impl WaylandCapture {
             .name("vnilink-wayland-input".into())
             .spawn({
                 let startup = startup.clone();
-                move || worker_main(worker, rx, ready_tx, startup)
+                move || worker_main(worker, rx, ready_tx, startup, grant)
             })
             .map_err(|_| Error::CaptureRejected("the Wayland input worker could not start"))?;
         // Consent may need human interaction. Cancellation in the GTK layer
@@ -242,7 +247,10 @@ async fn cancelled(startup: &vnilink::BackendStartup) {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
-async fn open_grant(startup: &vnilink::BackendStartup) -> Result<Grant, Error> {
+async fn open_grant(
+    startup: &vnilink::BackendStartup,
+    grant: Option<&ScreenGrant>,
+) -> Result<Grant, Error> {
     startup.check().map_err(startup_error)?;
     let proxy = RemoteDesktop::new()
         .await
@@ -253,6 +261,7 @@ async fn open_grant(startup: &vnilink::BackendStartup) -> Result<Grant, Error> {
         .map_err(|_| {
             Error::CaptureRejected("the RemoteDesktop portal could not create a session")
         })?;
+    let token = grant.and_then(ScreenGrant::token);
     // Once a session exists, cancellation must explicitly close it, including
     // while the compositor's permission request is waiting for the user.
     let work = async {
@@ -264,7 +273,12 @@ async fn open_grant(startup: &vnilink::BackendStartup) -> Result<Grant, Error> {
                 &session,
                 SelectDevicesOptions::default()
                     .set_devices(DeviceType::Keyboard | DeviceType::Pointer)
-                    .set_persist_mode(PersistMode::DoNot),
+                    .set_persist_mode(if grant.is_some() {
+                        PersistMode::ExplicitlyRevoked
+                    } else {
+                        PersistMode::DoNot
+                    })
+                    .set_restore_token(token.as_deref()),
             )
             .await?
             .response()?;
@@ -294,6 +308,11 @@ async fn open_grant(startup: &vnilink::BackendStartup) -> Result<Grant, Error> {
         let control = response
             .devices()
             .contains(DeviceType::Keyboard | DeviceType::Pointer);
+        // Each start answers with the token for the next; the one offered
+        // is spent. A grant that cannot be kept asks again next time.
+        if let (Some(grant), Some(token)) = (grant, response.restore_token()) {
+            let _ = grant.keep(token);
+        }
         let streams = response.streams();
         let stream = streams
             .first()
@@ -350,6 +369,7 @@ fn worker_main(
     rx: mpsc::Receiver<Command>,
     ready: mpsc::Sender<Ready>,
     startup: vnilink::BackendStartup,
+    grant: Option<ScreenGrant>,
 ) {
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -363,7 +383,7 @@ fn worker_main(
     // zbus drops proxies by spawning cleanup tasks. Keep a runtime context
     // entered until all portal objects/streams have been dropped.
     let _runtime_context = runtime.enter();
-    let grant = match runtime.block_on(open_grant(&startup)) {
+    let grant = match runtime.block_on(open_grant(&startup, grant.as_ref())) {
         Ok(grant) => grant,
         Err(error) => {
             let _ = ready.send(Err(error));

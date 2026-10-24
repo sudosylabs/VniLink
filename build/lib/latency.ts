@@ -397,6 +397,10 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 		await processes.run('cargo', ['build', '--release', '--locked', '-p', platform.readerCrate, '--example', 'glass_latency'], { cwd: root });
 		const rendezvous = join(work, 'rendezvous');
 		await mkdir(rendezvous);
+		// Where the desktop portal's grants are kept between runs, for the
+		// host's screen and for the reader's, so each is asked for once.
+		const grants = join(root, '.build/latency');
+		await mkdir(grants, { recursive: true, mode: 0o700 });
 		let exited = false;
 		for (const role of ['host', 'viewer'] as const) {
 			const profile = join(work, role);
@@ -407,6 +411,7 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 				VNILINK_LATENCY_DIR: rendezvous,
 				VNILINK_LATENCY_OUTPUT: options.output,
 				VNILINK_LATENCY_HOLD_MS: String(options.holdSeconds * 1000),
+				VNILINK_LATENCY_SCREEN_GRANT: join(grants, 'host-screen-grant'),
 			};
 			const side = platform.launch(role, environment, join(options.output, `${role}.log`));
 			sides.push(side.result.catch(() => undefined).finally(() => {
@@ -421,7 +426,7 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 		await new Promise(resolve => setTimeout(resolve, options.settleSeconds * 1000));
 		const samples = join(options.output, 'samples.jsonl');
 		// The host runs the reader, under its own Screen Recording permission.
-		await publish(rendezvous, 'read', { reader: platform.reader, seconds: options.seconds, samples });
+		await publish(rendezvous, 'read', { reader: platform.reader, seconds: options.seconds, samples, grant: join(grants, 'reader-screen-grant') });
 		await arrival(rendezvous, 'read-done', (options.seconds + 60) * 1000 + platform.consentMs, () => exited, signal);
 		const read: unknown = JSON.parse(await readFile(join(rendezvous, 'read-done.json'), 'utf8'));
 		if (typeof read !== 'object' || read === null || !('code' in read) || read.code !== 0) {

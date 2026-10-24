@@ -83,7 +83,8 @@ fn capture_portal(
             .map_err(|_| SnapshotFailure::Unavailable)?;
         let mut session = crate::portal::PortalSession::new();
         let remote = runtime
-            .block_on(crate::dbus::open_monitor(&mut session))
+            // A screenshot is one look: its grant is not kept.
+            .block_on(crate::dbus::open_monitor(&mut session, None))
             .map_err(|error| match error {
                 // Someone there declined the dialog: permission, not a source.
                 vnilink_media::Error::CaptureDenied(_) => SnapshotFailure::NeedsPermission,

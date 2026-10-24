@@ -15,10 +15,16 @@ interface NativeEngine {
 	openDataChannel(kind: string, sessionId: string, generation: string, rows: number, columns: number, media?: string): Promise<NativeDataChannel>;
 }
 
-interface Addon { openEngine(): Promise<NativeEngine>; openTemporaryEngine(capture?: boolean): Promise<NativeEngine>; }
+interface Addon { openEngine(): Promise<NativeEngine>; openTemporaryEngine(capture?: boolean, screenGrant?: string): Promise<NativeEngine>; }
 
 function isAddon(value: unknown): value is Addon {
 	return record(value) && typeof value.openEngine === 'function' && typeof value.openTemporaryEngine === 'function';
+}
+
+/** The file a temporary engine that captures keeps its screen sharing grant in, from `--screen-grant <file>`. */
+function screenGrantArgument(argv: readonly string[]): string | undefined {
+	const index = argv.indexOf('--screen-grant');
+	return index >= 0 ? argv[index + 1] : undefined;
 }
 
 /** Engine events are read this often while the main process listens. */
@@ -63,7 +69,7 @@ export class EngineHost implements IClientConnectionFilter {
 			if (!isAddon(addon)) {
 				throw new Error('Invalid addon');
 			}
-			this.engine = await (process.argv.includes('--temporary') ? addon.openTemporaryEngine(process.argv.includes('--capture')) : addon.openEngine());
+			this.engine = await (process.argv.includes('--temporary') ? addon.openTemporaryEngine(process.argv.includes('--capture'), screenGrantArgument(process.argv)) : addon.openEngine());
 			this.port.postMessage({ ready: true });
 		} catch (error) {
 			// Native error strings name the reason only, never secrets, so the main process can log it.

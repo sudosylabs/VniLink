@@ -9,8 +9,12 @@
 //! nothing is encoded while no one watches. Sharing the screen without
 //! allowing remote interaction, which GNOME's dialog leaves off by default,
 //! shares it view-only. Declining the dialog, or ending the share from the
-//! compositor's own controls, ends the host: nothing asks again until
-//! sharing is started anew.
+//! compositor's own controls, ends the host.
+//!
+//! Given a grant file, the portal keeps the consent until it is revoked in
+//! the system's privacy settings, as RustDesk's does: a later host shares
+//! the same screen, with the same interaction, without asking. Only the
+//! first host, and the first after a revocation, asks.
 use crate::{FfiError, VnilinkCore};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -108,7 +112,9 @@ impl VnilinkCore {
     /// Hosts the monitor chosen in the portal dialog for remote desktop
     /// viewers, with the keyboard and pointer of the same grant when it
     /// allows them. Sharing policy and peer grants still decide who may view.
-    pub fn linux_host(&self) -> Result<LinuxHost, FfiError> {
+    /// `grant` is where the portal's consent is kept between hosts
+    /// ([`vnilink_linux::ScreenGrant`]); without it every host asks.
+    pub fn linux_host(&self, grant: Option<std::path::PathBuf>) -> Result<LinuxHost, FfiError> {
         let core = Arc::clone(&self.inner);
         let stop = Arc::new(AtomicBool::new(false));
         let status = Arc::new(Mutex::new(Status::default()));
@@ -117,7 +123,7 @@ impl VnilinkCore {
             let status = Arc::clone(&status);
             std::thread::Builder::new()
                 .name("vnilink-linux-host".into())
-                .spawn(move || serve(&core, &stop, &status))
+                .spawn(move || serve(&core, &stop, &status, grant))
                 .map_err(|_| FfiError::Unsupported {
                     message: "Screen sharing could not start".into(),
                 })?
@@ -185,12 +191,17 @@ fn refusal(error: &vnilink_media::Error) -> String {
 
 /// Asks for the grant, installs it, and serves each run of viewers until
 /// stopped or until the grant ends.
-fn serve(core: &Arc<Core>, stop: &Arc<AtomicBool>, status: &Mutex<Status>) {
+fn serve(
+    core: &Arc<Core>,
+    stop: &Arc<AtomicBool>,
+    status: &Mutex<Status>,
+    grant: Option<std::path::PathBuf>,
+) {
     let set = |granted: bool, error: Option<String>| {
         *status.lock().unwrap_or_else(|e| e.into_inner()) = Status { granted, error };
     };
     let startup = vnilink::BackendStartup::with_stop(Arc::clone(stop), CONSENT_TIMEOUT);
-    let capture = match WaylandCapture::open(startup) {
+    let capture = match WaylandCapture::open(startup, grant.map(vnilink_linux::ScreenGrant::at)) {
         Ok(capture) => capture,
         Err(error) => {
             if !stop.load(Ordering::Acquire) {

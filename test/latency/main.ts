@@ -25,6 +25,8 @@ const output = process.env.VNILINK_LATENCY_OUTPUT;
 
 /** Hold mode: how long the stimulus holds still, in ms; 0 when it never does. */
 const holdMs = Number(process.env.VNILINK_LATENCY_HOLD_MS ?? '0');
+/** Where the host keeps the desktop portal's grant between runs. */
+const screenGrant = process.env.VNILINK_LATENCY_SCREEN_GRANT;
 
 /** Hold mode: how long the stimulus moves between holds. */
 const MOVE_MS = 2000;
@@ -231,7 +233,7 @@ async function host(driver: WindowDriver): Promise<void> {
 		const read = await expect('read', 5 * 60000);
 		const [cpuStart, startedAt] = [cpuSeconds(), Date.now()];
 		const outcome = await new Promise<{ code: number; output: string }>(resolve => {
-			execFile(String(read.reader), [String(read.seconds), String(read.samples)], (error, stdout, stderr) => {
+			execFile(String(read.reader), [String(read.seconds), String(read.samples), String(read.grant)], (error, stdout, stderr) => {
 				resolve({ code: error ? 1 : 0, output: `${stdout}${stderr}` });
 			});
 		});
@@ -406,6 +408,7 @@ async function viewer(driver: WindowDriver): Promise<void> {
 const application = new TestApplication({
 	showWindow: false,
 	nativeVideo: role === 'host' || !isMacintosh,
+	screenGrant: role === 'host' ? screenGrant : undefined,
 	timeoutMs: 30 * 60000,
 });
 

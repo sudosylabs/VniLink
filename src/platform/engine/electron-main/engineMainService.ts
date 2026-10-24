@@ -55,13 +55,18 @@ export class EngineMainService extends Disposable {
 		return this.connected && !this.closing;
 	}
 
-	/** `capture` lets a temporary engine host this computer's screen; only the latency measurement asks for it. */
-	public async start(temporary = false, capture = false): Promise<void> {
+	/**
+	 * `capture` lets a temporary engine host this computer's screen; only the
+	 * latency measurement asks for it. `screenGrant` is the file such an engine
+	 * keeps the desktop portal's grant in, so a measurement asks once.
+	 */
+	public async start(temporary = false, capture = false, screenGrant?: string): Promise<void> {
 		if (this.started || this.closing) {
 			throw new Error('Engine already started');
 		}
 		this.started = true;
-		const child = utilityProcess.fork(join(__dirname, 'engine.cjs'), temporary ? ['--temporary', ...(capture ? ['--capture'] : [])] : [], { serviceName: 'VniLink Engine', stdio: 'ignore' });
+		const args = temporary ? ['--temporary', ...(capture ? ['--capture', ...(screenGrant === undefined ? [] : ['--screen-grant', screenGrant])] : [])] : [];
+		const child = utilityProcess.fork(join(__dirname, 'engine.cjs'), args, { serviceName: 'VniLink Engine', stdio: 'ignore' });
 		this.child = child;
 		await new Promise<void>((resolve, reject) => {
 			const timeout = setTimeout(() => {

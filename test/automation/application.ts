@@ -16,6 +16,8 @@ export interface TestApplicationOptions {
 	 * once screen sharing is turned on.
 	 */
 	readonly nativeVideo?: boolean;
+	/** Where that engine keeps the desktop portal's grant to share the screen, so a run asks once. */
+	readonly screenGrant?: string;
 	readonly timeoutMs?: number;
 }
 
@@ -75,6 +77,7 @@ export class TestApplication {
 			showWindow: this.options.showWindow ?? false,
 			temporaryEngine: true,
 			temporaryEngineCaptures: this.options.nativeVideo ?? false,
+			temporaryEngineScreenGrant: this.options.screenGrant,
 			onReady: async window => {
 				const driver = new WindowDriver(window, this.output);
 				try {

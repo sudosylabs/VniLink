@@ -1251,23 +1251,35 @@ pub struct Engine {
 pub struct OpenedEngine {
     core: VnilinkCore,
     backends: Vec<TransferNativeBackend>,
+    screen_grant: Option<std::path::PathBuf>,
 }
 pub struct OpenTask {
     temporary: bool,
     /// A temporary engine that may host this computer's screen, for the
     /// latency measurement. Only video is prepared: no input, files or shell.
     capture: bool,
+    /// Where a temporary engine that captures keeps its screen sharing
+    /// grant, so a measurement asks once; a persistent engine keeps it in
+    /// its installation's private directory.
+    screen_grant: Option<std::path::PathBuf>,
 }
 impl Task for OpenTask {
     type Output = OpenedEngine;
     type JsValue = Engine;
     fn compute(&mut self) -> Result<Self::Output> {
-        let result = if self.temporary {
-            VnilinkCore::create(true, vec![])
+        let (result, screen_grant) = if self.temporary {
+            (
+                VnilinkCore::create(true, vec![]),
+                self.screen_grant.clone().filter(|_| self.capture),
+            )
         } else {
-            VnilinkCore::open_persistent(Box::new(
-                storage::EncryptedInstallationStore::open_production().map_err(core_error)?,
-            ))
+            let store =
+                storage::EncryptedInstallationStore::open_production().map_err(core_error)?;
+            let screen_grant = store.screen_grant();
+            (
+                VnilinkCore::open_persistent(Box::new(store)),
+                Some(screen_grant),
+            )
         };
         let core = result.map_err(core_error)?;
         let backends = if self.temporary && self.capture {
@@ -1291,7 +1303,11 @@ impl Task for OpenTask {
         core.start_file_job_driver();
         // Paired computers show as connected only while they are reachable.
         core.set_presence_links(true).map_err(core_error)?;
-        Ok(OpenedEngine { core, backends })
+        Ok(OpenedEngine {
+            core,
+            backends,
+            screen_grant,
+        })
     }
     fn resolve(&mut self, _: Env, opened: Self::Output) -> Result<Engine> {
         let core = Arc::new(opened.core);
@@ -1304,7 +1320,12 @@ impl Task for OpenTask {
             state: Arc::new(Mutex::new(State {
                 core,
                 closed: false,
-                native: native::NativeRuntimeState::new(opened.backends, desktops, cameras),
+                native: native::NativeRuntimeState::new(
+                    opened.backends,
+                    desktops,
+                    cameras,
+                    opened.screen_grant,
+                ),
                 video: HashMap::new(),
                 events: HashMap::new(),
                 systems: HashMap::new(),
@@ -1318,15 +1339,21 @@ pub fn open_engine() -> AsyncTask<OpenTask> {
     AsyncTask::new(OpenTask {
         temporary: false,
         capture: false,
+        screen_grant: None,
     })
 }
 // Explicit isolated test/preview mode; never a fallback for unavailable storage.
-// `capture` lets it host this computer's screen, for the latency measurement.
+// `capture` lets it host this computer's screen, for the latency measurement,
+// keeping its screen sharing grant in `screen_grant`.
 #[napi]
-pub fn open_temporary_engine(capture: Option<bool>) -> AsyncTask<OpenTask> {
+pub fn open_temporary_engine(
+    capture: Option<bool>,
+    screen_grant: Option<String>,
+) -> AsyncTask<OpenTask> {
     AsyncTask::new(OpenTask {
         temporary: true,
         capture: capture.unwrap_or(false),
+        screen_grant: screen_grant.map(std::path::PathBuf::from),
     })
 }
 

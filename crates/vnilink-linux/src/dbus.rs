@@ -11,13 +11,20 @@ use ashpd::desktop::PersistMode;
 use ashpd::enumflags2::BitFlags;
 use vnilink_media::Error;
 
+use crate::grant::ScreenGrant;
 use crate::portal::PortalSession;
 
 /// Create a portal session, select one monitor, and start it.
 ///
 /// The returned file descriptor is the PipeWire remote. The node id is stored
 /// on `session`. A failure leaves the local phase where the portal stopped.
-pub async fn open_monitor(session: &mut PortalSession) -> Result<OwnedFd, Error> {
+/// With a `grant`, the portal keeps the consent until it is revoked: its
+/// token is offered, so only the first start asks, and the token the start
+/// answers with is kept for the next. Without one, every start asks.
+pub async fn open_monitor(
+    session: &mut PortalSession,
+    grant: Option<&ScreenGrant>,
+) -> Result<OwnedFd, Error> {
     let proxy = Screencast::new()
         .await
         .map_err(|_| Error::CaptureRejected("the screen cast portal could not be opened"))?;
@@ -28,11 +35,17 @@ pub async fn open_monitor(session: &mut PortalSession) -> Result<OwnedFd, Error>
     session.create_session()?;
     // ashpd 0.13 stores the portal reply before these futures resolve.
     // `Request::response` is synchronous.
+    let token = grant.and_then(ScreenGrant::token);
     let sources = SelectSourcesOptions::default()
         .set_cursor_mode(CursorMode::Hidden)
         .set_sources(BitFlags::from(SourceType::Monitor))
         .set_multiple(false)
-        .set_persist_mode(PersistMode::DoNot);
+        .set_persist_mode(if grant.is_some() {
+            PersistMode::ExplicitlyRevoked
+        } else {
+            PersistMode::DoNot
+        })
+        .set_restore_token(token.as_deref());
     let selected = proxy
         .select_sources(&remote, sources)
         .await
@@ -60,6 +73,10 @@ pub async fn open_monitor(session: &mut PortalSession) -> Result<OwnedFd, Error>
     if let Some(token) = started.restore_token() {
         if !token.is_empty() {
             session.set_restore_token(token.to_string())?;
+            if let Some(grant) = grant {
+                // A grant that cannot be kept asks again next time.
+                let _ = grant.keep(token);
+            }
         }
     }
     session.start(node)?;

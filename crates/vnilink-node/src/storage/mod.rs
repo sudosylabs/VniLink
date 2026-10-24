@@ -109,6 +109,12 @@ impl Drop for PanicFlag<'_> {
 }
 
 impl EncryptedInstallationStore {
+    /// Where this installation keeps its screen sharing grant: beside the
+    /// database, in the engine's private directory.
+    pub fn screen_grant(&self) -> std::path::PathBuf {
+        self.paths.screen_grant.clone()
+    }
+
     pub fn open_production() -> Result<Self, FfiError> {
         let paths = paths::production_paths()?;
         open_at(paths, Arc::new(KeyringVault::production()), false).map_err(FfiError::from)

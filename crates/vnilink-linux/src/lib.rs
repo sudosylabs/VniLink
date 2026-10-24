@@ -71,6 +71,8 @@ pub use pixels::{raw_frame_from_bgra, raw_frame_from_bgrx};
 pub use pointer::{
     display_for_frame, display_for_frame_id, display_for_picture, place_on_display, pointer,
 };
+mod grant;
+pub use grant::ScreenGrant;
 pub use portal::{PortalPhase, PortalSession, ONE_PORTAL_SESSION_IS_UNIVERSAL};
 pub use x11::{raw_frame_from_ximage, X11Capture, X11Image, X11Plan};
 mod snapshot;
