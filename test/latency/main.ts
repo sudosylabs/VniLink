@@ -11,6 +11,7 @@ import { execFile } from 'node:child_process';
 import { app, BrowserWindow, screen } from 'electron';
 import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { isLinux, isMacintosh } from '../../src/base/common/platform.js';
 import { isEngineReply, record } from '../../src/platform/engine/common/engine.js';
 import { TestApplication } from '../automation/application.js';
 import type { WindowDriver } from '../automation/driver.js';
@@ -33,10 +34,19 @@ const MOVE_MS = 2000;
  * mode, and on Linux, where GNOME places a window shown inactive below the
  * focused one.
  */
-const ON_TOP = holdMs > 0 || process.platform === 'linux';
+const ON_TOP = holdMs > 0 || isLinux;
+
+// GNOME's dock animates an application whose window opens without focus,
+// as every window here does, and the animation is on the captured screen:
+// no picture would hold still. On Linux the windows stay out of the dock.
+if (isLinux) {
+	app.on('browser-window-created', (_event, window) => {
+		window.setSkipTaskbar(true);
+	});
+}
 
 /** How long someone at this computer may take to answer the desktop portal's dialog; only Linux asks. */
-const CONSENT_MS = process.platform === 'linux' ? 5 * 60000 : 0;
+const CONSENT_MS = isLinux ? 5 * 60000 : 0;
 
 if ((role !== 'host' && role !== 'viewer') || !directory || !output) {
 	throw new Error('VNILINK_LATENCY_ROLE (host or viewer), VNILINK_LATENCY_DIR and VNILINK_LATENCY_OUTPUT are required');
@@ -165,7 +175,7 @@ async function hostedPipelines(driver: WindowDriver): Promise<Record<string, unk
 }
 
 async function host(driver: WindowDriver): Promise<void> {
-	if (process.platform !== 'linux' && !await screenRecording(driver)) {
+	if (!isLinux && !await screenRecording(driver)) {
 		throw new Error('Screen Recording is not granted to the development VniLink (.build/electron/VniLink.app). Allow it in System Settings › Privacy & Security › Screen & System Audio Recording, then run again.');
 	}
 	const snapshot = await engine(driver, { type: 'snapshot' });
@@ -179,7 +189,7 @@ async function host(driver: WindowDriver): Promise<void> {
 	// Sharing is a setting; main writes it to the engine, as the Settings tab does.
 	await driver.window.webContents.executeJavaScript(`window.driver.mainProcess.getChannel('configuration').call('updateValue', { key: 'sharing.screen', value: true })`);
 	// On Linux turning it on asks the desktop portal.
-	if (process.platform === 'linux') {
+	if (isLinux) {
 		await portalGrant(driver);
 	}
 	const { cell, height, area } = stripGeometry();
@@ -395,7 +405,7 @@ async function viewer(driver: WindowDriver): Promise<void> {
 // one computer, not of either side.
 const application = new TestApplication({
 	showWindow: false,
-	nativeVideo: role === 'host' || process.platform !== 'darwin',
+	nativeVideo: role === 'host' || !isMacintosh,
 	timeoutMs: 30 * 60000,
 });
 

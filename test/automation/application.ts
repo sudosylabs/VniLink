@@ -3,6 +3,7 @@ import { app, session, type BrowserWindow } from 'electron';
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { isLinux } from '../../src/base/common/platform.js';
 import { VniLinkApplication } from '../../src/code/electron-main/app.js';
 import { WindowDriver } from './driver.js';
 
@@ -22,7 +23,7 @@ export class TestApplication {
 	public readonly profile = process.env.VNILINK_TEST_PROFILE ?? mkdtempSync(join(tmpdir(), 'vnilink-test-'));
 	public readonly output = join(__dirname, '../.build/test-runs', `${String(Date.now())}-${String(process.pid)}`);
 	private timer: ReturnType<typeof setTimeout> | undefined;
-	private readonly container = process.platform === 'linux' && process.env.VNILINK_TEST_CONTAINER === '1';
+	private readonly container = isLinux && process.env.VNILINK_TEST_CONTAINER === '1';
 
 	public get args(): string[] {
 		// Electron retains launch switches in argv; they are not scenario names.
@@ -81,7 +82,7 @@ export class TestApplication {
 					// never mapped gets no frames: its animation frames never
 					// come and a page capture fails. It is shown unfocused, and
 					// the scenarios start once it has drawn twice.
-					if (process.platform === 'linux' && !window.isVisible()) {
+					if (isLinux && !window.isVisible()) {
 						window.showInactive();
 						await window.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
 					}
