@@ -252,7 +252,10 @@ async fn open_grant(
     grant: Option<&ScreenGrant>,
 ) -> Result<Grant, Error> {
     startup.check().map_err(startup_error)?;
-    let proxy = RemoteDesktop::new()
+    let bus = crate::dbus::session_bus()
+        .await
+        .map_err(|_| Error::Unsupported("the RemoteDesktop portal"))?;
+    let proxy = RemoteDesktop::with_connection(bus.clone())
         .await
         .map_err(|_| Error::Unsupported("the RemoteDesktop portal"))?;
     let session = proxy
@@ -282,7 +285,7 @@ async fn open_grant(
             )
             .await?
             .response()?;
-        let cast = Screencast::new().await?;
+        let cast = Screencast::with_connection(bus).await?;
         let cursor_metadata = cast
             .available_cursor_modes()
             .await

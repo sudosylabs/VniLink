@@ -481,16 +481,9 @@ fn real_portal_notify_transport_preserves_all_events() {
                 .await
                 .unwrap();
             assert_eq!(*recorded.lock().unwrap(), expected);
-            let grant = open_grant(&vnilink::BackendStartup::new(Duration::from_secs(5)), None)
-                .await
-                .unwrap();
-            assert!(grant.cursor_metadata);
-            assert!(grant.control);
-            assert_eq!(grant.logical, (1920, 1080));
-            assert_eq!(grant.node, 42);
-            grant.session.close().await.unwrap();
-            assert_eq!(closed.load(Ordering::Relaxed), 1);
             // Exercise the actual worker/runtime boundary and explicit close.
+            // These run before any other portal open: each worker's runtime
+            // ends with it, and the second must still reach the portal.
             for revoked in [false, true] {
                 tokio::task::spawn_blocking(move || {
                     let (tx, rx) = mpsc::sync_channel(64);
@@ -542,6 +535,15 @@ fn real_portal_notify_transport_preserves_all_events() {
                 .await
                 .unwrap();
             }
+            assert_eq!(closed.load(Ordering::Relaxed), 2);
+            let grant = open_grant(&vnilink::BackendStartup::new(Duration::from_secs(5)), None)
+                .await
+                .unwrap();
+            assert!(grant.cursor_metadata);
+            assert!(grant.control);
+            assert_eq!(grant.logical, (1920, 1080));
+            assert_eq!(grant.node, 42);
+            grant.session.close().await.unwrap();
             assert_eq!(closed.load(Ordering::Relaxed), 3);
             // The screen without keyboard and pointer is a view-only grant,
             // kept open so its revocation still ends the capture.

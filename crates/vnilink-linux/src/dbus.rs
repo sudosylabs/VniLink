@@ -14,6 +14,16 @@ use vnilink_media::Error;
 use crate::grant::ScreenGrant;
 use crate::portal::PortalSession;
 
+/// A session-bus connection that lives on the caller's runtime.
+///
+/// ashpd otherwise shares one connection per process, and its socket reader
+/// runs on the runtime that opened it first. Every portal open here runs on a
+/// runtime of its own that ends with it, so a shared connection would die with
+/// the first open and every later portal call would wait forever.
+pub(crate) async fn session_bus() -> zbus::Result<zbus::Connection> {
+    zbus::Connection::session().await
+}
+
 /// Create a portal session, select one monitor, and start it.
 ///
 /// The returned file descriptor is the PipeWire remote. The node id is stored
@@ -25,7 +35,10 @@ pub async fn open_monitor(
     session: &mut PortalSession,
     grant: Option<&ScreenGrant>,
 ) -> Result<OwnedFd, Error> {
-    let proxy = Screencast::new()
+    let bus = session_bus()
+        .await
+        .map_err(|_| Error::CaptureRejected("the screen cast portal could not be opened"))?;
+    let proxy = Screencast::with_connection(bus)
         .await
         .map_err(|_| Error::CaptureRejected("the screen cast portal could not be opened"))?;
     let remote = proxy
