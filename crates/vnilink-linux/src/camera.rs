@@ -34,6 +34,9 @@ use vnilink_media::{EncodeParams, RawFrame, VideoEncoder};
 const BITRATE: u32 = 4_000_000;
 #[cfg(target_os = "linux")]
 const IDLE: Duration = Duration::from_secs(5);
+/// How long one wait for a frame lasts before cancellation is checked again.
+#[cfg(target_os = "linux")]
+const POLL_MS: i32 = 25;
 #[cfg(target_os = "linux")]
 const RAW_LIMIT: usize = 128 * 1024 * 1024;
 /// One enumerated V4L2 node with the hardware facts that identify it.
@@ -443,17 +446,17 @@ impl HostCameraFactory for LinuxCameraFactory {
                         // Retain the exact approved descriptor until capture has
                         // opened it, even if enumeration retires its factory entry.
                         let _held = worker_held;
-                        if capture(
+                        // The step that failed is the reason given: a missing
+                        // encoder and an unusable format are not the same fault.
+                        if let Err(error) = capture(
                             worker_requested,
                             open_path,
                             node,
                             source.clone(),
                             &ready,
                             &worker_startup,
-                        )
-                        .is_err()
-                        {
-                            let _ = ready.try_send(Err(Error::Unsupported("V4L2 camera")));
+                        ) {
+                            let _ = ready.try_send(Err(error));
                             source.fail();
                         }
                         source.close();
@@ -569,7 +572,13 @@ fn capture(
     .map_err(|_| Error::Unsupported("camera H.264 encoder"))?;
     let mut stream = Stream::with_buffers(&device, Type::VideoCapture, 2)
         .map_err(|_| Error::Unsupported("camera buffers"))?;
-    stream.set_timeout(Duration::from_millis(25));
+    // `v4l` queues the last buffer again at the start of every `next`, so a
+    // `next` that timed out leaves it queued twice and the driver refuses it
+    // (EINVAL). Only the first `next`, which starts streaming, waits inside
+    // `v4l`, as long as a camera may take to deliver its first frame; later
+    // ones are made once the device says a frame is ready.
+    stream.set_timeout(IDLE);
+    let handle = stream.handle();
     startup.check()?;
     if source.is_cancelled() {
         return Ok(());
@@ -577,15 +586,22 @@ fn capture(
     let start = Instant::now();
     let mut reported = false;
     let mut last = start;
+    let mut streaming = false;
     while !source.is_cancelled() {
         if !reported {
             startup.check()?;
         }
-        let (bytes, metadata) = match stream.next() {
-            Ok(frame) => frame,
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut && last.elapsed() < IDLE => continue,
-            Err(_) => return Err(Error::Unsupported("camera stopped delivering frames")),
-        };
+        if streaming {
+            match handle.poll(libc::POLLIN, POLL_MS) {
+                Ok(0) if last.elapsed() < IDLE => continue,
+                Ok(ready) if ready > 0 => {}
+                _ => return Err(Error::Unsupported("camera stopped delivering frames")),
+            }
+        }
+        let (bytes, metadata) = stream
+            .next()
+            .map_err(|_| Error::Unsupported("camera stopped delivering frames"))?;
+        streaming = true;
         last = Instant::now();
         let used = metadata.bytesused as usize;
         let bytes = bytes
