@@ -100,7 +100,7 @@ No screen shows both strips, so there is no glass-to-glass total and no reader. 
 - the host's capture and encode times (`PipelineSummary.capture_us`, `encode_us`; encode includes scaling and copies), its encoder, keyframes, reopens and drops, in `host-stages.jsonl`;
 - the viewer's stage times and status line (frame rate, codec, bitrate, round trip) in `stages.jsonl`, and its pipeline (round trip, decoder, conditions) in `viewer-pipeline.jsonl`.
 
-The network leg is the round trip: the clocks differ, so a picture's one-way time is not read. The stimulus still runs on the host: a strip that changes every frame, the motion the stream carries.
+Both viewers prepare native video, as the product's do: a Mac viewer whose engine had no decoders of its own offered nothing, and a Linux host refused it. The network leg is the round trip: the clocks differ, so a picture's one-way time is not read. The stimulus still runs on the host: a strip that changes every frame, the motion the stream carries.
 
 The remote side runs as a transient unit of the user's session there (`systemd-run --user`), so it has the graphical session's bus and portal. Its checkout must be built (`npm run build` there). The two sides' rendezvous files are copied over one shared SSH connection, and the remote side's evidence is copied back into the output and removed there, with its profile and rendezvous. A Linux host's portal asks someone there on the first run, as on one computer; its answer is kept in that checkout's `.build/latency/`.
 

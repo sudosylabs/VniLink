@@ -457,10 +457,11 @@ async function viewer(driver: WindowDriver): Promise<void> {
 // the window's own decoders admit it, and a viewer engine with native video
 // on the same Mac as the host made the host's capture reads about 19 ms
 // slower (glass to glass 133 against 116 ms p50): a cost of measuring on
-// one computer, not of either side.
+// one computer, not of either side. Across two computers the viewer
+// prepares it everywhere, as the product's does.
 const application = new TestApplication({
 	showWindow: false,
-	nativeVideo: role === 'host' || !isMacintosh,
+	nativeVideo: role === 'host' || !isMacintosh || process.env.VNILINK_LATENCY_ACROSS === '1',
 	screenGrant: role === 'host' ? screenGrant : undefined,
 	timeoutMs: 30 * 60000,
 });

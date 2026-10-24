@@ -647,6 +647,8 @@ async function measureAcross(root: string, signal: AbortSignal, options: Latency
 			VNILINK_LATENCY_OUTPUT: output,
 			VNILINK_LATENCY_HOLD_MS: '0',
 			VNILINK_LATENCY_FPS: String(options.frameRate ?? 0),
+			// Each side on its own computer, as a person uses them.
+			VNILINK_LATENCY_ACROSS: '1',
 			// A Linux host's portal asks someone there; the other side waits as long.
 			VNILINK_LATENCY_CONSENT_MS: String(remote.hosts === 'remote' || process.platform === 'linux' ? 5 * 60000 : 0),
 			VNILINK_LATENCY_SCREEN_GRANT: grant,
