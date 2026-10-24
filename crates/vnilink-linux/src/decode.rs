@@ -1,7 +1,7 @@
 //! Linux H.264 decode.
 //!
 //! The hardware path is VA-API variable-length decode on the first DRM
-//! render node that offers it. A keyframe carries SPS, PPS, and an IDR;
+//! render node that offers it, in [`crate::gpu::ranked`] order. A keyframe carries SPS, PPS, and an IDR;
 //! those parameter sets open the session, and later predicted frames reuse
 //! it. Output is BGRA for the UI to paint. Bitstreams are screen content:
 //! do not log them.
@@ -41,8 +41,8 @@ use vnilink_media::{
     STREAM_SIGNAL,
 };
 
+use crate::gpu::ranked_render_nodes;
 use crate::syntax::{Marking, Pps, Slice, SliceKind, Sps};
-use crate::vaapi::render_nodes;
 
 /// Decoded BGRA picture with its size, moved back to the caller thread.
 struct DecodedPicture {
@@ -372,7 +372,7 @@ impl OpenDecoder {
             return Err(Error::InvalidFrame("H.264 SPS picture size is empty"));
         }
         let surfaces = sps.num_ref_frames as usize + 2;
-        for path in render_nodes() {
+        for path in ranked_render_nodes() {
             if let Some((context, created, format)) = try_open(&path, &sps, surfaces.max(2)) {
                 return Ok(Self {
                     context,

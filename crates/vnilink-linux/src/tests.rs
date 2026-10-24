@@ -2,6 +2,8 @@
 mod decode_tests;
 #[path = "tests/encode.rs"]
 mod encode_tests;
+#[path = "tests/gpu.rs"]
+mod gpu_tests;
 #[path = "tests/grant.rs"]
 mod grant_tests;
 #[path = "tests/hevc_parameter_set.rs"]

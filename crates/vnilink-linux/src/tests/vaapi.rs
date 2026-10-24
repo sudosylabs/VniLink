@@ -60,10 +60,11 @@ fn h265_from_a_node_that_offers_it_decodes_in_software() {
     use crate::codecs::{decodes, PROBE_SIDE};
     use crate::vaapi::{Input, Session, VaCodec};
 
-    if !crate::vaapi::offers(VaCodec::H265) {
+    let Some(node) = crate::vaapi::offering(VaCodec::H265) else {
         return;
-    }
-    let session = Session::open(VaCodec::H265, PROBE_SIDE, PROBE_SIDE, 30, 1_000_000).unwrap();
+    };
+    let session =
+        Session::open(&node, VaCodec::H265, PROBE_SIDE, PROBE_SIDE, 30, 1_000_000).unwrap();
     assert!(decodes(vnilink::VideoCodec::H265, |picture, key| {
         let (y, uv) = vnilink_media::bgra_to_nv12(picture)?.into_planes();
         session.encode(Input::Nv12 { y, uv }, key)
@@ -83,10 +84,11 @@ fn gpu_conversion_matches_the_cpu_conversion() {
     use crate::codecs::PROBE_SIDE;
     use crate::vaapi::{Input, Session, VaCodec};
 
-    if !crate::vaapi::offers(VaCodec::H265) {
+    let Some(node) = crate::vaapi::offering(VaCodec::H265) else {
         return;
-    }
-    let session = Session::open(VaCodec::H265, PROBE_SIDE, PROBE_SIDE, 30, 8_000_000).unwrap();
+    };
+    let session =
+        Session::open(&node, VaCodec::H265, PROBE_SIDE, PROBE_SIDE, 30, 8_000_000).unwrap();
     if !session.converts() {
         return;
     }

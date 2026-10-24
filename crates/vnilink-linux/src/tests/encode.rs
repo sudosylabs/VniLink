@@ -169,3 +169,34 @@ fn higher_bitrate_changes_the_hardware_output_budget() {
         "bitrate control had no effect on detailed pictures: low={low}, high={high}"
     );
 }
+
+/// Which GPU this machine's sessions encode on, for confirming
+/// [`crate::gpu`]'s rule on other hardware. Linux only; run with
+/// `cargo test -p vnilink-linux --lib encoder_choice_on_this_machine -- --ignored --nocapture`.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "measurement"]
+fn encoder_choice_on_this_machine() {
+    let gpus = crate::gpu::inventory();
+    for gpu in &gpus {
+        println!("{gpu:?}");
+    }
+    println!(
+        "compositing: {:?}",
+        crate::gpu::compositing(&gpus).map(|gpu| &gpu.render_node)
+    );
+    for choice in crate::gpu::encoders(&gpus) {
+        println!("candidate: {choice:?}");
+    }
+    for codec in [
+        vnilink::VideoCodec::H264,
+        vnilink::VideoCodec::H265,
+        vnilink::VideoCodec::Av1,
+    ] {
+        match LinuxEncoder::open(codec, 1280, 720, 30, 4_000_000, false) {
+            Ok(encoder) => println!("{codec:?}: {}", encoder.implementation().name),
+            Err(error) => println!("{codec:?}: no hardware encoder ({error})"),
+        }
+    }
+    println!("caps: {:?}", crate::video_codec_caps());
+}

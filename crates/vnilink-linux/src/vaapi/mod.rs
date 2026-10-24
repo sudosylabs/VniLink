@@ -1,8 +1,8 @@
 //! VA-API encode: H.264 (Constrained Baseline or High) and H.265 Main,
-//! 8-bit 4:2:0, on the first DRM render node that offers the codec.
+//! 8-bit 4:2:0, on one DRM render node the caller chose ([`crate::gpu`]).
 //!
-//! Render nodes under `/dev/dri` are opened in name order; low-power slice
-//! encode is preferred to slice encode. A node without the codec is skipped.
+//! Low-power slice encode is preferred to slice encode. A node without the
+//! codec refuses to open.
 //! libva's context is not [`Send`]: this module's thread is its only caller
 //! and the encoder handle on the other side is a channel. Pictures arrive as
 //! BGRA and the GPU converts them to NV12 (BT.709, limited range) where the
@@ -153,7 +153,9 @@ pub(crate) struct Session {
 }
 
 impl Session {
+    /// A session on the render node at `node`.
     pub(crate) fn open(
+        node: &Path,
         codec: VaCodec,
         width: u16,
         height: u16,
@@ -162,9 +164,21 @@ impl Session {
     ) -> Result<Self, Error> {
         let (tx, rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::channel();
+        let node = node.to_path_buf();
         let thread = thread::Builder::new()
             .name("vnilink-vaapi".to_string())
-            .spawn(move || worker(codec, width, height, frame_rate, bitrate_bps, rx, ready_tx))
+            .spawn(move || {
+                worker(
+                    &node,
+                    codec,
+                    width,
+                    height,
+                    frame_rate,
+                    bitrate_bps,
+                    rx,
+                    ready_tx,
+                )
+            })
             .map_err(|_| Error::Unsupported(codec.name()))?;
         match ready_rx.recv_timeout(Duration::from_secs(5)) {
             Ok(Ok(converts)) => Ok(Self {
@@ -217,7 +231,9 @@ impl Drop for Session {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn worker(
+    node: &Path,
     codec: VaCodec,
     width: u16,
     height: u16,
@@ -226,7 +242,7 @@ fn worker(
     jobs: Receiver<Job>,
     ready: Sender<Result<bool, Error>>,
 ) {
-    let mut encoder = match Encoder::open(codec, width, height, frame_rate, bitrate_bps) {
+    let mut encoder = match Encoder::open(node, codec, width, height, frame_rate, bitrate_bps) {
         Ok(encoder) => {
             let _ = ready.send(Ok(encoder.converter.is_some()));
             encoder
@@ -272,6 +288,7 @@ struct Encoder {
 
 impl Encoder {
     fn open(
+        node: &Path,
         codec: VaCodec,
         width: u16,
         height: u16,
@@ -281,12 +298,8 @@ impl Encoder {
         if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
             return Err(Error::InvalidFrame("width and height must be even"));
         }
-        for path in render_nodes() {
-            if let Some(encoder) = try_open(&path, codec, width, height, frame_rate, bitrate_bps) {
-                return Ok(encoder);
-            }
-        }
-        Err(Error::Unsupported(codec.name()))
+        try_open(node, codec, width, height, frame_rate, bitrate_bps)
+            .ok_or(Error::Unsupported(codec.name()))
     }
 
     fn encode(&mut self, input: Input, force_keyframe: bool) -> Result<EncodedSample, Error> {
@@ -608,6 +621,7 @@ pub(crate) fn choose_bitrate_control(supported: u32) -> Option<u32> {
         .find(|mode| supported & mode != 0)
 }
 
+/// The render nodes under `/dev/dri`, in name order.
 pub(crate) fn render_nodes() -> Vec<std::path::PathBuf> {
     let Ok(entries) = std::fs::read_dir("/dev/dri") else {
         return Vec::new();
@@ -626,20 +640,28 @@ pub(crate) fn render_nodes() -> Vec<std::path::PathBuf> {
     paths
 }
 
-/// True when a DRM render node offers slice encode of `codec` with
-/// bitrate control. No encoder session is opened.
-pub(crate) fn offers(codec: VaCodec) -> bool {
+/// The first render node, in [`crate::gpu::ranked`] order, that offers
+/// slice encode of `codec` with bitrate control. No encoder session is
+/// opened.
+#[cfg(test)]
+pub(crate) fn offering(codec: VaCodec) -> Option<std::path::PathBuf> {
+    crate::gpu::ranked_render_nodes()
+        .into_iter()
+        .find(|node| offers_on(node, codec))
+}
+
+/// Whether the render node at `node` offers slice encode of `codec` with
+/// bitrate control.
+pub(crate) fn offers_on(node: &Path, codec: VaCodec) -> bool {
     let profile = codec.profile();
-    render_nodes().iter().any(|path| {
-        let Ok(display) = Display::open_drm_display(path) else {
-            return false;
-        };
-        let Ok(entrypoints) = display.query_config_entrypoints(profile) else {
-            return false;
-        };
-        choose_entrypoint(&entrypoints)
-            .is_some_and(|entrypoint| bitrate_config(&display, profile, entrypoint).is_some())
-    })
+    let Ok(display) = Display::open_drm_display(node) else {
+        return false;
+    };
+    let Ok(entrypoints) = display.query_config_entrypoints(profile) else {
+        return false;
+    };
+    choose_entrypoint(&entrypoints)
+        .is_some_and(|entrypoint| bitrate_config(&display, profile, entrypoint).is_some())
 }
 
 /// True when a DRM render node offers VA-API H.264 VLD decode. No decode

@@ -12,11 +12,11 @@ use crate::nvenc::{anchor_state, offers, Encoder};
 #[test]
 fn nvenc_output_decodes_where_the_gpu_offers_the_codec() {
     for codec in [VideoCodec::H265, VideoCodec::Av1] {
-        if !offers(codec) {
+        if !offers(None, codec) {
             continue;
         }
         let mut encoder =
-            Encoder::open(codec, PROBE_SIDE, PROBE_SIDE, 30, 1_000_000, false).unwrap();
+            Encoder::open(None, codec, PROBE_SIDE, PROBE_SIDE, 30, 1_000_000, false).unwrap();
         assert!(
             decodes(codec, |picture, key| encoder.encode(picture, key)),
             "{codec:?} from NVENC does not decode"
@@ -28,11 +28,12 @@ fn nvenc_output_decodes_where_the_gpu_offers_the_codec() {
 /// parameter sets and the next picture must not be one.
 #[test]
 fn nvenc_h264_keyframes_carry_their_parameter_sets() {
-    if !offers(VideoCodec::H264) {
+    if !offers(None, VideoCodec::H264) {
         return;
     }
     for high in [false, true] {
         let mut encoder = Encoder::open(
+            None,
             VideoCodec::H264,
             PROBE_SIDE,
             PROBE_SIDE,
@@ -61,11 +62,12 @@ fn nvenc_h264_keyframes_carry_their_parameter_sets() {
 /// same time, so when it closes is not checked here.
 #[test]
 fn nvenc_anchor_outlives_overlapping_sessions() {
-    if !offers(VideoCodec::H264) {
+    if !offers(None, VideoCodec::H264) {
         return;
     }
     let open = || {
         Encoder::open(
+            None,
             VideoCodec::H264,
             PROBE_SIDE,
             PROBE_SIDE,
@@ -97,7 +99,7 @@ fn nvenc_anchor_outlives_overlapping_sessions() {
 #[test]
 fn nvenc_conversion_matches_the_cpu_conversion() {
     for codec in [VideoCodec::H265, VideoCodec::Av1] {
-        if !offers(codec) {
+        if !offers(None, codec) {
             continue;
         }
         let side = usize::from(PROBE_SIDE);
@@ -113,7 +115,7 @@ fn nvenc_conversion_matches_the_cpu_conversion() {
             let picture =
                 RawFrame::bgra(PROBE_SIDE, PROBE_SIDE, 0, bgra.repeat(side * side)).unwrap();
             let mut encoder =
-                Encoder::open(codec, PROBE_SIDE, PROBE_SIDE, 30, 8_000_000, false).unwrap();
+                Encoder::open(None, codec, PROBE_SIDE, PROBE_SIDE, 30, 8_000_000, false).unwrap();
             let sample = encoder.encode(&picture, true).unwrap();
             let frame =
                 vnilink::EncodedFrame::new(codec, true, 0, sample.bytes().to_vec()).unwrap();
@@ -134,4 +136,29 @@ fn nvenc_conversion_matches_the_cpu_conversion() {
             );
         }
     }
+}
+
+/// NVENC finds each NVIDIA GPU by the PCI address sysfs gives it, the way
+/// sessions name it ([`crate::gpu::encoders`]).
+#[test]
+fn nvenc_opens_on_the_gpu_sysfs_names() {
+    if !offers(None, VideoCodec::H264) {
+        return;
+    }
+    let nvidia: Vec<_> = crate::gpu::inventory()
+        .into_iter()
+        .filter(|gpu| gpu.vendor == Some(crate::gpu::NVIDIA))
+        .filter_map(|gpu| gpu.pci_address)
+        .collect();
+    assert!(
+        !nvidia.is_empty(),
+        "NVENC opens but sysfs lists no NVIDIA GPU"
+    );
+    for address in nvidia {
+        assert!(
+            offers(Some(&address), VideoCodec::H264),
+            "NVENC does not open on {address}"
+        );
+    }
+    assert!(!offers(Some("0000:ff:1f.7"), VideoCodec::H264));
 }

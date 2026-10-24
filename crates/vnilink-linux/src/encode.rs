@@ -3,11 +3,11 @@
 //! NVENC reaches NVIDIA GPUs: H.264, H.265 Main and AV1 Main. VA-API reaches
 //! Intel, AMD and the other Mesa drivers: H.264 (High when the session
 //! negotiates it and the driver offers it, else Constrained Baseline) and
-//! H.265 Main. NVENC is tried first, as Windows ranks NVIDIA's encoder
-//! first. The GPU converts the capture to NV12 on NVENC and where a VA-API
-//! node has a video processor; elsewhere the CPU does. This build does not
-//! link a software H.264
-//! encoder: Cisco's OpenH264 patent grant covers Cisco's binary, not a
+//! H.265 Main. Encoders are tried on the GPU the compositor draws the
+//! capture on first, then on the others ([`crate::gpu`]); on an NVIDIA GPU
+//! NVENC comes before VA-API. The GPU converts the capture to NV12 on NVENC
+//! and where a VA-API node has a video processor; elsewhere the CPU does.
+//! This build does not link a software H.264 encoder: Cisco's OpenH264 patent grant covers Cisco's binary, not a
 //! source build compiled here, and x264 is GPL. Other codecs fall back to
 //! the shared software encoders ([`vnilink_media::CodecEncoder`]).
 
@@ -15,6 +15,8 @@
 use vnilink_media::bgra_to_nv12;
 use vnilink_media::{EncodeParams, EncodedSample, Error, RawFrame, VideoEncoder};
 
+#[cfg(target_os = "linux")]
+use crate::gpu::EncoderChoice;
 #[cfg(target_os = "linux")]
 use crate::vaapi::{Input, Session, VaCodec};
 
@@ -59,36 +61,51 @@ impl LinuxEncoder {
         }
         #[cfg(target_os = "linux")]
         {
-            let backend = match crate::nvenc::Encoder::open(
-                codec,
-                width,
-                height,
-                frame_rate,
-                bitrate_bps,
-                high,
-            ) {
-                Ok(encoder) => Backend::Nvenc(encoder),
-                // No NVIDIA GPU, or one without this codec or these settings.
-                Err(_) => {
-                    let codec = match codec {
-                        vnilink::VideoCodec::H264 => VaCodec::H264 { high },
-                        vnilink::VideoCodec::H265 => VaCodec::H265,
-                        _ => return Err(Error::Unsupported("VA-API for this codec")),
-                    };
-                    Backend::Vaapi(Session::open(
+            let va_codec = match codec {
+                vnilink::VideoCodec::H264 => Some(VaCodec::H264 { high }),
+                vnilink::VideoCodec::H265 => Some(VaCodec::H265),
+                _ => None,
+            };
+            let mut failure = Error::Unsupported("a hardware encoder for this codec");
+            for choice in crate::gpu::encoders(&crate::gpu::inventory()) {
+                // A GPU without this codec or these settings leaves it to
+                // the next.
+                let opened = match choice {
+                    EncoderChoice::Nvenc { pci_address } => crate::nvenc::Encoder::open(
+                        pci_address.as_deref(),
                         codec,
                         width,
                         height,
                         frame_rate,
                         bitrate_bps,
-                    )?)
+                        high,
+                    )
+                    .map(Backend::Nvenc),
+                    EncoderChoice::Vaapi { render_node } => match va_codec {
+                        Some(va_codec) => Session::open(
+                            &render_node,
+                            va_codec,
+                            width,
+                            height,
+                            frame_rate,
+                            bitrate_bps,
+                        )
+                        .map(Backend::Vaapi),
+                        None => continue,
+                    },
+                };
+                match opened {
+                    Ok(backend) => {
+                        return Ok(Self {
+                            width,
+                            height,
+                            backend,
+                        })
+                    }
+                    Err(error) => failure = error,
                 }
-            };
-            return Ok(Self {
-                width,
-                height,
-                backend,
-            });
+            }
+            return Err(failure);
         }
         #[cfg(not(target_os = "linux"))]
         {

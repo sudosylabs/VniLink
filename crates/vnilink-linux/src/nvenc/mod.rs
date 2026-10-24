@@ -3,15 +3,15 @@
 //!
 //! The encoder and CUDA come with NVIDIA's driver; both are loaded at run
 //! time, so a machine without them only reports NVENC missing. Sessions
-//! run on the first GPU's primary CUDA context, which is made current around
-//! every call. Pictures go in as the captured BGRA and NVENC converts them
+//! run on the primary CUDA context of the GPU the caller names by PCI
+//! address ([`crate::gpu`]), which is made current around every call. Pictures go in as the captured BGRA and NVENC converts them
 //! to the stream's colour, BT.709 limited range, which the stream declares.
 //! Each
 //! picture is encoded synchronously, without B pictures or lookahead, and
 //! a keyframe carries its parameter sets or sequence header.
 //!
 //! While any session is open, a small anchor session opened before it stays
-//! open too ([`Anchor`]). NVIDIA's driver (seen on 595) starts one thread per
+//! open too ([`Anchor`]), on the GPU of the first session that needed it. NVIDIA's driver (seen on 595) starts one thread per
 //! process that recalibrates the GPU clock every 10 s through the device of
 //! the first session initialized, and keeps that device until the last
 //! session closes, even when its own session closed long before. A host
@@ -33,7 +33,7 @@
 mod bindings;
 mod guid;
 
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void, CString};
 use std::sync::{Mutex, OnceLock};
 
 use bindings::*;
@@ -69,10 +69,15 @@ fn stream_colour() -> NV_ENC_CONFIG_H264_VUI_PARAMETERS {
 
 type CuContext = *mut c_void;
 
-/// The driver's NVENC entry points and the CUDA context sessions use.
+/// The driver's NVENC entry points and the CUDA contexts sessions use.
 struct Api {
     functions: NV_ENCODE_API_FUNCTION_LIST,
-    context: CuContext,
+    device_get: unsafe extern "C" fn(*mut i32, i32) -> i32,
+    device_by_pci: unsafe extern "C" fn(*mut i32, *const c_char) -> i32,
+    retain: unsafe extern "C" fn(*mut CuContext, i32) -> i32,
+    /// Primary contexts retained so far, by PCI address; `None` is CUDA's
+    /// first device. Retained contexts are never released.
+    contexts: Mutex<Vec<(Option<String>, Context)>>,
     push: unsafe extern "C" fn(CuContext) -> i32,
     pop: unsafe extern "C" fn(*mut CuContext) -> i32,
     // The libraries stay loaded for the process: function pointers above
@@ -81,11 +86,52 @@ struct Api {
     _nvenc: libloading::Library,
 }
 
-// SAFETY: the function list and context are immutable after loading.
-// NVENC and CUDA allow calls from any thread; a call that needs the context
-// pushes it on its own thread first ([`Current`]).
+// SAFETY: the function list is immutable after loading and the contexts
+// are behind a mutex. NVENC and CUDA allow calls from any thread; a call
+// that needs a context pushes it on its own thread first ([`Current`]).
 unsafe impl Send for Api {}
 unsafe impl Sync for Api {}
+
+/// One GPU's retained primary CUDA context.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Context(CuContext);
+
+// SAFETY: a CUDA context may be made current on any thread.
+unsafe impl Send for Context {}
+
+impl Api {
+    /// The primary context of the GPU at `pci_address`, retained on first
+    /// use; `None` takes CUDA's first device.
+    fn context(&self, pci_address: Option<&str>) -> Result<Context, Error> {
+        const UNSUPPORTED: Error = Error::Unsupported("NVENC on this GPU");
+        let mut contexts = self.contexts.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, context)) = contexts
+            .iter()
+            .find(|(address, _)| address.as_deref() == pci_address)
+        {
+            return Ok(*context);
+        }
+        let mut device = 0;
+        // SAFETY: `device` and the address outlive each call; CUDA was
+        // initialized at load.
+        let found = unsafe {
+            match pci_address {
+                Some(address) => {
+                    let address = CString::new(address).map_err(|_| UNSUPPORTED)?;
+                    (self.device_by_pci)(&mut device, address.as_ptr())
+                }
+                None => (self.device_get)(&mut device, 0),
+            }
+        };
+        let mut context = std::ptr::null_mut();
+        // SAFETY: `device` names a CUDA device found above.
+        if found != 0 || unsafe { (self.retain)(&mut context, device) } != 0 {
+            return Err(UNSUPPORTED);
+        }
+        contexts.push((pci_address.map(str::to_owned), Context(context)));
+        Ok(Context(context))
+    }
+}
 
 fn api() -> Option<&'static Api> {
     static API: OnceLock<Option<Api>> = OnceLock::new();
@@ -103,6 +149,9 @@ unsafe fn load() -> Option<Api> {
         .ok()?;
     let device_get = *cuda
         .get::<unsafe extern "C" fn(*mut i32, i32) -> i32>(b"cuDeviceGet\0")
+        .ok()?;
+    let device_by_pci = *cuda
+        .get::<unsafe extern "C" fn(*mut i32, *const c_char) -> i32>(b"cuDeviceGetByPCIBusId\0")
         .ok()?;
     let retain = *cuda
         .get::<unsafe extern "C" fn(*mut CuContext, i32) -> i32>(b"cuDevicePrimaryCtxRetain\0")
@@ -136,14 +185,15 @@ unsafe fn load() -> Option<Api> {
     if create(&mut functions) != NV_ENC_SUCCESS {
         return None;
     }
-    let mut device = 0;
-    let mut context = std::ptr::null_mut();
-    if init(0) != 0 || device_get(&mut device, 0) != 0 || retain(&mut context, device) != 0 {
+    if init(0) != 0 {
         return None;
     }
     Some(Api {
         functions,
-        context,
+        device_get,
+        device_by_pci,
+        retain,
+        contexts: Mutex::new(Vec::new()),
         push,
         pop,
         _cuda: cuda,
@@ -151,13 +201,14 @@ unsafe fn load() -> Option<Api> {
     })
 }
 
-/// The CUDA context made current on this thread until dropped.
+/// A CUDA context made current on this thread until dropped.
 struct Current<'a>(&'a Api);
 
 impl<'a> Current<'a> {
-    fn new(api: &'a Api) -> Result<Self, Error> {
-        // SAFETY: the context was retained at load and is never released.
-        if unsafe { (api.push)(api.context) } != 0 {
+    fn new(api: &'a Api, context: Context) -> Result<Self, Error> {
+        // SAFETY: the context was retained by [`Api::context`] and is never
+        // released.
+        if unsafe { (api.push)(context.0) } != 0 {
             return Err(Error::EncodeRejected("NVENC could not use the GPU"));
         }
         Ok(Self(api))
@@ -190,9 +241,10 @@ macro_rules! call {
     };
 }
 
-/// Whether this machine's NVIDIA driver loads and its GPU has `codec`.
-pub(crate) fn offers(codec: VideoCodec) -> bool {
-    Encoder::open(codec, 256, 144, 30, 1_000_000, false).is_ok()
+/// Whether this machine's NVIDIA driver loads and the GPU at
+/// `pci_address` (CUDA's first when `None`) has `codec`.
+pub(crate) fn offers(pci_address: Option<&str>, codec: VideoCodec) -> bool {
+    Encoder::open(pci_address, codec, 256, 144, 30, 1_000_000, false).is_ok()
 }
 
 /// The session initialized before every other open session and closed after
@@ -217,6 +269,7 @@ pub(crate) fn anchor_state() -> (usize, bool) {
 /// One NVENC session and its two buffers.
 pub(crate) struct Encoder {
     api: &'static Api,
+    context: Context,
     session: *mut c_void,
     input: NV_ENC_INPUT_PTR,
     output: NV_ENC_OUTPUT_PTR,
@@ -233,7 +286,10 @@ pub(crate) struct Encoder {
 unsafe impl Send for Encoder {}
 
 impl Encoder {
+    /// A session on the GPU at `pci_address`; `None` takes CUDA's first.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn open(
+        pci_address: Option<&str>,
         codec: VideoCodec,
         width: u16,
         height: u16,
@@ -246,6 +302,7 @@ impl Encoder {
         let mut anchor = ANCHOR.lock().unwrap_or_else(|e| e.into_inner());
         if anchor.encoder.is_none() {
             anchor.encoder = Some(Self::open_session(
+                pci_address,
                 VideoCodec::H264,
                 256,
                 144,
@@ -254,7 +311,15 @@ impl Encoder {
                 false,
             )?);
         }
-        match Self::open_session(codec, width, height, frame_rate, bitrate_bps, high) {
+        match Self::open_session(
+            pci_address,
+            codec,
+            width,
+            height,
+            frame_rate,
+            bitrate_bps,
+            high,
+        ) {
             Ok(mut encoder) => {
                 encoder.anchored = true;
                 anchor.sessions += 1;
@@ -269,7 +334,9 @@ impl Encoder {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn open_session(
+        pci_address: Option<&str>,
         codec: VideoCodec,
         width: u16,
         height: u16,
@@ -284,12 +351,13 @@ impl Encoder {
             VideoCodec::Av1 => guid::CODEC_AV1,
             _ => return Err(Error::Unsupported("NVENC for this codec")),
         };
-        let _current = Current::new(api)?;
+        let context = api.context(pci_address)?;
+        let _current = Current::new(api, context)?;
         let mut session = std::ptr::null_mut();
         let mut params = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS {
             version: struct_version(1, false),
             deviceType: NV_ENC_DEVICE_TYPE_CUDA,
-            device: api.context,
+            device: context.0,
             apiVersion: API_VERSION,
             ..Default::default()
         };
@@ -302,6 +370,7 @@ impl Encoder {
         // From here the session is closed by `Drop`, also on failure.
         let mut encoder = Self {
             api,
+            context,
             session,
             input: std::ptr::null_mut(),
             output: std::ptr::null_mut(),
@@ -460,7 +529,7 @@ impl Encoder {
             ));
         }
         let row_bytes = usize::from(self.width) * 4;
-        let _current = Current::new(api)?;
+        let _current = Current::new(api, self.context)?;
         let mut lock = NV_ENC_LOCK_INPUT_BUFFER {
             version: struct_version(1, false),
             inputBuffer: self.input,
@@ -564,7 +633,7 @@ impl Encoder {
     /// Releases this session's buffers, then the session.
     fn close(&mut self) {
         let api = self.api;
-        let Ok(_current) = Current::new(api) else {
+        let Ok(_current) = Current::new(api, self.context) else {
             return;
         };
         // SAFETY: each was created by this session and is not used again.
