@@ -8,6 +8,8 @@ The current repository is not the quality standard. Follow the documented target
 
 Read paths and reference files supplied by the user before drawing conclusions. Treat examples as evidence of a broader concern, not as its entire scope. For substantial changes or proposals, assess architecture, lifecycle, contracts/security, UX/accessibility, portability and build/test reproducibility; pursue the relevant concerns and explain material exclusions. Separate source evidence, inference and proposals.
 
+Comments, docs and fixtures describe the project, never a contributor's computer or account; `error-doc-voice` owns that rule.
+
 VS Code is the TypeScript architectural reference. Read the corresponding upstream subsystem before designing ours. Preserve copied infrastructure at full fidelity; explicit VniLink product adaptations remain valid. Import directories alone do not constitute architectural fidelity. See `workbench-architecture` for reference selection and provenance.
 
 ## Repository structure

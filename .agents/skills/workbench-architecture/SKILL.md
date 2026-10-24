@@ -7,7 +7,7 @@ description: "Write or review Electron/TypeScript workbench code (views, service
 
 ## Two references
 
-1. **VS Code** at the pinned commit in `build/vscode-source.json` (a checkout such as `/Users/hammed/Projects/vscode` with a worktree at that commit). Read the analogous upstream class before designing: `workbench/browser/workbench.ts`, `workbench/common/contributions.ts`, `platform/actions/common/actions.ts`, `base/browser/ui/list/listWidget.ts`.
+1. **VS Code** at the pinned commit in `build/vscode-source.json` (a VS Code checkout of the contributor's, with a worktree at that commit). Read the analogous upstream class before designing: `workbench/browser/workbench.ts`, `workbench/common/contributions.ts`, `platform/actions/common/actions.ts`, `base/browser/ui/list/listWidget.ts`.
 2. **`src/workbench/contrib/devices`**, the VniLink feature written to this standard. New code should read like it. If it can't, say why.
 
 ## Shape of a feature

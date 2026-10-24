@@ -7,9 +7,10 @@
 //! encoder on the GPU that holds the captured picture reads it without a
 //! copy, or with the cheapest one; ties on an adapter keep Media
 //! Foundation's merit order. Adapters are asked one by one, by LUID.
-//! `MFTEnumEx` over all of them put NVIDIA's first on a laptop whose panel
-//! is on Intel's GPU, in the signed-in desktop and over SSH alike, so an
-//! encoder that did not read the captured texture went to the other GPU.
+//! `MFTEnumEx` over all of them put NVIDIA's first on a hybrid Intel+NVIDIA
+//! laptop whose panel is on Intel's GPU (2026-10-22), in the signed-in
+//! desktop and over SSH alike, so an encoder that did not read the captured
+//! texture went to the other GPU.
 //!
 //! What a transform does with a recovery keyframe, a still screen and a new
 //! bitrate is measured per vendor (`recovery_tests`), not assumed from its
@@ -250,10 +251,10 @@ pub(crate) unsafe fn h264_encoders() -> impl Iterator<Item = H264Transform> {
 /// them; one whose hardware cannot be enumerated still gets the software
 /// transform.
 ///
-/// Each adapter is asked only when the encoders before it are used up: on
-/// the laptop measured, listing the other adapter's (NVIDIA's, its panel on
-/// Intel's) took 0.8 to 1 s, 3 s the first time, and an encoder that reopens
-/// froze the picture that long.
+/// Each adapter is asked only when the encoders before it are used up: on a
+/// hybrid Intel+NVIDIA laptop with its panel on Intel's GPU (2026-10-23),
+/// listing NVIDIA's took 0.8 to 1 s, 3 s the first time, and an encoder that
+/// reopens froze the picture that long.
 pub(crate) unsafe fn h264_encoders_for(
     capture: Option<LUID>,
 ) -> impl Iterator<Item = H264Transform> {

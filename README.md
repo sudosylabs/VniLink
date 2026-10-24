@@ -8,7 +8,7 @@ The Electron application lives at the repository root. Its sandboxed renderer ca
 
 `product.json` is the source of truth for the planned release identity, executable names, invitation association, icon inputs, signing policy and native target matrix. Version remains owned by `package.json`; Rust workspace versions remain in `Cargo.toml`. `npm run check:product` validates the metadata and artwork; it does not package the application or prove OS support.
 
-The agreed application identity is `fr.sudosy.vnilink`, display name **VniLink** and publisher **Sudosy Labs**. The publisher label is not a signing certificate subject or a claim about a registered legal entity. macOS uses executable name `VniLink`; Windows and Linux use `vnilink`. Packaging derives the macOS bundle identifier and Windows application identity from `appId`; Linux uses the corresponding `.desktop` filename. Helper identifiers must derive from this identity when signing is wired.
+`appId` is the application identity, `nameShort` the display name **VniLink** and `publisherName` the publisher. The publisher label is not a signing certificate subject or a claim about a registered legal entity. macOS uses executable name `VniLink`; Windows and Linux use `vnilink`. Packaging derives the macOS bundle identifier and Windows application identity from `appId`; Linux uses the corresponding `.desktop` filename. Helper identifiers must derive from this identity when signing is wired.
 
 | Planned platform | Architecture / Rust target | Intended minimum |
 | --- | --- | --- |
@@ -17,9 +17,9 @@ The agreed application identity is `fr.sudosy.vnilink`, display name **VniLink**
 | Windows | x64 / `x86_64-pc-windows-gnu` | Windows 10 22H2, build 19045 |
 | Linux | x64 / `x86_64-unknown-linux-gnu` | Ubuntu 24.04 and Debian 13 are intended validation baselines |
 
-The owner confirmed this initial packaging scope. These are planned targets, not verified support claims. macOS 14 follows the native ScreenCaptureKit dependency's enabled APIs; Electron 44 itself requires macOS 13 or later ([Electron release notes](https://www.electronjs.org/blog/electron-44-0)). Linux's current Debian 13 test image does not establish Ubuntu 24.04 binary compatibility: release builds must use an appropriate native-library/sysroot baseline and verify the resulting library dependencies on both distributions. No numeric glibc floor is asserted before that work. PipeWire 1.0 support is required by the current native binding on Wayland. Windows/Linux ARM64, 32-bit builds, universal macOS bundles, store distribution and an update feed are outside the initial matrix.
+These are planned packaging targets, not verified support claims. macOS 14 follows the native ScreenCaptureKit dependency's enabled APIs; Electron 44 itself requires macOS 13 or later ([Electron release notes](https://www.electronjs.org/blog/electron-44-0)). Linux's current Debian 13 test image does not establish Ubuntu 24.04 binary compatibility: release builds must use an appropriate native-library/sysroot baseline and verify the resulting library dependencies on both distributions. No numeric glibc floor is asserted before that work. PipeWire 1.0 support is required by the current native binding on Wayland. Windows/Linux ARM64, 32-bit builds, universal macOS bundles, store distribution and an update feed are outside the initial matrix.
 
-macOS release signing is planned through Developer ID and notarization using the owner's existing Apple Developer account. Initial Windows and Linux packages are unsigned. Unsigned installer generation is available as described below. Signing credentials, invitation file-open handling, platform manifests, tray integration and publishing remain later steps. The running application name and Windows application identity derive from this metadata. OS registration of `.vnl` remains a later step.
+macOS release signing is planned through Developer ID and notarization using the publisher's Apple Developer account. Initial Windows and Linux packages are unsigned. Unsigned installer generation is available as described below. Signing credentials, invitation file-open handling, platform manifests, tray integration and publishing remain later steps. The running application name and Windows application identity derive from this metadata. OS registration of `.vnl` remains a later step.
 
 The existing Electron user-data location, Rust installation directory and credential service `com.vnilink.storage` / account `installation-key` remain independent storage contracts. Do not rename or migrate them merely to match the packaging identifier. Upgrades must preserve access to the existing encrypted installation. Future installer identities must remain stable across versions and be set before first distribution.
 
@@ -92,13 +92,12 @@ Use the active session ID and generation when opening a channel; `beginConnectSe
 
 See [Contributing](CONTRIBUTING.md), [Security](SECURITY.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Pairing, grants, reconnect and Files ownership remain Rust contracts; replacing the UI does not replace those engines. The product requirements below describe the intended complete application, not claims that the Electron shell already implements them.
 
-## 1. Product requirements and decision status
+## 1. Project goals and decision status
 
-### Confirmed by the owner
+### Goals
 
 - Name: **VniLink**.
-- Three initial devices: a Mac mini at home, a Windows laptop, and a Linux laptop.
-- Every device must be able to control either of the other two: all six directed combinations must work.
+- Any paired computer can control any other, across every supported operating system and in both directions.
 - Access must work across the internet, including different networks, rather than only on a home LAN.
 - The application should be lightweight.
 - The shared Rust part must be a **library**. A shared Electron desktop application will host it through a defined Rust bridge.
@@ -108,9 +107,21 @@ See [Contributing](CONTRIBUTING.md), [Security](SECURITY.md) and the [Code of Co
 - The default relay is the public n0 relay set from the pinned Iroh release. In iroh 1.3.0 that is `RelayMode::Default`, also applied by `presets::N0`. Installing, pairing, and connecting works with those public relays alone.
 - An installation may replace that default with one or more custom relay URLs. In iroh 1.3.0 that is `RelayMode::Custom`. The override is local configuration.
 
+### Supported platforms
+
+| Platform | Status |
+| --- | --- |
+| macOS on Apple silicon (arm64) | Supported |
+| Windows x64, built with the GNU toolchain (`x86_64-pc-windows-gnu`) | Supported |
+| Linux x64 on Ubuntu and Fedora | Supported |
+| Linux arm64; Linux desktops other than GNOME | Unverified |
+| macOS on Intel (x64) | Unsupported; the packaging target above is not validated |
+
+Supported means the project develops and tests there; §12 lists the evidence each still needs before a feature counts as complete.
+
 ### Proposed defaults for implementation
 
-These are recommended starting choices, not additional owner-approved requirements:
+These are recommended starting choices, not additional project goals:
 
 - Iroh for authenticated encrypted transport, NAT traversal, and relay fallback.
 - Vanilla TypeScript, HTML and CSS for the shared Electron UI; native Rust adapters for operating-system integration.
@@ -125,8 +136,8 @@ These are recommended starting choices, not additional owner-approved requiremen
 Record decisions and platform evidence for:
 
 1. Linux distribution, desktop environment, compositor, and Wayland versus X11.
-2. OS versions and CPU/GPU architectures of all three machines.
-3. Whether required access includes locked screens, pre-login access after reboot, elevated Windows applications/UAC, and a monitorless Mac mini.
+2. OS versions and CPU/GPU architectures within each supported platform.
+3. Whether required access includes locked screens, pre-login access after reboot, elevated Windows applications/UAC, and a Mac with no monitor attached.
 4. Desired clipboard, file transfer, audio, multiple-monitor, and wake functionality.
 5. For a custom relay, that operator's traffic accounting, CPU and network throughput, domain/TLS, and existing workloads. VniLink does not provision a relay.
 6. Address refresh after pairing for a custom relay. The library pins iroh 1.3.0: public mode is `RelayMode::Default` via `presets::N0`, and custom mode is `RelayMode::Custom`. Custom mode clears n0 address lookup, so a peer is dialed from the relay URLs and direct addresses in the signed invitation. Refreshing those addresses later, and reaching a credentialed relay, still require each installation to hold that relay in its own configuration. The builder signature has changed across releases.
@@ -239,8 +250,6 @@ Choose either explicit paired-device address publication or a small authenticate
 
 Running a relay is optional. The default install uses the public relays. Operators who want a private relay configure domain and TLS, required ports, health checks, service startup, logs, updates, and abuse protection themselves. Relay access controls and resource limits must match the pinned release; avoid claiming a configuration option exists without checking it. Deployments, paid services, provider changes, and opening infrastructure access require their own task authorization. This README is not permission to provision or deploy.
 
-The owner's VPS, with 12 GB RAM and a stated 10 TB monthly allowance, is one possible custom relay for that owner. Other installations do not use it.
-
 ### Bandwidth budget
 
 Anyone operating a relay can use these planning figures. For a 31-day month (744 hours), a continuous one-direction stream uses approximately:
@@ -298,7 +307,7 @@ Clipboard and file transfer are privileged session features. Clipboard text requ
 
 `vnilink-macos` encodes and decodes H.264 with VideoToolbox and builds a ScreenCaptureKit configuration for one BGRA monitor, cursor hidden. `ScreenCapture` starts the stream and copies BGRA pictures through an output handler; `HostSession` paces them at the session quality and publishes Annex-B for that hosted session, and `serve_stream` reads a capture that is already open and stops when the session ends. Tests use a synthetic picture. They do not call `SCShareableContent::get` or start a stream, and they have not captured the screen. Electron permission onboarding and presentation of decoded pictures remain open.
 
-Test locked sessions, user switching, monitor disconnect, and headless capture on the actual Mac mini. FileVault preboot unlock is outside the initial logged-in-desktop milestone; do not promise that an ordinary app or launch agent can control it.
+Test locked sessions, user switching, monitor disconnect, and headless capture on a real Mac with no monitor attached. FileVault preboot unlock is outside the initial logged-in-desktop milestone; do not promise that an ordinary app or launch agent can control it.
 
 ### Windows
 
@@ -308,7 +317,7 @@ Ordinary SendInput is restricted by integrity levels. Elevated applications, UAC
 
 ### Linux
 
-X11 and the Wayland ScreenCast portal are separate. X11 reads the current session through x11rb. Tests unpack a 32-bit little-endian image and do not connect to a display. Portal phases are tested without D-Bus. The D-Bus driver is compiled on Linux only. Against ashpd 0.13 it asks for one monitor, a hidden cursor, and no persisted grant, then reads the synchronous portal response and returns a PipeWire file descriptor. `PortalCapture` connects that descriptor to the node and copies BGRA or BGRx frames. The production portal requests MemFd/MemPtr buffers without GPU modifiers and rejects unexpected DMA-BUF delivery. A real Wayland run later aborted inside Mesa during GBM unmapping, so that import path is retained only as an isolated hardware test. Tests do not open a portal session. `HostSession` paces captured frames at the session quality and publishes Annex-B for that hosted session. Its test uses a synthetic picture. `serve_portal` reads a capture that is already open and stops when the session ends. Neither one draws a window. One run on this Ubuntu 24.04 GNOME Wayland session shared a 1920×1080 monitor as BGRx in an Intel Y-tiled DMA-BUF. GBM mapped that modifier, and VA-API encoded the frame as a keyframe with SPS, PPS, and an IDR. That single-frame result did not validate repeated buffer cleanup; the later GBM-unmap abort supersedes it for production use. That grant is the one session the dialog allowed. The DMA-BUF test opens a render node when one is present. H.264 encode is VA-API through libva, fed NV12 that the node's video processor converts from the captured BGRA (BT.709, limited range), or that the CPU converts where the node has no video processor: High profile with CABAC when the session negotiates it, else Constrained Baseline. The Linux encoder currently leaves 8x8 transforms off; the decoder accepts them from other encoders. A keyframe carries SPS, PPS, and an IDR. The encoder opens `/dev/dri` render nodes in name order and uses the first one that offers low-power slice encode, or slice encode when the low-power entrypoint is absent. A node that opens without that entrypoint is skipped. A build where no node offers it returns unsupported. H.264 decode is VA-API variable-length decode through the same crate: `LinuxDecoder` opens the session from a keyframe's SPS and PPS, tracks references with a sliding-window picture buffer, downloads NV12, and returns BGRA. Baseline, Main, and High progressive pictures decode; fields, B slices, and long-term references are refused explicitly. This tree does not link x264 or a locally compiled OpenH264.
+X11 and the Wayland ScreenCast portal are separate. X11 reads the current session through x11rb. Tests unpack a 32-bit little-endian image and do not connect to a display. Portal phases are tested without D-Bus. The D-Bus driver is compiled on Linux only. Against ashpd 0.13 it asks for one monitor, a hidden cursor, and no persisted grant, then reads the synchronous portal response and returns a PipeWire file descriptor. `PortalCapture` connects that descriptor to the node and copies BGRA or BGRx frames. The production portal requests MemFd/MemPtr buffers without GPU modifiers and rejects unexpected DMA-BUF delivery. A real Wayland run later aborted inside Mesa during GBM unmapping, so that import path is retained only as an isolated hardware test. Tests do not open a portal session. `HostSession` paces captured frames at the session quality and publishes Annex-B for that hosted session. Its test uses a synthetic picture. `serve_portal` reads a capture that is already open and stops when the session ends. Neither one draws a window. One run on an Ubuntu 24.04 GNOME Wayland session with an Intel GPU shared a 1920×1080 monitor as BGRx in an Intel Y-tiled DMA-BUF. GBM mapped that modifier, and VA-API encoded the frame as a keyframe with SPS, PPS, and an IDR. That single-frame result did not validate repeated buffer cleanup; the later GBM-unmap abort supersedes it for production use. That grant is the one session the dialog allowed. The DMA-BUF test opens a render node when one is present. H.264 encode is VA-API through libva, fed NV12 that the node's video processor converts from the captured BGRA (BT.709, limited range), or that the CPU converts where the node has no video processor: High profile with CABAC when the session negotiates it, else Constrained Baseline. The Linux encoder currently leaves 8x8 transforms off; the decoder accepts them from other encoders. A keyframe carries SPS, PPS, and an IDR. The encoder opens `/dev/dri` render nodes in name order and uses the first one that offers low-power slice encode, or slice encode when the low-power entrypoint is absent. A node that opens without that entrypoint is skipped. A build where no node offers it returns unsupported. H.264 decode is VA-API variable-length decode through the same crate: `LinuxDecoder` opens the session from a keyframe's SPS and PPS, tracks references with a sliding-window picture buffer, downloads NV12, and returns BGRA. Baseline, Main, and High progressive pictures decode; fields, B slices, and long-term references are refused explicitly. This tree does not link x264 or a locally compiled OpenH264.
 
 Document the supported desktop combinations. Do not claim universal Linux unattended access from a successful portal session on one environment. Wayland control now uses `WaylandCapture` and its `HostDesktop` adapter through a combined RemoteDesktop/ScreenCast portal grant. Physical keys, character text, pointer, buttons and scroll are wired through D-Bus Notify methods. Real compositor input remains unverified; a private D-Bus fixture verifies the request flow, input calls and grant cleanup.
 
@@ -322,16 +331,16 @@ Capture/encode only when a session requires it. Avoid busy polling. Use bounded 
 
 Measure idle CPU/RAM, host capture/encode cost, controller decode/render cost, startup time, sustained bandwidth, reconnect time, and input-to-display latency. Record hardware, OS, resolution, frame rate, codec, network RTT, loss, direct/relay path, and measurement method with results.
 
-A proposed initial operating profile is 1080p at up to 30 fps with adjustable bitrate, plus idle reduction. This is a baseline to test, not a guaranteed capability or final owner requirement. Derive numerical performance acceptance targets from measurements and owner expectations before asserting the app is lightweight.
+A proposed initial operating profile is 1080p at up to 30 fps with adjustable bitrate, plus idle reduction. This is a baseline to test, not a guaranteed capability or final project requirement. Derive numerical performance acceptance targets from measurements and project goals before asserting the app is lightweight.
 
 ## 11. Implementation sequence and completion gates
 
-1. **Platform feasibility:** establish capture, authorized input, codec availability, and permission persistence on all actual devices. Deliver a supported-state matrix with evidence for lock/reboot/headless behavior and blockers.
+1. **Platform feasibility:** establish capture, authorized input, codec availability, and permission persistence on each supported platform. Deliver a supported-state matrix with evidence for lock/reboot/headless behavior and blockers.
 2. **Core and binding contract:** establish library lifecycle, capability/event API, trust persistence, session states, bindings, and versioned protocol. Complete when native hosts can start/stop the core and receive ordered bounded state updates safely.
-3. **Networking and pairing:** authenticated pairing, target-local grants, discovery, direct and forced-relay connections, rejection/revocation. Complete when all six directed connections work across distinct networks on the public-relay default, a custom relay URL works without rebuilding, and unauthorized peers are rejected.
-4. **First usable remote desktop:** one monitor, negotiated encoded video, keyboard/mouse, local disconnect, indicator, input cleanup. Complete when all six directions perform real interactive desktop tasks; mock adapters alone do not satisfy this gate.
+3. **Networking and pairing:** authenticated pairing, target-local grants, discovery, direct and forced-relay connections, rejection/revocation. Complete when every directed pair of supported operating systems connects across distinct networks on the public-relay default, a custom relay URL works without rebuilding, and unauthorized peers are rejected.
+4. **First usable remote desktop:** one monitor, negotiated encoded video, keyboard/mouse, local disconnect, indicator, input cleanup. Complete when every direction performs real interactive desktop tasks; mock adapters alone do not satisfy this gate.
 5. **Unattended reliability:** platform startup, UI-independent hosting, network changes, crash/restart recovery, sleep/resume, permission loss, display changes. Complete for the documented supported desktop states with reproducible tests.
-6. **Additional features:** clipboard, transfer, audio, multiple monitors, and wake behavior according to owner priority. Each feature needs negotiated permissions and independent completion evidence.
+6. **Additional features:** clipboard, transfer, audio, multiple monitors, and wake behavior according to project priority. Each feature needs negotiated permissions and independent completion evidence.
 7. **Packaging and operations:** signed platform packages where applicable, permission/setup guides, pinned bindings/dependencies, repeatable platform builds, an optional custom-relay runbook, compatibility documentation, and measured resource results. The default install uses the public relays and ships without a relay deployment.
 
 Keep implemented, tested, proposed, unsupported, and blocked items distinct in documentation. A compiling shell or passing model test is not a finished remote desktop app.

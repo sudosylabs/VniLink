@@ -32,4 +32,4 @@ UI work loads `design-philosophy` and `accessibility`, with layout/theming skill
 
 ## Verification
 
-Follow `unit-tests` and, when affected, `cross-platform-validation`. The local upstream reference is normally `/Users/hammed/Projects/vscode`; see the architecture skill for how to verify its revision and locate a reference elsewhere.
+Follow `unit-tests` and, when affected, `cross-platform-validation`. The upstream reference is a VS Code checkout at the ref in `build/vscode-source.json`, wherever the contributor keeps it; the architecture skill says how to verify its revision.

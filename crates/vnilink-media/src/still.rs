@@ -137,9 +137,10 @@ impl StillEncoder {
 }
 
 /// Makes still pictures on a thread of its own, so the stream never waits
-/// for one: about 50 ms at 1080p and 100 ms at 4K a try on an M1. Each is
-/// tagged with the change it was asked for after; the caller throws away
-/// one made before the screen changed again.
+/// for one: about 50 ms at 1080p and 100 ms at 4K a try on a first-generation
+/// Apple silicon Mac (M1, 2026-10-22). Each is tagged with the change it was
+/// asked for after; the caller throws away one made before the screen changed
+/// again.
 pub(crate) struct StillWorker {
     jobs: Option<mpsc::SyncSender<Job>>,
     made: mpsc::Receiver<Made>,

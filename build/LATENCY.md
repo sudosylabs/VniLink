@@ -43,9 +43,9 @@ Both sides start through LaunchServices (`open`), so macOS asks Screen Recording
 
 macOS grants an ad-hoc signed application by its code hash, so each checkout's development VniLink needs its own grant, and the list shows them all as "VniLink". To use a copy that already has it, such as the main checkout's, pass it with `--app`. That application only hosts Electron; the code it runs is this checkout's `out/`.
 
-The host's sharing allows view and control, but its engine prepares video only, so the viewer cannot control this Mac. Leave the display awake and uncovered while it runs.
+The host's sharing allows view and control, but its engine prepares video only, so the viewer cannot control the host Mac. Leave the display awake and uncovered while it runs.
 
-Only the host prepares native video on macOS; the viewer's window decodes with its own decoders. A viewer engine that also prepared native video, on the same Mac as the host, made the host's capture reads about 19 ms slower (133 against 116 ms p50 on an M1): a cost of measuring both sides on one computer, which a real viewer on another computer does not add. On Windows and Linux the viewer prepares it, as its engine admits a screen only with a decoder of its own.
+Only the host prepares native video on macOS; the viewer's window decodes with its own decoders. A viewer engine that also prepared native video, on the same Mac as the host, made the host's capture reads about 19 ms slower (133 against 116 ms p50 on a first-generation Apple silicon Mac, M1, 2026-10-23): a cost of measuring both sides on one computer, which a real viewer on another computer does not add. On Windows and Linux the viewer prepares it, as its engine admits a screen only with a decoder of its own.
 
 ### Windows
 
@@ -105,7 +105,7 @@ Both viewers prepare native video, as the product's do: a Mac viewer whose engin
 The remote side runs as a transient unit of the user's session there (`systemd-run --user`), so it has the graphical session's bus and portal. Its checkout must be built (`npm run build` there). The two sides' rendezvous files are copied over one shared SSH connection, and the remote side's evidence is copied back into the output and removed there, with its profile and rendezvous. A Linux host's portal asks someone there on the first run, as on one computer; its answer is kept in that checkout's `.build/latency/`.
 
 ```bash
-npm run measure:latency -- --remote lx --remote-root /home/me/Projects/vnilink --hosts here --fps 60 --seconds 30
+npm run measure:latency -- --remote someone@studio.local --remote-root /home/someone/vnilink --hosts here --fps 60 --seconds 30
 ```
 
 The evidence is `summary.md`, `run.json`, both sides' logs and the files above. Scaling and copies are inside the host's encode time; `encode_probe` in `vnilink-macos` (GPU scaling of a 4K picture) and `conversion_bench` in `vnilink-media` (CPU scaling and conversion) time them alone.
