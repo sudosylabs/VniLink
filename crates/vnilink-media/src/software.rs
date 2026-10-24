@@ -1,5 +1,13 @@
 //! In-process realtime software fallback. No subprocess or whole-frame JSON.
-use crate::{EncodeParams, EncodedSample, Error, RawFrame, VideoDecoder, VideoEncoder};
+//!
+//! Encoders convert to the stream's colour ([`STREAM_SIGNAL`]) and declare
+//! it where the codec can; the decoder shows each picture in the colour its
+//! stream declares.
+use crate::colour::declared_signal;
+use crate::nv12::{bgra_to_i420, i420_to_bgra};
+use crate::{
+    EncodeParams, EncodedSample, Error, RawFrame, VideoDecoder, VideoEncoder, STREAM_SIGNAL,
+};
 use shiguredo_aom as aom;
 use shiguredo_libvpx as vpx;
 use vnilink::{CodecSupport, EncodedFrame, VideoCodec};
@@ -34,8 +42,20 @@ impl SoftwareEncoder {
             .unwrap_or(1);
         match codec {
             VideoCodec::H265 => Ok(Self::Hevc(
-                vnilink_hevc::Encoder::open(width, height, fps, bitrate, threads)
-                    .map_err(|_| Error::Unsupported("Kvazaar encoder"))?,
+                vnilink_hevc::Encoder::open(
+                    width,
+                    height,
+                    fps,
+                    bitrate,
+                    threads,
+                    vnilink_hevc::Colour {
+                        primaries: STREAM_SIGNAL.primaries,
+                        transfer: STREAM_SIGNAL.transfer,
+                        matrix: STREAM_SIGNAL.matrix,
+                        full_range: STREAM_SIGNAL.full_range,
+                    },
+                )
+                .map_err(|_| Error::Unsupported("Kvazaar encoder"))?,
             )),
             VideoCodec::Vp8 | VideoCodec::Vp9 => {
                 let profile = if codec == VideoCodec::Vp8 {
@@ -44,6 +64,8 @@ impl SoftwareEncoder {
                     vpx::CodecConfig::Vp9(vpx::Vp9Config {
                         row_mt: true,
                         tune_content: Some(vpx::ContentType::Screen),
+                        color_space: Some(vpx::ColorSpace::Bt709),
+                        full_range: Some(STREAM_SIGNAL.full_range),
                         ..Default::default()
                     })
                 };
@@ -80,6 +102,10 @@ impl SoftwareEncoder {
                 config.rc_end_usage = aom::RateControlMode::Cbr;
                 config.rc_target_bitrate = (bitrate / 1000).max(1);
                 config.tune_content = Some(aom::ContentType::Screen);
+                config.color_primaries = Some(STREAM_SIGNAL.primaries.into());
+                config.transfer_characteristics = Some(STREAM_SIGNAL.transfer.into());
+                config.matrix_coefficients = Some(STREAM_SIGNAL.matrix.into());
+                config.color_range = Some(STREAM_SIGNAL.full_range.into());
                 Ok(Self::Av1(
                     aom::Encoder::new(config).map_err(|_| Error::Unsupported("libaom encoder"))?,
                 ))
@@ -101,7 +127,7 @@ impl VideoEncoder for SoftwareEncoder {
         }
     }
     fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
-        let (y, u, v) = to_i420(frame)?;
+        let (y, u, v) = bgra_to_i420(frame, STREAM_SIGNAL)?;
         match self {
             Self::Hevc(encoder) => {
                 let (key, bytes) = encoder
@@ -214,6 +240,7 @@ impl VideoDecoder for SoftwareDecoder {
                     &picture.i420[y + uv..],
                     [picture.width, picture.width / 2, picture.width / 2],
                     frame.timestamp_us,
+                    declared_signal(Some(picture.matrix), picture.full_range),
                 )
             }
             Self::Vpx(decoder) => {
@@ -235,6 +262,13 @@ impl VideoDecoder for SoftwareDecoder {
                     picture.v_plane(),
                     [picture.y_stride(), picture.u_stride(), picture.v_stride()],
                     frame.timestamp_us,
+                    declared_signal(
+                        picture.color_space().map(|space| match space {
+                            vpx::ColorSpace::Bt601 => 6,
+                            vpx::ColorSpace::Bt709 => 1,
+                        }),
+                        picture.full_range(),
+                    ),
                 );
                 if decoder
                     .next_frame()
@@ -273,6 +307,10 @@ impl VideoDecoder for SoftwareDecoder {
                         picture.v_stride().map_err(invalid)?,
                     ],
                     frame.timestamp_us,
+                    declared_signal(
+                        u8::try_from(picture.matrix_coefficients()).ok(),
+                        picture.full_range(),
+                    ),
                 );
                 if decoder.next_frame().is_some() {
                     return Err(Error::DecodeRejected("multiple AV1 pictures"));
@@ -282,41 +320,6 @@ impl VideoDecoder for SoftwareDecoder {
         }
     }
 }
-fn to_i420(frame: &RawFrame) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), Error> {
-    let w = frame.width() as usize;
-    let h = frame.height() as usize;
-    if w % 2 != 0 || h % 2 != 0 {
-        return Err(Error::InvalidFrame("software YUV dimensions must be even"));
-    }
-    let mut y = vec![0; w * h];
-    let mut u = vec![0; w * h / 4];
-    let mut v = vec![0; w * h / 4];
-    for row in 0..h {
-        for col in 0..w {
-            let pixel = &frame.pixels()[row * frame.stride() + col * 4..];
-            let (b, g, r) = (pixel[0] as i32, pixel[1] as i32, pixel[2] as i32);
-            y[row * w + col] = ((66 * r + 129 * g + 25 * b + 128) / 256 + 16).clamp(0, 255) as u8;
-        }
-    }
-    for row in (0..h).step_by(2) {
-        for col in (0..w).step_by(2) {
-            let mut rgb = [0i32; 3];
-            for dy in 0..2 {
-                for dx in 0..2 {
-                    let pixel = &frame.pixels()[(row + dy) * frame.stride() + (col + dx) * 4..];
-                    for i in 0..3 {
-                        rgb[i] += pixel[i] as i32;
-                    }
-                }
-            }
-            let (b, g, r) = (rgb[0] / 4, rgb[1] / 4, rgb[2] / 4);
-            let index = (row / 2) * (w / 2) + col / 2;
-            u[index] = ((-38 * r - 74 * g + 112 * b + 128) / 256 + 128).clamp(0, 255) as u8;
-            v[index] = ((112 * r - 94 * g - 18 * b + 128) / 256 + 128).clamp(0, 255) as u8;
-        }
-    }
-    Ok((y, u, v))
-}
 fn from_i420(
     w: usize,
     h: usize,
@@ -325,6 +328,7 @@ fn from_i420(
     v: &[u8],
     strides: [usize; 3],
     time: u64,
+    signal: crate::VideoSignal,
 ) -> Result<RawFrame, Error> {
     if w == 0 || h == 0 || w > 4096 || h > 4096 || w % 2 != 0 || h % 2 != 0 {
         return Err(Error::DecodeRejected("decoded dimensions"));
@@ -343,20 +347,7 @@ fn from_i420(
             return Err(Error::DecodeRejected("decoded plane bounds"));
         }
     }
-    let mut pixels = vec![0; w * h * 4];
-    for row in 0..h {
-        for col in 0..w {
-            let c = (y[row * strides[0] + col] as i32 - 16).max(0);
-            let d = u[(row / 2) * strides[1] + col / 2] as i32 - 128;
-            let e = v[(row / 2) * strides[2] + col / 2] as i32 - 128;
-            let target = &mut pixels[(row * w + col) * 4..];
-            target[0] = ((298 * c + 516 * d + 128) >> 8).clamp(0, 255) as u8;
-            target[1] = ((298 * c - 100 * d - 208 * e + 128) >> 8).clamp(0, 255) as u8;
-            target[2] = ((298 * c + 409 * e + 128) >> 8).clamp(0, 255) as u8;
-            target[3] = 255;
-        }
-    }
-    RawFrame::bgra(w as u16, h as u16, time, pixels)
+    i420_to_bgra(w as u16, h as u16, time, [y, u, v], strides, signal)
 }
 /// Only a successful synthetic roundtrip makes a codec available.
 pub fn probe_software_codecs() -> Vec<CodecSupport> {
@@ -532,6 +523,125 @@ mod tests {
                 assert!(picture.pixels()[2].abs_diff(128) < 20);
             }
         }
+    }
+
+    /// Black, white, grey, a mid tone and the primaries come back as they
+    /// went in through every software codec: each converts to the stream's
+    /// colour and the decoder reads that colour back.
+    #[test]
+    fn software_codecs_show_each_colour_as_it_went_in() {
+        for codec in [
+            VideoCodec::Vp8,
+            VideoCodec::Vp9,
+            VideoCodec::Av1,
+            VideoCodec::H265,
+        ] {
+            for bgra in [
+                [200u8, 120, 40, 255],
+                [0, 0, 0, 255],
+                [255, 255, 255, 255],
+                [128, 128, 128, 255],
+                [0, 0, 255, 255],
+                [0, 255, 0, 255],
+                [255, 0, 0, 255],
+            ] {
+                let mut encoder = SoftwareEncoder::open(codec, 64, 64, 30, 4_000_000).unwrap();
+                let frame = RawFrame::bgra(64, 64, 0, bgra.repeat(4096)).unwrap();
+                let params = EncodeParams {
+                    force_keyframe: true,
+                    recovery: false,
+                    bitrate_bps: 4_000_000,
+                    frame_rate: 30,
+                };
+                let sample = encoder.encode(&frame, &params).unwrap();
+                let encoded = EncodedFrame::new(codec, true, 0, sample.bytes().to_vec()).unwrap();
+                let picture = SoftwareDecoder::open(codec)
+                    .unwrap()
+                    .decode(&encoded)
+                    .unwrap();
+                let middle = 32 * picture.stride() + 32 * 4;
+                let shown = &picture.pixels()[middle..middle + 3];
+                assert!(
+                    shown
+                        .iter()
+                        .zip(&bgra)
+                        .all(|(shown, sent)| shown.abs_diff(*sent) <= 3),
+                    "{codec:?} {bgra:?} came back as {shown:?}"
+                );
+            }
+        }
+    }
+
+    /// H.265, AV1 and VP9 streams say they are BT.709 in limited range;
+    /// VP8 has nowhere to say it.
+    #[test]
+    fn software_encoders_declare_their_colour() {
+        let params = EncodeParams {
+            force_keyframe: true,
+            recovery: false,
+            bitrate_bps: 500_000,
+            frame_rate: 30,
+        };
+        let frame = RawFrame::bgra(64, 64, 0, [200u8, 120, 40, 255].repeat(4096)).unwrap();
+        let encode = |codec| {
+            SoftwareEncoder::open(codec, 64, 64, 30, 500_000)
+                .unwrap()
+                .encode(&frame, &params)
+                .unwrap()
+        };
+
+        let hevc = encode(VideoCodec::H265);
+        let picture = vnilink_hevc::Decoder::open()
+            .unwrap()
+            .decode(hevc.bytes())
+            .unwrap();
+        assert_eq!((picture.matrix, picture.full_range), (1, false));
+
+        let av1 = encode(VideoCodec::Av1);
+        let mut decoder = aom::Decoder::new(aom::DecoderConfig::new()).unwrap();
+        decoder.decode(av1.bytes()).unwrap();
+        let picture = decoder.next_frame().unwrap();
+        assert_eq!(
+            (picture.matrix_coefficients(), picture.full_range()),
+            (1, false)
+        );
+
+        for (codec, declared) in [
+            (VideoCodec::Vp9, Some(vpx::ColorSpace::Bt709)),
+            (VideoCodec::Vp8, None),
+        ] {
+            let sample = encode(codec);
+            let mut decoder = vpx::Decoder::new(vpx::DecoderConfig::new(match codec {
+                VideoCodec::Vp8 => vpx::DecoderCodec::Vp8,
+                _ => vpx::DecoderCodec::Vp9,
+            }))
+            .unwrap();
+            decoder.decode(sample.bytes()).unwrap();
+            let picture = decoder.next_frame().unwrap().unwrap();
+            assert_eq!(
+                (picture.color_space(), picture.full_range()),
+                (declared, false),
+                "{codec:?}"
+            );
+        }
+    }
+
+    /// A picture is shown in the matrix and range its stream declares; one
+    /// that declares none, or a matrix not handled, in the stream's colour.
+    #[test]
+    fn decoders_follow_the_declared_colour_else_the_stream_colour() {
+        use crate::colour::declared_signal;
+        use crate::YuvMatrix;
+
+        assert_eq!(
+            declared_signal(Some(6), false).yuv_matrix(),
+            YuvMatrix::Bt601
+        );
+        let full = declared_signal(Some(1), true);
+        assert!(full.full_range && full.yuv_matrix() == YuvMatrix::Bt709);
+        assert_eq!(declared_signal(Some(2), false), STREAM_SIGNAL);
+        assert_eq!(declared_signal(None, true), STREAM_SIGNAL);
+        assert_eq!(declared_signal(Some(9), false), STREAM_SIGNAL);
     }
 }
 

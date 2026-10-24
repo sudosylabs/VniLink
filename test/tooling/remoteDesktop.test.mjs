@@ -11,7 +11,7 @@ const result = await build({
 		name: 'stubs', setup(builder) {
 			builder.onResolve({ filter: /(dataChannelClient|webCodecsDecoder|extensions)\.js$/ }, args => ({ path: args.path, namespace: 'stub' }));
 			builder.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({
-				contents: 'export const DataChannelClient = { open() { throw new Error("no channel in tests"); } }; export const createWebCodecsDecoder = async () => undefined; export const registerSingleton = () => {}; export const InstantiationType = {};',
+				contents: 'export const DataChannelClient = { open() { throw new Error("no channel in tests"); } }; export const createWebCodecsDecoder = async () => undefined; export const webCodecsSupport = async () => false; export const registerSingleton = () => {}; export const InstantiationType = {};',
 				loader: 'js',
 			}));
 		},
@@ -164,9 +164,10 @@ test('a screen opens only where it is shared: the picture first, then the input 
 });
 
 test('the window says which codecs it decodes, hardware ones marked, each once, and whether it shows stills', async () => {
-	const answers = { 'avc1.640028': ['prefer-hardware', 'no-preference'], 'hev1.1.6.L153.B0': ['no-preference'], 'av01.0.08M.08': ['no-preference'], 'av01.1.08M.08.0.000': ['no-preference'] };
+	// A hardware decoder that shows the wrong colours answers no for `prefer-hardware`, as VP9's does here.
+	const answers = { 'avc1.640028': ['prefer-hardware', 'prefer-software'], 'hev1.1.6.L153.B0': ['prefer-software'], 'vp09.00.40.08': ['prefer-software'], 'av01.0.08M.08': ['prefer-software'], 'av01.1.08M.08.0.000': ['no-preference'] };
 	const decoders = await probeWindowDecoders(async config => (answers[config.codec] ?? []).includes(config.hardwareAcceleration));
-	assert.deepEqual(decoders, [{ codec: 'h264', hardware: true, chroma444: false }, { codec: 'h265', hardware: false, chroma444: false }, { codec: 'av1', hardware: false, chroma444: true }]);
+	assert.deepEqual(decoders, [{ codec: 'h264', hardware: true, chroma444: false }, { codec: 'h265', hardware: false, chroma444: false }, { codec: 'vp9', hardware: false, chroma444: false }, { codec: 'av1', hardware: false, chroma444: true }]);
 	assert(isEngineCommand({ type: 'setWindowDecoders', decoders }));
 	assert(isEngineCommand({ type: 'setWindowDecoders', decoders: [] }));
 	for (const bad of [
@@ -195,7 +196,7 @@ test('a screen offers only what the window decodes, and leaves out a codec it co
 	let probes = 0;
 	service.decoderSupport = async config => {
 		probes++;
-		return config.codec === 'avc1.640028' || (config.codec === 'hev1.1.6.L153.B0' && config.hardwareAcceleration === 'no-preference');
+		return config.codec === 'avc1.640028' || (config.codec === 'hev1.1.6.L153.B0' && config.hardwareAcceleration === 'prefer-software');
 	};
 	let consume;
 	service.openChannel = async (request, consumer) => {

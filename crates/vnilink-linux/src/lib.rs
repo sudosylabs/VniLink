@@ -4,11 +4,11 @@
 //! X session. [`PortalSession`] is the ScreenCast permission sequence, and
 //! [`PortalCapture`] reads BGRA or BGRx from the PipeWire node that sequence
 //! starts using shared-memory buffers. One started session is
-//! not universal unattended access. [`LinuxEncoder`] encodes with VA-API on
-//! the first DRM render node that offers the negotiated codec: H.264 (High
-//! when the session agrees it, else Constrained Baseline) and H.265.
-//! [`video_codec_caps`] offers H.265 only once a picture encoded on the GPU
-//! decodes. [`LinuxDecoder`] decodes H.264 on
+//! not universal unattended access. [`LinuxEncoder`] encodes with NVENC on
+//! an NVIDIA GPU, else with VA-API on the first DRM render node that offers
+//! the negotiated codec: H.264 (High when the session agrees it, else
+//! Constrained Baseline), H.265 and, on NVENC, AV1. [`video_codec_caps`]
+//! offers H.265 and AV1 only once a picture encoded on the GPU decodes. [`LinuxDecoder`] decodes H.264 on
 //! the first node that offers variable-length decode. Tests do not connect to an X server or a session
 //! bus. The encoder test and the DMA-BUF test open a render node when one
 //! is present.
@@ -34,9 +34,7 @@ mod encode;
 #[cfg(any(target_os = "linux", test))]
 mod hevc_parameter_set;
 mod host;
-// Not used by sessions yet: see the module's documentation.
 #[cfg(target_os = "linux")]
-#[allow(dead_code)]
 mod nvenc;
 mod owners;
 mod parameter_set;

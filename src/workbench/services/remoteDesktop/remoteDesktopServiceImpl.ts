@@ -3,11 +3,11 @@ import { IEngineService } from '../../../platform/engine/common/engineService.js
 import type { DataChannelRequest, DataPacket } from '../../../platform/engine/common/dataChannel.js';
 import { deviceName, engineErrorCategory, type DisplayInfo, type EngineCommand, type QualityLimits, type RemoteStatus, type VideoCodec, type WindowDecoder } from '../../../platform/engine/common/engine.js';
 import { DataChannelClient } from '../../../platform/engine/electron-browser/dataChannelClient.js';
-import { createWebCodecsDecoder } from '../camera/webCodecsDecoder.js';
+import { createWebCodecsDecoder, webCodecsSupport } from '../camera/webCodecsDecoder.js';
 import { activeControllerSession } from '../devices/controllerSession.js';
 import { IDeviceService } from '../devices/deviceService.js';
 import { EngineDesktopSession, type DesktopVideoChannel } from './engineDesktopSession.js';
-import { probeWindowDecoders, webCodecsSupport, type DecoderSupport } from './windowDecoders.js';
+import { probeWindowDecoders, type DecoderSupport } from './windowDecoders.js';
 import { DesktopReadbackError, desktopTargetKey, isValidDesktopQuality, type DesktopFailure, type DesktopSession, type DesktopSettings, type DesktopTarget, type IDesktopSession, IRemoteDesktopService } from './remoteDesktopService.js';
 
 export type DesktopChannelOpener = (

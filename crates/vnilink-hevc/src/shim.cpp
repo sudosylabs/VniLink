@@ -20,7 +20,8 @@ struct Encoder {
   ~Encoder() { if(owner) api->encoder_close(owner); if(config) api->config_destroy(config); }
   bool option(const char* key, int value) { return api->config_parse(config,key,std::to_string(value).c_str()); }
 };
-extern "C" void* vnl_hevc_encoder_open(int w,int h,int fps,int bitrate,int threads) noexcept {
+extern "C" void* vnl_hevc_encoder_open(int w,int h,int fps,int bitrate,int threads,
+                                      int primaries,int transfer,int matrix,int full_range) noexcept {
   try {
     std::lock_guard<std::mutex> lock(kvz_lock);
     auto storage=std::make_unique<Encoder>(w,h);
@@ -31,6 +32,10 @@ extern "C" void* vnl_hevc_encoder_open(int w,int h,int fps,int bitrate,int threa
       && e->option("width",w) && e->option("height",h) && e->option("input-fps",fps)
       && e->option("bitrate",bitrate) && e->option("gop",0) && e->option("owf",0)
       && e->option("threads",threads) && e->option("period",120) && e->option("vps-period",1);
+    if(primaries<0 || primaries>127 || transfer<0 || transfer>127 || matrix<0 || matrix>127) return nullptr;
+    // Declared in the SPS VUI; the caller converts the pictures to this colour.
+    e->config->vui.colorprim=int8_t(primaries); e->config->vui.transfer=int8_t(transfer);
+    e->config->vui.colormatrix=int8_t(matrix); e->config->vui.fullrange=full_range?1:0;
     if(valid) e->owner=e->api->encoder_open(e->config);
     if(!e->owner) { return nullptr; }
     return storage.release();
@@ -103,7 +108,8 @@ extern "C" void* vnl_hevc_decoder_open() noexcept {
 }
 extern "C" void vnl_hevc_decoder_close(void* owner) noexcept { delete static_cast<Decoder*>(owner); }
 extern "C" int vnl_hevc_decode(void* owner,const uint8_t* packet,size_t length,
-                               const uint8_t** output,size_t* output_length,int* width,int* height) noexcept {
+                               const uint8_t** output,size_t* output_length,int* width,int* height,
+                               int* matrix,int* full_range) noexcept {
   try {
     auto* d=static_cast<Decoder*>(owner);
     struct ResetOnFailure {de265_decoder_context* owner;bool success=false;~ResetOnFailure(){if(!success)de265_reset(owner);}} reset{d->owner};
@@ -127,9 +133,11 @@ extern "C" int vnl_hevc_decode(void* owner,const uint8_t* packet,size_t length,
       for(int y=0;y<ph;y++) std::memcpy(d->picture.data()+offset+size_t(y)*pw,plane+size_t(y)*stride,pw);
       offset+=size_t(pw)*ph;
     }
+    int declared_matrix=de265_get_image_matrix_coefficients(image),declared_range=de265_get_image_full_range_flag(image);
     de265_release_next_picture(d->owner);
     if(de265_peek_next_picture(d->owner)) return 0;
-    *output=d->picture.data(); *output_length=d->picture.size(); *width=w; *height=h;reset.success=true;
+    *output=d->picture.data(); *output_length=d->picture.size(); *width=w; *height=h;
+    *matrix=declared_matrix; *full_range=declared_range;reset.success=true;
     return 1;
   } catch(...) { return 0; }
 }

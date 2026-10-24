@@ -7,6 +7,7 @@ import { verifyCamera } from './camera.js';
 import { verifyConnection } from './connection.js';
 import { ContextMenuFixture, verifyContextMenu } from './contextMenu.js';
 import { verifyDataChannels } from './dataChannels.js';
+import { verifyDecoderColour } from './decoderColour.js';
 import { showThemedDialog, verifyDialogs } from './dialogs.js';
 import { showFilesFixture, verifyFiles } from './files.js';
 import { verifyHomeLifecycle } from './home.js';
@@ -83,7 +84,7 @@ export class BrowserScenarios {
 	}
 
 	private readonly scenarios = new Map<string, () => unknown>([
-		['workbench', verifyWorkbenchLifecycle], ['access', verifyAccess], ['camera', verifyCamera], ['connection', verifyConnection], ['context-menu', verifyContextMenu], ['data-channels', verifyDataChannels],
+		['workbench', verifyWorkbenchLifecycle], ['access', verifyAccess], ['camera', verifyCamera], ['connection', verifyConnection], ['context-menu', verifyContextMenu], ['data-channels', verifyDataChannels], ['decoder-colour', verifyDecoderColour],
 		['devices', verifyDevices], ['dialogs', verifyDialogs], ['files', verifyFiles], ['device-pairing', verifyPairingPopover], ['device-screenshot', verifyDeviceScreenshot], ['home', verifyHomeLifecycle], ['icons', verifyIcons],
 		['media-settings', verifyMediaSettings], ['remote-desktop', verifyRemoteDesktop], ['remote-desktop-session', verifyRemoteDesktopSession], ['remote-desktop-still', verifyRemoteDesktopStill], ['settings', verifySettingsPages], ['tabs', verifyTabs], ['terminal', verifyTerminal],
 	]);
