@@ -163,3 +163,58 @@ fn solid(width: u16, height: u16, timestamp_us: u64, b: u8, g: u8, r: u8) -> Raw
     }
     RawFrame::bgra(width, height, timestamp_us, pixels).unwrap()
 }
+
+/// How long each picture takes to come out of the decoder, per encoder
+/// transform on this machine, against [`crate::decode::DECODE_WAIT`].
+/// Windows only; run with
+/// `cargo test -p vnilink-windows --release --lib decode_wait -- --ignored --nocapture`.
+#[cfg(windows)]
+#[test]
+#[ignore = "measurement"]
+fn decode_wait() {
+    use vnilink_media::measure::text_page;
+    const PICTURES: u64 = 120;
+    let (width, height) = (1920u16, 1080u16);
+    for candidate in unsafe { crate::transform::h264_encoders() } {
+        let Ok(mut encoder) =
+            WindowsEncoder::open_candidate(&candidate, width, height, 30, 8_000_000)
+        else {
+            println!("{} ({:?}): did not open", candidate.name, candidate.vendor);
+            continue;
+        };
+        let mut decoder = WindowsDecoder::new();
+        let mut times = Vec::new();
+        for index in 0..PICTURES {
+            let timestamp_us = index * 33_333;
+            let picture = text_page(width, height, index).with_timestamp(timestamp_us);
+            let sample = encoder
+                .encode(
+                    &picture,
+                    &EncodeParams {
+                        force_keyframe: index % 30 == 0,
+                        recovery: false,
+                        bitrate_bps: 8_000_000,
+                        frame_rate: 30,
+                    },
+                )
+                .unwrap();
+            let encoded =
+                EncodedFrame::h264(sample.keyframe(), timestamp_us, sample.bytes().to_vec())
+                    .unwrap();
+            let started = std::time::Instant::now();
+            decoder.decode(&encoded).unwrap();
+            times.push(started.elapsed());
+        }
+        times.sort();
+        let at = |share: f64| times[((times.len() - 1) as f64 * share) as usize];
+        println!(
+            "{} ({:?}): 1080p decode p50 {:?}, p99 {:?}, max {:?}; bound {:?}",
+            candidate.name,
+            candidate.vendor,
+            at(0.5),
+            at(0.99),
+            times[times.len() - 1],
+            crate::decode::DECODE_WAIT,
+        );
+    }
+}

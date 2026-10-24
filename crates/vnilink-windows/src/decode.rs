@@ -241,7 +241,7 @@ fn feed(transform: &IMFTransform, annex_b: &[u8], timestamp_us: u64) -> Result<V
                 return Ok(bytes);
             }
             // Still decoding: measured on Intel's and Microsoft's streams,
-            // the picture was out within a few milliseconds.
+            // the picture was out within a few milliseconds ([`DECODE_WAIT`]).
             if std::time::Instant::now() >= deadline {
                 return Err(Error::DecodeRejected("the decoder produced no frame"));
             }
@@ -253,8 +253,14 @@ fn feed(transform: &IMFTransform, annex_b: &[u8], timestamp_us: u64) -> Result<V
 /// How long a picture may take to come out after its input: longer than
 /// any measured decode, short enough that a decoder that keeps pictures
 /// fails the frame instead of stalling the stream.
+///
+/// Measured on one hybrid Intel + NVIDIA laptop (2026-10-22): Microsoft's
+/// decoder, which decodes on the CPU, with streams from Intel's and
+/// Microsoft's encoders. Streams from NVIDIA's and AMD's encoders and
+/// slower CPUs take the same bound unmeasured; `decode_wait` in the decoder
+/// tests measures them.
 #[cfg(windows)]
-const DECODE_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
+pub(crate) const DECODE_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// One picture the decoder has ready, or `None` when it needs more input.
 #[cfg(windows)]

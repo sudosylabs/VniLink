@@ -44,9 +44,14 @@ pub(crate) enum Vendor {
 }
 
 /// Measured 2026-10-22 on Windows 11 26H2 with NVIDIA's (RTX 5060 Laptop),
-/// Intel's (UHD, Raptor Lake) and Microsoft's transforms; AMD and other
-/// hardware are not measured and keep the settings that are harmless where
-/// ignored.
+/// Intel's (UHD, Raptor Lake) and Microsoft's transforms, one GPU of each
+/// on one hybrid laptop; other GPU generations of those vendors are assumed
+/// to behave the same. AMD and other hardware are not measured and keep
+/// the settings that are harmless where ignored. The measurements are
+/// `recovery_tests` (`cargo test -p vnilink-windows --release --lib
+/// recovery_tests -- --ignored --nocapture`), which print each transform's
+/// figures on the machine they run on: a vendor that measures differently
+/// changes its answer here.
 impl Vendor {
     /// Short fixed name for diagnostics.
     pub(crate) fn label(self) -> &'static str {

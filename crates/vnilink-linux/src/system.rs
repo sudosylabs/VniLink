@@ -18,6 +18,10 @@ pub struct LinuxSystemActions {
 /// The longest one D-Bus call may take. GNOME answers `Lock` only once its
 /// lock screen is up, and never while it already is: unbounded, one call
 /// held the host's system service, and every later action was refused.
+/// The bound and the lock sequence were measured on GNOME only. KDE's,
+/// Xfce's and other screensavers behind the same freedesktop interface are
+/// unverified: one that locks later than this may do so after the host has
+/// reported that no screensaver answered.
 const CALL_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// The screensavers that lock a session, freedesktop's first.
