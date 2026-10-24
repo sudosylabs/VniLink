@@ -154,9 +154,14 @@ impl VideoCodecCaps {
 
     /// The decode side this installation can show in its window: only the
     /// codecs the window's decoder takes, and of those only the ones it
-    /// decodes in hardware when it has any. It shows still pictures when its
-    /// AV1 decoder takes 4:4:4. `None` leaves the caps as the native probe
-    /// registered them.
+    /// decodes in hardware when it has any, H.264 apart. H.264 stays offered
+    /// however the window decodes it: every host encodes it, most in
+    /// hardware, and a host offered only codecs it encodes in software
+    /// encodes in software. A Linux window, whose hardware H.264 shows the
+    /// wrong colours but whose VP9 and AV1 do not, left a Mac host encoding
+    /// VP9 or AV1 on its CPU. It shows still pictures when its AV1 decoder
+    /// takes 4:4:4. `None` leaves the caps as the native probe registered
+    /// them.
     pub fn for_window(&self, decoders: Option<&[WindowDecoder]>) -> Self {
         let Some(decoders) = decoders else {
             return self.clone();
@@ -170,7 +175,10 @@ impl VideoCodecCaps {
                 .any(|decoder| decoder.codec == codec && (decoder.hardware || !hardware))
         };
         let mut caps = self.clone();
-        if !shown(crate::VideoCodec::H264) {
+        if !decoders
+            .iter()
+            .any(|decoder| decoder.codec == crate::VideoCodec::H264)
+        {
             caps.decode_baseline = false;
             caps.decode_high = false;
         }

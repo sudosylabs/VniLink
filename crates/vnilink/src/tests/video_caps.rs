@@ -552,6 +552,49 @@ fn offers_keep_to_what_the_window_decodes_in_hardware_when_it_can() {
     assert!(!shown.can_decode() || !shown.supports_decode(VideoCodec::H264));
 }
 
+/// A Linux window decodes VP9 in hardware but H.264 only in software, its
+/// hardware H.264 showing the wrong colours. H.264 is still offered, so a
+/// host that encodes only H.264 in hardware, a Mac, does not encode VP9 on
+/// its CPU.
+#[test]
+fn h264_stays_offered_when_only_another_codec_decodes_in_hardware() {
+    use crate::video::CodecSupport;
+    use crate::VideoCodec;
+    let mut viewer = VideoCodecCaps::h264_full(4096, 4096, "viewer");
+    viewer.additional.push(CodecSupport {
+        codec: VideoCodec::Vp9,
+        encode: false,
+        decode: true,
+        hardware: true,
+    });
+    let window = [
+        WindowDecoder {
+            codec: VideoCodec::H264,
+            hardware: false,
+            chroma444: false,
+        },
+        WindowDecoder {
+            codec: VideoCodec::Vp9,
+            hardware: true,
+            chroma444: false,
+        },
+    ];
+    let shown = viewer.for_window(Some(&window));
+    assert!(shown.supports_decode(VideoCodec::H264));
+    assert!(shown.supports_decode(VideoCodec::Vp9));
+    // A host encoding H.264 in hardware and VP9 only in software.
+    let mut host = VideoCodecCaps::h264_full(4096, 4096, "host");
+    host.hardware = true;
+    host.additional.push(CodecSupport {
+        codec: VideoCodec::Vp9,
+        encode: true,
+        decode: true,
+        hardware: false,
+    });
+    let agreed = crate::video_caps::negotiate(shown.decoder_offer(), &host).unwrap();
+    assert_eq!(agreed.codec, crate::CODEC_H264_HIGH);
+}
+
 #[test]
 fn a_window_lists_each_codec_once() {
     let core = start_direct();
