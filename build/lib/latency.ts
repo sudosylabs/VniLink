@@ -13,14 +13,16 @@
  * share it), another computer or another operating system, and host and
  * viewer share one CPU and GPU.
  */
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { closeSync, existsSync, openSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { parseArgs } from 'node:util';
+import { parseArgs, promisify } from 'node:util';
 import { electronExecutable } from './electron.ts';
 import { assertNativeFresh, defaultNativeOptions } from './native.ts';
 import { type LaunchedProcess, ProcessRunner } from './processes.ts';
+import { loadProduct } from './product.ts';
 
 export interface LatencyOptions {
 	/** How long the reader samples, after the stream has settled. */
@@ -42,12 +44,34 @@ export interface LatencyOptions {
 	 * and what the first change after a hold took.
 	 */
 	readonly holdSeconds: number;
+	/** The viewer's frame rate at the Smooth preset's bitrate and size; undefined keeps the default quality. */
+	readonly frameRate: number | undefined;
+	/** Two computers: the other one; undefined runs both sides on this one. */
+	readonly remote: RemoteComputer | undefined;
+}
+
+/**
+ * The other computer of a two-computer run, reached over SSH. It runs Linux
+ * and has a built checkout of this repository.
+ */
+export interface RemoteComputer {
+	/** The SSH destination, as `ssh` takes it. */
+	readonly destination: string;
+	/** The checkout there, absolute. */
+	readonly root: string;
+	/** Which computer hosts its screen: this one, or the remote one. */
+	readonly hosts: 'here' | 'remote';
+	/** An SSH configuration file for every connection, or the user's own. */
+	readonly sshConfig: string | undefined;
 }
 
 export function latencyOptions(root: string, args: readonly string[]): LatencyOptions {
 	const { values } = parseArgs({
 		args: [...args],
-		options: { seconds: { type: 'string', default: '20' }, settle: { type: 'string', default: '3' }, output: { type: 'string' }, app: { type: 'string' }, hold: { type: 'string', default: '0' } },
+		options: {
+			seconds: { type: 'string', default: '20' }, settle: { type: 'string', default: '3' }, output: { type: 'string' }, app: { type: 'string' }, hold: { type: 'string', default: '0' },
+			fps: { type: 'string' }, remote: { type: 'string' }, 'remote-root': { type: 'string' }, hosts: { type: 'string', default: 'here' }, 'ssh-config': { type: 'string' },
+		},
 		strict: true,
 	});
 	const seconds = Number(values.seconds);
@@ -62,9 +86,130 @@ export function latencyOptions(root: string, args: readonly string[]): LatencyOp
 	if (values.app !== undefined && !/\.app\/?$/.test(values.app)) {
 		throw new Error('--app must name a .app bundle');
 	}
+	const frameRate = values.fps === undefined ? undefined : Number(values.fps);
+	if (frameRate !== undefined && (!Number.isInteger(frameRate) || frameRate < 1 || frameRate > 120)) {
+		throw new Error('--fps must be 1..120');
+	}
+	if (values.hosts !== 'here' && values.hosts !== 'remote') {
+		throw new Error('--hosts must be here or remote');
+	}
+	let remote: RemoteComputer | undefined;
+	if (values.remote !== undefined) {
+		const remoteRoot = values['remote-root'];
+		if (!remoteRoot?.startsWith('/')) {
+			throw new Error('--remote needs --remote-root, the absolute path of a built checkout there');
+		}
+		if (holdSeconds > 0) {
+			throw new Error('--hold reads one screen and cannot run across two computers');
+		}
+		remote = { destination: values.remote, root: remoteRoot, hosts: values.hosts, sshConfig: values['ssh-config'] === undefined ? undefined : resolve(values['ssh-config']) };
+	} else if (values['remote-root'] !== undefined || values.hosts !== 'here' || values['ssh-config'] !== undefined) {
+		throw new Error('--remote-root, --hosts and --ssh-config need --remote');
+	}
 	// Absolute: the two sides run from another directory.
 	const output = resolve(values.output ?? join(root, '.build/latency', new Date().toISOString().replaceAll(':', '-')));
-	return { seconds, settleSeconds, output, app: values.app, holdSeconds };
+	return { seconds, settleSeconds, output, app: values.app, holdSeconds, frameRate, remote };
+}
+
+/** Each stage one side measures of itself, sampled once a second: its p50, p95 and samples. */
+export interface StagePercentiles {
+	readonly p50: number;
+	readonly p95: number;
+	readonly count: number;
+}
+
+/** A pipeline over a run, from one side's once-a-second diagnostics samples (`PipelineSummary`). */
+export interface PipelineRun {
+	/** Host: capture and encode times, scaling and copies included in encode, in ms. */
+	readonly capture: StagePercentiles | undefined;
+	readonly encode: StagePercentiles | undefined;
+	/** Viewer: the round trip, in ms. */
+	readonly roundTrip: StagePercentiles | undefined;
+	/** The last sample's codec, size, encoder or decoder and counters. */
+	readonly last: Readonly<Record<string, unknown>>;
+	/** Every condition any sample held. */
+	readonly conditions: readonly string[];
+}
+
+/** The viewer's status lines over a run: pictures shown a second. */
+export function summariseFrameRate(stages: string): StagePercentiles | undefined {
+	const rates = lines(stages).flatMap(entry => {
+		const status = typeof entry === 'object' && entry !== null && 'status' in entry && typeof entry.status === 'string' ? entry.status : '';
+		const match = /(\d+) fps/.exec(status);
+		return match ? [Number(match[1])] : [];
+	});
+	return stagePercentiles(rates);
+}
+
+function stagePercentiles(values: readonly number[]): StagePercentiles | undefined {
+	const sorted = [...values].sort((a, b) => a - b);
+	return sorted.length ? { p50: rank(sorted, 0.5), p95: rank(sorted, 0.95), count: sorted.length } : undefined;
+}
+
+/** A side's pipeline samples (`{ at, sample }` lines) as one run. */
+export function summarisePipeline(samples: string): PipelineRun {
+	const pipelines = lines(samples).flatMap(line => typeof line === 'object' && line !== null && 'sample' in line && typeof line.sample === 'object' && line.sample !== null
+		? [line.sample as Record<string, unknown>]
+		: []);
+	const ms = (name: string, scale: number): StagePercentiles | undefined => stagePercentiles(pipelines.flatMap(pipeline => {
+		const value = pipeline[name];
+		return typeof value === 'number' ? [value / scale] : [];
+	}));
+	const conditions = new Set(pipelines.flatMap(pipeline => Array.isArray(pipeline.conditions)
+		? pipeline.conditions.flatMap((condition: unknown) => typeof condition === 'object' && condition !== null && 'condition' in condition && typeof condition.condition === 'string' ? [condition.condition] : [])
+		: []));
+	return { capture: ms('capture_us', 1000), encode: ms('encode_us', 1000), roundTrip: ms('rtt_ms', 1), last: pipelines.at(-1) ?? {}, conditions: [...conditions] };
+}
+
+/** A two-computer run's summary: each side's own stage times; no glass-to-glass total, as no one screen shows both. */
+export function renderAcrossSummary(
+	host: PipelineRun, viewer: PipelineRun, stages: LatencySummary, frameRate: StagePercentiles | undefined, cpu?: LatencyCpu,
+): string {
+	const row = (name: string, value: StagePercentiles | undefined): string => value
+		? `| ${name} | ${value.p50.toFixed(1)} | ${value.p95.toFixed(1)} | ${String(value.count)} |`
+		: `| ${name} | - | - | 0 |`;
+	const field = (pipeline: PipelineRun, name: string): string => {
+		const value = pipeline.last[name];
+		return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : 'unknown';
+	};
+	return [
+		'# Stage times across two computers',
+		'',
+		`Codec ${field(host, 'codec')}, ${field(host, 'width')}x${field(host, 'height')}; host encoder ${field(host, 'encoder')} (hardware ${field(host, 'encoder_hardware')}, input ${field(host, 'encoder_input')}); viewer decoder hardware ${field(viewer, 'decoder_hardware')}.`,
+		'',
+		'| Host, once a second | p50 ms | p95 ms | Samples |',
+		'|---|---|---|---|',
+		row('Capture', host.capture),
+		row('Encode (scaling and copies included)', host.encode),
+		'',
+		`Host counters at the end: keyframes ${field(host, 'keyframes_sent')}, encoder reopens ${field(host, 'encoder_reopens')}, frames dropped before sending ${field(host, 'send_dropped')}.`,
+		'',
+		'| Viewer | p50 | p95 | Samples |',
+		'|---|---|---|---|',
+		row('Round trip (ms)', viewer.roundTrip),
+		row('Pictures shown a second', frameRate),
+		'',
+		'Stages the viewer measures (median of one-second windows); its host stage is capture to send on the host:',
+		'',
+		'| Stage | p50 ms | p95 ms | Windows |',
+		'|---|---|---|---|',
+		...[...stages.stages].map(([name, stage]) => `| ${name} | ${stage.p50.toFixed(1)} | ${stage.p95.toFixed(1)} | ${String(stage.windows)} |`),
+		'',
+		`Conditions the viewer held: ${viewer.conditions.length ? viewer.conditions.join(', ') : 'none'}.`,
+		'',
+		...(cpu ? [
+			'CPU over the run, in cores:',
+			'',
+			'| Side | Total | By process |',
+			'|---|---|---|',
+			...(['host', 'viewer'] as const).map(side => {
+				const kinds = Object.entries(cpu[side]).sort(([, a], [, b]) => b - a);
+				const total = kinds.reduce((sum, [, used]) => sum + used, 0);
+				return `| ${side} | ${total.toFixed(2)} | ${kinds.map(([kind, used]) => `${kind} ${used.toFixed(2)}`).join(', ')} |`;
+			}),
+			'',
+		] : []),
+	].join('\n');
 }
 
 export interface Percentiles {
@@ -383,8 +528,194 @@ async function latencyPlatform(root: string, options: LatencyOptions, processes:
 	throw new Error('measure:latency reads a macOS, Windows or Linux display');
 }
 
+/** A POSIX shell word: the remote side's commands go through its login shell. */
+function shellWord(value: string): string {
+	return `'${value.replaceAll('\'', '\'\\\'\'')}'`;
+}
+
+/** Runs commands on the remote computer over one shared SSH connection. */
+interface RemoteShell {
+	/** `ssh`'s arguments up to and including the destination. */
+	readonly args: readonly string[];
+	/** Runs a shell command there and returns its output. */
+	output(command: string): Promise<string>;
+}
+
+function remoteShell(remote: RemoteComputer, work: string, signal: AbortSignal): RemoteShell {
+	const args = [
+		...(remote.sshConfig ? ['-F', remote.sshConfig] : []),
+		'-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15',
+		// One connection for the run: the rendezvous is copied several times a second.
+		'-o', 'ControlMaster=auto', '-o', `ControlPath=${join(work, 'ssh-%h-%p')}`, '-o', 'ControlPersist=120',
+		remote.destination,
+	];
+	return {
+		args,
+		output: async command => (await promisify(execFile)('ssh', [...args, command], { signal, maxBuffer: 64 * 1024 * 1024 })).stdout,
+	};
+}
+
+/**
+ * Copies each side's rendezvous files to the other until `stopped`: both
+ * sides write a file once, whole, by renaming, so a file is copied once.
+ */
+async function mirrorRendezvous(shell: RemoteShell, here: string, there: string, stopped: () => boolean, signal: AbortSignal): Promise<void> {
+	const copied = new Set<string>();
+	while (!stopped()) {
+		signal.throwIfAborted();
+		const local = (await readdir(here)).filter(name => name.endsWith('.json'));
+		const remote = (await shell.output(`ls -1 ${shellWord(there)}`)).split('\n').filter(name => name.endsWith('.json'));
+		for (const name of local.filter(name => !remote.includes(name) && !copied.has(name))) {
+			const content = (await readFile(join(here, name))).toString('base64');
+			const target = `${there}/${name}`;
+			await shell.output(`printf %s ${shellWord(content)} | base64 -d > ${shellWord(`${target}.partial`)} && mv ${shellWord(`${target}.partial`)} ${shellWord(target)}`);
+			copied.add(name);
+		}
+		for (const name of remote.filter(name => !local.includes(name) && !copied.has(name))) {
+			const content = await shell.output(`cat ${shellWord(`${there}/${name}`)}`);
+			await writeFile(join(here, `${name}.partial`), content);
+			await rename(join(here, `${name}.partial`), join(here, name));
+			copied.add(name);
+		}
+		await new Promise(resolve => setTimeout(resolve, 250));
+	}
+}
+
+/**
+ * One side on this computer and the other on a Linux computer over SSH, the
+ * pair a person uses: each side's own stage times, the host's capture and
+ * encode and the viewer's queue, decode and drawing, with the round trip
+ * for the network. No screen shows both, so there is no glass-to-glass total.
+ */
+async function measureAcross(root: string, signal: AbortSignal, options: LatencyOptions, remote: RemoteComputer): Promise<void> {
+	await assertNativeFresh(root);
+	const processes = new ProcessRunner(signal);
+	const work = await mkdtemp(join(tmpdir(), 'vl-'));
+	const shell = remoteShell(remote, work, signal);
+	const here: 'host' | 'viewer' = remote.hosts === 'here' ? 'host' : 'viewer';
+	const there: 'host' | 'viewer' = here === 'host' ? 'viewer' : 'host';
+	const stamp = new Date().toISOString().replaceAll(':', '-');
+	const unit = `vnilink-latency-${String(process.pid)}`;
+	let remoteRendezvous: string | undefined;
+	let remoteOutput: string | undefined;
+	let stopped = false;
+	const sides: Promise<unknown>[] = [];
+	let fetched = false;
+	/** The remote side's evidence joins this side's, once, for a run that failed too. */
+	const fetchEvidence = async (): Promise<void> => {
+		if (fetched || !remoteOutput) {
+			return;
+		}
+		fetched = true;
+		const archive = processes.start('ssh', [...shell.args, `tar -C ${shellWord(remoteOutput)} -cf - .`], { stdio: ['ignore', 'pipe', 'inherit'] });
+		const extract = processes.start('tar', ['-C', options.output, '-xf', '-'], { stdio: ['pipe', 'inherit', 'inherit'] });
+		if (archive.child.stdout && extract.child.stdin) {
+			archive.child.stdout.pipe(extract.child.stdin);
+		}
+		await Promise.all([archive.result, extract.result]);
+	};
+	try {
+		await mkdir(options.output, { recursive: true });
+		if ((await shell.output('uname -s')).trim() !== 'Linux') {
+			throw new Error('--remote runs its side on Linux');
+		}
+		const executable = `${remote.root}/.build/electron/${(await loadProduct(root)).applicationName}`;
+		await shell.output(`test -x ${shellWord(executable)} && test -f ${shellWord(`${remote.root}/out/latency.cjs`)}`).catch(() => {
+			throw new Error(`${remote.destination}:${remote.root} has no built VniLink: run npm run build there first`);
+		});
+		remoteRendezvous = (await shell.output('mktemp -d')).trim();
+		remoteOutput = `${remote.root}/.build/latency/${stamp}`;
+		const remoteGrants = `${remote.root}/.build/latency`;
+		await shell.output(`mkdir -p ${shellWord(remoteOutput)} && chmod 700 ${shellWord(remoteGrants)}`);
+		const rendezvous = join(work, 'rendezvous');
+		await mkdir(rendezvous);
+		const grants = join(root, '.build/latency');
+		await mkdir(grants, { recursive: true, mode: 0o700 });
+		const environment = (role: 'host' | 'viewer', rendezvousDirectory: string, output: string, grant: string): Record<string, string> => ({
+			VNILINK_LATENCY_ROLE: role,
+			VNILINK_LATENCY_DIR: rendezvousDirectory,
+			VNILINK_LATENCY_OUTPUT: output,
+			VNILINK_LATENCY_HOLD_MS: '0',
+			VNILINK_LATENCY_FPS: String(options.frameRate ?? 0),
+			VNILINK_LATENCY_SCREEN_GRANT: grant,
+		});
+		let exited = false;
+		const platform = await latencyPlatform(root, options, processes, signal);
+		const profile = join(work, here);
+		await mkdir(profile);
+		const local = platform.launch(here, { ...environment(here, rendezvous, options.output, join(grants, 'host-screen-grant')), VNILINK_TEST_PROFILE: profile }, join(options.output, `${here}.log`));
+		// The remote side runs as a transient unit of the user's session there,
+		// which has the graphical session's bus and the desktop portal.
+		const remoteEnvironment = { ...environment(there, remoteRendezvous, remoteOutput, `${remoteGrants}/host-screen-grant`), VNILINK_TEST_PROFILE: `${remoteRendezvous}-profile` };
+		const launch = [
+			'systemd-run', '--user', '--wait', '--collect', '--quiet', `--unit=${unit}`,
+			`--working-directory=${remote.root}`,
+			'-p', `StandardOutput=file:${remoteOutput}/${there}.log`, '-p', `StandardError=file:${remoteOutput}/${there}.log`,
+			...Object.entries(remoteEnvironment).map(([name, value]) => `--setenv=${name}=${value}`),
+			// As on Linux here: the sides run under XWayland.
+			executable, '--ozone-platform=x11', `${remote.root}/out/latency.cjs`,
+		].map(shellWord).join(' ');
+		const other = processes.start('ssh', [...shell.args, `mkdir -p ${shellWord(`${remoteRendezvous}-profile`)} && ${launch}`], { stdio: 'ignore' });
+		for (const side of [local, other]) {
+			sides.push(side.result.catch(() => undefined).finally(() => {
+				exited = true;
+			}));
+		}
+		const mirroring = mirrorRendezvous(shell, rendezvous, remoteRendezvous, () => stopped, signal);
+		mirroring.catch(() => undefined);
+		// The portal on a Linux host asks someone there once; its answer is kept.
+		await arrival(rendezvous, 'viewer-streaming', 120000 + 5 * 60000, () => exited, signal);
+		await new Promise(resolve => setTimeout(resolve, options.settleSeconds * 1000));
+		await publish(rendezvous, 'read', { seconds: options.seconds });
+		await arrival(rendezvous, 'read-done', (options.seconds + 60) * 1000, () => exited, signal);
+		await arrival(rendezvous, 'viewer-cpu', 5000, () => false, signal).catch(() => undefined);
+		await publish(rendezvous, 'done', {});
+		await Promise.race([Promise.all(sides), new Promise(resolve => setTimeout(resolve, 30000))]);
+		stopped = true;
+		await mirroring.catch(() => undefined);
+		await fetchEvidence();
+		const read = async (name: string): Promise<string> => readFile(join(options.output, name), 'utf8').catch(() => '');
+		const cpuOf = async (name: string): Promise<Record<string, number>> => {
+			const value: unknown = JSON.parse(await readFile(join(rendezvous, `${name}.json`), 'utf8').catch(() => '{}'));
+			return typeof value === 'object' && value !== null ? Object.fromEntries(Object.entries(value).filter((entry): entry is [string, number] => typeof entry[1] === 'number')) : {};
+		};
+		const stages = await read('stages.jsonl');
+		const summary = renderAcrossSummary(
+			summarisePipeline(await read('host-stages.jsonl')),
+			summarisePipeline(await read('viewer-pipeline.jsonl')),
+			summariseLatency('', stages),
+			summariseFrameRate(stages),
+			{ host: await cpuOf('host-cpu'), viewer: await cpuOf('viewer-cpu') },
+		);
+		const run = {
+			seconds: options.seconds, settle: options.settleSeconds, fps: options.frameRate ?? null,
+			host: here === 'host' ? `${process.platform} (here)` : `${remote.destination} (linux)`,
+			viewer: here === 'viewer' ? `${process.platform} (here)` : `${remote.destination} (linux)`,
+			date: new Date().toISOString(),
+		};
+		await writeFile(join(options.output, 'run.json'), JSON.stringify(run, null, 2));
+		await writeFile(join(options.output, 'summary.md'), summary);
+		console.log(summary);
+		console.log(`Evidence: ${options.output}`);
+	} finally {
+		stopped = true;
+		await publish(join(work, 'rendezvous'), 'done', {}).catch(() => undefined);
+		await Promise.race([Promise.all(sides), new Promise(resolve => setTimeout(resolve, 20000))]);
+		await fetchEvidence().catch(() => undefined);
+		// A side that did not quit stops with its unit; nothing is left there.
+		await shell.output(`systemctl --user stop ${shellWord(unit)} 2>/dev/null; ${remoteRendezvous ? `rm -rf ${shellWord(remoteRendezvous)} ${shellWord(`${remoteRendezvous}-profile`)}` : 'true'}; ${remoteOutput ? `rm -rf ${shellWord(remoteOutput)}` : 'true'}`).catch(() => undefined);
+		await promisify(execFile)('ssh', [...shell.args.slice(0, -1), '-O', 'exit', remote.destination]).catch(() => undefined);
+		await processes.stop();
+		await rm(work, { recursive: true, force: true });
+	}
+}
+
 export async function measureLatency(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
 	const options = latencyOptions(root, args);
+	if (options.remote) {
+		await measureAcross(root, signal, options, options.remote);
+		return;
+	}
 	await assertNativeFresh(root);
 	const processes = new ProcessRunner(signal);
 	const work = await mkdtemp(join(tmpdir(), 'vnilink-latency-'));
@@ -411,6 +742,7 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 				VNILINK_LATENCY_DIR: rendezvous,
 				VNILINK_LATENCY_OUTPUT: options.output,
 				VNILINK_LATENCY_HOLD_MS: String(options.holdSeconds * 1000),
+				VNILINK_LATENCY_FPS: String(options.frameRate ?? 0),
 				VNILINK_LATENCY_SCREEN_GRANT: join(grants, 'host-screen-grant'),
 			};
 			const side = platform.launch(role, environment, join(options.output, `${role}.log`));

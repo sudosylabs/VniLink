@@ -36,7 +36,7 @@ test('the page carries the same strip as the module', () => {
 test('latency options are bounded', () => {
 	const options = latencyOptions('/root', ['--seconds', '5', '--settle', '1', '--output', '/out']);
 	// Paths resolve the platform's way: `/out` is `C:\out` on Windows.
-	assert.deepEqual(options, { seconds: 5, settleSeconds: 1, output: resolve('/out'), app: undefined, holdSeconds: 0 });
+	assert.deepEqual(options, { seconds: 5, settleSeconds: 1, output: resolve('/out'), app: undefined, holdSeconds: 0, frameRate: undefined, remote: undefined });
 	assert.equal(latencyOptions('/root', ['--hold', '6']).holdSeconds, 6);
 	assert.throws(() => latencyOptions('/root', ['--hold', '61']));
 	assert.throws(() => latencyOptions('/root', ['--hold', '1.5']));
@@ -127,4 +127,48 @@ test('a hold the capture shows as no pictures at all is a hold too', () => {
 	const hold = summariseHolds(schedule, '', samples.join('\n'));
 	assert.deepEqual([hold.afterHold?.p50, hold.afterHold?.count], [70, 1]);
 	assert.deepEqual([hold.others?.max, hold.others?.count], [30, 4]);
+});
+
+test('a two-computer run names the other computer, its checkout and which one hosts', () => {
+	assert.equal(latencyOptions('/root', ['--fps', '30']).frameRate, 30);
+	assert.throws(() => latencyOptions('/root', ['--fps', '0']));
+	assert.throws(() => latencyOptions('/root', ['--fps', '29.97']));
+	const options = latencyOptions('/root', ['--remote', 'lx', '--remote-root', '/home/a/vnilink', '--hosts', 'remote', '--ssh-config', '/c']);
+	assert.deepEqual(options.remote, { destination: 'lx', root: '/home/a/vnilink', hosts: 'remote', sshConfig: resolve('/c') });
+	assert.equal(latencyOptions('/root', ['--remote', 'lx', '--remote-root', '/r']).remote?.hosts, 'here');
+	assert.throws(() => latencyOptions('/root', ['--remote', 'lx']), /--remote-root/);
+	assert.throws(() => latencyOptions('/root', ['--remote', 'lx', '--remote-root', 'relative']), /--remote-root/);
+	assert.throws(() => latencyOptions('/root', ['--remote', 'lx', '--remote-root', '/r', '--hosts', 'both']));
+	assert.throws(() => latencyOptions('/root', ['--remote', 'lx', '--remote-root', '/r', '--hold', '5']), /--hold/);
+	assert.throws(() => latencyOptions('/root', ['--hosts', 'remote']), /need --remote/);
+});
+
+test('a two-computer run is summarised from each side\'s own samples', async () => {
+	const { renderAcrossSummary, summariseFrameRate, summariseLatency, summarisePipeline } = await import('../../build/lib/latency.ts');
+	const sample = fields => JSON.stringify({ at: 0, sample: fields });
+	const host = summarisePipeline([
+		sample({ codec: 'h265', width: 1920, height: 1080, capture_us: 2000, encode_us: 9000, encoder: 'nvenc', encoder_hardware: true, keyframes_sent: 3 }),
+		sample({ codec: 'h265', width: 1920, height: 1080, capture_us: 4000, encode_us: 11000, encoder: 'nvenc', encoder_hardware: true, keyframes_sent: 4 }),
+		sample({}),
+	].join('\n'));
+	assert.deepEqual([host.capture?.p50, host.capture?.p95, host.capture?.count], [2, 4, 2]);
+	assert.deepEqual([host.encode?.p50, host.encode?.p95], [9, 11]);
+	assert.deepEqual(host.last, {});
+	const viewer = summarisePipeline([
+		sample({ rtt_ms: 4, decoder_hardware: true, conditions: [{ condition: 'encoder.slow' }] }),
+		sample({ rtt_ms: 6, decoder_hardware: true, conditions: [] }),
+	].join('\n'));
+	assert.deepEqual([viewer.roundTrip?.p50, viewer.conditions], [4, ['encoder.slow']]);
+	const stages = [
+		JSON.stringify({ at: 0, text: 'Decoding: 2.0 ms, 3.0 ms at most for 95%', status: '58 fps · HEVC · 9.1 Mb/s · 4 ms' }),
+		JSON.stringify({ at: 1, text: 'Decoding: 2.0 ms, 3.0 ms at most for 95%', status: '60 fps · HEVC · 9.4 Mb/s · 4 ms' }),
+	].join('\n');
+	const rate = summariseFrameRate(stages);
+	assert.deepEqual([rate?.p50, rate?.p95], [58, 60]);
+	const text = renderAcrossSummary(summarisePipeline(sample({ codec: 'h265', width: 1920, height: 1080, encoder: 'nvenc', encoder_hardware: true, capture_us: 2000, encode_us: 9000 })), viewer, summariseLatency('', stages), rate);
+	assert.match(text, /Codec h265, 1920x1080; host encoder nvenc \(hardware true/);
+	assert.match(text, /\| Encode \(scaling and copies included\) \| 9\.0 \| 9\.0 \| 1 \|/);
+	assert.match(text, /\| Pictures shown a second \| 58\.0 \| 60\.0 \| 2 \|/);
+	assert.match(text, /\| Decoding \| 2\.0 \| 3\.0 \| 2 \|/);
+	assert.match(text, /Conditions the viewer held: encoder\.slow/);
 });

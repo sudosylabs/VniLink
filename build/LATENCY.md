@@ -86,6 +86,29 @@ The reader prints the p50, p95, p99 and maximum when it finishes.
 | `--output` | `.build/latency/<time>` | Where the evidence goes. |
 | `--app` | this checkout's development VniLink | macOS: the `.app` that runs both sides. |
 | `--hold` | `0` | Hold mode: seconds the stimulus holds still after each 2 s of motion; `0` is off. |
+| `--fps` | the default quality | The viewer's frame rate, at the Smooth preset's 12 Mb/s and 1920x1080. |
+| `--remote` | | Two computers: the other one's SSH destination. |
+| `--remote-root` | | With `--remote`: the absolute path of a built checkout there. |
+| `--hosts` | `here` | With `--remote`: which computer hosts its screen, `here` or `remote`. |
+| `--ssh-config` | the user's | With `--remote`: an SSH configuration file for every connection. |
+
+### Two computers
+
+`--remote <destination> --remote-root <path>` runs one side here and the other on a Linux computer over SSH, the pair a person uses, so each side has its own CPU, GPU and media engine and the stream crosses a real network. The viewer picks the codec it would pick in use: a Linux window offers no HEVC, so a Mac host sends it H.264.
+
+No screen shows both strips, so there is no glass-to-glass total and no reader. Each side reports itself once a second instead:
+- the host's capture and encode times (`PipelineSummary.capture_us`, `encode_us`; encode includes scaling and copies), its encoder, keyframes, reopens and drops, in `host-stages.jsonl`;
+- the viewer's stage times and status line (frame rate, codec, bitrate, round trip) in `stages.jsonl`, and its pipeline (round trip, decoder, conditions) in `viewer-pipeline.jsonl`.
+
+The network leg is the round trip: the clocks differ, so a picture's one-way time is not read. The stimulus still runs on the host: a strip that changes every frame, the motion the stream carries.
+
+The remote side runs as a transient unit of the user's session there (`systemd-run --user`), so it has the graphical session's bus and portal. Its checkout must be built (`npm run build` there). The two sides' rendezvous files are copied over one shared SSH connection, and the remote side's evidence is copied back into the output and removed there, with its profile and rendezvous. A Linux host's portal asks someone there on the first run, as on one computer; its answer is kept in that checkout's `.build/latency/`.
+
+```bash
+npm run measure:latency -- --remote lx --remote-root /home/me/Projects/vnilink --hosts here --fps 60 --seconds 30
+```
+
+The evidence is `summary.md`, `run.json`, both sides' logs and the files above. Scaling and copies are inside the host's encode time; `encode_probe` in `vnilink-macos` (GPU scaling of a 4K picture) and `conversion_bench` in `vnilink-media` (CPU scaling and conversion) time them alone.
 
 ### Hold mode
 

@@ -25,6 +25,8 @@ const output = process.env.VNILINK_LATENCY_OUTPUT;
 
 /** Hold mode: how long the stimulus holds still, in ms; 0 when it never does. */
 const holdMs = Number(process.env.VNILINK_LATENCY_HOLD_MS ?? '0');
+/** The viewer's frame rate, at the Smooth preset's bitrate and size; 0 keeps the default quality. */
+const frameRate = Number(process.env.VNILINK_LATENCY_FPS ?? '0');
 /** Where the host keeps the desktop portal's grant between runs. */
 const screenGrant = process.env.VNILINK_LATENCY_SCREEN_GRANT;
 
@@ -176,6 +178,21 @@ async function hostedPipelines(driver: WindowDriver): Promise<Record<string, unk
 	return pipelines.filter((pipeline): pipeline is Record<string, unknown> => record(pipeline) && pipeline.hosted === true);
 }
 
+/**
+ * Appends what `sample` returns to `path` once a second until `until`
+ * settles: a side's own pipeline over the run, as its diagnostics hold it.
+ */
+async function sampleEverySecond(path: string, until: Promise<unknown>, sample: () => Promise<unknown>): Promise<void> {
+	const state = { done: false };
+	void until.finally(() => {
+		state.done = true;
+	});
+	while (!state.done) {
+		appendFileSync(path, `${JSON.stringify({ at: Date.now(), sample: await sample() })}\n`);
+		await new Promise(resolve => setTimeout(resolve, 1000));
+	}
+}
+
 async function host(driver: WindowDriver): Promise<void> {
 	if (!isLinux && !await screenRecording(driver)) {
 		throw new Error('Screen Recording is not granted to the development VniLink (.build/electron/VniLink.app). Allow it in System Settings › Privacy & Security › Screen & System Audio Recording, then run again.');
@@ -232,11 +249,23 @@ async function host(driver: WindowDriver): Promise<void> {
 		// this application's Screen Recording permission.
 		const read = await expect('read', 5 * 60000);
 		const [cpuStart, startedAt] = [cpuSeconds(), Date.now()];
-		const outcome = await new Promise<{ code: number; output: string }>(resolve => {
-			execFile(String(read.reader), [String(read.seconds), String(read.samples), String(read.grant)], (error, stdout, stderr) => {
-				resolve({ code: error ? 1 : 0, output: `${stdout}${stderr}` });
+		// Without a reader, as when the viewer is on another computer, the
+		// run is the sampling time alone.
+		const reading = typeof read.reader === 'string'
+			? new Promise<{ code: number; output: string }>(resolve => {
+				execFile(String(read.reader), [String(read.seconds), String(read.samples), String(read.grant)], (error, stdout, stderr) => {
+					resolve({ code: error ? 1 : 0, output: `${stdout}${stderr}` });
+				});
+			})
+			: new Promise<{ code: number; output: string }>(resolve => {
+				setTimeout(() => {
+					resolve({ code: 0, output: '' });
+				}, Number(read.seconds) * 1000);
 			});
-		});
+		// Capture and encode times as the host measures them, once a second.
+		const sampling = sampleEverySecond(join(evidence, 'host-stages.jsonl'), reading, async () => (await hostedPipelines(driver)).at(0) ?? {});
+		const outcome = await reading;
+		await sampling;
 		publish('host-cpu', cores(cpuStart, cpuSeconds(), (Date.now() - startedAt) / 1000));
 		// The viewer's pipeline as the host's diagnostics hold it: its encoder,
 		// keyframes, reopens and drops over the run.
@@ -248,19 +277,26 @@ async function host(driver: WindowDriver): Promise<void> {
 	}
 }
 
-/** The still pictures the viewer's diagnostics say it showed. */
-async function stillsShown(driver: WindowDriver): Promise<number | undefined> {
+/** The pipeline the viewer's diagnostics hold for the screen it shows. */
+async function viewingPipeline(driver: WindowDriver): Promise<Record<string, unknown> | undefined> {
 	const reply = await engine(driver, { type: 'diagnosticSnapshot' });
 	const snapshot: unknown = typeof reply.snapshot === 'string' ? JSON.parse(reply.snapshot) : undefined;
 	const pipelines: unknown[] = record(snapshot) && Array.isArray(snapshot.pipelines) ? snapshot.pipelines : [];
-	const viewing = pipelines.find((pipeline): pipeline is Record<string, unknown> => record(pipeline) && pipeline.hosted === false);
+	return pipelines.find((pipeline): pipeline is Record<string, unknown> => record(pipeline) && pipeline.hosted === false);
+}
+
+/** The still pictures the viewer's diagnostics say it showed. */
+async function stillsShown(driver: WindowDriver): Promise<number | undefined> {
+	const viewing = await viewingPipeline(driver);
 	return typeof viewing?.stills_shown === 'number' ? viewing.stills_shown : undefined;
 }
 
 async function viewer(driver: WindowDriver): Promise<void> {
-	if (holdMs > 0) {
-		// The Smooth preset: stills of a 4K screen fit only a fast stream's budget.
-		await driver.window.webContents.executeJavaScript(`window.driver.mainProcess.getChannel('configuration').call('updateValue', { key: 'desktop.quality', value: { max_bitrate_kbps: 12000, max_frame_rate: 60, max_width: 1920, max_height: 1080 } })`);
+	if (holdMs > 0 || frameRate > 0) {
+		// The Smooth preset: stills of a 4K screen fit only a fast stream's
+		// budget. A frame rate given keeps its bitrate and size.
+		const quality = { max_bitrate_kbps: 12000, max_frame_rate: frameRate > 0 ? frameRate : 60, max_width: 1920, max_height: 1080 };
+		await driver.window.webContents.executeJavaScript(`window.driver.mainProcess.getChannel('configuration').call('updateValue', { key: 'desktop.quality', value: ${JSON.stringify(quality)} })`);
 	}
 	publish('viewer', { token: await invitation(driver) });
 	const host = await expect('host', 60000);
@@ -356,6 +392,8 @@ async function viewer(driver: WindowDriver): Promise<void> {
 	// runner sets them against the total read from the screen.
 	const stages = join(evidence, 'stages.jsonl');
 	const stills = join(evidence, 'stills.jsonl');
+	// The viewer's own pipeline once a second: round trip, decoder and conditions.
+	const viewerPipeline = join(evidence, 'viewer-pipeline.jsonl');
 	// CPU over the reader's run, as the host measures its own.
 	let cpuStart: [Record<string, number>, number] | undefined;
 	let lastStages = 0;
@@ -390,10 +428,15 @@ async function viewer(driver: WindowDriver): Promise<void> {
 		if (cpuStart && existsSync(join(rendezvous, 'read-done.json')) && !existsSync(join(rendezvous, 'viewer-cpu.json'))) {
 			publish('viewer-cpu', cores(cpuStart[0], cpuSeconds(), (Date.now() - cpuStart[1]) / 1000));
 		}
-		const text: unknown = await driver.window.webContents.executeJavaScript(`document.querySelector('.desktop-status-stats')?.title ?? ''`);
-		if (typeof text === 'string' && text.length > 0) {
-			appendFileSync(stages, `${JSON.stringify({ at: Date.now(), text })}\n`);
+		const shown: unknown = await driver.window.webContents.executeJavaScript(`(() => {
+			const stats = document.querySelector('.desktop-status-stats');
+			return { text: stats?.title ?? '', status: stats?.textContent ?? '' };
+		})()`);
+		if (record(shown) && typeof shown.text === 'string' && shown.text.length > 0) {
+			// The stage times, and the status line: frame rate, codec, bitrate and round trip.
+			appendFileSync(stages, `${JSON.stringify({ at: Date.now(), text: shown.text, status: shown.status })}\n`);
 		}
+		appendFileSync(viewerPipeline, `${JSON.stringify({ at: Date.now(), sample: await viewingPipeline(driver) ?? {} })}\n`);
 		await new Promise(resolve => setTimeout(resolve, holdMs > 0 ? 100 : 1000));
 	}
 }
