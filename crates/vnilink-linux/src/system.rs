@@ -39,11 +39,19 @@ impl LinuxSystemActions {
         builder?.method_timeout(CALL_TIMEOUT).build()
     }
 
-    /// Whether this screensaver shows the lock screen now; `None` when it
-    /// cannot say.
-    fn locked(connection: &Connection, (bus, path, interface): (&str, &str, &str)) -> Option<bool> {
-        let proxy = Proxy::new(connection, bus, path, interface).ok()?;
-        proxy.call("GetActive", &()).ok()
+    /// Whether this session is locked, as logind knows it; `None` when it
+    /// cannot say. The screensavers do not: GNOME's `GetActive` answers false
+    /// on a locked screen, and freedesktop's does not implement it.
+    fn locked() -> Option<bool> {
+        let connection = Self::bus(Builder::system()).ok()?;
+        let proxy = Proxy::new(
+            &connection,
+            "org.freedesktop.login1",
+            "/org/freedesktop/login1/session/auto",
+            "org.freedesktop.login1.Session",
+        )
+        .ok()?;
+        proxy.get_property("LockedHint").ok()
     }
 
     fn lock_via(
@@ -95,16 +103,16 @@ impl HostSystemActions for LinuxSystemActions {
     }
 
     fn lock_workstation(&self) -> Result<(), Error> {
+        // Already locked is locked: no request to wait on.
+        if Self::locked() == Some(true) {
+            return Ok(());
+        }
         let connection =
             Self::bus(Builder::session()).map_err(|_| Error::Unsupported("no session bus"))?;
         for screensaver in SCREENSAVERS {
-            // Already locked is locked: no second request to wait on.
-            if Self::locked(&connection, screensaver) == Some(true) {
-                return Ok(());
-            }
             let sent = Self::lock_via(&connection, screensaver);
             // An answer that timed out may still have locked the screen.
-            if sent.is_ok() || Self::locked(&connection, screensaver) == Some(true) {
+            if sent.is_ok() || Self::locked() == Some(true) {
                 return Ok(());
             }
         }
@@ -137,7 +145,7 @@ impl HostSystemActions for LinuxSystemActions {
         let wayland = crate::session::is_wayland();
         let x11 = crate::session::is_x11();
         HostSessionState {
-            locked: None,
+            locked: Self::locked(),
             login_screen: None,
             headless: !wayland && !x11,
             session: if wayland {
