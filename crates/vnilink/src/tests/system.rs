@@ -4,7 +4,7 @@ use crate::{
     Core, Error, HostSessionState, HostSystemActions, OperationState, ServiceKind, SessionPhase,
     SystemAction, SystemPolicy, SystemSupport,
 };
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 fn wait(mut condition: impl FnMut() -> bool) {
@@ -33,6 +33,8 @@ struct FakeActions {
     support_calls: Mutex<u32>,
     fail_lock: Mutex<bool>,
     fail_restore: Mutex<bool>,
+    /// While true, a lock never answers, as GNOME's does on a locked screen.
+    stall_lock: (Mutex<bool>, Condvar),
 }
 
 impl FakeActions {
@@ -49,6 +51,7 @@ impl FakeActions {
             support_calls: Mutex::new(0),
             fail_lock: Mutex::new(false),
             fail_restore: Mutex::new(false),
+            stall_lock: (Mutex::new(false), Condvar::new()),
         }
     }
 }
@@ -62,6 +65,10 @@ impl HostSystemActions for FakeActions {
         if *self.fail_lock.lock().unwrap() {
             return Err(Error::Unsupported("fake lock refused by the OS"));
         }
+        let (stalled, released) = &self.stall_lock;
+        let _released = released
+            .wait_while(stalled.lock().unwrap(), |stalled| *stalled)
+            .unwrap();
         self.calls.lock().unwrap().locks += 1;
         Ok(())
     }
@@ -206,6 +213,55 @@ fn lock_executes_and_restart_needs_explicit_policy() {
     let shutdown = system.execute(SystemAction::Shutdown).unwrap();
     wait(|| system.operation(shutdown.id).unwrap().state == OperationState::Executed);
     assert_eq!(actions.calls.lock().unwrap().shutdowns, 1);
+}
+
+/// A lock the host's OS never answers fails the viewer's request, as
+/// GNOME's does on a screen already locked, but no longer holds the host's
+/// system service: the viewer's next request is served.
+#[test]
+fn an_action_that_never_answers_does_not_hold_the_service() {
+    /// Lets the stalled lock answer however the test ends, so a failed
+    /// assertion fails rather than waits on it forever.
+    struct Release(Arc<FakeActions>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            *self.0.stall_lock.0.lock().unwrap() = false;
+            self.0.stall_lock.1.notify_all();
+        }
+    }
+    let (host, controller, actions) = paired_system();
+    allow_restart(&host, Duration::ZERO);
+    let parent = active_parent(&controller, &host);
+    *actions.stall_lock.0.lock().unwrap() = true;
+    let _release = Release(actions.clone());
+    let system = open_system(&controller, &parent);
+    let locked = system.execute(SystemAction::Lock);
+    assert!(locked.is_err(), "{locked:?}");
+    drop(system);
+    // As the engine does after a failed request: a fresh service, closed
+    // again when the host refuses it.
+    let until = Instant::now() + Duration::from_secs(8);
+    let restarted = loop {
+        assert!(
+            Instant::now() < until,
+            "the host never served another request"
+        );
+        let owner = controller
+            .attach_controller_service(parent.id, parent.generation, ServiceKind::System)
+            .unwrap();
+        match controller.open_system_service(owner.id, owner.generation) {
+            Ok(system) => break system.execute(SystemAction::Restart).unwrap(),
+            Err(Error::Busy) => {
+                controller
+                    .close_controller_service(owner.id, owner.generation)
+                    .unwrap();
+                controller.forget_controller_service(owner.id).unwrap();
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => panic!("{error:?}"),
+        }
+    };
+    assert_eq!(restarted.state, OperationState::Scheduled);
 }
 
 fn allow_restart(host: &Core, notice: Duration) {

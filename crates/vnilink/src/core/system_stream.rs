@@ -1405,10 +1405,15 @@ async fn serve_inner(
                     Ok(action) => action,
                     Err(_) => return Err(Error::Malformed),
                 };
+                // The viewer sends nothing while it waits for this reply:
+                // anything it sends now, its stream closing included, means
+                // it gave up. A native action that never answers then holds
+                // no owner, and the viewer's next request is served.
                 let reply = tokio::select! {
                     biased;
                     _ = parent_stop.changed() => break,
                     _ = service_stop.changed() => break,
+                    _ = read(recv) => break,
                     reply = execute(shared, admission, action) => reply?,
                 };
                 write(send, reply).await?;

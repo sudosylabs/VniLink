@@ -25,7 +25,7 @@ struct Native {
 }
 impl Native {
     fn open() -> Result<Self, Error> {
-        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        if crate::session::is_wayland() {
             return Err(Error::Unsupported(
                 "Wayland display privacy requires compositor support",
             ));

@@ -165,5 +165,7 @@ test('the computer that asked reads every outcome in words', () => {
 	assert.equal(at('shutdown', 'failed', 'osascript failed'), 'Couldn\'t shut down');
 	assert.equal(systemRequestMessage(new Error('Unauthorized: denied')), 'Not allowed there');
 	assert.equal(systemRequestMessage(new Error('NoSession: gone')), 'Not connected');
+	assert.equal(systemRequestMessage(new Error('Busy: one at a time')), 'Busy, try again');
+	assert.equal(systemRequestMessage(new Error('Timeout: no reply')), 'No answer in time');
 	assert.equal(systemRequestMessage(new Error('boom')), 'Couldn\'t reach it');
 });

@@ -69,6 +69,9 @@ export function systemRequestMessage(error: unknown): string {
 		case 'Unauthorized': return nls.localize('system.requestNotAllowed', 'Not allowed there');
 		case 'NoSession':
 		case 'StaleSession': return nls.localize('system.requestDisconnected', 'Not connected');
+		// Reached, but still doing an earlier action or slow to answer.
+		case 'Busy': return nls.localize('system.requestBusy', 'Busy, try again');
+		case 'Timeout': return nls.localize('system.requestTimeout', 'No answer in time');
 		default: return nls.localize('system.requestFailed', 'Couldn\'t reach it');
 	}
 }
