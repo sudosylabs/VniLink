@@ -202,8 +202,35 @@ fn a_still_is_shown_but_never_recorded() {
 #[test]
 fn a_still_fits_what_the_link_drains_in_a_moment() {
     // 8 Mb/s carries 250 kB in the quarter second a still may hold it.
-    assert_eq!(crate::video::still_budget(8_000_000), 250_000);
-    assert_eq!(crate::video::still_budget(u64::MAX), crate::MAX_VIDEO_FRAME);
+    assert_eq!(crate::video::still_drain(8_000_000), 250_000);
+}
+
+/// A still is made to the size the send gate admits: its datagrams, their
+/// prefixes and its parity included. Sized to the drain itself, every still
+/// on a 12 Mb/s link was refused (374,989 encoded bytes, 422,786 to 557,116
+/// on the wire, against 375,000).
+#[test]
+fn a_still_made_to_its_budget_is_not_refused_for_its_framing() {
+    let cost = |payload: usize, max: usize, protection: f64| {
+        let (datagrams, bytes) =
+            crate::video::fragmented_size(crate::video::VIDEO_HEADER + payload, max, protection);
+        bytes + datagrams * 20
+    };
+    let wire = crate::video::still_drain(12_000_000);
+    for max in [1180, 1432] {
+        for protection in [0.1, 0.33, crate::video::MAX_PROTECTION] {
+            let payload = crate::video::still_payload(wire, max, 20, protection);
+            assert!(cost(payload, max, protection) <= wire);
+            assert!(
+                cost(payload + 1, max, protection) > wire,
+                "the largest that fits"
+            );
+            assert!(payload < wire);
+        }
+    }
+    // A link too slow for any picture takes none, and none exceeds a frame.
+    assert_eq!(crate::video::still_payload(10, 1180, 20, 0.1), 0);
+    assert!(crate::video::still_payload(usize::MAX / 4, 1180, 20, 0.0) <= crate::MAX_VIDEO_FRAME);
 }
 
 /// An idle link's round trip is its floor while its window is still sized

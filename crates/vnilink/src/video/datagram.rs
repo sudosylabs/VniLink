@@ -69,6 +69,23 @@ pub(crate) fn parity_count(data: usize, protection: f64) -> usize {
     (((data as f64) * protection.min(MAX_PROTECTION)).ceil() as usize).max(MIN_PARITY)
 }
 
+/// The datagrams [`fragment`] makes of a body of `body` bytes, and their
+/// bytes together, without making them: what a frame costs on the wire.
+pub(crate) fn fragmented_size(body: usize, max_datagram: usize, protection: f64) -> (usize, usize) {
+    let per = max_datagram.saturating_sub(FRAG_HEADER).max(64) & !1;
+    let framed = LEN_PREFIX + body;
+    let data = framed.div_ceil(per).min(usize::from(MAX_FRAGMENTS));
+    let parity = parity_count(data, protection);
+    // Unprotected, the last data shard keeps its own length; protected, it
+    // is padded to the others'.
+    let shard_bytes = if parity > 0 {
+        (data + parity) * per
+    } else {
+        framed.min(data * per)
+    };
+    (data + parity, shard_bytes + (data + parity) * FRAG_HEADER)
+}
+
 /// Split `body` into datagram payloads of at most `max_datagram` bytes:
 /// its data shards, then [`parity_count`] parity shards at `protection`.
 /// `seq` identifies the frame; the caller increments it per frame.

@@ -95,6 +95,9 @@ pub(super) struct DesktopRuntime {
     quality: Mutex<Quality>,
     /// What the link carries now, to size still pictures by.
     link_rate: Mutex<crate::video::LinkRate>,
+    /// Host: the largest datagram the link last took, less its prefix; 0
+    /// until the first, or while video goes on a stream.
+    datagram: std::sync::atomic::AtomicUsize,
     adaptive: Mutex<crate::adaptation::Adaptive>,
     decode_duration: Mutex<Option<(u64, std::time::Instant)>>,
     producer_duration: Mutex<Option<(u64, u64, std::time::Instant)>>,
@@ -199,6 +202,7 @@ impl DesktopRuntime {
             activity: Mutex::new(super::activity::Activity::new(std::time::Instant::now())),
             quality: Mutex::new(info.quality),
             link_rate: Mutex::new(crate::video::LinkRate::default()),
+            datagram: std::sync::atomic::AtomicUsize::new(0),
             adaptive: Mutex::new(crate::adaptation::Adaptive::default()),
             decode_duration: Mutex::new(None),
             producer_duration: Mutex::new(None),
@@ -329,12 +333,29 @@ impl DesktopRuntime {
             self.control_state.send_replace((status, epoch));
         }
     }
-    /// The largest still picture the link takes now: what it carries,
-    /// capped at the agreed bitrate, within [`crate::STILL_DRAIN`].
-    fn still_budget(&self) -> usize {
+    /// What a still picture, and anything queued ahead of it, may take on
+    /// the wire now: what the link carries, capped at the agreed bitrate,
+    /// within [`crate::STILL_DRAIN`]. The send gate holds a still to this.
+    fn still_drain(&self) -> usize {
         let agreed = u64::from(lock(&self.quality).max_bitrate_kbps) * 1000;
         let carried = lock(&self.link_rate).bits_per_second().unwrap_or(agreed);
-        crate::video::still_budget(agreed.min(carried))
+        crate::video::still_drain(agreed.min(carried))
+    }
+    /// The largest still picture the link takes now, in encoded bytes: the
+    /// drain less what the gate's datagrams and parity add to it, so a still
+    /// made to this size is not refused for its own framing.
+    fn still_budget(&self) -> usize {
+        let wire = self.still_drain();
+        match self.datagram.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => wire
+                .saturating_sub(crate::video::VIDEO_HEADER)
+                .min(crate::MAX_VIDEO_FRAME),
+            max => {
+                let protection =
+                    lock(&self.viewer_loss).protection(true, false, std::time::Instant::now());
+                crate::video::still_payload(wire, max, PREFIX, protection)
+            }
+        }
     }
     pub(super) fn metadata(&self) -> DesktopInfo {
         let mut info = self.info.clone();
@@ -2653,6 +2674,9 @@ async fn host_send(
                 max
             };
             if let Some(max) = max.filter(|max| *max > PREFIX + crate::video::FRAG_HEADER + 64) {
+                desktop
+                    .datagram
+                    .store(max - PREFIX, std::sync::atomic::Ordering::Relaxed);
                 let now = std::time::Instant::now();
                 let protection = lock(&desktop.viewer_loss).protection(
                     frame.keyframe,
@@ -2677,7 +2701,7 @@ async fn host_send(
                     // it: both must drain within the moment a still may
                     // hold the link.
                     let space = link.datagram_send_buffer_space();
-                    if wire > space || backlog + wire > desktop.still_budget() {
+                    if wire > space || backlog + wire > desktop.still_drain() {
                         desktop.counters.still_dropped();
                         continue;
                     }
@@ -2709,7 +2733,7 @@ async fn host_send(
                     desktop.counters.keyframe_sent(frame.payload.len());
                 }
             } else if still {
-                if body.len() > desktop.still_budget() {
+                if body.len() > desktop.still_drain() {
                     desktop.counters.still_dropped();
                     continue;
                 }

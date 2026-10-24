@@ -440,3 +440,22 @@ fn a_frames_role_round_trips_and_a_malformed_still_is_refused() {
     assert!(flags(&EncodedFrame::h264(true, 1, vec![9; 40]).unwrap(), 3).is_err());
     assert!(flags(&still, 7).is_err());
 }
+
+/// What a frame costs on the wire is what fragmenting it makes, at every
+/// size, datagram and protection: a budget can be met before encoding.
+#[test]
+fn a_frame_s_wire_size_is_known_before_it_is_fragmented() {
+    for max in [256, 1200, 1452] {
+        for protection in [0.0, 0.1, 0.33, 0.5] {
+            for body in [0, 1, 63, 250, 1199, 1200, 4096, 100_000, 374_999] {
+                let fragments = fragment(&vec![7; body], 1, max, protection);
+                let made = (fragments.len(), fragments.iter().map(Vec::len).sum());
+                assert_eq!(
+                    crate::video::fragmented_size(body, max, protection),
+                    made,
+                    "{body} bytes over {max}, protection {protection}"
+                );
+            }
+        }
+    }
+}
