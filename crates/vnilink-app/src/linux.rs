@@ -344,7 +344,7 @@ mod tests {
     #[ignore = "needs a desktop session with xdg-desktop-portal"]
     fn stopping_while_the_dialog_waits_ends_the_host_without_a_grant() {
         let host = core();
-        let hosting = host.linux_host().unwrap();
+        let hosting = host.linux_host(None).unwrap();
         std::thread::sleep(Duration::from_secs(1));
         assert!(!hosting.is_started());
         let stopped = Instant::now();
@@ -370,7 +370,7 @@ mod tests {
         let viewer = core();
         host.prepare_native_video().unwrap();
         viewer.prepare_native_video().unwrap();
-        let hosting = host.linux_host().unwrap();
+        let hosting = host.linux_host(None).unwrap();
         let until = Instant::now() + Duration::from_secs(120);
         while !hosting.is_started() {
             assert!(hosting.error().is_none(), "{:?}", hosting.error());

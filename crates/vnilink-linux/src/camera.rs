@@ -1205,9 +1205,11 @@ mod tests {
 
     #[test]
     fn serialised_reappearance_keeps_consent_for_the_same_instance() {
+        // No such node, as in the tests beside it: a real camera at
+        // /dev/video0 answers with its own identity, which is refused.
         let unit = |serial: Option<&str>| {
             node(
-                "/dev/video0",
+                "/dev/vnilink-nonexistent0",
                 "uvcvideo",
                 "Twin Cam",
                 "usb-0000:00:14.0-1",
