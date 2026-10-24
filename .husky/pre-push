@@ -1,0 +1,5 @@
+# Opt-in: `git config vnilink.prePush full` runs the suite CI runs on this OS
+# (`npm run validate`) before each push. Off by default; CI runs it anyway.
+if [ "$(git config --get vnilink.prePush)" = "full" ]; then
+	npm run validate
+fi

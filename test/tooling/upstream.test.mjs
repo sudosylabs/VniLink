@@ -13,12 +13,14 @@ test('staged fixes preserve imported source while checking application files', (
 	assert.equal(isApplicationFile(imported), false);
 	assert.equal(isApplicationFile(application), true);
 	const commands = staged['{src,test,build}/**/*.ts']([imported, application]);
-	assert.equal(commands.length, 2);
-	for (const command of commands) {
+	assert.equal(commands.length, 3);
+	for (const command of commands.slice(0, 2)) {
 		assert.ok(command.includes(JSON.stringify(application)));
 		assert.ok(!command.includes(JSON.stringify(imported)));
 	}
-	assert.deepEqual(staged['{src,test,build}/**/*.ts']([imported]), []);
+	// Types span files: imported source is still type-checked, once, after the fixes.
+	assert.equal(commands[2], 'npm run typecheck');
+	assert.deepEqual(staged['{src,test,build}/**/*.ts']([imported]), ['npm run typecheck']);
 });
 
 test('copied service container injects, shares and disposes its service instances', async () => {

@@ -3,83 +3,210 @@ name: ci
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
+# Every job installs what build/prerequisites.json lists, runs `npm run doctor`
+# to show what the computer has, then the checks and the full suite. Intel
+# macOS and Windows on Arm are unsupported; Linux arm64 is unverified.
 jobs:
-  verify:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      # postinstall installs the Rust toolchain rust-toolchain.toml names.
+      - run: npm ci
+      - run: npm run doctor -- --require build,test:rust,test:ui
+      - run: npm run check
+      - run: cargo fmt --all -- --check
+      - run: npm run test:rust
+      - run: npm test
+      - name: Upload scenario evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenarios-macos
+          path: .build/test-runs
+          if-no-files-found: ignore
+
+  ubuntu:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install Ubuntu packages
+        run: |
+          sudo apt-get update
+          node build/lib/prerequisites.ts packages debian build test:ui test:rust | xargs sudo apt-get install -y --no-install-recommends
+      - run: npm ci
+      # Ubuntu restricts the user namespaces Chromium's sandbox needs.
+      - run: npm run sandbox:linux
+      - run: npm run doctor -- --require build,test:rust,test:ui
+      - run: npm run check
+      - run: cargo fmt --all -- --check
+      - run: npm run test:rust
+      - run: npm run build
+      - run: npm run test:native
+      # No display on the runner: Xvfb, Openbox and a temporary keyring.
+      - run: scripts/test.sh
+      - name: Upload scenario evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenarios-ubuntu
+          path: .build/test-runs
+          if-no-files-found: ignore
+
+  fedora:
+    runs-on: ubuntu-24.04
+    container:
+      image: fedora:43
+      options: --shm-size=512m
+    env:
+      # Root in a container: Electron runs without its sandbox, as in the Debian image.
+      VNILINK_TEST_CONTAINER: '1'
+    steps:
+      - name: Install checkout and Node prerequisites
+        run: dnf install -y git tar xz
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install Fedora packages
+        run: node build/lib/prerequisites.ts packages fedora build test:ui test:rust | xargs dnf install -y
+      - name: Install rustup
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - run: npm ci
+      - run: npm run doctor -- --require build,test:rust,test:ui
+      - run: npm run check
+      - run: cargo fmt --all -- --check
+      - run: npm run test:rust
+      - run: npm run build
+      - run: npm run test:native
+      - run: scripts/test.sh
+      - name: Upload scenario evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenarios-fedora
+          path: .build/test-runs
+          if-no-files-found: ignore
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Read MSYS2 packages
+        id: packages
+        shell: pwsh
+        run: |
+          $Packages = (node build/lib/prerequisites.ts packages msys2 build test:ui test:rust) -join ' '
+          "msys2=$Packages" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+      - name: Install MSYS2 MinGW-w64
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          install: ${{ steps.packages.outputs.msys2 }}
+      # setup-msys2 installs its own MSYS2 (not the runner image's C:\msys64).
+      - name: Use that MSYS2
+        shell: pwsh
+        env:
+          MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          "$env:MSYS2_ROOT\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "VNILINK_MSYS_ROOT=$env:MSYS2_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      # npm ci, the doctor, the checks, Rust tests and UI tests.
+      - name: Test (native Windows environment)
+        shell: pwsh
+        run: ./scripts/test-windows.ps1 -MsysRoot $env:VNILINK_MSYS_ROOT
+      - name: Upload scenario evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenarios-windows
+          path: .build/test-runs
+          if-no-files-found: ignore
+
+  # The maintained Debian image the macOS workstation also uses (npm run test:linux).
+  linux-container:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run doctor -- --require test:linux
+      - run: npm run test:linux
+      - name: Upload scenario evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenarios-linux-container
+          path: .build/linux-validation
+          if-no-files-found: ignore
+
+  # Unsigned installers, on main and on request: the release path every OS ships.
+  package:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    needs: [macos, ubuntu, windows]
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
-
+        os: [macos-latest, ubuntu-24.04, windows-latest]
     runs-on: ${{ matrix.os }}
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: .nvmrc
           cache: npm
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-
-      - name: Install Windows GNU toolchain
-        id: msys2
+      - name: Install Ubuntu packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          node build/lib/prerequisites.ts packages debian package:installers | xargs sudo apt-get install -y --no-install-recommends
+      - name: Read MSYS2 packages
         if: runner.os == 'Windows'
+        id: packages
+        shell: pwsh
+        run: |
+          $Packages = (node build/lib/prerequisites.ts packages msys2 package:installers) -join ' '
+          "msys2=$Packages" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+      - name: Install MSYS2 MinGW-w64
+        if: runner.os == 'Windows'
+        id: msys2
         uses: msys2/setup-msys2@v2
         with:
-          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-clang mingw-w64-x86_64-nasm mingw-w64-x86_64-make
-
-      # setup-msys2 installs its own MSYS2 (not the runner image's C:\msys64); use that one.
-      - name: Configure Windows native builds
+          install: ${{ steps.packages.outputs.msys2 }}
+      - name: Use that MSYS2
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
         run: |
-          rustup target add x86_64-pc-windows-gnu
           "$env:MSYS2_ROOT\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           "VNILINK_MSYS_ROOT=$env:MSYS2_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "CMAKE_GENERATOR=MinGW Makefiles" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "CARGO_BUILD_TARGET=x86_64-pc-windows-gnu" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=gcc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      # Windows installs inside scripts/test-windows.ps1. Linux needs the build
-      # tooling on the host to start the container.
       - run: npm ci
-        if: runner.os != 'Windows'
-
-      - run: npm run check
-        if: runner.os == 'macOS'
-
-      - run: cargo fmt --all -- --check
-        if: runner.os == 'macOS'
-
-      - name: Test Rust crates and native backend
-        if: runner.os == 'macOS'
-        run: npm run test:rust
-
-      - name: Test (maintained Linux environment)
-        if: runner.os == 'Linux'
-        run: npm run test:linux
-
-      - name: Test (macOS)
-        if: runner.os == 'macOS'
-        run: npm test
-
-      - name: Test (native Windows environment)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./scripts/test-windows.ps1 -MsysRoot $env:VNILINK_MSYS_ROOT
-
-      - name: Upload scenario evidence
-        if: always()
-        uses: actions/upload-artifact@v4
+      - run: npm run doctor -- --require package:installers
+      - run: npm run package:installers
+      - run: npm run verify:installers
+      - uses: actions/upload-artifact@v4
         with:
-          name: scenarios-${{ matrix.os }}
-          path: |
-            .build/test-runs
-            .build/linux-validation
-          if-no-files-found: ignore
+          name: installers-${{ matrix.os }}
+          path: dist/installers
+          if-no-files-found: error
