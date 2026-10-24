@@ -4,8 +4,14 @@ ENV DEBIAN_FRONTEND=noninteractive HUSKY=0 VNILINK_TEST_CONTAINER=1
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
-COPY build/containers/linux-packages.txt /tmp/linux-packages.txt
-RUN apt-get update && xargs -a /tmp/linux-packages.txt apt-get install -y --no-install-recommends && rm -rf /var/lib/apt/lists/* && rustup component add rustfmt clippy rust-analyzer llvm-tools-preview
+# The Debian packages of every task the container runs, from the prerequisites manifest.
+COPY build/prerequisites.json /tmp/prerequisites/build/prerequisites.json
+COPY build/lib/prerequisites.ts /tmp/prerequisites/build/lib/prerequisites.ts
+RUN apt-get update \
+    && node /tmp/prerequisites/build/lib/prerequisites.ts packages debian build test:ui test:rust measure:impaired:linux > /tmp/linux-packages.txt \
+    && xargs -a /tmp/linux-packages.txt apt-get install -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* /tmp/prerequisites \
+    && rustup component add rustfmt clippy rust-analyzer llvm-tools-preview
 COPY build/containers/linux-entrypoint.sh /usr/local/bin/vnilink-tests
 RUN chmod +x /usr/local/bin/vnilink-tests
 COPY build/containers/impaired-entrypoint.sh /usr/local/bin/vnilink-impaired

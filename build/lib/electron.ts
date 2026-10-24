@@ -6,7 +6,6 @@
  * product's name and artwork, in the layout of the packaged application.
  */
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -15,6 +14,7 @@ import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { ProcessRunner } from './processes.ts';
 import { assignExecutableUuids, darwinUsageDescriptions, executableUuids } from './macos/identity.ts';
+import { linuxSandbox, linuxSandboxProfile, systemProbe } from './prerequisites.ts';
 import { loadProduct, type Product } from './product.ts';
 import { fileSha256, releaseInventory } from './verify.ts';
 
@@ -44,7 +44,7 @@ export interface ElectronOptions {
 export async function electronExecutable(root: string, signal: AbortSignal, options: ElectronOptions = {}): Promise<string> {
 	const executable = await preparedElectron(root, signal);
 	if (process.platform === 'linux' && options.sandboxed !== false) {
-		await assertLinuxSandbox(executable, signal);
+		await assertLinuxSandbox(root);
 	}
 	return executable;
 }
@@ -194,31 +194,12 @@ async function brandWin32(root: string, product: Product, output: string, execut
 	});
 }
 
-/**
- * Where AppArmor restricts unprivileged user namespaces (Ubuntu 23.10 and
- * later), Chromium's sandbox has them only through a profile that grants
- * them to its executable, as Ubuntu's own `code` and `chrome` profiles do,
- * or else needs the setuid `chrome-sandbox` helper; with neither, every
- * launch aborts. The helper's root ownership is lost whenever
- * `.build/electron` is prepared again, so the development Electron is
- * allowed by a profile, which `sandbox:linux` installs for its path.
- */
-async function assertLinuxSandbox(executable: string, signal: AbortSignal): Promise<void> {
-	const restricted = await readFile('/proc/sys/kernel/apparmor_restrict_unprivileged_userns', 'utf8').catch(() => '0');
-	if (restricted.trim() !== '1') {
-		return;
+/** Throws, naming the fix, unless the development Electron may use Chromium's sandbox (see `linuxSandbox`). */
+async function assertLinuxSandbox(root: string): Promise<void> {
+	const sandbox = await linuxSandbox(root, systemProbe);
+	if (sandbox.status !== 'ready') {
+		throw new Error(`Electron's sandbox cannot start: ${sandbox.detail ?? 'no profile allows it'}. Run \`npm run sandbox:linux\` once; it asks for sudo to install that profile.`);
 	}
-	const helper = await stat(join(dirname(executable), 'chrome-sandbox')).catch(() => undefined);
-	if (helper?.uid === 0 && (helper.mode & 0o4755) === 0o4755) {
-		return;
-	}
-	// A profile attaches by path when the executable starts: as Node it reads
-	// its own label, `unconfined` when none did.
-	const { stdout } = await run(executable, ['-e', `process.stdout.write(require('node:fs').readFileSync('/proc/self/attr/current', 'utf8'))`], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, signal });
-	if (!stdout.trim().startsWith('unconfined')) {
-		return;
-	}
-	throw new Error(`Electron's sandbox cannot start: AppArmor restricts unprivileged user namespaces here, and no profile allows them for ${executable}. Run \`node build/run.ts sandbox:linux\` once; it asks for sudo to install that profile.`);
 }
 
 /**
@@ -237,11 +218,11 @@ export async function allowLinuxSandbox(root: string, signal: AbortSignal): Prom
 	if (/["\n]/.test(executable)) {
 		throw new Error(`An AppArmor profile cannot name ${JSON.stringify(executable)}`);
 	}
-	const name = `vnilink-development-${createHash('sha256').update(root).digest('hex').slice(0, 12)}`;
+	const name = linuxSandboxProfile(root);
 	const profile = [
 		`# The VniLink development Electron in ${root}: user namespaces for`,
 		'# Chromium\'s sandbox, and nothing confined, as Ubuntu\'s profile for Visual',
-		'# Studio Code. Written by `node build/run.ts sandbox:linux`.',
+		'# Studio Code. Written by `npm run sandbox:linux`.',
 		'abi <abi/4.0>,',
 		'include <tunables/global>',
 		'',

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { cp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative, win32 } from 'node:path';
+import { glassPrebuild, mingwCandidates } from './prerequisites.ts';
 import type { ProcessRunner } from './processes.ts';
 
 export interface NativeOptions {
@@ -74,9 +75,6 @@ function assertHostTarget(target: string | undefined): void {
 	}
 }
 
-/** MSYS2's default install location; runners and custom installs put MinGW on PATH or name their root. */
-const defaultMsysRoot = 'C:\\msys64';
-
 /**
  * MinGW tools for the GNU Windows target: Rust links with them and calls
  * `dlltool`, and the native libraries build their C with them. A toolchain
@@ -88,18 +86,15 @@ export function windowsGnuEnvironment(environment: NodeJS.ProcessEnv, exists: (p
 	const result: NodeJS.ProcessEnv = { ...environment };
 	// Windows names it Path; a second PATH key would leave which one wins to the spawn.
 	const pathKey = Object.keys(result).find(key => key.toUpperCase() === 'PATH') ?? 'PATH';
-	const entries = (result[pathKey] ?? '').split(';').filter(Boolean);
-	const hasTools = (directory: string): boolean => exists(win32.join(directory, 'dlltool.exe'));
-	let bin = entries.find(hasTools);
+	const candidates = mingwCandidates(environment);
+	const index = candidates.findIndex(directory => exists(win32.join(directory, 'dlltool.exe')));
+	const bin = candidates[index] as string | undefined;
 	if (!bin) {
-		const root = environment.VNILINK_MSYS_ROOT ?? defaultMsysRoot;
-		const candidate = win32.join(root, 'mingw64', 'bin');
-		if (!hasTools(candidate)) {
-			throw new Error(`The Windows build needs MinGW (dlltool, gcc) and found none on PATH or in ${candidate}. `
-				+ 'Install MSYS2 with mingw-w64-x86_64-gcc, -clang, -nasm and -make, then put its mingw64\\bin on PATH or set VNILINK_MSYS_ROOT to its root.');
-		}
-		bin = candidate;
-		result[pathKey] = [bin, ...entries].join(';');
+		throw new Error(`The Windows build needs MinGW (dlltool, gcc) and found none on PATH or in ${candidates[candidates.length - 1]}. `
+			+ 'Install MSYS2 with mingw-w64-x86_64-gcc, -clang, -nasm and -make, then put its mingw64\\bin on PATH or set VNILINK_MSYS_ROOT to its root; `npm run doctor` checks the rest.');
+	}
+	if (index === candidates.length - 1) {
+		result[pathKey] = [bin, ...candidates.slice(0, -1)].join(';');
 	}
 	result.CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER ??= 'gcc';
 	result.CMAKE_GENERATOR ??= 'MinGW Makefiles';
@@ -203,7 +198,7 @@ export async function stageGlass(
 		return false;
 	}
 	const source = join(root, 'node_modules/@vnilink/elg');
-	const prebuild = join(source, 'prebuilds', `darwin-${architecture}`, 'node.napi.node');
+	const prebuild = glassPrebuild(root, architecture);
 	try {
 		await readFile(prebuild);
 	} catch {

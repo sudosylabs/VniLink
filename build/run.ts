@@ -6,6 +6,7 @@
 import { fileURLToPath } from 'node:url';
 import { buildApplication } from './lib/bundles.ts';
 import { DevelopmentSession, startApplication } from './lib/development.ts';
+import { doctor } from './lib/doctor.ts';
 import { allowLinuxSandbox } from './lib/electron.ts';
 import { checkHygiene } from './lib/hygiene.ts';
 import { measureImpaired, measureImpairedInContainer } from './lib/impaired.ts';
@@ -13,6 +14,7 @@ import { measureLatency } from './lib/latency.ts';
 import { buildInstallers } from './lib/installers.ts';
 import { renderTrayAssets } from './lib/trayAssets.ts';
 import { packageApplication } from './lib/package.ts';
+import { assertTaskReady } from './lib/prerequisites.ts';
 import { checkProduct } from './lib/product.ts';
 import { buildRelease } from './lib/release.ts';
 import { runUiTests, testRust, validateLinux } from './lib/test.ts';
@@ -47,6 +49,7 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 	'check:upstream': () => verifyUpstream(),
 	'format': (_root, _signal, args) => formatFiles(args),
 	'vscode': (_root, _signal, args) => vscodeCommand(args),
+	'doctor': (root, _signal, args) => doctor(root, args),
 };
 
 const [name = '', ...args] = process.argv.slice(2);
@@ -66,4 +69,14 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 	});
 }
 
-await task(fileURLToPath(new URL('../', import.meta.url)), controller.signal, args);
+const root = fileURLToPath(new URL('../', import.meta.url));
+
+try {
+	// Every task first checks what it needs here (build/prerequisites.json).
+	await assertTaskReady(root, name);
+} catch (error) {
+	console.error(error instanceof Error ? error.message : error);
+	process.exit(1);
+}
+
+await task(root, controller.signal, args);

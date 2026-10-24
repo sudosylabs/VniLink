@@ -1,0 +1,670 @@
+{
+  "$comment": "What each task needs on each OS. build/lib/prerequisites.ts checks it (npm run doctor, preinstall and every task's own preflight); the Linux container, CI and CONTRIBUTING.md read their package lists and instructions from it.",
+  "node": {
+    "versionFile": ".nvmrc",
+    "install": "Install the version in `.nvmrc` with a version manager, for example `nvm install` (macOS, Linux) or `nvm install $(Get-Content .nvmrc)` with nvm-windows, or from https://nodejs.org."
+  },
+  "rust": {
+    "toolchainFile": "rust-toolchain.toml",
+    "install": "Install rustup from https://rustup.rs; `npm ci` then installs the toolchain `rust-toolchain.toml` names."
+  },
+  "platforms": {
+    "darwin": {
+      "name": "macOS",
+      "architectures": {
+        "arm64": {
+          "status": "supported"
+        },
+        "x64": {
+          "status": "unsupported",
+          "reason": "Intel Macs cannot build VniLink: the vendored AV1 and VP8/VP9 build scripts accept only Apple silicon (`vendor/shiguredo-aom/build.rs`, `vendor/shiguredo-libvpx/build.rs`)"
+        }
+      }
+    },
+    "win32": {
+      "name": "Windows",
+      "rustTarget": "x86_64-pc-windows-gnu",
+      "architectures": {
+        "x64": {
+          "status": "supported"
+        },
+        "arm64": {
+          "status": "unsupported",
+          "reason": "Windows on Arm has no GNU (MinGW) build of the native addon"
+        }
+      }
+    },
+    "linux": {
+      "name": "Linux",
+      "architectures": {
+        "x64": {
+          "status": "supported"
+        },
+        "arm64": {
+          "status": "unverified",
+          "reason": "it builds in the Linux container on Apple silicon but has not run on an arm64 desktop"
+        }
+      },
+      "distributions": {
+        "debian": {
+          "name": "Ubuntu and Debian",
+          "ids": ["ubuntu", "debian"],
+          "status": "supported",
+          "verified": "Debian 13 (the Linux test container) and Ubuntu 26.04; CI runs Ubuntu 24.04",
+          "install": "sudo apt-get install --no-install-recommends"
+        },
+        "fedora": {
+          "name": "Fedora",
+          "ids": ["fedora"],
+          "status": "supported",
+          "verified": "CI runs Fedora 43",
+          "install": "sudo dnf install"
+        }
+      },
+      "desktops": {
+        "supported": ["GNOME"],
+        "reason": "Screen capture and input go through the XDG desktop portal; only GNOME's has been exercised. Other desktops are unverified."
+      }
+    }
+  },
+  "requirements": {
+    "platform": {
+      "title": "Supported OS and architecture",
+      "check": {
+        "custom": "platform"
+      }
+    },
+    "node": {
+      "title": "Node.js",
+      "check": {
+        "custom": "node"
+      }
+    },
+    "rust": {
+      "title": "Rust toolchain",
+      "purpose": "Builds the native addon (crates/vnilink-node).",
+      "check": {
+        "custom": "rust"
+      },
+      "fix": {
+        "default": "`rustup toolchain install`",
+        "missing-rustup": "Install rustup from https://rustup.rs, then run `rustup toolchain install` in the checkout."
+      }
+    },
+    "rust-windows-target": {
+      "title": "Rust GNU Windows target",
+      "platforms": ["win32"],
+      "purpose": "The addon builds for x86_64-pc-windows-gnu with MSYS2's MinGW, not MSVC.",
+      "check": {
+        "custom": "rust-target"
+      },
+      "prepared": true,
+      "fix": {
+        "default": "`rustup target add x86_64-pc-windows-gnu` (`npm ci` does this)"
+      }
+    },
+    "rust-windows-host": {
+      "title": "Rust host toolchain without MSVC",
+      "platforms": ["win32"],
+      "purpose": "Build scripts run on the host toolchain: a GNU host needs only MinGW, an MSVC host also needs Visual Studio's linker.",
+      "check": {
+        "custom": "rust-windows-host"
+      },
+      "fix": {
+        "default": "`rustup set default-host x86_64-pc-windows-gnu`, then `rustup toolchain install`"
+      }
+    },
+    "xcode-tools": {
+      "title": "Xcode Command Line Tools",
+      "platforms": ["darwin"],
+      "purpose": "Clang, the SDK and the system frameworks the addon links.",
+      "check": {
+        "custom": "xcode-tools"
+      },
+      "fix": {
+        "default": "`xcode-select --install`"
+      }
+    },
+    "xcode": {
+      "title": "Xcode (actool)",
+      "platforms": ["darwin"],
+      "optional": true,
+      "purpose": "Compiles the Icon Composer icon of the development app; without it the flat icon is used.",
+      "check": {
+        "custom": "xcode"
+      },
+      "fix": {
+        "default": "Install Xcode from the App Store, then `sudo xcode-select -s /Applications/Xcode.app`."
+      }
+    },
+    "liquid-glass": {
+      "title": "Liquid Glass prebuild (@vnilink/elg)",
+      "platforms": ["darwin"],
+      "purpose": "The optional npm dependency the main process loads for window material.",
+      "check": {
+        "custom": "liquid-glass"
+      },
+      "prepared": true,
+      "fix": {
+        "default": "`npm ci`"
+      }
+    },
+    "mingw": {
+      "title": "MSYS2 MinGW-w64 tools",
+      "platforms": ["win32"],
+      "purpose": "Links the addon and builds its C dependencies (gcc, dlltool, libclang, nasm, mingw32-make).",
+      "check": {
+        "custom": "mingw",
+        "tools": ["gcc.exe", "dlltool.exe", "clang.exe", "libclang.dll", "nasm.exe", "mingw32-make.exe"],
+        "packages": {
+          "msys2": "mingw-w64-x86_64-gcc mingw-w64-x86_64-clang mingw-w64-x86_64-nasm mingw-w64-x86_64-make"
+        }
+      },
+      "fix": {
+        "default": "`winget install MSYS2.MSYS2`, then in the MSYS2 shell `pacman -S --needed {msys2}`. Put `C:\\msys64\\mingw64\\bin` on PATH or set `VNILINK_MSYS_ROOT` to the MSYS2 root."
+      }
+    },
+    "download-tools": {
+      "title": "git and curl",
+      "purpose": "The first native build clones and downloads codec and CMake sources with them.",
+      "check": {
+        "commands": {
+          "git": {
+            "debian": "git",
+            "fedora": "git",
+            "darwin": "`xcode-select --install`",
+            "win32": "`winget install Git.Git`"
+          },
+          "curl": {
+            "debian": "curl",
+            "fedora": "curl",
+            "darwin": "`xcode-select --install`",
+            "win32": "included in Windows 10 and later"
+          }
+        }
+      }
+    },
+    "cmake": {
+      "title": "CMake",
+      "purpose": "Builds Opus for the audio codec (opusic-sys); the AV1 build downloads its own CMake.",
+      "check": {
+        "commands": {
+          "cmake": {
+            "debian": "cmake",
+            "fedora": "cmake",
+            "darwin": "`brew install cmake`",
+            "win32": "`pacman -S mingw-w64-x86_64-cmake` in the MSYS2 shell, or `winget install Kitware.CMake`",
+            "msys2": "mingw-w64-x86_64-cmake"
+          }
+        }
+      }
+    },
+    "linux-build-tools": {
+      "title": "C toolchain, make, pkg-config, nasm, perl",
+      "platforms": ["linux"],
+      "purpose": "Builds libvpx and libaom from source and links the addon.",
+      "check": {
+        "commands": {
+          "cc": {
+            "debian": "build-essential",
+            "fedora": "gcc"
+          },
+          "c++": {
+            "debian": "build-essential",
+            "fedora": "gcc-c++"
+          },
+          "make": {
+            "debian": "build-essential",
+            "fedora": "make"
+          },
+          "pkg-config": {
+            "debian": "pkg-config",
+            "fedora": "pkgconf-pkg-config"
+          },
+          "perl": {
+            "debian": "perl",
+            "fedora": "perl"
+          },
+          "nasm": {
+            "debian": "nasm",
+            "fedora": "nasm",
+            "architectures": ["x64"]
+          }
+        }
+      }
+    },
+    "libclang": {
+      "title": "libclang",
+      "platforms": ["linux"],
+      "purpose": "bindgen generates the PipeWire, VA-API and V4L2 bindings with it.",
+      "check": {
+        "custom": "libclang",
+        "packages": {
+          "debian": "libclang-dev",
+          "fedora": "clang-devel"
+        }
+      }
+    },
+    "linux-build-libraries": {
+      "title": "Development libraries",
+      "platforms": ["linux"],
+      "purpose": "Headers and link libraries of the system services the addon uses.",
+      "check": {
+        "pkg-config": {
+          "alsa": {
+            "debian": "libasound2-dev",
+            "fedora": "alsa-lib-devel",
+            "for": "audio (cpal)"
+          },
+          "dbus-1": {
+            "debian": "libdbus-1-dev",
+            "fedora": "dbus-devel",
+            "for": "Secret Service and portals"
+          },
+          "libpipewire-0.3": {
+            "debian": "libpipewire-0.3-dev",
+            "fedora": "pipewire-devel",
+            "for": "screen capture"
+          },
+          "libspa-0.2": {
+            "debian": "libspa-0.2-dev",
+            "fedora": "pipewire-devel",
+            "for": "screen capture"
+          },
+          "libva": {
+            "debian": "libva-dev",
+            "fedora": "libva-devel",
+            "for": "hardware video"
+          },
+          "libva-drm": {
+            "debian": "libva-dev",
+            "fedora": "libva-devel",
+            "for": "hardware video"
+          },
+          "wayland-client": {
+            "debian": "libwayland-dev",
+            "fedora": "wayland-devel",
+            "for": "Wayland input"
+          },
+          "gbm": {
+            "debian": "libgbm-dev",
+            "fedora": "mesa-libgbm-devel",
+            "for": "DMA-BUF frames"
+          },
+          "egl": {
+            "debian": "libegl-dev",
+            "fedora": "libglvnd-devel",
+            "for": "DMA-BUF frames"
+          }
+        }
+      }
+    },
+    "linux-runtime-libraries": {
+      "title": "Electron runtime libraries",
+      "platforms": ["linux"],
+      "purpose": "Shared libraries Electron and the addon load at startup.",
+      "check": {
+        "libraries": {
+          "libgtk-3.so.0": {
+            "debian": "libgtk-3-0",
+            "fedora": "gtk3"
+          },
+          "libnss3.so": {
+            "debian": "libnss3",
+            "fedora": "nss"
+          },
+          "libXss.so.1": {
+            "debian": "libxss1",
+            "fedora": "libXScrnSaver"
+          },
+          "libXtst.so.6": {
+            "debian": "libxtst6",
+            "fedora": "libXtst"
+          },
+          "libnotify.so.4": {
+            "debian": "libnotify4",
+            "fedora": "libnotify"
+          },
+          "libatspi.so.0": {
+            "debian": "libatspi2.0-0",
+            "fedora": "at-spi2-core"
+          },
+          "libdrm.so.2": {
+            "debian": "libdrm2",
+            "fedora": "libdrm"
+          },
+          "libxcb.so.1": {
+            "debian": "libxcb1",
+            "fedora": "libxcb"
+          },
+          "libxkbcommon.so.0": {
+            "debian": "libxkbcommon0",
+            "fedora": "libxkbcommon"
+          },
+          "libsecret-1.so.0": {
+            "debian": "libsecret-1-0",
+            "fedora": "libsecret"
+          },
+          "libasound.so.2": {
+            "debian": "libasound2t64",
+            "fedora": "alsa-lib"
+          }
+        },
+        "commands": {
+          "xdg-open": {
+            "debian": "xdg-utils",
+            "fedora": "xdg-utils"
+          }
+        }
+      }
+    },
+    "desktop-session": {
+      "title": "Desktop session",
+      "platforms": ["linux"],
+      "purpose": "The application opens windows on an X11 or Wayland display.",
+      "check": {
+        "custom": "desktop-session"
+      },
+      "fix": {
+        "default": "Run it from a graphical session (`DISPLAY` or `WAYLAND_DISPLAY` set)."
+      }
+    },
+    "secret-service": {
+      "title": "Secret Service",
+      "platforms": ["linux"],
+      "purpose": "Normal startup reads the installation key from the desktop's Secret Service (org.freedesktop.secrets).",
+      "check": {
+        "custom": "secret-service",
+        "packages": {
+          "debian": "gnome-keyring",
+          "fedora": "gnome-keyring"
+        }
+      },
+      "fix": {
+        "default": "Install and unlock a Secret Service provider such as GNOME Keyring or KeePassXC."
+      }
+    },
+    "test-display": {
+      "title": "Display for UI tests",
+      "platforms": ["linux"],
+      "purpose": "UI tests use the desktop's display; without one, scripts/test.sh runs them under Xvfb with a window manager and a temporary keyring.",
+      "check": {
+        "custom": "test-display",
+        "commands": {
+          "xvfb-run": {
+            "debian": "xvfb",
+            "fedora": "xorg-x11-server-Xvfb"
+          },
+          "xauth": {
+            "debian": "xauth",
+            "fedora": "xorg-x11-xauth"
+          },
+          "dbus-run-session": {
+            "debian": "dbus-daemon",
+            "fedora": "dbus-daemon"
+          },
+          "dbus-launch": {
+            "debian": "dbus-x11",
+            "fedora": "dbus-x11"
+          },
+          "gnome-keyring-daemon": {
+            "debian": "gnome-keyring",
+            "fedora": "gnome-keyring"
+          },
+          "openbox": {
+            "debian": "openbox",
+            "fedora": "openbox"
+          },
+          "xprop": {
+            "debian": "x11-utils",
+            "fedora": "xprop"
+          }
+        }
+      }
+    },
+    "linux-sandbox": {
+      "title": "Chromium sandbox",
+      "platforms": ["linux"],
+      "purpose": "Where AppArmor restricts unprivileged user namespaces (Ubuntu 23.10 and later), the development Electron needs a profile allowing them.",
+      "check": {
+        "custom": "linux-sandbox"
+      },
+      "fix": {
+        "default": "`npm run sandbox:linux` (asks for sudo, once per checkout)"
+      }
+    },
+    "apparmor": {
+      "title": "AppArmor",
+      "platforms": ["linux"],
+      "purpose": "sandbox:linux installs an AppArmor profile with apparmor_parser and sudo.",
+      "check": {
+        "custom": "apparmor"
+      }
+    },
+    "docker": {
+      "title": "Docker",
+      "purpose": "Runs the maintained Debian container for Linux validation and network measurements.",
+      "check": {
+        "custom": "docker"
+      },
+      "fix": {
+        "darwin": "Install and start Docker Desktop: https://docs.docker.com/desktop/",
+        "win32": "Install and start Docker Desktop: https://docs.docker.com/desktop/",
+        "debian": "`sudo apt-get install docker.io && sudo usermod -aG docker $USER`, then log in again.",
+        "fedora": "`sudo dnf install moby-engine && sudo systemctl enable --now docker && sudo usermod -aG docker $USER`, then log in again."
+      }
+    },
+    "network-namespaces": {
+      "title": "ip and tc",
+      "platforms": ["linux"],
+      "purpose": "The impaired-network harness builds network namespaces and shapes their links.",
+      "check": {
+        "commands": {
+          "ip": {
+            "debian": "iproute2",
+            "fedora": "iproute"
+          },
+          "tc": {
+            "debian": "iproute2",
+            "fedora": "iproute-tc"
+          }
+        }
+      }
+    },
+    "rsvg-convert": {
+      "title": "rsvg-convert",
+      "purpose": "Renders the tray icons from their SVG sources.",
+      "check": {
+        "commands": {
+          "rsvg-convert": {
+            "debian": "librsvg2-bin",
+            "fedora": "librsvg2-tools",
+            "darwin": "`brew install librsvg`",
+            "win32": "`pacman -S mingw-w64-x86_64-librsvg` in the MSYS2 shell"
+          }
+        }
+      }
+    },
+    "rpmbuild": {
+      "title": "rpmbuild",
+      "platforms": ["linux"],
+      "purpose": "electron-builder builds the .rpm installer with it.",
+      "check": {
+        "commands": {
+          "rpmbuild": {
+            "debian": "rpm",
+            "fedora": "rpm-build"
+          }
+        }
+      }
+    },
+    "ssh": {
+      "title": "OpenSSH client",
+      "optional": true,
+      "purpose": "Measuring latency against another computer drives it over SSH.",
+      "check": {
+        "commands": {
+          "ssh": {
+            "debian": "openssh-client",
+            "fedora": "openssh-clients",
+            "darwin": "included in macOS",
+            "win32": "Settings > System > Optional features > OpenSSH Client"
+          }
+        }
+      }
+    }
+  },
+  "tasks": {
+    "install": {
+      "run": "npm ci",
+      "description": "Install the JavaScript dependencies",
+      "requires": ["platform", "node"]
+    },
+    "build": {
+      "description": "Build the native addon and the application",
+      "requires": [
+        "platform",
+        "node",
+        "rust",
+        "rust-windows-target",
+        "rust-windows-host",
+        "xcode-tools",
+        "mingw",
+        "download-tools",
+        "cmake",
+        "linux-build-tools",
+        "libclang",
+        "linux-build-libraries",
+        "liquid-glass"
+      ]
+    },
+    "build:release": {
+      "description": "Build the release payload",
+      "same": "build"
+    },
+    "package": {
+      "description": "Assemble the unsigned application",
+      "same": "build"
+    },
+    "package:installers": {
+      "description": "Build the installers",
+      "same": "build",
+      "requires": ["rpmbuild"]
+    },
+    "verify:release": {
+      "description": "Load the staged release addon",
+      "requires": ["platform", "node"]
+    },
+    "verify:package": {
+      "description": "Launch the assembled application",
+      "requires": ["platform", "node", "linux-runtime-libraries", "test-display", "linux-sandbox"]
+    },
+    "verify:installers": {
+      "description": "Check the installers",
+      "requires": ["platform", "node"]
+    },
+    "start": {
+      "description": "Launch the built application",
+      "requires": [
+        "platform",
+        "node",
+        "xcode",
+        "linux-runtime-libraries",
+        "desktop-session",
+        "secret-service",
+        "linux-sandbox"
+      ]
+    },
+    "dev": {
+      "description": "Launch the development application with watchers",
+      "same": "start"
+    },
+    "watch": {
+      "description": "Run the watchers without the application",
+      "requires": ["platform", "node"]
+    },
+    "test:ui": {
+      "description": "Run the UI scenarios in Electron",
+      "requires": ["platform", "node", "linux-runtime-libraries", "test-display", "linux-sandbox"]
+    },
+    "test:rust": {
+      "description": "Run the Rust tests",
+      "same": "build"
+    },
+    "test:linux": {
+      "description": "Run the checks and tests in the Linux container",
+      "requires": ["platform", "node", "docker"]
+    },
+    "sandbox:linux": {
+      "description": "Allow the development Electron its sandbox",
+      "platforms": ["linux"],
+      "requires": ["platform", "node", "apparmor"]
+    },
+    "measure:impaired": {
+      "description": "Measure sessions over impaired networks in the container",
+      "requires": ["platform", "node", "docker"]
+    },
+    "measure:impaired:linux": {
+      "description": "Measure sessions over impaired networks on this Linux host",
+      "platforms": ["linux"],
+      "same": "build",
+      "requires": ["network-namespaces"]
+    },
+    "measure:latency": {
+      "description": "Measure glass-to-glass latency",
+      "same": "build",
+      "requires": ["linux-runtime-libraries", "desktop-session", "linux-sandbox", "ssh"]
+    },
+    "check:product": {
+      "description": "Check the product metadata",
+      "requires": ["node"]
+    },
+    "check:upstream": {
+      "description": "Check the copied VS Code sources",
+      "requires": ["node"]
+    },
+    "check:hygiene": {
+      "description": "Reject personal details in the repository",
+      "requires": ["node"]
+    },
+    "assets:tray": {
+      "description": "Render the tray icons",
+      "requires": ["node", "rsvg-convert"]
+    },
+    "format": {
+      "description": "Format the sources",
+      "requires": ["node"]
+    },
+    "vscode": {
+      "description": "Import VS Code sources",
+      "requires": ["node"]
+    },
+    "doctor": {
+      "description": "Report what every task needs here",
+      "requires": []
+    }
+  },
+  "downloads": [
+    {
+      "what": "CMake 4.4 (about 50 MB)",
+      "into": "~/.cache/shiguredo_cmake",
+      "platforms": ["darwin", "win32", "linux"],
+      "cache": ".cache/shiguredo_cmake"
+    },
+    {
+      "what": "libvpx and libaom prebuilt archives from github.com/shiguredo",
+      "into": "target/electron",
+      "platforms": ["darwin"]
+    },
+    {
+      "what": "libvpx prebuilt archive from github.com/shiguredo and the libaom sources from aomedia.googlesource.com",
+      "into": "target/electron",
+      "platforms": ["win32"]
+    },
+    {
+      "what": "the libvpx and libaom sources from chromium.googlesource.com and aomedia.googlesource.com",
+      "into": "target/electron",
+      "platforms": ["linux"]
+    }
+  ]
+}

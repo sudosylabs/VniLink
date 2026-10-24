@@ -39,7 +39,9 @@
     "test:rust": "node build/run.ts test:rust",
     "package:installers": "npm run package:dir && node build/run.ts package:installers",
     "package:installers:staged": "node build/run.ts package:installers",
-    "verify:installers": "node build/run.ts verify:installers"
+    "verify:installers": "node build/run.ts verify:installers",
+    "doctor": "node build/run.ts doctor",
+    "sandbox:linux": "node build/run.ts sandbox:linux"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
