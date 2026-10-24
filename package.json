@@ -4,9 +4,14 @@
   "private": true,
   "main": "out/main.cjs",
   "engines": {
-    "node": ">=22.19.0"
+    "node": "^22.19.0"
+  },
+  "volta": {
+    "node": "22.19.0"
   },
   "scripts": {
+    "preinstall": "node build/npm/preinstall.ts",
+    "postinstall": "node build/npm/postinstall.ts",
     "typecheck": "tsc --noEmit && tsc -p build/tsconfig.json && npm run typecheck:upstream",
     "typecheck:upstream": "tsc -p src/tsconfig.json --noEmit",
     "build": "npm run typecheck && node build/run.ts build",

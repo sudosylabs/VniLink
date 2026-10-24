@@ -2,7 +2,7 @@
   "$comment": "What each task needs on each OS. build/lib/prerequisites.ts checks it (npm run doctor, preinstall and every task's own preflight); the Linux container, CI and CONTRIBUTING.md read their package lists and instructions from it.",
   "node": {
     "versionFile": ".nvmrc",
-    "install": "Install the version in `.nvmrc` with a version manager, for example `nvm install` (macOS, Linux) or `nvm install $(Get-Content .nvmrc)` with nvm-windows, or from https://nodejs.org."
+    "install": "Install the version in `.nvmrc` with a version manager: `nvm install` (macOS, Linux), `nvm install $(Get-Content .nvmrc)` (nvm-windows), or Volta, which takes it from `package.json`; or from https://nodejs.org."
   },
   "rust": {
     "toolchainFile": "rust-toolchain.toml",
