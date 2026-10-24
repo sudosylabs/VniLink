@@ -23,15 +23,6 @@ export const stillDecoderConfig: VideoDecoderConfig = { codec: 'av01.1.08M.08.0.
 /** Whether this window can decode with a configuration. */
 export type DecoderSupport = (config: VideoDecoderConfig) => Promise<boolean>;
 
-/** WebCodecs' own answer; a refusal to answer is no. */
-export const webCodecsSupport: DecoderSupport = async config => {
-	try {
-		return (await VideoDecoder.isConfigSupported(config)).supported === true;
-	} catch {
-		return false;
-	}
-};
-
 /**
  * The codecs this window decodes, each marked when its decoder is hardware,
  * and AV1 when it also shows still pictures at 4:4:4.
@@ -40,7 +31,7 @@ export async function probeWindowDecoders(supported: DecoderSupport): Promise<Wi
 	const answers = await Promise.all(videoCodecNames.map(async codec => {
 		const config = { codec: probes[codec], optimizeForLatency: true };
 		const hardware = await supported({ ...config, hardwareAcceleration: 'prefer-hardware' });
-		if (!hardware && !await supported({ ...config, hardwareAcceleration: 'no-preference' })) {
+		if (!hardware && !await supported({ ...config, hardwareAcceleration: 'prefer-software' })) {
 			return undefined;
 		}
 		return { codec, hardware, chroma444: codec === 'av1' && await supported(stillDecoderConfig) };

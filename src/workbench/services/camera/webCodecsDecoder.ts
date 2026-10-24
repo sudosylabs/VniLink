@@ -1,3 +1,4 @@
+import { showsStreamColour } from './decoderColour.js';
 import type { CameraChunk, CameraDecoder, CameraDecoderFactory } from './engineCameraStream.js';
 
 /** A WebCodecs H.264 decoder for Annex-B pictures, hardware first. */
@@ -55,20 +56,36 @@ class WebCodecsDecoder implements CameraDecoder {
 	}
 }
 
-/** Annex-B input carries its parameter sets in band, so no `description` is given. */
+/**
+ * Whether this window decodes with `config`: WebCodecs' own answer, a refusal
+ * to answer being no, and for a hardware decoder also whether it shows the
+ * stream's colour ({@link showsStreamColour}).
+ */
+export async function webCodecsSupport(config: VideoDecoderConfig): Promise<boolean> {
+	try {
+		if ((await VideoDecoder.isConfigSupported(config)).supported !== true) {
+			return false;
+		}
+	} catch {
+		return false;
+	}
+	return config.hardwareAcceleration !== 'prefer-hardware' || showsStreamColour(config);
+}
+
+/**
+ * Annex-B input carries its parameter sets in band, so no `description` is
+ * given. Hardware first, then software, never `no-preference`, which may pick
+ * the hardware decoder {@link webCodecsSupport} turned down.
+ */
 export const createWebCodecsDecoder: CameraDecoderFactory = async (codec, output, error) => {
-	for (const hardwareAcceleration of ['prefer-hardware', 'no-preference'] as const) {
+	for (const hardwareAcceleration of ['prefer-hardware', 'prefer-software'] as const) {
 		const config: VideoDecoderConfig = { codec, hardwareAcceleration, optimizeForLatency: true };
-		try {
-			if (!(await VideoDecoder.isConfigSupported(config)).supported) {
-				continue;
-			}
-		} catch {
+		if (!await webCodecsSupport(config)) {
 			continue;
 		}
 		const decoder = new VideoDecoder({ output, error });
 		decoder.configure(config);
-		return new WebCodecsDecoder(decoder, hardwareAcceleration === 'no-preference');
+		return new WebCodecsDecoder(decoder, hardwareAcceleration === 'prefer-software');
 	}
 	return undefined;
 };
