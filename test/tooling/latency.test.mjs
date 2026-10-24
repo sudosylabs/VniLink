@@ -144,7 +144,7 @@ test('a two-computer run names the other computer, its checkout and which one ho
 });
 
 test('a two-computer run is summarised from each side\'s own samples', async () => {
-	const { renderAcrossSummary, summariseFrameRate, summariseLatency, summarisePipeline } = await import('../../build/lib/latency.ts');
+	const { renderAcrossSummary, summariseLatency, summarisePipeline, summariseViewerStatus } = await import('../../build/lib/latency.ts');
 	const sample = fields => JSON.stringify({ at: 0, sample: fields });
 	const host = summarisePipeline([
 		sample({ codec: 'h265', width: 1920, height: 1080, capture_us: 2000, encode_us: 9000, encoder: 'nvenc', encoder_hardware: true, keyframes_sent: 3 }),
@@ -155,20 +155,21 @@ test('a two-computer run is summarised from each side\'s own samples', async () 
 	assert.deepEqual([host.encode?.p50, host.encode?.p95], [9, 11]);
 	assert.deepEqual(host.last, {});
 	const viewer = summarisePipeline([
-		sample({ rtt_ms: 4, decoder_hardware: true, conditions: [{ condition: 'encoder.slow' }] }),
-		sample({ rtt_ms: 6, decoder_hardware: true, conditions: [] }),
+		sample({ decoder_hardware: true, conditions: [{ condition: 'encoder.slow' }] }),
+		sample({ decoder_hardware: true, conditions: [] }),
 	].join('\n'));
-	assert.deepEqual([viewer.roundTrip?.p50, viewer.conditions], [4, ['encoder.slow']]);
+	assert.deepEqual(viewer.conditions, ['encoder.slow']);
 	const stages = [
-		JSON.stringify({ at: 0, text: 'Decoding: 2.0 ms, 3.0 ms at most for 95%', status: '58 fps · HEVC · 9.1 Mb/s · 4 ms' }),
-		JSON.stringify({ at: 1, text: 'Decoding: 2.0 ms, 3.0 ms at most for 95%', status: '60 fps · HEVC · 9.4 Mb/s · 4 ms' }),
+		JSON.stringify({ at: 0, text: 'Decoding: 2.0 ms, 3.0 ms at most for 95%\n3 pictures replaced by newer ones before drawing', status: '58 fps · HEVC · 9.1 Mb/s · 4 ms' }),
+		JSON.stringify({ at: 1, text: 'Decoding: 2.0 ms, 3.0 ms at most for 95%', status: '60 fps · HEVC · 9.4 Mb/s · 6 ms' }),
 	].join('\n');
-	const rate = summariseFrameRate(stages);
-	assert.deepEqual([rate?.p50, rate?.p95], [58, 60]);
-	const text = renderAcrossSummary(summarisePipeline(sample({ codec: 'h265', width: 1920, height: 1080, encoder: 'nvenc', encoder_hardware: true, capture_us: 2000, encode_us: 9000 })), viewer, summariseLatency('', stages), rate);
+	const status = summariseViewerStatus(stages);
+	assert.deepEqual([status.frameRate?.p50, status.frameRate?.p95, status.roundTrip?.p50, status.roundTrip?.p95, status.replaced?.count], [58, 60, 4, 6, 1]);
+	const text = renderAcrossSummary(summarisePipeline(sample({ codec: 'h265', width: 1920, height: 1080, encoder: 'nvenc', encoder_hardware: true, capture_us: 2000, encode_us: 9000 })), viewer, summariseLatency('', stages), status);
 	assert.match(text, /Codec h265, 1920x1080; host encoder nvenc \(hardware true/);
 	assert.match(text, /\| Encode \(scaling and copies included\) \| 9\.0 \| 9\.0 \| 1 \|/);
-	assert.match(text, /\| Pictures shown a second \| 58\.0 \| 60\.0 \| 2 \|/);
+	assert.match(text, /\| Pictures received a second \| 58\.0 \| 60\.0 \| 2 \|/);
+	assert.match(text, /\| Round trip \(ms\) \| 4\.0 \| 6\.0 \| 2 \|/);
 	assert.match(text, /\| Decoding \| 2\.0 \| 3\.0 \| 2 \|/);
 	assert.match(text, /Conditions the viewer held: encoder\.slow/);
 });

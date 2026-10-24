@@ -49,8 +49,11 @@ if (isLinux) {
 	});
 }
 
-/** How long someone at this computer may take to answer the desktop portal's dialog; only Linux asks. */
-const CONSENT_MS = isLinux ? 5 * 60000 : 0;
+/**
+ * How long someone at the host may take to answer the desktop portal's
+ * dialog; only Linux asks. The runner says when the host is another computer.
+ */
+const CONSENT_MS = Number(process.env.VNILINK_LATENCY_CONSENT_MS ?? (isLinux ? 5 * 60000 : 0));
 
 if ((role !== 'host' && role !== 'viewer') || !directory || !output) {
 	throw new Error('VNILINK_LATENCY_ROLE (host or viewer), VNILINK_LATENCY_DIR and VNILINK_LATENCY_OUTPUT are required');
@@ -170,6 +173,13 @@ async function portalGrant(driver: WindowDriver): Promise<void> {
 	}
 }
 
+/** Why the last picture on this side stopped, and its services, for a start that fails. */
+async function startDiagnostics(driver: WindowDriver): Promise<unknown> {
+	const reply = await engine(driver, { type: 'diagnosticSnapshot' });
+	const snapshot: unknown = typeof reply.snapshot === 'string' ? JSON.parse(reply.snapshot) : undefined;
+	return record(snapshot) ? { lastEnd: snapshot.last_end, services: snapshot.services } : undefined;
+}
+
 /** The pipelines the host's diagnostics hold for the screens it serves. */
 async function hostedPipelines(driver: WindowDriver): Promise<Record<string, unknown>[]> {
 	const reply = await engine(driver, { type: 'diagnosticSnapshot' });
@@ -242,7 +252,7 @@ async function host(driver: WindowDriver): Promise<void> {
 		})()`);
 		for (let sample = 0; sample < 40 && !existsSync(join(rendezvous, 'viewer-streaming.json')) && !existsSync(join(rendezvous, 'read.json')); sample++) {
 			const events: unknown = await driver.window.webContents.executeJavaScript('window.latencyEvents.splice(0)');
-			appendFileSync(trace, `${String(Date.now())} ${JSON.stringify({ status: await engine(driver, { type: 'nativeSharingStatus' }), events, pipelines: await hostedPipelines(driver) })}\n`);
+			appendFileSync(trace, `${String(Date.now())} ${JSON.stringify({ status: await engine(driver, { type: 'nativeSharingStatus' }), events, pipelines: await hostedPipelines(driver), diagnostics: await startDiagnostics(driver) })}\n`);
 			await new Promise(resolve => setTimeout(resolve, 500));
 		}
 		// The reader runs as this process's child, so macOS counts it under
@@ -365,7 +375,7 @@ async function viewer(driver: WindowDriver): Promise<void> {
 				events: window.latencyEvents.splice(0),
 			};
 		})()`);
-		appendFileSync(trace, `${String(Date.now())} ${JSON.stringify(state)}\n`);
+		appendFileSync(trace, `${String(Date.now())} ${JSON.stringify({ ...(record(state) ? state : {}), diagnostics: await startDiagnostics(driver) })}\n`);
 		if (attempt % 10 === 0) {
 			await driver.screenshot(`viewer-start-${String(attempt)}`);
 		}

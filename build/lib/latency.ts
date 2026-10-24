@@ -123,22 +123,31 @@ export interface PipelineRun {
 	/** Host: capture and encode times, scaling and copies included in encode, in ms. */
 	readonly capture: StagePercentiles | undefined;
 	readonly encode: StagePercentiles | undefined;
-	/** Viewer: the round trip, in ms. */
-	readonly roundTrip: StagePercentiles | undefined;
 	/** The last sample's codec, size, encoder or decoder and counters. */
 	readonly last: Readonly<Record<string, unknown>>;
 	/** Every condition any sample held. */
 	readonly conditions: readonly string[];
 }
 
-/** The viewer's status lines over a run: pictures shown a second. */
-export function summariseFrameRate(stages: string): StagePercentiles | undefined {
-	const rates = lines(stages).flatMap(entry => {
-		const status = typeof entry === 'object' && entry !== null && 'status' in entry && typeof entry.status === 'string' ? entry.status : '';
-		const match = /(\d+) fps/.exec(status);
+/** What the viewer's status line and stage text said over a run, once a second. */
+export interface ViewerStatus {
+	/** Pictures received a second. */
+	readonly frameRate: StagePercentiles | undefined;
+	/** The round trip, in ms: the network leg, as one-way times are not read. */
+	readonly roundTrip: StagePercentiles | undefined;
+	/** Pictures a second replaced by newer ones before the window drew them. */
+	readonly replaced: StagePercentiles | undefined;
+}
+
+/** The viewer's stage lines (`{ text, status }`) as its frame rate, round trip and replaced pictures. */
+export function summariseViewerStatus(stages: string): ViewerStatus {
+	const entries = lines(stages).flatMap(entry => typeof entry === 'object' && entry !== null ? [entry as Record<string, unknown>] : []);
+	const read = (field: string, pattern: RegExp): StagePercentiles | undefined => stagePercentiles(entries.flatMap(entry => {
+		const match = typeof entry[field] === 'string' ? pattern.exec(entry[field]) : null;
 		return match ? [Number(match[1])] : [];
-	});
-	return stagePercentiles(rates);
+	}));
+	// "50 fps · H.264 · 380 kb/s · 76 ms"; "17 pictures replaced by newer ones before drawing"
+	return { frameRate: read('status', /(\d+) fps/), roundTrip: read('status', /(\d+) ms$/), replaced: read('text', /(\d+) pictures replaced/) };
 }
 
 function stagePercentiles(values: readonly number[]): StagePercentiles | undefined {
@@ -158,12 +167,12 @@ export function summarisePipeline(samples: string): PipelineRun {
 	const conditions = new Set(pipelines.flatMap(pipeline => Array.isArray(pipeline.conditions)
 		? pipeline.conditions.flatMap((condition: unknown) => typeof condition === 'object' && condition !== null && 'condition' in condition && typeof condition.condition === 'string' ? [condition.condition] : [])
 		: []));
-	return { capture: ms('capture_us', 1000), encode: ms('encode_us', 1000), roundTrip: ms('rtt_ms', 1), last: pipelines.at(-1) ?? {}, conditions: [...conditions] };
+	return { capture: ms('capture_us', 1000), encode: ms('encode_us', 1000), last: pipelines.at(-1) ?? {}, conditions: [...conditions] };
 }
 
 /** A two-computer run's summary: each side's own stage times; no glass-to-glass total, as no one screen shows both. */
 export function renderAcrossSummary(
-	host: PipelineRun, viewer: PipelineRun, stages: LatencySummary, frameRate: StagePercentiles | undefined, cpu?: LatencyCpu,
+	host: PipelineRun, viewer: PipelineRun, stages: LatencySummary, status: ViewerStatus, cpu?: LatencyCpu,
 ): string {
 	const row = (name: string, value: StagePercentiles | undefined): string => value
 		? `| ${name} | ${value.p50.toFixed(1)} | ${value.p95.toFixed(1)} | ${String(value.count)} |`
@@ -186,8 +195,9 @@ export function renderAcrossSummary(
 		'',
 		'| Viewer | p50 | p95 | Samples |',
 		'|---|---|---|---|',
-		row('Round trip (ms)', viewer.roundTrip),
-		row('Pictures shown a second', frameRate),
+		row('Round trip (ms)', status.roundTrip),
+		row('Pictures received a second', status.frameRate),
+		row('Pictures a second replaced before drawing', status.replaced),
 		'',
 		'Stages the viewer measures (median of one-second windows); its host stage is capture to send on the host:',
 		'',
@@ -637,6 +647,8 @@ async function measureAcross(root: string, signal: AbortSignal, options: Latency
 			VNILINK_LATENCY_OUTPUT: output,
 			VNILINK_LATENCY_HOLD_MS: '0',
 			VNILINK_LATENCY_FPS: String(options.frameRate ?? 0),
+			// A Linux host's portal asks someone there; the other side waits as long.
+			VNILINK_LATENCY_CONSENT_MS: String(remote.hosts === 'remote' || process.platform === 'linux' ? 5 * 60000 : 0),
 			VNILINK_LATENCY_SCREEN_GRANT: grant,
 		});
 		let exited = false;
@@ -684,7 +696,7 @@ async function measureAcross(root: string, signal: AbortSignal, options: Latency
 			summarisePipeline(await read('host-stages.jsonl')),
 			summarisePipeline(await read('viewer-pipeline.jsonl')),
 			summariseLatency('', stages),
-			summariseFrameRate(stages),
+			summariseViewerStatus(stages),
 			{ host: await cpuOf('host-cpu'), viewer: await cpuOf('viewer-cpu') },
 		);
 		const run = {
