@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { build } from 'esbuild';
@@ -12,7 +12,8 @@ export const opened = [];
 export const windows = new Map();
 export const ipcMain = { handle: (name, callback) => handlers.set(name, callback), removeHandler: name => handlers.delete(name), on() { }, once() { }, removeListener() { } };
 export const app = { isPackaged: false, getVersion: () => 'test', getPath: () => '/Pictures', getLoginItemSettings: () => ({ openAtLogin: false }) };
-export const shell = { openExternal: async url => opened.push(url) };
+export const shown = [];
+export const shell = { openExternal: async url => opened.push(url), showItemInFolder: path => shown.push(path) };
 export const clipboard = { text: '', items: [], readText: async () => clipboard.text, writeText: async text => { clipboard.text = text; }, write: async items => { clipboard.items = items; } };
 export class ClipboardItem { constructor(items) { this.items = items; } }
 export const dialog = { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) };
@@ -55,7 +56,7 @@ const output = await build({
 			export { windowIdFromContext } from './src/platform/ipc/electron-main/windowContext.js';
 			export { setUnexpectedErrorHandler } from './src/base/common/errors.js';
 			export { Event } from './src/base/common/event.js';
-			export { handlers, opened, windows, clipboard } from 'electron';
+			export { handlers, opened, shown, windows, clipboard } from 'electron';
 			export { VSBuffer } from './src/base/common/buffer.js';
 			export { disk } from 'fixture:store';`,
 		loader: 'ts', resolveDir: process.cwd(),
@@ -71,7 +72,7 @@ const output = await build({
 const {
 	validatedIpcMain, WORKBENCH_URL, NativeHostChannel, NativeHostMainService, EngineChannel, ConfigurationMainService, RecordingMainService,
 	UIStateChannel, SaveStrategy, StateService,
-	windowIdFromContext, setUnexpectedErrorHandler, Event, handlers, opened, windows, disk, clipboard, VSBuffer,
+	windowIdFromContext, setUnexpectedErrorHandler, Event, handlers, opened, shown, windows, disk, clipboard, VSBuffer,
 } = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
 
 const logService = { error() { }, trace() { } };
@@ -114,10 +115,32 @@ test('privileged channels accept only the workbench main frame of an application
 	assert.equal(windowIdFromContext('window:12'), 12);
 });
 
+test('a diagnostics export reads the end of this run\'s main and window logs, home written ~', async () => {
+	const root = await mkdtemp(join(tmpdir(), 'vnilink-logs-'));
+	try {
+		await mkdir(join(root, 'window1'), { recursive: true });
+		await writeFile(join(root, 'main.log'), `started\nopened ${homedir()}/Library/x\n`);
+		await writeFile(join(root, 'window1', 'renderer.log'), 'x'.repeat(300 * 1024) + 'last');
+		const window = appWindow(7);
+		const nativeHost = new NativeHostMainService({ fsPath: root }, { onDidOpenWindow: Event.None, getWindowById: id => id === 7 ? window : undefined });
+		const channel = new NativeHostChannel(nativeHost, async () => { });
+		await assert.rejects(channel.call('window:7', 'readLogTails', [7, 'main.log']), /Invalid/);
+		const tails = await channel.call('window:7', 'readLogTails', [7]);
+		assert.deepEqual(tails.map(tail => tail.name).sort(), ['main.log', join('window1', 'renderer.log')]);
+		const main = tails.find(tail => tail.name === 'main.log');
+		assert.equal(main.text, 'started\nopened ~/Library/x\n');
+		const renderer = tails.find(tail => tail.name !== 'main.log');
+		assert.equal(renderer.text.length, 256 * 1024);
+		assert.ok(renderer.text.endsWith('last'));
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test('native host requests must name their own window and links are allowlisted', async () => {
 	const window = appWindow(7);
 	let relaunches = 0;
-	const nativeHost = new NativeHostMainService({ onDidOpenWindow: Event.None, getWindowById: id => id === 7 ? window : undefined });
+	const nativeHost = new NativeHostMainService({ fsPath: '/logs/run' }, { onDidOpenWindow: Event.None, getWindowById: id => id === 7 ? window : undefined });
 	const channel = new NativeHostChannel(nativeHost, async () => {
 		relaunches++;
 	});
@@ -129,6 +152,9 @@ test('native host requests must name their own window and links are allowlisted'
 	await assert.rejects(channel.call('window:7', 'openExternal', [7, 'https://arbitrary.example/']), /not allowed/);
 	await channel.call('window:7', 'openExternal', [7, 'https://docs.iroh.computer/relays/rate-limiting']);
 	assert.deepEqual(opened, ['https://docs.iroh.computer/relays/rate-limiting']);
+	await assert.rejects(channel.call('window:7', 'openLogsFolder', [7, '/elsewhere']), /Invalid/);
+	await channel.call('window:7', 'openLogsFolder', [7]);
+	assert.deepEqual(shown, [join('/logs/run', 'main.log')]);
 	// Plain text only, for the window that asks, within a bound.
 	await channel.call('window:7', 'writeClipboardText', [7, 'copied ✓']);
 	assert.equal(await channel.call('window:7', 'readClipboardText', [7]), 'copied ✓');
@@ -143,7 +169,7 @@ test('native host requests must name their own window and links are allowlisted'
 
 test('a window copies a PNG picture, and nothing else, to the clipboard', async () => {
 	const window = appWindow(7);
-	const nativeHost = new NativeHostMainService({ onDidOpenWindow: Event.None, getWindowById: id => id === 7 ? window : undefined });
+	const nativeHost = new NativeHostMainService({ fsPath: '/logs/run' }, { onDidOpenWindow: Event.None, getWindowById: id => id === 7 ? window : undefined });
 	const channel = new NativeHostChannel(nativeHost, async () => { });
 	const png = VSBuffer.wrap(Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]));
 	await channel.call('window:7', 'writeClipboardPicture', [7, png]);
@@ -166,6 +192,7 @@ test('windows change settings only through the configuration channel', async () 
 	const privateCommands = [
 		{ type: 'subscribeEvents' }, { type: 'pollEvents', subscriptionId: '1', maxEvents: 1 }, { type: 'releaseEvents', subscriptionId: '1' },
 		{ type: 'setRelayPublic' }, { type: 'setSharingPolicy', policy: { view: true } }, { type: 'setDesktopCodecDefault', codec: 'auto' }, { type: 'setTransferDirectory', path: '/tmp/Transfers' }, { type: 'setTerminalShell', shell: null },
+		{ type: 'setLogFilter', directives: 'off' },
 	];
 	for (const command of privateCommands) {
 		await assert.rejects(channel.call('window:1', 'execute', command), /Invalid/, `${command.type} must stay private to main`);
@@ -310,6 +337,44 @@ test('the offered shell is chosen by id, refused while shells run, and a missing
 	commands.length = 0;
 	await restored.restoreEngineDefaults(true);
 	assert(!commands.some(command => command.type === 'setTerminalShell'), 'A temporary engine was given a host shell');
+	restored.dispose();
+});
+
+test('the engine log setting sends its filter, the advanced one first, and a refused one is not saved', async () => {
+	const commands = [];
+	const engine = settingsEngine(async command => {
+		commands.push(command);
+		if (command.type === 'setLogFilter' && command.directives === 'vnilink=loud') {
+			throw new Error('InvalidArg: The log filter is not valid');
+		}
+		return { type: 'logFilter', directives: command.directives ?? 'warn,vnilink=info', source: command.directives === null ? 'default' : 'setting' };
+	});
+	const errors = [];
+	const log = { error: (...args) => errors.push(args), trace() { }, warn() { } };
+	disk.file = {};
+	const configuration = new ConfigurationMainService('/settings.json', engine, log);
+	await configuration.updateValue('diagnostics.engineLog', 'debug');
+	assert.deepEqual(commands.at(-1), { type: 'setLogFilter', directives: 'warn,vnilink=debug' });
+	await configuration.updateValue('diagnostics.engineLog', 'off');
+	assert.deepEqual(commands.at(-1), { type: 'setLogFilter', directives: 'off' });
+	await configuration.updateValue('diagnostics.engineLogFilter', ' vnilink::files=trace ');
+	assert.deepEqual(commands.at(-1), { type: 'setLogFilter', directives: 'vnilink::files=trace' });
+	await assert.rejects(configuration.updateValue('diagnostics.engineLogFilter', 'vnilink=loud'), /not valid/);
+	assert.equal(configuration.snapshot.values['diagnostics.engineLogFilter'], ' vnilink::files=trace ');
+	assert.deepEqual(commands.at(-1), { type: 'setLogFilter', directives: 'vnilink::files=trace' }, 'the previous filter was not restored');
+	await configuration.updateValue('diagnostics.engineLogFilter', '');
+	await configuration.updateValue('diagnostics.engineLog', 'info');
+	assert.deepEqual(commands.at(-1), { type: 'setLogFilter', directives: null }, 'the default level was not sent as the engine default');
+	await assert.rejects(configuration.updateValue('diagnostics.engineLogFilter', 'x'.repeat(1025)), /shorter filter/);
+	configuration.dispose();
+
+	// A saved filter the engine refuses at startup leaves its default and is logged.
+	disk.file = { 'diagnostics.engineLogFilter': 'vnilink=loud' };
+	commands.length = 0;
+	const restored = new ConfigurationMainService('/settings.json', engine, log);
+	await restored.restoreEngineDefaults(false);
+	assert.deepEqual(commands.filter(command => command.type === 'setLogFilter'), [{ type: 'setLogFilter', directives: 'vnilink=loud' }]);
+	assert.equal(errors.length, 1);
 	restored.dispose();
 });
 

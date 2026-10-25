@@ -575,6 +575,17 @@ enum Command {
     Snapshot,
     /// The bounded diagnostic snapshot as JSON; see `vnilink::diagnostics`.
     DiagnosticSnapshot,
+    /// The flight recorder's events as JSON lines; see `vnilink_log`.
+    DiagnosticRecorder,
+    /// The engine log's filter in force and where it came from.
+    LogFilter,
+    /// Applies the application's log filter setting, in `tracing`'s
+    /// directive syntax; `null` asks for the default.
+    SetLogFilter {
+        directives: Option<String>,
+    },
+    /// The end of this run's engine log file.
+    EngineLogTail,
     Endpoint,
     Capabilities,
     VideoCodecs,
@@ -1077,6 +1088,22 @@ enum Reply {
     DiagnosticSnapshot {
         snapshot: String,
     },
+    /// At most `vnilink_log::MAX_EXPORT_BYTES` of JSON lines.
+    DiagnosticRecorder {
+        events: String,
+    },
+    LogFilter {
+        directives: String,
+        /// `environment`, `setting` or `default`.
+        source: &'static str,
+    },
+    /// At most [`MAX_LOG_TAIL`] bytes of JSON lines, and the file's path
+    /// with the home folder written `~`; no path when the engine writes no
+    /// log file.
+    EngineLogTail {
+        path: Option<String>,
+        text: String,
+    },
     Invitation {
         token: String,
     },
@@ -1269,6 +1296,7 @@ impl Task for OpenTask {
     type JsValue = Engine;
     fn compute(&mut self) -> Result<Self::Output> {
         let (result, screen_grant, screenshot_grant) = if self.temporary {
+            start_log_file(None);
             (
                 VnilinkCore::create(true, vec![]),
                 self.screen_grant.clone().filter(|_| self.capture),
@@ -1277,6 +1305,7 @@ impl Task for OpenTask {
         } else {
             let store =
                 storage::EncryptedInstallationStore::open_production().map_err(core_error)?;
+            start_log_file(Some(&store.log_folder()));
             let (screen_grant, screenshot_grant) = (store.screen_grant(), store.screenshot_grant());
             (
                 VnilinkCore::open_persistent(Box::new(store)),
@@ -1337,8 +1366,44 @@ impl Task for OpenTask {
         })
     }
 }
+/// The most of the engine log file one reply carries.
+const MAX_LOG_TAIL: usize = 256 * 1024;
+
+fn log_filter_reply(state: vnilink_log::FilterState) -> Reply {
+    Reply::LogFilter {
+        directives: state.directives,
+        source: state.source.as_str(),
+    }
+}
+
+/// `path` with the home folder written `~`, so a reply names no account.
+fn without_home(path: &std::path::Path) -> String {
+    let home = dirs::home_dir();
+    match home
+        .as_deref()
+        .and_then(|home| path.strip_prefix(home).ok())
+    {
+        Some(inside) => std::path::Path::new("~").join(inside).display().to_string(),
+        None => path.display().to_string(),
+    }
+}
+
+/// Starts this run's engine log file: a persistent engine's in its own
+/// private folder, a temporary engine's only where `VNILINK_LOG_DIR` asks.
+/// An engine that cannot write one still runs, with its recorder.
+fn start_log_file(folder: Option<&std::path::Path>) {
+    let configured = std::env::var_os(vnilink_log::LOG_DIR_ENV).filter(|value| !value.is_empty());
+    let Some(folder) = folder.or(configured.as_deref().map(std::path::Path::new)) else {
+        return;
+    };
+    if vnilink_log::write_to(folder).is_err() {
+        tracing::warn!(target: "vnilink::storage", "the engine log file could not be opened");
+    }
+}
+
 #[napi]
 pub fn open_engine() -> AsyncTask<OpenTask> {
+    vnilink_log::install();
     AsyncTask::new(OpenTask {
         temporary: false,
         capture: false,
@@ -1353,6 +1418,7 @@ pub fn open_temporary_engine(
     capture: Option<bool>,
     screen_grant: Option<String>,
 ) -> AsyncTask<OpenTask> {
+    vnilink_log::install();
     AsyncTask::new(OpenTask {
         temporary: true,
         capture: capture.unwrap_or(false),
@@ -2195,6 +2261,19 @@ impl EngineBridge {
             Command::DiagnosticSnapshot => Reply::DiagnosticSnapshot {
                 snapshot: core.diagnostic_snapshot_json().map_err(core_error)?,
             },
+            Command::DiagnosticRecorder => Reply::DiagnosticRecorder {
+                events: vnilink_log::export(),
+            },
+            Command::LogFilter => log_filter_reply(vnilink_log::filter()),
+            Command::SetLogFilter { directives } => log_filter_reply(
+                vnilink_log::set_filter(directives.as_deref())
+                    .map_err(|error| Error::new(Status::InvalidArg, error.to_string()))?,
+            ),
+            Command::EngineLogTail => Reply::EngineLogTail {
+                path: vnilink_log::log_file().map(|path| without_home(&path)),
+                text: vnilink_log::tail(MAX_LOG_TAIL)
+                    .map_err(|_| Error::from_reason("The engine log could not be read"))?,
+            },
             Command::Endpoint => Reply::Endpoint {
                 endpoint_id: core.endpoint_id(),
             },
@@ -2417,6 +2496,10 @@ impl EngineBridge {
         match command {
             Command::Snapshot
             | Command::DiagnosticSnapshot
+            | Command::DiagnosticRecorder
+            | Command::LogFilter
+            | Command::SetLogFilter { .. }
+            | Command::EngineLogTail
             | Command::Endpoint
             | Command::Capabilities
             | Command::VideoCodecs
@@ -2638,6 +2721,8 @@ impl CommandShape {
         }
         let expected: &[&str] = match kind {
             "snapshot" | "diagnosticSnapshot" | "disconnect" | "shutdown" => &["type"],
+            "diagnosticRecorder" | "logFilter" | "engineLogTail" => &["type"],
+            "setLogFilter" => &["type", "directives"],
             "endpoint"
             | "capabilities"
             | "videoCodecs"

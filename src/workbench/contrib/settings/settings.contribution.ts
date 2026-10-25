@@ -54,6 +54,7 @@ const pages: readonly ISettingsPageDescriptor[] = [
 		refresh: SettingsRefresh.Interval,
 		sections: [
 			{ id: 'availability', settings: ['application.acceptConnections', 'application.openAtLogin', 'application.runInBackground'] },
+			{ id: 'diagnostics', title: nls.localize('diagnostics.title', 'Diagnostics'), settings: ['diagnostics.engineLog', 'diagnostics.applicationLog'] },
 		],
 	},
 	{

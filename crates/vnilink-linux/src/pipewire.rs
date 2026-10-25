@@ -1255,6 +1255,10 @@ fn push_dma_buf(
             record_delivery(shared, true);
         }
         Ok(None) => {
+            tracing::debug!(
+                target: vnilink::trace::CAPTURE,
+                "picture dropped: no GPU copy free; its changes go with the next"
+            );
             gpu.dropped = changed();
         }
         Err(_) => shared.gpu_failed.store(true, Ordering::Relaxed),

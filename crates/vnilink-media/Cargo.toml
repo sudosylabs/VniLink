@@ -8,6 +8,7 @@ description = "Frame pacing and H.264 Annex-B for VniLink platform adapters"
 publish = false
 
 [dependencies]
+tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 thiserror = "2"
 vnilink = { path = "../vnilink" }
 

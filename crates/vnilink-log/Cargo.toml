@@ -1,0 +1,13 @@
+[package]
+name = "vnilink-log"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The VniLink engine's log: filters, log files and the flight recorder"
+publish = false
+
+[dependencies]
+serde_json = "=1.0.151"
+tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["registry", "std", "env-filter"] }

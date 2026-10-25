@@ -8,6 +8,7 @@ description = "X11 capture, the Wayland portal, and VA-API video for VniLink"
 publish = false
 
 [dependencies]
+tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 vnilink = { path = "../vnilink" }
 vnilink-media = { path = "../vnilink-media" }
 x11rb = { version = "=0.14.0", features = ["randr", "xfixes"] }

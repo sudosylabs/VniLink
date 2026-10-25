@@ -7,6 +7,7 @@ import { Disposable } from '../../../base/common/lifecycle.js';
 import type { IChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { Client as MessagePortClient } from '../../../base/parts/ipc/electron-main/ipc.mp.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
+import { ILogService } from '../../log/common/log.js';
 import type { DataChannelRequest } from '../common/dataChannel.js';
 import type { EngineCommand, EngineReply } from '../common/engine.js';
 import { isEngineEvent, isEngineReply, record } from '../common/engine.js';
@@ -51,6 +52,14 @@ export class EngineMainService extends Disposable {
 	private readonly waiting = new Set<(error: Error) => void>();
 	private inflightSnapshot: Promise<EngineReply> | undefined;
 
+	/**
+	 * The engine keeps its own log (`vnilink-log`); what it prints on
+	 * standard error, such as a native panic, goes to the main log.
+	 */
+	constructor(@ILogService private readonly logService: ILogService) {
+		super();
+	}
+
 	public get available(): boolean {
 		return this.connected && !this.closing;
 	}
@@ -66,7 +75,15 @@ export class EngineMainService extends Disposable {
 		}
 		this.started = true;
 		const args = temporary ? ['--temporary', ...(capture ? ['--capture', ...(screenGrant === undefined ? [] : ['--screen-grant', screenGrant])] : [])] : [];
-		const child = utilityProcess.fork(join(__dirname, 'engine.cjs'), args, { serviceName: 'VniLink Engine', stdio: 'ignore' });
+		const child = utilityProcess.fork(join(__dirname, 'engine.cjs'), args, { serviceName: 'VniLink Engine', stdio: 'pipe' });
+		child.stdout?.resume();
+		child.stderr?.on('data', (chunk: Buffer) => {
+			for (const line of chunk.toString('utf8').split('\n')) {
+				if (line.trim()) {
+					this.logService.error(`[engine] ${line.slice(0, 2000)}`);
+				}
+			}
+		});
 		this.child = child;
 		await new Promise<void>((resolve, reject) => {
 			const timeout = setTimeout(() => {

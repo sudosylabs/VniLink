@@ -58,6 +58,8 @@ export class NativeHostChannel implements IServerChannel {
 			case 'readClipboardText': return this.nativeHost.readClipboardText(windowId, args[1] as 'selection' | 'clipboard' | undefined);
 			case 'writeClipboardText': return this.nativeHost.writeClipboardText(windowId, String(args[1]), args[2] as 'selection' | 'clipboard' | undefined);
 			case 'relaunch': return this.relaunch();
+			case 'openLogsFolder': return this.nativeHost.openLogsFolder(windowId);
+			case 'readLogTails': return this.nativeHost.readLogTails(windowId);
 		}
 		throw new Error('Invalid native host request');
 	}

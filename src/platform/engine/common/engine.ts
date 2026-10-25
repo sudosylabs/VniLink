@@ -189,6 +189,14 @@ export type EngineCommand =
 	| { type: 'snapshot' }
 	/** The engine's bounded diagnostic snapshot, as the JSON it exports. */
 	| { type: 'diagnosticSnapshot' }
+	/** The engine's flight recorder, as JSON lines. */
+	| { type: 'diagnosticRecorder' }
+	/** The engine log's filter in force. */
+	| { type: 'logFilter' }
+	/** Applies the log filter setting, in `tracing`'s directive syntax; `null` asks for the default. */
+	| { type: 'setLogFilter'; directives: string | null }
+	/** The end of the engine's own log file. */
+	| { type: 'engineLogTail' }
 	| { type: 'endpoint' | 'capabilities' | 'videoCodecs' | 'clipboardOwnerSession' | 'subscribeEvents' | 'subscribeVideo' }
 	| { type: 'setVideoCodecs'; codecs: VideoCodecCaps }
 	| { type: 'saveCustomRelays'; relays: RelayInput[] }
@@ -299,6 +307,11 @@ export type EngineReply =
 	| { type: 'snapshot'; snapshot: EngineSnapshot }
 	/** At most {@link MAX_DIAGNOSTIC_BYTES} of JSON: stages, phases, counts and labels, no payload. */
 	| { type: 'diagnosticSnapshot'; snapshot: string }
+	| { type: 'diagnosticRecorder'; events: string }
+	/** `environment` (`VNILINK_LOG`) wins over the `setting`. */
+	| { type: 'logFilter'; directives: string; source: LogFilterSource }
+	/** At most {@link MAX_ENGINE_LOG_TAIL} bytes of JSON lines; `path` has the home folder as `~`, and is `null` without a log file. */
+	| { type: 'engineLogTail'; path: string | null; text: string }
 	| { type: 'invitation'; token: string }
 	| { type: 'pairingFile'; file: { bytes: number[]; check: string; expires_at_ms: string } }
 	| { type: 'pairingPreview'; preview: { id: string; endpoint_id: string; check: string; expires_at_ms: string } }
@@ -673,6 +686,43 @@ function diagnosticSnapshot(value: unknown): value is string {
 	}
 }
 
+export type LogFilterSource = 'environment' | 'setting' | 'default';
+
+/** The longest log filter the engine accepts, `vnilink_log::MAX_FILTER_BYTES`. */
+export const MAX_LOG_FILTER_BYTES = 1024;
+
+/** The most of its log file the engine returns, `MAX_LOG_TAIL` in the bridge. */
+export const MAX_ENGINE_LOG_TAIL = 256 * 1024;
+
+function utf8Length(value: string): number {
+	return new TextEncoder().encode(value).length;
+}
+
+function logFilter(value: unknown): value is string | null {
+	return value === null || (typeof value === 'string' && utf8Length(value) <= MAX_LOG_FILTER_BYTES);
+}
+
+function logFilterSource(value: unknown): value is LogFilterSource {
+	return value === 'environment' || value === 'setting' || value === 'default';
+}
+
+/** The engine's export cap for its flight recorder, `vnilink_log::MAX_EXPORT_BYTES`. */
+export const MAX_RECORDER_BYTES = 4 * 1024 * 1024;
+
+/** The flight recorder as the engine exports it: JSON lines within the cap, each one object. */
+function diagnosticRecorder(value: unknown): value is string {
+	if (typeof value !== 'string' || new TextEncoder().encode(value).length > MAX_RECORDER_BYTES) {
+		return false;
+	}
+	return value.split('\n').filter(line => line.length > 0).every(line => {
+		try {
+			return record(JSON.parse(line));
+		} catch {
+			return false;
+		}
+	});
+}
+
 export function isEngineCommand(value: unknown): value is EngineCommand {
 	if (!record(value)) {
 		return false;
@@ -681,7 +731,9 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 	let valid = false;
 	switch (value.type) {
 		case 'beginConnectServices': keys = ['endpointId']; valid = text(value.endpointId); break;
-		case 'snapshot': case 'diagnosticSnapshot': keys = []; valid = true; break;
+		case 'snapshot': case 'diagnosticSnapshot': case 'diagnosticRecorder': keys = []; valid = true; break;
+		case 'logFilter': case 'engineLogTail': keys = []; valid = true; break;
+		case 'setLogFilter': keys = ['directives']; valid = logFilter(value.directives); break;
 		case 'endpoint': case 'capabilities': case 'videoCodecs': case 'clipboardOwnerSession':
 		case 'subscribeEvents': case 'subscribeVideo': keys = []; valid = true; break;
 		case 'setVideoCodecs': keys = ['codecs']; valid = videoCodecs(value.codecs); break;
@@ -797,6 +849,9 @@ export function isEngineReply(value: unknown): value is EngineReply {
 	switch (value.type) {
 		case 'snapshot': return record(value.snapshot) && text(value.snapshot.endpoint_id) && typeof value.snapshot.hosting === 'boolean' && typeof value.snapshot.public_relay === 'boolean' && strings(value.snapshot.relay_urls) && Array.isArray(value.snapshot.devices) && value.snapshot.devices.every((item: unknown) => device(item)) && capabilities(value.snapshot.capabilities) && session(value.snapshot.incoming) && session(value.snapshot.outgoing);
 		case 'diagnosticSnapshot': return diagnosticSnapshot(value.snapshot) && Object.keys(value).length === 2;
+		case 'diagnosticRecorder': return diagnosticRecorder(value.events) && Object.keys(value).length === 2;
+		case 'logFilter': return typeof value.directives === 'string' && utf8Length(value.directives) <= MAX_LOG_FILTER_BYTES && logFilterSource(value.source) && Object.keys(value).length === 3;
+		case 'engineLogTail': return (value.path === null || text(value.path)) && typeof value.text === 'string' && utf8Length(value.text) <= MAX_ENGINE_LOG_TAIL && Object.keys(value).length === 3;
 		case 'invitation': return text(value.token);
 		case 'pairingFile': return record(value.file) && bytes(value.file.bytes) && text(value.file.check) && decimal(value.file.expires_at_ms);
 		case 'pairingPreview': return record(value.preview) && decimal(value.preview.id) && text(value.preview.endpoint_id) && text(value.preview.check) && decimal(value.preview.expires_at_ms);

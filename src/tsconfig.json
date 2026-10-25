@@ -232,7 +232,15 @@
     "./base/parts/contextmenu/electron-main/contextmenu.ts",
     "./base/parts/contextmenu/common/contextmenu.ts",
     "./base/parts/contextmenu/electron-browser/contextmenu.ts",
-    "./workbench/services/contextmenu/electron-browser/contextmenuService.ts"
+    "./workbench/services/contextmenu/electron-browser/contextmenuService.ts",
+    "./platform/log/electron-main/logIpc.ts",
+    "./platform/log/electron-main/loggerService.ts",
+    "./platform/log/node/loggerService.ts",
+    "./platform/log/node/spdlogLog.ts",
+    "./platform/files/common/files.ts",
+    "./base/common/glob.ts",
+    "./platform/log/common/logIpc.ts",
+    "./base/common/uriIpc.ts"
   ],
   "include": [],
   "exclude": []

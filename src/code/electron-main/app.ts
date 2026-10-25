@@ -30,8 +30,13 @@ import type { ServicesAccessor } from '../../platform/instantiation/common/insta
 import { InstantiationService } from '../../platform/instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../platform/instantiation/common/serviceCollection.js';
 import { ILifecycleMainService, LifecycleMainService } from '../../platform/lifecycle/electron-main/lifecycleMainService.js';
-import { ConsoleMainLogger, ILogService, LogLevel } from '../../platform/log/common/log.js';
+import { URI } from '../../base/common/uri.js';
+import { BufferLogger } from '../../platform/log/common/bufferLog.js';
+import { ConsoleMainLogger, ILogService, LogLevel, parseLogLevel } from '../../platform/log/common/log.js';
 import { LogService } from '../../platform/log/common/logService.js';
+import { LoggerChannel } from '../../platform/log/electron-main/logIpc.js';
+import { ILoggerMainService, LoggerMainService } from '../../platform/log/electron-main/loggerService.js';
+import { logsFolderName, pruneLogs } from '../../platform/log/electron-main/logsFolder.js';
 import { installApplicationMenu, registerEditingShortcuts } from '../../platform/menubar/electron-main/menubar.js';
 import { registerContextMenuListener } from '../../base/parts/contextmenu/electron-main/contextmenu.js';
 import { NATIVE_HOST_CHANNEL_NAME } from '../../platform/native/common/native.js';
@@ -70,6 +75,9 @@ const workbenchFiles = new Set(['/index.html', '/renderer.js', '/renderer.css', 
  */
 export class VniLinkApplication extends Disposable {
 	private readonly logService: LogService;
+	/** This run's logs folder, `<userData>/logs/<started at>`, as VS Code's `logsHome`. */
+	private readonly logsHome: URI;
+	private readonly loggerService: LoggerMainService;
 	private readonly stateService: StateService;
 	private readonly instantiationService: InstantiationService;
 	private started: Promise<void> | undefined;
@@ -78,7 +86,16 @@ export class VniLinkApplication extends Disposable {
 
 	constructor(private readonly options: ApplicationOptions = {}) {
 		super();
-		this.logService = this._register(new LogService(new ConsoleMainLogger(process.argv.includes('--verbose') ? LogLevel.Trace : LogLevel.Info)));
+		const logLevel = process.argv.includes('--verbose') ? LogLevel.Trace : LogLevel.Info;
+		this.logsHome = URI.file(join(app.getPath('userData'), 'logs', logsFolderName(new Date())));
+		this.loggerService = this._register(new LoggerMainService(logLevel, this.logsHome));
+		// Main logs to the console at once and to main.log from here on, as VS Code's main does.
+		const bufferLogger = new BufferLogger(logLevel);
+		this.logService = this._register(new LogService(bufferLogger, [new ConsoleMainLogger(logLevel)]));
+		bufferLogger.logger = this.loggerService.createLogger('main', { name: 'Main' });
+		void pruneLogs(join(app.getPath('userData'), 'logs'), this.logsHome.fsPath).catch((error: unknown) => {
+			this.logService.warn('Older logs could not be removed', error);
+		});
 		setUnexpectedErrorHandler(error => {
 			this.logService.error(error instanceof Error ? error : new Error(String(error)));
 		});
@@ -89,9 +106,10 @@ export class VniLinkApplication extends Disposable {
 	private createServices(): ServiceCollection {
 		return new ServiceCollection(
 			[ILogService, this.logService],
+			[ILoggerMainService, this.loggerService],
 			[ILifecycleMainService, new SyncDescriptor(LifecycleMainService)],
 			[IWindowsMainService, new SyncDescriptor(WindowsMainService)],
-			[INativeHostMainService, new SyncDescriptor(NativeHostMainService)],
+			[INativeHostMainService, new SyncDescriptor(NativeHostMainService, [this.logsHome])],
 			[IEngineMainService, new SyncDescriptor(EngineMainService)],
 			[IHostingMainService, new SyncDescriptor(HostingMainService)],
 			[IScreenHostingMainService, new SyncDescriptor(ScreenHostingMainService)],
@@ -135,6 +153,7 @@ export class VniLinkApplication extends Disposable {
 			this.checkRunning();
 			this.instantiationService.invokeFunction(accessor => {
 				this.applyAppearance(accessor);
+				this.applyLogLevel(accessor);
 				this.configureSession();
 				this.initChannels(accessor);
 			});
@@ -254,6 +273,28 @@ export class VniLinkApplication extends Disposable {
 		this._register(configuration.onDidChangeConfiguration(apply));
 	}
 
+	/**
+	 * The application's own logs follow `diagnostics.applicationLog`, as VS
+	 * Code's Set Log Level does; `--verbose` keeps everything. The engine's
+	 * log has its own setting.
+	 */
+	private applyLogLevel(accessor: ServicesAccessor): void {
+		if (process.argv.includes('--verbose')) {
+			return;
+		}
+		const configuration = accessor.get(IConfigurationMainService);
+		const apply = (): void => {
+			const value = configuration.getValue('diagnostics.applicationLog');
+			const level = (typeof value === 'string' ? parseLogLevel(value) : undefined) ?? LogLevel.Info;
+			if (level !== this.loggerService.getLogLevel()) {
+				this.loggerService.setLogLevel(level);
+				this.logService.setLevel(level);
+			}
+		};
+		apply();
+		this._register(configuration.onDidChangeConfiguration(apply));
+	}
+
 	private configureSession(): void {
 		protocol.handle('vnilink', request => {
 			const url = new URL(request.url);
@@ -286,6 +327,7 @@ export class VniLinkApplication extends Disposable {
 		}));
 		server.registerChannel(ENGINE_CHANNEL_NAME, disposables.add(new EngineChannel(engine, windows, nativeHost, permissions)));
 		server.registerChannel(PERMISSIONS_CHANNEL_NAME, new PermissionsChannel(permissions));
+		server.registerChannel('logger', disposables.add(new LoggerChannel(this.loggerService)));
 		server.registerChannel(CONFIGURATION_CHANNEL_NAME, new ConfigurationChannel(configuration));
 		server.registerChannel(UI_STATE_CHANNEL_NAME, new UIStateChannel(accessor.get(IStateService)));
 		server.registerChannel(RECORDING_CHANNEL_NAME, ProxyChannel.fromService({
@@ -316,6 +358,8 @@ export class VniLinkApplication extends Disposable {
 			version: app.getVersion(),
 			engineAvailable,
 			enableSmokeTestDriver: this.options.temporaryEngine === true,
+			logsPath: this.logsHome.fsPath,
+			logLevel: this.loggerService.getLogLevel(),
 		};
 	}
 

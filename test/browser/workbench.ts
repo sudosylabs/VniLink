@@ -2,7 +2,7 @@ import { Event } from '../../src/base/common/event.js';
 import { IWorkbenchConfigurationService } from '../../src/workbench/services/configuration/configurationService.js';
 import { SyncDescriptor } from '../../src/platform/instantiation/common/descriptors.js';
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
-import { NullLogService } from '../../src/platform/log/common/log.js';
+import { LogLevel, NullLogService } from '../../src/platform/log/common/log.js';
 import { Workbench } from '../../src/workbench/workbench.js';
 
 export async function verifyWorkbenchLifecycle(): Promise<void> {
@@ -23,7 +23,7 @@ export async function verifyWorkbenchLifecycle(): Promise<void> {
 		}
 	}
 	const parent = document.createElement('div');
-	const workbench = new Workbench(parent, { windowId: 1, osRelease: 'test', platform: 'darwin', version: 'test', engineAvailable: false, enableSmokeTestDriver: false }, new ServiceCollection([IWorkbenchConfigurationService, new SyncDescriptor(Configuration)]), new NullLogService());
+	const workbench = new Workbench(parent, { windowId: 1, osRelease: 'test', platform: 'darwin', version: 'test', engineAvailable: false, enableSmokeTestDriver: false, logsPath: '/logs', logLevel: LogLevel.Info }, new ServiceCollection([IWorkbenchConfigurationService, new SyncDescriptor(Configuration)]), new NullLogService());
 	const start = workbench.startup();
 	workbench.dispose();
 	resolve?.();

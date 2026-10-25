@@ -438,13 +438,27 @@ fn worker_main(
                 Ok(Command::Close) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Ok(Command::Input(events, reply)) => {
+                    let count = events.len();
+                    let started = std::time::Instant::now();
                     let result = runtime.block_on(async {
                         tokio::time::timeout(INPUT_TIMEOUT, deliver(&proxy, &session, node, events))
                             .await
                     });
+                    tracing::trace!(
+                        target: vnilink::trace::INPUT,
+                        events = count,
+                        micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+                        ok = matches!(result, Ok(Ok(()))),
+                        "portal input delivered"
+                    );
                     let result = match result {
                         Ok(Ok(())) => Ok(()),
-                        _ => {
+                        failed => {
+                            tracing::warn!(
+                                target: vnilink::trace::INPUT,
+                                timed_out = failed.is_err(),
+                                "the portal refused input: input ends for this session"
+                            );
                             connection.closed.store(true, Ordering::Release);
                             Err(vnilink::Error::InputFailed(
                                 "the Wayland portal rejected input or ended the session",

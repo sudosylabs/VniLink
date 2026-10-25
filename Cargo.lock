@@ -5720,6 +5720,7 @@ dependencies = [
  "sha2 0.11.0",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
  "trash",
  "vnilink-audio",
  "vnilink-rename",
@@ -5734,6 +5735,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "tracing",
  "vnilink",
  "vnilink-audio",
  "vnilink-linux",
@@ -5773,12 +5775,22 @@ dependencies = [
  "libva",
  "pipewire",
  "tokio",
+ "tracing",
  "v4l",
  "vnilink",
  "vnilink-macos",
  "vnilink-media",
  "x11rb 0.14.0",
  "zbus 5.19.0",
+]
+
+[[package]]
+name = "vnilink-log"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -5797,6 +5809,7 @@ dependencies = [
  "objc2-foundation",
  "opus",
  "screencapturekit",
+ "tracing",
  "videotoolbox",
  "vnilink",
  "vnilink-audio",
@@ -5813,6 +5826,7 @@ dependencies = [
  "shiguredo_aom",
  "shiguredo_libvpx",
  "thiserror 2.0.21",
+ "tracing",
  "vnilink",
  "vnilink-hevc",
  "vnilink-rename",
@@ -5836,7 +5850,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tracing",
  "vnilink-app",
+ "vnilink-log",
  "windows 0.61.3",
  "zeroize",
 ]
@@ -5853,6 +5869,7 @@ name = "vnilink-windows"
 version = "0.1.0"
 dependencies = [
  "tokio",
+ "tracing",
  "vnilink",
  "vnilink-media",
  "windows 0.61.3",

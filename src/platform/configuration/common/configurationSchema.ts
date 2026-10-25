@@ -2,7 +2,7 @@ import * as nls from '../../../nls.js';
 import type { IStringDictionary } from '../../../base/common/collections.js';
 import { Registry } from '../../registry/common/platform.js';
 import { isMacintosh } from '../../../base/common/platform.js';
-import { isCodecPreference, isQualityLimits, shellId } from '../../engine/common/engine.js';
+import { isCodecPreference, isQualityLimits, MAX_LOG_FILTER_BYTES, shellId } from '../../engine/common/engine.js';
 import { Extensions, type IConfigurationNode, type IConfigurationPropertySchema, type IConfigurationRegistry } from './configurationRegistry.js';
 
 /**
@@ -365,6 +365,55 @@ registerSettings('user', {
 			title: nls.localize('terminal.shell', 'Shell'),
 			description: nls.localize('terminal.shellHelp', 'Paired computers can’t choose another.'),
 			validate: shellChoice,
+		},
+	},
+});
+
+/** A filter the engine reads; it checks the syntax itself when the setting is applied. */
+function logFilterText(value: unknown): string | undefined {
+	return typeof value === 'string' && new TextEncoder().encode(value).length <= MAX_LOG_FILTER_BYTES ? undefined : nls.localize('diagnostics.filterLength', 'Enter a shorter filter.');
+}
+
+registerSettings('user', {
+	id: 'diagnostics',
+	title: nls.localize('diagnostics.title', 'Diagnostics'),
+	properties: {
+		'diagnostics.applicationLog': {
+			type: 'string',
+			enum: ['off', 'error', 'warn', 'info', 'debug', 'trace'],
+			enumItemLabels: [
+				nls.localize('diagnostics.off', 'Off'),
+				nls.localize('diagnostics.error', 'Errors'),
+				nls.localize('diagnostics.warn', 'Warnings'),
+				nls.localize('diagnostics.info', 'Information'),
+				nls.localize('diagnostics.debug', 'Debug'),
+				nls.localize('diagnostics.trace', 'Everything'),
+			],
+			default: 'info',
+			title: nls.localize('diagnostics.applicationLog', 'Application log'),
+			description: nls.localize('diagnostics.applicationLogHelp', 'What VniLink records about its windows and settings.'),
+		},
+		'diagnostics.engineLog': {
+			type: 'string',
+			enum: ['off', 'error', 'warn', 'info', 'debug', 'trace'],
+			enumItemLabels: [
+				nls.localize('diagnostics.off', 'Off'),
+				nls.localize('diagnostics.error', 'Errors'),
+				nls.localize('diagnostics.warn', 'Warnings'),
+				nls.localize('diagnostics.info', 'Information'),
+				nls.localize('diagnostics.debug', 'Debug'),
+				nls.localize('diagnostics.trace', 'Everything'),
+			],
+			default: 'info',
+			title: nls.localize('diagnostics.engineLog', 'Engine log'),
+			description: nls.localize('diagnostics.engineLogHelp', 'What VniLink records in its engine log. Higher levels help explain a problem and take more space.'),
+		},
+		'diagnostics.engineLogFilter': {
+			type: 'string',
+			default: '',
+			title: nls.localize('diagnostics.engineLogFilter', 'Engine log filter'),
+			description: nls.localize('diagnostics.engineLogFilterHelp', 'Levels per area, such as vnilink::files=debug; replaces the engine log level when set. The VNILINK_LOG environment variable replaces both.'),
+			validate: logFilterText,
 		},
 	},
 });

@@ -620,9 +620,16 @@ pub(super) async fn host_input_loop(
 }
 
 pub(super) fn note_input_failure(shared: &Shared, session_id: u64, error: &Error) {
+    let message = input::InputFault::from_error(error).message();
+    tracing::warn!(
+        target: crate::trace::INPUT,
+        session = session_id,
+        reason = %message,
+        "input failed"
+    );
     shared.events.publish(CoreEvent::InputFailed {
         id: session_id,
-        message: input::InputFault::from_error(error).message(),
+        message,
     });
 }
 

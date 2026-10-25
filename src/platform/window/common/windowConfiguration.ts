@@ -1,3 +1,5 @@
+import { isLogLevel, type LogLevel } from '../../log/common/log.js';
+
 /** Per-window values the main process hands to the sandboxed workbench before it starts. */
 export interface INativeWindowConfiguration {
 	readonly windowId: number;
@@ -7,6 +9,10 @@ export interface INativeWindowConfiguration {
 	readonly engineAvailable: boolean;
 	/** Exposes the automation driver; set only for isolated smoke-test profiles. */
 	readonly enableSmokeTestDriver: boolean;
+	/** This run's logs folder, where the window writes `window<id>/renderer.log` through main. */
+	readonly logsPath: string;
+	/** The level main logs at, which the window starts at too. */
+	readonly logLevel: LogLevel;
 }
 
 /** Channel the preload uses to resolve the window configuration. */
@@ -30,6 +36,11 @@ export function isNativeWindowConfiguration(value: unknown): value is INativeWin
 		'engineAvailable' in value &&
 		typeof value.engineAvailable === 'boolean' &&
 		'enableSmokeTestDriver' in value &&
-		typeof value.enableSmokeTestDriver === 'boolean'
+		typeof value.enableSmokeTestDriver === 'boolean' &&
+		'logsPath' in value &&
+		typeof value.logsPath === 'string' &&
+		value.logsPath.length > 0 &&
+		'logLevel' in value &&
+		isLogLevel(value.logLevel)
 	);
 }

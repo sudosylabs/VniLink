@@ -115,6 +115,12 @@ impl EncryptedInstallationStore {
         self.paths.screen_grant.clone()
     }
 
+    /// Where the engine writes its log files: a folder per run inside its
+    /// private directory.
+    pub fn log_folder(&self) -> std::path::PathBuf {
+        self.paths.engine_dir.join("logs")
+    }
+
     /// Where its screenshots keep their grant, beside the host's.
     pub fn screenshot_grant(&self) -> std::path::PathBuf {
         self.paths.screenshot_grant.clone()

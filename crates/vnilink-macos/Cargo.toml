@@ -8,6 +8,7 @@ description = "VideoToolbox H.264 and ScreenCaptureKit for VniLink"
 publish = false
 
 [dependencies]
+tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 vnilink = { path = "../vnilink" }
 vnilink-media = { path = "../vnilink-media" }
 vnilink-audio = { path = "../vnilink-audio" }

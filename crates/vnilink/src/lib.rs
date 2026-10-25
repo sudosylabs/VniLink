@@ -113,6 +113,7 @@ mod session;
 mod sidestream;
 pub mod system;
 pub mod terminal;
+pub mod trace;
 mod transfer;
 mod trust;
 mod video;

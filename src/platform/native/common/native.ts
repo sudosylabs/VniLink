@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: native window controls, window state, folder picking, message boxes, displays, allowlisted links, clipboard and relaunch.
+ *  Adapted for VniLink: native window controls, window state, folder picking, message boxes, displays, allowlisted links, clipboard, relaunch and logs.
  *--------------------------------------------------------------------------------------------*/
 
 import type { WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
@@ -62,6 +62,27 @@ export interface INativeHostService {
 
 	/** Restarts the application; main refuses unless the engine requires a restart. */
 	relaunch(): Promise<void>;
+
+	// Logs
+	/** Shows this run's logs folder in the system's file manager. */
+	openLogsFolder(): Promise<void>;
+	/** The end of this run's main and window logs, for a diagnostics export. */
+	readLogTails(): Promise<LogTail[]>;
+}
+
+/** The end of one log file: its path in the logs folder and its last lines. */
+export interface LogTail {
+	readonly name: string;
+	readonly text: string;
+}
+
+/** The most of each log a tail carries, in characters. */
+export const MAX_LOG_TAIL = 256 * 1024;
+
+export function isLogTails(value: unknown): value is LogTail[] {
+	return Array.isArray(value) && value.length <= 32 && value.every((tail: unknown) =>
+		typeof tail === 'object' && tail !== null && 'name' in tail && typeof tail.name === 'string' && tail.name.length > 0 && tail.name.length <= 256
+		&& 'text' in tail && typeof tail.text === 'string' && tail.text.length <= MAX_LOG_TAIL);
 }
 
 /** Main-process IPC channel serving {@link INativeHostService}. */
@@ -83,7 +104,9 @@ export type NativeHostMethod =
 	| 'readClipboardText'
 	| 'writeClipboardText'
 	| 'writeClipboardPicture'
-	| 'relaunch';
+	| 'relaunch'
+	| 'openLogsFolder'
+	| 'readLogTails';
 
 /** Longest text a window may place on the clipboard. */
 const MAX_CLIPBOARD_TEXT = 16 * 1024 * 1024;
@@ -159,7 +182,7 @@ export function isNativeHostRequest(method: unknown, args: unknown): method is N
 	if (typeof method !== 'string' || !Array.isArray(args) || !Number.isSafeInteger(args[0]) || args[0] <= 0) {
 		return false;
 	}
-	if (method === 'getWindowState' || method === 'getCaptureDisplays' || method === 'relaunch') {
+	if (method === 'getWindowState' || method === 'getCaptureDisplays' || method === 'relaunch' || method === 'openLogsFolder' || method === 'readLogTails') {
 		return args.length === 1;
 	}
 	if (method === 'readClipboardText') {

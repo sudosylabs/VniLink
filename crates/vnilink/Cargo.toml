@@ -16,6 +16,7 @@ test-probes = []
 fuzzing = []
 
 [dependencies]
+tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 bytes = "=1.12.1"
 enigo = "=0.6.1"
 iroh = "=1.3.0"

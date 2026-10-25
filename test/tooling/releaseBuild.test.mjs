@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import { bundleOptions, relinkSourceFilter, releaseSourceFilter } from '../../build/lib/bundles.ts';
-import { assertNativeFresh, compileNative, nativeEnvironment, nativeIdentity, stageGlass, stageNative } from '../../build/lib/native.ts';
+import { assertNativeFresh, compileNative, nativeEnvironment, nativeIdentity, stageGlass, stageNative, stageSpdlog } from '../../build/lib/native.ts';
 import { loadProduct } from '../../build/lib/product.ts';
 import { buildRelease } from '../../build/lib/release.ts';
 import { verifyReleaseFiles } from '../../build/lib/verify.ts';
@@ -85,6 +85,24 @@ test('Liquid Glass is staged from the optional package on macOS only', async () 
 		assert.equal(await readFile(join(output, 'native/elg/index.cjs'), 'utf8'), 'owner');
 		assert.equal(await readFile(join(output, 'native/elg/elg.node'), 'utf8'), 'arm64-addon', 'Staged the wrong architecture');
 		assert.equal(await readFile(join(output, 'licenses/elg.txt'), 'utf8'), 'MIT');
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test('spdlog is staged with its licences when the optional package built, and skipped otherwise', async () => {
+	const root = await mkdtemp(join(tmpdir(), 'vnilink-spdlog-'));
+	try {
+		const output = join(root, 'out');
+		assert.equal(await stageSpdlog(root, output), false);
+		const pkg = join(root, 'node_modules/@vscode/spdlog');
+		await put(pkg, 'build/Release/spdlog.node', 'addon');
+		await put(pkg, 'LICENSE', 'MIT Microsoft');
+		await put(pkg, 'deps/spdlog/LICENSE', 'MIT Gabi');
+		assert.equal(await stageSpdlog(root, output), true);
+		assert.equal(await readFile(join(output, 'native/spdlog/spdlog.node'), 'utf8'), 'addon');
+		assert.equal(await readFile(join(output, 'licenses/vscode-spdlog.txt'), 'utf8'), 'MIT Microsoft');
+		assert.equal(await readFile(join(output, 'licenses/spdlog.txt'), 'utf8'), 'MIT Gabi');
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

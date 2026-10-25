@@ -5,7 +5,7 @@ import { build } from 'esbuild';
 const electron = `
 import { EventEmitter } from 'node:events';
 export const exposed = {};
-export const ipcRenderer = Object.assign(new EventEmitter(), { invoked: [], async invoke(channel) { this.invoked.push(channel); return { windowId: 1, osRelease: 'test', platform: 'darwin', version: 'test', engineAvailable: true, enableSmokeTestDriver: false }; }, send() { } });
+export const ipcRenderer = Object.assign(new EventEmitter(), { invoked: [], async invoke(channel) { this.invoked.push(channel); return { windowId: 1, osRelease: 'test', platform: 'darwin', version: 'test', engineAvailable: true, enableSmokeTestDriver: false, logsPath: '/logs', logLevel: 2 }; }, send() { } });
 export const contextBridge = { exposeInMainWorld(name, value) { exposed[name] = value; } };
 export const webUtils = { getPathForFile: () => '/dropped' };`;
 

@@ -260,6 +260,13 @@ impl DesktopRuntime {
     fn ended(&self, shared: &Shared, hosted: bool, end: crate::DesktopEnd) {
         let mut slot = lock(&self.end);
         if slot.is_none() {
+            tracing::info!(
+                target: crate::trace::SESSION,
+                service = self.info.service.id,
+                hosted,
+                reason = end.label(),
+                "desktop ended"
+            );
             *slot = Some(end);
             *lock(&shared.last_desktop_end) = Some(crate::diagnostics::EndSummary {
                 service_id: self.info.service.id,
@@ -777,6 +784,13 @@ impl Core {
         encoder: crate::EncoderImplementation,
     ) -> Result<(), Error> {
         *lock(&runtime(&*self.alive_state()?, id, generation, true)?.encoder) = Some(encoder);
+        tracing::info!(
+            target: crate::trace::STREAM,
+            service = id,
+            generation,
+            encoder = ?encoder,
+            "encoder opened"
+        );
         Ok(())
     }
     /// The platform backend's view of whether the screen is on a desktop
@@ -1632,7 +1646,18 @@ async fn client_send(
                             (desktop.info.monitor_width, desktop.info.monitor_height),
                             &crate::video_caps::VideoCodecCaps::default(),
                         );
-                        desktop.input.push_quality(next)?; *lock(&desktop.quality) = next;
+                        tracing::info!(
+                            target: crate::trace::STREAM,
+                            service = desktop.info.service.id,
+                            bitrate_kbps = next.max_bitrate_kbps,
+                            frame_rate = next.max_frame_rate,
+                            width = next.max_width,
+                            height = next.max_height,
+                            reason = ?lock(&desktop.adaptive).status.reason,
+                            "quality changed"
+                        );
+                        desktop.input.push_quality(next)?;
+                        *lock(&desktop.quality) = next;
                     }
                 }
             }

@@ -75,6 +75,7 @@
   },
   "type": "module",
   "optionalDependencies": {
-    "@vnilink/elg": "0.1.0-rc"
+    "@vnilink/elg": "0.1.0-rc",
+    "@vscode/spdlog": "0.15.8"
   }
 }

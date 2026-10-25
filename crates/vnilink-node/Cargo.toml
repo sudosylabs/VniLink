@@ -16,7 +16,9 @@ crate-type = ["cdylib", "rlib"]
 reset-installation = []
 
 [dependencies]
+tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 vnilink-app = { path = "../vnilink-app" }
+vnilink-log = { path = "../vnilink-log" }
 napi = { version = "=3.12.2", default-features = false, features = ["napi8", "dyn-symbols"] }
 napi-derive = "=3.6.3"
 serde = { version = "=1.0.229", features = ["derive"] }

@@ -206,6 +206,36 @@ test('presence, peer availability and hosted services cross the bridge exactly',
 	assert.equal(isEngineReply({ type: 'services', services: [{ id: '1' }] }), false);
 });
 
+test('the flight recorder is bounded JSON lines, each one object', () => {
+	assert.equal(isEngineCommand({ type: 'diagnosticRecorder' }), true);
+	assert.equal(isEngineCommand({ type: 'diagnosticRecorder', service: '4' }), false);
+	const events = `${JSON.stringify({ ms: 1, level: 'INFO', target: 'vnilink::session', message: 'desktop ended' })}\n`;
+	assert.equal(isEngineReply({ type: 'diagnosticRecorder', events }), true);
+	assert.equal(isEngineReply({ type: 'diagnosticRecorder', events: '' }), true);
+	assert.equal(isEngineReply({ type: 'diagnosticRecorder', events: 'not json\n' }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticRecorder', events: '[1]\n' }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticRecorder', events, extra: 1 }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticRecorder', events: `${JSON.stringify({ pad: 'x'.repeat(4 * 1024 * 1024) })}\n` }), false);
+});
+
+test('the engine log\'s filter and its file\'s tail cross the bridge exactly', () => {
+	assert.equal(isEngineCommand({ type: 'logFilter' }), true);
+	assert.equal(isEngineCommand({ type: 'engineLogTail' }), true);
+	assert.equal(isEngineCommand({ type: 'engineLogTail', path: '/tmp/engine.log' }), false);
+	assert.equal(isEngineCommand({ type: 'setLogFilter', directives: 'vnilink::files=debug' }), true);
+	assert.equal(isEngineCommand({ type: 'setLogFilter', directives: null }), true);
+	assert.equal(isEngineCommand({ type: 'setLogFilter' }), false);
+	assert.equal(isEngineCommand({ type: 'setLogFilter', directives: 3 }), false);
+	assert.equal(isEngineCommand({ type: 'setLogFilter', directives: 'x'.repeat(1025) }), false);
+	assert.equal(isEngineReply({ type: 'logFilter', directives: 'off', source: 'setting' }), true);
+	assert.equal(isEngineReply({ type: 'logFilter', directives: 'off', source: 'file' }), false);
+	assert.equal(isEngineReply({ type: 'logFilter', directives: 'off', source: 'default', extra: 1 }), false);
+	assert.equal(isEngineReply({ type: 'engineLogTail', path: '~/engine.log', text: '{"ms":1}\n' }), true);
+	assert.equal(isEngineReply({ type: 'engineLogTail', path: null, text: '' }), true);
+	assert.equal(isEngineReply({ type: 'engineLogTail', text: '' }), false);
+	assert.equal(isEngineReply({ type: 'engineLogTail', path: null, text: 'x'.repeat(256 * 1024 + 1) }), false);
+});
+
 test('the diagnostic snapshot is one bounded JSON object naming its version', () => {
 	assert.equal(isEngineCommand({ type: 'diagnosticSnapshot' }), true);
 	assert.equal(isEngineCommand({ type: 'diagnosticSnapshot', path: '/tmp/x' }), false);

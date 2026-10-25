@@ -1,11 +1,15 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: native window controls, window state, folder picking, message boxes, displays, allowlisted links and clipboard.
+ *  Adapted for VniLink: native window controls, window state, folder picking, message boxes, displays, allowlisted links, clipboard and logs.
  *--------------------------------------------------------------------------------------------*/
 
 import { clipboard, ClipboardItem, dialog, screen, shell } from 'electron';
 import type { BrowserWindow } from 'electron';
+import { open, readdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join, relative } from 'node:path';
+import type { URI } from '../../../base/common/uri.js';
 import type { VSBuffer } from '../../../base/common/buffer.js';
 import type { MessageBoxOptions, MessageBoxReturnValue } from '../../../base/parts/sandbox/common/electronTypes.js';
 import { Disposable, DisposableStore } from '../../../base/common/lifecycle.js';
@@ -14,7 +18,7 @@ import { createDecorator } from '../../instantiation/common/instantiation.js';
 import { isMacintosh } from '../../../base/common/platform.js';
 import type { NativeScreenSource } from '../../engine/common/engine.js';
 import { isNativeScreenSource } from '../../engine/common/engine.js';
-import type { IWindowState, IWindowControlsOptions } from '../common/native.js';
+import { MAX_LOG_TAIL, type IWindowState, type IWindowControlsOptions, type LogTail } from '../common/native.js';
 import { IWindowsMainService } from '../../windows/electron-main/windowsMainService.js';
 import type { WindowsMainService } from '../../windows/electron-main/windowsMainService.js';
 import { CodeWindow } from '../../windows/electron-main/windowImpl.js';
@@ -29,7 +33,11 @@ export class NativeHostMainService extends Disposable {
 	private readonly revisions = new Map<number, number>();
 	private readonly materials = new Map<number, WindowMaterial>();
 
-	constructor(@IWindowsMainService private readonly windowsMainService: WindowsMainService) {
+	/** `logsHome` is this run's logs folder. */
+	constructor(
+		private readonly logsHome: URI,
+		@IWindowsMainService private readonly windowsMainService: WindowsMainService,
+	) {
 		super();
 		this._register(windowsMainService.onDidOpenWindow(window => {
 			this.registerWindow(window);
@@ -173,6 +181,40 @@ export class NativeHostMainService extends Disposable {
 	}
 
 	/** Opens a link from {@link allowedExternalLinks} in the system browser. */
+	public openLogsFolder(windowId: number): Promise<void> {
+		this.window(windowId);
+		shell.showItemInFolder(join(this.logsHome.fsPath, 'main.log'));
+		return Promise.resolve();
+	}
+
+	/**
+	 * The end of each `.log` under this run's logs folder, the application's
+	 * own (the engine keeps its log apart); the home folder is written `~`.
+	 */
+	public async readLogTails(windowId: number): Promise<LogTail[]> {
+		this.window(windowId);
+		const root = this.logsHome.fsPath;
+		const entries = await readdir(root, { recursive: true, withFileTypes: true }).catch(() => []);
+		const files = entries
+			.filter(entry => entry.isFile() && entry.name.endsWith('.log'))
+			.map(entry => join(entry.parentPath, entry.name))
+			.slice(0, 32);
+		const home = homedir();
+		return Promise.all(files.map(async file => {
+			const handle = await open(file, 'r');
+			try {
+				const { size } = await handle.stat();
+				const length = Math.min(size, MAX_LOG_TAIL);
+				const buffer = Buffer.alloc(length);
+				await handle.read(buffer, 0, length, size - length);
+				const text = buffer.toString('utf8').split(home).join('~').slice(-MAX_LOG_TAIL);
+				return { name: relative(root, file), text };
+			} finally {
+				await handle.close();
+			}
+		}));
+	}
+
 	public async openExternal(windowId: number, url: string): Promise<void> {
 		this.window(windowId);
 		if (!allowedExternalLinks.includes(url)) {

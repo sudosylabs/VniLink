@@ -12,7 +12,10 @@ import { SyncDescriptor } from '../platform/instantiation/common/descriptors.js'
 import { ServiceCollection } from '../platform/instantiation/common/serviceCollection.js';
 import { IMainProcessService } from '../platform/ipc/common/mainProcessService.js';
 import { ElectronIPCMainProcessService } from '../platform/ipc/electron-browser/mainProcessService.js';
-import { ConsoleLogger, ILogService, LogLevel } from '../platform/log/common/log.js';
+import { URI } from '../base/common/uri.js';
+import { joinPath } from '../base/common/resources.js';
+import { ConsoleLogger, ILoggerService, ILogService } from '../platform/log/common/log.js';
+import { LoggerChannelClient } from '../platform/log/common/logIpc.js';
 import { LogService } from '../platform/log/common/logService.js';
 import { INativeHostService } from '../platform/native/common/native.js';
 import { NativeHostService } from '../platform/native/common/nativeHostService.js';
@@ -34,9 +37,16 @@ export class DesktopMain extends Disposable {
 	/** Creates the services that need this window's configuration; the rest register themselves. */
 	private initServices(): { serviceCollection: ServiceCollection; logService: ILogService } {
 		const serviceCollection = new ServiceCollection();
-		const logService = this._register(new LogService(new ConsoleLogger(LogLevel.Info)));
+		const mainProcessService = this._register(new ElectronIPCMainProcessService(this.configuration.windowId));
+		serviceCollection.set(IMainProcessService, mainProcessService);
+		// As VS Code's window: its log goes through main to window<id>/renderer.log, and to the console.
+		const { windowId, logLevel, logsPath } = this.configuration;
+		const windowLogsPath = joinPath(URI.file(logsPath), `window${String(windowId)}`);
+		const loggerService = this._register(new LoggerChannelClient(windowId, logLevel, windowLogsPath, [], mainProcessService.getChannel('logger')));
+		serviceCollection.set(ILoggerService, loggerService);
+		const fileLogger = this._register(loggerService.createLogger(joinPath(windowLogsPath, 'renderer.log'), { id: 'renderer', name: 'Window' }));
+		const logService = this._register(new LogService(fileLogger, [new ConsoleLogger(logLevel)]));
 		serviceCollection.set(ILogService, logService);
-		serviceCollection.set(IMainProcessService, this._register(new ElectronIPCMainProcessService(this.configuration.windowId)));
 		serviceCollection.set(INativeHostService, new SyncDescriptor(NativeHostService, [this.configuration.windowId]));
 		serviceCollection.set(IEngineService, new SyncDescriptor(EngineService, [this.configuration.engineAvailable]));
 		return { serviceCollection, logService };

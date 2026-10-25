@@ -318,6 +318,16 @@ impl FrameSink for TargetSink<'_> {
                     .unwrap_or(0)
             };
         }
+        tracing::trace!(
+            target: vnilink::trace::STREAM,
+            service = id,
+            role = ?frame.role,
+            keyframe = frame.keyframe,
+            bytes = frame.payload.len(),
+            timestamp_us = frame.timestamp_us,
+            regions = frame.regions.as_ref().map(Vec::len),
+            "picture sent"
+        );
         if self.service {
             self.core.publish_desktop_video(id, self.generation, frame)
         } else {
@@ -378,6 +388,8 @@ fn small_change(frame: &RawFrame) -> bool {
 /// small change then would leave the still showing what the stream already
 /// replaced, and the viewer redraws only where the stream says it changed.
 struct Stills {
+    /// The service the stills are for, to record.
+    service: u64,
     /// The viewer agreed to still pictures.
     agreed: bool,
     worker: Option<StillWorker>,
@@ -398,8 +410,9 @@ struct Stills {
 const STILL_SETTLE: Duration = Duration::from_millis(100);
 
 impl Stills {
-    fn new() -> Self {
+    fn new(service: u64) -> Self {
         Self {
+            service,
             agreed: false,
             worker: None,
             change: 0,
@@ -445,6 +458,12 @@ impl Stills {
             .as_ref()
             .is_some_and(|worker| worker.make(self.screen, frame, size, budget))
         {
+            tracing::debug!(
+                target: vnilink::trace::STILL,
+                service = self.service,
+                budget,
+                "still asked for"
+            );
             self.asked = Some((self.change, self.screen));
         }
     }
@@ -454,9 +473,29 @@ impl Stills {
     fn made(&mut self) -> Option<vnilink::EncodedFrame> {
         let made = self.worker.as_ref()?.take()?;
         if made.change != self.screen {
+            tracing::debug!(
+                target: vnilink::trace::STILL,
+                service = self.service,
+                "still discarded: the screen changed while it was made"
+            );
             return None;
         }
-        let still = vnilink::EncodedFrame::still(made.timestamp_us, made.picture?).ok()?;
+        let Some(picture) = made.picture else {
+            tracing::debug!(
+                target: vnilink::trace::STILL,
+                service = self.service,
+                "still not sent: no better than the stream within its budget"
+            );
+            return None;
+        };
+        let still = vnilink::EncodedFrame::still(made.timestamp_us, picture).ok()?;
+        tracing::debug!(
+            target: vnilink::trace::STILL,
+            service = self.service,
+            bytes = still.payload.len(),
+            timestamp_us = still.timestamp_us,
+            "still made"
+        );
         self.sent = Some(self.change);
         Some(still)
     }
@@ -512,7 +551,7 @@ fn consume<E, F>(
     }
     let mut applied_quality = target.quality;
     let mut seen = 0u64;
-    let mut stills = Stills::new();
+    let mut stills = Stills::new(target.id);
     while !control.cancel.load(Ordering::Acquire) {
         let reopens = session.reopens();
         if let Some(quality) = control

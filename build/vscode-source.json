@@ -584,6 +584,13 @@
       "changedImports": 0
     },
     {
+      "path": "src/base/common/glob.ts",
+      "upstreamPath": "src/vs/base/common/glob.ts",
+      "sha256": "ba3b4dd506c34e3363fa9af12f49b649a30bb9237dfef6e1bcf1bb57ff07ce1e",
+      "adapted": true,
+      "upstreamStyle": true
+    },
+    {
       "path": "src/base/common/hash.ts",
       "upstreamPath": "src/vs/base/common/hash.ts",
       "sha256": "aff9064e078dd4fe23b33027e1f619cdbdde3654c677102b56e822aa45e74f90",
@@ -1082,6 +1089,12 @@
       "changedImports": 0
     },
     {
+      "path": "src/base/common/uriIpc.ts",
+      "upstreamPath": "src/vs/base/common/uriIpc.ts",
+      "sha256": "72edaf6a10eaa605947fd0e2fa96827c1eb1db17ce69ec61f44df61c1871b431",
+      "changedImports": 0
+    },
+    {
       "path": "src/base/common/uuid.ts",
       "upstreamPath": "src/vs/base/common/uuid.ts",
       "sha256": "fe776763455e19a8126238f13f9c2c51939e7a31f387445dde1ad7d0f870b1d6",
@@ -1304,6 +1317,12 @@
       "changedImports": 0
     },
     {
+      "path": "src/platform/files/common/files.ts",
+      "upstreamPath": "src/vs/platform/files/common/files.ts",
+      "sha256": "91c6e6ab8162d1a5d706fdc5f3a41e6ad669c8d21cf86ed80178e607a47554ee",
+      "changedImports": 0
+    },
+    {
       "path": "src/platform/instantiation/common/descriptors.ts",
       "upstreamPath": "src/vs/platform/instantiation/common/descriptors.ts",
       "sha256": "3822bb2986b64bbf1eb4f644eaf5a83056a7537b9d0450bea83a552dd8c48975",
@@ -1382,9 +1401,40 @@
       "changedImports": 0
     },
     {
+      "path": "src/platform/log/common/logIpc.ts",
+      "upstreamPath": "src/vs/platform/log/common/logIpc.ts",
+      "sha256": "932d14f99c4308967e93825f2160096dd64859f61602f752fd10d1f20f209e45",
+      "changedImports": 0
+    },
+    {
+      "path": "src/platform/log/electron-main/loggerService.ts",
+      "upstreamPath": "src/vs/platform/log/electron-main/loggerService.ts",
+      "sha256": "0c3381f549824d260d1d29e074be08bd5cbfb94622645d5beb0a0361903da7b5",
+      "changedImports": 0
+    },
+    {
+      "path": "src/platform/log/electron-main/logIpc.ts",
+      "upstreamPath": "src/vs/platform/log/electron-main/logIpc.ts",
+      "sha256": "1873a4cbe3a12a1fbf5ea203fe7b74187920effc7a0977644a63a7b335f66658",
+      "changedImports": 0
+    },
+    {
+      "path": "src/platform/log/node/loggerService.ts",
+      "upstreamPath": "src/vs/platform/log/node/loggerService.ts",
+      "sha256": "76e8b3d9f2bf31ae3c3f4e98e87065060ae43b7afefe6327d05da91c90cda8f2",
+      "changedImports": 0
+    },
+    {
+      "path": "src/platform/log/node/spdlogLog.ts",
+      "upstreamPath": "src/vs/platform/log/node/spdlogLog.ts",
+      "sha256": "bb1db688fed4609598c0b56a6ed912bd2a5fffb129ac42f995039cba088ac210",
+      "adapted": true,
+      "upstreamStyle": true
+    },
+    {
       "path": "src/platform/native/common/native.ts",
       "upstreamPath": "src/vs/platform/native/common/native.ts",
-      "sha256": "9d3992c16f078239f80761ed8098ad0a9303ad1a859db08f154f4c33824d8e55",
+      "sha256": "6e630036a5ac7744afc433d93d0847f0f0a4b92c787ec65efecffcdf9358067b",
       "adapted": true
     },
     {
@@ -1397,7 +1447,7 @@
       "path": "src/platform/native/electron-main/nativeHostMainService.ts",
       "upstreamPath": "src/vs/platform/native/electron-main/nativeHostMainService.ts",
       "adapted": true,
-      "sha256": "4bd335b30eaf934b6e73b8392bd7263492fd445cd671b0d6522182c6b4de67a8"
+      "sha256": "2cef28eb80caf323d9d3f093dba9463dce6fb74261818694ae11d4d5af216bf6"
     },
     {
       "path": "src/platform/registry/common/platform.ts",
@@ -1505,7 +1555,7 @@
       "path": "src/workbench/desktop.main.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/desktop.main.ts",
       "adapted": true,
-      "sha256": "ea0da3d87ba8df10c0252d571a08127b8218f56b68c8aab2799e0f499cb9a864"
+      "sha256": "2ed7e8acc10e2dce4791c2867d1aad9c8c0af3eca41c5f8927fd37b52740a95a"
     },
     {
       "path": "src/workbench/parts/titlebar/media/modernTabs.css",
@@ -1571,8 +1621,10 @@
     "src/base/browser/ui/dialog/dialog.ts",
     "src/base/browser/ui/inputbox/inputBox.ts",
     "src/base/browser/ui/list/list.ts",
+    "src/base/browser/ui/list/listView.ts",
     "src/base/browser/ui/list/listWidget.ts",
     "src/base/browser/ui/menu/menu.ts",
+    "src/base/browser/ui/scrollbar/scrollableElement.ts",
     "src/base/browser/ui/toggle/toggle.ts",
     "src/base/browser/window.ts",
     "src/base/common/actions.ts",
@@ -1592,6 +1644,7 @@
     "src/base/common/platform.ts",
     "src/base/common/process.ts",
     "src/base/common/resources.ts",
+    "src/base/common/scrollable.ts",
     "src/base/common/themables.ts",
     "src/base/common/types.ts",
     "src/base/common/uri.ts",
@@ -1622,6 +1675,8 @@
     "src/platform/ipc/common/mainProcessService.ts",
     "src/platform/ipc/electron-browser/services.ts",
     "src/platform/layout/browser/layoutService.ts",
+    "src/platform/log/electron-main/logIpc.ts",
+    "src/platform/log/electron-main/loggerService.ts",
     "src/platform/native/common/native.ts",
     "src/platform/native/electron-main/nativeHostMainService.ts",
     "src/platform/registry/common/platform.ts",
@@ -5830,7 +5885,22 @@
     },
     {
       "from": "src/workbench/desktop.main.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/desktop.main.ts",
+      "to": "src/base/common/resources.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/desktop.main.ts",
       "to": "src/platform/log/common/log.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/desktop.main.ts",
+      "to": "src/platform/log/common/logIpc.ts",
       "kind": "import"
     },
     {
@@ -5951,6 +6021,56 @@
     {
       "from": "src/base/parts/ipc/common/ipc.ts",
       "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/common/logIpc.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/common/logIpc.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/common/logIpc.ts",
+      "to": "src/base/parts/ipc/common/ipc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/common/logIpc.ts",
+      "to": "src/platform/log/common/log.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/common/logIpc.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/common/logIpc.ts",
+      "to": "src/base/common/uriIpc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/uriIpc.ts",
+      "to": "src/base/common/buffer.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/uriIpc.ts",
+      "to": "src/base/common/marshalling.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/uriIpc.ts",
+      "to": "src/base/common/marshallingIds.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/uriIpc.ts",
+      "to": "src/base/common/uri.ts",
       "kind": "import"
     },
     {
@@ -6135,6 +6255,11 @@
     },
     {
       "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
       "to": "src/base/common/buffer.ts",
       "kind": "import"
     },
@@ -6216,6 +6341,261 @@
     {
       "from": "src/platform/windows/electron-main/windowImpl.ts",
       "to": "src/platform/native/common/native.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/electron-main/loggerService.ts",
+      "to": "src/base/common/map.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/electron-main/loggerService.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/electron-main/loggerService.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/electron-main/loggerService.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/electron-main/loggerService.ts",
+      "to": "src/platform/log/common/log.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/electron-main/loggerService.ts",
+      "to": "src/platform/log/node/loggerService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/node/loggerService.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/node/loggerService.ts",
+      "to": "src/base/common/uuid.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/node/loggerService.ts",
+      "to": "src/platform/log/common/log.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/node/loggerService.ts",
+      "to": "src/platform/log/node/spdlogLog.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/node/spdlogLog.ts",
+      "to": "src/platform/log/node/spdlogAddon.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/node/spdlogLog.ts",
+      "to": "src/platform/log/node/spdlogAddon.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/node/spdlogLog.ts",
+      "to": "src/platform/files/common/files.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/node/spdlogLog.ts",
+      "to": "src/platform/log/common/log.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/files/common/files.ts",
+      "to": "src/base/common/buffer.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/files/common/files.ts",
+      "to": "src/base/common/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/files/common/files.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/files/common/files.ts",
+      "to": "src/base/common/glob.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/files/common/files.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/files/common/files.ts",
+      "to": "src/base/common/ternarySearchTree.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/files/common/files.ts",
+      "to": "src/base/common/path.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/files/common/files.ts",
+      "to": "src/base/common/stream.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/files/common/files.ts",
+      "to": "src/base/common/strings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/files/common/files.ts",
+      "to": "src/base/common/types.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/files/common/files.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/files/common/files.ts",
+      "to": "src/nls.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/files/common/files.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/files/common/files.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/files/common/files.ts",
+      "to": "src/base/common/network.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/files/common/files.ts",
+      "to": "src/base/common/htmlContent.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/files/common/files.ts",
+      "to": "src/base/common/lazy.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/ternarySearchTree.ts",
+      "to": "src/base/common/arrays.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/ternarySearchTree.ts",
+      "to": "src/base/common/assert.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/ternarySearchTree.ts",
+      "to": "src/base/common/charCode.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/ternarySearchTree.ts",
+      "to": "src/base/common/strings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/ternarySearchTree.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/glob.ts",
+      "to": "src/base/common/arrays.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/glob.ts",
+      "to": "src/base/common/async.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/glob.ts",
+      "to": "src/base/common/charCode.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/glob.ts",
+      "to": "src/base/common/extpath.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/glob.ts",
+      "to": "src/base/common/map.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/glob.ts",
+      "to": "src/base/common/path.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/glob.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/glob.ts",
+      "to": "src/base/common/strings.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/electron-main/logIpc.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/electron-main/logIpc.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/electron-main/logIpc.ts",
+      "to": "src/base/common/map.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/electron-main/logIpc.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/electron-main/logIpc.ts",
+      "to": "src/base/parts/ipc/common/ipc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/electron-main/logIpc.ts",
+      "to": "src/platform/log/common/log.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/log/electron-main/logIpc.ts",
+      "to": "src/platform/log/electron-main/loggerService.ts",
       "kind": "import"
     },
     {
@@ -6526,31 +6906,6 @@
     {
       "from": "src/platform/environment/common/environment.ts",
       "to": "src/platform/instantiation/common/instantiation.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/ternarySearchTree.ts",
-      "to": "src/base/common/arrays.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/ternarySearchTree.ts",
-      "to": "src/base/common/assert.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/ternarySearchTree.ts",
-      "to": "src/base/common/charCode.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/ternarySearchTree.ts",
-      "to": "src/base/common/strings.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/ternarySearchTree.ts",
-      "to": "src/base/common/uri.ts",
       "kind": "import"
     },
     {
@@ -7228,8 +7583,10 @@
     "src/base/browser/ui/dialog/dialog.ts",
     "src/base/browser/ui/inputbox/inputBox.ts",
     "src/base/browser/ui/list/list.ts",
+    "src/base/browser/ui/list/listView.ts",
     "src/base/browser/ui/list/listWidget.ts",
     "src/base/browser/ui/menu/menu.ts",
+    "src/base/browser/ui/scrollbar/scrollableElement.ts",
     "src/base/browser/ui/toggle/toggle.ts",
     "src/base/browser/window.ts",
     "src/base/common/actions.ts",
@@ -7249,6 +7606,7 @@
     "src/base/common/platform.ts",
     "src/base/common/process.ts",
     "src/base/common/resources.ts",
+    "src/base/common/scrollable.ts",
     "src/base/common/themables.ts",
     "src/base/common/types.ts",
     "src/base/common/uri.ts",
@@ -7279,6 +7637,8 @@
     "src/platform/ipc/common/mainProcessService.ts",
     "src/platform/ipc/electron-browser/services.ts",
     "src/platform/layout/browser/layoutService.ts",
+    "src/platform/log/electron-main/logIpc.ts",
+    "src/platform/log/electron-main/loggerService.ts",
     "src/platform/native/common/native.ts",
     "src/platform/native/electron-main/nativeHostMainService.ts",
     "src/platform/registry/common/platform.ts",
@@ -7315,6 +7675,7 @@
     "src/base/browser/ui/icon/icon.ts",
     "src/base/common/icons.ts",
     "src/platform/actions/browser/menuEntryActionViewItem.ts",
-    "src/platform/theme/browser/defaultStyles.ts"
+    "src/platform/theme/browser/defaultStyles.ts",
+    "src/platform/log/node/spdlogAddon.ts"
   ]
 }

@@ -179,6 +179,33 @@ export async function assertNativeFresh(root: string, outputDirectory = join(roo
 	}
 }
 
+/** Where the log services load spdlog from, inside the output directory; see `spdlogAddon.ts`. */
+export const SPDLOG_DIRECTORY = 'native/spdlog';
+
+/**
+ * Stages the spdlog addon VS Code's log services write files with, from the
+ * optional @vscode/spdlog dependency, with its licences, and says whether
+ * it did. The package builds from source when it installs; where it did not
+ * build (a Windows build without Microsoft's compiler), nothing is staged and
+ * the application logs to the console only.
+ */
+export async function stageSpdlog(root: string, outputDirectory: string): Promise<boolean> {
+	const source = join(root, 'node_modules/@vscode/spdlog');
+	const addon = join(source, 'build/Release/spdlog.node');
+	if (!existsSync(addon)) {
+		return false;
+	}
+	const target = join(outputDirectory, SPDLOG_DIRECTORY);
+	await mkdir(target, { recursive: true });
+	await mkdir(join(outputDirectory, 'licenses'), { recursive: true });
+	await Promise.all([
+		cp(addon, join(target, 'spdlog.node')),
+		cp(join(source, 'LICENSE'), join(outputDirectory, 'licenses/vscode-spdlog.txt')),
+		cp(join(source, 'deps/spdlog/LICENSE'), join(outputDirectory, 'licenses/spdlog.txt')),
+	]);
+	return true;
+}
+
 /** Where the main process loads macOS Liquid Glass from, inside the output directory. */
 export const GLASS_DIRECTORY = 'native/elg';
 

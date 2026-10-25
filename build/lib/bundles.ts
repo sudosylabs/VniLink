@@ -2,7 +2,7 @@
 import { build, type BuildOptions } from 'esbuild';
 import { cp, mkdir, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { compileNative, defaultNativeOptions, stageGlass, stageNative, type NativeIdentity, type NativeOptions } from './native.ts';
+import { compileNative, defaultNativeOptions, stageGlass, stageSpdlog, stageNative, type NativeIdentity, type NativeOptions } from './native.ts';
 import { ProcessRunner } from './processes.ts';
 import { define, execute, parallel, series } from './task.ts';
 
@@ -108,6 +108,9 @@ export async function buildApplication(root: string, signal: AbortSignal, option
 			}),
 			define('glass:stage', async () => {
 				await stageGlass(root, outputDirectory);
+			}),
+			define('spdlog:stage', async () => {
+				await stageSpdlog(root, outputDirectory);
 			}),
 		),
 	);

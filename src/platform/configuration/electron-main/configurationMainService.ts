@@ -38,6 +38,8 @@ function engineCommands(group: string, values: Values): EngineCommand[] {
 			return [{ type: 'setNativeCameraSources', ids: sourceIds(values['media.camera']) }];
 		case 'media.audio':
 			return [{ type: 'setNativeAudioSources', microphones: sourceIds(values['media.microphone']), system: sourceIds(values['media.systemAudio']) }];
+		case 'diagnostics':
+			return [{ type: 'setLogFilter', directives: logDirectives(values['diagnostics.engineLog'], values['diagnostics.engineLogFilter']) }];
 		case 'terminal.shell': {
 			// The empty id offers the automatic shell.
 			const shell = values['terminal.shell'];
@@ -55,7 +57,25 @@ function engineGroup(key: string): string | undefined {
 	if (key === 'media.microphone' || key === 'media.systemAudio') {
 		return 'media.audio';
 	}
+	if (key === 'diagnostics.engineLog' || key === 'diagnostics.engineLogFilter') {
+		return 'diagnostics';
+	}
 	return key.startsWith('input.') ? 'input' : undefined;
+}
+
+/**
+ * The engine log's filter: the advanced filter when set, else the level for
+ * VniLink's areas with libraries' warnings; `null` is the engine's default.
+ */
+function logDirectives(level: unknown, filter: unknown): string | null {
+	if (typeof filter === 'string' && filter.trim()) {
+		return filter.trim();
+	}
+	switch (level) {
+		case 'off': return 'off';
+		case 'error': case 'warn': case 'debug': case 'trace': return `warn,vnilink=${level}`;
+		default: return null;
+	}
 }
 
 function sourceIds(value: unknown): string[] {
@@ -186,6 +206,9 @@ export class ConfigurationMainService extends Disposable {
 		for (const group of ['desktop.codec', 'desktop.quality', 'input']) {
 			await this.apply(group, values);
 		}
+		await this.apply('diagnostics', values).catch((error: unknown) => {
+			this.logService.error('Saved engine log filter was refused; the engine keeps its default.', error);
+		});
 		if (values['media.camera']) {
 			await this.apply('media.camera', values).catch((error: unknown) => {
 				this.logService.error('Saved camera source could not be opened.', error);

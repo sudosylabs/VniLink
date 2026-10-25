@@ -8,6 +8,7 @@ description = "Desktop Duplication and Media Foundation H.264 for VniLink"
 publish = false
 
 [dependencies]
+tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 vnilink = { path = "../vnilink" }
 vnilink-media = { path = "../vnilink-media" }
 
