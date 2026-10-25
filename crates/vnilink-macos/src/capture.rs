@@ -4,7 +4,10 @@
 //! lists shareable content and starts a stream, which asks for Screen Recording
 //! permission. The stream handler pushes each copied picture into a
 //! [`FrameChannel`]; [`ScreenCapture::poll_frame`] returns current pixels
-//! immediately, including a cached idle picture. Tests construct the plan and do not call `start`.
+//! immediately, including a cached idle picture. The stream delivers
+//! pictures at the size the host encodes ([`ScreenCapture::deliver_at`]):
+//! the system scales them as it captures, and each is compared with the one
+//! before at that size. Tests construct the plan and do not call `start`.
 //! FileVault preboot is not a logged-in display and is not captured.
 
 use vnilink_media::{CapturePlan, ChannelSlot, CursorPolicy, Error, FrameChannel};
@@ -124,9 +127,23 @@ impl ScreenPlan {
     }
 }
 
+/// A picture size packed in one word, so the handler reads it without a lock.
+#[cfg(target_os = "macos")]
+fn pack((width, height): (u16, u16)) -> u32 {
+    u32::from(width) << 16 | u32::from(height)
+}
+
+#[cfg(target_os = "macos")]
+fn unpack(size: u32) -> (u16, u16) {
+    ((size >> 16) as u16, size as u16)
+}
+
 #[cfg(target_os = "macos")]
 struct Handler {
     channel: Arc<FrameChannel>,
+    /// The size the stream is configured for ([`pack`]): pictures of the
+    /// size before a change, still in flight, are not delivered.
+    size: Arc<std::sync::atomic::AtomicU32>,
     /// The picture last pushed: a frame with the same pixels is not a new
     /// one. Without this an unchanged screen would read as changing at the
     /// frame rate (see `pixels::same_picture`).
@@ -143,6 +160,13 @@ impl SCStreamOutputTrait for Handler {
             // Idle/status samples have no picture. They do not end capture.
             return;
         };
+        let delivered = (
+            u16::try_from(pixel_buffer.width()).unwrap_or(0),
+            u16::try_from(pixel_buffer.height()).unwrap_or(0),
+        );
+        if pack(delivered) != self.size.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
         // The same pixels again leave the channel as it is: its picture and
         // when the source attested it do not change, so the shared capture
         // sees an unchanged screen.
@@ -241,9 +265,11 @@ fn display_coord(value: f64) -> Result<i32, Error> {
 #[cfg(target_os = "macos")]
 pub struct ScreenCapture {
     stream: SCStream,
-    plan: ScreenPlan,
-    width: u16,
-    height: u16,
+    /// The configuration now: its size follows [`Self::deliver_at`].
+    plan: std::sync::Mutex<ScreenPlan>,
+    /// The display's size, the plan's at start.
+    full: (u16, u16),
+    size: Arc<std::sync::atomic::AtomicU32>,
     channel: Arc<FrameChannel>,
 }
 
@@ -280,6 +306,10 @@ impl ScreenCapture {
             .build()
             .map_err(|_| Error::CaptureRejected("the display filter could not be built"))?;
         let channel = Arc::new(FrameChannel::new());
+        let size = Arc::new(std::sync::atomic::AtomicU32::new(pack((
+            plan.width(),
+            plan.height(),
+        ))));
         let delegate = failure_delegate(&channel);
         let mut stream = SCStream::new_with_delegate(&filter, &plan.configuration(), delegate)
             .map_err(|_| Error::CaptureRejected("ScreenCaptureKit did not start"))?;
@@ -287,6 +317,7 @@ impl ScreenCapture {
             .add_output_handler(
                 Handler {
                     channel: Arc::clone(&channel),
+                    size: Arc::clone(&size),
                     previous: std::sync::Mutex::new(None),
                 },
                 SCStreamOutputType::Screen,
@@ -298,9 +329,9 @@ impl ScreenCapture {
             .map_err(|_| Error::CaptureRejected("ScreenCaptureKit did not start"))?;
         let capture = Self {
             stream,
-            plan: *plan,
-            width: plan.width(),
-            height: plan.height(),
+            plan: std::sync::Mutex::new(*plan),
+            full: (plan.width(), plan.height()),
+            size,
             channel,
         };
         // Own the stream before checking so late success runs stop_capture.
@@ -311,15 +342,60 @@ impl ScreenCapture {
     /// Switch only the cursor policy at session admission. Legacy viewers keep
     /// ScreenCaptureKit's embedded cursor; metadata-aware viewers draw locally.
     pub fn set_shows_cursor(&self, shows_cursor: bool) -> Result<(), Error> {
-        let mut plan = self.plan;
-        plan.shows_cursor = shows_cursor;
+        let mut plan = self.plan.lock().unwrap_or_else(|e| e.into_inner());
+        let mut next = *plan;
+        next.shows_cursor = shows_cursor;
         self.stream
-            .update_configuration(&plan.configuration())
-            .map_err(|_| Error::CaptureRejected("the cursor capture policy could not be updated"))
+            .update_configuration(&next.configuration())
+            .map_err(|_| {
+                Error::CaptureRejected("the cursor capture policy could not be updated")
+            })?;
+        *plan = next;
+        Ok(())
     }
 
+    /// The size pictures come at now.
     pub fn size(&self) -> (u16, u16) {
-        (self.width, self.height)
+        unpack(self.size.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    /// The display's size, the largest the stream delivers.
+    pub fn full_size(&self) -> (u16, u16) {
+        self.full
+    }
+
+    /// Reconfigures the stream to deliver pictures of `size`, which the
+    /// system scales from the display as it captures them: the host then
+    /// neither scales a 4K picture to the size it encodes nor compares
+    /// the larger picture with the one before. Pictures of the size before
+    /// are dropped from here on, and the stored one is forgotten, so the
+    /// next read waits for one of the new size. `false` when the size is
+    /// not one the display can give or ScreenCaptureKit refused it; the
+    /// stream goes on at its size.
+    pub fn deliver_at(&self, size: (u16, u16)) -> bool {
+        let (width, height) = size;
+        if width < 2 || height < 2 || width > self.full.0 || height > self.full.1 {
+            return false;
+        }
+        let mut plan = self.plan.lock().unwrap_or_else(|e| e.into_inner());
+        let mut next = *plan;
+        next.width = width;
+        next.height = height;
+        let before = self
+            .size
+            .swap(pack(size), std::sync::atomic::Ordering::AcqRel);
+        self.channel.clear();
+        if self
+            .stream
+            .update_configuration(&next.configuration())
+            .is_err()
+        {
+            self.size
+                .store(before, std::sync::atomic::Ordering::Release);
+            return false;
+        }
+        *plan = next;
+        true
     }
 
     /// When ScreenCaptureKit last delivered a picture whose pixels changed.

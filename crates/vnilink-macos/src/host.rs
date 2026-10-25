@@ -111,6 +111,15 @@ impl FrameSource for SharedSource<'_> {
         self.inner.size()
     }
 
+    fn full_size(&self) -> (u16, u16) {
+        self.inner.full_size()
+    }
+
+    /// ScreenCaptureKit scales the display as it captures it.
+    fn deliver_at(&self, size: (u16, u16)) -> Result<bool, Error> {
+        Ok(self.inner.deliver_at(size))
+    }
+
     fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
         let embedded = self.embedded.load(Ordering::Relaxed);
         let first = !self.known.swap(true, Ordering::Relaxed);

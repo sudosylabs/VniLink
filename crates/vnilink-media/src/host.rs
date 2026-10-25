@@ -39,6 +39,19 @@ pub trait FrameSource {
     fn attested_display(&self) -> &str {
         ""
     }
+    /// The largest pictures this source delivers: the display's own pixels.
+    fn full_size(&self) -> (u16, u16) {
+        self.size()
+    }
+    /// Asks the platform to deliver pictures of `size`, at most
+    /// [`Self::full_size`], scaled as it captures them, so that nothing
+    /// scales them again before encoding. `Ok(true)` once later pictures
+    /// come at that size and [`Self::size`] says so; `Ok(false)` from a
+    /// source that delivers only its own size, or whose platform refused.
+    fn deliver_at(&self, size: (u16, u16)) -> Result<bool, Error> {
+        let _ = size;
+        Ok(false)
+    }
     /// Shared topology revision the polled pictures attest, read live
     /// for every published frame. 0 means unknown: the fanout stamps the
     /// current topology revision instead. Captures whose geometry is

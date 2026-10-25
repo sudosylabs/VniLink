@@ -4,6 +4,10 @@
 //! keeps the newest raw picture and encodes it on its own thread at its own
 //! quality. A slow encoder skips intervening pictures; it does not queue them
 //! and it does not stall the reader or any sibling.
+//!
+//! A source that can scale as it captures ([`FrameSource::deliver_at`]) is
+//! asked for the largest size any consumer encodes, so that consumer's
+//! encoder takes the picture as it comes; smaller consumers scale it down.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -111,6 +115,31 @@ impl PictureSlot {
     fn poke(&self) {
         self.wake.notify_all();
     }
+    /// Forgets the picture, as when the source changes size: consumers
+    /// wait for one of the new size.
+    fn clear(&self) {
+        self.picture
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .frame = None;
+    }
+}
+
+/// The size to ask a source for: the largest any of `targets` encodes a
+/// picture of `full` at, or `None` without a target.
+fn capture_target(full: (u16, u16), targets: &[VideoTarget]) -> Option<(u16, u16)> {
+    targets
+        .iter()
+        .filter_map(|target| {
+            encoded_size(
+                full.0,
+                full.1,
+                target.quality.max_width,
+                target.quality.max_height,
+            )
+            .ok()
+        })
+        .max_by_key(|(width, height)| u32::from(*width) * u32::from(*height))
 }
 
 /// The newest picture as one consumer takes it.
@@ -586,6 +615,8 @@ where
     let mut last_attested = None;
     let mut last_cursor = None;
     let mut last_published: Option<Instant> = None;
+    // A size the source would not deliver is not asked for again.
+    let mut refused = None;
     std::thread::scope(|scope| {
         let mut running: Vec<Running<'_>> = Vec::new();
         let mut draining: Vec<Running<'_>> = Vec::new();
@@ -635,6 +666,17 @@ where
                             }
                         }
                         _ => {}
+                    }
+                }
+            }
+            // Before any consumer opens at the size the source delivers now:
+            // those that read another size end and open again at the new one.
+            if let Some(wanted) = capture_target(capture.full_size(), &targets) {
+                if wanted != capture.size() && refused != Some(wanted) {
+                    match capture.deliver_at(wanted) {
+                        Ok(true) => slot.clear(),
+                        Ok(false) => refused = Some(wanted),
+                        Err(error) => break Err(error.into()),
                     }
                 }
             }
@@ -808,6 +850,49 @@ mod display_filter {
         // The legacy whole-desktop capture still serves every consumer.
         assert!(serves(&unselected, 0, Some(4)));
         assert!(serves(&left, 0, Some(5)));
+    }
+}
+
+#[cfg(test)]
+mod capture_target_tests {
+    use super::capture_target;
+    use vnilink::{Quality, VideoTarget};
+
+    fn target(width: u16, height: u16) -> VideoTarget {
+        VideoTarget {
+            service: true,
+            id: 1,
+            generation: 1,
+            quality: Quality::new(8_000, 60, width, height).unwrap(),
+            separate_cursor: false,
+            codec: 1,
+            display_id: 0,
+            revision: 1,
+        }
+    }
+
+    #[test]
+    fn a_source_is_asked_for_the_largest_size_a_consumer_encodes() {
+        let full = (3840, 2160);
+        assert_eq!(capture_target(full, &[]), None);
+        assert_eq!(
+            capture_target(full, &[target(1920, 1080)]),
+            Some((1920, 1080))
+        );
+        // The display's shape is kept, and the larger consumer wins.
+        assert_eq!(
+            capture_target(full, &[target(1280, 1024), target(1920, 1200)]),
+            Some((1920, 1080))
+        );
+        // Never more than the display.
+        assert_eq!(capture_target(full, &[target(7680, 4320)]), Some(full));
+        // The size a consumer encodes from the scaled picture is the size
+        // it would have encoded from the display's own.
+        let wanted = capture_target((3440, 1440), &[target(1920, 1080)]).unwrap();
+        assert_eq!(
+            crate::frame::encoded_size(wanted.0, wanted.1, 1920, 1080).unwrap(),
+            wanted
+        );
     }
 }
 

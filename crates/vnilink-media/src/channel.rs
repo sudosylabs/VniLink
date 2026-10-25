@@ -87,6 +87,12 @@ impl FrameChannel {
         true
     }
 
+    /// Forgets the stored picture, as when the capture changes size: the
+    /// next read waits for a picture of the new one. A failure stays.
+    pub fn clear(&self) {
+        *self.slot.lock().expect("frame channel") = None;
+    }
+
     fn stored(&self) {
         *self.pushed_at.lock().expect("frame channel") = Some(Instant::now());
         self.generation.fetch_add(1, Ordering::Relaxed);
