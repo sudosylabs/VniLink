@@ -13,16 +13,16 @@
  * share it), another computer or another operating system, and host and
  * viewer share one CPU and GPU.
  */
-import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { closeSync, existsSync, openSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { parseArgs, promisify } from 'node:util';
+import { parseArgs } from 'node:util';
 import { electronExecutable } from './electron.ts';
 import { assertNativeFresh, defaultNativeOptions } from './native.ts';
 import { type LaunchedProcess, ProcessRunner } from './processes.ts';
 import { loadProduct } from './product.ts';
+import { remoteShell, shellWord, type RemoteShell } from './remote.ts';
 
 export interface LatencyOptions {
 	/** How long the reader samples, after the stream has settled. */
@@ -549,33 +549,6 @@ async function latencyPlatform(root: string, options: LatencyOptions, processes:
 	throw new Error('measure:latency reads a macOS, Windows or Linux display');
 }
 
-/** A POSIX shell word: the remote side's commands go through its login shell. */
-function shellWord(value: string): string {
-	return `'${value.replaceAll('\'', '\'\\\'\'')}'`;
-}
-
-/** Runs commands on the remote computer over one shared SSH connection. */
-interface RemoteShell {
-	/** `ssh`'s arguments up to and including the destination. */
-	readonly args: readonly string[];
-	/** Runs a shell command there and returns its output. */
-	output(command: string): Promise<string>;
-}
-
-function remoteShell(remote: RemoteComputer, work: string, signal: AbortSignal): RemoteShell {
-	const args = [
-		...(remote.sshConfig ? ['-F', remote.sshConfig] : []),
-		'-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15',
-		// One connection for the run: the rendezvous is copied several times a second.
-		'-o', 'ControlMaster=auto', '-o', `ControlPath=${join(work, 'ssh-%h-%p')}`, '-o', 'ControlPersist=120',
-		remote.destination,
-	];
-	return {
-		args,
-		output: async command => (await promisify(execFile)('ssh', [...args, command], { signal, maxBuffer: 64 * 1024 * 1024 })).stdout,
-	};
-}
-
 /**
  * Copies each side's rendezvous files to the other until `stopped`: both
  * sides write a file once, whole, by renaming, so a file is copied once.
@@ -734,7 +707,7 @@ async function measureAcross(root: string, signal: AbortSignal, options: Latency
 		await fetchEvidence().catch(() => undefined);
 		// A side that did not quit stops with its unit; nothing is left there.
 		await shell.output(`systemctl --user stop ${shellWord(unit)} 2>/dev/null; ${remoteRendezvous ? `rm -rf ${shellWord(remoteRendezvous)} ${shellWord(`${remoteRendezvous}-profile`)}` : 'true'}; ${remoteOutput ? `rm -rf ${shellWord(remoteOutput)}` : 'true'}`).catch(() => undefined);
-		await promisify(execFile)('ssh', [...shell.args.slice(0, -1), '-O', 'exit', remote.destination]).catch(() => undefined);
+		await shell.close();
 		await processes.stop();
 		await rm(work, { recursive: true, force: true });
 	}
