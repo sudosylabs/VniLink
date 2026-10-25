@@ -46,6 +46,7 @@ opt-level = 3
 napi-build = { path = "vendor/napi-build" }
 iroh = { path = "vendor/iroh" }
 enigo = { path = "vendor/enigo" }
+libva = { path = "vendor/libva" }
 cpal = { path = "vendor/cpal" }
 portable-pty = { path = "vendor/portable-pty" }
 

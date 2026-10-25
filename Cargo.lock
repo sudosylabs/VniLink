@@ -2653,8 +2653,6 @@ dependencies = [
 [[package]]
 name = "libva"
 version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "493a749de39d6db1d1923fa90bc659ca7db2f9ca1481dcc84add045552185516"
 dependencies = [
  "bindgen 0.72.1",
  "bitflags 2.13.2",
