@@ -1253,6 +1253,7 @@ fn native_camera_callback_and_frame_queue_cross_ffi() {
         display_id: 0,
         revision: 0,
         role: Default::default(),
+        regions: None,
         timing: Default::default(),
     };
     source.publish(expected.clone()).unwrap();

@@ -416,6 +416,62 @@ fn a_frame_carries_its_capture_to_send_time_and_its_queued_time() {
     );
 }
 
+/// A changed picture says where it changed; more places than a frame
+/// carries, or a picture that is not a change, say nothing.
+#[test]
+fn a_changed_frame_carries_where_it_changed() {
+    use crate::{Region, MAX_REGIONS};
+    let clock = Region {
+        x: 1800,
+        y: 1040,
+        width: 96,
+        height: 24,
+    };
+    let frame = EncodedFrame::h264(false, 5, vec![0x41, 2])
+        .unwrap()
+        .with_regions(Some(vec![clock]));
+    let back = decode_video_body(&encode_video_body(&frame)).unwrap();
+    assert_eq!(back.regions, Some(vec![clock]));
+    assert_eq!(back.payload, vec![0x41, 2]);
+    // None changed: an empty list is a statement too.
+    let none = frame.clone().with_regions(Some(Vec::new()));
+    assert_eq!(
+        decode_video_body(&encode_video_body(&none))
+            .unwrap()
+            .regions,
+        Some(Vec::new())
+    );
+    let many = frame
+        .clone()
+        .with_regions(Some(vec![clock; MAX_REGIONS + 1]));
+    assert_eq!(many.regions, None);
+    assert_eq!(
+        decode_video_body(&encode_video_body(&many))
+            .unwrap()
+            .regions,
+        None
+    );
+    // A repeat of the screen says nothing of regions, whatever it holds.
+    let repeat = frame.clone().unchanged();
+    assert_eq!(
+        decode_video_body(&encode_video_body(&repeat))
+            .unwrap()
+            .regions,
+        None
+    );
+    // Regions on a repeat, and a count past the limit or past the body, are
+    // malformed.
+    let mut body = encode_video_body(&frame);
+    body[1] |= 4;
+    assert!(matches!(decode_video_body(&body), Err(Error::Malformed)));
+    let mut body = encode_video_body(&frame);
+    body[30] = (MAX_REGIONS + 1) as u8;
+    assert!(matches!(decode_video_body(&body), Err(Error::Malformed)));
+    let mut body = encode_video_body(&frame);
+    body[30] = 2;
+    assert!(matches!(decode_video_body(&body), Err(Error::Malformed)));
+}
+
 #[test]
 fn h264_frames_round_trip_and_reject_a_bad_payload() {
     assert!(matches!(
@@ -439,10 +495,10 @@ fn h264_frames_round_trip_and_reject_a_bad_payload() {
     assert_eq!((back.display_id, back.revision), (3, 7));
 
     let mut flags = encode_video_body(&EncodedFrame::h264(true, 7, vec![4]).unwrap());
-    // Bits past the keyframe and role bits are ignored.
-    flags[1] = 0xF9;
+    // Bits past the keyframe, role and region bits are ignored.
+    flags[1] = 0xF1;
     assert!(decode_video_body(&flags).unwrap().keyframe);
-    flags[1] = 0xF8;
+    flags[1] = 0xF0;
     assert!(!decode_video_body(&flags).unwrap().keyframe);
 
     assert!(matches!(

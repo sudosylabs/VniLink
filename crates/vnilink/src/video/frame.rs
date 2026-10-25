@@ -8,8 +8,16 @@ use crate::error::Error;
 use super::MAX_VIDEO_FRAME;
 
 /// Header before the payload: codec, flags, timestamp, source display id,
-/// source topology revision, and the host's capture-to-send time.
+/// source topology revision, and the host's capture-to-send time. A frame
+/// that says where it changed has its regions between this and the payload.
 pub(crate) const VIDEO_HEADER: usize = 30;
+
+/// The most regions a frame carries; a picture changed in more places says
+/// none, as if all of it changed.
+pub const MAX_REGIONS: usize = 64;
+
+/// The bytes the regions may add after [`VIDEO_HEADER`]: a count, then each.
+const MAX_REGION_BYTES: usize = 1 + MAX_REGIONS * 8;
 use super::VideoCodec;
 
 /// One encoded H.264 frame. Construct it with [`EncodedFrame::h264`].
@@ -35,8 +43,21 @@ pub struct EncodedFrame {
     pub revision: u64,
     /// What the picture is to the stream: see [`FrameRole`].
     pub role: FrameRole,
+    /// Where the picture differs from the one before it in the stream, in
+    /// its own pixels; `None` when the host cannot say, as if all of it did.
+    /// Only a [`FrameRole::Changed`] picture says.
+    pub regions: Option<Vec<Region>>,
     /// How long the frame took to get here; telemetry, not content.
     pub timing: FrameTiming,
+}
+
+/// A part of a picture, in its pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Region {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
 }
 
 /// What a frame's picture is to its stream.
@@ -58,6 +79,7 @@ pub enum FrameRole {
 const FLAG_KEYFRAME: u8 = 1;
 const FLAG_STILL: u8 = 2;
 const FLAG_UNCHANGED: u8 = 4;
+const FLAG_REGIONS: u8 = 8;
 
 /// Where a frame's time went, for the latency of each stage. Timing is not
 /// part of a frame's identity: frames with the same picture compare equal
@@ -105,8 +127,16 @@ impl EncodedFrame {
             display_id: 0,
             revision: 0,
             role: FrameRole::Changed,
+            regions: None,
             timing: FrameTiming::default(),
         })
+    }
+
+    /// Says where the picture changed; more than [`MAX_REGIONS`] say
+    /// nothing, as if all of it did.
+    pub fn with_regions(mut self, regions: Option<Vec<Region>>) -> Self {
+        self.regions = regions.filter(|regions| regions.len() <= MAX_REGIONS);
+        self
     }
 
     /// A still picture: an AV1 4:4:4 keyframe of a still screen.
@@ -161,6 +191,7 @@ impl fmt::Debug for EncodedFrame {
             .field("display_id", &self.display_id)
             .field("revision", &self.revision)
             .field("role", &self.role)
+            .field("regions", &self.regions.as_ref().map(Vec::len))
             .field("timing", &self.timing)
             .field("payload_len", &self.payload.len())
             .finish()
@@ -177,7 +208,7 @@ fn validate_payload(payload: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 pub(crate) fn check_video_len(len: usize) -> Result<(), Error> {
-    if len < VIDEO_HEADER || len > VIDEO_HEADER + MAX_VIDEO_FRAME {
+    if len < VIDEO_HEADER || len > VIDEO_HEADER + MAX_REGION_BYTES + MAX_VIDEO_FRAME {
         Err(Error::Malformed)
     } else {
         Ok(())
@@ -185,10 +216,15 @@ pub(crate) fn check_video_len(len: usize) -> Result<(), Error> {
 }
 
 pub(crate) fn encode_video_body(frame: &EncodedFrame) -> Vec<u8> {
-    let mut body = Vec::with_capacity(VIDEO_HEADER + frame.payload.len());
+    let regions = frame
+        .regions
+        .as_ref()
+        .filter(|regions| frame.role == FrameRole::Changed && regions.len() <= MAX_REGIONS);
+    let mut body = Vec::with_capacity(VIDEO_HEADER + MAX_REGION_BYTES + frame.payload.len());
     body.push(frame.codec.wire_id());
     body.push(
         if frame.keyframe { FLAG_KEYFRAME } else { 0 }
+            | if regions.is_some() { FLAG_REGIONS } else { 0 }
             | match frame.role {
                 FrameRole::Changed => 0,
                 FrameRole::Unchanged => FLAG_UNCHANGED,
@@ -205,6 +241,14 @@ pub(crate) fn encode_video_body(frame: &EncodedFrame) -> Vec<u8> {
         .captured_at
         .map_or(frame.timing.host_us, micros_since);
     body.extend_from_slice(&host_us.to_be_bytes());
+    if let Some(regions) = regions {
+        body.push(regions.len() as u8);
+        for region in regions {
+            for value in [region.x, region.y, region.width, region.height] {
+                body.extend_from_slice(&value.to_be_bytes());
+            }
+        }
+    }
     body.extend_from_slice(&frame.payload);
     body
 }
@@ -228,10 +272,36 @@ pub(crate) fn decode_video_body(body: &[u8]) -> Result<EncodedFrame, Error> {
         (true, false) if keyframe && codec == VideoCodec::Av1 => FrameRole::Still,
         _ => return Err(Error::Malformed),
     };
-    let mut frame = EncodedFrame::new(codec, keyframe, timestamp_us, body[VIDEO_HEADER..].to_vec())
+    let mut payload = &body[VIDEO_HEADER..];
+    let mut regions = None;
+    if flags & FLAG_REGIONS != 0 {
+        // Only a changed picture says where it changed.
+        if role != FrameRole::Changed {
+            return Err(Error::Malformed);
+        }
+        let (&count, rest) = payload.split_first().ok_or(Error::Malformed)?;
+        let count = usize::from(count);
+        if count > MAX_REGIONS || rest.len() < count * 8 {
+            return Err(Error::Malformed);
+        }
+        let value = |at: usize| u16::from_be_bytes([rest[at], rest[at + 1]]);
+        regions = Some(
+            (0..count)
+                .map(|index| Region {
+                    x: value(index * 8),
+                    y: value(index * 8 + 2),
+                    width: value(index * 8 + 4),
+                    height: value(index * 8 + 6),
+                })
+                .collect(),
+        );
+        payload = &rest[count * 8..];
+    }
+    let mut frame = EncodedFrame::new(codec, keyframe, timestamp_us, payload.to_vec())
         .map(|frame| frame.with_source(display_id, revision))
         .map_err(|_| Error::Malformed)?;
     frame.role = role;
+    frame.regions = regions;
     frame.timing.host_us = host_us;
     Ok(frame)
 }

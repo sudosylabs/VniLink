@@ -53,8 +53,8 @@ impl vnilink_media::NativePicture for MacPicture {
     }
 }
 
-/// The share of the picture that changed between two BGRA pixel buffers:
-/// 0 for the same picture. ScreenCaptureKit marks a frame complete at the
+/// Where the picture changed between two BGRA pixel buffers: nothing for
+/// the same picture. ScreenCaptureKit marks a frame complete at the
 /// full frame rate whether or not anything on the screen changed, and
 /// attaches no dirty rects, so only the pixels say. Both stay where they
 /// are: on Apple silicon the buffers are in shared memory and are read in
@@ -63,7 +63,7 @@ impl vnilink_media::NativePicture for MacPicture {
 pub(crate) fn picture_change(
     left: &apple_cf::cv::CVPixelBuffer,
     right: &apple_cf::cv::CVPixelBuffer,
-) -> Option<f32> {
+) -> Option<vnilink_media::Changes> {
     let (Ok(size), Ok(other)) = (bgra_size(left), bgra_size(right)) else {
         return None;
     };

@@ -180,7 +180,7 @@ impl SCStreamOutputTrait for Handler {
             changed = previous
                 .as_ref()
                 .and_then(|previous| crate::pixels::picture_change(previous, &kept));
-            if changed == Some(0.0) {
+            if changed.as_ref().is_some_and(|changes| changes.share == 0.0) {
                 return;
             }
             *previous = Some(kept);

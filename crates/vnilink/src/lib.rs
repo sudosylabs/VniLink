@@ -173,8 +173,8 @@ pub use system::{
 };
 pub use video::{
     picture_buffer_bits, CodecSupport, Condition, ConditionEntry, ConditionSet, EncodedFrame,
-    Evidence, FrameRole, FrameTiming, HostCapture, RecordingVideoTap, VideoCodec,
-    VideoSubscription, YuvMatrix, MAX_VIDEO_FRAME, PICTURE_DRAIN, STILL_DRAIN,
+    Evidence, FrameRole, FrameTiming, HostCapture, RecordingVideoTap, Region, VideoCodec,
+    VideoSubscription, YuvMatrix, MAX_REGIONS, MAX_VIDEO_FRAME, PICTURE_DRAIN, STILL_DRAIN,
 };
 pub use video_caps::{
     clamp_quality, negotiate as negotiate_video_codec, AgreedCodec, EncoderImplementation,

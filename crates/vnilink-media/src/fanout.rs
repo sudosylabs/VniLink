@@ -218,6 +218,53 @@ struct TargetSink<'a> {
     captured_at: Option<Instant>,
     /// The picture being encoded shows the same screen as the one before.
     unchanged: bool,
+    /// Where the screen changed since the last picture sent, in capture
+    /// pixels; `None` when that is not known, as after pictures missed.
+    pending: Option<Vec<vnilink::Region>>,
+    /// The capture's size and the encoded picture's, to place the regions.
+    capture: (u16, u16),
+    picture: (u16, u16),
+}
+
+impl TargetSink<'_> {
+    /// Adds where a picture changed the screen to what the next picture
+    /// sent says; `None` says nothing more can be said.
+    fn add(&mut self, regions: Option<&[vnilink::Region]>) {
+        self.pending = self
+            .pending
+            .take()
+            .zip(regions)
+            .and_then(|(mut pending, regions)| {
+                pending.extend_from_slice(regions);
+                (pending.len() <= vnilink::MAX_REGIONS).then_some(pending)
+            });
+    }
+
+    /// `region` of the capture in the encoded picture's pixels, grown to
+    /// whole pixels.
+    fn placed(&self, region: vnilink::Region) -> vnilink::Region {
+        let along = |at: u16, from: u16, to: u16, up: bool| -> u16 {
+            let scaled = u32::from(at) * u32::from(to);
+            let from = u32::from(from.max(1));
+            (if up {
+                scaled.div_ceil(from)
+            } else {
+                scaled / from
+            })
+            .min(u32::from(to)) as u16
+        };
+        let ((cw, ch), (pw, ph)) = (self.capture, self.picture);
+        let left = along(region.x, cw, pw, false);
+        let top = along(region.y, ch, ph, false);
+        let right = along(region.x.saturating_add(region.width), cw, pw, true);
+        let bottom = along(region.y.saturating_add(region.height), ch, ph, true);
+        vnilink::Region {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+        }
+    }
 }
 
 impl FrameSink for TargetSink<'_> {
@@ -236,8 +283,23 @@ impl FrameSink for TargetSink<'_> {
         if frame.timing.captured_at.is_none() {
             frame.timing.captured_at = self.captured_at;
         }
-        if self.unchanged {
-            frame = frame.unchanged();
+        // A stream picture says where it differs from the one sent before
+        // it: the screen's changes since, pictures the encoder skipped
+        // included. One the encoder made of an unchanged screen after such
+        // changes is a change too.
+        if frame.role != vnilink::FrameRole::Still {
+            let regions = self.pending.replace(Vec::new());
+            let changed = regions.as_ref().is_none_or(|regions| !regions.is_empty());
+            if self.unchanged && !changed {
+                frame = frame.unchanged();
+            } else {
+                frame = frame.with_regions(regions.map(|regions| {
+                    regions
+                        .into_iter()
+                        .map(|region| self.placed(region))
+                        .collect()
+                }));
+            }
         }
         // Attest the revision the pixels were captured for, read live:
         // a supervisor re-attesting an unchanged capture updates the
@@ -281,6 +343,22 @@ fn fail_target(core: &Core, target: &VideoTarget, failure: StreamFailure) {
     }
 }
 
+/// Where `cursor` is drawn on the screen, when it is.
+fn pointer_bounds(cursor: &CursorState) -> Option<vnilink::Region> {
+    let image = cursor.image.as_ref().filter(|_| cursor.visible)?;
+    let left = i64::from(cursor.position.0) - i64::from(image.hotspot().0);
+    let top = i64::from(cursor.position.1) - i64::from(image.hotspot().1);
+    let right = (left + i64::from(image.width())).clamp(0, i64::from(u16::MAX));
+    let bottom = (top + i64::from(image.height())).clamp(0, i64::from(u16::MAX));
+    let (left, top) = (left.clamp(0, right), top.clamp(0, bottom));
+    Some(vnilink::Region {
+        x: left as u16,
+        y: top as u16,
+        width: (right - left) as u16,
+        height: (bottom - top) as u16,
+    })
+}
+
 /// The most of the screen a change may cover and leave a still where it
 /// is: a clock, a caret or a few typed letters. The viewer redraws such a
 /// change from the stream over the still, tile by tile.
@@ -289,7 +367,9 @@ const SMALL_CHANGE: f32 = 0.02;
 /// Whether `frame` changed only a little of the screen, as its source says;
 /// a source that cannot say changed all of it.
 fn small_change(frame: &RawFrame) -> bool {
-    frame.changed().is_some_and(|share| share <= SMALL_CHANGE)
+    frame
+        .changed()
+        .is_some_and(|changes| changes.share <= SMALL_CHANGE)
 }
 
 /// One target's still pictures: asked for once the screen has had no more
@@ -390,7 +470,12 @@ fn consume<E, F>(
         capture_revision,
         captured_at: None,
         unchanged: false,
+        pending: None,
+        capture: capture_size,
+        picture: capture_size,
     };
+    // Where the pointer drawn into the picture last was.
+    let mut drawn_pointer: Option<vnilink::Region> = None;
     // The encoder as last reported: at open, at every reopen, and whenever
     // a picture took another input than the one before.
     let mut reported = session.implementation();
@@ -519,12 +604,31 @@ fn consume<E, F>(
         else {
             continue;
         };
+        // Pictures missed between two read here changed the screen where
+        // none can say.
+        if seen != 0 && generation > seen.wrapping_add(1) {
+            sink.pending = None;
+        }
         seen = generation;
         sink.captured_at = captured_at;
         sink.unchanged = unchanged;
-        if !unchanged && !small_change(&frame) {
-            stills.changed();
+        if !unchanged {
+            sink.add(
+                frame
+                    .changed()
+                    .and_then(|changes| changes.regions.as_deref()),
+            );
+            if !small_change(&frame) {
+                stills.changed();
+            }
         }
+        sink.picture = encoded_size(
+            capture_size.0,
+            capture_size.1,
+            applied_quality.max_width,
+            applied_quality.max_height,
+        )
+        .unwrap_or(capture_size);
         if frame.width() != capture_size.0 || frame.height() != capture_size.1 {
             // The source changed size. Leave the target up so the supervisor
             // can open a fresh encoder; do not close the peer.
@@ -560,6 +664,13 @@ fn consume<E, F>(
                 }
             }
         } else if let Some(cursor) = cursor.as_ref() {
+            // A pointer drawn into the picture changes it where it was and where it is.
+            let pointer = pointer_bounds(cursor);
+            if pointer != drawn_pointer {
+                let places: Vec<_> = drawn_pointer.into_iter().chain(pointer).collect();
+                sink.add(Some(&places));
+                drawn_pointer = pointer;
+            }
             match composite(&frame, cursor) {
                 Ok(composited) => frame = composited,
                 Err(_) => {

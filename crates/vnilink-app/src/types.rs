@@ -271,7 +271,41 @@ pub struct FfiEncodedFrame {
     pub display_id: u64,
     pub revision: u64,
     pub role: FfiFrameRole,
+    /// Where the picture changed since the one before it; see
+    /// [`vnilink::EncodedFrame::regions`].
+    pub regions: Option<Vec<FfiRegion>>,
     pub timing: FfiFrameTiming,
+}
+
+/// A part of a picture, in its pixels; see [`vnilink::Region`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FfiRegion {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+impl From<vnilink::Region> for FfiRegion {
+    fn from(value: vnilink::Region) -> Self {
+        Self {
+            x: value.x,
+            y: value.y,
+            width: value.width,
+            height: value.height,
+        }
+    }
+}
+
+impl From<FfiRegion> for vnilink::Region {
+    fn from(value: FfiRegion) -> Self {
+        Self {
+            x: value.x,
+            y: value.y,
+            width: value.width,
+            height: value.height,
+        }
+    }
 }
 
 /// What a frame is to the picture; see [`vnilink::FrameRole`].
@@ -355,7 +389,14 @@ impl FfiEncodedFrame {
             }),
         };
         frame
-            .map(|frame| frame.with_source(self.display_id, self.revision))
+            .map(|frame| {
+                frame
+                    .with_source(self.display_id, self.revision)
+                    .with_regions(
+                        self.regions
+                            .map(|regions| regions.into_iter().map(Into::into).collect()),
+                    )
+            })
             .map_err(map_error)
     }
 }
@@ -369,6 +410,9 @@ impl From<vnilink::EncodedFrame> for FfiEncodedFrame {
             display_id: value.display_id,
             revision: value.revision,
             role: value.role.into(),
+            regions: value
+                .regions
+                .map(|regions| regions.into_iter().map(Into::into).collect()),
             timing: FfiFrameTiming {
                 host_us: value.timing.host_us,
                 queued_us: value.timing.queued_us,
@@ -385,6 +429,7 @@ impl std::fmt::Debug for FfiEncodedFrame {
             .field("display_id", &self.display_id)
             .field("revision", &self.revision)
             .field("role", &self.role)
+            .field("regions", &self.regions.as_ref().map(Vec::len))
             .field("payload_len", &self.payload.len())
             .finish()
     }

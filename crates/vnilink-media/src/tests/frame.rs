@@ -89,24 +89,39 @@ fn clones_and_shared_frames_hold_the_same_pixels() {
     assert!(RawFrame::shared(64, 32, 63 * 4, 0, frame.shared_pixels()).is_err());
 }
 
-/// The share of a picture rectangles cover, clipped to it and never above all of it.
+/// Rectangles give the share of the picture they cover, clipped to it, and
+/// where; more than a frame carries say no places.
 #[test]
-fn rectangles_give_the_share_of_the_picture_they_cover() {
-    use crate::changed_share;
-    assert_eq!(changed_share([[0, 0, 50, 100]], 100, 100), 0.5);
-    // Clipped at the edges.
-    assert_eq!(changed_share([[-50, 0, 100, 100]], 100, 100), 0.5);
+fn rectangles_give_where_and_how_much_of_the_picture_changed() {
+    use crate::Changes;
+    let half = Changes::of([[0, 0, 50, 100]], 100, 100);
+    assert_eq!(half.share, 0.5);
     assert_eq!(
-        changed_share([[0, 0, 100, 100], [0, 0, 100, 100]], 100, 100),
-        1.0
+        half.regions,
+        Some(vec![vnilink::Region {
+            x: 0,
+            y: 0,
+            width: 50,
+            height: 100
+        }])
     );
-    assert_eq!(changed_share(std::iter::empty(), 100, 100), 0.0);
+    // Clipped at the edges; empty ones say nothing.
+    let clipped = Changes::of([[-50, 0, 100, 100], [10, 10, 0, 5]], 100, 100);
+    assert_eq!(clipped.share, 0.5);
+    assert_eq!(clipped.regions.map(|regions| regions.len()), Some(1));
+    assert_eq!(Changes::of([[0, 0, 100, 100]; 2], 100, 100).share, 1.0);
+    let many = Changes::of((0..65).map(|x| [x, 0, 1, 1]), 100, 100);
+    assert_eq!(many.regions, None);
+    // Joined: shares add, places run on until there are too many.
+    let joined = half.clone().join(Changes::none());
+    assert_eq!(joined, half);
+    assert_eq!(half.clone().join(many).regions, None);
 }
 
 /// Tiles compare their pixels and not the rows' padding; a picture too
 /// short for its rows cannot be compared.
 #[test]
-fn tiles_that_differ_give_the_share_of_the_picture_that_changed() {
+fn tiles_that_differ_say_where_the_picture_changed() {
     use crate::changed_tiles;
     // Two pictures of 128 by 64 pixels, two tiles, one padded by 16 bytes a row.
     let left = vec![9u8; 128 * 4 * 64];
@@ -114,17 +129,19 @@ fn tiles_that_differ_give_the_share_of_the_picture_that_changed() {
     for y in 0..64 {
         right[y * (128 * 4 + 16)..][..128 * 4].fill(9);
     }
-    assert_eq!(
-        changed_tiles((&left, 512), (&right, 528), 128, 64),
-        Some(0.0)
-    );
+    let same = changed_tiles((&left, 512), (&right, 528), 128, 64).unwrap();
+    assert_eq!((same.share, same.regions), (0.0, Some(Vec::new())));
     right[10 * 528 + 70 * 4] = 1;
+    let one = changed_tiles((&left, 512), (&right, 528), 128, 64).unwrap();
+    assert_eq!(one.share, 0.5);
     assert_eq!(
-        changed_tiles((&left, 512), (&right, 528), 128, 64),
-        Some(0.5)
+        one.regions,
+        Some(vec![vnilink::Region {
+            x: 64,
+            y: 0,
+            width: 64,
+            height: 64
+        }])
     );
-    assert_eq!(
-        changed_tiles((&left, 512), (&right[..1000], 528), 128, 64),
-        None
-    );
+    assert!(changed_tiles((&left, 512), (&right[..1000], 528), 128, 64).is_none());
 }

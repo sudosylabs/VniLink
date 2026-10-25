@@ -364,7 +364,7 @@ impl WindowsCapture {
             if presented {
                 let frame = self.copy_resource(resource.as_ref(), timestamp_us)?;
                 Ok(frame.map(|frame| {
-                    let changed = self.changed_share(&info, frame.width(), frame.height());
+                    let changed = self.changes(&info, frame.width(), frame.height());
                     frame
                         .with_captured_at(presented_at(info.LastPresentTime))
                         .with_changed(changed)
@@ -379,16 +379,16 @@ impl WindowsCapture {
         frame
     }
 
-    /// The share of the output the acquired frame changed, from Desktop
+    /// Where the acquired frame changed the output, from Desktop
     /// Duplication's dirty rectangles and where its moves landed, over every
     /// frame it accumulated; `None` when it cannot say. Read before the
     /// frame is released.
-    unsafe fn changed_share(
+    unsafe fn changes(
         &self,
         info: &DXGI_OUTDUPL_FRAME_INFO,
         width: u16,
         height: u16,
-    ) -> Option<f32> {
+    ) -> Option<vnilink_media::Changes> {
         let bytes = info.TotalMetadataBufferSize as usize;
         if bytes == 0 {
             return None;
@@ -426,7 +426,7 @@ impl WindowsCapture {
                     i64::from(rect.bottom) - i64::from(rect.top),
                 ]
             });
-        Some(vnilink_media::changed_share(
+        Some(vnilink_media::Changes::of(
             rects,
             u32::from(width),
             u32::from(height),

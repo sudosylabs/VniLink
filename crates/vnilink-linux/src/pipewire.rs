@@ -1156,15 +1156,15 @@ fn copy_buffer(stream: &pw::stream::Stream, state: &mut ListenerState) {
         captured_at: Some(Instant::now()),
         changed: damage
             .as_deref()
-            .map(|damage| damaged_share(damage, width, height)),
+            .map(|damage| damage_changes(damage, width, height)),
     });
     record_delivery(shared, false);
 }
 
-/// The share of the screen a buffer's damage covers. SPA ends the list at
+/// Where a buffer's damage says the screen changed. SPA ends the list at
 /// the first empty region.
-fn damaged_share(damage: &[[i32; 4]], width: u16, height: u16) -> f32 {
-    vnilink_media::changed_share(
+fn damage_changes(damage: &[[i32; 4]], width: u16, height: u16) -> vnilink_media::Changes {
+    vnilink_media::Changes::of(
         damage
             .iter()
             .take_while(|region| region[2] > 0 && region[3] > 0)
@@ -1237,7 +1237,7 @@ fn push_dma_buf(
                 stride: usize::from(width) * 4,
                 bytes: vnilink_media::Pixels::native(Box::new(picture)),
                 captured_at: Some(Instant::now()),
-                changed: damage.map(|damage| damaged_share(damage, width, height)),
+                changed: damage.map(|damage| damage_changes(damage, width, height)),
             });
             record_delivery(shared, true);
         }

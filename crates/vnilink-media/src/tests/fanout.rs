@@ -1052,6 +1052,7 @@ impl FrameSource for ColouredStill {
 struct Ticking {
     started: Instant,
     share: f32,
+    regions: Option<Vec<vnilink::Region>>,
     page: RawFrame,
 }
 
@@ -1065,7 +1066,10 @@ impl FrameSource for Ticking {
             self.page
                 .clone()
                 .with_timestamp(timestamp)
-                .with_changed(Some(self.share)),
+                .with_changed(Some(crate::Changes {
+                    share: self.share,
+                    regions: self.regions.clone(),
+                })),
         ))
     }
 
@@ -1108,6 +1112,19 @@ fn roles_of(
     shows: bool,
     watch: Duration,
 ) -> Vec<vnilink::FrameRole> {
+    frames_of(source, shows, watch)
+        .into_iter()
+        .map(|frame| frame.role)
+        .collect()
+}
+
+/// The frames a viewer receives over `watch` of `source`, as
+/// [`roles_of`] serves it.
+fn frames_of(
+    source: impl FrameSource + Send + 'static,
+    shows: bool,
+    watch: Duration,
+) -> Vec<vnilink::EncodedFrame> {
     let host = Arc::new(boot());
     let viewer = boot();
     host.set_capture(Box::new(StillsCapture)).unwrap();
@@ -1170,7 +1187,7 @@ fn roles_of(
             if frame.role == vnilink::FrameRole::Still {
                 assert_eq!(frame.display_id, 7, "a still is stamped like any picture");
             }
-            roles.push(frame.role);
+            roles.push(frame);
         }
     }
     stop.store(true, Ordering::Relaxed);
@@ -1207,12 +1224,53 @@ fn small_changes_still_bring_a_still_and_large_ones_do_not() {
     let ticking = |share| Ticking {
         started: Instant::now(),
         share,
+        regions: None,
         page: crate::measure::colour_text_page(COLOURED.0, COLOURED.1, 0),
     };
     let roles = roles_of(ticking(0.01), true, watch);
     assert!(roles.contains(&vnilink::FrameRole::Still), "{roles:?}");
     let roles = roles_of(ticking(0.5), true, watch);
     assert!(!roles.contains(&vnilink::FrameRole::Still), "{roles:?}");
+}
+
+/// A picture says where the screen changed since the picture sent before
+/// it, as its source told the host.
+#[test]
+fn a_changed_picture_says_where_the_screen_changed() {
+    let clock = vnilink::Region {
+        x: 40,
+        y: 56,
+        width: 20,
+        height: 8,
+    };
+    let frames = frames_of(
+        Ticking {
+            started: Instant::now(),
+            share: 0.04,
+            regions: Some(vec![clock]),
+            page: crate::measure::colour_text_page(COLOURED.0, COLOURED.1, 0),
+        },
+        false,
+        Duration::from_millis(1_600),
+    );
+    // The first picture is the whole screen; the ticks after it say the clock.
+    assert_eq!(
+        frames.first().map(|frame| frame.regions.clone()),
+        Some(None)
+    );
+    let ticks: Vec<_> = frames
+        .iter()
+        .skip(1)
+        .filter(|frame| frame.role == vnilink::FrameRole::Changed)
+        .collect();
+    assert!(!ticks.is_empty(), "{frames:?}");
+    assert!(
+        ticks.iter().all(|frame| frame
+            .regions
+            .as_ref()
+            .is_some_and(|regions| regions.contains(&clock))),
+        "{frames:?}"
+    );
 }
 
 /// A source that is told of each picture as it arrives, as the platform

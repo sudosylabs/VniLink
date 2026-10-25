@@ -19,7 +19,7 @@ pub struct RawFrame {
     stride: usize,
     timestamp_us: u64,
     captured_at: Option<Instant>,
-    changed: Option<f32>,
+    changed: Option<Changes>,
     bgra: Pixels,
 }
 
@@ -127,15 +127,15 @@ impl RawFrame {
         self
     }
 
-    /// The share of the picture, from 0 to 1, that its source says changed
-    /// since the picture it delivered before; `None` when the source cannot
-    /// say, which counts as all of it.
-    pub fn changed(&self) -> Option<f32> {
-        self.changed
+    /// Where its source says the picture changed since the one it
+    /// delivered before; `None` when the source cannot say, which counts as
+    /// all of it.
+    pub fn changed(&self) -> Option<&Changes> {
+        self.changed.as_ref()
     }
 
-    pub fn with_changed(mut self, changed: Option<f32>) -> Self {
-        self.changed = changed.map(|share| share.clamp(0.0, 1.0));
+    pub fn with_changed(mut self, changed: Option<Changes>) -> Self {
+        self.changed = changed;
         self
     }
 
@@ -168,7 +168,7 @@ impl Clone for RawFrame {
             stride: self.stride,
             timestamp_us: self.timestamp_us,
             captured_at: self.captured_at,
-            changed: self.changed,
+            changed: self.changed.clone(),
             bgra: self.bgra.clone(),
         }
     }
@@ -257,46 +257,96 @@ fn row_bytes(width: u16) -> usize {
     usize::from(width) * 4
 }
 
-/// The share of a `width` by `height` picture that `rects` cover, each as
-/// `[x, y, width, height]` and clipped to the picture. Overlaps count twice,
-/// so the share is never below what changed.
-pub fn changed_share(rects: impl IntoIterator<Item = [i64; 4]>, width: u32, height: u32) -> f32 {
-    let area = u64::from(width) * u64::from(height);
-    if area == 0 {
-        return 1.0;
+/// Where a picture changed since the one before it: how much of it, and
+/// where, as long as a frame can carry the places.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Changes {
+    /// The share of the picture, from 0 to 1; overlaps count twice, so it
+    /// is never below what changed.
+    pub share: f32,
+    /// The changed parts, in the picture's pixels; `None` when they were
+    /// more than [`vnilink::MAX_REGIONS`].
+    pub regions: Option<Vec<vnilink::Region>>,
+}
+
+impl Changes {
+    /// Nothing changed.
+    pub fn none() -> Self {
+        Self {
+            share: 0.0,
+            regions: Some(Vec::new()),
+        }
     }
-    let covered: u64 = rects
-        .into_iter()
-        .map(|[x, y, w, h]| {
+
+    /// The changes `rects` make to a `width` by `height` picture, each as
+    /// `[x, y, width, height]` and clipped to it; empty ones say nothing.
+    pub fn of(rects: impl IntoIterator<Item = [i64; 4]>, width: u32, height: u32) -> Self {
+        let area = u64::from(width) * u64::from(height);
+        let mut covered = 0u64;
+        let mut regions = Some(Vec::new());
+        for [x, y, w, h] in rects {
             let left = x.clamp(0, i64::from(width));
             let top = y.clamp(0, i64::from(height));
             let right = x.saturating_add(w).clamp(0, i64::from(width));
             let bottom = y.saturating_add(h).clamp(0, i64::from(height));
-            ((right - left).max(0) * (bottom - top).max(0)) as u64
-        })
-        .sum();
-    (covered.min(area) as f64 / area as f64) as f32
+            if right <= left || bottom <= top {
+                continue;
+            }
+            covered += ((right - left) * (bottom - top)) as u64;
+            regions = regions
+                .filter(|regions: &Vec<vnilink::Region>| regions.len() < vnilink::MAX_REGIONS)
+                .map(|mut regions| {
+                    regions.push(vnilink::Region {
+                        x: left as u16,
+                        y: top as u16,
+                        width: (right - left) as u16,
+                        height: (bottom - top) as u16,
+                    });
+                    regions
+                });
+        }
+        Self {
+            share: if area == 0 {
+                1.0
+            } else {
+                (covered.min(area) as f64 / area as f64) as f32
+            },
+            regions,
+        }
+    }
+
+    /// The changes of two pictures in turn.
+    pub fn join(self, after: Self) -> Self {
+        Self {
+            share: (self.share + after.share).min(1.0),
+            regions: self
+                .regions
+                .zip(after.regions)
+                .and_then(|(mut regions, after)| {
+                    regions.extend(after);
+                    (regions.len() <= vnilink::MAX_REGIONS).then_some(regions)
+                }),
+        }
+    }
 }
 
 /// The side of the tiles [`changed_tiles`] compares, in pixels.
 const CHANGE_TILE: usize = 64;
 
-/// The share of [`CHANGE_TILE`]-pixel tiles whose pixels differ between two
-/// BGRA pictures of `width` by `height`, `left` and `right` each with its
-/// stride: 0 for the same picture. Row padding is not compared; `None` when
-/// either is too short for its rows.
+/// Where two BGRA pictures of `width` by `height` differ, by
+/// [`CHANGE_TILE`]-pixel tiles, `left` and `right` each with its stride:
+/// [`Changes::none`] for the same picture. Changed tiles side by side make
+/// one region. Row padding is not compared; `None` when either is too short
+/// for its rows.
 pub fn changed_tiles(
     (left, left_stride): (&[u8], usize),
     (right, right_stride): (&[u8], usize),
     width: u16,
     height: u16,
-) -> Option<f32> {
+) -> Option<Changes> {
     let (width, height) = (usize::from(width), usize::from(height));
     let columns = width.div_ceil(CHANGE_TILE);
     let rows = height.div_ceil(CHANGE_TILE);
-    if columns == 0 || rows == 0 {
-        return Some(0.0);
-    }
     let mut changed = vec![false; columns * rows];
     let row_bytes = width * 4;
     for y in 0..height {
@@ -312,5 +362,25 @@ pub fn changed_tiles(
             *tile = left_row[from..to] != right_row[from..to];
         }
     }
-    Some(changed.iter().filter(|tile| **tile).count() as f32 / changed.len() as f32)
+    let mut runs = Vec::new();
+    for row in 0..rows {
+        let mut column = 0;
+        while column < columns {
+            if !changed[row * columns + column] {
+                column += 1;
+                continue;
+            }
+            let start = column;
+            while column < columns && changed[row * columns + column] {
+                column += 1;
+            }
+            runs.push([
+                (start * CHANGE_TILE) as i64,
+                (row * CHANGE_TILE) as i64,
+                ((column - start) * CHANGE_TILE) as i64,
+                CHANGE_TILE as i64,
+            ]);
+        }
+    }
+    Some(Changes::of(runs, width as u32, height as u32))
 }

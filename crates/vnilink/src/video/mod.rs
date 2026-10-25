@@ -27,7 +27,7 @@ pub(crate) use datagram::{
 };
 pub(crate) use frame::micros_since;
 pub(crate) use frame::{check_video_len, decode_video_body, encode_video_body, VIDEO_HEADER};
-pub use frame::{EncodedFrame, FrameRole, FrameTiming};
+pub use frame::{EncodedFrame, FrameRole, FrameTiming, Region, MAX_REGIONS};
 pub(crate) use queue::{KeyframeFlag, QueueTelemetry, VideoInbox, VideoOutbox, VideoPush};
 pub use queue::{RecordingVideoTap, VideoSubscription};
 #[cfg(test)]
