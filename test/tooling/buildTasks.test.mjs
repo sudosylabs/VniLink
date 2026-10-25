@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { define, execute, parallel, series } from '../../build/lib/task.ts';
 import { ProcessRunner } from '../../build/lib/processes.ts';
 import { assertNativeFresh, compileNative, stageNative } from '../../build/lib/native.ts';
+import { selectServices, testkitServices } from '../../build/lib/test.ts';
 
 test('series runs in order, parallel settles every task, and failures stop later steps', async () => {
 	const events = [];
@@ -137,4 +138,15 @@ test('process tree teardown releases a descendant and closed owners cannot relau
 		assert(Date.now() < deadline, 'Descendant survived owner teardown');
 		await new Promise(resolve => setTimeout(resolve, 25));
 	}
+});
+
+test('each service with a suite in the test kit runs alone, and a service without one is refused', async () => {
+	const root = join(import.meta.dirname, '../..');
+	const tests = await testkitServices(root, 'tests');
+	const benches = await testkitServices(root, 'benches');
+	assert.ok(tests.includes('files') && tests.includes('desktop'), tests.join());
+	assert.ok(benches.includes('files') && benches.includes('desktop'), benches.join());
+	assert.deepEqual(selectServices(tests, ['files']), ['files']);
+	assert.deepEqual(selectServices(tests, []), tests);
+	assert.throws(() => selectServices(tests, ['files', 'fax']), /No suite for fax\. Services: .*files/);
 });

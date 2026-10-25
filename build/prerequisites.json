@@ -604,6 +604,14 @@
       "description": "Run the Rust tests",
       "same": "build"
     },
+    "test:service": {
+      "description": "Run one service's functional suite on this computer",
+      "same": "build"
+    },
+    "bench:service": {
+      "description": "Measure one service's performance on this computer",
+      "same": "build"
+    },
     "test:linux": {
       "description": "Run the checks and tests in the Linux container",
       "requires": ["platform", "node", "docker"]

@@ -5865,6 +5865,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vnilink-testkit"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde_json",
+ "vnilink",
+ "vnilink-log",
+ "vnilink-media",
+]
+
+[[package]]
 name = "vnilink-windows"
 version = "0.1.0"
 dependencies = [

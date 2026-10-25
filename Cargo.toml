@@ -11,6 +11,7 @@ members = [
     "crates/vnilink-app",
     "crates/vnilink-node",
     "crates/vnilink-log",
+    "crates/vnilink-testkit",
 ]
 resolver = "2"
 

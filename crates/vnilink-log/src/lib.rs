@@ -212,6 +212,12 @@ pub fn tail(max_bytes: usize) -> io::Result<String> {
     }
 }
 
+/// The log's clock: milliseconds since it was installed, as each event's
+/// `ms` says, so a caller can take the events after a moment of its own.
+pub fn now_ms() -> u64 {
+    u64::try_from(log().started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
 /// Everything the flight recorder holds, as JSON lines in time order: at
 /// most [`MAX_EXPORT_BYTES`], the newest kept, with a first line saying how
 /// many older events were left out when any were.

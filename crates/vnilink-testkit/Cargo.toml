@@ -1,0 +1,25 @@
+[package]
+name = "vnilink-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Engines on one computer, and each service's functional and performance suites"
+publish = false
+
+[dependencies]
+blake3 = "=1.8.7"
+serde_json = "=1.0.151"
+# Loopback engines that never reach a relay (`Core::open_direct`).
+vnilink = { path = "../vnilink", features = ["test-probes"] }
+vnilink-log = { path = "../vnilink-log" }
+vnilink-media = { path = "../vnilink-media" }
+
+# Each service's performance suite: `node build/run.ts bench:service <service>`.
+[[bench]]
+name = "files"
+harness = false
+
+[[bench]]
+name = "desktop"
+harness = false
