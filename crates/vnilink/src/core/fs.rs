@@ -6,6 +6,7 @@
 //! stream on the live control connection, carrying the versioned wire codec
 //! with the session generation, and the host re-checks generation and the
 //! transfer grant per request before touching its disks.
+// trace: records every ignored failure
 
 use super::*;
 
@@ -506,25 +507,46 @@ async fn dispatch_aux_host(
         return;
     }
     if tag == super::desktop_stream::TAG {
-        let _ =
-            super::desktop_stream::serve(shared, session_id, peer, send, recv, body, stop).await;
+        crate::ignored!(
+            crate::trace::STREAM,
+            "a failed desktop stream ends only itself",
+            super::desktop_stream::serve(shared, session_id, peer, send, recv, body, stop).await
+        );
     } else if tag == super::desktop_clipboard::TAG {
-        let _ = super::desktop_clipboard::serve(shared, session_id, peer, send, recv, body).await;
+        crate::ignored!(
+            crate::trace::CLIPBOARD,
+            "a failed clipboard pipe ends only itself",
+            super::desktop_clipboard::serve(shared, session_id, peer, send, recv, body).await
+        );
     } else if tag == super::service_stream::TAG_SERVICE {
-        let _ =
-            super::service_stream::serve(shared, session_id, peer, send, recv, body, stop).await;
+        crate::ignored!(
+            crate::trace::SERVICE,
+            "a failed service stream ends only itself",
+            super::service_stream::serve(shared, session_id, peer, send, recv, body, stop).await
+        );
     } else {
         let work = async {
             if tag == super::service_jobs::TAG {
-                let _ =
-                    super::service_jobs::serve(&shared, session_id, &peer, &mut send, body).await;
+                crate::ignored!(
+                    crate::trace::FILES,
+                    "a failed Files service request ends only itself",
+                    super::service_jobs::serve(&shared, session_id, &peer, &mut send, body).await
+                );
             } else if tag == crate::job::TAG_FS {
-                let _ = handle_fs_request(&shared, session_id, &peer, &mut send, body).await;
+                crate::ignored!(
+                    crate::trace::FILES,
+                    "a failed file request ends only itself",
+                    handle_fs_request(&shared, session_id, &peer, &mut send, body).await
+                );
             } else {
-                let _ = super::jobs::handle_job_request(
-                    &shared, session_id, &peer, &mut send, body, tag,
-                )
-                .await;
+                crate::ignored!(
+                    crate::trace::FILES,
+                    "a failed transfer request ends only itself",
+                    super::jobs::handle_job_request(
+                        &shared, session_id, &peer, &mut send, body, tag,
+                    )
+                    .await
+                );
             }
         };
         tokio::select! {
@@ -629,6 +651,15 @@ pub(super) async fn handle_fs_request(
     }
     let payload: Vec<u8> = payload.to_vec();
     let request = fs::decode_request(&payload).map_err(|_| ())?;
+    let started = std::time::Instant::now();
+    let operation = match &request {
+        fs::Request::List { .. } => "list",
+        fs::Request::Mkdir { .. } => "create folder",
+        fs::Request::Rename { .. } => "rename",
+        fs::Request::Delete { .. } => "delete",
+        fs::Request::Watch { .. } => "watch",
+        fs::Request::Places { .. } => "places",
+    };
     let (id, generation) = match &request {
         fs::Request::List { id, generation, .. }
         | fs::Request::Mkdir { id, generation, .. }
@@ -804,6 +835,15 @@ pub(super) async fn handle_fs_request(
             }
         }
     };
+    // The operation and how it went, never the names it touched.
+    tracing::debug!(
+        target: crate::trace::FILES,
+        operation,
+        status = response.status,
+        body_bytes = body.as_ref().map_or(0, Vec::len),
+        took_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        "file request answered"
+    );
     reply(send, response, body).await?;
     Ok(())
 }
@@ -883,7 +923,11 @@ pub(super) fn status_error(status: u8, message: &str) -> Result<(), Error> {
 /// Places offers one plugged in since VniLink started.
 fn current_roots(shared: &Shared) -> fs::RootSet {
     let mut roots = lock(&shared.file_roots);
-    let _ = roots.refresh_drives();
+    crate::ignored!(
+        crate::trace::FILES,
+        "places keeps the drives it already knew",
+        roots.refresh_drives()
+    );
     roots.clone()
 }
 

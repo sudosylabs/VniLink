@@ -13,6 +13,7 @@
 //! in place. Anything that was actively transferred stays the transfer
 //! manager's business: this layer refuses to rename a source or destination
 //! it cannot state, and reports interruption instead of guessing.
+// trace: records every ignored failure
 
 use crate::error::Error;
 
@@ -183,7 +184,15 @@ fn rename_case_only_anchored(
         match vnilink_rename::anchored::rename_at_noreplace(dir.as_fd(), &temp, dest) {
             Ok(()) => return Ok(()),
             Err(_) => {
-                let _ = vnilink_rename::anchored::rename_at_noreplace(dir.as_fd(), &temp, source);
+                if let Err(error) =
+                    vnilink_rename::anchored::rename_at_noreplace(dir.as_fd(), &temp, source)
+                {
+                    tracing::warn!(
+                        target: crate::trace::FILES,
+                        failure = crate::trace::failure(&error),
+                        "a rename failed and so did moving it back: the entry keeps a temporary name until it is swept"
+                    );
+                }
                 return Err(Error::InvalidSetting(RENAME_FAILED));
             }
         }
@@ -220,7 +229,13 @@ fn rename_case_only(source: &std::path::Path, dest: &std::path::Path) -> Result<
             Ok(()) => return Ok(()),
             Err(_) => {
                 // Best effort: move back so the entry keeps a stable name.
-                let _ = std::fs::rename(&temp, source);
+                if let Err(error) = std::fs::rename(&temp, source) {
+                    tracing::warn!(
+                        target: crate::trace::FILES,
+                        failure = crate::trace::failure(&error),
+                        "a rename failed and so did moving it back: the entry keeps a temporary name until it is swept"
+                    );
+                }
                 return Err(Error::InvalidSetting(RENAME_FAILED));
             }
         }

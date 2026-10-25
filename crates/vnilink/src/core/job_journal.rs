@@ -11,6 +11,7 @@
 //! Journals live in `jobs/<id>.jsonl` in the transfer directory. Nothing is
 //! synced: a crash loses at most the last lines, and a torn last line is
 //! ignored when the journals are read again.
+// trace: records every ignored failure
 
 use super::*;
 
@@ -221,7 +222,11 @@ pub(super) fn read_journals(dir: &std::path::Path) -> Option<(Vec<JobRecord>, bo
         };
         if name.ends_with(TMP_SUFFIX) {
             // An interrupted rewrite; the journal it would replace stands.
-            let _ = std::fs::remove_file(entry.path());
+            crate::ignored!(
+                crate::trace::FILES,
+                "an interrupted rewrite left behind is tried again next start",
+                std::fs::remove_file(entry.path())
+            );
             continue;
         }
         let Some(id) = name

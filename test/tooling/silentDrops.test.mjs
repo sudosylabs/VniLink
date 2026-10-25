@@ -16,7 +16,7 @@ async function rustFiles(folder) {
 
 /** The module's code before its first test module, where a dropped result goes unrecorded. */
 function productionCode(text) {
-	const tests = text.search(/^\s*#\[cfg\(test\)\]\s*\n\s*(pub(\([a-z]+\))? )?mod /m);
+	const tests = text.search(/^\s*#\[cfg\([^\]\n]*\btest\b[^\]\n]*\)\]\s*\n\s*(pub(\([a-z]+\))? )?mod /m);
 	return tests < 0 ? text : text.slice(0, tests);
 }
 
@@ -25,13 +25,17 @@ export function silentDrops(text) {
 	return productionCode(text)
 		.split('\n')
 		.map((line, index) => ({ line: line.trim(), number: index + 1 }))
-		// `let _ = name;` only marks an unused parameter.
-		.filter(({ line }) => !line.startsWith('//') && !/^let _ = [a-z_][a-z0-9_]*;$/.test(line) && (/\blet _ = /.test(line) || /\.ok\(\);/.test(line)));
+		// `let _ = name;` and `let _ = (a, b);` only mark unused names; `let kept = f().ok();` keeps the value.
+		.filter(({ line }) => !line.startsWith('//')
+			&& !/^let _ = \(?[a-z_][a-z0-9_]*(, [a-z_][a-z0-9_]*)*\)?;$/.test(line)
+			// `let _ = f()?;` passes the failure on.
+			&& !/\?;$/.test(line)
+			&& (/\blet _ = /.test(line) || /^[^=]*\.ok\(\);$/.test(line)));
 }
 
 test('a dropped result is found, and test modules and comments are not', () => {
-	const text = ['// let _ = in a comment', 'let _ = sender.send(1);', 'value.ok();', 'keep(value.ok());', 'let _ = unused;', '#[cfg(test)]', 'mod tests {', 'let _ = fixture();', '}'].join('\n');
-	assert.deepEqual(silentDrops(text).map(drop => drop.number), [2, 3]);
+	const text = ['// let _ = in a comment', 'let _ = sender.send(1);', 'value.ok();', 'keep(value.ok());', 'let _ = unused;', 'let _ = (a, b);', 'let kept = value.ok();', 'list.pop().ok();', '#[cfg(test)]', 'mod tests {', 'let _ = fixture();', '}'].join('\n');
+	assert.deepEqual(silentDrops(text).map(drop => drop.number), [2, 3, 8]);
 });
 
 test('modules that record every ignored failure drop nothing silently', async () => {

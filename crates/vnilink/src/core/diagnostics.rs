@@ -206,7 +206,15 @@ mod tests {
         std::thread::scope(|scope| {
             let snapshot = scope.spawn(|| core.diagnostic_snapshot().map(|_| ()));
             std::thread::sleep(std::time::Duration::from_millis(100));
-            let state_free = core.shared.state.try_lock().is_ok();
+            // Other engine tasks take state briefly; a snapshot holding it
+            // while it waits would keep it taken throughout.
+            let state_free = (0..100).any(|_| {
+                let free = core.shared.state.try_lock().is_ok();
+                if !free {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                free
+            });
             drop(jobs);
             snapshot.join().unwrap().unwrap();
             assert!(

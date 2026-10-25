@@ -55,6 +55,21 @@ fn an_upload_lands_exactly() {
         tree(&pair.controller.root().join("set"))
     );
     // Each side's job records say which engine kept them.
+    // Every file crossed whole, by the record of each side.
+    let received = trace.named("file received");
+    assert!(!received.is_empty(), "no file receipt was recorded");
+    for event in &received {
+        assert_eq!(event["engine"], "host", "{event}");
+        assert_eq!(event["outcome"], "received", "{event}");
+    }
+    let served = trace.named("file served");
+    assert_eq!(served.len(), received.len(), "{served:?}");
+    for event in &served {
+        assert_eq!(event["engine"], "controller", "{event}");
+        assert_eq!(event["ended"], "sent", "{event}");
+    }
+    let everything = trace.events().join("\n");
+    assert!(!everything.contains("read me"), "a file name was recorded");
     let states = trace.named("job state");
     assert!(!states.is_empty(), "no job state was recorded");
     for event in states {

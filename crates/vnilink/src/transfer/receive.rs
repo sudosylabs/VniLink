@@ -1,4 +1,5 @@
 //! Asking for one file and receiving it into its partial.
+// trace: records every ignored failure
 
 use std::time::Duration;
 
@@ -89,12 +90,53 @@ async fn ask_now(connection: &Connection, request: FileRequest) -> Result<Answer
     })
 }
 
+impl Received {
+    /// How a file's receipt ended, for records.
+    fn outcome(&self) -> &'static str {
+        match self {
+            Self::Done { .. } => "received",
+            Self::Cancelled => "cancelled",
+            Self::Denied => "denied",
+            Self::Busy => "busy",
+            Self::Changed => "changed at the source",
+            Self::Stalled => "stalled",
+            Self::Mismatch => "a segment did not match",
+        }
+    }
+}
+
+/// [`receive_stream`], recording how the file's receipt ended: the
+/// outcome, the bytes it took and how long, never the file.
+pub(crate) async fn receive(
+    recv: RecvStream,
+    partial: &mut Partial,
+    size: u64,
+    progress: &std::sync::mpsc::Sender<u64>,
+    counters: &TransferCounters,
+    cancel: &mut tokio::sync::watch::Receiver<bool>,
+) -> Result<Received, Error> {
+    let started = std::time::Instant::now();
+    let from = partial.written();
+    let received = receive_stream(recv, partial, size, progress, counters, cancel).await;
+    tracing::debug!(
+        target: crate::trace::FILES,
+        size,
+        resumed_at = from,
+        took = partial.written().saturating_sub(from),
+        took_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        outcome = received.as_ref().map_or("failed", Received::outcome),
+        failure = received.as_ref().err().map(Error::name),
+        "file received"
+    );
+    received
+}
+
 /// Appends what arrives on `recv` to `partial` until the file is whole,
 /// checking each segment against the value that follows it. Reports the
 /// bytes written to `progress` as they arrive; a cancel stops at once and
 /// keeps the checked segments, and so does a sender that sends nothing for
 /// [`STALL_WITHIN`].
-pub(crate) async fn receive(
+async fn receive_stream(
     mut recv: RecvStream,
     partial: &mut Partial,
     size: u64,
@@ -117,7 +159,11 @@ pub(crate) async fn receive(
             chunk = tokio::time::timeout(STALL_WITHIN, recv.read_chunk(CHUNK)) => chunk,
         };
         let Ok(chunk) = chunk else {
-            let _ = recv.stop(VarInt::from_u32(RESET_STALLED));
+            crate::ignored!(
+                crate::trace::FILES,
+                "a stalled stream that cannot be stopped is closed with its link",
+                recv.stop(VarInt::from_u32(RESET_STALLED))
+            );
             return Ok(Received::Stalled);
         };
         let bytes = match chunk {
@@ -188,7 +234,11 @@ impl Incoming {
             partial.append(&bytes[..take])?;
             counters.received(take);
             bytes = &bytes[take..];
-            let _ = progress.send(partial.written());
+            crate::ignored!(
+                crate::trace::FILES,
+                "progress nobody watches is not needed",
+                progress.send(partial.written())
+            );
             if partial.segment_left() == 0 {
                 self.value = Some(Vec::with_capacity(VALUE_LEN));
             }
@@ -235,8 +285,17 @@ pub(crate) fn land<'a>(
     segment: u64,
     chunks: impl IntoIterator<Item = &'a [u8]>,
 ) -> Result<bool, Error> {
-    let _ = std::fs::remove_file(data);
-    let _ = std::fs::remove_file(journal);
+    // A fuzz case starts from nothing, whether or not a last one left files.
+    crate::ignored!(
+        crate::trace::FILES,
+        "a fuzz case starts from nothing",
+        std::fs::remove_file(data)
+    );
+    crate::ignored!(
+        crate::trace::FILES,
+        "a fuzz case starts from nothing",
+        std::fs::remove_file(journal)
+    );
     let mut partial = Partial::open_in(data, journal, size, segment)?;
     let mut incoming = Incoming::after(&partial);
     let (progress, _) = std::sync::mpsc::channel();

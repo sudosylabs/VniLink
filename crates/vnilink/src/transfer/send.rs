@@ -1,5 +1,6 @@
 //! Sending one held source from a segment boundary, each segment followed
 //! by its chaining value.
+// trace: records every ignored failure
 
 use std::io::{Read, Seek, SeekFrom};
 use std::time::Duration;
@@ -45,7 +46,11 @@ pub(crate) async fn read_request(recv: &mut RecvStream) -> Option<FileRequest> {
 /// Answers a request with a refusal status and ends the stream.
 pub(crate) async fn refuse(send: &mut SendStream, status: u8) {
     if send.write_all(&[status]).await.is_ok() {
-        let _ = send.finish();
+        crate::ignored!(
+            crate::trace::FILES,
+            "a refusal's stream that cannot finish is closed with its link",
+            send.finish()
+        );
     }
 }
 
@@ -86,10 +91,13 @@ pub(crate) async fn send(
     if send.write_all(&[STATUS_SENDING]).await.is_err() {
         return;
     }
+    let started = std::time::Instant::now();
+    let size = source.size;
     let (pieces, mut arriving) = tokio::sync::mpsc::channel(READ_AHEAD);
     let reader = tokio::task::spawn_blocking(move || read_source(source, offset, held, pieces));
     let mut sent: u64 = 0;
     let mut position = offset + held;
+    let mut ended = "the reader stopped";
     while let Some(piece) = arriving.recv().await {
         match piece {
             Piece::Bytes(bytes) => {
@@ -99,6 +107,7 @@ pub(crate) async fn send(
                 // A receiver that stops reading stops the stream itself, and
                 // a peer that is gone ends the connection.
                 if send.write_chunk(bytes).await.is_err() {
+                    ended = "the receiver left";
                     break;
                 }
                 counters.sent(len);
@@ -106,12 +115,18 @@ pub(crate) async fn send(
                 sent_to(position, false);
                 sent += 1;
                 if sent % RECHECK_EVERY == 0 && !may_send() {
-                    let _ = send.reset(VarInt::from_u32(0));
+                    crate::ignored!(
+                        crate::trace::FILES,
+                        "a stream that cannot be reset is closed with its link",
+                        send.reset(VarInt::from_u32(0))
+                    );
+                    ended = "cancelled or no longer permitted";
                     break;
                 }
             }
             Piece::Value(value) => {
                 if send.write_all(&value).await.is_err() {
+                    ended = "the receiver left";
                     break;
                 }
             }
@@ -119,22 +134,46 @@ pub(crate) async fn send(
                 if send.finish().is_ok() {
                     counters.served();
                     sent_to(position, true);
+                    ended = "sent";
+                } else {
+                    ended = "the receiver left before the end";
                 }
                 break;
             }
             Piece::Changed => {
-                let _ = send.reset(VarInt::from_u32(RESET_CHANGED));
+                crate::ignored!(
+                    crate::trace::FILES,
+                    "a stream that cannot be reset is closed with its link",
+                    send.reset(VarInt::from_u32(RESET_CHANGED))
+                );
+                ended = "the file changed while it was read";
                 break;
             }
             Piece::Failed => {
-                let _ = send.reset(VarInt::from_u32(0));
+                crate::ignored!(
+                    crate::trace::FILES,
+                    "a stream that cannot be reset is closed with its link",
+                    send.reset(VarInt::from_u32(0))
+                );
+                ended = "the file could not be read";
                 break;
             }
         }
     }
     // A dropped receiver stops the reader at its next chunk.
     drop(arriving);
-    let _ = reader.await;
+    if reader.await.is_err() {
+        tracing::warn!(target: crate::trace::FILES, "a file reader panicked");
+    }
+    tracing::debug!(
+        target: crate::trace::FILES,
+        size,
+        from = offset + held,
+        sent = position.saturating_sub(offset + held),
+        took_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        ended,
+        "file served"
+    );
 }
 
 /// Whether `offset` is a segment boundary of a `size`-byte file and `held`
@@ -154,7 +193,11 @@ fn read_source(
     pieces: tokio::sync::mpsc::Sender<Piece>,
 ) {
     if source.file.seek(SeekFrom::Start(offset)).is_err() {
-        let _ = pieces.blocking_send(Piece::Failed);
+        crate::ignored!(
+            crate::trace::FILES,
+            "a sender that left needs no piece",
+            pieces.blocking_send(Piece::Failed)
+        );
         return;
     }
     let unchanged = |file: &std::fs::File| {
@@ -175,7 +218,11 @@ fn read_source(
                 } else {
                     Piece::Failed
                 };
-                let _ = pieces.blocking_send(piece);
+                crate::ignored!(
+                    crate::trace::FILES,
+                    "a sender that left needs no piece",
+                    pieces.blocking_send(piece)
+                );
                 return;
             }
             hasher.update(&chunk);
@@ -185,13 +232,18 @@ fn read_source(
                 continue;
             }
             let mut bytes = Bytes::from(chunk);
-            let _ = bytes.split_to(unsent);
+            // The receiver holds the first `unsent` bytes already.
+            drop(bytes.split_to(unsent));
             if pieces.blocking_send(Piece::Bytes(bytes)).is_err() {
                 return;
             }
         }
         if !unchanged(&source.file) {
-            let _ = pieces.blocking_send(Piece::Changed);
+            crate::ignored!(
+                crate::trace::FILES,
+                "a sender that left needs no piece",
+                pieces.blocking_send(Piece::Changed)
+            );
             return;
         }
         if pieces
@@ -207,7 +259,11 @@ fn read_source(
     } else {
         Piece::Changed
     };
-    let _ = pieces.blocking_send(piece);
+    crate::ignored!(
+        crate::trace::FILES,
+        "a sender that left needs no piece",
+        pieces.blocking_send(piece)
+    );
 }
 
 /// Size and modification time of an open file, in manifest units.

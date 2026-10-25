@@ -12,6 +12,7 @@
 //! preferably off the UI thread. One `job_poll` advances at most one
 //! file; progress is exact between polls. Records persist in per-job
 //! journals (`job_journal`).
+// trace: records every ignored failure
 
 use super::*;
 
@@ -462,7 +463,11 @@ const PREFETCH_BYTES: u64 = 64 * 1024 * 1024;
 pub(super) fn stop_prefetch(shared: &Shared, id: u64) {
     if let Some(prefetch) = lock(&shared.job_prefetch).remove(&id) {
         if let Some(stop) = prefetch.stop {
-            let _ = stop.send(true);
+            crate::ignored!(
+                crate::trace::FILES,
+                "a fetch that already ended needs no stop",
+                stop.send(true)
+            );
         }
     }
 }
@@ -1101,13 +1106,21 @@ impl Core {
             (record.peer_key, record.outgoing)
         };
         if let Some(stop) = lock(&self.shared.job_cancel).remove(&id) {
-            let _ = stop.send(true);
+            crate::ignored!(
+                crate::trace::FILES,
+                "a fetch that already ended needs no stop",
+                stop.send(true)
+            );
         }
         stop_prefetch(&self.shared, id);
         // Best-effort peer notification: without a live session the local
         // record is still cancelled and serves nothing, so a later status
         // poll or resume observes the terminal state.
-        let _ = self.notify_peer_cancel(&peer_key, outgoing, id);
+        told_peer(
+            "cancel",
+            id,
+            self.notify_peer_cancel(&peer_key, outgoing, id),
+        );
         save_jobs(&self.shared)?;
         self.job_snapshot(id)
     }
@@ -1118,6 +1131,7 @@ impl Core {
         outgoing: bool,
         job_id: u64,
     ) -> Result<(), Error> {
+        let local = job_id;
         let (job_id, owner) = {
             let jobs = lock(&self.shared.jobs);
             let record = jobs.get(&job_id).ok_or(Error::InvalidSetting(NO_JOB))?;
@@ -1133,7 +1147,12 @@ impl Core {
         let payload = job::encode(&cancel)?;
         // The reply is an ack; any failure (no session, stale generation,
         // denied) still leaves the local cancellation in place.
-        let _ = self.job_round_trip_side(peer, outgoing, owner, job::TAG_JOB_CANCEL, &payload);
+        told_peer(
+            "cancel",
+            local,
+            self.job_round_trip_side(peer, outgoing, owner, job::TAG_JOB_CANCEL, &payload)
+                .map(drop),
+        );
         Ok(())
     }
 
@@ -1179,7 +1198,11 @@ impl Core {
         };
         // Best-effort peer coordination: without a live session the local
         // resume still stands and a later status poll reconciles.
-        let _ = self.notify_peer_resume(&peer_key, outgoing, id);
+        told_peer(
+            "resume",
+            id,
+            self.notify_peer_resume(&peer_key, outgoing, id),
+        );
         Ok(snapshot)
     }
 
@@ -1189,6 +1212,7 @@ impl Core {
         outgoing: bool,
         job_id: u64,
     ) -> Result<(), Error> {
+        let local = job_id;
         let (job_id, owner) = {
             let jobs = lock(&self.shared.jobs);
             let record = jobs.get(&job_id).ok_or(Error::InvalidSetting(NO_JOB))?;
@@ -1202,7 +1226,12 @@ impl Core {
             job_id,
         };
         let payload = job::encode(&resume)?;
-        let _ = self.job_round_trip_side(peer, outgoing, owner, job::TAG_JOB_RESUME, &payload);
+        told_peer(
+            "resume",
+            local,
+            self.job_round_trip_side(peer, outgoing, owner, job::TAG_JOB_RESUME, &payload)
+                .map(drop),
+        );
         Ok(())
     }
 
@@ -1242,7 +1271,11 @@ impl Core {
         };
         save_jobs(&self.shared)?;
         if sender {
-            let _ = self.notify_peer_resolve(&peer_key, outgoing, id, choice, apply_to_remaining);
+            told_peer(
+                "choice",
+                id,
+                self.notify_peer_resolve(&peer_key, outgoing, id, choice, apply_to_remaining),
+            );
         }
         self.job_snapshot(id)
     }
@@ -1283,6 +1316,7 @@ impl Core {
         choice: ConflictChoice,
         apply_to_remaining: bool,
     ) -> Result<(), Error> {
+        let local = job_id;
         let (job_id, owner) = {
             let jobs = lock(&self.shared.jobs);
             let record = jobs.get(&job_id).ok_or(Error::InvalidSetting(NO_JOB))?;
@@ -1304,7 +1338,12 @@ impl Core {
             apply_to_remaining,
         };
         let payload = job::encode(&resolve)?;
-        let _ = self.job_round_trip_side(peer, outgoing, owner, job::TAG_JOB_RESOLVE, &payload);
+        told_peer(
+            "choice",
+            local,
+            self.job_round_trip_side(peer, outgoing, owner, job::TAG_JOB_RESOLVE, &payload)
+                .map(drop),
+        );
         Ok(())
     }
 
@@ -1572,7 +1611,9 @@ impl Core {
                 stop_rx,
             ),
         };
-        let _ = watcher.join();
+        if watcher.join().is_err() {
+            tracing::warn!(target: crate::trace::FILES, job = id, "a transfer's cancel watcher panicked");
+        }
         lock(&self.shared.job_cancel).remove(&id);
         // A cancel or interruption during fetch preserves its state even if bytes arrived.
         {
@@ -1620,7 +1661,11 @@ impl Core {
             .map(|meta| meta.len())
             .unwrap_or(u64::MAX);
         if staged_size != entry.size {
-            let _ = std::fs::remove_file(&staged);
+            crate::ignored!(
+                crate::trace::FILES,
+                "a staged file left behind is swept with its job's staging",
+                std::fs::remove_file(&staged)
+            );
             return self.mark_failed(id, VERIFY_FAILED);
         }
         let landed = match self.publish_staged(id, &entry, &staged, choice) {
@@ -1629,7 +1674,11 @@ impl Core {
             Ok(None) => return self.job_snapshot(id),
         };
         // The partial is published; its journal describes nothing now.
-        let _ = std::fs::remove_file(&segments);
+        crate::ignored!(
+            crate::trace::FILES,
+            "a staged file left behind is swept with its job's staging",
+            std::fs::remove_file(&segments)
+        );
         // Skip leaves the destination untouched; anything published lands
         // under its final name for verification.
         let _ = landed;
@@ -2023,7 +2072,11 @@ impl Core {
             (record.local_root, record.local_rel.clone(), record.peer_key)
         };
         if !Self::receiver_granted(&self.shared, &peer_key) {
-            let _ = std::fs::remove_file(staged);
+            crate::ignored!(
+                crate::trace::FILES,
+                "a staged file left behind is swept with its job's staging",
+                std::fs::remove_file(staged)
+            );
             self.mark_interrupted(id, PERMISSION_OFF)?;
             return Ok(None);
         }
@@ -2063,7 +2116,11 @@ impl Core {
                     Ok(None)
                 }
                 Err(_) => {
-                    let _ = std::fs::remove_file(staged);
+                    crate::ignored!(
+                        crate::trace::FILES,
+                        "a staged file left behind is swept with its job's staging",
+                        std::fs::remove_file(staged)
+                    );
                     self.mark_failed(id, PUBLISH_FAILED)?;
                     Ok(None)
                 }
@@ -2169,7 +2226,11 @@ impl Core {
                 Ok(true) => return Ok((None, false)),
                 Ok(false) => {}
                 Err(_) => {
-                    let _ = std::fs::remove_file(staged);
+                    crate::ignored!(
+                        crate::trace::FILES,
+                        "a staged file left behind is swept with its job's staging",
+                        std::fs::remove_file(staged)
+                    );
                     self.mark_failed(id, PUBLISH_FAILED)?;
                     return Ok((None, true));
                 }
@@ -2178,7 +2239,11 @@ impl Core {
         let mut stage = match vnilink_rename::anchored::SiblingStage::create(dir_fd) {
             Ok(stage) => stage,
             Err(_) => {
-                let _ = std::fs::remove_file(staged);
+                crate::ignored!(
+                    crate::trace::FILES,
+                    "a staged file left behind is swept with its job's staging",
+                    std::fs::remove_file(staged)
+                );
                 self.mark_failed(id, PUBLISH_FAILED)?;
                 return Ok((None, true));
             }
@@ -2186,7 +2251,11 @@ impl Core {
         let mut src = match std::fs::File::open(staged) {
             Ok(file) => file,
             Err(_) => {
-                let _ = std::fs::remove_file(staged);
+                crate::ignored!(
+                    crate::trace::FILES,
+                    "a staged file left behind is swept with its job's staging",
+                    std::fs::remove_file(staged)
+                );
                 self.mark_failed(id, PUBLISH_FAILED)?;
                 return Ok((None, true));
             }
@@ -2195,7 +2264,11 @@ impl Core {
         let mut copied: u64 = 0;
         loop {
             if !self.prestage_live(id) {
-                let _ = std::fs::remove_file(staged);
+                crate::ignored!(
+                    crate::trace::FILES,
+                    "a staged file left behind is swept with its job's staging",
+                    std::fs::remove_file(staged)
+                );
                 self.mark_interrupted(id, STOPPED)?;
                 return Ok((None, true));
             }
@@ -2206,13 +2279,21 @@ impl Core {
                 Ok(0) => break,
                 Ok(n) => n,
                 Err(_) => {
-                    let _ = std::fs::remove_file(staged);
+                    crate::ignored!(
+                        crate::trace::FILES,
+                        "a staged file left behind is swept with its job's staging",
+                        std::fs::remove_file(staged)
+                    );
                     self.mark_failed(id, PUBLISH_FAILED)?;
                     return Ok((None, true));
                 }
             };
             if stage.write_all(&buf[..n]).is_err() {
-                let _ = std::fs::remove_file(staged);
+                crate::ignored!(
+                    crate::trace::FILES,
+                    "a staged file left behind is swept with its job's staging",
+                    std::fs::remove_file(staged)
+                );
                 self.mark_failed(id, PUBLISH_FAILED)?;
                 return Ok((None, true));
             }
@@ -2224,7 +2305,11 @@ impl Core {
             probe(id);
         }
         if stage.fsync().is_err() {
-            let _ = std::fs::remove_file(staged);
+            crate::ignored!(
+                crate::trace::FILES,
+                "a staged file left behind is swept with its job's staging",
+                std::fs::remove_file(staged)
+            );
             self.mark_failed(id, PUBLISH_FAILED)?;
             return Ok((None, true));
         }
@@ -2386,7 +2471,11 @@ impl Core {
                 }
                 drop(state_guard);
                 drop(jobs);
-                let _ = std::fs::remove_file(staged);
+                crate::ignored!(
+                    crate::trace::FILES,
+                    "a staged file left behind is swept with its job's staging",
+                    std::fs::remove_file(staged)
+                );
                 save_jobs(&self.shared)?;
                 return Ok(None);
             }
@@ -2421,7 +2510,11 @@ impl Core {
                     match commit_file(file_name, allow_overwrite) {
                         Ok(consumed_sibling) => {
                             if consumed_sibling {
-                                let _ = std::fs::remove_file(staged);
+                                crate::ignored!(
+                                    crate::trace::FILES,
+                                    "a staged file left behind is swept with its job's staging",
+                                    std::fs::remove_file(staged)
+                                );
                             }
                             Ok(Some(file_name.to_owned()))
                         }
@@ -2445,14 +2538,22 @@ impl Core {
                             }
                             drop(state_guard);
                             drop(jobs);
-                            let _ = std::fs::remove_file(staged);
+                            crate::ignored!(
+                                crate::trace::FILES,
+                                "a staged file left behind is swept with its job's staging",
+                                std::fs::remove_file(staged)
+                            );
                             save_jobs(&self.shared)?;
                             return Ok(None);
                         }
                         Err(_) => {
                             drop(state_guard);
                             drop(jobs);
-                            let _ = std::fs::remove_file(staged);
+                            crate::ignored!(
+                                crate::trace::FILES,
+                                "a staged file left behind is swept with its job's staging",
+                                std::fs::remove_file(staged)
+                            );
                             self.mark_failed(id, PUBLISH_FAILED)?;
                             return Ok(None);
                         }
@@ -2466,7 +2567,11 @@ impl Core {
                         match commit_file(file_name, false) {
                             Ok(consumed_sibling) => {
                                 if consumed_sibling {
-                                    let _ = std::fs::remove_file(staged);
+                                    crate::ignored!(
+                                        crate::trace::FILES,
+                                        "a staged file left behind is swept with its job's staging",
+                                        std::fs::remove_file(staged)
+                                    );
                                 }
                                 Ok(Some(file_name.to_owned()))
                             }
@@ -2488,14 +2593,22 @@ impl Core {
                                 }
                                 drop(state_guard);
                                 drop(jobs);
-                                let _ = std::fs::remove_file(staged);
+                                crate::ignored!(
+                                    crate::trace::FILES,
+                                    "a staged file left behind is swept with its job's staging",
+                                    std::fs::remove_file(staged)
+                                );
                                 save_jobs(&self.shared)?;
                                 return Ok(None);
                             }
                             Err(_) => {
                                 drop(state_guard);
                                 drop(jobs);
-                                let _ = std::fs::remove_file(staged);
+                                crate::ignored!(
+                                    crate::trace::FILES,
+                                    "a staged file left behind is swept with its job's staging",
+                                    std::fs::remove_file(staged)
+                                );
                                 self.mark_failed(id, PUBLISH_FAILED)?;
                                 return Ok(None);
                             }
@@ -2504,7 +2617,11 @@ impl Core {
                         match commit_file(&free, false) {
                             Ok(consumed_sibling) => {
                                 if consumed_sibling {
-                                    let _ = std::fs::remove_file(staged);
+                                    crate::ignored!(
+                                        crate::trace::FILES,
+                                        "a staged file left behind is swept with its job's staging",
+                                        std::fs::remove_file(staged)
+                                    );
                                 }
                                 Ok(Some(free))
                             }
@@ -2525,14 +2642,22 @@ impl Core {
                                 }
                                 drop(state_guard);
                                 drop(jobs);
-                                let _ = std::fs::remove_file(staged);
+                                crate::ignored!(
+                                    crate::trace::FILES,
+                                    "a staged file left behind is swept with its job's staging",
+                                    std::fs::remove_file(staged)
+                                );
                                 save_jobs(&self.shared)?;
                                 return Ok(None);
                             }
                             Err(_) => {
                                 drop(state_guard);
                                 drop(jobs);
-                                let _ = std::fs::remove_file(staged);
+                                crate::ignored!(
+                                    crate::trace::FILES,
+                                    "a staged file left behind is swept with its job's staging",
+                                    std::fs::remove_file(staged)
+                                );
                                 self.mark_failed(id, PUBLISH_FAILED)?;
                                 return Ok(None);
                             }
@@ -3399,11 +3524,15 @@ fn interrupt_jobs(shared: &Shared, peer: &[u8; 32], controller_only: bool, reaso
     };
     for id in ids {
         if let Some(stop) = lock(&shared.job_cancel).remove(&id) {
-            let _ = stop.send(true);
+            crate::ignored!(
+                crate::trace::FILES,
+                "a fetch that already ended needs no stop",
+                stop.send(true)
+            );
         }
         stop_prefetch(shared, id);
     }
-    let _ = save_jobs(shared);
+    persist_jobs(shared);
 }
 
 /// Tells job watchers, and the background driver and workers, that
@@ -3543,14 +3672,50 @@ fn follow_arrival(
 fn remove_staging(shared: &Shared, id: u64) {
     stop_prefetch(shared, id);
     if let Some(dir) = lock(&shared.transfer_dir).clone() {
-        let _ = std::fs::remove_dir_all(dir.join(STAGING_DIR).join(format!("job-{id}")));
+        crate::ignored!(
+            crate::trace::FILES,
+            "staging left behind is swept on the next start",
+            std::fs::remove_dir_all(dir.join(STAGING_DIR).join(format!("job-{id}")))
+        );
     }
 }
 
 /// Saves the jobs that changed and tells watchers: each change to a job
-/// ends here. A save that changes nothing writes and tells nothing.
+/// ends here. A save that changes nothing writes and tells nothing. A save
+/// that fails is recorded: what it held may not survive a restart.
 pub(super) fn save_jobs(shared: &Shared) -> Result<(), Error> {
-    super::job_journal::save_jobs(shared)
+    let saved = super::job_journal::save_jobs(shared);
+    if let Err(error) = &saved {
+        tracing::warn!(
+            target: crate::trace::FILES,
+            failure = error.name(),
+            reason = error.reason(),
+            "transfer records were not saved: a restart may lose their latest state"
+        );
+    }
+    saved
+}
+
+/// [`save_jobs`] for callers that carry on either way; the failure is
+/// recorded there.
+pub(super) fn persist_jobs(shared: &Shared) {
+    // `save_jobs` recorded any failure.
+    if save_jobs(shared).is_err() {}
+}
+
+/// Records that the peer was not told of a change to a shared job: its
+/// side keeps the job as it was until it next asks.
+fn told_peer(change: &'static str, job: u64, told: Result<(), Error>) {
+    if let Err(error) = told {
+        tracing::info!(
+            target: crate::trace::FILES,
+            job,
+            change,
+            failure = error.name(),
+            reason = error.reason(),
+            "the peer was not told: its side keeps the job as it was until it next asks"
+        );
+    }
 }
 
 pub(super) fn load_jobs(shared: &Shared) {
@@ -3634,7 +3799,11 @@ fn reconcile_staging_at(dir: &std::path::Path, keep: &std::collections::HashSet<
                 if name != format!("job-{id}") || keep.contains(&id) {
                     continue;
                 }
-                let _ = anchored::remove_tree_at(staging.as_fd(), name);
+                crate::ignored!(
+                    crate::trace::FILES,
+                    "staging left behind is swept on the next start",
+                    anchored::remove_tree_at(staging.as_fd(), name)
+                );
             }
         }
     }
@@ -3856,10 +4025,14 @@ async fn handle_cancel(
     };
     if let Some(id) = id {
         if let Some(stop) = lock(&shared.job_cancel).remove(&id) {
-            let _ = stop.send(true);
+            crate::ignored!(
+                crate::trace::FILES,
+                "a fetch that already ended needs no stop",
+                stop.send(true)
+            );
         }
         stop_prefetch(shared, id);
-        let _ = save_jobs(shared);
+        persist_jobs(shared);
     }
     reply(
         send,
@@ -4056,7 +4229,7 @@ async fn handle_resolve(
         }
     };
     // `status` computed under lock; save outside (save takes jobs lock).
-    let _ = save_jobs(shared);
+    persist_jobs(shared);
     reply(
         send,
         job::encode(&job::JobReply {
@@ -4238,7 +4411,7 @@ async fn handle_resume(
                 return Ok(());
             }
             PinDecision::Rebound => {
-                let _ = save_jobs(shared);
+                persist_jobs(shared);
                 let err = job::JobReply {
                     v: job::JOB_VERSION,
                     id: resume.id,
@@ -4261,7 +4434,7 @@ async fn handle_resume(
                     record.error = Some(reason.to_owned());
                 }
             }
-            let _ = save_jobs(shared);
+            persist_jobs(shared);
             let err = job::JobReply {
                 v: job::JOB_VERSION,
                 id: resume.id,
@@ -4281,7 +4454,7 @@ async fn handle_resume(
                 record.error = None;
             }
         }
-        let _ = save_jobs(shared);
+        persist_jobs(shared);
     } else {
         let mut jobs = lock(&shared.jobs);
         if let Some(record) = wire_job_mut(&mut jobs, peer, resume.job_id) {
@@ -4293,7 +4466,7 @@ async fn handle_resume(
             record.error = None;
         }
         drop(jobs);
-        let _ = save_jobs(shared);
+        persist_jobs(shared);
     }
     reply(
         send,
@@ -4397,7 +4570,7 @@ pub(super) async fn handle_upload_offer(
         );
         Ok(())
     })();
-    let _ = save_jobs(shared);
+    persist_jobs(shared);
     let status = match accept {
         Ok(()) => job::STATUS_OK,
         Err(status) => status,
@@ -4553,7 +4726,7 @@ pub(super) async fn handle_download_request(
             return Ok(());
         }
     };
-    let _ = save_jobs(shared);
+    persist_jobs(shared);
     // Whatever ends this request before preparation does, the job does
     // not stay Preparing.
     let mut unfinished = Unprepared { shared, id };
@@ -4577,7 +4750,16 @@ pub(super) async fn handle_download_request(
     let Some(prepared) = quick else {
         reply(send, respond(job::STATUS_OK, id, None).map_err(|_| ())?).await?;
         let prepared = preparing.await;
-        let _ = finish_preparation(shared, &request, session_id, permission_epoch, id, prepared);
+        if let Err(status) =
+            finish_preparation(shared, &request, session_id, permission_epoch, id, prepared)
+        {
+            tracing::info!(
+                target: crate::trace::FILES,
+                job = id,
+                status,
+                "a download prepared after its answer failed"
+            );
+        }
         unfinished.id = 0;
         return Ok(());
     };
@@ -4626,7 +4808,7 @@ impl Drop for Unprepared<'_> {
             })
             .is_some();
         if stopped {
-            let _ = save_jobs(self.shared);
+            persist_jobs(self.shared);
         }
     }
 }
@@ -4679,7 +4861,7 @@ fn finish_preparation(
             }
         }
     };
-    let _ = save_jobs(shared);
+    persist_jobs(shared);
     settled
 }
 

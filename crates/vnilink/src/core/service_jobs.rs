@@ -1,4 +1,5 @@
 //! Files-owned jobs reuse the transfer engine, with an explicit peer owner.
+// trace: records every ignored failure
 use super::*;
 use crate::{job, JobSnapshot, JobState, ServiceKind, ServicePhase};
 use serde::{Deserialize, Serialize};
@@ -118,7 +119,7 @@ pub(super) fn interrupt_orphaned(shared: &Shared) {
         super::jobs::stop_prefetch(shared, *id);
     }
     if !interrupted.is_empty() {
-        let _ = super::jobs::save_jobs(shared);
+        super::jobs::persist_jobs(shared);
     }
 }
 
@@ -331,7 +332,11 @@ impl Core {
             result,
             Err(Error::Network(_) | Error::Timeout | Error::Malformed)
         ) {
-            let _ = self.close_controller_service(owner.id, owner.generation);
+            crate::ignored!(
+                crate::trace::FILES,
+                "an owner already closed settles its job anyway",
+                self.close_controller_service(owner.id, owner.generation)
+            );
         }
         interrupt_orphaned(&self.shared);
         result

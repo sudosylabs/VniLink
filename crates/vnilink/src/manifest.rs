@@ -10,6 +10,7 @@
 //! nesting/counts and destination-case collisions are rejected. Preservation
 //! beyond bytes is disclosed, not fabricated: only content and the hierarchy
 //! move.
+// trace: records every ignored failure
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -730,9 +731,17 @@ fn commit_across_volumes(
                 })
                 .and_then(|()| rename(&sibling, dest));
             if landed.is_ok() {
-                let _ = std::fs::remove_file(staged);
+                crate::ignored!(
+                    crate::trace::FILES,
+                    "a staged file left behind is swept with its job's staging",
+                    std::fs::remove_file(staged)
+                );
             } else {
-                let _ = std::fs::remove_file(&sibling);
+                crate::ignored!(
+                    crate::trace::FILES,
+                    "a sibling copy left behind is swept with its job's staging",
+                    std::fs::remove_file(&sibling)
+                );
             }
             landed
         }
