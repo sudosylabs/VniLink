@@ -1,5 +1,6 @@
 //! Desktop instances on a neutral parent. Every instance owns its stream,
 //! queues and datagram epoch; session APIs cannot publish into this backend.
+// trace: records every ignored failure
 use super::*;
 use crate::input::{HeldInput, Outbound};
 use crate::protocol::{ControlMessage, SessionStamp};
@@ -1380,14 +1381,19 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                     }
                 };
                 if installed {
-                    let _ = ready.send(Ok(desktop.clone()));
+                    crate::ignored!(
+                        crate::trace::STREAM,
+                        "the opener stopped waiting for the desktop",
+                        ready.send(Ok(desktop.clone()))
+                    );
                     ensure_datagram_router(
                         &shared,
                         link.clone(),
                         owner_info.connection_id,
                         generation,
                     );
-                    let _ = lease
+                    // The desktop's end is recorded below, whichever way it went.
+                    let _ended = lease
                         .run(async {
                             let mut clipboard = tokio::task::JoinSet::new();
                             clipboard.spawn(super::desktop_clipboard::client(
@@ -1427,9 +1433,17 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                         );
                     }
                 } else {
-                    let _ = ready.send(Err(Error::NoSession));
+                    crate::ignored!(
+                        crate::trace::STREAM,
+                        "the opener stopped waiting for the desktop",
+                        ready.send(Err(Error::NoSession))
+                    );
                 }
-                let _ = send.finish();
+                crate::ignored!(
+                    crate::trace::STREAM,
+                    "a closing stream that cannot finish is closed by the link",
+                    send.finish()
+                );
                 desktop.close();
                 super::desktop_service::finish_controller(
                     &shared,
@@ -1470,7 +1484,11 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                         },
                     );
                 }
-                let _ = ready.send(Err(error));
+                crate::ignored!(
+                    crate::trace::STREAM,
+                    "the opener stopped waiting for the desktop",
+                    ready.send(Err(error))
+                );
             }
         }
     });
@@ -2056,10 +2074,18 @@ pub(super) async fn serve(
     let parent_stopped = *parent_stop.borrow();
     if let Some(end) = host_end(&shared, &desktop, parent_stopped) {
         desktop.ended(&shared, true, crate::DesktopEnd::Host(end));
-        let _ = tokio::time::timeout(END_PATIENCE, write(&mut send, &[END, end.encode()])).await;
+        crate::ignored!(
+            crate::trace::STREAM,
+            "the viewer may be gone before it hears why the desktop ended",
+            tokio::time::timeout(END_PATIENCE, write(&mut send, &[END, end.encode()])).await
+        );
     }
     desktop.close();
-    let _ = send.finish();
+    crate::ignored!(
+        crate::trace::STREAM,
+        "a closing stream that cannot finish is closed by the link",
+        send.finish()
+    );
     Ok(())
 }
 
@@ -2238,6 +2264,31 @@ fn release_late_input(
     stale
 }
 
+/// Records input the host received but did not apply, and why. Input is
+/// never dropped without one of these (`crate::trace`).
+fn discarded(desktop: &DesktopRuntime, kind: &'static str, why: &'static str) {
+    tracing::debug!(
+        target: crate::trace::INPUT,
+        service = desktop.info.service.id,
+        kind,
+        why,
+        "input discarded"
+    );
+}
+
+/// Why this Desktop's input is contended now.
+fn contention(input_allowed: bool, controlling: bool, current: bool) -> &'static str {
+    if !input_allowed {
+        "the peer may not control this computer"
+    } else if !controlling {
+        "another viewer controls this computer"
+    } else if !current {
+        "it was sent under an earlier control lease"
+    } else {
+        "contended"
+    }
+}
+
 /// Validate under Core state, take the adapter without waiting, then release
 /// Core state before native work. Late input is released under the same adapter
 /// guard when retirement or a lease transition overtakes the native call.
@@ -2288,6 +2339,11 @@ fn process_host_command(
             return process_host_command(shared, desktop, body);
         }
         if !input_allowed {
+            tracing::info!(
+                target: crate::trace::INPUT,
+                service = desktop.info.service.id,
+                "control refused: the peer may not control this computer"
+            );
             desktop
                 .control_state
                 .send_replace((DesktopControlState::Viewing, current_epoch));
@@ -2299,6 +2355,13 @@ fn process_host_command(
             } else {
                 DesktopControlState::Contended
             };
+        tracing::info!(
+            target: crate::trace::INPUT,
+            service = desktop.info.service.id,
+            state = ?status,
+            epoch = current_epoch,
+            "control asked for"
+        );
         let next_epoch = if status == DesktopControlState::Controlling
             && desktop.control_state.borrow().0 != status
         {
@@ -2313,6 +2376,12 @@ fn process_host_command(
         return Ok(());
     }
     if body.len() == 9 && body[0] == YIELD_CONTROL {
+        tracing::info!(
+            target: crate::trace::INPUT,
+            service = desktop.info.service.id,
+            current = epoch == current_epoch,
+            "control yielded"
+        );
         if epoch == current_epoch {
             release_desktop_input(shared, desktop);
             if state.desktop_control == Some(desktop.stamp) {
@@ -2345,11 +2414,13 @@ fn process_host_command(
     // Contended input is discarded without applying or observing held
     // state; viewers stay connected and request acquisition after the
     // current controller yields. Release/keyframe/quality are unaffected.
-    let contended =
-        !input_allowed || state.desktop_control != Some(desktop.stamp) || epoch != current_epoch;
+    let controlling = state.desktop_control == Some(desktop.stamp);
+    let contended = !input_allowed || !controlling || epoch != current_epoch;
+    let contended_why = contention(input_allowed, controlling, epoch == current_epoch);
     match command {
         ControlMessage::Input { stamp, event } if stamp == desktop.stamp => {
             if contended {
+                discarded(desktop, event.kind(), contended_why);
                 return Ok(());
             }
             let selected = lock(&desktop.selected).clone();
@@ -2360,17 +2431,37 @@ fn process_host_command(
             drop(state);
             let Some(mut adapter) = native_input_adapter(shared, desktop, epoch, Some(event))?
             else {
+                discarded(
+                    desktop,
+                    event.kind(),
+                    "control changed before it could apply",
+                );
                 return Ok(());
             };
             if desktop.retired.load(std::sync::atomic::Ordering::Acquire)
                 || *desktop.control_state.borrow() != (DesktopControlState::Controlling, epoch)
             {
+                discarded(
+                    desktop,
+                    event.kind(),
+                    "the service ended before it could apply",
+                );
                 return Ok(());
             }
             match adapter.as_mut() {
                 None => return Err(Error::Unsupported("desktop input adapter")),
                 Some(adapter) => {
-                    if let Err(error) = adapter.apply(event) {
+                    let started = std::time::Instant::now();
+                    let applied = adapter.apply(event);
+                    tracing::trace!(
+                        target: crate::trace::INPUT,
+                        service = desktop.info.service.id,
+                        kind = event.kind(),
+                        failed = applied.as_ref().err().map(Error::name),
+                        took_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+                        "input applied"
+                    );
+                    if let Err(error) = applied {
                         release_late_input(shared, desktop, epoch, adapter.as_mut());
                         super::keys::note_input_failure(
                             shared,
@@ -2391,7 +2482,11 @@ fn process_host_command(
             {
                 if let Some(adapter) = adapter.as_mut() {
                     for release in held.release_events() {
-                        let _ = adapter.apply(release);
+                        crate::ignored!(
+                            crate::trace::INPUT,
+                            "a key or button left held by ended control is released at best",
+                            adapter.apply(release)
+                        );
                     }
                 }
                 *held = HeldInput::default();
@@ -2424,6 +2519,7 @@ fn process_host_command(
         }
         ControlMessage::Text { stamp, text } if stamp == desktop.stamp => {
             if contended {
+                discarded(desktop, "typed text", contended_why);
                 return Ok(());
             }
             if let Some(problem) = crate::input::key_text_problem(&text.0) {
@@ -2431,11 +2527,21 @@ fn process_host_command(
             }
             drop(state);
             let Some(mut adapter) = native_input_adapter(shared, desktop, epoch, None)? else {
+                discarded(
+                    desktop,
+                    "typed text",
+                    "control changed before it could apply",
+                );
                 return Ok(());
             };
             if desktop.retired.load(std::sync::atomic::Ordering::Acquire)
                 || *desktop.control_state.borrow() != (DesktopControlState::Controlling, epoch)
             {
+                discarded(
+                    desktop,
+                    "typed text",
+                    "the service ended before it could apply",
+                );
                 return Ok(());
             }
             let adapter = adapter
@@ -2455,6 +2561,7 @@ fn process_host_command(
         }
         ControlMessage::Chord { stamp, text } if stamp == desktop.stamp => {
             if contended {
+                discarded(desktop, "typed text", contended_why);
                 return Ok(());
             }
             if let Some(problem) = crate::input::key_text_problem(&text.0) {
@@ -2462,11 +2569,21 @@ fn process_host_command(
             }
             drop(state);
             let Some(mut adapter) = native_input_adapter(shared, desktop, epoch, None)? else {
+                discarded(
+                    desktop,
+                    "typed text",
+                    "control changed before it could apply",
+                );
                 return Ok(());
             };
             if desktop.retired.load(std::sync::atomic::Ordering::Acquire)
                 || *desktop.control_state.borrow() != (DesktopControlState::Controlling, epoch)
             {
+                discarded(
+                    desktop,
+                    "typed text",
+                    "the service ended before it could apply",
+                );
                 return Ok(());
             }
             let adapter = adapter

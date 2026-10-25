@@ -39,10 +39,14 @@ macro_rules! ignored {
         match $result {
             Ok(value) => Some(value),
             Err(error) => {
+                #[allow(unused_imports)]
+                use $crate::trace::{ByFailure as _, ByType as _};
+                let named = &$crate::trace::Named(&error);
                 $crate::trace::__tracing::debug!(
                     target: $target,
                     why = $why,
-                    failure = $crate::trace::failure(&error),
+                    failure = named.failure_name(),
+                    reason = named.failure_reason(),
                     "ignored"
                 );
                 $crate::trace::count_ignored($target, $why);
@@ -50,6 +54,58 @@ macro_rules! ignored {
             }
         }
     };
+}
+
+/// A failure that names itself for records: by a fixed name and, where it
+/// has one, a fixed product reason; never by text a library or the system
+/// wrote. VniLink's error types implement it.
+pub trait Failure {
+    fn failure_name(&self) -> &'static str;
+    fn failure_reason(&self) -> Option<&'static str> {
+        None
+    }
+}
+
+impl Failure for crate::Error {
+    fn failure_name(&self) -> &'static str {
+        self.name()
+    }
+    fn failure_reason(&self) -> Option<&'static str> {
+        self.reason()
+    }
+}
+
+#[doc(hidden)]
+pub struct Named<'a, T>(pub &'a T);
+
+/// [`ignored!`] names a failure by [`Failure`] when its type has it…
+#[doc(hidden)]
+pub trait ByFailure {
+    fn failure_name(&self) -> &'static str;
+    fn failure_reason(&self) -> Option<&'static str>;
+}
+impl<T: Failure> ByFailure for Named<'_, T> {
+    fn failure_name(&self) -> &'static str {
+        self.0.failure_name()
+    }
+    fn failure_reason(&self) -> Option<&'static str> {
+        self.0.failure_reason()
+    }
+}
+
+/// …and otherwise by [`failure`].
+#[doc(hidden)]
+pub trait ByType {
+    fn failure_name(&self) -> &'static str;
+    fn failure_reason(&self) -> Option<&'static str>;
+}
+impl<T: 'static> ByType for &Named<'_, T> {
+    fn failure_name(&self) -> &'static str {
+        failure(self.0)
+    }
+    fn failure_reason(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// What failed, by name: a VniLink [`crate::Error`]'s [`crate::Error::name`],
@@ -232,6 +288,11 @@ mod tests {
             ),
             None
         );
-        assert_eq!(before("the test ignores it"), earlier + 1);
+        // A type without `Failure` is named by its type.
+        assert_eq!(
+            crate::ignored!(FILES, "the test ignores it", "x".parse::<u8>()),
+            None
+        );
+        assert_eq!(before("the test ignores it"), earlier + 2);
     }
 }

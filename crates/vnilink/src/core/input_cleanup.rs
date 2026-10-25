@@ -1,5 +1,6 @@
 //! One bounded native cleanup worker per Core. Jobs retain their owner's
 //! admission slot until release completes, including after record removal.
+// trace: records every ignored failure
 use super::*;
 type Job = Box<dyn FnOnce() + Send>;
 const CAPACITY: usize = 32; // 16 scoped Desktop slots plus at most 4 legacy peers.
@@ -12,7 +13,9 @@ impl Executor {
             .spawn(crate::trace::within(span, move || {
                 while let Ok(job) = receive.recv() {
                     // A backend panic must not kill the only cleanup executor.
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).is_err() {
+                        tracing::warn!(target: crate::trace::INPUT, "an input cleanup panicked");
+                    }
                 }
             }))?;
         Ok(Self(send))

@@ -1,3 +1,4 @@
+// trace: records every ignored failure
 use enigo::{Axis, Coordinate, Direction, Enigo, Keyboard, Mouse, NewConError, Settings};
 
 use crate::error::Error;

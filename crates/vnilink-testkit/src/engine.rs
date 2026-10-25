@@ -51,8 +51,12 @@ impl Engine {
         std::fs::create_dir_all(scratch.join("root")).expect("a file root");
         core.set_transfer_directory(scratch.join("transfers"))
             .expect("a transfer folder");
-        core.set_file_roots(vec![scratch.join("root")])
-            .expect("a file root");
+        // Windows refuses rooted Files until its operations are handle-relative;
+        // the other services still run there, and the Files suites fail plainly.
+        match core.set_file_roots(vec![scratch.join("root")]) {
+            Err(vnilink::Error::Unsupported(_)) if cfg!(windows) => {}
+            result => result.expect("a file root"),
+        }
         // A suite's files are small next to the free space the product keeps
         // in reserve; admission has its own tests in `vnilink`.
         core.set_file_resource_policy(vnilink::job::FileResourcePolicy {

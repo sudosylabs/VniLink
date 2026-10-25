@@ -1,4 +1,5 @@
 //! Translate mode on Linux. The X display opens on the first chord, not in tests.
+// trace: records every ignored failure
 
 use enigo::{Direction, Keyboard};
 
@@ -60,7 +61,11 @@ impl super::OsInput {
             ChordLevel::ShiftAltGr => {
                 self.raw_usage(usage::LEFT_SHIFT, Direction::Press)?;
                 if let Err(error) = self.raw_usage(usage::RIGHT_ALT, Direction::Press) {
-                    let _ = self.raw_usage(usage::LEFT_SHIFT, Direction::Release);
+                    crate::ignored!(
+                        crate::trace::INPUT,
+                        "the shift held for a failed shortcut is released at best",
+                        self.raw_usage(usage::LEFT_SHIFT, Direction::Release)
+                    );
                     return Err(error);
                 }
                 Ok(())

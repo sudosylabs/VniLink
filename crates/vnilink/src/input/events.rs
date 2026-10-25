@@ -79,6 +79,21 @@ pub enum InputEvent {
 }
 
 impl InputEvent {
+    /// What a record may say of this event: its kind, never which key or
+    /// where (`crate::trace`).
+    pub fn kind(self) -> &'static str {
+        match self {
+            Self::Key { down: true, .. } => "key down",
+            Self::Key { down: false, .. } => "key up",
+            Self::Button { down: true, .. } => "button down",
+            Self::Button { down: false, .. } => "button up",
+            Self::Pointer { .. } => "pointer",
+            Self::Wheel { .. } => "wheel",
+            Self::PreciseWheel { .. } => "precise wheel",
+            Self::Motion { .. } => "motion",
+        }
+    }
+
     pub(crate) fn validate(self) -> Result<(), Error> {
         let mut wire = Vec::with_capacity(25);
         self.encode(&mut wire);

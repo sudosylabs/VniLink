@@ -25,11 +25,12 @@ export function silentDrops(text) {
 	return productionCode(text)
 		.split('\n')
 		.map((line, index) => ({ line: line.trim(), number: index + 1 }))
-		.filter(({ line }) => !line.startsWith('//') && (/\blet _ = /.test(line) || /\.ok\(\);/.test(line)));
+		// `let _ = name;` only marks an unused parameter.
+		.filter(({ line }) => !line.startsWith('//') && !/^let _ = [a-z_][a-z0-9_]*;$/.test(line) && (/\blet _ = /.test(line) || /\.ok\(\);/.test(line)));
 }
 
 test('a dropped result is found, and test modules and comments are not', () => {
-	const text = ['// let _ = in a comment', 'let _ = sender.send(1);', 'value.ok();', 'keep(value.ok());', '#[cfg(test)]', 'mod tests {', 'let _ = fixture();', '}'].join('\n');
+	const text = ['// let _ = in a comment', 'let _ = sender.send(1);', 'value.ok();', 'keep(value.ok());', 'let _ = unused;', '#[cfg(test)]', 'mod tests {', 'let _ = fixture();', '}'].join('\n');
 	assert.deepEqual(silentDrops(text).map(drop => drop.number), [2, 3]);
 });
 

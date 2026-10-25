@@ -35,6 +35,34 @@ pub const FRAME_TOO_LARGE: &str = "encoded frame is larger than 1 MiB";
 /// the next picture is encoded as usual, and an owed keyframe stays owed.
 pub const FRAME_DROPPED: &str = "the encoder dropped the picture";
 
+impl vnilink::trace::Failure for Error {
+    fn failure_name(&self) -> &'static str {
+        match self {
+            Self::InvalidFrame(_) => "invalid frame",
+            Self::InvalidSetting(_) => "invalid setting",
+            Self::Unsupported(_) => "unsupported",
+            Self::EncodeRejected(_) => "encode rejected",
+            Self::DecodeRejected(_) => "decode rejected",
+            Self::CaptureFailed(_) => "capture failed",
+            Self::CaptureRejected(_) => "capture rejected",
+            Self::CaptureDenied(_) => "capture denied",
+            Self::SecureDesktop => "secure desktop",
+        }
+    }
+    fn failure_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::InvalidFrame(reason)
+            | Self::InvalidSetting(reason)
+            | Self::Unsupported(reason)
+            | Self::EncodeRejected(reason)
+            | Self::DecodeRejected(reason)
+            | Self::CaptureRejected(reason)
+            | Self::CaptureDenied(reason) => Some(reason),
+            Self::CaptureFailed(_) | Self::SecureDesktop => None,
+        }
+    }
+}
+
 impl Error {
     /// The encoder produced a frame larger than one frame may be.
     pub fn is_too_large(&self) -> bool {

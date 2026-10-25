@@ -102,7 +102,7 @@ fn an_unchanged_screen_brings_one_still() {
 /// the order they were pressed.
 #[test]
 fn input_reaches_the_host_in_order() {
-    let _trace = traced();
+    let trace = traced();
     let session = DesktopSession::start(ScriptedScreen::new(Script::Still), false);
     wait_for("the first picture", DEFAULT_WAIT, || {
         session.frames.recv_timeout(Duration::from_millis(20))
@@ -120,4 +120,63 @@ fn input_reaches_the_host_in_order() {
         (applied.len() >= pressed.len()).then_some(applied)
     });
     assert_eq!(applied, pressed);
+    // The host recorded each key it applied, by kind only.
+    let recorded: Vec<String> = trace
+        .named("input applied")
+        .iter()
+        .map(|event| {
+            assert_eq!(event["engine"], "host", "{event}");
+            assert!(
+                event.get("usage").is_none(),
+                "a key's identity was recorded: {event}"
+            );
+            event["kind"].as_str().unwrap_or_default().to_owned()
+        })
+        .collect();
+    assert_eq!(
+        recorded,
+        ["key down", "key up"].repeat(4),
+        "the host's record of applied input"
+    );
+}
+
+/// Once the host stops sharing control, a viewer's key still leaves the
+/// viewer, and the host discards it and records why.
+#[test]
+fn a_key_after_control_is_withdrawn_is_discarded_and_says_why() {
+    let trace = traced();
+    let session = DesktopSession::start(ScriptedScreen::new(Script::Still), false);
+    wait_for("the first picture", DEFAULT_WAIT, || {
+        session.frames.recv_timeout(Duration::from_millis(20))
+    });
+    session
+        .pair
+        .host
+        .core
+        .set_desktop_sharing(vnilink::Grants {
+            view: true,
+            control: false,
+            clipboard: false,
+            transfer: false,
+        })
+        .unwrap();
+    session
+        .service
+        .submit_input(InputEvent::key_down(usage::A))
+        .expect("the viewer sends the key; the host decides");
+    let discarded = wait_for("the host to discard the key", DEFAULT_WAIT, || {
+        let discarded = trace.named("input discarded");
+        (!discarded.is_empty()).then_some(discarded)
+    });
+    assert_eq!(discarded.len(), 1, "{discarded:?}");
+    assert_eq!(discarded[0]["engine"], "host");
+    assert_eq!(discarded[0]["kind"], "key down");
+    assert_eq!(
+        discarded[0]["why"],
+        "the peer may not control this computer"
+    );
+    assert!(
+        session.applied().is_empty(),
+        "a key was applied without control"
+    );
 }

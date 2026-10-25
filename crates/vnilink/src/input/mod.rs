@@ -1,3 +1,4 @@
+// trace: records every ignored failure
 use crate::error::Error;
 
 mod events;

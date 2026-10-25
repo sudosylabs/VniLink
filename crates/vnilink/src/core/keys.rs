@@ -1,4 +1,5 @@
 //! Key, pointer, keyboard mode, and finished text on the control stream.
+// trace: records every ignored failure
 
 use super::*;
 
@@ -521,22 +522,30 @@ pub(super) async fn host_input_loop(
                 let message = match frame {
                     Ok(message) => message,
                     Err(Error::Malformed) => {
-                        let _ = write_frame(send, &ControlMessage::Reject(error_code(&Error::Malformed))).await;
+                        tracing::info!(target: crate::trace::INPUT, session = session_id, "a malformed control frame ended the session");
+                        crate::ignored!(crate::trace::INPUT, "the session ends whether the peer hears why", write_frame(send, &ControlMessage::Reject(error_code(&Error::Malformed))).await);
                         break false;
                     }
-                    Err(_) => break false,
+                    Err(error) => {
+                        tracing::debug!(target: crate::trace::INPUT, session = session_id, error = error.name(), "the session's control stream ended");
+                        break false;
+                    }
                 };
                 match message {
                     ControlMessage::Addresses { relays, direct } => {
-                        let _ = remember_peer_addresses(
-                            shared,
-                            peer.as_bytes(),
-                            Announcement { relays, direct },
+                        crate::ignored!(
+                            crate::trace::RELAY,
+                            "a peer's addresses are a hint; the next announcement retries",
+                            remember_peer_addresses(
+                                shared,
+                                peer.as_bytes(),
+                                Announcement { relays, direct },
+                            )
                         );
                     }
                     ControlMessage::Close => break false,
                     ControlMessage::Keyframe { stamp } => {
-                        match check_authorized(shared, send, stamp, false).await {
+                        match check_authorized(shared, send, stamp, false, "keyframe request").await {
                             Some(true) => {},
                             None => continue,
                             Some(false) => break false,
@@ -546,7 +555,7 @@ pub(super) async fn host_input_loop(
                             .publish(CoreEvent::KeyframeRequested { id: session_id });
                     }
                     ControlMessage::Quality { stamp, quality } => {
-                        match check_authorized(shared, send, stamp, false).await {
+                        match check_authorized(shared, send, stamp, false, "quality").await {
                             Some(true) => {},
                             None => continue,
                             Some(false) => break false,
@@ -558,7 +567,7 @@ pub(super) async fn host_input_loop(
                         }
                     }
                     ControlMessage::Input { stamp, event } => {
-                        match check_authorized(shared, send, stamp, true).await {
+                        match check_authorized(shared, send, stamp, true, event.kind()).await {
                             Some(true) => {},
                             None => continue,
                             Some(false) => break false,
@@ -567,7 +576,7 @@ pub(super) async fn host_input_loop(
                             LegacyInput::Event(event)).await;
                     }
                     ControlMessage::SelectDisplays { stamp, displays } => {
-                        match check_authorized(shared, send, stamp, false).await {
+                        match check_authorized(shared, send, stamp, false, "display selection").await {
                             Some(true) => {},
                             None => continue,
                             Some(false) => break false,
@@ -590,7 +599,7 @@ pub(super) async fn host_input_loop(
                         }
                     }
                     ControlMessage::Text { stamp, text } => {
-                        match check_authorized(shared, send, stamp, true).await {
+                        match check_authorized(shared, send, stamp, true, "typed text").await {
                             Some(true) => {},
                             None => continue,
                             Some(false) => break false,
@@ -599,7 +608,7 @@ pub(super) async fn host_input_loop(
                             LegacyInput::Text(text.0, false)).await;
                     }
                     ControlMessage::Chord { stamp, text } => {
-                        match check_authorized(shared, send, stamp, true).await {
+                        match check_authorized(shared, send, stamp, true, "shortcut").await {
                             Some(true) => {},
                             None => continue,
                             Some(false) => break false,
@@ -608,7 +617,8 @@ pub(super) async fn host_input_loop(
                             LegacyInput::Text(text.0, true)).await;
                     }
                     _ => {
-                        let _ = write_frame(send, &ControlMessage::Reject(error_code(&Error::Malformed))).await;
+                        tracing::info!(target: crate::trace::INPUT, session = session_id, "an unexpected control message ended the session");
+                        crate::ignored!(crate::trace::INPUT, "the session ends whether the peer hears why", write_frame(send, &ControlMessage::Reject(error_code(&Error::Malformed))).await);
                         break false;
                     }
                 }
@@ -641,7 +651,12 @@ async fn check_authorized(
     send: &mut iroh::endpoint::SendStream,
     stamp: SessionStamp,
     contended_input: bool,
+    what: &'static str,
 ) -> Option<bool> {
+    let discard = |why: &'static str| {
+        tracing::debug!(target: crate::trace::INPUT, stamp = stamp.id, what, why, "input discarded");
+        None
+    };
     let decision = {
         let state = lock(&shared.state);
         let Some(owner) = state
@@ -649,10 +664,11 @@ async fn check_authorized(
             .values()
             .find(|session| session.wire_stamp == stamp)
         else {
+            tracing::info!(target: crate::trace::INPUT, stamp = stamp.id, what, "a control message named no session; the connection ends");
             return Some(false);
         };
         if contended_input && !state.trust.granted(&owner.peer_key, Grant::Control) {
-            return None;
+            return discard("the peer may not control this computer");
         }
         // Contended input from a session without the lease is discarded, like
         // late messages after retirement: the viewer stays connected and its
@@ -668,14 +684,14 @@ async fn check_authorized(
                     .any(|s| s.wire_stamp == stamp && s.id != holder)
             })
         {
-            return None;
+            return discard("another viewer controls this computer");
         }
         if state
             .incoming
             .values()
             .any(|s| s.wire_stamp == stamp && *s.desktop_stop.borrow())
         {
-            return None;
+            return discard("the desktop has stopped");
         }
         let active = state
             .incoming
@@ -691,7 +707,12 @@ async fn check_authorized(
         session::check_input(active, stamp)
     };
     if let Err(error) = decision {
-        let _ = write_frame(send, &ControlMessage::Reject(error_code(&error))).await;
+        tracing::info!(target: crate::trace::INPUT, stamp = stamp.id, what, refused = error.name(), "a control message was refused; the connection ends");
+        crate::ignored!(
+            crate::trace::INPUT,
+            "the session ends whether the peer hears why",
+            write_frame(send, &ControlMessage::Reject(error_code(&error))).await
+        );
         return Some(false);
     }
     Some(true)
@@ -704,6 +725,17 @@ enum LegacyInput {
     Text(String, bool),
 }
 
+impl LegacyInput {
+    /// Its kind, never its keys or text (`crate::trace`).
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Event(event) => event.kind(),
+            Self::Text(_, false) => "typed text",
+            Self::Text(_, true) => "shortcut",
+        }
+    }
+}
+
 async fn apply_host_input(
     shared: &Arc<Shared>,
     session_id: u64,
@@ -712,13 +744,18 @@ async fn apply_host_input(
     input_open: &mut bool,
     command: LegacyInput,
 ) -> bool {
+    let kind = command.kind();
+    let discard = |why: &'static str| {
+        tracing::debug!(target: crate::trace::INPUT, session = session_id, kind, why, "input discarded");
+        false
+    };
     if !*input_open {
-        return false;
+        return discard("input on this session was closed after a failure");
     }
     let (epoch, mut stop, mut desktop_stop, slot, link) = {
         let state = lock(&shared.state);
         let Some(session) = state.incoming.get(&session_id) else {
-            return false;
+            return discard("the session ended");
         };
         (
             session.input_epoch.load(Ordering::Acquire),
@@ -737,12 +774,12 @@ async fn apply_host_input(
     // Its slot and late-release fence remain until actual completion.
     let result = tokio::select! {
         biased;
-        _ = wait_native_stop(&mut stop) => return false,
-        _ = wait_native_stop(&mut desktop_stop) => return false,
+        _ = wait_native_stop(&mut stop) => return discard("the session stopped while it applied"),
+        _ = wait_native_stop(&mut desktop_stop) => return discard("the desktop stopped while it applied"),
         _ = async move {
             if let Some(link) = link { link.closed().await; }
             else { std::future::pending::<()>().await; }
-        } => return false,
+        } => return discard("the connection closed while it applied"),
         result = worker => result.unwrap_or(Err(Error::NoSession)),
     };
     match result {
@@ -751,7 +788,12 @@ async fn apply_host_input(
             note_input_failure(shared, session_id, &error);
             if matches!(error, Error::Unsupported(_)) {
                 *input_open = false;
-                let _ = write_frame(send, &ControlMessage::Reject(error_code(&error))).await;
+                tracing::warn!(target: crate::trace::INPUT, session = session_id, "input on this session closed: this computer cannot apply it");
+                crate::ignored!(
+                    crate::trace::INPUT,
+                    "input stays closed whether the peer hears why",
+                    write_frame(send, &ControlMessage::Reject(error_code(&error))).await
+                );
             }
             false
         }
@@ -775,10 +817,15 @@ fn apply_legacy_input(
 ) -> Result<(), Error> {
     // Capture the lease before waiting. A revoke/regrant while queued cannot
     // turn an old command into input for a newly admitted lease.
+    let kind = command.kind();
+    let discard = |why: &'static str| {
+        tracing::debug!(target: crate::trace::INPUT, session = id, kind, why, "input discarded");
+        Ok(())
+    };
     let epoch_watch = {
         let state = lock(&shared.state);
         let Some(session) = state.incoming.get(&id) else {
-            return Ok(());
+            return discard("the session ended");
         };
         session.input_epoch.clone()
     };
@@ -794,18 +841,23 @@ fn apply_legacy_input(
             }
         };
         let Some(session) = state.incoming.get(&id) else {
-            return Ok(());
+            return discard("the session ended");
         };
         if state.shut_down
             || session.phase != SessionPhase::Active
             || session.wire_stamp != stamp
             || *session.stop.borrow()
             || *session.desktop_stop.borrow()
-            || epoch_watch.load(Ordering::Acquire) != epoch
-            || !state.trust.granted(&session.peer_key, Grant::View)
+        {
+            return discard("the session stopped before it applied");
+        }
+        if epoch_watch.load(Ordering::Acquire) != epoch {
+            return discard("control changed before it applied");
+        }
+        if !state.trust.granted(&session.peer_key, Grant::View)
             || !state.trust.granted(&session.peer_key, Grant::Control)
         {
-            return Ok(());
+            return discard("the peer may no longer control this computer");
         }
         if shared.input_cleanup.load(Ordering::Acquire) != 0 {
             drop(state);
@@ -814,7 +866,7 @@ fn apply_legacy_input(
             continue;
         }
         if state.input_holder() != Some(id) {
-            return Ok(());
+            return discard("another viewer controls this computer");
         }
         if let LegacyInput::Event(event) = &command {
             super::topology::accept_pointer(shared, *event, &session.selected_displays)?;
@@ -826,6 +878,7 @@ fn apply_legacy_input(
         let adapter = adapter
             .as_mut()
             .ok_or(Error::Unsupported("no desktop adapter is installed"))?;
+        let started = std::time::Instant::now();
         let result = match &command {
             LegacyInput::Event(event) => adapter.apply(*event),
             LegacyInput::Text(text, chord) => {
@@ -840,6 +893,14 @@ fn apply_legacy_input(
                 }
             }
         };
+        tracing::trace!(
+            target: crate::trace::INPUT,
+            session = id,
+            kind,
+            failed = result.as_ref().err().map(Error::name),
+            took_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+            "input applied"
+        );
         let late_releases = {
             let mut held = lock(&held);
             if result.is_ok() {

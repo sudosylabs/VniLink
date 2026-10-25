@@ -1,4 +1,5 @@
 //! VideoToolbox stays on a Rust worker. Swift polls one latest decoded picture.
+// trace: records every ignored failure
 use crate::{FfiError, VnilinkCore};
 use std::collections::HashMap;
 use std::sync::{
@@ -200,7 +201,9 @@ impl MacViewer {
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
         if let Some(worker) = self.worker.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            let _ = worker.join();
+            if worker.join().is_err() {
+                tracing::warn!(target: vnilink::trace::CAPTURE, "a capture worker panicked");
+            }
         }
         self.state.lock().unwrap_or_else(|e| e.into_inner()).frame = None;
     }
@@ -379,8 +382,12 @@ impl VnilinkCore {
                 let result = decoder.push(&frame);
                 if matches!(&result, Ok(ControllerOutput::Decoded(_))) {
                     if let Some(desktop) = &worker_desktop {
-                        let _ = desktop.report_decode_duration(
-                            began.elapsed().as_micros().min(5_000_000) as u64,
+                        vnilink::ignored!(
+                            vnilink::trace::DECODE,
+                            "a decode time for a closed service is not needed",
+                            desktop.report_decode_duration(
+                                began.elapsed().as_micros().min(5_000_000) as u64,
+                            )
                         );
                     }
                 }
@@ -514,7 +521,11 @@ impl HostTarget {
     }
     fn close(&self, core: &Core) {
         if self.service {
-            let _ = core.close_hosted_service(self.id, self.generation);
+            vnilink::ignored!(
+                vnilink::trace::HOSTING,
+                "a hosted service already gone needs no close",
+                core.close_hosted_service(self.id, self.generation)
+            );
         } else if core.hosted_sessions().ok().is_some_and(|sessions| {
             sessions.into_iter().any(|s| {
                 s.id == self.id
@@ -522,7 +533,11 @@ impl HostTarget {
                     && s.phase == SessionPhase::Active
             })
         }) {
-            let _ = core.stop_hosted_session();
+            vnilink::ignored!(
+                vnilink::trace::HOSTING,
+                "a hosted session already gone needs no stop",
+                core.stop_hosted_session()
+            );
         }
     }
 }
@@ -603,7 +618,9 @@ impl MacHost {
             let worker = self.worker.lock().unwrap_or_else(|e| e.into_inner()).take();
             drop(hosts);
             if let Some(worker) = worker {
-                let _ = worker.join();
+                if worker.join().is_err() {
+                    tracing::warn!(target: vnilink::trace::CAPTURE, "a capture worker panicked");
+                }
             }
             return;
         }
@@ -614,11 +631,16 @@ impl MacHost {
         // skipped) or a fully torn-down core (clean setup), never a
         // half-torn one.
         if let Some(worker) = self.worker.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            let _ = worker.join();
+            if worker.join().is_err() {
+                tracing::warn!(target: vnilink::trace::CAPTURE, "a capture worker panicked");
+            }
         }
-        let _ = self
-            .core
-            .set_video_codecs(vnilink::VideoCodecCaps::decode_only("videotoolbox"));
+        vnilink::ignored!(
+            vnilink::trace::ENCODE,
+            "a shut-down engine needs no codecs",
+            self.core
+                .set_video_codecs(vnilink::VideoCodecCaps::decode_only("videotoolbox"))
+        );
     }
 }
 impl Drop for MacHost {
@@ -728,7 +750,11 @@ impl VnilinkCore {
                     plan
                 }
                 Err(error) => {
-                    let _ = ready_tx.send(Err(error));
+                    vnilink::ignored!(
+                        vnilink::trace::CAPTURE,
+                        "the opener stopped waiting for the capture",
+                        ready_tx.send(Err(error))
+                    );
                     return;
                 }
             };
@@ -821,9 +847,13 @@ impl VnilinkCore {
                     match loss {
                         CaptureLoss::Restart => {}
                         CaptureLoss::Permission => {
-                            let _ = worker_core.report_os_permission(
-                                vnilink::availability::Capability::DesktopView,
-                                true,
+                            vnilink::ignored!(
+                                vnilink::trace::CAPTURE,
+                                "a permission report to a shut-down engine is moot",
+                                worker_core.report_os_permission(
+                                    vnilink::availability::Capability::DesktopView,
+                                    true,
+                                )
                             );
                             fail_display_viewers(
                                 &worker_core,
@@ -1706,7 +1736,11 @@ fn fail_display_viewers(core: &vnilink::Core, display_id: u64, failure: vnilink:
     };
     for target in routing.targets {
         if target.service && target.serves_source(display_id, routing.default_source) {
-            let _ = core.fail_hosted_service(target.id, target.generation, failure);
+            vnilink::ignored!(
+                vnilink::trace::HOSTING,
+                "a viewer already gone needs no failure",
+                core.fail_hosted_service(target.id, target.generation, failure)
+            );
         }
     }
 }
