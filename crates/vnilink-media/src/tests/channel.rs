@@ -105,3 +105,45 @@ fn the_same_picture_again_is_not_a_change() {
     assert!(channel.pushed_at() > pushed);
     assert!(channel.push_if_changed(slot(2, 2)));
 }
+
+#[test]
+fn a_waiter_wakes_on_a_push_and_not_before_a_deadline_without_one() {
+    use std::sync::Arc;
+    use std::time::Instant;
+    let channel = Arc::new(FrameChannel::new());
+    let seen = channel.generation();
+    let started = Instant::now();
+    assert_eq!(
+        channel.wait_newer(seen, started + Duration::from_millis(30)),
+        seen
+    );
+    assert!(started.elapsed() >= Duration::from_millis(30));
+    let pusher = {
+        let channel = Arc::clone(&channel);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            channel.push(slot(2, 2));
+        })
+    };
+    let started = Instant::now();
+    let woken = channel.wait_newer(seen, started + Duration::from_secs(5));
+    assert!(woken > seen);
+    assert!(started.elapsed() < Duration::from_secs(1));
+    pusher.join().unwrap();
+    // A picture already stored does not make the waiter wait.
+    let started = Instant::now();
+    assert_eq!(
+        channel.wait_newer(seen, started + Duration::from_secs(5)),
+        woken
+    );
+    assert!(started.elapsed() < Duration::from_millis(5));
+}
+
+#[test]
+fn a_failure_ends_a_wait() {
+    let channel = FrameChannel::new();
+    channel.fail("stopped");
+    let started = std::time::Instant::now();
+    channel.wait_newer(0, started + Duration::from_secs(5));
+    assert!(started.elapsed() < Duration::from_secs(1));
+}

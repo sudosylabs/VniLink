@@ -1156,3 +1156,255 @@ fn an_unchanged_screen_brings_one_still_picture() {
     let roles = roles_of_an_unchanged_screen(false, watch);
     assert!(!roles.contains(&Still), "{roles:?}");
 }
+
+/// A source that is told of each picture as it arrives, as the platform
+/// captures are, and records when it is read.
+struct Pushing {
+    channel: crate::channel::FrameChannel,
+    seen: std::sync::atomic::AtomicU64,
+    arrivals: Mutex<Vec<Instant>>,
+    reads: Mutex<Vec<Instant>>,
+    waits: AtomicUsize,
+}
+
+impl Pushing {
+    fn new() -> Self {
+        Self {
+            channel: crate::channel::FrameChannel::new(),
+            seen: std::sync::atomic::AtomicU64::new(0),
+            arrivals: Mutex::new(Vec::new()),
+            reads: Mutex::new(Vec::new()),
+            waits: AtomicUsize::new(0),
+        }
+    }
+
+    fn arrive(&self) {
+        self.arrivals.lock().unwrap().push(Instant::now());
+        self.channel.push(crate::channel::ChannelSlot {
+            width: 64,
+            height: 64,
+            stride: 256,
+            bytes: crate::Pixels::from(vec![0; 64 * 64 * 4]),
+            captured_at: None,
+        });
+    }
+}
+
+impl FrameSource for Pushing {
+    fn size(&self) -> (u16, u16) {
+        (64, 64)
+    }
+
+    fn poll_frame(&self, timestamp: u64) -> Result<Option<RawFrame>, Error> {
+        self.seen
+            .store(self.channel.generation(), Ordering::Release);
+        self.reads.lock().unwrap().push(Instant::now());
+        Ok(self.channel.try_latest()?.map(|_| solid(64, 64, timestamp)))
+    }
+
+    fn wait_frame(&self, deadline: Instant) -> crate::FrameWait {
+        self.waits.fetch_add(1, Ordering::Relaxed);
+        let seen = self.seen.load(Ordering::Acquire);
+        crate::FrameWait::from_arrived(self.channel.wait_newer(seen, deadline) != seen)
+    }
+
+    fn attested_at(&self) -> Option<Instant> {
+        self.channel.pushed_at()
+    }
+}
+
+/// Serves `source` to one viewer and runs `body` once its first picture has
+/// arrived, with the stop flag and the frame period. Returns the number of
+/// pictures encoded and how long the worker took to end after `stop`.
+fn serve_pushing(
+    source: &Arc<Pushing>,
+    body: impl FnOnce(&AtomicBool, Duration),
+) -> (usize, Duration) {
+    let host = Arc::new(boot());
+    let viewer = boot();
+    host.set_capture(Box::new(Source {
+        idle: false,
+        frames: Arc::new(AtomicUsize::new(0)),
+        thread: Mutex::new(None),
+        wrong_thread: Arc::new(AtomicBool::new(false)),
+    }))
+    .unwrap();
+    for core in [&host, &viewer] {
+        core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
+            .unwrap();
+    }
+    host.set_topology(9, &[twin(7, 0)]).unwrap();
+    pair(&host, &viewer);
+    host.start_hosting().unwrap();
+    let parent = viewer.begin_connect_services(&host.endpoint_id()).unwrap();
+    wait_active(&viewer, parent.id);
+    let parent = viewer.controller_session(parent.id).unwrap();
+    let owner = viewer
+        .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
+        .unwrap();
+    let handle = viewer
+        .open_desktop_service(owner.id, owner.generation)
+        .unwrap();
+    let frames = handle.subscribe_video().unwrap();
+    let encodes = Arc::new(AtomicUsize::new(0));
+    let period = Arc::new(Mutex::new(Duration::from_millis(33)));
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker = {
+        let (stop, host, encodes, period, source) = (
+            Arc::clone(&stop),
+            Arc::clone(&host),
+            Arc::clone(&encodes),
+            Arc::clone(&period),
+            Arc::clone(source),
+        );
+        std::thread::spawn(move || {
+            crate::serve_shared_capture(
+                &*source,
+                &host,
+                &stop,
+                false,
+                7,
+                |targets| {
+                    if let Some(target) = targets.first() {
+                        *period.lock().unwrap() = Duration::from_micros(
+                            1_000_000 / u64::from(target.quality.max_frame_rate.max(1)),
+                        );
+                    }
+                },
+                move |_, _, _, _, _| {
+                    Ok(Encoder {
+                        slow: false,
+                        encodes: Arc::clone(&encodes),
+                        opens: Arc::new(AtomicUsize::new(0)),
+                    })
+                },
+            )
+        })
+    };
+    // The first picture opens the stream; the viewer's request for one is
+    // answered from what the source pushes.
+    source.arrive();
+    frames
+        .recv_timeout(Duration::from_secs(5))
+        .expect("first picture");
+    let period = *period.lock().unwrap();
+    body(&stop, period);
+    let asked = Instant::now();
+    stop.store(true, Ordering::Release);
+    worker.join().unwrap().unwrap();
+    (encodes.load(Ordering::Relaxed), asked.elapsed())
+}
+
+/// Arrival times that are not on the frame rate's grid.
+fn irregular(period: Duration, count: usize) -> Vec<Duration> {
+    (0..count)
+        .map(|index| period.mul_f64([1.7, 2.3, 3.1, 1.2, 2.9, 4.4][index % 6]))
+        .collect()
+}
+
+#[test]
+fn a_picture_is_read_when_it_arrives_not_on_a_timer() {
+    let source = Arc::new(Pushing::new());
+    serve_pushing(&source, |_, period| {
+        source.arrivals.lock().unwrap().clear();
+        for gap in irregular(period, 14) {
+            std::thread::sleep(gap);
+            source.arrive();
+        }
+        std::thread::sleep(period);
+    });
+    let arrivals = source.arrivals.lock().unwrap().clone();
+    let reads = source.reads.lock().unwrap().clone();
+    let mut delays: Vec<Duration> = arrivals
+        .iter()
+        .map(|arrival| {
+            reads
+                .iter()
+                .find(|read| *read >= arrival)
+                .expect("every picture is read")
+                .duration_since(*arrival)
+        })
+        .collect();
+    delays.sort();
+    // A timer would add half a period (8 ms at 60 fps) on average.
+    assert!(
+        delays[delays.len() / 2] < Duration::from_millis(2),
+        "median delay {:?}",
+        delays[delays.len() / 2]
+    );
+    assert!(
+        *delays.last().unwrap() < Duration::from_millis(10),
+        "worst delay {:?}",
+        delays.last()
+    );
+}
+
+#[test]
+fn pictures_faster_than_the_frame_rate_are_read_no_faster_than_it() {
+    let source = Arc::new(Pushing::new());
+    let mut observed = Duration::ZERO;
+    serve_pushing(&source, |_, period| {
+        observed = period;
+        source.reads.lock().unwrap().clear();
+        let end = Instant::now() + Duration::from_millis(900);
+        while Instant::now() < end {
+            source.arrive();
+            std::thread::sleep(period / 4);
+        }
+    });
+    let reads = source.reads.lock().unwrap().clone();
+    let closest = reads
+        .windows(2)
+        .map(|pair| pair[1].duration_since(pair[0]))
+        .min()
+        .unwrap();
+    assert!(
+        closest + Duration::from_micros(500) >= observed,
+        "reads {closest:?} apart at a period of {observed:?}"
+    );
+}
+
+#[test]
+fn pictures_just_above_the_frame_rate_do_not_spin_the_reader() {
+    let source = Arc::new(Pushing::new());
+    let mut observed = Duration::ZERO;
+    serve_pushing(&source, |_, period| {
+        observed = period;
+        source.reads.lock().unwrap().clear();
+        source.waits.store(0, Ordering::Relaxed);
+        let end = Instant::now() + Duration::from_millis(900);
+        while Instant::now() < end {
+            source.arrive();
+            std::thread::sleep(period.mul_f64(0.97));
+        }
+    });
+    let reads = source.reads.lock().unwrap().len();
+    let waits = source.waits.load(Ordering::Relaxed);
+    let possible = (Duration::from_millis(900).as_secs_f64() / observed.as_secs_f64()) as usize;
+    assert!(reads <= possible + 2, "{reads} reads, {possible} periods");
+    assert!(waits <= 3 * possible, "{waits} waits, {possible} periods");
+}
+
+#[test]
+fn a_still_screen_is_kept_alive_once_a_second_without_polling_at_the_frame_rate() {
+    let source = Arc::new(Pushing::new());
+    let (encodes, _) = serve_pushing(&source, |_, _| {
+        source.reads.lock().unwrap().clear();
+        std::thread::sleep(Duration::from_millis(2_500));
+    });
+    assert!(
+        (2..=5).contains(&encodes),
+        "{encodes} pictures in 2.5 s of a still screen"
+    );
+    let reads = source.reads.lock().unwrap().len();
+    assert!(reads <= 12, "{reads} reads of a still screen in 2.5 s");
+}
+
+#[test]
+fn stop_is_seen_while_waiting_for_a_picture() {
+    let source = Arc::new(Pushing::new());
+    let (_, ended) = serve_pushing(&source, |_, _| {
+        std::thread::sleep(Duration::from_millis(100));
+    });
+    assert!(ended < Duration::from_millis(200), "ended after {ended:?}");
+}

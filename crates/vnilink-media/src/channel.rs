@@ -7,7 +7,7 @@
 //! them.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::error::Error;
@@ -53,6 +53,11 @@ pub struct FrameChannel {
     failure: Mutex<Option<&'static str>>,
     /// When `push` last stored a picture. Idle readers do not refresh this.
     pushed_at: Mutex<Option<Instant>>,
+    /// Wakes [`Self::wait_newer`] when a picture is stored or a failure is
+    /// recorded. The mutex guards nothing: the state it announces is atomic
+    /// or has its own lock, and `generation` is advanced under it so a wait
+    /// cannot miss a push between its check and its sleep.
+    arrival: (Mutex<()>, Condvar),
 }
 
 impl FrameChannel {
@@ -63,6 +68,7 @@ impl FrameChannel {
             returned: AtomicU64::new(0),
             failure: Mutex::new(None),
             pushed_at: Mutex::new(None),
+            arrival: (Mutex::new(()), Condvar::new()),
         }
     }
 
@@ -95,7 +101,38 @@ impl FrameChannel {
 
     fn stored(&self) {
         *self.pushed_at.lock().expect("frame channel") = Some(Instant::now());
-        self.generation.fetch_add(1, Ordering::Relaxed);
+        let _arrival = self.arrival.0.lock().expect("frame channel");
+        self.generation.fetch_add(1, Ordering::Release);
+        self.arrival.1.notify_all();
+    }
+
+    /// How many pictures have been stored. A picture stored after a call
+    /// to this has a greater number.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+
+    /// Wait until a picture newer than `seen` is stored, or `deadline`, and
+    /// return the generation then current. The result is `seen` when nothing
+    /// arrived in time. A recorded failure ends the wait at once, so the
+    /// caller's next read reports it. A push wakes the waiter directly.
+    pub fn wait_newer(&self, seen: u64, deadline: Instant) -> u64 {
+        let mut guard = self.arrival.0.lock().expect("frame channel");
+        loop {
+            let generation = self.generation();
+            if generation > seen || self.failure().is_some() {
+                return generation;
+            }
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return generation;
+            };
+            guard = self
+                .arrival
+                .1
+                .wait_timeout(guard, remaining)
+                .expect("frame channel")
+                .0;
+        }
     }
 
     /// Acquisition time of the last `push`. A later read of the same slot does not move it.
@@ -110,6 +147,9 @@ impl FrameChannel {
         if failure.is_none() {
             *failure = Some(reason);
         }
+        drop(failure);
+        let _arrival = self.arrival.0.lock().expect("frame channel");
+        self.arrival.1.notify_all();
     }
 
     /// The recorded failure, if any. The open loop polls this while the

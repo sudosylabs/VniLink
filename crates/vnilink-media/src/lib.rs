@@ -60,7 +60,9 @@ pub use desktop::{CapturePlan, CursorPolicy, DesktopKind, MonitorSize};
 pub use error::{Error, PublishError, FRAME_DROPPED};
 pub use fanout::serve_shared_capture;
 pub use frame::{encoded_size, scale_bgra, RawFrame};
-pub use host::{serve_capture, serve_desktop_capture, FrameSource, HostSession, OpenEncoder};
+pub use host::{
+    serve_capture, serve_desktop_capture, FrameSource, FrameWait, HostSession, OpenEncoder,
+};
 pub use nv12::{bgra_to_nv12, nv12_to_bgra, Nv12};
 pub use pump::{
     CoreSink, EncodeParams, EncodedSample, FramePump, FrameSink, HostVideo, PumpOutput,

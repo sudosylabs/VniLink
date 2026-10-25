@@ -19,6 +19,28 @@ use crate::pump::{CoreSink, FrameSink, HostVideo, PumpOutput, VideoEncoder};
 use crate::rate::{RateChange, RateController};
 use crate::Quality;
 
+/// How [`FrameSource::wait_frame`] ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameWait {
+    /// A picture the last poll did not return is ready.
+    Arrived,
+    /// The deadline passed with none.
+    TimedOut,
+    /// This source cannot wait for pictures; it returned at once.
+    Unsupported,
+}
+
+impl FrameWait {
+    /// What a source's wait says when it can wait: whether a picture came.
+    pub fn from_arrived(arrived: bool) -> Self {
+        if arrived {
+            Self::Arrived
+        } else {
+            Self::TimedOut
+        }
+    }
+}
+
 /// Where paced pictures come from. Both portal and ScreenCaptureKit captures satisfy it.
 pub trait FrameSource {
     fn size(&self) -> (u16, u16);
@@ -28,6 +50,15 @@ pub trait FrameSource {
     /// and shutdown are checked between reads. Healthy native reads finish
     /// within 100 ms; native API/device failure is returned as an error.
     fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error>;
+    /// Waits until a picture the last [`Self::poll_frame`] did not return
+    /// is ready, or until `deadline`. A source that is told of each picture
+    /// as it arrives wakes then, so the next poll finds it at once. Waits end
+    /// at `deadline` at the latest, so the caller's stop flags are seen
+    /// between them. The default does not wait: the caller times its polls.
+    fn wait_frame(&self, deadline: std::time::Instant) -> FrameWait {
+        let _ = deadline;
+        FrameWait::Unsupported
+    }
     fn cursor(&self) -> Option<vnilink::CursorState> {
         None
     }

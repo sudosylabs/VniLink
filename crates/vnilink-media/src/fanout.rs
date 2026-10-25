@@ -23,7 +23,7 @@ use crate::frame::{encoded_size, RawFrame};
 use crate::host::HostSession;
 use crate::pump::{FrameSink, VideoEncoder};
 use crate::still::{StillWorker, STILL_AFTER};
-use crate::FrameSource;
+use crate::{FrameSource, FrameWait};
 
 #[derive(Default)]
 struct Picture {
@@ -155,6 +155,9 @@ struct Sample {
 /// How often an unchanged picture is still handed on, so a viewer sees the
 /// stream is alive.
 const IDLE_KEEPALIVE: Duration = Duration::from_secs(1);
+/// The longest the shared capture sleeps or waits before it looks at its
+/// stop flag, the routing and the consumers again.
+const WAKE_SLICE: Duration = Duration::from_millis(20);
 
 /// Older than this, a source's capture time is not trusted over the read.
 const CAPTURE_AGE_LIMIT: Duration = Duration::from_secs(1);
@@ -618,6 +621,8 @@ where
     // A size the source would not deliver is not asked for again.
     let mut refused = None;
     let mut next_read = Instant::now();
+    // Whether the source cannot wait for pictures, so its reads are timed.
+    let mut timed = true;
     std::thread::scope(|scope| {
         let mut running: Vec<Running<'_>> = Vec::new();
         let mut draining: Vec<Running<'_>> = Vec::new();
@@ -749,12 +754,37 @@ where
                 })
                 .min()
                 .unwrap_or(Duration::from_millis(33));
+            // Reads are at least a period apart, however fast pictures come:
+            // a 120 Hz display at 60 fps takes the newest once the period
+            // has passed. Waits and sleeps are short, so stop is seen.
+            let now = Instant::now();
+            if now < next_read {
+                std::thread::sleep((next_read - now).min(WAKE_SLICE));
+                continue;
+            }
+            // Due: a picture that arrived meanwhile is read at once, and
+            // otherwise the read waits for one rather than for a timer, so
+            // a picture is read as it arrives and not up to a period later.
+            let wait = capture.wait_frame(now + WAKE_SLICE);
+            timed = wait == FrameWait::Unsupported;
+            if wait == FrameWait::TimedOut
+                && last_published.is_some_and(|at| at.elapsed() < IDLE_KEEPALIVE)
+                && capture.cursor() == last_cursor
+            {
+                // Still: nothing to read until a picture, the pointer or the
+                // keepalive says so.
+                continue;
+            }
             let read_started = Instant::now();
             let timestamp = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
             let frame = match capture.poll_frame(timestamp) {
                 Ok(Some(frame)) => frame,
                 Ok(None) => {
-                    std::thread::sleep(Duration::from_millis(10));
+                    // No first picture yet: a source that can wait is waited
+                    // on at the top of the next turn.
+                    if timed {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
                     continue;
                 }
                 Err(error) => break Err(error.into()),
@@ -798,17 +828,19 @@ where
                     unchanged,
                 );
             }
-            // Reads keep the frame rate's cadence: the loop's own work is
-            // part of the period, not added to it, which had a 30 fps
-            // stream read 25 times a second and a 60 fps one 52. A read
-            // that ran past its time starts the cadence again from now
-            // rather than reading again at once to catch up.
+            // A source read on a timer keeps the frame rate's cadence: the
+            // loop's own work is part of the period, not added to it, which
+            // had a 30 fps stream read 25 times a second and a 60 fps one
+            // 52. A read that ran past its time starts the cadence again
+            // from now rather than reading again at once to catch up. A
+            // source that wakes the read only holds the next one back a
+            // period from this one.
             let now = Instant::now();
-            next_read += period;
-            match next_read.checked_duration_since(now) {
-                Some(remaining) => std::thread::sleep(remaining),
-                None => next_read = now,
-            }
+            next_read = if timed {
+                (next_read + period).max(now)
+            } else {
+                read_started + period
+            };
         };
         for worker in running.iter().chain(draining.iter()) {
             worker.control.cancel.store(true, Ordering::Release);
