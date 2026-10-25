@@ -2,9 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use vnilink::{Core, Grants, MemoryStore, RelaySettings};
+use vnilink::{Core, Grants, MemoryStore, RelaySettings, ServiceInfo, ServiceKind, SessionInfo};
 
-use crate::Scratch;
+use crate::{wait_for, Scratch, DEFAULT_WAIT};
 
 /// A real engine on loopback, as the application runs one, with its own
 /// identity in memory and its own folders: `root`, the one folder it may
@@ -18,9 +18,31 @@ pub struct Engine {
 impl Engine {
     /// `name` tags its folders, such as `host` or `controller`.
     pub fn start(name: &str) -> Self {
-        let scratch = Scratch::new(name);
         let core = Core::open_direct(Arc::new(MemoryStore::empty()), RelaySettings::public_n0())
             .expect("a loopback engine");
+        Self::prepare(name, core)
+    }
+
+    /// An engine with no direct address, whose only way to its peers is the
+    /// relay at `relay` ([`crate::relay::LocalRelay`]).
+    pub fn relayed(name: &str, relay: &str) -> Self {
+        let settings =
+            RelaySettings::custom(vec![vnilink::CustomRelay::new(relay).expect("a relay URL")])
+                .expect("relay settings");
+        let core = Core::open(
+            Arc::new(MemoryStore::empty()),
+            vnilink::OpenConfig {
+                listen: vnilink::Listen::RelayOnly,
+                event_capacity: 64,
+                initial_relay: settings,
+            },
+        )
+        .expect("a relayed engine");
+        Self::prepare(name, core)
+    }
+
+    fn prepare(name: &str, core: Core) -> Self {
+        let scratch = Scratch::new(name);
         // A session needs codecs to open, whatever it carries.
         core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "testkit"))
             .expect("codecs");
@@ -69,6 +91,23 @@ impl Drop for Engine {
     }
 }
 
+/// What the host and the controller grant so files move both ways; a
+/// session opens under view and control.
+pub const FILES: (Grants, Grants) = (
+    Grants {
+        view: true,
+        control: true,
+        clipboard: false,
+        transfer: true,
+    },
+    Grants {
+        view: false,
+        control: false,
+        clipboard: false,
+        transfer: true,
+    },
+);
+
 /// A host and a controller that trust each other, as two computers do once
 /// paired, the host serving.
 pub struct Pair {
@@ -80,9 +119,23 @@ impl Pair {
     /// Paired both ways; the host shares what `host` grants and the
     /// controller what `controller` grants.
     pub fn new(host: Grants, controller: Grants) -> Self {
+        Self::paired(
+            Engine::start("host"),
+            Engine::start("controller"),
+            host,
+            controller,
+        )
+    }
+
+    fn paired(
+        host_engine: Engine,
+        controller_engine: Engine,
+        host: Grants,
+        controller: Grants,
+    ) -> Self {
         let pair = Self {
-            host: Engine::start("host"),
-            controller: Engine::start("controller"),
+            host: host_engine,
+            controller: controller_engine,
         };
         let invitation = Duration::from_secs(60);
         pair.host.core.start_hosting().expect("hosting");
@@ -109,23 +162,55 @@ impl Pair {
         pair
     }
 
+    /// As [`Self::new`], each engine reaching the other only through the
+    /// relay at `relay`.
+    pub fn relayed(relay: &str, host: Grants, controller: Grants) -> Self {
+        Self::paired(
+            Engine::relayed("host", relay),
+            Engine::relayed("controller", relay),
+            host,
+            controller,
+        )
+    }
+
     /// Both sides may move files, as the Files tab needs.
     pub fn for_files() -> Self {
-        let transfer = Grants {
-            view: false,
-            control: false,
-            clipboard: false,
-            transfer: true,
-        };
-        // A session opens under view and control.
-        Self::new(
-            Grants {
-                view: true,
-                control: true,
-                ..transfer
-            },
-            transfer,
-        )
+        let (host, controller) = FILES;
+        Self::new(host, controller)
+    }
+
+    /// The host shares `kinds` as services, besides being seen and
+    /// controlled, under which a services connection opens.
+    pub fn for_services(kinds: &[ServiceKind]) -> Self {
+        let pair = Self::for_desktop();
+        for kind in kinds {
+            pair.host
+                .core
+                .set_service_sharing(*kind, true)
+                .expect("service sharing");
+        }
+        pair
+    }
+
+    /// The controller's services connection to the host, as the
+    /// application opens one, once the host admitted it.
+    pub fn connect_services(&self) -> SessionInfo {
+        let controller = &self.controller.core;
+        let pending = controller
+            .begin_connect_services(&self.host.endpoint())
+            .expect("a connection");
+        wait_for("the connection to be admitted", DEFAULT_WAIT, || {
+            let session = controller.controller_session(pending.id).ok()?;
+            (session.phase == vnilink::SessionPhase::Active).then_some(session)
+        })
+    }
+
+    /// A service of `kind` on `connection`.
+    pub fn attach(&self, connection: &SessionInfo, kind: ServiceKind) -> ServiceInfo {
+        self.controller
+            .core
+            .attach_controller_service(connection.id, connection.generation, kind)
+            .expect("a service")
     }
 
     /// The host may be seen and controlled.

@@ -9,11 +9,19 @@ publish = false
 
 [dependencies]
 blake3 = "=1.8.7"
+# A relay on this computer for the relay suite (`relay.rs`).
+iroh-relay = { version = "=1.3.0", features = ["server"] }
+tokio = { version = "1.44", features = ["rt-multi-thread"] }
 serde_json = "=1.0.151"
 # Loopback engines that never reach a relay (`Core::open_direct`).
 vnilink = { path = "../vnilink", features = ["test-probes"] }
+vnilink-audio = { path = "../vnilink-audio" }
 vnilink-log = { path = "../vnilink-log" }
 vnilink-media = { path = "../vnilink-media" }
+
+# Each platform's own backends, where a suite runs the real one.
+[target.'cfg(windows)'.dependencies]
+vnilink-windows = { path = "../vnilink-windows" }
 
 # Each service's performance suite: `node build/run.ts bench:service <service>`.
 [[bench]]
@@ -22,4 +30,32 @@ harness = false
 
 [[bench]]
 name = "desktop"
+harness = false
+
+[[bench]]
+name = "terminal"
+harness = false
+
+[[bench]]
+name = "clipboard"
+harness = false
+
+[[bench]]
+name = "system"
+harness = false
+
+[[bench]]
+name = "pairing"
+harness = false
+
+[[bench]]
+name = "camera"
+harness = false
+
+[[bench]]
+name = "audio"
+harness = false
+
+[[bench]]
+name = "relay"
 harness = false

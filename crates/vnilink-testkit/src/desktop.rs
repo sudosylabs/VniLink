@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use vnilink::{DisplayInfo, EncodedFrame, HostCapture, HostDesktop, InputEvent, ServiceKind};
 use vnilink_media::{EncodeParams, EncodedSample, Error, FrameSource, RawFrame, VideoEncoder};
 
-use crate::{wait_for, Pair, DEFAULT_WAIT};
+use crate::Pair;
 
 /// The screen's size: small, so the pipeline's own work is what is measured.
 pub const SCREEN: (u16, u16) = (64, 64);
@@ -183,6 +183,21 @@ impl HostDesktop for RecordingDesktop {
     }
 }
 
+/// The host's clipboard: it records the text it is given.
+pub struct RecordingClipboard {
+    pub texts: Arc<Mutex<Vec<String>>>,
+}
+
+impl vnilink::HostClipboard for RecordingClipboard {
+    fn set_text(&mut self, text: &str) -> Result<(), vnilink::Error> {
+        self.texts
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .push(text.into());
+        Ok(())
+    }
+}
+
 /// A viewer watching the host's scripted screen through the Remote Desktop
 /// service, as the application opens it. Dropping it stops the host's
 /// pipeline.
@@ -223,7 +238,15 @@ impl DesktopSession {
     /// Pairs two engines, starts the host's pipeline on `screen`, and
     /// connects a viewer whose window shows stills when `stills`.
     pub fn start(screen: ScriptedScreen, stills: bool) -> Self {
+        Self::prepared(screen, stills, |_| {})
+    }
+
+    /// As [`Self::start`], with `prepare` setting the host up before the
+    /// viewer connects, as adapters the engine refuses to swap during a
+    /// session (a clipboard, say) must be.
+    pub fn prepared(screen: ScriptedScreen, stills: bool, prepare: impl FnOnce(&Pair)) -> Self {
         let pair = Pair::for_desktop();
+        prepare(&pair);
         let (host, viewer) = (&pair.host.core, &pair.controller.core);
         let applied = Arc::new(Mutex::new(Vec::new()));
         host.set_capture(Box::new(ScreenCapture))
@@ -250,17 +273,8 @@ impl DesktopSession {
             .set_window_decoders(window_decoders(stills))
             .expect("the window's decoders");
 
-        let parent = viewer
-            .begin_connect_services(&pair.host.endpoint())
-            .expect("a connection");
-        wait_for("the connection to be admitted", DEFAULT_WAIT, || {
-            (viewer.controller_session(parent.id).ok()?.phase == vnilink::SessionPhase::Active)
-                .then_some(())
-        });
-        let parent = viewer.controller_session(parent.id).expect("the session");
-        let owner = viewer
-            .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
-            .expect("a desktop service");
+        let connection = pair.connect_services();
+        let owner = pair.attach(&connection, ServiceKind::Desktop);
         let service = viewer
             .open_desktop_service(owner.id, owner.generation)
             .expect("the desktop service");
@@ -309,6 +323,33 @@ impl DesktopSession {
             }
         }
         frames
+    }
+
+    /// The host's side of this Desktop service: its id and generation.
+    pub fn hosted(&self) -> (u64, u64) {
+        self.pair
+            .host
+            .core
+            .hosted_services()
+            .expect("hosted services")
+            .into_iter()
+            .find(|service| service.kind == ServiceKind::Desktop)
+            .map(|service| (service.id, service.generation))
+            .expect("a hosted Desktop service")
+    }
+
+    /// Lets the controller share the host's clipboard, or not.
+    pub fn share_clipboard(&self, clipboard: bool) {
+        self.pair
+            .host
+            .core
+            .set_desktop_sharing(vnilink::Grants {
+                view: true,
+                control: true,
+                clipboard,
+                transfer: false,
+            })
+            .expect("sharing");
     }
 
     /// The input the host applied so far.

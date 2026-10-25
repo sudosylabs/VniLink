@@ -48,6 +48,21 @@ impl Traced {
     }
 }
 
+impl Traced {
+    /// The events recorded since this test started whose message is
+    /// `message`, as JSON objects, for a suite to assert what a service
+    /// records.
+    pub fn named(&self, message: &str) -> Vec<serde_json::Value> {
+        self.events()
+            .iter()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|event| {
+                event.get("message").and_then(serde_json::Value::as_str) == Some(message)
+            })
+            .collect()
+    }
+}
+
 impl Drop for Traced {
     fn drop(&mut self) {
         if !std::thread::panicking() {

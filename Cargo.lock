@@ -5869,10 +5869,14 @@ name = "vnilink-testkit"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "iroh-relay",
  "serde_json",
+ "tokio",
  "vnilink",
+ "vnilink-audio",
  "vnilink-log",
  "vnilink-media",
+ "vnilink-windows",
 ]
 
 [[package]]
