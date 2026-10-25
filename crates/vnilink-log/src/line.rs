@@ -6,6 +6,9 @@ use serde_json::{Map, Value};
 use tracing::field::{Field, Visit};
 use tracing::Event;
 
+/// The keys every line has.
+const RESERVED: [&str; 3] = ["ms", "level", "target"];
+
 pub(crate) struct Line {
     ms: u64,
     level: &'static str,
@@ -62,15 +65,22 @@ impl Line {
         self.service
     }
 
-    /// `{"ms":…,"level":…,"target":…,<fields>}`.
+    /// `{"ms":…,"level":…,"target":…,<fields>}`. A field named like one of
+    /// the line's own keys is kept as `field.<name>`, so it never replaces
+    /// when the event happened.
     pub(crate) fn json(&self) -> String {
         let mut object = Map::with_capacity(self.fields.len() + 3);
+        for (name, value) in &self.fields {
+            let name = if RESERVED.contains(&name.as_str()) {
+                format!("field.{name}")
+            } else {
+                name.clone()
+            };
+            object.insert(name, value.clone());
+        }
         object.insert("ms".into(), self.ms.into());
         object.insert("level".into(), self.level.into());
         object.insert("target".into(), self.target.as_str().into());
-        for (name, value) in &self.fields {
-            object.insert(name.clone(), value.clone());
-        }
         Value::Object(object).to_string()
     }
 

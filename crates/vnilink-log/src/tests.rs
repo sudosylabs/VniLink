@@ -212,3 +212,32 @@ fn the_installed_log_filters_writes_records_and_changes_while_running() {
     set_filter(None).unwrap();
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn an_event_field_never_replaces_when_it_happened() {
+    use tracing_subscriber::layer::SubscriberExt;
+    struct Capture(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Capture {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let started = std::time::Instant::now() - std::time::Duration::from_secs(5);
+            self.0
+                .lock()
+                .unwrap()
+                .push(line::Line::of(event, started).json());
+        }
+    }
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(Capture(lines.clone()));
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::info!(target: "vnilink::files", ms = 3u64, level = "x", "took");
+    });
+    let line: serde_json::Value = serde_json::from_str(&lines.lock().unwrap()[0]).unwrap();
+    assert!(line["ms"].as_u64().unwrap() >= 5000, "{line}");
+    assert_eq!(line["level"], "INFO");
+    assert_eq!(line["field.ms"], 3);
+    assert_eq!(line["field.level"], "x");
+}
