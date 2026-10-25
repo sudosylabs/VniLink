@@ -7,3 +7,9 @@ Before `exec`, `close_random_fds` in `src/unix.rs` closed every inherited descri
 The patch marks those descriptors close-on-exec with `fcntl(2)` instead, so `exec` closes them and `close(2)` is never called in the child. The shell still inherits only stdio. Nothing else is changed.
 
 Remove this patch when an upstream release stops closing descriptors with `close(2)` before `exec`.
+
+## A borrowed master descriptor
+
+`MasterPty` exposes its descriptor only as a raw number (`as_raw_fd`), which a crate that forbids `unsafe` cannot wait on. The patch adds `MasterPty::as_fd`, returning the same descriptor as a `BorrowedFd` tied to the master's lifetime; the trait's default returns `None`, and the Unix master returns its own. VniLink's terminal worker waits on it with `poll(2)` instead of sleeping between reads.
+
+Remove this part when upstream offers a borrowed descriptor.

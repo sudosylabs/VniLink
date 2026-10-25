@@ -47,14 +47,10 @@ impl HostedTerminal {
     pub(super) fn read(&self, offset: u64) -> (u64, Vec<u8>, Option<TerminalEvent>) {
         let log = lock(&self.log);
         let first = offset.max(log.offset);
-        let skip = (first - log.offset) as usize;
-        let bytes = log
-            .bytes
-            .iter()
-            .skip(skip)
-            .take(TERMINAL_CHUNK)
-            .copied()
-            .collect();
+        // A range starts where it asks, however much history is kept before it.
+        let start = ((first - log.offset) as usize).min(log.bytes.len());
+        let end = (start + TERMINAL_CHUNK).min(log.bytes.len());
+        let bytes = log.bytes.range(start..end).copied().collect();
         (first, bytes, log.ended.clone())
     }
     pub(super) fn replay_start(&self) -> u64 {

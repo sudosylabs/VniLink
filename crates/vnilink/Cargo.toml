@@ -56,7 +56,7 @@ x11rb = "=0.14.0"
 
 [target.'cfg(unix)'.dependencies]
 portable-pty = "=0.9.0"
-nix = { version = "=0.28.0", features = ["fs", "signal", "process", "user"] }
+nix = { version = "=0.28.0", features = ["fs", "poll", "signal", "process", "user"] }
 
 [[example]]
 name = "impaired_relay"

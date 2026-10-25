@@ -376,6 +376,10 @@ impl MasterPty for UnixMasterPty {
         Some(self.fd.0.as_raw_fd())
     }
 
+    fn as_fd(&self) -> Option<std::os::fd::BorrowedFd<'_>> {
+        Some(self.fd.0.as_fd())
+    }
+
     fn tty_name(&self) -> Option<PathBuf> {
         self.tty_name.clone()
     }

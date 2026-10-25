@@ -3,10 +3,6 @@ use crate::Error;
 
 pub const TERMINAL_CHUNK: usize = 16 * 1024;
 pub const TERMINAL_QUEUE: usize = 32;
-/// How long a busy shell's output may gather into one chunk; typing echoes
-/// arrive this much later at most.
-#[cfg(unix)]
-const OUTPUT_GATHER: std::time::Duration = std::time::Duration::from_millis(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TerminalSize {
@@ -150,6 +146,259 @@ mod native {
             let _ = self.child.wait();
         }
     }
+    /// How often an idle worker looks whether its terminal was closed.
+    const STOP_CHECK: Duration = Duration::from_millis(100);
+    /// How often a worker whose shell closed its terminal looks for its exit.
+    const EXIT_CHECK: Duration = Duration::from_millis(10);
+    /// Output that follows other output this closely is a busy shell's.
+    const BUSY: Duration = Duration::from_millis(2);
+    /// How long a busy shell's output may gather into one chunk. Each chunk
+    /// crosses the network and the viewer's acknowledgement on its own, so
+    /// busy output travels in chunks; output after a pause, such as a typed
+    /// key's echo, goes at once.
+    const GATHER: Duration = Duration::from_millis(1);
+
+    fn nonblocking(fd: std::os::fd::RawFd) -> Result<(), Error> {
+        let flags = nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_GETFL)
+            .map_err(|_| Error::Unsupported("terminal flags"))?;
+        nix::fcntl::fcntl(
+            fd,
+            nix::fcntl::FcntlArg::F_SETFL(
+                nix::fcntl::OFlag::from_bits_truncate(flags) | nix::fcntl::OFlag::O_NONBLOCK,
+            ),
+        )
+        .map(drop)
+        .map_err(|_| Error::Unsupported("nonblocking terminal I/O"))
+    }
+
+    /// Hands commands to the worker one at a time, waking it as each
+    /// arrives, so the worker sleeps on its terminal rather than a timer.
+    fn forward(
+        commands: std::sync::mpsc::Receiver<TerminalCommand>,
+        worker: std::sync::mpsc::SyncSender<TerminalCommand>,
+        mut wake: std::fs::File,
+        stop: Arc<AtomicBool>,
+    ) {
+        while !stop.load(Ordering::Acquire) {
+            match commands.recv_timeout(STOP_CHECK) {
+                Ok(command) => {
+                    if worker.send(command).is_err() {
+                        break;
+                    }
+                    // A full pipe already holds a wake-up.
+                    let _ = wake.write(&[1]);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        drop(worker);
+        let _ = wake.write(&[1]);
+    }
+
+    /// Owns a shell and its terminal: writes the input it is given, reads
+    /// what the shell writes, and reports how it ended. It waits on the
+    /// terminal and its wake pipe, so input and output move as soon as they
+    /// can; between them it costs nothing.
+    struct PtyWorker {
+        process: NativeProcess,
+        reader: Box<dyn Read + Send>,
+        writer: Box<dyn Write + Send>,
+        inbox: std::sync::mpsc::Receiver<TerminalCommand>,
+        wake: std::fs::File,
+        output: tokio::sync::mpsc::Sender<TerminalEvent>,
+        ended: Arc<AtomicBool>,
+    }
+
+    impl PtyWorker {
+        fn run(mut self) {
+            let mut pending: Vec<u8> = Vec::new();
+            let mut offset = 0;
+            let mut event = None;
+            let mut exit = None;
+            let mut eof = false;
+            let mut last_output: Option<std::time::Instant> = None;
+            'serve: while !self.ended.load(Ordering::Acquire) {
+                let mut drained = [0u8; 64];
+                while matches!(self.wake.read(&mut drained), Ok(n) if n > 0) {}
+                // Commands keep their order: the next waits for the input before it.
+                while pending.is_empty() {
+                    match self.inbox.try_recv() {
+                        Ok(TerminalCommand::Input(bytes)) => {
+                            if bytes.is_empty() || bytes.len() > TERMINAL_CHUNK {
+                                event = Some(TerminalEvent::Failed(
+                                    "terminal input chunk is out of range".into(),
+                                ));
+                                break 'serve;
+                            }
+                            pending = bytes;
+                            offset = 0;
+                        }
+                        Ok(TerminalCommand::Resize(value)) => {
+                            if value.validate().is_err()
+                                || self.process.master.resize(size(value)).is_err()
+                            {
+                                event =
+                                    Some(TerminalEvent::Failed("terminal resize failed".into()));
+                                break 'serve;
+                            }
+                        }
+                        Ok(TerminalCommand::Redraw(value)) => {
+                            let temporary = TerminalSize {
+                                rows: if value.rows == 1 { 2 } else { value.rows - 1 },
+                                columns: value.columns,
+                            };
+                            if value.validate().is_err()
+                                || self.process.master.resize(size(temporary)).is_err()
+                                || self.process.master.resize(size(value)).is_err()
+                            {
+                                event =
+                                    Some(TerminalEvent::Failed("terminal redraw failed".into()));
+                                break 'serve;
+                            }
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => break 'serve,
+                    }
+                }
+                if !pending.is_empty() {
+                    match self.writer.write(&pending[offset..]) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            offset += n;
+                            if offset == pending.len() {
+                                pending.clear();
+                            }
+                        }
+                        Err(e)
+                            if matches!(
+                                e.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                            ) => {}
+                        Err(_) => break,
+                    }
+                }
+                // Output waits while the last chunk could not be handed on.
+                if event.is_none() && !eof {
+                    let busy = last_output.is_some_and(|at| at.elapsed() < BUSY);
+                    let gathered = std::time::Instant::now() + GATHER;
+                    let mut bytes = vec![0; TERMINAL_CHUNK];
+                    let mut filled = 0;
+                    while filled < TERMINAL_CHUNK {
+                        match self.reader.read(&mut bytes[filled..]) {
+                            Ok(0) => {
+                                eof = true;
+                                break;
+                            }
+                            Ok(n) => filled += n,
+                            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                let left =
+                                    gathered.saturating_duration_since(std::time::Instant::now());
+                                if filled == 0 || !busy || left.is_zero() || !self.readable(left) {
+                                    break;
+                                }
+                            }
+                            Err(e) if e.raw_os_error() == Some(nix::libc::EIO) => {
+                                eof = true;
+                                break;
+                            }
+                            Err(_) => {
+                                event = Some(TerminalEvent::Failed("terminal read failed".into()));
+                                break 'serve;
+                            }
+                        }
+                    }
+                    if filled > 0 {
+                        last_output = Some(std::time::Instant::now());
+                        bytes.truncate(filled);
+                        event = Some(TerminalEvent::Output(bytes));
+                    }
+                }
+                if exit.is_none() {
+                    match self.process.child.try_wait() {
+                        Ok(Some(status)) => exit = Some(status.exit_code()),
+                        Ok(None) => {}
+                        Err(_) => break,
+                    }
+                }
+                if let Some(value) = event.take() {
+                    match self.output.try_send(value) {
+                        Ok(()) => {}
+                        Err(tokio::sync::mpsc::error::TrySendError::Full(value)) => {
+                            event = Some(value)
+                        }
+                        Err(_) => break,
+                    }
+                }
+                if eof && event.is_none() {
+                    if let Some(code) = exit {
+                        event = Some(TerminalEvent::Exited(code));
+                        break;
+                    }
+                }
+                if event.is_some() {
+                    // The consumer drains promptly; a full queue is brief.
+                    std::thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+                self.wait(
+                    !eof,
+                    !pending.is_empty(),
+                    if eof { EXIT_CHECK } else { STOP_CHECK },
+                );
+            }
+            if let Some(mut value) = event {
+                // Preserve final output/status under backpressure, while close
+                // still cancels immediately instead of blocking on the consumer.
+                while !self.ended.load(Ordering::Acquire) {
+                    match self.output.try_send(value) {
+                        Ok(()) => break,
+                        Err(tokio::sync::mpsc::error::TrySendError::Full(v)) => {
+                            value = v;
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+        }
+
+        /// Whether the shell writes more within `within`.
+        fn readable(&self, within: Duration) -> bool {
+            use nix::poll::{poll, PollFd, PollFlags};
+            let Some(terminal) = self.process.master.as_fd() else {
+                return false;
+            };
+            let mut fds = [PollFd::new(terminal, PollFlags::POLLIN)];
+            let within = u16::try_from(within.as_millis().max(1)).unwrap_or(u16::MAX);
+            poll(&mut fds, within).is_ok_and(|ready| ready > 0)
+        }
+
+        /// Sleeps until the shell wrote something (when `reading`), the
+        /// terminal takes more input (when `writing`), a command arrives, or
+        /// `longest` passes.
+        fn wait(&self, reading: bool, writing: bool, longest: Duration) {
+            use nix::poll::{poll, PollFd, PollFlags};
+            use std::os::fd::AsFd;
+            let mut interest = PollFlags::empty();
+            if reading {
+                interest |= PollFlags::POLLIN;
+            }
+            if writing {
+                interest |= PollFlags::POLLOUT;
+            }
+            let longest = u16::try_from(longest.as_millis()).unwrap_or(u16::MAX);
+            let wake = PollFd::new(self.wake.as_fd(), PollFlags::POLLIN);
+            // An interrupted or failed wait only means looking again sooner.
+            let _ = match self.process.master.as_fd() {
+                Some(terminal) => poll(&mut [wake, PollFd::new(terminal, interest)], longest),
+                // A master without a descriptor: look again at the longest wait.
+                None => poll(&mut [wake], longest),
+            };
+        }
+    }
+
     fn account() -> Result<nix::unistd::User, Error> {
         nix::unistd::User::from_uid(nix::unistd::Uid::effective())
             .map_err(|_| Error::Unsupported("host account lookup"))?
@@ -287,20 +536,12 @@ mod native {
                 .ok_or(Error::Unsupported("nonblocking terminal I/O"))?;
             // All cloned master descriptors share O_NONBLOCK. No slow reader or
             // stopped foreground process can prevent this worker observing close.
-            let flags = nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_GETFL)
-                .map_err(|_| Error::Unsupported("terminal flags"))?;
-            nix::fcntl::fcntl(
-                fd,
-                nix::fcntl::FcntlArg::F_SETFL(
-                    nix::fcntl::OFlag::from_bits_truncate(flags) | nix::fcntl::OFlag::O_NONBLOCK,
-                ),
-            )
-            .map_err(|_| Error::Unsupported("nonblocking terminal I/O"))?;
-            let mut reader = pair
+            nonblocking(fd)?;
+            let reader = pair
                 .master
                 .try_clone_reader()
                 .map_err(|_| Error::Unsupported("terminal reader"))?;
-            let mut writer = pair
+            let writer = pair
                 .master
                 .take_writer()
                 .map_err(|_| Error::Unsupported("terminal writer"))?;
@@ -319,7 +560,7 @@ mod native {
                 .map_err(|_| Error::Unsupported("terminal shell startup"))?;
             let process_id = child.process_id().unwrap_or(0);
             drop(pair.slave);
-            let mut process = NativeProcess {
+            let process = NativeProcess {
                 master: pair.master,
                 child,
             };
@@ -327,171 +568,30 @@ mod native {
             let (tx, rx) = std::sync::mpsc::sync_channel(TERMINAL_QUEUE);
             let (output, events) = tokio::sync::mpsc::channel(TERMINAL_QUEUE);
             let stop = Arc::new(AtomicBool::new(false));
-            let ended = stop.clone();
-            let worker = move || {
-                let mut pending = Vec::new();
-                let mut offset = 0;
-                let mut event = None;
-                let mut exit = None;
-                let mut eof = false;
-                while !ended.load(Ordering::Acquire) {
-                    // The worker sleeps only when a pass did nothing, so a busy
-                    // shell runs at the consumer's pace and an idle one costs little.
-                    let mut progressed = false;
-                    if let Some(value) = event.take() {
-                        match output.try_send(value) {
-                            Ok(()) => progressed = true,
-                            Err(tokio::sync::mpsc::error::TrySendError::Full(value)) => {
-                                event = Some(value)
-                            }
-                            Err(_) => break,
-                        }
-                    }
-                    if pending.is_empty() {
-                        match rx.try_recv() {
-                            Ok(TerminalCommand::Input(bytes)) => {
-                                progressed = true;
-                                if bytes.is_empty() || bytes.len() > TERMINAL_CHUNK {
-                                    event = Some(TerminalEvent::Failed(
-                                        "terminal input chunk is out of range".into(),
-                                    ));
-                                    break;
-                                }
-                                pending = bytes;
-                                offset = 0;
-                            }
-                            Ok(TerminalCommand::Resize(value)) => {
-                                progressed = true;
-                                if value.validate().is_err()
-                                    || process.master.resize(size(value)).is_err()
-                                {
-                                    event = Some(TerminalEvent::Failed(
-                                        "terminal resize failed".into(),
-                                    ));
-                                    break;
-                                }
-                            }
-                            Ok(TerminalCommand::Redraw(value)) => {
-                                progressed = true;
-                                let temporary = TerminalSize {
-                                    rows: if value.rows == 1 { 2 } else { value.rows - 1 },
-                                    columns: value.columns,
-                                };
-                                if value.validate().is_err()
-                                    || process.master.resize(size(temporary)).is_err()
-                                    || process.master.resize(size(value)).is_err()
-                                {
-                                    event = Some(TerminalEvent::Failed(
-                                        "terminal redraw failed".into(),
-                                    ));
-                                    break;
-                                }
-                            }
-                            Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
-                            Err(_) => {}
-                        }
-                    }
-                    if !pending.is_empty() {
-                        match writer.write(&pending[offset..]) {
-                            Ok(0) => break,
-                            Ok(n) => {
-                                progressed = true;
-                                offset += n;
-                                if offset == pending.len() {
-                                    pending.clear();
-                                }
-                            }
-                            Err(e)
-                                if matches!(
-                                    e.kind(),
-                                    std::io::ErrorKind::WouldBlock
-                                        | std::io::ErrorKind::Interrupted
-                                ) => {}
-                            Err(_) => break,
-                        }
-                    }
-                    if event.is_none() && !eof {
-                        // Drain what the PTY holds into one chunk: a read returns
-                        // only what the shell wrote since the last one, often a
-                        // line. Output that is still arriving gets one short wait
-                        // to fill the chunk, since each chunk crosses the network
-                        // and the viewer's acknowledgement on its own.
-                        let mut bytes = vec![0; TERMINAL_CHUNK];
-                        let mut filled = 0;
-                        let mut failed = false;
-                        let mut gathered = false;
-                        while filled < TERMINAL_CHUNK {
-                            match reader.read(&mut bytes[filled..]) {
-                                Ok(0) => {
-                                    eof = true;
-                                    break;
-                                }
-                                Ok(n) => filled += n,
-                                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                                    if filled == 0 || gathered {
-                                        break;
-                                    }
-                                    gathered = true;
-                                    std::thread::sleep(OUTPUT_GATHER);
-                                }
-                                Err(e) if e.raw_os_error() == Some(nix::libc::EIO) => {
-                                    eof = true;
-                                    break;
-                                }
-                                Err(_) => {
-                                    failed = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if failed {
-                            event = Some(TerminalEvent::Failed("terminal read failed".into()));
-                            break;
-                        }
-                        if filled > 0 {
-                            bytes.truncate(filled);
-                            event = Some(TerminalEvent::Output(bytes));
-                            progressed = true;
-                        }
-                    }
-                    if exit.is_none() {
-                        match process.child.try_wait() {
-                            Ok(Some(status)) => exit = Some(status.exit_code()),
-                            Ok(None) => {}
-                            Err(_) => break,
-                        }
-                    }
-                    if eof && event.is_none() {
-                        if let Some(code) = exit {
-                            event = Some(TerminalEvent::Exited(code));
-                            break;
-                        }
-                    }
-                    if !progressed {
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                }
-                if let Some(value) = event {
-                    // Preserve final output/status under backpressure, while close
-                    // still cancels immediately instead of blocking on the consumer.
-                    let mut value = value;
-                    while !ended.load(Ordering::Acquire) {
-                        match output.try_send(value) {
-                            Ok(()) => break,
-                            Err(tokio::sync::mpsc::error::TrySendError::Full(v)) => {
-                                value = v;
-                                std::thread::sleep(Duration::from_millis(5));
-                            }
-                            Err(_) => break,
-                        }
-                    }
-                }
-                drop(process);
+            let (wake_rx, wake_tx) =
+                nix::unistd::pipe().map_err(|_| Error::Unsupported("terminal wake pipe"))?;
+            for end in [&wake_rx, &wake_tx] {
+                nonblocking(std::os::fd::AsRawFd::as_raw_fd(end))?;
+            }
+            // Holds one command so the queue above stays the backpressure.
+            let (forwarded, inbox) = std::sync::mpsc::sync_channel(1);
+            let forwarding = stop.clone();
+            std::thread::Builder::new()
+                .name("vnilink-terminal-input".into())
+                .spawn(move || forward(rx, forwarded, std::fs::File::from(wake_tx), forwarding))
+                .map_err(|_| Error::Unsupported("terminal worker"))?;
+            let worker = PtyWorker {
+                process,
+                reader,
+                writer,
+                inbox,
+                wake: std::fs::File::from(wake_rx),
+                output,
+                ended: stop.clone(),
             };
             std::thread::Builder::new()
                 .name("vnilink-terminal".into())
-                .spawn(worker)
+                .spawn(move || worker.run())
                 .map_err(|_| Error::Unsupported("terminal worker"))?;
             Ok(TerminalBackend {
                 process_id,

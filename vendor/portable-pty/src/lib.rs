@@ -113,6 +113,14 @@ pub trait MasterPty: Downcast + Send {
     #[cfg(unix)]
     fn as_raw_fd(&self) -> Option<unix::RawFd>;
 
+    /// The same descriptor as `as_raw_fd`, borrowed for as long as the
+    /// master lives, so a caller can wait on it with `poll(2)` without
+    /// `unsafe`. VniLink patch; see VNILINK.md.
+    #[cfg(unix)]
+    fn as_fd(&self) -> Option<std::os::fd::BorrowedFd<'_>> {
+        None
+    }
+
     #[cfg(unix)]
     fn tty_name(&self) -> Option<std::path::PathBuf>;
 
