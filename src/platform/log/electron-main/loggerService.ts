@@ -107,3 +107,4 @@ export class LoggerMainService extends LoggerService implements ILoggerMainServi
 		this.loggerResourcesByWindow.clear();
 	}
 }
+
