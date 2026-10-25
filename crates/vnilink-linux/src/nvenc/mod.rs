@@ -8,7 +8,9 @@
 //! to the stream's colour, BT.709 limited range, which the stream declares.
 //! Each
 //! picture is encoded synchronously, without B pictures or lookahead, and
-//! a keyframe carries its parameter sets or sequence header.
+//! a keyframe carries its parameter sets or sequence header. Keyframes come
+//! only when asked for, and a new bitrate or frame rate is taken by the
+//! open session ([`Encoder::retune`]).
 //!
 //! While any session is open, a small anchor session opened before it stays
 //! open too ([`Anchor`]), on the GPU of the first session that needed it. NVIDIA's driver (seen on 595) starts one thread per
@@ -48,8 +50,11 @@ const fn struct_version(version: u32, high: bool) -> u32 {
     API_VERSION | (version << 16) | (0x7 << 28) | if high { 1 << 31 } else { 0 }
 }
 
-/// Pictures between keyframes, as the VA-API encoder bounds recovery.
-const KEYFRAME_INTERVAL: u32 = 120;
+/// No periodic keyframe: the viewer asks for one after a loss, and until
+/// then every picture predicts from the one before. A periodic keyframe
+/// every 120 pictures made 16 to 18 in 30 s of a 60 fps stream, each a
+/// burst at a picture's share of the bitrate.
+const KEYFRAME_INTERVAL: u32 = NVENC_INFINITE_GOPLENGTH;
 
 /// The stream's colour, as [`vnilink_media::bgra_to_nv12`] converts for the
 /// other encoders: BT.709 primaries, transfer and matrix, limited range.
@@ -273,6 +278,11 @@ pub(crate) struct Encoder {
     session: *mut c_void,
     input: NV_ENC_INPUT_PTR,
     output: NV_ENC_OUTPUT_PTR,
+    /// The settings the session was initialized with, kept for
+    /// [`Self::retune`]; `init.encodeConfig` points into `config`, whose
+    /// box keeps it in place.
+    config: Box<NV_ENC_CONFIG>,
+    init: Box<NV_ENC_INITIALIZE_PARAMS>,
     codec: VideoCodec,
     width: u16,
     height: u16,
@@ -374,6 +384,8 @@ impl Encoder {
             session,
             input: std::ptr::null_mut(),
             output: std::ptr::null_mut(),
+            config: Box::default(),
+            init: Box::default(),
             codec,
             width,
             height,
@@ -421,12 +433,8 @@ impl Encoder {
         config.frameIntervalP = 1;
         let rc = &mut config.rcParams;
         rc.rateControlMode = NV_ENC_PARAMS_RC_CBR;
-        rc.averageBitRate = bitrate_bps;
-        rc.maxBitRate = bitrate_bps;
-        // One picture's worth of buffer: a picture leaves as it is made.
-        rc.vbvBufferSize = bitrate_bps / u32::from(frame_rate.max(1));
-        rc.vbvInitialDelay = rc.vbvBufferSize;
         rc.multiPass = NV_ENC_MULTI_PASS_DISABLED;
+        set_rate(rc, bitrate_bps, frame_rate);
         // SAFETY: each arm writes the union member of the codec opened.
         unsafe {
             match self.codec {
@@ -466,7 +474,8 @@ impl Encoder {
                 }
             }
         }
-        let mut init = Box::new(NV_ENC_INITIALIZE_PARAMS {
+        self.config = config;
+        self.init = Box::new(NV_ENC_INITIALIZE_PARAMS {
             version: struct_version(6, true),
             encodeGUID: encode_guid,
             presetGUID: guid::PRESET_P3,
@@ -477,7 +486,7 @@ impl Encoder {
             frameRateNum: u32::from(frame_rate.max(1)),
             frameRateDen: 1,
             enablePTD: 1,
-            encodeConfig: &mut *config,
+            encodeConfig: &mut *self.config,
             maxEncodeWidth: u32::from(self.width),
             maxEncodeHeight: u32::from(self.height),
             tuningInfo: NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY,
@@ -485,7 +494,7 @@ impl Encoder {
         });
         // SAFETY: `init` and the `config` it points to outlive the call.
         check(
-            unsafe { call!(api, nvEncInitializeEncoder)(self.session, &mut *init) },
+            unsafe { call!(api, nvEncInitializeEncoder)(self.session, &mut *self.init) },
             "NVENC refused the settings",
         )
         .map_err(unsupported)?;
@@ -514,6 +523,30 @@ impl Encoder {
         )?;
         self.output = output.bitstreamBuffer;
         Ok(())
+    }
+
+    /// Takes a new bitrate and frame rate between pictures, with no
+    /// keyframe: the session is reconfigured, not reset. `Ok(false)` when
+    /// the driver refuses, and the caller opens a session again instead.
+    pub(crate) fn retune(&mut self, bitrate_bps: u32, frame_rate: u8) -> Result<bool, Error> {
+        let api = self.api;
+        let Some(reconfigure) = api.functions.nvEncReconfigureEncoder else {
+            return Ok(false);
+        };
+        let _current = Current::new(api, self.context)?;
+        set_rate(&mut self.config.rcParams, bitrate_bps, frame_rate);
+        self.init.frameRateNum = u32::from(frame_rate.max(1));
+        self.init.encodeConfig = &mut *self.config;
+        let mut params = Box::new(NV_ENC_RECONFIGURE_PARAMS {
+            version: struct_version(1, true),
+            reInitEncodeParams: *self.init,
+            ..Default::default()
+        });
+        params.set_resetEncoder(0);
+        params.set_forceIDR(0);
+        // SAFETY: the session is initialized; `params` and the config it
+        // points to outlive the call.
+        Ok(unsafe { reconfigure(self.session, &mut *params) } == NV_ENC_SUCCESS)
     }
 
     pub(crate) fn encode(
@@ -627,6 +660,15 @@ impl Encoder {
             _ => EncodedSample::packet(VideoCodec::Av1, key, bytes),
         }
     }
+}
+
+/// Constant bitrate with one picture's worth of buffer: a picture leaves as
+/// it is made, a keyframe included.
+fn set_rate(rc: &mut NV_ENC_RC_PARAMS, bitrate_bps: u32, frame_rate: u8) {
+    rc.averageBitRate = bitrate_bps;
+    rc.maxBitRate = bitrate_bps;
+    rc.vbvBufferSize = bitrate_bps / u32::from(frame_rate.max(1));
+    rc.vbvInitialDelay = rc.vbvBufferSize;
 }
 
 impl Encoder {

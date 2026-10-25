@@ -162,3 +162,60 @@ fn nvenc_opens_on_the_gpu_sysfs_names() {
     }
     assert!(!offers(Some("0000:ff:1f.7"), VideoCodec::H264));
 }
+
+/// A pattern that moves everywhere from one picture to the next, so each
+/// costs what the bitrate allows.
+fn moving(index: usize) -> RawFrame {
+    let side = usize::from(PROBE_SIDE);
+    let pixels = (0..side * side)
+        .flat_map(|pixel| {
+            let (x, y) = (pixel % side, pixel / side);
+            let value = (x + 2 * y + index * 3) as u8;
+            [value, value.wrapping_mul(3), (x ^ y) as u8, 255]
+        })
+        .collect();
+    RawFrame::bgra(PROBE_SIDE, PROBE_SIDE, index as u64, pixels).unwrap()
+}
+
+/// Only the first picture is a keyframe however long the stream runs, and
+/// a new bitrate taken by the open session makes no keyframe and changes
+/// what each picture costs.
+#[test]
+fn nvenc_keyframes_come_only_when_asked_and_a_retune_makes_none() {
+    if !offers(None, VideoCodec::H264) {
+        return;
+    }
+    let mut encoder = Encoder::open(
+        None,
+        VideoCodec::H264,
+        PROBE_SIDE,
+        PROBE_SIDE,
+        30,
+        4_000_000,
+        true,
+    )
+    .unwrap();
+    let mut sizes = Vec::new();
+    for index in 0..300 {
+        if index == 150 {
+            assert!(
+                encoder.retune(200_000, 30).unwrap(),
+                "NVENC refused a retune"
+            );
+        }
+        let sample = encoder
+            .encode(&moving(index), false)
+            .unwrap_or_else(|error| panic!("picture {index}: {error}"));
+        assert_eq!(sample.keyframe(), index == 0, "picture {index}");
+        sizes.push(sample.bytes().len());
+    }
+    let mean =
+        |range: std::ops::Range<usize>| sizes[range.clone()].iter().sum::<usize>() / range.len();
+    assert!(
+        mean(260..300) * 4 < mean(100..140),
+        "pictures after the retune average {} bytes against {} before",
+        mean(260..300),
+        mean(100..140)
+    );
+    assert!(encoder.encode(&moving(300), true).unwrap().keyframe());
+}

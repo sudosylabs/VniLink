@@ -150,6 +150,25 @@ impl VideoEncoder for LinuxEncoder {
         }
     }
 
+    /// Both backends take a new bitrate and frame rate as they run, so a
+    /// quality change at the same size neither reopens nor makes a keyframe.
+    fn retune(&mut self, bitrate_bps: u32, frame_rate: u8) -> Result<bool, Error> {
+        if bitrate_bps == 0 || frame_rate == 0 {
+            return Ok(false);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            return match &mut self.backend {
+                Backend::Nvenc(encoder) => encoder.retune(bitrate_bps, frame_rate),
+                Backend::Vaapi(session) => session.retune(bitrate_bps, frame_rate).map(|()| true),
+            };
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Ok(false)
+        }
+    }
+
     fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
         if frame.width() != self.width || frame.height() != self.height {
             return Err(Error::InvalidFrame(

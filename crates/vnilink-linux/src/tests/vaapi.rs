@@ -126,3 +126,72 @@ fn gpu_conversion_matches_the_cpu_conversion() {
         );
     }
 }
+
+/// One picture's share of the bitrate is the HRD buffer and the window rate
+/// control holds; a change starts rate control over once, on the picture
+/// that carries it, and the same rate again changes nothing.
+#[test]
+fn rate_control_holds_one_picture_and_resets_once_per_change() {
+    use crate::vaapi::RateControl;
+
+    let mut rate = RateControl::new(12_000_000, 60);
+    assert_eq!((rate.buffer_bits(), rate.window_ms()), (200_000, 16));
+    assert!(!rate.reset);
+    rate.retune(12_000_000, 60);
+    assert!(!rate.reset, "the same rate is no change");
+    rate.retune(6_000_000, 30);
+    assert_eq!(
+        (rate.bitrate_bps, rate.frame_rate, rate.reset),
+        (6_000_000, 30, true)
+    );
+    assert_eq!((rate.buffer_bits(), rate.window_ms()), (200_000, 33));
+}
+
+/// Only the first picture is a keyframe however long the stream runs, and
+/// a new bitrate taken between pictures makes no keyframe and changes what
+/// each picture costs.
+#[test]
+fn keyframes_come_only_when_asked_and_a_retune_makes_none() {
+    use crate::codecs::PROBE_SIDE;
+    use crate::vaapi::{Input, Session, VaCodec};
+
+    let codec = VaCodec::H264 { high: true };
+    let Some(node) = crate::vaapi::offering(codec) else {
+        return;
+    };
+    let session = Session::open(&node, codec, PROBE_SIDE, PROBE_SIDE, 30, 4_000_000).unwrap();
+    let side = usize::from(PROBE_SIDE);
+    let moving = |index: usize| {
+        let pixels = (0..side * side)
+            .flat_map(|pixel| {
+                let (x, y) = (pixel % side, pixel / side);
+                let value = (x + 2 * y + index * 3) as u8;
+                [value, value.wrapping_mul(3), (x ^ y) as u8, 255]
+            })
+            .collect();
+        let picture =
+            vnilink_media::RawFrame::bgra(PROBE_SIDE, PROBE_SIDE, index as u64, pixels).unwrap();
+        let (y, uv) = vnilink_media::bgra_to_nv12(&picture).unwrap().into_planes();
+        Input::Nv12 { y, uv }
+    };
+    let mut sizes = Vec::new();
+    for index in 0..300 {
+        if index == 150 {
+            session.retune(200_000, 30).unwrap();
+        }
+        let sample = session
+            .encode(moving(index), false)
+            .unwrap_or_else(|error| panic!("picture {index}: {error}"));
+        assert_eq!(sample.keyframe(), index == 0, "picture {index}");
+        sizes.push(sample.bytes().len());
+    }
+    let mean =
+        |range: std::ops::Range<usize>| sizes[range.clone()].iter().sum::<usize>() / range.len();
+    assert!(
+        mean(260..300) * 4 < mean(100..140),
+        "pictures after the retune average {} bytes against {} before",
+        mean(260..300),
+        mean(100..140)
+    );
+    assert!(session.encode(moving(300), true).unwrap().keyframe());
+}

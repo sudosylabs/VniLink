@@ -11,6 +11,12 @@
 //! Each codec's module fills the driver's parameters and writes the
 //! parameter sets a driver may leave out of a keyframe. No software encoder
 //! is linked.
+//!
+//! Keyframes come only when asked for: the first picture, and those the
+//! host asks for after a loss or a refresh. Rate control holds a picture to
+//! one picture's share of the bitrate ([`RateControl`]), and takes a new
+//! bitrate or frame rate between pictures without reopening
+//! ([`Session::retune`]).
 
 mod convert;
 mod h264;
@@ -26,6 +32,7 @@ use libva::BufferType;
 use libva::Display;
 use libva::EncMiscParameter;
 use libva::EncMiscParameterFrameRate;
+use libva::EncMiscParameterHRD;
 use libva::EncMiscParameterRateControl;
 use libva::Image;
 use libva::MappedCodedBuffer;
@@ -78,6 +85,12 @@ impl VaCodec {
         }
     }
 }
+
+/// The I and IDR period the driver's rate control plans for. This encoder
+/// decides each picture's type itself and makes a keyframe only when asked,
+/// so the driver is told the longest period it is likely to take rather
+/// than none: 0 is not read the same way by every driver.
+pub(super) const INTRA_PERIOD: u32 = u16::MAX as u32;
 
 /// What one picture's parameters need from the encoder core.
 pub(super) struct PictureJob {
@@ -142,6 +155,11 @@ enum Job {
         input: Input,
         force_keyframe: bool,
         reply: Sender<Result<EncodedSample, Error>>,
+    },
+    Retune {
+        bitrate_bps: u32,
+        frame_rate: u8,
+        reply: Sender<()>,
     },
     Stop,
 }
@@ -220,6 +238,22 @@ impl Session {
             .recv_timeout(Duration::from_secs(10))
             .map_err(|_| Error::EncodeRejected("VA-API rejected the frame"))?
     }
+
+    /// Takes `bitrate_bps` and `frame_rate` from the next picture on, with
+    /// no keyframe: rate control's parameters go with every picture.
+    pub(crate) fn retune(&self, bitrate_bps: u32, frame_rate: u8) -> Result<(), Error> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.tx
+            .send(Job::Retune {
+                bitrate_bps,
+                frame_rate,
+                reply: reply_tx,
+            })
+            .map_err(|_| Error::EncodeRejected("VA-API rejected the frame"))?;
+        reply_rx
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|_| Error::EncodeRejected("VA-API rejected the frame"))
+    }
 }
 
 impl Drop for Session {
@@ -263,6 +297,14 @@ fn worker(
                 let result = encoder.encode(input, force_keyframe);
                 let _ = reply.send(result);
             }
+            Job::Retune {
+                bitrate_bps,
+                frame_rate,
+                reply,
+            } => {
+                encoder.rate.retune(bitrate_bps, frame_rate);
+                let _ = reply.send(());
+            }
         }
     }
 }
@@ -277,13 +319,56 @@ struct Encoder {
     visible_height: u32,
     coded_width: u32,
     coded_height: u32,
-    frame_rate: u32,
-    bitrate_bps: u32,
+    rate: RateControl,
     cursor: usize,
     /// The surface holding the picture before, once there is one.
     previous: Option<usize>,
     poisoned: bool,
-    frames_since_key: u32,
+}
+
+/// The bitrate and frame rate the next picture is encoded at, and whether
+/// rate control starts over at them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RateControl {
+    pub(crate) bitrate_bps: u32,
+    pub(crate) frame_rate: u32,
+    /// Set by a change and cleared by the picture that carries it.
+    pub(crate) reset: bool,
+}
+
+impl RateControl {
+    pub(crate) fn new(bitrate_bps: u32, frame_rate: u8) -> Self {
+        Self {
+            bitrate_bps,
+            frame_rate: u32::from(frame_rate.max(1)),
+            reset: false,
+        }
+    }
+
+    pub(crate) fn retune(&mut self, bitrate_bps: u32, frame_rate: u8) {
+        let next = Self::new(bitrate_bps, frame_rate);
+        if (next.bitrate_bps, next.frame_rate) != (self.bitrate_bps, self.frame_rate) {
+            *self = Self {
+                reset: true,
+                ..next
+            };
+        }
+    }
+
+    /// One picture's share of the bitrate, in bits: the HRD buffer, as
+    /// NVENC's VBV and Media Foundation's buffer are sized, so that no
+    /// picture, a keyframe included, takes the link longer than a picture's
+    /// interval to send.
+    pub(crate) fn buffer_bits(&self) -> u32 {
+        (self.bitrate_bps / self.frame_rate).max(1)
+    }
+
+    /// The window rate control holds the bitrate over, in milliseconds:
+    /// the time the buffer takes to drain at the bitrate, one picture's
+    /// interval.
+    pub(crate) fn window_ms(&self) -> u32 {
+        (1000 / self.frame_rate).max(1)
+    }
 }
 
 impl Encoder {
@@ -306,12 +391,9 @@ impl Encoder {
         if self.poisoned {
             return Err(Error::EncodeRejected("VA-API rejected the frame"));
         }
-        // Bound recovery time after loss: periodic keyframes match the macOS
-        // encoder's interval so a dropped keyframe does not freeze video for
-        // the whole session.
-        const MAX_P_FRAMES: u32 = 120;
-        let key =
-            force_keyframe || self.previous.is_none() || self.frames_since_key >= MAX_P_FRAMES;
+        // No periodic keyframe: the viewer asks for one after a loss, and
+        // until then every picture predicts from the one before.
+        let key = force_keyframe || self.previous.is_none();
         let index = self.cursor;
         let surface = self.surfaces[index]
             .take()
@@ -356,11 +438,7 @@ impl Encoder {
         self.surfaces[index] = Some(surface);
         self.previous = Some(index);
         self.syntax.encoded(key);
-        self.frames_since_key = if key {
-            0
-        } else {
-            self.frames_since_key.saturating_add(1)
-        };
+        self.rate.reset = false;
         self.cursor ^= 1;
         Ok(sample)
     }
@@ -385,24 +463,34 @@ impl Encoder {
             visible_height: self.visible_height,
             coded_width: self.coded_width,
             coded_height: self.coded_height,
-            frame_rate: self.frame_rate,
-            bitrate_bps: self.bitrate_bps,
+            frame_rate: self.rate.frame_rate,
+            bitrate_bps: self.rate.bitrate_bps,
         };
         let (initial_qp, min_qp, max_qp) = self.syntax.quantizers();
+        let buffer_bits = self.rate.buffer_bits();
         let mut buffers = Vec::new();
         for buffer in self.syntax.buffers(&job).into_iter().chain([
             BufferType::EncMiscParameter(EncMiscParameter::FrameRate(
-                EncMiscParameterFrameRate::new(self.frame_rate, 0),
+                EncMiscParameterFrameRate::new(self.rate.frame_rate, 0),
             )),
+            // The buffer starts full, as NVENC's initial delay is set.
+            BufferType::EncMiscParameter(EncMiscParameter::HRD(EncMiscParameterHRD::new(
+                buffer_bits,
+                buffer_bits,
+            ))),
+            // Pictures are never skipped, as NVENC and Media Foundation do
+            // not skip them: a skipped picture would leave the newest
+            // screen unsent, and the one after it predicting from a
+            // picture the driver did not make. The quantiser rises instead.
             BufferType::EncMiscParameter(EncMiscParameter::RateControl(
                 EncMiscParameterRateControl::new(
-                    self.bitrate_bps,
+                    self.rate.bitrate_bps,
                     100,
-                    1_000,
+                    self.rate.window_ms(),
                     initial_qp,
                     min_qp,
                     0,
-                    RcFlags::new(0, 1, 0, 0, 0, 0, 0, 0, 0),
+                    RcFlags::new(u32::from(self.rate.reset), 1, 0, 0, 0, 0, 0, 0, 0),
                     0,
                     max_qp,
                     0,
@@ -513,12 +601,10 @@ fn try_open(
         visible_height: u32::from(height),
         coded_width,
         coded_height,
-        frame_rate: u32::from(frame_rate),
-        bitrate_bps,
+        rate: RateControl::new(bitrate_bps, frame_rate),
         cursor: 0,
         previous: None,
         poisoned: false,
-        frames_since_key: 0,
     })
 }
 

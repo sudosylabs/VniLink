@@ -4,9 +4,8 @@
 //! leave out.
 
 use libva::{
-    BufferType, EncMiscParameter, EncMiscParameterHRD, EncPackedHeaderParameter,
-    EncPackedHeaderType, EncPictureParameter, EncSequenceParameter, EncSliceParameter, PictureHEVC,
-    VA_INVALID_ID, VA_PICTURE_HEVC_INVALID,
+    BufferType, EncPackedHeaderParameter, EncPackedHeaderType, EncPictureParameter,
+    EncSequenceParameter, EncSliceParameter, PictureHEVC, VA_INVALID_ID, VA_PICTURE_HEVC_INVALID,
 };
 use vnilink_media::{hevc_sample, hevc_units, EncodedSample, Error};
 
@@ -53,11 +52,6 @@ impl Syntax {
             .map(|(id, poc)| PictureHEVC::new(id, poc, 0));
         let mut buffers = vec![
             BufferType::EncSequenceParameter(EncSequenceParameter::HEVC(self.sequence(job))),
-            // A quarter second of video, three quarters full at the start.
-            BufferType::EncMiscParameter(EncMiscParameter::HRD(EncMiscParameterHRD::new(
-                job.bitrate_bps / 4 * 3,
-                job.bitrate_bps,
-            ))),
             BufferType::EncPictureParameter(EncPictureParameter::HEVC(
                 self.picture(job, poc, reference),
             )),
@@ -133,8 +127,8 @@ impl Syntax {
             1,
             level_idc(job.coded_width * job.coded_height),
             0,
-            300,
-            300,
+            super::INTRA_PERIOD,
+            super::INTRA_PERIOD,
             1,
             job.bitrate_bps,
             job.coded_width as u16,

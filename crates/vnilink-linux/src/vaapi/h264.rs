@@ -139,8 +139,8 @@ fn sequence(job: &PictureJob) -> libva::EncSequenceParameterBufferH264 {
     libva::EncSequenceParameterBufferH264::new(
         0,
         level_idc(job.coded_width / 16 * (job.coded_height / 16)),
-        300,
-        300,
+        super::INTRA_PERIOD,
+        super::INTRA_PERIOD,
         1,
         job.bitrate_bps,
         1,
