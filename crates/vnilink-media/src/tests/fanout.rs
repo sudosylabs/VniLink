@@ -1054,6 +1054,8 @@ struct Ticking {
     share: f32,
     regions: Option<Vec<vnilink::Region>>,
     page: RawFrame,
+    /// The tick the last read saw: a read says a change only after a new one.
+    read: Mutex<u128>,
 }
 
 impl FrameSource for Ticking {
@@ -1062,14 +1064,22 @@ impl FrameSource for Ticking {
     }
 
     fn poll_frame(&self, timestamp: u64) -> Result<Option<RawFrame>, Error> {
+        let tick = self.started.elapsed().as_millis() / 500;
+        let mut read = self.read.lock().unwrap();
+        let changed = if *read == tick {
+            crate::Changes::none()
+        } else {
+            crate::Changes {
+                share: self.share,
+                regions: self.regions.clone(),
+            }
+        };
+        *read = tick;
         Ok(Some(
             self.page
                 .clone()
                 .with_timestamp(timestamp)
-                .with_changed(Some(crate::Changes {
-                    share: self.share,
-                    regions: self.regions.clone(),
-                })),
+                .with_changed(Some(changed)),
         ))
     }
 
@@ -1226,6 +1236,7 @@ fn small_changes_still_bring_a_still_and_large_ones_do_not() {
         share,
         regions: None,
         page: crate::measure::colour_text_page(COLOURED.0, COLOURED.1, 0),
+        read: Mutex::new(u128::MAX),
     };
     let roles = roles_of(ticking(0.01), true, watch);
     assert!(roles.contains(&vnilink::FrameRole::Still), "{roles:?}");
@@ -1249,6 +1260,7 @@ fn a_changed_picture_says_where_the_screen_changed() {
             share: 0.04,
             regions: Some(vec![clock]),
             page: crate::measure::colour_text_page(COLOURED.0, COLOURED.1, 0),
+            read: Mutex::new(u128::MAX),
         },
         false,
         Duration::from_millis(1_600),

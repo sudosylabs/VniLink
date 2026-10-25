@@ -967,8 +967,13 @@ where
             // at the full frame rate. A consumer that owes a keyframe takes
             // the last picture meanwhile.
             let attested = capture.attested_at();
-            let unchanged =
-                attested.is_some() && attested == last_attested && cursor == last_cursor;
+            // A read that says the screen changed is a change, whatever the
+            // attestation says: a picture stored between the read and the
+            // attestation would otherwise lose where it changed.
+            let unchanged = attested.is_some()
+                && attested == last_attested
+                && cursor == last_cursor
+                && !frame.changed().is_some_and(|changes| changes.share > 0.0);
             if !unchanged || last_published.is_none_or(|at| at.elapsed() >= IDLE_KEEPALIVE) {
                 last_attested = attested;
                 last_cursor.clone_from(&cursor);

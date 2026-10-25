@@ -71,6 +71,9 @@ struct GpuState {
     /// that leaves the list zeroed would otherwise read as a screen that
     /// never changes.
     damage_filled: bool,
+    /// What buffers dropped since the last picture kept changed: the next
+    /// one kept shows their changes too.
+    dropped: Option<vnilink_media::Changes>,
 }
 
 /// How one stream ended.
@@ -422,6 +425,7 @@ fn serve(
             modifier: None,
             importer: None,
             damage_filled: false,
+            dropped: Some(vnilink_media::Changes::none()),
         }),
     };
     let _listener = stream
@@ -1191,6 +1195,9 @@ fn push_dma_buf(
             return;
         }
     }
+    // This buffer's changes after any dropped since the last picture kept;
+    // taken once, by the picture kept or by the next drop.
+    let mut dropped = gpu.dropped.replace(vnilink_media::Changes::none());
     let (Some(importer), Some(modifier), Some((width, height)), Some(format)) = (
         gpu.importer.as_mut(),
         gpu.modifier,
@@ -1220,6 +1227,12 @@ fn push_dma_buf(
             )
         })
         .collect();
+    let mut changed = || {
+        dropped
+            .take()
+            .zip(damage.map(|damage| damage_changes(damage, width, height)))
+            .map(|(before, after)| before.join(after))
+    };
     let copied = importer.copy(key, || {
         Prime::from_planes(
             &planes,
@@ -1237,11 +1250,13 @@ fn push_dma_buf(
                 stride: usize::from(width) * 4,
                 bytes: vnilink_media::Pixels::native(Box::new(picture)),
                 captured_at: Some(Instant::now()),
-                changed: damage.map(|damage| damage_changes(damage, width, height)),
+                changed: changed(),
             });
             record_delivery(shared, true);
         }
-        Ok(None) => {}
+        Ok(None) => {
+            gpu.dropped = changed();
+        }
         Err(_) => shared.gpu_failed.store(true, Ordering::Relaxed),
     }
 }
