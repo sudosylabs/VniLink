@@ -42,6 +42,8 @@ test('every setting is titled, has a valid default and refuses values outside it
 	assert.equal(validateSetting('power.incoming.idleTimeout', 1.5), undefined);
 	assert.match(validateSetting('terminal.maxSessions', 2.5), /whole number/);
 	assert.match(validateSetting('desktop.quality', { max_bitrate_kbps: 1, max_frame_rate: 61, max_width: 1, max_height: 1 }), /60 fps/);
+	// Automatic is the default: the bandwidth limit is the most a stream holds.
+	assert.deepEqual(settingDefaults('user')['desktop.quality'], { max_bitrate_kbps: 50000, max_frame_rate: 30, max_width: 1920, max_height: 1080 });
 	assert.match(validateSetting('future.setting', true), /Unknown setting/);
 	assert.equal(settingKeys().includes('appearance.nativeBackground'), false);
 });

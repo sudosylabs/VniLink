@@ -175,8 +175,9 @@ registerSettings('user', {
 	properties: {
 		'desktop.quality': {
 			type: 'object',
-			default: { max_bitrate_kbps: 2000, max_frame_rate: 30, max_width: 1920, max_height: 1080 },
-			title: nls.localize('desktop.quality', 'Stream quality'),
+			default: { max_bitrate_kbps: 50000, max_frame_rate: 30, max_width: 1920, max_height: 1080 },
+			title: nls.localize('desktop.quality', 'Stream limits'),
+			description: nls.localize('desktop.qualityHelp', 'The most bandwidth, frame rate and picture size a stream may use. A stream uses what its picture and the connection allow, up to these limits.'),
 			validate: value => isQualityLimits(value) ? undefined : nls.localize('desktop.invalidQuality', 'Enter limits up to 50,000 kbps, 60 fps and 7680 × 7680 px.'),
 		},
 		'desktop.codec': {

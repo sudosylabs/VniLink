@@ -1,4 +1,3 @@
-import * as nls from '../../../nls.js';
 import type { Event } from '../../../base/common/event.js';
 import type { IDisposable } from '../../../base/common/lifecycle.js';
 import type { DesktopMediaStatus } from '../../../platform/engine/common/dataChannel.js';
@@ -16,11 +15,18 @@ export function desktopTargetKey(target: DesktopTarget): string {
 	return `${target.role}:${target.id}:${target.generation}`;
 }
 
-export const qualityPresets = [
-	{ id: 'bandwidth', label: nls.localize('desktop.preset.bandwidth', 'Low bandwidth'), quality: { max_bitrate_kbps: 2000, max_frame_rate: 24, max_width: 1280, max_height: 720 } },
-	{ id: 'balanced', label: nls.localize('desktop.preset.balanced', 'Balanced'), quality: { max_bitrate_kbps: 5000, max_frame_rate: 30, max_width: 1920, max_height: 1080 } },
-	{ id: 'smooth', label: nls.localize('desktop.preset.smooth', 'Smooth'), quality: { max_bitrate_kbps: 12000, max_frame_rate: 60, max_width: 1920, max_height: 1080 } },
-] as const;
+/**
+ * The most bandwidth a stream may use. The engine follows the picture and the
+ * link below it, so these are limits, not rates: Automatic sets none beyond
+ * what a stream can carry, and Data saver keeps a stream fit for a metered link.
+ */
+export const bandwidthLimits = {
+	automatic: 50000,
+	dataSaver: 2000,
+} as const;
+
+/** Where the Maximum choice starts, until a limit is typed. */
+export const defaultMaximumBandwidth = 20000;
 
 export function isValidDesktopQuality(quality: QualityLimits): boolean {
 	return Number.isInteger(quality.max_bitrate_kbps) && quality.max_bitrate_kbps >= 1 && quality.max_bitrate_kbps <= 50000 &&

@@ -107,7 +107,7 @@ const pages: readonly ISettingsPageDescriptor[] = [
 		className: 'remote-desktop-page',
 		...form,
 		sections: [
-			{ id: 'quality', title: nls.localize('desktop.quality', 'Stream quality'), settings: ['desktop.quality'] },
+			{ id: 'quality', title: nls.localize('desktop.quality', 'Stream limits'), settings: ['desktop.quality'] },
 			{ id: 'codec', title: nls.localize('desktop.codecTitle', 'Video codec'), settings: ['desktop.codec'] },
 		],
 	},
