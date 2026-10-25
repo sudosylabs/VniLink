@@ -785,6 +785,14 @@ impl DataChannel {
             vnilink_app::FfiAdaptationReason::Recovering => "recovering",
             vnilink_app::FfiAdaptationReason::Idle => "idle",
         };
+        let limit = match status.limit {
+            vnilink_app::FfiRateLimit::None => "none",
+            vnilink_app::FfiRateLimit::Setting => "setting",
+            vnilink_app::FfiRateLimit::Relay => "relay",
+            vnilink_app::FfiRateLimit::Network => "network",
+            vnilink_app::FfiRateLimit::Encoder => "encoder",
+            vnilink_app::FfiRateLimit::Receiver => "receiver",
+        };
         Ok(serde_json::json!({
             "reason": reason,
             "receivedKbps": status.received_kbps,
@@ -795,6 +803,7 @@ impl DataChannel {
             "rttMs": status.rtt_ms,
             "encodeUs": status.encode_us,
             "captureUs": status.capture_us,
+            "limit": limit,
             "conditions": status.conditions.iter().map(|condition| condition_label(*condition)).collect::<Vec<_>>(),
         })
         .to_string())

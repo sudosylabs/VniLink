@@ -69,8 +69,9 @@ mod terminal;
 pub use services::{
     DesktopService, FfiAdaptationReason, FfiCloseCause, FfiCondition, FfiDesktopControlState,
     FfiDesktopCursor, FfiDesktopCursorImage, FfiDesktopEnd, FfiDesktopInfo, FfiDesktopMediaStatus,
-    FfiServiceInfo, FfiServiceKind, FfiServicePermissions, FfiServicePhase, FfiServiceSupport,
-    FfiSharingPolicy, FfiSharingPolicyUpdate, FfiStreamFailure, FilesService, ServiceLeasePoller,
+    FfiRateLimit, FfiServiceInfo, FfiServiceKind, FfiServicePermissions, FfiServicePhase,
+    FfiServiceSupport, FfiSharingPolicy, FfiSharingPolicyUpdate, FfiStreamFailure, FilesService,
+    ServiceLeasePoller,
 };
 pub use system::{
     FfiHostSystemReport, FfiOperationState, FfiPrivacyState, FfiScheduledSystemAction,

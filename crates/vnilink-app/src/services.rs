@@ -999,6 +999,29 @@ pub enum FfiAdaptationReason {
     Recovering,
     Idle,
 }
+/// See [`vnilink::RateLimit`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiRateLimit {
+    None,
+    Setting,
+    Relay,
+    Network,
+    Encoder,
+    Receiver,
+}
+impl From<vnilink::RateLimit> for FfiRateLimit {
+    fn from(limit: vnilink::RateLimit) -> Self {
+        use vnilink::RateLimit as Limit;
+        match limit {
+            Limit::None => Self::None,
+            Limit::Setting => Self::Setting,
+            Limit::Relay => Self::Relay,
+            Limit::Network => Self::Network,
+            Limit::Encoder => Self::Encoder,
+            Limit::Receiver => Self::Receiver,
+        }
+    }
+}
 /// See [`vnilink::Condition`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiCondition {
@@ -1044,6 +1067,8 @@ pub struct FfiDesktopMediaStatus {
     pub decode_us: u64,
     pub encode_us: u64,
     pub capture_us: u64,
+    /// What most holds the bitrate where it is.
+    pub limit: FfiRateLimit,
     /// What is wrong with the picture now, from the most severe.
     pub conditions: Vec<FfiCondition>,
 }
@@ -1069,6 +1094,7 @@ impl From<vnilink::DesktopMediaStatus> for FfiDesktopMediaStatus {
             decode_us: status.decode_us,
             encode_us: status.encode_us,
             capture_us: status.capture_us,
+            limit: status.limit.into(),
             conditions: status.conditions.iter().map(Into::into).collect(),
         }
     }

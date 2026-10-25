@@ -411,10 +411,10 @@ pub(super) async fn handle_host_request(
                     // clamped to this host's monitor and codec caps.
                     let monitor = monitor_size(shared);
                     let caps = lock(&shared.video_caps).clone();
-                    let agreed = session::agree_quality(&quality, monitor, &caps);
                     let codec_id = agreed_codec
                         .map(|agreed| agreed.codec)
                         .unwrap_or(crate::protocol::CODEC_H264);
+                    let agreed = session::start_quality(&quality, monitor, &caps, codec_id);
                     let matrix = crate::VideoCodec::from_wire_id(codec_id)
                         .map_or(crate::YuvMatrix::Bt709, |agreed| {
                             crate::YuvMatrix::of_codec(bt601, agreed)

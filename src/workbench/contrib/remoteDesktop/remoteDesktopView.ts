@@ -110,7 +110,7 @@ interface PointerLook {
 
 const codecNames: Readonly<Record<string, string>> = { h264: 'H.264', h265: 'HEVC', vp8: 'VP8', vp9: 'VP9', av1: 'AV1' };
 
-/** Frame rate, codec, bitrate and round trip, then why the quality is lowered when it is. */
+/** Frame rate, codec, bitrate and round trip, then why the quality is lowered, or the bitrate held, when it is. */
 export function statsText(stats: DesktopStats, name: string): string {
 	const { status } = stats;
 	const rate = status.receivedKbps >= 1000
@@ -128,6 +128,17 @@ export function statsText(stats: DesktopStats, name: string): string {
 		case 'encoderPressure': parts.push(nls.localize('desktop.lowThere', 'Lowered: {0} is behind', name)); break;
 		case 'recovering': parts.push(nls.localize('desktop.recovering', 'Improving')); break;
 		case 'warmingUp': case 'stable': case 'idle': break;
+	}
+	// A cut already says why; a bitrate that is merely held says what holds it.
+	if (status.reason !== 'networkPressure' && status.reason !== 'encoderPressure') {
+		switch (status.limit) {
+			case 'setting': parts.push(nls.localize('desktop.limitSetting', 'At your bandwidth limit')); break;
+			case 'relay': parts.push(nls.localize('desktop.limitRelay', 'Limited by the relay')); break;
+			case 'network': parts.push(nls.localize('desktop.limitNetwork', 'Limited by the network')); break;
+			case 'encoder': parts.push(nls.localize('desktop.limitEncoder', 'Limited by {0}', name)); break;
+			case 'receiver': parts.push(nls.localize('desktop.limitReceiver', 'Limited by this computer')); break;
+			case 'none': break;
+		}
 	}
 	return parts.join(' · ');
 }

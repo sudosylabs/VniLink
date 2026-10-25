@@ -124,6 +124,12 @@ export type DesktopCondition =
 /** Every condition, from the most to the least severe: the engine's order. */
 export const desktopConditions: readonly DesktopCondition[] = ['link.blackout', 'relay.backlog', 'link.congestion', 'link.loss', 'host.secureDesktop', 'encoder.slow', 'decoder.slow', 'decoder.recovering', 'encoder.software', 'decoder.software', 'relay.path'];
 
+/** What most holds a picture's bitrate where it is, as the engine names it; see `vnilink::RateLimit`. */
+export type DesktopRateLimit = 'none' | 'setting' | 'relay' | 'network' | 'encoder' | 'receiver';
+
+/** Every rate limit, as the engine names it. */
+export const desktopRateLimits: readonly DesktopRateLimit[] = ['none', 'setting', 'relay', 'network', 'encoder', 'receiver'];
+
 /** How a desktop picture is doing, from the engine's adaptation: what arrives, what waits, why the quality is where it is, and what is wrong. */
 export interface DesktopMediaStatus {
 	reason: 'warmingUp' | 'stable' | 'receiverPressure' | 'encoderPressure' | 'networkPressure' | 'recovering' | 'idle';
@@ -135,6 +141,8 @@ export interface DesktopMediaStatus {
 	rttMs: number;
 	encodeUs: number;
 	captureUs: number;
+	/** What holds the bitrate where it is; `none` when nothing does. */
+	limit: DesktopRateLimit;
 	/** Most severe first; empty when nothing is wrong. */
 	conditions: DesktopCondition[];
 }
@@ -150,9 +158,10 @@ function conditions(value: unknown): value is DesktopCondition[] {
 
 export function isDesktopMediaStatus(value: unknown): value is DesktopMediaStatus {
 	const counts = ['receivedKbps', 'receivedFps', 'receiverQueueMs', 'hostQueueMs', 'lossPerMille', 'rttMs', 'encodeUs', 'captureUs'] as const;
-	return record(value) && Object.keys(value).length === 10
+	return record(value) && Object.keys(value).length === 11
 		&& ['warmingUp', 'stable', 'receiverPressure', 'encoderPressure', 'networkPressure', 'recovering', 'idle'].includes(String(value.reason))
 		&& counts.every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0)
+		&& desktopRateLimits.includes(value.limit as DesktopRateLimit)
 		&& conditions(value.conditions);
 }
 

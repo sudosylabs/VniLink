@@ -90,7 +90,10 @@ fn admission_clamps_quality_to_host_codec_caps() {
     host.set_video_codecs(VideoCodecCaps::h264_full(640, 480, "test"))
         .unwrap();
     let session = controller.connect(&host.endpoint_id()).unwrap();
-    let agreed = Quality::new(2_000, 30, 640, 480).unwrap();
+    // The session starts at the dialled rate, held to what the picture can
+    // use: the 1080p monitor's proportions inside 640x480 are 640x360, which
+    // at 30 fps is 1,105 kb/s as H.264. It is not the viewer's limit.
+    let agreed = Quality::new(1_105, 30, 640, 480).unwrap();
     assert_eq!(session.quality, Some(agreed));
     assert_eq!(
         host.snapshot().unwrap().incoming.unwrap().quality,

@@ -128,9 +128,21 @@ pub(crate) fn admit_services(
     Ok(())
 }
 
-/// Default encoder limits the controller offers when it dials.
+/// Default limits the controller dials with. The bitrate is the most a
+/// stream may use, and the default sets none beyond what the protocol
+/// carries: the rate follows the picture and the link below it.
 pub(crate) fn controller_offer() -> Quality {
-    Quality::new(2_000, 30, 1920, 1080).expect("default offer is valid")
+    Quality::new(crate::protocol::MAX_BITRATE_KBPS, 30, 1920, 1080).expect("default offer is valid")
+}
+
+/// What a stream starts at under the controller's `limits`: the bitrate
+/// starts low, within the limit, and adaptation raises it while the picture
+/// and the link allow.
+pub(crate) fn dial_quality(limits: Quality) -> Quality {
+    Quality {
+        max_bitrate_kbps: limits.max_bitrate_kbps.min(crate::bitrate::START_KBPS),
+        ..limits
+    }
 }
 
 /// Agreed limits for the live session: the offer clamped to the host monitor.
@@ -141,6 +153,30 @@ pub(crate) fn agree_quality(
     caps: &crate::video_caps::VideoCodecCaps,
 ) -> Quality {
     crate::video_caps::clamp_quality(offered, monitor, caps)
+}
+
+/// What the host starts a session at: the offer agreed, and its bitrate
+/// held to what the agreed picture can use, so a small or slow picture
+/// never begins above its ceiling and is cut at once.
+pub(crate) fn start_quality(
+    offered: &Quality,
+    monitor: (u16, u16),
+    caps: &crate::video_caps::VideoCodecCaps,
+    codec: u8,
+) -> Quality {
+    let agreed = agree_quality(offered, monitor, caps);
+    let Some(codec) = crate::VideoCodec::from_wire_id(codec) else {
+        return agreed;
+    };
+    let size = crate::bitrate::encode_size((agreed.max_width, agreed.max_height), monitor);
+    Quality {
+        max_bitrate_kbps: agreed.max_bitrate_kbps.min(crate::bitrate::picture_kbps(
+            codec,
+            size,
+            agreed.max_frame_rate,
+        )),
+        ..agreed
+    }
 }
 
 /// Input is accepted only for the generation that owns the active session.
@@ -180,5 +216,57 @@ pub(crate) fn announce_progression(
             phase,
             peer_id: peer_id.to_owned(),
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_host_starts_a_small_or_slow_picture_at_what_it_can_use() {
+        let caps = crate::video_caps::VideoCodecCaps::h264_full(4096, 4096, "test");
+        let offer = dial_quality(controller_offer());
+        // 640x360 at 30 fps can use 1,105 kb/s as H.264: no start above it.
+        let small = start_quality(&offer, (640, 360), &caps, crate::protocol::CODEC_H264);
+        assert_eq!(
+            small,
+            Quality::new(1105, 30, 640, 360).unwrap(),
+            "a start above the ceiling is cut at once, and an encoder that cannot retune reopens"
+        );
+        // A picture that can use more starts at the common start.
+        let large = start_quality(&offer, (1920, 1080), &caps, crate::protocol::CODEC_H264);
+        assert_eq!(large.max_bitrate_kbps, crate::bitrate::START_KBPS);
+        // The viewer's limit below both is kept.
+        let saver = Quality::new(500, 30, 1920, 1080).unwrap();
+        assert_eq!(
+            start_quality(&saver, (1920, 1080), &caps, crate::protocol::CODEC_H264)
+                .max_bitrate_kbps,
+            500
+        );
+    }
+
+    #[test]
+    fn a_stream_starts_low_within_the_limit_the_viewer_set() {
+        // Automatic sets no limit: the stream starts at the common rate.
+        let automatic = dial_quality(controller_offer());
+        assert_eq!(automatic.max_bitrate_kbps, crate::bitrate::START_KBPS);
+        assert_eq!(
+            (
+                automatic.max_frame_rate,
+                automatic.max_width,
+                automatic.max_height
+            ),
+            (30, 1920, 1080)
+        );
+        // A limit below it, such as Data saver's, is where it starts.
+        let saver = Quality::new(2_000, 24, 1280, 720).unwrap();
+        assert_eq!(dial_quality(saver), saver);
+        // The frame rate and size are ceilings as chosen.
+        let large = Quality::new(30_000, 60, 3840, 2160).unwrap();
+        assert_eq!(
+            dial_quality(large),
+            Quality::new(crate::bitrate::START_KBPS, 60, 3840, 2160).unwrap()
+        );
     }
 }

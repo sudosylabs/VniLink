@@ -96,6 +96,9 @@ pub(super) struct DesktopRuntime {
     pub(super) info: DesktopInfo,
     stamp: SessionStamp,
     quality: Mutex<Quality>,
+    /// Viewer: the most bandwidth its user allows, whatever `info.quality`
+    /// started the stream at.
+    bitrate_limit: u32,
     /// What the link carries now, to size still pictures by.
     link_rate: Mutex<crate::video::LinkRate>,
     /// Host: the largest datagram the link last took, less its prefix; 0
@@ -198,12 +201,13 @@ impl DesktopRuntime {
         self.recording_allowed.send_replace((allowed, epoch));
         Ok(())
     }
-    fn new(info: DesktopInfo, stamp: SessionStamp) -> Arc<Self> {
+    fn new(info: DesktopInfo, stamp: SessionStamp, bitrate_limit: u32) -> Arc<Self> {
         Arc::new(Self {
             recording_allowed: tokio::sync::watch::channel((false, 0)).0,
             recording_gate: Mutex::new(()),
             activity: Mutex::new(super::activity::Activity::new(std::time::Instant::now())),
             quality: Mutex::new(info.quality),
+            bitrate_limit,
             link_rate: Mutex::new(crate::video::LinkRate::default()),
             datagram: std::sync::atomic::AtomicUsize::new(0),
             adaptive: Mutex::new(crate::adaptation::Adaptive::default()),
@@ -1173,7 +1177,8 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
             record.stop.clone(),
         )
     };
-    let offer = core.desktop_quality_defaults()?;
+    let limits = core.desktop_quality_defaults()?;
+    let offer = crate::session::dial_quality(limits);
     let decoder_caps = {
         let caps = core.video_codecs()?;
         caps.for_window(core.alive_state()?.window_decoders.as_deref())
@@ -1195,6 +1200,7 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
             matrix: crate::YuvMatrix::Bt709,
         },
         SessionStamp::new(0, 0),
+        limits.max_bitrate_kbps,
     );
     {
         let mut state = core.alive_state()?;
@@ -1312,7 +1318,7 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                         ) {
                             return Err(Error::IncompatibleVersion);
                         }
-                        let desktop = DesktopRuntime::new(info, epoch);
+                        let desktop = DesktopRuntime::new(info, epoch, limits.max_bitrate_kbps);
                         desktop
                             .control_state
                             .send_replace((control_status, control_epoch));
@@ -1593,7 +1599,17 @@ async fn client_send(
                         let mut adaptive = lock(&desktop.adaptive);
                         // The quality the host agreed at Accept is what
                         // the viewer chose, within the host's limits.
-                        let next = adaptive.step(current, desktop.info.quality, elapsed, feedback);
+                        let limits = crate::adaptation::Limits {
+                            ceiling: Quality {
+                                max_bitrate_kbps: desktop.bitrate_limit,
+                                ..desktop.info.quality
+                            },
+                            codec: crate::VideoCodec::from_wire_id(desktop.info.codec)
+                                .unwrap_or(crate::VideoCodec::H264),
+                            monitor: (desktop.info.monitor_width, desktop.info.monitor_height),
+                            relayed: path.is_relay(),
+                        };
+                        let next = adaptive.step(current, limits, elapsed, feedback);
                         (next, adaptive.signals)
                     };
                     let decoder = *lock(&desktop.decoder);
@@ -1904,12 +1920,13 @@ pub(super) async fn serve(
                         monitor_width: monitor.0,
                         monitor_height: monitor.1,
                         codec,
-                        quality: crate::session::agree_quality(&quality, monitor, &caps),
+                        quality: crate::session::start_quality(&quality, monitor, &caps, codec),
                         separate_cursor: separate,
                         stills,
                         matrix,
                     },
                     SessionStamp::new(id, parent.generation),
+                    quality.max_bitrate_kbps,
                 );
                 shared
                     .desktop_owners
@@ -2805,6 +2822,11 @@ async fn host_send(
                 let timing = lock(&desktop.producer_duration).as_ref()
                     .filter(|(_, _, at)| at.elapsed() <= Duration::from_secs(3))
                     .map(|(capture, encode, _)| (*capture, *encode)).unwrap_or_default();
+                // Read before the feedback is built: a guard held through its
+                // fields would meet the one taken below.
+                let link_kbps = lock(&desktop.link_rate)
+                    .bits_per_second()
+                    .map_or(0, |bits| (bits / 1000).min(u64::from(u32::MAX)) as u32);
                 let feedback = crate::adaptation::HostFeedback {
                     sent_bytes: stats.udp_tx.bytes, lost_bytes: stats.lost_bytes,
                     dropped: queue.dropped, queued: queue.queued, oldest_ms: queue.oldest_ms,
@@ -2814,6 +2836,7 @@ async fn host_send(
                         .unwrap_or(0)
                         .min(600_000),
                     capture_us: timing.0, encode_us: timing.1,
+                    link_kbps,
                     congestion_events: link.paths().iter().find(|path| path.is_selected())
                         .map_or(0, |path| {
                             let stats = path.stats();
@@ -3017,6 +3040,7 @@ mod tests {
                 matrix: crate::YuvMatrix::Bt709,
             },
             SessionStamp::new(1, 3),
+            crate::protocol::MAX_BITRATE_KBPS,
         )
     }
     #[test]

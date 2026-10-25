@@ -1,6 +1,6 @@
 import { Emitter } from '../../src/base/common/event.js';
 import { DisposableStore } from '../../src/base/common/lifecycle.js';
-import type { DesktopCondition } from '../../src/platform/engine/common/dataChannel.js';
+import type { DesktopCondition, DesktopMediaStatus, DesktopRateLimit } from '../../src/platform/engine/common/dataChannel.js';
 import type { DisplayInfo } from '../../src/platform/engine/common/engine.js';
 import { InstantiationService } from '../../src/platform/instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
@@ -45,6 +45,9 @@ class FakeSession implements IDesktopSession {
 	public disposed = false;
 	/** What the engine says is wrong with the picture, most severe first. */
 	public conditions: DesktopCondition[] = ['link.congestion', 'relay.path'];
+	/** Why the quality is where it is, and what holds the bitrate. */
+	public reason: DesktopMediaStatus['reason'] = 'networkPressure';
+	public limit: DesktopRateLimit = 'none';
 
 	constructor(public readonly control: boolean) { }
 
@@ -53,7 +56,7 @@ class FakeSession implements IDesktopSession {
 	}
 
 	public stats(): Promise<DesktopStats | undefined> {
-		return Promise.resolve({ codec: 'h264', status: { reason: 'networkPressure', receivedKbps: 9400, receivedFps: 60, receiverQueueMs: 4, hostQueueMs: 2, lossPerMille: 3, rttMs: 18, encodeUs: 4000, captureUs: 1000, conditions: this.conditions }, latency: { host: { p50: 9, p95: 14, count: 60 }, decode: { p50: 3, p95: 5, count: 60 } }, skipped: 0 });
+		return Promise.resolve({ codec: 'h264', status: { reason: this.reason, receivedKbps: 9400, receivedFps: 60, receiverQueueMs: 4, hostQueueMs: 2, lossPerMille: 3, rttMs: 18, encodeUs: 4000, captureUs: 1000, limit: this.limit, conditions: this.conditions }, latency: { host: { p50: 9, p95: 14, count: 60 }, decode: { p50: 3, p95: 5, count: 60 } }, skipped: 0 });
 	}
 
 	public send(input: DesktopInput): void {
@@ -171,6 +174,18 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		assert(shownColour() === '0,0,255', `A changed screen did not replace the still: ${shownColour()}`);
 		// How the picture is doing, once a second.
 		await until(() => view.element.querySelector('.desktop-status-stats')?.textContent === '60 fps · H.264 · 9.4 Mb/s · 18 ms · Lowered for the network', `Wrong stats: ${view.element.querySelector('.desktop-status-stats')?.textContent ?? ''}`, 3000);
+		// A bitrate that is held says what holds it, and only when no cut already explains the picture.
+		sessions[0].reason = 'stable';
+		for (const [limit, text] of [['setting', 'At your bandwidth limit'], ['relay', 'Limited by the relay'], ['network', 'Limited by the network'], ['encoder', 'Limited by Studio PC'], ['receiver', 'Limited by this computer']] as const) {
+			sessions[0].limit = limit;
+			await until(() => view.element.querySelector('.desktop-status-stats')?.textContent === `60 fps · H.264 · 9.4 Mb/s · 18 ms · ${text}`, `Wrong stats for ${limit}: ${view.element.querySelector('.desktop-status-stats')?.textContent ?? ''}`, 3000);
+		}
+		sessions[0].limit = 'none';
+		await until(() => view.element.querySelector('.desktop-status-stats')?.textContent === '60 fps · H.264 · 9.4 Mb/s · 18 ms', 'A bitrate nothing holds was explained', 3000);
+		sessions[0].reason = 'networkPressure';
+		sessions[0].limit = 'network';
+		await until(() => view.element.querySelector('.desktop-status-stats')?.textContent === '60 fps · H.264 · 9.4 Mb/s · 18 ms · Lowered for the network', 'A cut said its cause twice', 3000);
+		sessions[0].limit = 'none';
 		// What is wrong, beside the stats: the worst in one phrase, all of them on hover and to a screen reader.
 		const condition = view.element.querySelector<HTMLElement>('.desktop-status-condition');
 		assert(condition !== null && !condition.hidden && condition.textContent === 'Slow network: lowered quality', `Wrong condition: ${condition?.textContent ?? ''}`);

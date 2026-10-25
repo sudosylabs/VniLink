@@ -58,7 +58,7 @@ function fixture({ control = true, decodes = true } = {}) {
 		video: {
 			onCursor: cursors.event, requestKeyframe: () => keyframes.push(true), mediaStatus: decoder => {
 				reports.push(decoder);
-				return Promise.resolve({ reason: 'stable', receivedKbps: 1, receivedFps: 1, receiverQueueMs: 0, hostQueueMs: 0, lossPerMille: 0, rttMs: 20, encodeUs: 0, captureUs: 0, conditions: [] });
+				return Promise.resolve({ reason: 'stable', receivedKbps: 1, receivedFps: 1, receiverQueueMs: 0, hostQueueMs: 0, lossPerMille: 0, rttMs: 20, encodeUs: 0, captureUs: 0, limit: 'none', conditions: [] });
 			}, close() { }
 		},
 		input: control ? { input: command => inputs.push(command), close() { } } : undefined,
@@ -237,7 +237,7 @@ test('the engine hears how fast the decoder works, not how long a picture waits 
 	};
 	const reported = [];
 	const session = new EngineDesktopSession(true, { id: '4', generation: '2' }, createDecoder, () => Promise.resolve([]));
-	const status = { reason: 'stable', receivedKbps: 1, receivedFps: 1, receiverQueueMs: 0, hostQueueMs: 0, lossPerMille: 0, rttMs: 20, encodeUs: 0, captureUs: 0, conditions: [] };
+	const status = { reason: 'stable', receivedKbps: 1, receivedFps: 1, receiverQueueMs: 0, hostQueueMs: 0, lossPerMille: 0, rttMs: 20, encodeUs: 0, captureUs: 0, limit: 'none', conditions: [] };
 	const mediaStatus = ({ decodeUs }) => {
 		reported.push(decodeUs);
 		return Promise.resolve(status);

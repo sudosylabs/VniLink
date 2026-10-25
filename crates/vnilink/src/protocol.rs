@@ -107,6 +107,9 @@ pub struct Quality {
 /// Largest width or height a [`Quality`] holds.
 pub(crate) const MAX_EDGE: u16 = 7680;
 
+/// Largest bitrate a [`Quality`] holds, in kb/s.
+pub(crate) const MAX_BITRATE_KBPS: u32 = 50_000;
+
 impl Quality {
     pub fn new(
         max_bitrate_kbps: u32,
@@ -114,7 +117,7 @@ impl Quality {
         max_width: u16,
         max_height: u16,
     ) -> Result<Self, Error> {
-        if !(1..=50_000).contains(&max_bitrate_kbps) {
+        if !(1..=MAX_BITRATE_KBPS).contains(&max_bitrate_kbps) {
             return Err(Error::InvalidSetting(
                 "bitrate must be between 1 and 50000 kbps",
             ));

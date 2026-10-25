@@ -76,6 +76,8 @@
 #![forbid(unsafe_code)]
 
 mod adaptation;
+mod bitrate;
+pub use bitrate::RateLimit;
 mod address;
 pub mod availability;
 pub use adaptation::{AdaptationReason, DesktopMediaStatus};

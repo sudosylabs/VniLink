@@ -546,8 +546,9 @@ fn the_offer_and_agreed_quality_travel_with_the_session() {
     host.set_capture(Box::new(ShutdownCapture)).unwrap();
     pair_for_control(&host, &controller);
     let session = controller.connect(&host.endpoint_id()).unwrap();
-    // The 1x1 shutdown capture clamps the 1920x1080 offer.
-    let agreed = Quality::new(2_000, 30, 1, 1).unwrap();
+    // The 1x1 shutdown capture clamps the 1920x1080 offer, and a picture of
+    // one pixel starts at the lowest rate, not the common start.
+    let agreed = Quality::new(crate::bitrate::FLOOR_KBPS, 30, 1, 1).unwrap();
     assert_eq!(session.quality, Some(agreed));
     assert_eq!(
         host.snapshot().unwrap().incoming.unwrap().quality,

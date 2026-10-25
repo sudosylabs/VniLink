@@ -193,11 +193,19 @@ fn admission_order_prefers_hosting_and_the_control_channel_is_active() {
 
 #[test]
 fn the_offer_clamps_to_the_host_monitor() {
+    // The default limits: no bitrate limit beyond what a quality holds. The
+    // monitor clamps the size and leaves the bitrate to the controller.
     let offer = controller_offer();
+    assert_eq!(offer.max_bitrate_kbps, crate::protocol::MAX_BITRATE_KBPS);
     let caps = VideoCodecCaps::h264_full(4096, 4096, "test");
     assert_eq!(
         agree_quality(&offer, (800, 600), &caps),
-        Quality::new(2_000, 30, 800, 600).unwrap()
+        Quality::new(crate::protocol::MAX_BITRATE_KBPS, 30, 800, 600).unwrap()
+    );
+    // What is dialled starts low inside those limits, on every path.
+    assert_eq!(
+        agree_quality(&crate::session::dial_quality(offer), (800, 600), &caps),
+        Quality::new(crate::bitrate::START_KBPS, 30, 800, 600).unwrap()
     );
     assert_eq!(agree_quality(&offer, (0, 0), &caps), offer);
     assert_eq!(agree_quality(&offer, (4000, 3000), &caps), offer);

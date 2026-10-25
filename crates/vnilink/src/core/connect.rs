@@ -383,7 +383,7 @@ pub(super) fn start_outgoing(
                 quality: if services_only {
                     None
                 } else {
-                    Some(state.desktop_quality_default)
+                    Some(crate::session::dial_quality(state.desktop_quality_default))
                 },
                 codec: crate::protocol::CODEC_H264,
                 matrix: crate::YuvMatrix::Bt709,
@@ -549,7 +549,7 @@ pub(super) async fn establish(
     let files_only = files_only || retired;
     let services_only = services_only || retired;
     let addr = device_addr(&device)?;
-    let offer = lock(&shared.state).desktop_quality_default;
+    let offer = crate::session::dial_quality(lock(&shared.state).desktop_quality_default);
     let codec_preference = lock(&shared.state).desktop_codec_default;
     // Neither non-desktop mode needs a decoder; desktop offers the decoder
     // mask, or only the codec the owner selected.
