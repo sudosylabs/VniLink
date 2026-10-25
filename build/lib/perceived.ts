@@ -115,6 +115,13 @@ export interface PerceivedSummary {
 	/** SSIM once settled, and when the card first came within 0.01 of it, ms after a swap. */
 	readonly settledSsim: number | undefined;
 	readonly sharpAfterMs: number | undefined;
+	/** Whether the page stopped changing after the freeze; undefined without one. */
+	readonly frozen: boolean | undefined;
+	/** SSIM of every picture of the card after the freeze, ms after it. */
+	readonly stillSharpness: readonly { readonly afterMs: number; readonly ssim: number }[];
+	/** SSIM of the last picture of the still card, and when the card first came within 0.005 of it. */
+	readonly stillSsim: number | undefined;
+	readonly stillSharpAfterMs: number | undefined;
 }
 
 interface Event {
@@ -195,13 +202,16 @@ export function summarisePerceived(label: string, lines: string, ssim: ReadonlyM
 	});
 	// Pacing: the pictures after the clicks, the pointer resting.
 	const settledFrom = (number(clicks.at(-1)?.t) ?? 0) + 500;
-	const pacing = frames.filter(frame => frame.t > settledFrom);
+	const freeze = events.find(event => event.type === 'freeze');
+	const frozenAt = number(freeze?.t) ?? Infinity;
+	const pacing = frames.filter(frame => frame.t > settledFrom && frame.t < frozenAt);
 	const intervals = pacing.slice(1).map((frame, index) => frame.t - pacing[index].t);
 	const counters = pacing.map(frame => frame.frame).filter((value): value is number => value !== undefined);
 	const span = pacing.length > 1 ? (pacing[pacing.length - 1].t - pacing[0].t) / 1000 : 0;
 	const hostFrames = counters.length > 1 ? counters[counters.length - 1] - counters[0] + 1 : 0;
 	// Sharpness after each swap, by the scheduled time it was asked at.
-	const crops = events.filter(event => event.type === 'crop' && typeof event.file === 'string' && ssim.has(event.file));
+	const scored = events.filter(event => event.type === 'crop' && typeof event.file === 'string' && ssim.has(event.file));
+	const crops = scored.filter(event => event.phase !== 'still');
 	const buckets = new Map<number, number[]>();
 	const scheduled = [0, 100, 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000, 7500];
 	for (const crop of crops) {
@@ -215,6 +225,12 @@ export function summarisePerceived(label: string, lines: string, ssim: ReadonlyM
 	const sharpness = [...buckets].sort(([a], [b]) => a - b).map(([afterMs, values]) => ({ afterMs, ssim: median(values) }));
 	const settled = sharpness.filter(point => point.afterMs >= 6000).map(point => point.ssim);
 	const settledSsim = settled.length ? median(settled) : undefined;
+	// The still screen: every picture after the freeze, in order. The page
+	// froze when the frame counter stops a second after the click.
+	const still = scored.filter(event => event.phase === 'still')
+		.map(crop => ({ afterMs: Math.round(number(crop.sinceMs) ?? 0), ssim: ssim.get(crop.file as string) ?? 0 }));
+	const stillSsim = still.at(-1)?.ssim;
+	const stillFrames = frames.filter(frame => frame.t > frozenAt + 1000 && frame.frame !== undefined);
 	return {
 		label,
 		scale: number(located.scaleX) ?? 0,
@@ -234,6 +250,10 @@ export function summarisePerceived(label: string, lines: string, ssim: ReadonlyM
 		sharpness,
 		settledSsim,
 		sharpAfterMs: settledSsim === undefined ? undefined : sharpness.find(point => point.ssim >= settledSsim - 0.01)?.afterMs,
+		frozen: freeze ? stillFrames.length > 0 && stillFrames.every(frame => frame.frame === stillFrames[0].frame) : undefined,
+		stillSharpness: still,
+		stillSsim,
+		stillSharpAfterMs: stillSsim === undefined ? undefined : still.find(point => point.ssim >= stillSsim - 0.005)?.afterMs,
 	};
 }
 
@@ -260,6 +280,8 @@ export function renderPerceived(runs: readonly PerceivedSummary[]): string {
 		row('Host frames shown', run => run.hostFramesShown === undefined ? '-' : `${(run.hostFramesShown * 100).toFixed(0)}%`),
 		row('Card SSIM settled', run => fixed(run.settledSsim, 4)),
 		row('Card sharp after a swap, ms', run => run.sharpAfterMs === undefined ? '-' : String(run.sharpAfterMs)),
+		row('Still screen: card SSIM first / last', run => run.frozen === false ? 'page did not freeze' : run.stillSharpness.length ? `${fixed(run.stillSharpness[0].ssim, 4)} / ${fixed(run.stillSsim, 4)}` : '-'),
+		row('Still screen: last change, ms after the freeze', run => run.stillSharpAfterMs === undefined ? '-' : String(run.stillSharpAfterMs)),
 		row('Card SSIM at 0 / 250 / 1000 / 2000 ms', run => [0, 250, 1000, 2000].map(at => fixed(run.sharpness.find(point => point.afterMs === at)?.ssim, 3)).join(' / ')),
 		'',
 	].join('\n');
@@ -313,10 +335,15 @@ async function displayPixels(signal: AbortSignal): Promise<number | undefined> {
 /** SSIM of every crop in `directory`, then the summary there and on the console. */
 export async function analysePerceived(directory: string, label: string, signal: AbortSignal): Promise<PerceivedSummary> {
 	const lines = await readFile(join(directory, 'events.jsonl'), 'utf8');
-	const events = lines.split('\n').filter(line => line.trim()).map(line => JSON.parse(line) as Event);
-	const located = events.find(event => event.type === 'located');
-	const cell = number(located?.cell) ?? 12;
-	const layout = perceivedLayout(number(located?.hostWidth) ?? 0, number(located?.hostHeight) ?? 0, cell / 12);
+	const all = lines.split('\n').filter(line => line.trim()).map(line => JSON.parse(line) as Event);
+	// Only the measurement after the last lock counts, as in the summary.
+	const events = all.slice(Math.max(0, all.findLastIndex(event => event.type === 'located')));
+	const located = events.at(0);
+	if (located?.type !== 'located') {
+		throw new Error('The driver never found the page on this screen');
+	}
+	const cell = number(located.cell) ?? 12;
+	const layout = perceivedLayout(number(located.hostWidth) ?? 0, number(located.hostHeight) ?? 0, cell / 12);
 	const ssim = new Map<string, number>();
 	for (const variant of [0, 1]) {
 		await writeFile(join(directory, `card-${String(variant)}.rgb`), cardReference(variant, layout.card.width, layout.card.height));
@@ -357,7 +384,7 @@ export async function measurePerceived(root: string, signal: AbortSignal, args: 
 			'systemd-run', '--user', '--collect', '--quiet', `--unit=${unit}`, `--working-directory=${options.remote.root}`,
 			electron, '--ozone-platform=x11', `${options.remote.root}/out/perceived.cjs`,
 		].map(shellWord).join(' '));
-		console.log(`The stimulus is maximised on ${options.remote.destination}. Open ${options.label} on this Mac to it now, full screen, showing its whole screen; measuring starts when the page is found (up to ${String(options.waitSeconds)} s), then the pointer moves by itself for about 45 s.`);
+		console.log(`The stimulus is maximised on ${options.remote.destination}. Open ${options.label} on this Mac to it now, full screen, showing its whole screen; measuring starts when the page is found (up to ${String(options.waitSeconds)} s), then the pointer moves by itself for about a minute.`);
 		await processes.run(join(root, 'target/release/examples/perceived'), [options.output, String(options.waitSeconds), ...(pixels ? [String(pixels)] : [])]);
 		await analysePerceived(options.output, options.label, signal);
 	} finally {

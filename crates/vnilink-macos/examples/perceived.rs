@@ -288,6 +288,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut log = std::io::BufWriter::new(std::fs::File::create(out.join("events.jsonl"))?);
     let post = |kind: CGEventType, x: f64, y: f64| {
+        let button = if matches!(
+            kind,
+            CGEventType::RightMouseDown | CGEventType::RightMouseUp
+        ) {
+            CGMouseButton::Right
+        } else {
+            CGMouseButton::Left
+        };
         let event = CGEvent::new_mouse_event(
             None,
             kind,
@@ -295,7 +303,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 x: x * points,
                 y: y * points,
             },
-            CGMouseButton::Left,
+            button,
         );
         CGEvent::post(CGEventTapLocation::HIDEventTap, event.as_deref());
     };
@@ -566,6 +574,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &mut *log,
             Instant::now() + Duration::from_secs(20),
             &mut sharpness,
+        )?;
+
+        // A still screen: a right click freezes the page, and the card is
+        // cropped from every picture after it. The display sends a picture
+        // only when something on it changes, so the last crop before any
+        // time is what the screen showed then.
+        post(CGEventType::RightMouseDown, vx, vy);
+        post(CGEventType::RightMouseUp, vx, vy);
+        let frozen_at = ms(Instant::now());
+        writeln!(log, r#"{{"type":"freeze","t":{frozen_at:.3}}}"#)?;
+        const STILL_CROPS: u32 = 60;
+        let mut still_crops = 0u32;
+        let mut generation: Option<u32> = None;
+        let arm = || {
+            want.lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .card = Some(card);
+        };
+        arm();
+        let mut still = |log: &mut dyn Write,
+                         now: f64,
+                         reading: &Reading,
+                         piece: Option<&RawFrame>|
+         -> Result<(), Box<dyn std::error::Error>> {
+            generation = reading.value(Role::Card).or(generation);
+            if let (Some(piece), Some(generation)) = (piece, generation) {
+                let file = format!("crop-{}.bgra", crops.get());
+                std::fs::write(directory.join(&file), piece.pixels())?;
+                writeln!(
+                    log,
+                    r#"{{"type":"crop","phase":"still","t":{now:.3},"card":{generation},"sinceMs":{:.3},"file":"{file}","width":{},"height":{}}}"#,
+                    now - frozen_at,
+                    piece.width(),
+                    piece.height(),
+                )?;
+                crops.set(crops.get() + 1);
+                still_crops += 1;
+            }
+            if still_crops < STILL_CROPS {
+                arm();
+            }
+            Ok(())
+        };
+        observe(
+            &mut *log,
+            Instant::now() + Duration::from_secs(10),
+            &mut still,
         )?;
         Ok(())
     };

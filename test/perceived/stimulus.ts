@@ -1,6 +1,6 @@
 /**
  * The perceived-quality stimulus (`npm run measure:perceived`): a page shown
- * full screen on the computer being controlled, through whichever remote
+ * maximised on the computer being controlled, through whichever remote
  * desktop application is under test. Everything it shows is read back from
  * the viewing computer's own screen, so the application is a black box.
  *
@@ -15,6 +15,10 @@
  * - a test card of rectangles, two variants that swap every
  *   {@link CARD_PERIOD_MS}, drawn pixel for pixel so the task can rasterise
  *   the same rectangles as the reference.
+ *
+ * A right click freezes the page, so the last phase measures a screen that
+ * has stopped changing, where an application may refine or replace its
+ * picture.
  *
  * `crates/vnilink-macos/examples/perceived.rs` keeps a copy of
  * {@link perceivedLayout}; `test/tooling/perceived.test.mjs` keeps the two
@@ -228,11 +232,24 @@ addEventListener('pointermove', event => {
 	values.pointerX = Math.round(event.clientX * ratio);
 	values.pointerY = Math.round(event.clientY * ratio);
 });
-addEventListener('pointerdown', () => {
-	values.clicks++;
+// A right click freezes the page for good: nothing on it changes again, so
+// a still screen's picture can be measured.
+let frozen = false;
+addEventListener('pointerdown', event => {
+	if (event.button === 2) {
+		frozen = true;
+	} else {
+		values.clicks++;
+	}
+});
+addEventListener('contextmenu', event => {
+	event.preventDefault();
 });
 let phase = 0;
 function draw(time) {
+	if (frozen) {
+		return;
+	}
 	values.frame++;
 	const generation = Math.floor((time - started) / CARD_PERIOD_MS);
 	if (generation !== values.card) {

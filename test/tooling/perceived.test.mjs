@@ -67,8 +67,13 @@ test('a run is summarised from what the viewer screen showed', () => {
 		line({ type: 'crop', t: 3020, card: 1, sinceMs: 0, file: 'crop-0.bgra', width: 8, height: 8 }),
 		line({ type: 'crop', t: 3270, card: 1, sinceMs: 250, file: 'crop-1.bgra', width: 8, height: 8 }),
 		line({ type: 'crop', t: 9520, card: 1, sinceMs: 6500, file: 'crop-2.bgra', width: 8, height: 8 }),
+		// Frozen: the counter stops, and later pictures of the card are sharper.
+		line({ type: 'freeze', t: 10000 }),
+		...Array.from({ length: 30 }, (_, index) => frame(10000 + index * 100, { clicks: 1, card: 1, frame: 999 })),
+		line({ type: 'crop', phase: 'still', t: 10050, card: 1, sinceMs: 50, file: 'crop-3.bgra', width: 8, height: 8 }),
+		line({ type: 'crop', phase: 'still', t: 12400, card: 1, sinceMs: 2400, file: 'crop-4.bgra', width: 8, height: 8 }),
 	].join('\n');
-	const ssim = new Map([['crop-0.bgra', 0.7], ['crop-1.bgra', 0.95], ['crop-2.bgra', 0.955]]);
+	const ssim = new Map([['crop-0.bgra', 0.7], ['crop-1.bgra', 0.95], ['crop-2.bgra', 0.955], ['crop-3.bgra', 0.8], ['crop-4.bgra', 0.99]]);
 	const summary = summarisePerceived('Test', events, ssim);
 	assert.equal(summary.scale, 1.6);
 	assert.equal(summary.restarts, 1);
@@ -79,8 +84,12 @@ test('a run is summarised from what the viewer screen showed', () => {
 	assert.ok(Math.abs((summary.framesPerSecond ?? 0) - 59.9) < 0.2);
 	assert.equal(summary.stutters, 0);
 	assert.deepEqual([summary.settledSsim, summary.sharpAfterMs], [0.955, 250]);
+	// Still pictures are their own measure, and the frozen page is not a stutter.
+	assert.deepEqual([summary.frozen, summary.stillSsim, summary.stillSharpAfterMs, summary.stutters], [true, 0.99, 2400, 0]);
+	assert.equal(summary.sharpness.length, 3);
 	const text = renderPerceived([summary, { ...summary, label: 'Other' }]);
 	assert.match(text, /\| \| Test \| Other \|/);
 	assert.match(text, /\| Card sharp after a swap, ms \| 250 \| 250 \|/);
 	assert.match(text, /\| Picture moved, measurement restarted \| 1 \| 1 \|/);
+	assert.match(text, /\| Still screen: card SSIM first \/ last \| 0\.8000 \/ 0\.9900 \|/);
 });
