@@ -59,7 +59,7 @@ pub use controller::{serve_controller, ControllerOutput, ControllerVideo, Decode
 pub use desktop::{CapturePlan, CursorPolicy, DesktopKind, MonitorSize};
 pub use error::{Error, PublishError, FRAME_DROPPED};
 pub use fanout::serve_shared_capture;
-pub use frame::{encoded_size, scale_bgra, RawFrame};
+pub use frame::{changed_share, changed_tiles, encoded_size, scale_bgra, RawFrame};
 pub use host::{
     serve_capture, serve_desktop_capture, FrameSource, FrameWait, HostSession, OpenEncoder,
 };

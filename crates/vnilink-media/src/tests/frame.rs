@@ -88,3 +88,43 @@ fn clones_and_shared_frames_hold_the_same_pixels() {
     assert!(RawFrame::shared(64, 33, 64 * 4, 0, frame.shared_pixels()).is_err());
     assert!(RawFrame::shared(64, 32, 63 * 4, 0, frame.shared_pixels()).is_err());
 }
+
+/// The share of a picture rectangles cover, clipped to it and never above all of it.
+#[test]
+fn rectangles_give_the_share_of_the_picture_they_cover() {
+    use crate::changed_share;
+    assert_eq!(changed_share([[0, 0, 50, 100]], 100, 100), 0.5);
+    // Clipped at the edges.
+    assert_eq!(changed_share([[-50, 0, 100, 100]], 100, 100), 0.5);
+    assert_eq!(
+        changed_share([[0, 0, 100, 100], [0, 0, 100, 100]], 100, 100),
+        1.0
+    );
+    assert_eq!(changed_share(std::iter::empty(), 100, 100), 0.0);
+}
+
+/// Tiles compare their pixels and not the rows' padding; a picture too
+/// short for its rows cannot be compared.
+#[test]
+fn tiles_that_differ_give_the_share_of_the_picture_that_changed() {
+    use crate::changed_tiles;
+    // Two pictures of 128 by 64 pixels, two tiles, one padded by 16 bytes a row.
+    let left = vec![9u8; 128 * 4 * 64];
+    let mut right = vec![0u8; (128 * 4 + 16) * 64];
+    for y in 0..64 {
+        right[y * (128 * 4 + 16)..][..128 * 4].fill(9);
+    }
+    assert_eq!(
+        changed_tiles((&left, 512), (&right, 528), 128, 64),
+        Some(0.0)
+    );
+    right[10 * 528 + 70 * 4] = 1;
+    assert_eq!(
+        changed_tiles((&left, 512), (&right, 528), 128, 64),
+        Some(0.5)
+    );
+    assert_eq!(
+        changed_tiles((&left, 512), (&right[..1000], 528), 128, 64),
+        None
+    );
+}

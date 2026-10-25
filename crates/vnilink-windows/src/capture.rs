@@ -16,7 +16,7 @@ use std::sync::Mutex;
 
 use vnilink_media::{Error, RawFrame};
 use windows::core::Interface;
-use windows::Win32::Foundation::{E_ACCESSDENIED, E_FAIL, HMODULE};
+use windows::Win32::Foundation::{E_ACCESSDENIED, E_FAIL, HMODULE, RECT};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
@@ -26,7 +26,7 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_U
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, IDXGIAdapter1, IDXGIFactory1, IDXGIOutput, IDXGIOutput1,
     IDXGIOutputDuplication, IDXGIResource, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_NOT_FOUND,
-    DXGI_ERROR_WAIT_TIMEOUT,
+    DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTDUPL_MOVE_RECT,
 };
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFO};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
@@ -343,7 +343,7 @@ impl WindowsCapture {
         timeout_ms: u32,
         timestamp_us: u64,
     ) -> Result<Option<RawFrame>, Error> {
-        let mut info = windows::Win32::Graphics::Dxgi::DXGI_OUTDUPL_FRAME_INFO::default();
+        let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource = None;
         if let Err(err) = self
             .duplication
@@ -363,7 +363,12 @@ impl WindowsCapture {
         let frame = self.update_pointer(&info).and_then(|_| {
             if presented {
                 let frame = self.copy_resource(resource.as_ref(), timestamp_us)?;
-                Ok(frame.map(|frame| frame.with_captured_at(presented_at(info.LastPresentTime))))
+                Ok(frame.map(|frame| {
+                    let changed = self.changed_share(&info, frame.width(), frame.height());
+                    frame
+                        .with_captured_at(presented_at(info.LastPresentTime))
+                        .with_changed(changed)
+                }))
             } else {
                 Ok(None)
             }
@@ -372,6 +377,60 @@ impl WindowsCapture {
             return Err(map_error(err));
         }
         frame
+    }
+
+    /// The share of the output the acquired frame changed, from Desktop
+    /// Duplication's dirty rectangles and where its moves landed, over every
+    /// frame it accumulated; `None` when it cannot say. Read before the
+    /// frame is released.
+    unsafe fn changed_share(
+        &self,
+        info: &DXGI_OUTDUPL_FRAME_INFO,
+        width: u16,
+        height: u16,
+    ) -> Option<f32> {
+        let bytes = info.TotalMetadataBufferSize as usize;
+        if bytes == 0 {
+            return None;
+        }
+        let move_size = std::mem::size_of::<DXGI_OUTDUPL_MOVE_RECT>();
+        let mut moves = vec![DXGI_OUTDUPL_MOVE_RECT::default(); bytes / move_size + 1];
+        let mut used = 0u32;
+        self.duplication
+            .GetFrameMoveRects(
+                (moves.len() * move_size) as u32,
+                moves.as_mut_ptr(),
+                &mut used,
+            )
+            .ok()?;
+        moves.truncate(used as usize / move_size);
+        let rect_size = std::mem::size_of::<RECT>();
+        let mut dirty = vec![RECT::default(); bytes / rect_size + 1];
+        let mut used = 0u32;
+        self.duplication
+            .GetFrameDirtyRects(
+                (dirty.len() * rect_size) as u32,
+                dirty.as_mut_ptr(),
+                &mut used,
+            )
+            .ok()?;
+        dirty.truncate(used as usize / rect_size);
+        let rects = dirty
+            .iter()
+            .chain(moves.iter().map(|moved| &moved.DestinationRect))
+            .map(|rect| {
+                [
+                    i64::from(rect.left),
+                    i64::from(rect.top),
+                    i64::from(rect.right) - i64::from(rect.left),
+                    i64::from(rect.bottom) - i64::from(rect.top),
+                ]
+            });
+        Some(vnilink_media::changed_share(
+            rects,
+            u32::from(width),
+            u32::from(height),
+        ))
     }
 
     unsafe fn copy_resource(

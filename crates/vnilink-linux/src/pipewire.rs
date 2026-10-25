@@ -267,6 +267,7 @@ impl PortalCapture {
             if let Some(slot) = self.shared.channel.try_latest()? {
                 self.seen.store(generation, Ordering::Release);
                 let (frame, delivery) = frame_from_slot(&self.shared, slot, timestamp_us)?;
+                let frame = frame.with_changed(self.shared.channel.take_changed());
                 *self.delivery.lock().expect("portal delivery") = Some(delivery);
                 return Ok(Some(frame));
             }
@@ -283,7 +284,7 @@ impl PortalCapture {
             Ok(Ok(Some((frame, delivery)))) => {
                 self.seen.store(generation, Ordering::Release);
                 *self.delivery.lock().expect("portal delivery") = Some(delivery);
-                Ok(Some(frame))
+                Ok(Some(frame.with_changed(self.shared.channel.take_changed())))
             }
             Ok(Ok(None)) => Ok(None),
             Ok(Err(err)) => Err(err),
@@ -1153,8 +1154,24 @@ fn copy_buffer(stream: &pw::stream::Stream, state: &mut ListenerState) {
         // When PipeWire handed the picture over: the compositor's own
         // presentation time is not read.
         captured_at: Some(Instant::now()),
+        changed: damage
+            .as_deref()
+            .map(|damage| damaged_share(damage, width, height)),
     });
     record_delivery(shared, false);
+}
+
+/// The share of the screen a buffer's damage covers. SPA ends the list at
+/// the first empty region.
+fn damaged_share(damage: &[[i32; 4]], width: u16, height: u16) -> f32 {
+    vnilink_media::changed_share(
+        damage
+            .iter()
+            .take_while(|region| region[2] > 0 && region[3] > 0)
+            .map(|region| region.map(i64::from)),
+        u32::from(width),
+        u32::from(height),
+    )
 }
 
 /// Imports a DMA-BUF the compositor drew and keeps the GPU's copy of it as
@@ -1220,6 +1237,7 @@ fn push_dma_buf(
                 stride: usize::from(width) * 4,
                 bytes: vnilink_media::Pixels::native(Box::new(picture)),
                 captured_at: Some(Instant::now()),
+                changed: damage.map(|damage| damaged_share(damage, width, height)),
             });
             record_delivery(shared, true);
         }
@@ -1301,6 +1319,7 @@ mod timing_tests {
             stride: 32,
             bytes: vec![255; 256].into(),
             captured_at: Some(delivered),
+            changed: None,
         });
         let started = Instant::now();
         for timestamp_us in 0..20 {

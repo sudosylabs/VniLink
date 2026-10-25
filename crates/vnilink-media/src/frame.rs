@@ -19,6 +19,7 @@ pub struct RawFrame {
     stride: usize,
     timestamp_us: u64,
     captured_at: Option<Instant>,
+    changed: Option<f32>,
     bgra: Pixels,
 }
 
@@ -88,6 +89,7 @@ impl RawFrame {
             stride,
             timestamp_us,
             captured_at: None,
+            changed: None,
             bgra,
         })
     }
@@ -125,6 +127,18 @@ impl RawFrame {
         self
     }
 
+    /// The share of the picture, from 0 to 1, that its source says changed
+    /// since the picture it delivered before; `None` when the source cannot
+    /// say, which counts as all of it.
+    pub fn changed(&self) -> Option<f32> {
+        self.changed
+    }
+
+    pub fn with_changed(mut self, changed: Option<f32>) -> Self {
+        self.changed = changed.map(|share| share.clamp(0.0, 1.0));
+        self
+    }
+
     /// The pixels, to hand to another frame or holder without a copy.
     pub fn shared_pixels(&self) -> Pixels {
         self.bgra.clone()
@@ -154,6 +168,7 @@ impl Clone for RawFrame {
             stride: self.stride,
             timestamp_us: self.timestamp_us,
             captured_at: self.captured_at,
+            changed: self.changed,
             bgra: self.bgra.clone(),
         }
     }
@@ -240,4 +255,62 @@ pub fn scale_bgra(frame: &RawFrame, dst_width: u16, dst_height: u16) -> Result<R
 
 fn row_bytes(width: u16) -> usize {
     usize::from(width) * 4
+}
+
+/// The share of a `width` by `height` picture that `rects` cover, each as
+/// `[x, y, width, height]` and clipped to the picture. Overlaps count twice,
+/// so the share is never below what changed.
+pub fn changed_share(rects: impl IntoIterator<Item = [i64; 4]>, width: u32, height: u32) -> f32 {
+    let area = u64::from(width) * u64::from(height);
+    if area == 0 {
+        return 1.0;
+    }
+    let covered: u64 = rects
+        .into_iter()
+        .map(|[x, y, w, h]| {
+            let left = x.clamp(0, i64::from(width));
+            let top = y.clamp(0, i64::from(height));
+            let right = x.saturating_add(w).clamp(0, i64::from(width));
+            let bottom = y.saturating_add(h).clamp(0, i64::from(height));
+            ((right - left).max(0) * (bottom - top).max(0)) as u64
+        })
+        .sum();
+    (covered.min(area) as f64 / area as f64) as f32
+}
+
+/// The side of the tiles [`changed_tiles`] compares, in pixels.
+const CHANGE_TILE: usize = 64;
+
+/// The share of [`CHANGE_TILE`]-pixel tiles whose pixels differ between two
+/// BGRA pictures of `width` by `height`, `left` and `right` each with its
+/// stride: 0 for the same picture. Row padding is not compared; `None` when
+/// either is too short for its rows.
+pub fn changed_tiles(
+    (left, left_stride): (&[u8], usize),
+    (right, right_stride): (&[u8], usize),
+    width: u16,
+    height: u16,
+) -> Option<f32> {
+    let (width, height) = (usize::from(width), usize::from(height));
+    let columns = width.div_ceil(CHANGE_TILE);
+    let rows = height.div_ceil(CHANGE_TILE);
+    if columns == 0 || rows == 0 {
+        return Some(0.0);
+    }
+    let mut changed = vec![false; columns * rows];
+    let row_bytes = width * 4;
+    for y in 0..height {
+        let left_row = left.get(y * left_stride..y * left_stride + row_bytes)?;
+        let right_row = right.get(y * right_stride..y * right_stride + row_bytes)?;
+        let band = &mut changed[y / CHANGE_TILE * columns..][..columns];
+        for (column, tile) in band.iter_mut().enumerate() {
+            if *tile {
+                continue;
+            }
+            let from = column * CHANGE_TILE * 4;
+            let to = (from + CHANGE_TILE * 4).min(row_bytes);
+            *tile = left_row[from..to] != right_row[from..to];
+        }
+    }
+    Some(changed.iter().filter(|tile| **tile).count() as f32 / changed.len() as f32)
 }

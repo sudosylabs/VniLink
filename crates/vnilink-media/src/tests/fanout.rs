@@ -1047,6 +1047,34 @@ impl FrameSource for ColouredStill {
     }
 }
 
+/// Coloured text where something changes every half second, covering
+/// `share` of the screen each time, as its source says.
+struct Ticking {
+    started: Instant,
+    share: f32,
+    page: RawFrame,
+}
+
+impl FrameSource for Ticking {
+    fn size(&self) -> (u16, u16) {
+        COLOURED
+    }
+
+    fn poll_frame(&self, timestamp: u64) -> Result<Option<RawFrame>, Error> {
+        Ok(Some(
+            self.page
+                .clone()
+                .with_timestamp(timestamp)
+                .with_changed(Some(self.share)),
+        ))
+    }
+
+    fn attested_at(&self) -> Option<Instant> {
+        let ticks = self.started.elapsed().as_millis() / 500;
+        Some(self.started + Duration::from_millis(ticks as u64 * 500))
+    }
+}
+
 /// A host whose capture sends still pictures.
 struct StillsCapture;
 
@@ -1063,6 +1091,23 @@ impl vnilink::HostCapture for StillsCapture {
 /// unchanged screen, from a host that sends stills, to a window that shows
 /// them when `shows`.
 fn roles_of_an_unchanged_screen(shows: bool, watch: Duration) -> Vec<vnilink::FrameRole> {
+    roles_of(
+        ColouredStill {
+            at: Instant::now(),
+            page: crate::measure::colour_text_page(COLOURED.0, COLOURED.1, 0),
+        },
+        shows,
+        watch,
+    )
+}
+
+/// The roles of the pictures a viewer receives over `watch` of `source`,
+/// from a host that sends stills, to a window that shows them when `shows`.
+fn roles_of(
+    source: impl FrameSource + Send + 'static,
+    shows: bool,
+    watch: Duration,
+) -> Vec<vnilink::FrameRole> {
     let host = Arc::new(boot());
     let viewer = boot();
     host.set_capture(Box::new(StillsCapture)).unwrap();
@@ -1103,10 +1148,7 @@ fn roles_of_an_unchanged_screen(shows: bool, watch: Duration) -> Vec<vnilink::Fr
     let (worker_stop, worker_host) = (Arc::clone(&stop), Arc::clone(&host));
     let worker = std::thread::spawn(move || {
         crate::serve_shared_capture(
-            &ColouredStill {
-                at: Instant::now(),
-                page: crate::measure::colour_text_page(COLOURED.0, COLOURED.1, 0),
-            },
+            &source,
             &worker_host,
             &worker_stop,
             false,
@@ -1157,6 +1199,22 @@ fn an_unchanged_screen_brings_one_still_picture() {
     assert!(!roles.contains(&Still), "{roles:?}");
 }
 
+/// A clock or a caret changing leaves the screen still enough for a still;
+/// half of it changing as often does not.
+#[test]
+fn small_changes_still_bring_a_still_and_large_ones_do_not() {
+    let watch = crate::STILL_AFTER + Duration::from_millis(2_500);
+    let ticking = |share| Ticking {
+        started: Instant::now(),
+        share,
+        page: crate::measure::colour_text_page(COLOURED.0, COLOURED.1, 0),
+    };
+    let roles = roles_of(ticking(0.01), true, watch);
+    assert!(roles.contains(&vnilink::FrameRole::Still), "{roles:?}");
+    let roles = roles_of(ticking(0.5), true, watch);
+    assert!(!roles.contains(&vnilink::FrameRole::Still), "{roles:?}");
+}
+
 /// A source that is told of each picture as it arrives, as the platform
 /// captures are, and records when it is read.
 struct Pushing {
@@ -1186,6 +1244,7 @@ impl Pushing {
             stride: 256,
             bytes: crate::Pixels::from(vec![0; 64 * 64 * 4]),
             captured_at: None,
+            changed: None,
         });
     }
 }

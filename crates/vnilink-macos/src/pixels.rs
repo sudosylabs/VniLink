@@ -53,57 +53,37 @@ impl vnilink_media::NativePicture for MacPicture {
     }
 }
 
-/// Whether two pictures of `rows` rows of `row_bytes` bytes hold the same
-/// pixels: `left` at `left_stride` bytes a row, `right` at `right_stride`.
-/// Row padding is not compared; a picture too short for its rows differs.
-pub(crate) fn same_rows(
-    (left, left_stride): (&[u8], usize),
-    (right, right_stride): (&[u8], usize),
-    row_bytes: usize,
-    rows: usize,
-) -> bool {
-    (0..rows).all(|row| {
-        let (from_left, from_right) = (row * left_stride, row * right_stride);
-        match (
-            left.get(from_left..from_left + row_bytes),
-            right.get(from_right..from_right + row_bytes),
-        ) {
-            (Some(left), Some(right)) => left == right,
-            _ => false,
-        }
-    })
-}
-
-/// Whether two BGRA pixel buffers show the same picture. ScreenCaptureKit
-/// marks a frame complete at the full frame rate whether or not anything on
-/// the screen changed, and attaches no dirty rects, so only the pixels say.
-/// Both stay where they are: on Apple silicon the buffers are in shared
-/// memory and are read in place. One that cannot be read differs.
+/// The share of the picture that changed between two BGRA pixel buffers:
+/// 0 for the same picture. ScreenCaptureKit marks a frame complete at the
+/// full frame rate whether or not anything on the screen changed, and
+/// attaches no dirty rects, so only the pixels say. Both stay where they
+/// are: on Apple silicon the buffers are in shared memory and are read in
+/// place. `None` when either cannot be read, or the sizes differ.
 #[cfg(target_os = "macos")]
-pub(crate) fn same_picture(
+pub(crate) fn picture_change(
     left: &apple_cf::cv::CVPixelBuffer,
     right: &apple_cf::cv::CVPixelBuffer,
-) -> bool {
+) -> Option<f32> {
     let (Ok(size), Ok(other)) = (bgra_size(left), bgra_size(right)) else {
-        return false;
+        return None;
     };
     if size != other {
-        return false;
+        return None;
     }
     let (Ok(left), Ok(right)) = (left.lock_read_only(), right.lock_read_only()) else {
-        return false;
+        return None;
     };
     // The stream has finished both buffers; these guards only read them.
     let (Some(left_bytes), Some(right_bytes)) =
         (unsafe { left.as_slice() }, unsafe { right.as_slice() })
     else {
-        return false;
+        return None;
     };
-    same_rows(
+    vnilink_media::changed_tiles(
         (left_bytes, left.bytes_per_row()),
         (right_bytes, right.bytes_per_row()),
-        usize::from(size.0) * 4,
-        usize::from(size.1),
+        size.0,
+        size.1,
     )
 }
 
@@ -170,27 +150,4 @@ fn packed_bgra(
         bgra[dst_start..dst_start + row].copy_from_slice(&source[src_start..end]);
     }
     Ok(bgra)
-}
-
-#[cfg(test)]
-mod same_rows_tests {
-    use super::same_rows;
-
-    #[test]
-    fn rows_compare_their_pixels_and_not_their_padding() {
-        // Two rows of four bytes, padded to six and to eight.
-        let left = [1, 2, 3, 4, 0, 0, 5, 6, 7, 8, 9, 9];
-        let right = [1, 2, 3, 4, 7, 7, 7, 7, 5, 6, 7, 8, 1, 1, 1, 1];
-        assert!(same_rows((&left, 6), (&right, 8), 4, 2));
-        let mut changed = right;
-        changed[10] = 0;
-        assert!(
-            !same_rows((&left, 6), (&changed, 8), 4, 2),
-            "one byte differs"
-        );
-        assert!(
-            !same_rows((&left, 6), (&right[..10], 8), 4, 2),
-            "a short picture differs"
-        );
-    }
 }

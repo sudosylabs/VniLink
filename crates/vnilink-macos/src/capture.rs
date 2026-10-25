@@ -146,7 +146,7 @@ struct Handler {
     size: Arc<std::sync::atomic::AtomicU32>,
     /// The picture last pushed: a frame with the same pixels is not a new
     /// one. Without this an unchanged screen would read as changing at the
-    /// frame rate (see `pixels::same_picture`).
+    /// frame rate (see `pixels::picture_change`).
     previous: std::sync::Mutex<Option<apple_cf::cv::CVPixelBuffer>>,
 }
 
@@ -169,16 +169,18 @@ impl SCStreamOutputTrait for Handler {
         }
         // The same pixels again leave the channel as it is: its picture and
         // when the source attested it do not change, so the shared capture
-        // sees an unchanged screen.
+        // sees an unchanged screen. Otherwise the comparison says how much
+        // of it changed.
+        let mut changed = None;
         if let Some(kept) = sample.pixel_buffer() {
             let mut previous = self
                 .previous
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner());
-            if previous
+            changed = previous
                 .as_ref()
-                .is_some_and(|previous| crate::pixels::same_picture(previous, &kept))
-            {
+                .and_then(|previous| crate::pixels::picture_change(previous, &kept));
+            if changed == Some(0.0) {
                 return;
             }
             *previous = Some(kept);
@@ -200,6 +202,7 @@ impl SCStreamOutputTrait for Handler {
                     stride: usize::from(width) * 4,
                     bytes: vnilink_media::Pixels::native(Box::new(picture)),
                     captured_at,
+                    changed,
                 });
             }
             Err(Error::Unsupported(reason)) => self.channel.fail(reason),
@@ -483,7 +486,11 @@ fn poll_channel(
                 timestamp_us,
                 slot.bytes,
             )
-            .map(|frame| frame.with_captured_at(slot.captured_at))
+            .map(|frame| {
+                frame
+                    .with_captured_at(slot.captured_at)
+                    .with_changed(channel.take_changed())
+            })
         })
         .transpose()
 }
@@ -502,6 +509,7 @@ mod idle_tests {
             stride: 8,
             bytes: vec![19; 16].into(),
             captured_at: Some(shown),
+            changed: None,
         });
         let first = poll_channel(&channel, 2).unwrap().unwrap();
         let repeated = poll_channel(&channel, 3).unwrap().unwrap();

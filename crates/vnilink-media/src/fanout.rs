@@ -281,9 +281,20 @@ fn fail_target(core: &Core, target: &VideoTarget, failure: StreamFailure) {
     }
 }
 
-/// One target's still pictures: asked for once the screen has stayed the
-/// same for [`STILL_AFTER`], once per still period, and published only if
-/// the screen did not change meanwhile.
+/// The most of the screen a change may cover and leave a still where it
+/// is: a clock, a caret or a few typed letters. The viewer redraws such a
+/// change from the stream over the still, tile by tile.
+const SMALL_CHANGE: f32 = 0.02;
+
+/// Whether `frame` changed only a little of the screen, as its source says;
+/// a source that cannot say changed all of it.
+fn small_change(frame: &RawFrame) -> bool {
+    frame.changed().is_some_and(|share| share <= SMALL_CHANGE)
+}
+
+/// One target's still pictures: asked for once the screen has had no more
+/// than small changes for [`STILL_AFTER`], once per still period, and
+/// published only if the screen did not change more than that meanwhile.
 struct Stills {
     /// The viewer agreed to still pictures.
     agreed: bool,
@@ -511,7 +522,7 @@ fn consume<E, F>(
         seen = generation;
         sink.captured_at = captured_at;
         sink.unchanged = unchanged;
-        if !unchanged {
+        if !unchanged && !small_change(&frame) {
             stills.changed();
         }
         if frame.width() != capture_size.0 || frame.height() != capture_size.1 {

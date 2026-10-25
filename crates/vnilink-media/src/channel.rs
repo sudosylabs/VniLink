@@ -23,6 +23,9 @@ pub struct ChannelSlot {
     pub bytes: crate::Pixels,
     /// When the OS captured the picture, if the platform says.
     pub captured_at: Option<Instant>,
+    /// The share of the screen, from 0 to 1, that changed since the picture
+    /// the platform delivered before; `None` when it cannot say.
+    pub changed: Option<f32>,
 }
 
 impl ChannelSlot {
@@ -53,6 +56,9 @@ pub struct FrameChannel {
     failure: Mutex<Option<&'static str>>,
     /// When `push` last stored a picture. Idle readers do not refresh this.
     pushed_at: Mutex<Option<Instant>>,
+    /// The share of the screen the pictures stored since the last
+    /// [`Self::take_changed`] changed; `None` once one could not say.
+    changed: Mutex<Option<f32>>,
     /// Wakes [`Self::wait_newer`] when a picture is stored or a failure is
     /// recorded. The mutex guards nothing: the state it announces is atomic
     /// or has its own lock, and `generation` is advanced under it so a wait
@@ -68,12 +74,14 @@ impl FrameChannel {
             returned: AtomicU64::new(0),
             failure: Mutex::new(None),
             pushed_at: Mutex::new(None),
+            changed: Mutex::new(None),
             arrival: (Mutex::new(()), Condvar::new()),
         }
     }
 
     /// Store `slot` as the latest picture. Overwrites whatever is waiting.
     pub fn push(&self, slot: ChannelSlot) {
+        self.add_changed(slot.changed);
         *self.slot.lock().expect("frame channel") = Some(slot);
         self.stored();
     }
@@ -87,10 +95,26 @@ impl FrameChannel {
         if stored.as_ref().is_some_and(|last| last.same_picture(&slot)) {
             return false;
         }
+        self.add_changed(slot.changed);
         *stored = Some(slot);
         drop(stored);
         self.stored();
         true
+    }
+
+    fn add_changed(&self, share: Option<f32>) {
+        let mut changed = self.changed.lock().expect("frame channel");
+        *changed = changed
+            .zip(share)
+            .map(|(before, share)| (before + share).min(1.0));
+    }
+
+    /// The share of the screen changed by the pictures stored since the
+    /// last call, adding each one's, overlaps twice; `None` when one could
+    /// not say, or before the first call. The reader takes it with each
+    /// picture it reads.
+    pub fn take_changed(&self) -> Option<f32> {
+        self.changed.lock().expect("frame channel").replace(0.0)
     }
 
     /// Forgets the stored picture, as when the capture changes size: the
