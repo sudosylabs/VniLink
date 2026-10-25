@@ -155,7 +155,7 @@ impl WaylandCapture {
             connection.close();
             startup_error(error)
         })?;
-        let capture = match PortalCapture::open(fd, node, startup.clone()) {
+        let capture = match PortalCapture::open_for_encoder(fd, node, startup.clone()) {
             Ok(capture) => capture,
             Err(error) => {
                 connection.close();

@@ -6,19 +6,29 @@
 //! range. A node without a video processor, or one that refuses BGRX, keeps
 //! the CPU conversion.
 //!
-//! The source has the encoder's coded size, padded black, so the processor
-//! maps whole surface to whole surface. Regions are left out: libva 0.1.4
-//! frees a pipeline buffer's rectangles once the buffer is created, before
-//! the driver reads them.
+//! A picture from memory is uploaded padded black to the encoder's coded
+//! size, so the processor maps whole surface to whole surface. A screen
+//! picture that stays on the GPU ([`GpuPicture`]) is imported as it is and
+//! scaled into the encoder's picture, a region of its coded size, with the
+//! processor's high-quality filter, black around it; that needs the pipeline
+//! buffer's rectangles to outlive its creation, which vendor/libva ensures.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use libva::{
     BufferType, Display, Image, Picture, ProcColorProperties, ProcPipelineParameterBuffer, Surface,
-    VAEntrypoint, VAProfile,
+    VAEntrypoint, VAProfile, VARectangle,
 };
-use vnilink_media::{Error, RawFrame};
+use vnilink_media::{scale_bgra, Error, RawFrame};
+
+use crate::gpu_picture::{self, GpuPicture, Prime};
+
+/// `VA_FILTER_SCALING_HQ`: the processor's high-quality scaler.
+const FILTER_SCALING_HQ: u32 = 0x0000_0200;
 
 /// `VAProcColorStandardType` in `va_vpp.h`.
 const STANDARD_BT709: u8 = libva::_VAProcColorStandardType_VAProcColorStandardBT709 as u8;
@@ -32,6 +42,10 @@ const MATRIX_RGB: u8 = 0;
 const MATRIX_BT709: u8 = 1;
 
 pub(super) struct Converter {
+    display: Arc<Display>,
+    node: PathBuf,
+    /// Screen pictures imported so far, by the picture's identity.
+    imported: RefCell<HashMap<u64, Surface<Prime>>>,
     context: Rc<libva::Context>,
     /// The captured picture, uploaded for the video processor to read.
     source: Surface<()>,
@@ -46,6 +60,7 @@ impl Converter {
     /// `None` when the node cannot.
     pub(super) fn open(
         display: &Arc<Display>,
+        node: &Path,
         width: u32,
         height: u32,
         coded: (u32, u32),
@@ -84,6 +99,9 @@ impl Converter {
             .ok()?
             .pop()?;
         Some(Self {
+            display: Arc::clone(display),
+            node: node.to_path_buf(),
+            imported: RefCell::new(HashMap::new()),
             context,
             source,
             format,
@@ -100,22 +118,96 @@ impl Converter {
         frame: &RawFrame,
         target: Surface<()>,
     ) -> Result<Surface<()>, Error> {
-        let rejected = |_| Error::EncodeRejected("VA-API rejected the frame");
+        if let Some(picture) = frame
+            .native_picture()
+            .and_then(|native| native.as_any().downcast_ref::<GpuPicture>())
+        {
+            if picture.node() == self.node.as_path() {
+                return self.convert_picture(picture, target);
+            }
+        }
+        let scaled;
+        let frame = if frame.native_picture().is_some()
+            && (u32::from(frame.width()), u32::from(frame.height())) != (self.width, self.height)
+        {
+            // A picture the pump left at its own size for a processor that
+            // is not on its GPU: read it back and scale it here.
+            scaled = scale_bgra(frame, self.width as u16, self.height as u16)?;
+            &scaled
+        } else {
+            frame
+        };
         if (u32::from(frame.width()), u32::from(frame.height())) != (self.width, self.height) {
             return Err(Error::InvalidFrame(
                 "the frame size does not match the encoder",
             ));
         }
         self.upload(frame)?;
+        self.process(self.source.id(), target, None, 0)
+    }
+
+    /// Scales `picture`, in the GPU memory it already is in, into `target`'s
+    /// visible part.
+    fn convert_picture(
+        &self,
+        picture: &GpuPicture,
+        target: Surface<()>,
+    ) -> Result<Surface<()>, Error> {
+        let (width, height) = vnilink_media::NativePicture::size(picture);
+        let source = {
+            let mut imported = self.imported.borrow_mut();
+            if !imported.contains_key(&picture.id()) {
+                // Keep to the pictures the capture holds now.
+                if imported.len() >= 16 {
+                    imported.clear();
+                }
+                let surface = gpu_picture::import(
+                    &self.display,
+                    picture.share()?,
+                    u32::from(width),
+                    u32::from(height),
+                )
+                .map_err(|_| Error::EncodeRejected("VA-API rejected the frame"))?;
+                imported.insert(picture.id(), surface);
+            }
+            imported
+                .get(&picture.id())
+                .map(Surface::id)
+                .ok_or(Error::EncodeRejected("VA-API rejected the frame"))?
+        };
+        let region = VARectangle {
+            x: 0,
+            y: 0,
+            width: self.width as u16,
+            height: self.height as u16,
+        };
+        let filter = if (u32::from(width), u32::from(height)) == (self.width, self.height) {
+            0
+        } else {
+            FILTER_SCALING_HQ
+        };
+        self.process(source, target, Some(region), filter)
+    }
+
+    /// The processor's conversion of `source` into `target`: sRGB, full range
+    /// in; BT.709, limited range out, into `region` when there is one.
+    fn process(
+        &self,
+        source: libva::VASurfaceID,
+        target: Surface<()>,
+        region: Option<VARectangle>,
+        filter_flags: u32,
+    ) -> Result<Surface<()>, Error> {
+        let rejected = |_| Error::EncodeRejected("VA-API rejected the frame");
         let parameters = ProcPipelineParameterBuffer::new(
-            self.source.id(),
+            source,
             None,
             STANDARD_SRGB,
-            None,
+            region,
             0xff00_0000,
             STANDARD_BT709,
             0,
-            0,
+            filter_flags,
             None,
             None,
             None,

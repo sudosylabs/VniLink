@@ -3,8 +3,9 @@
 //! X11 and the Wayland portal are separate. [`X11Capture`] reads the current
 //! X session. [`PortalSession`] is the ScreenCast permission sequence, and
 //! [`PortalCapture`] reads BGRA or BGRx from the PipeWire node that sequence
-//! starts using shared-memory buffers. One started session is
-//! not universal unattended access. [`LinuxEncoder`] encodes on the GPU the
+//! starts, in shared-memory buffers, or, when the encoder is VA-API on the
+//! GPU the compositor draws on, as DMA-BUFs that stay on the GPU
+//! (`gpu_picture`). One started session is not universal unattended access. [`LinuxEncoder`] encodes on the GPU the
 //! compositor draws the capture on when it offers the negotiated codec, else
 //! on another (`gpu`), with NVENC on an NVIDIA GPU or VA-API: H.264 (High
 //! when the session agrees it, else Constrained Baseline), H.265 and, on
@@ -34,6 +35,8 @@ mod codecs;
 mod encode;
 #[cfg(any(target_os = "linux", test))]
 mod gpu;
+#[cfg(target_os = "linux")]
+mod gpu_picture;
 #[cfg(any(target_os = "linux", test))]
 mod hevc_parameter_set;
 mod host;

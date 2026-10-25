@@ -582,6 +582,7 @@ fn try_open(
         .find(|format| format.fourcc == VA_FOURCC_NV12)?;
     let converter = Converter::open(
         &display,
+        path,
         u32::from(width),
         u32::from(height),
         (coded_width, coded_height),

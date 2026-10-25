@@ -23,6 +23,9 @@ use crate::vaapi::{Input, Session, VaCodec};
 pub struct LinuxEncoder {
     width: u16,
     height: u16,
+    /// Whether the last picture was scaled and converted in GPU memory it
+    /// was already in.
+    on_gpu: bool,
     #[cfg(target_os = "linux")]
     backend: Backend,
 }
@@ -99,6 +102,7 @@ impl LinuxEncoder {
                         return Ok(Self {
                             width,
                             height,
+                            on_gpu: false,
                             backend,
                         })
                     }
@@ -142,6 +146,7 @@ impl VideoEncoder for LinuxEncoder {
             #[cfg(target_os = "linux")]
             input: Some(match &self.backend {
                 Backend::Nvenc(_) => vnilink::EncoderInput::GpuUpload,
+                Backend::Vaapi(_) if self.on_gpu => vnilink::EncoderInput::GpuTexture,
                 Backend::Vaapi(session) if session.converts() => vnilink::EncoderInput::GpuUpload,
                 Backend::Vaapi(_) => vnilink::EncoderInput::Cpu,
             }),
@@ -169,8 +174,24 @@ impl VideoEncoder for LinuxEncoder {
         }
     }
 
+    fn scales_native(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            matches!(&self.backend, Backend::Vaapi(session) if session.converts())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    }
+
     fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
-        if frame.width() != self.width || frame.height() != self.height {
+        // A picture on the GPU reaches a VA-API session at its own size and
+        // is scaled there; the pump leaves it alone for any session that
+        // says so.
+        let in_place = self.scales_native() && frame.native_picture().is_some();
+        self.on_gpu = in_place;
+        if !in_place && (frame.width() != self.width || frame.height() != self.height) {
             return Err(Error::InvalidFrame(
                 "the frame size does not match the encoder",
             ));

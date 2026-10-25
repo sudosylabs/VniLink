@@ -15,6 +15,7 @@ fn idle_portal_keeps_the_picture_and_propagates_capture_failure() {
             format: PortalFormat::Bgrx,
             buffer: PortalBuffer::Memory,
         })),
+        gpu_failed: AtomicBool::new(false),
     };
     assert!(wait_frame(&mainloop, &shared, 0).unwrap().is_none());
     shared.channel.push(ChannelSlot {
