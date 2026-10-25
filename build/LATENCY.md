@@ -87,7 +87,8 @@ The reader prints the p50, p95, p99 and maximum when it finishes.
 | `--app` | this checkout's development VniLink | macOS: the `.app` that runs both sides. |
 | `--hold` | `0` | Hold mode: seconds the stimulus holds still after each 2 s of motion; `0` is off. |
 | `--fps` | the default quality | The viewer's frame rate, at the Smooth preset's 12 Mb/s and 1920x1080. |
-| `--bitrate` | 12000 | With `--fps`: the viewer's bitrate limit in kb/s. |
+| `--bitrate` | 12000 | With `--fps`: the viewer's bitrate limit in kb/s; 50000 is Automatic. |
+| `--busy` | off | With `--remote`: the stimulus fills the host's work area with detail that changes every frame, so the stream uses the bitrate it is given. Without it the strip is nearly all that changes and a stream uses a fraction of its limit. |
 | `--remote` | | Two computers: the other one's SSH destination. |
 | `--remote-root` | | With `--remote`: the absolute path of a built checkout there. |
 | `--hosts` | `here` | With `--remote`: which computer hosts its screen, `here` or `remote`. |

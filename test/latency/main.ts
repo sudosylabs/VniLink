@@ -29,6 +29,8 @@ const holdMs = Number(process.env.VNILINK_LATENCY_HOLD_MS ?? '0');
 const frameRate = Number(process.env.VNILINK_LATENCY_FPS ?? '0');
 /** The viewer's bitrate limit in kb/s with a frame rate; 0 keeps the Smooth preset's. */
 const bitrate = Number(process.env.VNILINK_LATENCY_BITRATE ?? '0');
+/** The stimulus fills the page below the strip with detail that changes every frame. */
+const busy = process.env.VNILINK_LATENCY_BUSY === '1';
 /** Where the host keeps the desktop portal's grant between runs. */
 const screenGrant = process.env.VNILINK_LATENCY_SCREEN_GRANT;
 
@@ -133,6 +135,10 @@ async function invitation(driver: WindowDriver): Promise<string> {
 function stripGeometry(): { cell: number; height: number; viewerTop: number; area: Electron.Rectangle } {
 	const area = holdMs > 0 ? screen.getPrimaryDisplay().bounds : screen.getPrimaryDisplay().workArea;
 	const cell = Math.floor(area.width / (CELLS + 4));
+	if (busy) {
+		// Two computers only: the stimulus fills the work area and no viewer shares it.
+		return { cell, height: area.height, viewerTop: area.height, area };
+	}
 	return holdMs > 0
 		? { cell, height: area.height, viewerTop: Math.floor(area.height / 2), area }
 		: { cell, height: Math.ceil(cell * 2), viewerTop: Math.ceil(cell * 2), area };
@@ -237,7 +243,7 @@ async function host(driver: WindowDriver): Promise<void> {
 		if (hold) {
 			writeFileSync(join(evidence, 'schedule.json'), JSON.stringify(hold));
 		}
-		await stimulus.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(stimulusPage(cell, hold))}`);
+		await stimulus.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(stimulusPage(cell, hold, busy))}`);
 		stimulus.showInactive();
 		publish('host-ready', {});
 		// The native host's state while the viewer starts, for a start that fails.

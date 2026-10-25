@@ -37,8 +37,14 @@ export interface StimulusHold {
 	readonly holdMs: number;
 }
 
-/** A self-contained page drawing the strip at `cell` CSS pixels a cell. */
-export function stimulusPage(cell: number, hold?: StimulusHold): string {
+/**
+ * A self-contained page drawing the strip at `cell` CSS pixels a cell. With
+ * `busy`, the page below the strip fills with scattered coloured blocks that
+ * change on every frame, a picture an encoder spends its whole bitrate on
+ * and a screen of that much detail changing does not; without it, the strip
+ * is nearly all that changes and a stream uses a fraction of its bitrate.
+ */
+export function stimulusPage(cell: number, hold?: StimulusHold, busy = false): string {
 	// The page cannot import, so it carries its own copy of `cells`;
 	// `test/tooling/latency.test.mjs` keeps the copies and the reader alike.
 	const script = `
@@ -58,7 +64,8 @@ const cell = ${String(cell)};
 const hold = ${JSON.stringify(hold ?? null)};
 canvas.width = Math.round(innerWidth * scale);
 canvas.height = Math.round(innerHeight * scale);
-const band = hold ? Math.round(cell * 2 * scale) : canvas.height;
+const busy = ${JSON.stringify(busy)};
+const band = hold || busy ? Math.round(cell * 2 * scale) : canvas.height;
 function holding() {
 	return hold !== null && (Date.now() - hold.origin) % (hold.moveMs + hold.holdMs) >= hold.moveMs;
 }
@@ -67,6 +74,12 @@ function holding() {
 function resume() {
 	const cycle = hold.moveMs + hold.holdMs;
 	return cycle - (Date.now() - hold.origin) % cycle;
+}
+let seed = 7;
+const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648);
+if (busy) {
+	context.fillStyle = '#fff';
+	context.fillRect(0, band, canvas.width, canvas.height - band);
 }
 if (hold) {
 	// Coloured words on white, the same on every run.
@@ -77,8 +90,6 @@ if (hold) {
 	context.fillRect(0, band, canvas.width, canvas.height - band);
 	context.font = String(size) + 'px Menlo, monospace';
 	context.textBaseline = 'top';
-	let seed = 7;
-	const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648);
 	// The top half: the viewer covers the bottom half.
 	for (let y = band + size; y < canvas.height / 2 - size; y += Math.round(size * 1.5)) {
 		for (let x = size; x < canvas.width - size * 8;) {
@@ -107,6 +118,16 @@ function draw(time) {
 			context.fillRect(left, top, right - left, height);
 		}
 	});
+	if (busy) {
+		// Several hundred blocks a frame, the same sequence on every run.
+		for (let block = 0; block < 400; block++) {
+			// The low bits of this generator repeat, so the high ones are used.
+			const random = limit => (next() >>> 8) % limit;
+			context.fillStyle = 'rgb(' + random(256) + ',' + random(256) + ',' + random(256) + ')';
+			const size = 8 + random(56);
+			context.fillRect(random(canvas.width), band + random(canvas.height - band), size, size);
+		}
+	}
 	requestAnimationFrame(draw);
 }
 requestAnimationFrame(draw);`;

@@ -31,12 +31,20 @@ test('the page carries the same strip as the module', () => {
 		assert.deepEqual([...pageCells(value)], cells(value), `value ${String(value)}`);
 	}
 	assert.match(page, /const cell = 30;/);
+	assert.match(page, /const busy = false;/);
+	assert.match(stimulusPage(30, undefined, true), /const busy = true;/);
 });
 
 test('latency options are bounded', () => {
 	const options = latencyOptions('/root', ['--seconds', '5', '--settle', '1', '--output', '/out']);
 	// Paths resolve the platform's way: `/out` is `C:\out` on Windows.
-	assert.deepEqual(options, { seconds: 5, settleSeconds: 1, output: resolve('/out'), app: undefined, holdSeconds: 0, frameRate: undefined, remote: undefined });
+	assert.deepEqual(options, { seconds: 5, settleSeconds: 1, output: resolve('/out'), app: undefined, holdSeconds: 0, frameRate: undefined, bitrate: undefined, busy: false, remote: undefined });
+	assert.equal(latencyOptions('/root', ['--fps', '60', '--bitrate', '50000']).bitrate, 50000);
+	assert.throws(() => latencyOptions('/root', ['--busy']));
+	assert.equal(latencyOptions('/root', ['--busy', '--remote', 'a@b', '--remote-root', '/r']).busy, true);
+	assert.throws(() => latencyOptions('/root', ['--bitrate', '0']));
+	assert.throws(() => latencyOptions('/root', ['--bitrate', '50001']));
+	assert.throws(() => latencyOptions('/root', ['--bitrate', 'automatic']));
 	assert.equal(latencyOptions('/root', ['--hold', '6']).holdSeconds, 6);
 	assert.throws(() => latencyOptions('/root', ['--hold', '61']));
 	assert.throws(() => latencyOptions('/root', ['--hold', '1.5']));
