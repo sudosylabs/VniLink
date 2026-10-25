@@ -147,6 +147,7 @@ pub(super) fn synchronize(state: &mut State, events: &EventHub) {
 impl Core {
     /// Support on this connection. This does not bypass remote authorization.
     pub fn controller_service_support(&self, connection_id: u64) -> Result<ServiceSupport, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let session = state.outgoing.get(&connection_id).ok_or(Error::NoSession)?;
         if finished(&session.phase) || session.phase == SessionPhase::Stopping {
@@ -241,6 +242,7 @@ impl Core {
     }
 
     pub fn controller_services(&self) -> Result<Vec<ServiceInfo>, Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         synchronize(&mut state, &self.shared.events);
         let mut records: Vec<_> = state.services.values().map(|r| r.info.clone()).collect();
@@ -249,6 +251,7 @@ impl Core {
     }
 
     pub fn controller_service(&self, id: u64) -> Result<ServiceInfo, Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         synchronize(&mut state, &self.shared.events);
         Ok(state
@@ -263,6 +266,7 @@ impl Core {
     /// service generations. New adapters must use this and a cancellation lease
     /// rather than retaining an unchecked session id across asynchronous work.
     pub fn service_connection(&self, id: u64, generation: u64) -> Result<SessionInfo, Error> {
+        let _engine = self.engine();
         let lease = self.service_lease(id, generation)?;
         let state = self.alive_state()?;
         let session = live_session(&state, false, lease.info.connection_id)?;
@@ -273,6 +277,7 @@ impl Core {
     }
 
     pub fn service_lease(&self, id: u64, generation: u64) -> Result<ServiceLease, Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         synchronize(&mut state, &self.shared.events);
         let record = state.services.get(&id).ok_or(Error::NoSession)?;
@@ -291,6 +296,7 @@ impl Core {
     /// Cancels only this owner/epoch. The peer connection and sibling services
     /// remain alive. Idempotent for a closed record of the same generation.
     pub fn close_controller_service(&self, id: u64, generation: u64) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         synchronize(&mut state, &self.shared.events);
         let record = state.services.get_mut(&id).ok_or(Error::NoSession)?;
@@ -308,6 +314,7 @@ impl Core {
 
     /// Releases a finished record. Never cancels running work.
     pub fn forget_controller_service(&self, id: u64) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         synchronize(&mut state, &self.shared.events);
         let record = state.services.get(&id).ok_or(Error::NoSession)?;

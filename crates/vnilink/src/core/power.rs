@@ -40,11 +40,13 @@ impl Drop for Slot {
 
 impl Core {
     pub fn power_policy(&self) -> Result<PowerPolicy, Error> {
+        let _engine = self.engine();
         Ok(self.alive_state()?.power_policy)
     }
     /// Saved first; the resource actor reconciles live owners on its next tick.
     /// An OS rejection appears as Failed/Unavailable, never a false Active ACK.
     pub fn set_power_policy(&self, policy: PowerPolicy) -> Result<(), Error> {
+        let _engine = self.engine();
         policy.validate()?;
         let mut state = self.alive_state()?;
         let previous = state.power_policy;
@@ -66,6 +68,7 @@ impl Core {
         Ok(())
     }
     pub fn power_status(&self) -> Result<Vec<PowerStatus>, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         Ok(lock(&self.shared.power_status).to_vec())
     }

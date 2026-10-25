@@ -11,8 +11,9 @@
 //! engine it is (`engine` in the application, which has one; `host` and
 //! `controller` in tests, which run two in one process). Its runtime enters
 //! it on every thread, and threads it starts run in it ([`within`]), so
-//! every event recorded there says which engine recorded it. A public call
-//! that records on its caller's thread enters it too.
+//! every event recorded there says which engine recorded it. Every public
+//! call of `Core` enters it too, so what a call records on its caller's
+//! thread says the same.
 //!
 //! The filter (`vnilink-log`) chooses areas by these targets, for example
 //! `vnilink=info,vnilink::files=debug`. Spans name what an event belongs

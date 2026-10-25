@@ -32,6 +32,7 @@ impl Core {
 
     /// Updates OS consent without clearing a separately observed device or backend failure.
     pub fn report_os_permission(&self, capability: Capability, denied: bool) -> Result<(), Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         lock(&self.shared.backend_state)
             .entry(capability)
@@ -55,6 +56,7 @@ impl Core {
     /// Drops any published backend facts for one capability. The query
     /// returns to unknown (no blocker) for OS, device and failure facts.
     pub fn clear_backend_state(&self, capability: Capability) -> Result<(), Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         lock(&self.shared.backend_state).remove(&capability);
         Ok(())

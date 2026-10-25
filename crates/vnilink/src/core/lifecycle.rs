@@ -1,4 +1,5 @@
 //! Open, shutdown, identity, and relay.
+// trace: records every ignored failure
 
 use super::*;
 
@@ -378,6 +379,7 @@ impl Core {
     }
 
     pub fn shutdown(&self) {
+        let _engine = self.engine();
         {
             let mut state = lock(&self.shared.state);
             if !state.shut_down {
@@ -415,7 +417,11 @@ impl Core {
             })
             .await
             .is_ok();
-            let _ = tx.send(closed);
+            crate::ignored!(
+                crate::trace::SESSION,
+                "the caller stopped waiting for its answer",
+                tx.send(closed)
+            );
         });
         let observed = rx.recv_timeout(limit.saturating_add(Duration::from_secs(1)));
         match observed {
@@ -428,6 +434,7 @@ impl Core {
     }
 
     pub fn endpoint_id(&self) -> String {
+        let _engine = self.engine();
         self.shared.secret.public().to_string()
     }
 
@@ -437,6 +444,7 @@ impl Core {
     /// After [`Core::reset_identity`], the new secret is only in the store.
     /// This stopped core still reports the key it bound.
     pub fn export_identity(&self) -> [u8; 32] {
+        let _engine = self.engine();
         self.shared.secret.to_bytes()
     }
 
@@ -444,11 +452,13 @@ impl Core {
     /// includes pending changes. Credentials remain opaque inside CustomRelay:
     /// callers can preserve or replace them but cannot read the token string.
     pub fn relay_configuration(&self) -> Result<RelaySettings, Error> {
+        let _engine = self.engine();
         Ok(self.alive_state()?.record_relay.clone())
     }
 
     /// Compare saved and bound relays inside Rust, including private credentials.
     pub fn relay_restart_required(&self) -> Result<bool, Error> {
+        let _engine = self.engine();
         Ok(self.alive_state()?.record_relay != self.shared.relay)
     }
 
@@ -458,6 +468,7 @@ impl Core {
     /// relay bound at start. A credential stays in the installation record and
     /// out of [`Debug`]. This does not dial the relay.
     pub fn set_relay(&self, relay: RelaySettings) -> Result<(), Error> {
+        let _engine = self.engine();
         relay.to_relay_mode()?;
         let mut state = self.alive_state()?;
         if self.shared.store.is_none() {
@@ -482,6 +493,7 @@ impl Core {
     /// locked or unavailable store leaves this process and the saved record
     /// unchanged.
     pub fn reset_identity(&self) -> Result<(), Error> {
+        let _engine = self.engine();
         {
             let mut state = self.alive_state()?;
             let store = self.shared.store.clone().ok_or(Error::InvalidSetting(
@@ -506,6 +518,7 @@ impl Core {
     }
 
     pub fn subscribe(&self) -> Result<EventSubscription, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         self.shared.events.subscribe()
     }
@@ -513,6 +526,7 @@ impl Core {
     /// Live hosted peers, oldest id first. `Snapshot::incoming` remains the
     /// latest session for single-view callers. Use this when iterating peers.
     pub fn hosted_sessions(&self) -> Result<Vec<SessionInfo>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let mut sessions: Vec<SessionInfo> = state
             .incoming
@@ -525,6 +539,7 @@ impl Core {
     }
 
     pub fn snapshot(&self) -> Result<Snapshot, Error> {
+        let _engine = self.engine();
         let state = lock(&self.shared.state);
         if state.shut_down {
             return Err(Error::ShutDown);
@@ -555,6 +570,7 @@ impl Core {
     }
 
     pub fn capabilities(&self) -> Capabilities {
+        let _engine = self.engine();
         desktop_capabilities(&self.shared)
     }
 
@@ -563,6 +579,7 @@ impl Core {
     /// released without a finished close can be claimed again.
     #[cfg(any(test, feature = "test-probes"))]
     pub fn endpoint_close_count(&self) -> usize {
+        let _engine = self.engine();
         self.shared.close_count.load(Ordering::Relaxed)
     }
 

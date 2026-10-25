@@ -1,4 +1,5 @@
 //! Hosting, the accept loop, and the side streams that start after Accept.
+// trace: records every ignored failure
 
 use super::*;
 
@@ -36,6 +37,7 @@ const MAX_LIVE_INCOMING: usize = 4;
 
 impl Core {
     pub fn start_hosting(&self) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         state.hosting = true;
         drop(state);
@@ -51,6 +53,7 @@ impl Core {
     /// close asynchronously; outgoing (controller-side) sessions are
     /// untouched.
     pub fn stop_hosting(&self) -> Result<(), Error> {
+        let _engine = self.engine();
         let stops = {
             let mut state = self.alive_state()?;
             state.hosting = false;
@@ -66,7 +69,11 @@ impl Core {
                 .collect::<Vec<_>>()
         };
         for stop in stops {
-            let _ = stop.send(true);
+            crate::ignored!(
+                crate::trace::SESSION,
+                "work that already ended needs no stop",
+                stop.send(true)
+            );
         }
         self.shared
             .events
@@ -79,12 +86,14 @@ impl Core {
     /// With more than one live peer this stops an arbitrary one. Call
     /// [`Core::stop_hosted_peer`] when the session id is known.
     pub fn stop_hosted_session(&self) -> Result<(), Error> {
+        let _engine = self.engine();
         self.stop_incoming()
     }
 
     /// Ends one hosted peer. Other live peers, their services and their
     /// capture consumers stay up. Hosting itself stays enabled.
     pub fn stop_hosted_peer(&self, id: u64) -> Result<(), Error> {
+        let _engine = self.engine();
         let stop = {
             let mut state = self.alive_state()?;
             let session = state.incoming.get_mut(&id).ok_or(Error::NoSession)?;
@@ -94,7 +103,11 @@ impl Core {
             session.phase = SessionPhase::Stopping;
             session.stop.clone()
         };
-        let _ = stop.send(true);
+        crate::ignored!(
+            crate::trace::SESSION,
+            "work that already ended needs no stop",
+            stop.send(true)
+        );
         Ok(())
     }
 
@@ -110,7 +123,11 @@ impl Core {
         };
         state.generation = state.generation.saturating_add(1);
         drop(state);
-        let _ = stop.send(true);
+        crate::ignored!(
+            crate::trace::SESSION,
+            "work that already ended needs no stop",
+            stop.send(true)
+        );
         Ok(())
     }
 }
@@ -249,9 +266,12 @@ pub(super) async fn host_connection(shared: Arc<Shared>, connection: iroh::endpo
                     HostTurn::PeerShouldClose | HostTurn::LocalStop => {
                         // The controller reads the reject or close frame, then drops
                         // the connection. Closing first discards that frame.
-                        let _ =
+                        crate::ignored!(
+                            crate::trace::SESSION,
+                            "a closing connection is closed at best",
                             tokio::time::timeout(Duration::from_secs(2), connection.closed())
-                                .await;
+                                    .await
+                        );
                     }
                     HostTurn::Done => {}
                 }
@@ -329,11 +349,15 @@ pub(super) async fn handle_host_request(
     let message = match read_frame(&mut recv).await {
         Ok(message) => message,
         Err(_) => {
-            let _ = write_frame(
-                &mut send,
-                &ControlMessage::Reject(error_code(&Error::Malformed)),
-            )
-            .await;
+            crate::ignored!(
+                crate::trace::SESSION,
+                "the peer may be gone before it hears why",
+                write_frame(
+                    &mut send,
+                    &ControlMessage::Reject(error_code(&Error::Malformed)),
+                )
+                .await
+            );
             return HostTurn::PeerShouldClose;
         }
     };
@@ -396,8 +420,11 @@ pub(super) async fn handle_host_request(
             };
             match decision {
                 Err(error) => {
-                    let _ =
-                        write_frame(&mut send, &ControlMessage::Reject(error_code(&error))).await;
+                    crate::ignored!(
+                        crate::trace::SESSION,
+                        "the peer may be gone before it hears why",
+                        write_frame(&mut send, &ControlMessage::Reject(error_code(&error))).await
+                    );
                     HostTurn::PeerShouldClose
                 }
                 Ok(()) => {
@@ -415,8 +442,12 @@ pub(super) async fn handle_host_request(
                         !decode && lock(&shared.capture).is_some(),
                     );
                     if let Err(error) = decision {
-                        let _ = write_frame(&mut send, &ControlMessage::Reject(error_code(&error)))
-                            .await;
+                        crate::ignored!(
+                            crate::trace::SESSION,
+                            "the peer may be gone before it hears why",
+                            write_frame(&mut send, &ControlMessage::Reject(error_code(&error)))
+                                .await
+                        );
                         return HostTurn::PeerShouldClose;
                     }
                     // Agree the encoder limits before admitting: the offer
@@ -458,13 +489,20 @@ pub(super) async fn handle_host_request(
                             // The peer is admitted: keep its display name for
                             // this host's device list. Persist failures stay
                             // local; the next dial refreshes the name.
-                            let _ = super::link::remember_peer_hostname(
-                                shared,
-                                peer.as_bytes(),
-                                hello_hostname,
+                            crate::ignored!(
+                                crate::trace::SESSION,
+                                "a peer's name and addresses are refreshed at the next connection",
+                                super::link::remember_peer_hostname(
+                                    shared,
+                                    peer.as_bytes(),
+                                    hello_hostname,
+                                )
                             );
-                            let _ =
-                                super::link::remember_peer_os(shared, peer.as_bytes(), hello_os);
+                            crate::ignored!(
+                                crate::trace::SESSION,
+                                "a peer's name and addresses are refreshed at the next connection",
+                                super::link::remember_peer_os(shared, peer.as_bytes(), hello_os)
+                            );
                             let desktop_stop = lock(&shared.state)
                                 .incoming
                                 .get(&info.id)
@@ -574,8 +612,16 @@ pub(super) async fn handle_host_request(
                                 video.abort();
                             }
                             if local_stop {
-                                let _ = write_frame(&mut send, &ControlMessage::Close).await;
-                                let _ = send.finish();
+                                crate::ignored!(
+                                    crate::trace::SESSION,
+                                    "the peer may be gone before it hears why",
+                                    write_frame(&mut send, &ControlMessage::Close).await
+                                );
+                                crate::ignored!(
+                                    crate::trace::SESSION,
+                                    "a stream that cannot finish is closed with its link",
+                                    send.finish()
+                                );
                             }
                             finish_incoming(shared, info.id);
                             if local_stop {
@@ -585,9 +631,12 @@ pub(super) async fn handle_host_request(
                             }
                         }
                         Err(error) => {
-                            let _ =
+                            crate::ignored!(
+                                crate::trace::SESSION,
+                                "the peer may be gone before it hears why",
                                 write_frame(&mut send, &ControlMessage::Reject(error_code(&error)))
-                                    .await;
+                                    .await
+                            );
                             HostTurn::PeerShouldClose
                         }
                     }
@@ -595,11 +644,15 @@ pub(super) async fn handle_host_request(
             }
         }
         _ => {
-            let _ = write_frame(
-                &mut send,
-                &ControlMessage::Reject(error_code(&Error::Malformed)),
-            )
-            .await;
+            crate::ignored!(
+                crate::trace::SESSION,
+                "the peer may be gone before it hears why",
+                write_frame(
+                    &mut send,
+                    &ControlMessage::Reject(error_code(&Error::Malformed)),
+                )
+                .await
+            );
             HostTurn::PeerShouldClose
         }
     }
@@ -796,7 +849,11 @@ pub(super) fn spawn_host_streams(
     let shared_allow = Arc::clone(shared);
     let clipboard_task = tokio::spawn(async move {
         let opened = crate::sidestream::accept_bi(&clipboard_connection, &mut clipboard_stop).await;
-        let _ = gate_tx.send(opened.is_ok());
+        crate::ignored!(
+            crate::trace::SESSION,
+            "the caller stopped waiting for its answer",
+            gate_tx.send(opened.is_ok())
+        );
         if let Ok((send, recv)) = opened {
             crate::clipboard::exchange(
                 send,

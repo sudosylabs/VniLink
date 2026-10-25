@@ -1,4 +1,5 @@
 //! Independent Audio pipes on a neutral parent. Mute is receiver-local.
+// trace: records every ignored failure
 use super::{
     service_stream::{preamble, read, status, write},
     *,
@@ -149,12 +150,20 @@ impl Core {
             match opened {
                 Err(error) => {
                     phase = ServicePhase::Failed(error.to_string());
-                    let _ = ready.send(Err(error));
+                    crate::ignored!(
+                        crate::trace::AUDIO,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Err(error))
+                    );
                 }
                 Ok((mut send, mut recv, actual)) => {
                     let format = actual.format().unwrap();
                     let kind = actual.kind;
-                    let _ = ready.send(Ok(actual));
+                    crate::ignored!(
+                        crate::trace::AUDIO,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Ok(actual))
+                    );
                     let run = async {
                         loop {
                             let bytes = tokio::time::timeout(
@@ -196,7 +205,11 @@ impl Core {
                     } else if lease.is_cancelled() {
                         phase = ServicePhase::Closed(CloseCause::OwnerClose);
                     }
-                    let _ = send.finish();
+                    crate::ignored!(
+                        crate::trace::AUDIO,
+                        "a stream that cannot finish is closed with its link",
+                        send.finish()
+                    );
                 }
             }
             packets.close();
@@ -280,7 +293,11 @@ pub(super) async fn list(
             serde_json::to_vec(&devices).map_err(|_| Error::Malformed)?,
         )
         .await?;
-        let _ = send.finish();
+        crate::ignored!(
+            crate::trace::AUDIO,
+            "a stream that cannot finish is closed with its link",
+            send.finish()
+        );
         Ok(())
     };
     if *parent.borrow() {
@@ -457,6 +474,10 @@ pub(super) async fn serve(
         return Err(Error::NoSession);
     }
     let result = tokio::select! {biased;_=parent.changed()=>Err(Error::NoSession),_=stop.changed()=>Err(Error::NoSession),result=run=>result};
-    let _ = send.finish();
+    crate::ignored!(
+        crate::trace::AUDIO,
+        "a stream that cannot finish is closed with its link",
+        send.finish()
+    );
     result
 }

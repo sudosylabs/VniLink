@@ -1,4 +1,5 @@
 //! Versioned, independently owned service pipes on the existing peer link.
+// trace: records every ignored failure
 use super::*;
 use crate::protocol::SessionStamp;
 use crate::{fs, CloseCause, ServiceInfo, ServiceKind, ServiceLease, ServicePhase, ServiceSupport};
@@ -282,6 +283,7 @@ impl Core {
         })
     }
     pub fn hosted_services(&self) -> Result<Vec<ServiceInfo>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let mut records: Vec<_> = state
             .hosted_services
@@ -320,6 +322,7 @@ impl Core {
         })
     }
     pub fn close_hosted_service(&self, id: u64, generation: u64) -> Result<(), Error> {
+        let _engine = self.engine();
         self.end_hosted_service(id, generation, CloseCause::OwnerClose)
     }
     /// Closes a hosted service because this computer's own producer for it
@@ -402,11 +405,19 @@ impl Core {
                 .await;
             let (mut send, mut recv) = match connection {
                 Ok(pair) => {
-                    let _ = ready.send(Ok(()));
+                    crate::ignored!(
+                        crate::trace::SERVICE,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Ok(()))
+                    );
                     pair
                 }
                 Err(error) => {
-                    let _ = ready.send(Err(error));
+                    crate::ignored!(
+                        crate::trace::SERVICE,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Err(error))
+                    );
                     return;
                 }
             };
@@ -433,7 +444,11 @@ impl Core {
                 };
                 // Its caller has stopped waiting; nothing is sent for it.
                 if std::time::Instant::now() >= work.deadline {
-                    let _ = work.reply.send(Err(Error::Timeout));
+                    crate::ignored!(
+                        crate::trace::SERVICE,
+                        "the caller stopped waiting for its answer",
+                        work.reply.send(Err(Error::Timeout))
+                    );
                     continue;
                 }
                 let outcome = lease
@@ -454,14 +469,22 @@ impl Core {
                         | Error::StaleSession
                         | Error::NoSession)
                 );
-                let _ = work.reply.send(outcome);
+                crate::ignored!(
+                    crate::trace::SERVICE,
+                    "the caller stopped waiting for its answer",
+                    work.reply.send(outcome)
+                );
                 if fatal {
                     break;
                 }
             }
             // Closing the pipe produces EOF remotely and closes only that host
             // backend. There is no connection-wide close here.
-            let _ = send.finish();
+            crate::ignored!(
+                crate::trace::SERVICE,
+                "a stream that cannot finish is closed with its link",
+                send.finish()
+            );
             let cause = if lease.is_cancelled() || owner_done {
                 CloseCause::OwnerClose
             } else {
@@ -562,14 +585,22 @@ impl Core {
                 .await;
             match opened {
                 Ok((mut send, mut recv)) => {
-                    let _ = ready.send(Ok(()));
+                    crate::ignored!(
+                        crate::trace::SERVICE,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Ok(()))
+                    );
                     let mut unexpected = [0u8; 1];
                     tokio::select! {
                         biased;
                         _ = lease.cancelled() => {},
                         _ = recv.read(&mut unexpected) => {},
                     }
-                    let _ = send.finish();
+                    crate::ignored!(
+                        crate::trace::SERVICE,
+                        "a stream that cannot finish is closed with its link",
+                        send.finish()
+                    );
                     // A lost parent preserves the logical owner for reconnect.
                     super::desktop_service::finish_controller(
                         &shared,
@@ -613,7 +644,11 @@ impl Core {
                             },
                         );
                     }
-                    let _ = ready.send(Err(error));
+                    crate::ignored!(
+                        crate::trace::SERVICE,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Err(error))
+                    );
                 }
             }
         });
@@ -695,7 +730,11 @@ async fn wait_for_change(
     }
     super::fs::status_error(response.status, &response.message)?;
     let body = read(&mut recv).await?;
-    let _ = send.finish();
+    crate::ignored!(
+        crate::trace::SERVICE,
+        "a stream that cannot finish is closed with its link",
+        send.finish()
+    );
     Ok(u64::from_be_bytes(
         body.try_into().map_err(|_| Error::Malformed)?,
     ))
@@ -770,7 +809,11 @@ async fn serve_files_wait(
             write(&mut send, fs::encode_response(&refused)).await?;
         }
     }
-    let _ = send.finish();
+    crate::ignored!(
+        crate::trace::SERVICE,
+        "a stream that cannot finish is closed with its link",
+        send.finish()
+    );
     Ok(())
 }
 
@@ -1133,7 +1176,11 @@ pub(super) async fn serve(
                 _ = recv.read(&mut unexpected) => {},
             }
         }
-        let _ = send.finish();
+        crate::ignored!(
+            crate::trace::SERVICE,
+            "a stream that cannot finish is closed with its link",
+            send.finish()
+        );
         return Ok(());
     }
     loop {
@@ -1154,6 +1201,10 @@ pub(super) async fn serve(
             result = super::fs::handle_fs_request(&shared, connection_id, &peer, &mut send, &request) => result.map_err(|_| Error::Malformed)?,
         }
     }
-    let _ = send.finish();
+    crate::ignored!(
+        crate::trace::SERVICE,
+        "a stream that cannot finish is closed with its link",
+        send.finish()
+    );
     Ok(())
 }

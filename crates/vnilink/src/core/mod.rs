@@ -11,6 +11,7 @@
 //! - [`files`] — file transfer stream
 //! - [`video`] — encoded frames
 //! - [`wire`] — control frame read and write
+// trace: records every ignored failure
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -841,7 +842,11 @@ fn finished(phase: &SessionPhase) -> bool {
 
 fn signal_stop(session: Option<&mut LiveSession>) {
     if let Some(session) = session {
-        let _ = session.stop.send(true);
+        crate::ignored!(
+            crate::trace::SESSION,
+            "work that already ended needs no stop",
+            session.stop.send(true)
+        );
     }
 }
 
@@ -928,7 +933,11 @@ fn stop_owned_work(state: &mut State, shared: &Shared) {
     }
     let jobs: Vec<_> = lock(&shared.job_cancel).values().cloned().collect();
     for stop in jobs {
-        let _ = stop.send(true);
+        crate::ignored!(
+            crate::trace::SESSION,
+            "work that already ended needs no stop",
+            stop.send(true)
+        );
     }
     for terminal in lock(&shared.terminal_sessions).values() {
         terminal.stop.store(true, Ordering::Release);

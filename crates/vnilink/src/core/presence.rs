@@ -6,6 +6,7 @@
 //! no service by itself, and the host does not count it as someone connected.
 //! The supervisor redials with backoff, sooner when the peer dials us or the
 //! user asks for the link, and stops for unpaired computers.
+// trace: records every ignored failure
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -41,6 +42,7 @@ impl Core {
     /// dial explicitly leave it off. Turning it off stops supervising but
     /// leaves open links as ordinary neutral sessions.
     pub fn set_presence_links(&self, enabled: bool) -> Result<(), Error> {
+        let _engine = self.engine();
         {
             let mut state = self.alive_state()?;
             if state.presence_links == enabled {
@@ -125,7 +127,13 @@ async fn keep_link(shared: Arc<Shared>, handle: tokio::runtime::Handle, peer: [u
                 }
             }
             Err(Error::NotPaired | Error::ShutDown) => break,
-            Err(_) => {}
+            Err(error) => tracing::debug!(
+                target: crate::trace::RELAY,
+                peer = crate::diagnostics::fingerprint(&peer),
+                failure = error.name(),
+                reason = error.reason(),
+                "a link to a paired computer could not start"
+            ),
         }
         if !running(&shared) {
             break;
@@ -142,6 +150,14 @@ async fn keep_link(shared: Arc<Shared>, handle: tokio::runtime::Handle, peer: [u
         );
         failures += 1;
         let wait = BACKOFF[(failures - 1).min(BACKOFF.len() - 1)];
+        tracing::debug!(
+            target: crate::trace::RELAY,
+            peer = crate::diagnostics::fingerprint(&peer),
+            refused,
+            failures,
+            retry_ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
+            "a link to a paired computer is down; trying again"
+        );
         tokio::select! {
             _ = tokio::time::sleep(wait) => {}
             _ = wake.notified() => {
@@ -173,6 +189,28 @@ async fn watch_link(shared: &Shared, id: u64, peer: &[u8; 32], display_id: &str)
             None => return reached,
             Some(phase) if finished(&phase) => return reached,
             Some(SessionPhase::Active) => {
+                if !reached {
+                    // How the link reaches the peer: directly or through a relay.
+                    let link = lock(&shared.state)
+                        .outgoing
+                        .get(&id)
+                        .and_then(|session| session.link.clone());
+                    let (relayed, paths) = link.map_or((None, 0), |link| {
+                        let paths = link.paths();
+                        let relayed = paths
+                            .iter()
+                            .find(|path| path.is_selected())
+                            .map(|path| path.is_relay());
+                        (relayed, paths.iter().count())
+                    });
+                    tracing::info!(
+                        target: crate::trace::RELAY,
+                        peer = crate::diagnostics::fingerprint(peer),
+                        relayed,
+                        paths,
+                        "a link to a paired computer is up"
+                    );
+                }
                 reached = true;
                 lock(&shared.state).link_refused.remove(peer);
                 set_presence(shared, display_id, DevicePresence::Connected);
@@ -198,6 +236,14 @@ fn set_presence(shared: &Shared, display_id: &str, presence: DevicePresence) {
         state.presence.insert(display_id.to_owned(), presence) != Some(presence)
     };
     if changed {
+        tracing::debug!(
+            target: crate::trace::RELAY,
+            peer = super::parse_endpoint_id(display_id)
+                .map(|key| crate::diagnostics::fingerprint(&key))
+                .unwrap_or_default(),
+            presence = ?presence,
+            "presence"
+        );
         shared.events.publish(CoreEvent::PresenceChanged {
             endpoint_id: display_id.to_owned(),
             presence,

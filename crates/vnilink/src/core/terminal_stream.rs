@@ -1,4 +1,5 @@
 //! Independently cancelled terminal pipe over an admitted neutral connection.
+// trace: records every ignored failure
 use super::service_stream::{read, write};
 use super::terminal_runtime::{self, HostedTerminal};
 use super::*;
@@ -119,6 +120,7 @@ impl Drop for RemoteTerminalService {
 
 impl Core {
     pub fn terminal_policy(&self) -> Result<crate::terminal::TerminalPolicy, Error> {
+        let _engine = self.engine();
         Ok(self.alive_state()?.terminal_policy)
     }
     /// Host-local, durable and transactional. Busy leaves both runtime and saved
@@ -185,6 +187,7 @@ impl Core {
     }
     /// The shell the installed factory runs, when it came from a choice.
     pub fn terminal_shell_id(&self) -> Result<Option<String>, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         Ok(lock(&self.shared.terminal_factory)
             .as_ref()
@@ -192,6 +195,7 @@ impl Core {
     }
     /// Host-side retained shell records, including detached persistent sessions.
     pub fn hosted_terminal_sessions(&self) -> Result<Vec<TerminalSessionInfo>, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         let mut sessions: Vec<_> = lock(&self.shared.terminal_sessions)
             .values()
@@ -201,6 +205,7 @@ impl Core {
         Ok(sessions)
     }
     pub fn close_terminal_session(&self, id: &str) -> Result<(), Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         let sessions = lock(&self.shared.terminal_sessions);
         sessions
@@ -293,11 +298,19 @@ impl Core {
             match opened {
                 Err(error) => {
                     phase = ServicePhase::Failed(error.to_string());
-                    let _ = ready.send(Err(error));
+                    crate::ignored!(
+                        crate::trace::TERMINAL,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Err(error))
+                    );
                 }
                 Ok((mut send, mut recv, session)) => {
                     let session_id = session.id.clone();
-                    let _ = ready.send(Ok(session));
+                    crate::ignored!(
+                        crate::trace::TERMINAL,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Ok(session))
+                    );
                     let run = async {
                         let sending = async {
                             while let Some(frame) = requests.recv().await {
@@ -339,8 +352,12 @@ impl Core {
                     if result.is_err() && !lease.is_cancelled() {
                         phase = ServicePhase::Failed("terminal pipe ended".into());
                         if !matches!(result, Err(Error::InputFailed(_))) {
-                            let _ = events
-                                .try_send(TerminalEvent::Failed("terminal pipe ended".into()));
+                            crate::ignored!(
+                                crate::trace::TERMINAL,
+                                "a viewer whose events are full or gone learns of the end from the pipe",
+                                events
+                                    .try_send(TerminalEvent::Failed("terminal pipe ended".into()))
+                            );
                         }
                     } else if lease.is_cancelled() {
                         phase = ServicePhase::Closed(CloseCause::OwnerClose);
@@ -369,18 +386,30 @@ impl Core {
                             .await?;
                             write(&mut control, session_id.into_bytes()).await?;
                             super::service_stream::status(&read(&mut response).await?)?;
-                            let _ = control.finish();
+                            crate::ignored!(
+                                crate::trace::TERMINAL,
+                                "a stream that cannot finish is closed with its link",
+                                control.finish()
+                            );
                             Ok::<(), Error>(())
                         };
                         if !matches!(tokio::time::timeout(TIMEOUT, close).await, Ok(Ok(()))) {
-                            let _ = tokio::time::timeout(
-                                Duration::from_millis(250),
-                                write(&mut send, vec![6]),
-                            )
-                            .await;
+                            crate::ignored!(
+                                crate::trace::TERMINAL,
+                                "the peer may be gone before it hears why",
+                                tokio::time::timeout(
+                                    Duration::from_millis(250),
+                                    write(&mut send, vec![6]),
+                                )
+                                .await
+                            );
                         }
                     }
-                    let _ = send.finish();
+                    crate::ignored!(
+                        crate::trace::TERMINAL,
+                        "a stream that cannot finish is closed with its link",
+                        send.finish()
+                    );
                     // Finishing this stream only retires its local owner.
                 }
             }
@@ -668,7 +697,11 @@ pub(super) async fn serve(
         "terminal stream ended"
     );
     drop(attached);
-    let _ = send.finish();
+    crate::ignored!(
+        crate::trace::TERMINAL,
+        "a stream that cannot finish is closed with its link",
+        send.finish()
+    );
     result
 }
 
@@ -725,7 +758,11 @@ impl Core {
                 if let Some(id) = &id { write(&mut send, id.as_bytes().to_vec()).await?; }
                 super::service_stream::status(&read(&mut recv).await?)?;
                 let result = if id.is_none() { read(&mut recv).await? } else { Vec::new() };
-                let _ = send.finish();
+                crate::ignored!(
+                    crate::trace::TERMINAL,
+                    "a stream that cannot finish is closed with its link",
+                    send.finish()
+                );
                 Ok(result)
             });
             tokio::select! { biased; _ = stop.changed() => Err(Error::NoSession), result = request => result.map_err(|_| Error::Timeout)? }
@@ -796,7 +833,11 @@ pub(super) async fn registry(
                 .await?;
             }
         }
-        let _ = send.finish();
+        crate::ignored!(
+            crate::trace::TERMINAL,
+            "a stream that cannot finish is closed with its link",
+            send.finish()
+        );
         Ok(())
     };
     if *parent.borrow() {

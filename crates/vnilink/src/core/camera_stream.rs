@@ -1,4 +1,5 @@
 //! Independently owned camera transport, using the shared H.264 frame format.
+// trace: records every ignored failure
 use super::service_stream::{preamble, read, status, write};
 use super::*;
 use crate::{
@@ -92,6 +93,7 @@ impl Core {
     /// Stops offering a camera this computer has: paired computers read it
     /// as turned off, not as missing.
     pub fn turn_off_camera(&self) -> Result<(), Error> {
+        let _engine = self.engine();
         self.replace_camera_factory(None, true)
     }
     fn replace_camera_factory(
@@ -143,7 +145,11 @@ impl Core {
                 status(&read(&mut recv).await?)?;
                 let devices: Vec<CameraDevice> = serde_json::from_slice(&read(&mut recv).await?).map_err(|_| Error::Malformed)?;
                 validate_devices(&devices)?;
-                let _ = send.finish();
+                crate::ignored!(
+                    crate::trace::CAMERA,
+                    "a stream that cannot finish is closed with its link",
+                    send.finish()
+                );
                 Ok(devices)
             });
             if *stop.borrow() { return Err(Error::NoSession); }
@@ -219,10 +225,18 @@ impl Core {
             match opened {
                 Err(error) => {
                     phase = ServicePhase::Failed(error.to_string());
-                    let _ = ready.send(Err(error));
+                    crate::ignored!(
+                        crate::trace::CAMERA,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Err(error))
+                    );
                 }
                 Ok((mut send, mut recv, actual)) => {
-                    let _ = ready.send(Ok(actual));
+                    crate::ignored!(
+                        crate::trace::CAMERA,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Ok(actual))
+                    );
                     let mut reason = CameraEnd::Lost;
                     let requests = async {
                         loop {
@@ -295,7 +309,11 @@ impl Core {
                         "camera picture ended"
                     );
                     end_reason = Some(reason);
-                    let _ = send.finish();
+                    crate::ignored!(
+                        crate::trace::CAMERA,
+                        "a stream that cannot finish is closed with its link",
+                        send.finish()
+                    );
                 }
             }
             frames.close();
@@ -396,7 +414,11 @@ pub(super) async fn list(
             serde_json::to_vec(&devices).map_err(|_| Error::Malformed)?,
         )
         .await?;
-        let _ = send.finish();
+        crate::ignored!(
+            crate::trace::CAMERA,
+            "a stream that cannot finish is closed with its link",
+            send.finish()
+        );
         Ok(())
     };
     if *parent.borrow() {
@@ -643,8 +665,16 @@ pub(super) async fn serve(
     );
     if withdrawn {
         // Tell the viewer why the picture stopped; it may already be gone.
-        let _ = tokio::time::timeout(TIMEOUT, write(&mut send, vec![END_WITHDRAWN])).await;
+        crate::ignored!(
+            crate::trace::CAMERA,
+            "the peer may be gone before it hears why",
+            tokio::time::timeout(TIMEOUT, write(&mut send, vec![END_WITHDRAWN])).await
+        );
     }
-    let _ = send.finish();
+    crate::ignored!(
+        crate::trace::CAMERA,
+        "a stream that cannot finish is closed with its link",
+        send.finish()
+    );
     result
 }

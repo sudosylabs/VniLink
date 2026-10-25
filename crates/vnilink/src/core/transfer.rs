@@ -114,6 +114,7 @@ impl Core {
     /// from it when it already exists. Refused while a controlling session
     /// is active.
     pub fn set_transfer_directory(&self, path: impl AsRef<std::path::Path>) -> Result<(), Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         if state
             .incoming
@@ -247,6 +248,7 @@ pub(super) fn close_peer_files(shared: &Shared, peer: &[u8; 32]) {
 #[cfg(any(test, feature = "test-probes"))]
 impl Core {
     pub fn files_path_stats(&self) -> Vec<serde_json::Value> {
+        let _engine = self.engine();
         let shared = &self.shared;
         let serving: Vec<Connection> = lock(&shared.files_serving)
             .values()

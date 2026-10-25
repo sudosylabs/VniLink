@@ -27,7 +27,7 @@ export function silentDrops(text) {
 		.map((line, index) => ({ line: line.trim(), number: index + 1 }))
 		// `let _ = name;` and `let _ = (a, b);` only mark unused names; `let kept = f().ok();` keeps the value.
 		.filter(({ line }) => !line.startsWith('//')
-			&& !/^let _ = \(?[a-z_][a-z0-9_]*(, [a-z_][a-z0-9_]*)*\)?;$/.test(line)
+			&& !/^let _ = \(?[A-Za-z_][A-Za-z0-9_]*(, [A-Za-z_][A-Za-z0-9_]*)*\)?;$/.test(line)
 			// `let _ = f()?;` passes the failure on.
 			&& !/\?;$/.test(line)
 			&& (/\blet _ = /.test(line) || /^[^=]*\.ok\(\);$/.test(line)));

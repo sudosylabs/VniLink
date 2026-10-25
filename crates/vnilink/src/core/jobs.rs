@@ -909,6 +909,7 @@ impl Core {
 
     /// Snapshots one job record.
     pub fn job_snapshot(&self, id: u64) -> Result<JobSnapshot, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         lock(&self.shared.jobs)
             .get(&id)
@@ -918,6 +919,7 @@ impl Core {
 
     /// Snapshots all job records by id.
     pub fn job_list(&self) -> Result<Vec<JobSnapshot>, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         let jobs = lock(&self.shared.jobs);
         let mut ids: Vec<u64> = jobs.keys().copied().collect();
@@ -981,6 +983,7 @@ impl Core {
     /// Senders keep polling so receiver-side decisions cannot strand them.
     /// Runs on the caller's thread and blocks like `job_poll`.
     pub fn drive_jobs(&self) -> Result<Vec<JobSnapshot>, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         let ids: Vec<u64> = {
             let jobs = lock(&self.shared.jobs);
@@ -1013,6 +1016,7 @@ impl Core {
     /// `Arc<Core>`; the driver and its workers end when the Core shuts down
     /// or drops.
     pub fn start_job_driver(self: &std::sync::Arc<Self>) {
+        let _engine = self.engine();
         const IDLE: Duration = Duration::from_secs(1);
         let weak = std::sync::Arc::downgrade(self);
         let shared = self.shared.clone();
@@ -1073,6 +1077,7 @@ impl Core {
 
     /// Advances whenever any job changes; see [`Core::job_changes_since`].
     pub fn job_revision(&self) -> u64 {
+        let _engine = self.engine();
         self.shared.job_revision.load(Ordering::Acquire)
     }
 
@@ -1287,6 +1292,7 @@ impl Core {
     /// force full re-download, so explicit cancel-then-forget is required
     /// (cancel retains staging for resume; forget releases it).
     pub fn job_forget(&self, id: u64) -> Result<(), Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         {
             let jobs = lock(&self.shared.jobs);

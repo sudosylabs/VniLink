@@ -1,4 +1,5 @@
 //! Authorize, connect, disconnect, and the controller dial loop.
+// trace: records every ignored failure
 
 use super::*;
 
@@ -40,6 +41,7 @@ impl Drop for ControllerTasks {
 
 impl Core {
     pub fn set_desktop_sharing(&self, grants: Grants) -> Result<(), Error> {
+        let _engine = self.engine();
         self.update_sharing_policy(|policy| {
             policy.view = grants.view;
             policy.control = grants.control;
@@ -49,6 +51,7 @@ impl Core {
     }
 
     pub fn revoke(&self, endpoint_id: &str) -> Result<(), Error> {
+        let _engine = self.engine();
         self.unpair(endpoint_id)
     }
 
@@ -99,10 +102,18 @@ impl Core {
             super::services::synchronize(&mut state, &self.shared.events);
         }
         for stop in incoming_stop {
-            let _ = stop.send(true);
+            crate::ignored!(
+                crate::trace::SESSION,
+                "work that already ended needs no stop",
+                stop.send(true)
+            );
         }
         if let Some(stop) = outgoing_stop {
-            let _ = stop.send(true);
+            crate::ignored!(
+                crate::trace::SESSION,
+                "work that already ended needs no stop",
+                stop.send(true)
+            );
         }
         close_peer_files(&self.shared, &key);
         super::jobs::interrupt_peer_jobs(&self.shared, &key, true);
@@ -113,6 +124,7 @@ impl Core {
     }
 
     pub fn connect(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
+        let _engine = self.engine();
         self.connect_inner(endpoint_id, false)
     }
 
@@ -123,6 +135,7 @@ impl Core {
     /// slot: fails `Busy` while another control session is active, like
     /// `connect` (open Files from the live desktop session to reuse it).
     pub fn connect_files(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
+        let _engine = self.engine();
         self.connect_inner(endpoint_id, true)
     }
 
@@ -132,8 +145,16 @@ impl Core {
         match ready.recv_timeout(CONNECT_WAIT) {
             Ok(result) => result,
             Err(_) => {
-                let _ = stop.send(true);
-                let _ = self.disconnect_session(pending.id);
+                crate::ignored!(
+                    crate::trace::SESSION,
+                    "work that already ended needs no stop",
+                    stop.send(true)
+                );
+                crate::ignored!(
+                    crate::trace::SESSION,
+                    "a session already gone needs no disconnect",
+                    self.disconnect_session(pending.id)
+                );
                 Err(Error::Timeout)
             }
         }
@@ -143,11 +164,13 @@ impl Core {
     /// The returned local id remains stable across reconnects. Observe its phase
     /// through controller_session/controller_sessions or SessionChanged events.
     pub fn begin_connect(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
+        let _engine = self.engine();
         self.start_controller(endpoint_id, false, false, false)
             .map(|(info, _, _)| info)
     }
 
     pub fn begin_connect_files(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
+        let _engine = self.engine();
         self.start_controller(endpoint_id, true, false, false)
             .map(|(info, _, _)| info)
     }
@@ -158,6 +181,7 @@ impl Core {
     /// and reconnect. This does not open or replace any service owner. A live
     /// legacy connection still returns Busy; no privileged fallback is used.
     pub fn begin_connect_services(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
+        let _engine = self.engine();
         let info = self
             .start_controller(endpoint_id, true, true, false)
             .map(|(info, _, _)| info)?;
@@ -191,6 +215,7 @@ impl Core {
     }
 
     pub fn controller_sessions(&self) -> Result<Vec<SessionInfo>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let mut sessions: Vec<_> = state.outgoing.values().map(session_info).collect();
         sessions.sort_by_key(|s| s.id);
@@ -198,6 +223,7 @@ impl Core {
     }
 
     pub fn controller_session(&self, id: u64) -> Result<SessionInfo, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         state
             .outgoing
@@ -208,19 +234,25 @@ impl Core {
 
     /// Stops only this local controller handle, including a pending approval.
     pub fn disconnect_session(&self, id: u64) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         let session = state.outgoing.get_mut(&id).ok_or(Error::NoSession)?;
         if finished(&session.phase) {
             return Err(Error::NoSession);
         }
         session.phase = SessionPhase::Stopping;
-        let _ = session.stop.send(true);
+        crate::ignored!(
+            crate::trace::SESSION,
+            "work that already ended needs no stop",
+            session.stop.send(true)
+        );
         super::services::synchronize(&mut state, &self.shared.events);
         Ok(())
     }
 
     /// Releases a closed/failed tab's record and buffers. Never stops live work.
     pub fn forget_controller_session(&self, id: u64) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         let session = state.outgoing.get(&id).ok_or(Error::NoSession)?;
         if !finished(&session.phase) {
@@ -232,6 +264,7 @@ impl Core {
 
     /// Legacy disconnect is refused when more than one outgoing session is live.
     pub fn disconnect(&self) -> Result<(), Error> {
+        let _engine = self.engine();
         let id = {
             let state = self.alive_state()?;
             if state.live_outgoing_count() > 1 {
@@ -324,7 +357,11 @@ pub(super) fn start_outgoing(
                 if services_only && existing.phase != SessionPhase::Stopping {
                     let info = session_info(existing);
                     let (ready, result) = std::sync::mpsc::sync_channel(1);
-                    let _ = ready.send(Ok(info.clone()));
+                    crate::ignored!(
+                        crate::trace::SESSION,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Ok(info.clone()))
+                    );
                     return Ok((info, result, existing.stop.clone()));
                 }
                 return Err(Error::Busy);
@@ -463,7 +500,11 @@ pub(super) async fn run_controller(
         if *stop_rx.borrow() || lock(&shared.state).shut_down {
             finish_outgoing(&shared, local_id);
             if let Some(ready) = ready.take() {
-                let _ = ready.send(Err(Error::NoSession));
+                crate::ignored!(
+                    crate::trace::SESSION,
+                    "the caller stopped waiting for its answer",
+                    ready.send(Err(Error::NoSession))
+                );
             }
             return;
         }
@@ -484,7 +525,11 @@ pub(super) async fn run_controller(
             Err(error) => {
                 fail_outgoing(&shared, local_id, &error);
                 if let Some(ready) = ready.take() {
-                    let _ = ready.send(Err(error));
+                    crate::ignored!(
+                        crate::trace::SESSION,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Err(error))
+                    );
                 }
                 return;
             }
@@ -497,7 +542,11 @@ pub(super) async fn run_controller(
         if *stop_rx.borrow() || lock(&shared.state).shut_down {
             finish_outgoing(&shared, local_id);
             if let Some(ready) = ready.take() {
-                let _ = ready.send(Err(Error::NoSession));
+                crate::ignored!(
+                    crate::trace::SESSION,
+                    "the caller stopped waiting for its answer",
+                    ready.send(Err(Error::NoSession))
+                );
             }
             return;
         }
@@ -527,7 +576,11 @@ pub(super) async fn run_controller(
             Err(error) => {
                 fail_outgoing(&shared, local_id, &error);
                 if let Some(ready) = ready.take() {
-                    let _ = ready.send(Err(error));
+                    crate::ignored!(
+                        crate::trace::SESSION,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Err(error))
+                    );
                 }
                 return;
             }
@@ -630,12 +683,20 @@ pub(super) async fn establish(
                 // The host admitted us: keep its display name for this
                 // controller's device list. Persist failures stay local; the
                 // next dial refreshes the name.
-                let _ = super::link::remember_peer_hostname(
-                    shared,
-                    &device.endpoint_id,
-                    accept_hostname,
+                crate::ignored!(
+                    crate::trace::SESSION,
+                    "a peer's name and addresses are refreshed at the next connection",
+                    super::link::remember_peer_hostname(
+                        shared,
+                        &device.endpoint_id,
+                        accept_hostname,
+                    )
                 );
-                let _ = super::link::remember_peer_os(shared, &device.endpoint_id, accept_os);
+                crate::ignored!(
+                    crate::trace::SESSION,
+                    "a peer's name and addresses are refreshed at the next connection",
+                    super::link::remember_peer_os(shared, &device.endpoint_id, accept_os)
+                );
                 {
                     let mut state = lock(&shared.state);
                     if let Some(session) = state.outgoing.get_mut(&local_id) {
@@ -753,7 +814,11 @@ pub(super) async fn establish(
         &info.peer_id,
     );
     if let Some(ready) = ready.take() {
-        let _ = ready.send(Ok(info.clone()));
+        crate::ignored!(
+            crate::trace::SESSION,
+            "the caller stopped waiting for its answer",
+            ready.send(Ok(info.clone()))
+        );
     }
     let keyframe = Arc::new(KeyframeFlag::new());
     let mut video_stop = stop_rx.clone();
@@ -859,7 +924,11 @@ pub(super) async fn command_loop(
                     }
                 }
                 Err(error) => {
-                    let _ = frames_tx.send(Err(error)).await;
+                    crate::ignored!(
+                        crate::trace::SESSION,
+                        "a reader whose consumer left stops reading",
+                        frames_tx.send(Err(error)).await
+                    );
                     break;
                 }
             }
@@ -899,10 +968,14 @@ pub(super) async fn command_loop(
                 frame = frames_rx.recv() => {
                     match frame {
                         Some(Ok(ControlMessage::Addresses { relays, direct })) => {
-                            let _ = remember_peer_addresses(
-                                shared,
-                                &peer_key,
-                                Announcement { relays, direct },
+                            crate::ignored!(
+                                crate::trace::SESSION,
+                                "a peer's name and addresses are refreshed at the next connection",
+                                remember_peer_addresses(
+                                    shared,
+                                    &peer_key,
+                                    Announcement { relays, direct },
+                                )
                             );
                         }
                         Some(Ok(ControlMessage::Close)) => {

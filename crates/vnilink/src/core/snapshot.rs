@@ -3,6 +3,7 @@
 //! Kind byte 8 rides the existing service stream. The host checks view
 //! permission again before it writes pixels. Closing the request finishes
 //! only this stream.
+// trace: records every ignored failure
 
 use super::*;
 use crate::snapshot::{
@@ -49,8 +50,16 @@ impl Core {
         let owner =
             self.attach_controller_service(connection_id, generation, ServiceKind::ScreenSnapshot)?;
         let outcome = self.exchange_snapshot(connection_id, generation, owner.id, cancel, prompt);
-        let _ = self.close_controller_service(owner.id, owner.generation);
-        let _ = self.forget_controller_service(owner.id);
+        crate::ignored!(
+            crate::trace::SNAPSHOT,
+            "an owner already gone needs no close",
+            self.close_controller_service(owner.id, owner.generation)
+        );
+        crate::ignored!(
+            crate::trace::SNAPSHOT,
+            "an owner already gone needs no close",
+            self.forget_controller_service(owner.id)
+        );
         if cancel.load(Ordering::Acquire) {
             return Ok(ScreenSnapshot::Cancelled);
         }
@@ -79,7 +88,11 @@ impl Core {
             .await
             .map_err(|_| Error::Timeout)
             .and_then(|result| result);
-            let _ = tx.send(result);
+            crate::ignored!(
+                crate::trace::SNAPSHOT,
+                "the caller stopped waiting for its answer",
+                tx.send(result)
+            );
         });
         rx.recv_timeout(Duration::from_secs(6))
             .map_err(|_| Error::Timeout)?
@@ -88,6 +101,7 @@ impl Core {
     /// Whether [`Self::offer_attested_picture`] would take a picture
     /// attested `at`. A capture whose pixels cost a copy to read asks first.
     pub fn wants_attested_picture(&self, at: std::time::Instant) -> bool {
+        let _engine = self.engine();
         crate::snapshot::tap_is_fresh(at, std::time::Instant::now())
             && !lock(&self.shared.snapshot_tap)
                 .as_ref()
@@ -162,7 +176,11 @@ impl Core {
                 _ = cancel_wait => Ok(ScreenSnapshot::Cancelled),
                 result = exchange => result,
             };
-            let _ = tx.send(result);
+            crate::ignored!(
+                crate::trace::SNAPSHOT,
+                "the caller stopped waiting for its answer",
+                tx.send(result)
+            );
         });
         let deadline = Instant::now() + SNAPSHOT_DEADLINE + Duration::from_secs(1);
         loop {
@@ -289,7 +307,11 @@ pub(super) async fn probe(
     };
     super::service_stream::write(&mut send, vec![super::service_stream::VERSION, status, 0])
         .await?;
-    let _ = send.finish();
+    crate::ignored!(
+        crate::trace::SNAPSHOT,
+        "a stream that cannot finish is closed with its link",
+        send.finish()
+    );
     Ok(())
 }
 
@@ -304,7 +326,11 @@ pub(super) async fn serve(
     super::service_stream::write(&mut send, vec![super::service_stream::VERSION, 0, 0]).await?;
     let request = super::service_stream::read(&mut recv).await;
     let Ok(request) = request else {
-        let _ = send.finish();
+        crate::ignored!(
+            crate::trace::SNAPSHOT,
+            "a stream that cannot finish is closed with its link",
+            send.finish()
+        );
         return Ok(());
     };
     let prompt = read_prompt(&request);
@@ -316,7 +342,11 @@ pub(super) async fn serve(
                 && still_allowed(&shared, &peer)
             {
                 write_payload(&mut send, &encode_image(&shot.image)).await?;
-                let _ = send.finish();
+                crate::ignored!(
+                    crate::trace::SNAPSHOT,
+                    "a stream that cannot finish is closed with its link",
+                    send.finish()
+                );
                 return Ok(());
             }
         }
@@ -324,7 +354,11 @@ pub(super) async fn serve(
     let factory = lock(&shared.snapshot_factory).clone();
     let Some(factory) = factory else {
         write_outcome(&mut send, OUTCOME_UNAVAILABLE).await?;
-        let _ = send.finish();
+        crate::ignored!(
+            crate::trace::SNAPSHOT,
+            "a stream that cannot finish is closed with its link",
+            send.finish()
+        );
         return Ok(());
     };
     let cancel = Arc::new(AtomicBool::new(false));
@@ -369,7 +403,11 @@ pub(super) async fn serve(
         || *service_stop.borrow()
         || !still_allowed(&shared, &peer)
     {
-        let _ = send.finish();
+        crate::ignored!(
+            crate::trace::SNAPSHOT,
+            "a stream that cannot finish is closed with its link",
+            send.finish()
+        );
         return Ok(());
     }
     let outcome = match captured {
@@ -381,13 +419,21 @@ pub(super) async fn serve(
         Err(SnapshotFailure::TimedOut) => vec![1, OUTCOME_TIMEOUT],
         Err(SnapshotFailure::Cancelled) if stop == Stop::Deadline => vec![1, OUTCOME_TIMEOUT],
         Err(SnapshotFailure::Cancelled) => {
-            let _ = send.finish();
+            crate::ignored!(
+                crate::trace::SNAPSHOT,
+                "a stream that cannot finish is closed with its link",
+                send.finish()
+            );
             return Ok(());
         }
         Err(SnapshotFailure::Unavailable) => vec![1, OUTCOME_UNAVAILABLE],
     };
     write_payload(&mut send, &outcome).await?;
-    let _ = send.finish();
+    crate::ignored!(
+        crate::trace::SNAPSHOT,
+        "a stream that cannot finish is closed with its link",
+        send.finish()
+    );
     Ok(())
 }
 

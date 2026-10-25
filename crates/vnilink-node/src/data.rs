@@ -1,4 +1,5 @@
 //! Session-scoped binary data plane. Never takes the JSON bridge's State mutex.
+// trace: records every ignored failure
 use super::{core_error, parse_id, Command, CommandShape, Engine};
 use napi::{
     bindgen_prelude::{AsyncTask, Buffer, Function},
@@ -16,7 +17,11 @@ use vnilink_app::{
 /// Channel owners are private bridge resources; do not retain their closed records.
 fn retire_service(core: &VnilinkCore, id: u64, generation: u64) {
     if core.close_controller_service(id, generation).is_ok() {
-        let _ = core.forget_controller_service(id);
+        vnilink::ignored!(
+            vnilink::trace::BRIDGE,
+            "a closed owner already forgotten needs no forgetting",
+            core.forget_controller_service(id)
+        );
     }
 }
 
@@ -390,7 +395,8 @@ impl DataChannel {
             .ok_or_else(|| Error::from_reason("Channel unavailable"))?
             .on_ready(move || {
                 // Full means a wake is already waiting: this frame is read then.
-                let _ = ready.call((), ThreadsafeFunctionCallMode::NonBlocking);
+                // Its status says only whether the queue took the wake.
+                let _queued = ready.call((), ThreadsafeFunctionCallMode::NonBlocking);
             });
         Ok(())
     }
@@ -769,12 +775,20 @@ impl DataChannel {
             return Ok("null".into());
         }
         if decode_us > 0 {
-            let _ = service.report_decode_duration(u64::from(decode_us));
+            vnilink::ignored!(
+                vnilink::trace::DECODE,
+                "a decode time for a closed service is not needed",
+                service.report_decode_duration(u64::from(decode_us))
+            );
         }
         // The window counts restarts for this one picture, so the count only
         // grows; one that went back is the core's to refuse, not a failure
         // of the status read.
-        let _ = service.report_decoder(software, u64::from(recoveries), u64::from(stills_shown));
+        vnilink::ignored!(
+            vnilink::trace::DECODE,
+            "a decoder report for a closed service is not needed",
+            service.report_decoder(software, u64::from(recoveries), u64::from(stills_shown))
+        );
         let status = service.media_status().map_err(core_error)?;
         let reason = match status.reason {
             vnilink_app::FfiAdaptationReason::WarmingUp => "warmingUp",
@@ -944,7 +958,11 @@ impl DataChannel {
         {
             if let Ok(desktop) = self.desktop.lock() {
                 if let Some(desktop) = desktop.as_ref() {
-                    let _ = desktop.service.release_input();
+                    vnilink::ignored!(
+                        vnilink::trace::INPUT,
+                        "input of a closed desktop is released by its host",
+                        desktop.service.release_input()
+                    );
                 }
             }
         }
@@ -998,7 +1016,11 @@ impl DataChannel {
 impl Drop for DataChannel {
     fn drop(&mut self) {
         if !self.closed.load(std::sync::atomic::Ordering::Acquire) {
-            let _ = self.take_cleanup().compute();
+            vnilink::ignored!(
+                vnilink::trace::BRIDGE,
+                "a channel dropped without closing is cleaned up at best",
+                self.take_cleanup().compute()
+            );
         }
     }
 }
@@ -1555,7 +1577,11 @@ impl FileTask {
                     .map_err(|_| Error::from_reason("Channel unavailable"))?;
                 if self.closed.load(std::sync::atomic::Ordering::Acquire) {
                     drop(jobs);
-                    let _ = self.core.job_cancel(job);
+                    vnilink::ignored!(
+                        vnilink::trace::FILES,
+                        "a job of a closed window that cannot cancel is interrupted with its owner",
+                        self.core.job_cancel(job)
+                    );
                     return Err(Refused("NoSession: the window closed".into()));
                 }
                 jobs.push(job);

@@ -3,10 +3,12 @@ use super::*;
 use crate::{ServiceKind, ServicePermissions};
 impl Core {
     pub fn service_permissions(&self, endpoint_id: &str) -> Result<ServicePermissions, Error> {
+        let _engine = self.engine();
         let peer = parse_endpoint_id(endpoint_id)?;
         self.alive_state()?.trust.service_permissions(&peer)
     }
     pub fn set_service_sharing(&self, kind: ServiceKind, allowed: bool) -> Result<(), Error> {
+        let _engine = self.engine();
         self.update_sharing_policy(|policy| match kind {
             ServiceKind::Desktop => policy.view = allowed,
             ServiceKind::Files => policy.files = allowed,
@@ -20,6 +22,7 @@ impl Core {
         })
     }
     pub fn set_recording_sharing(&self, allowed: bool) -> Result<(), Error> {
+        let _engine = self.engine();
         self.update_sharing_policy(|policy| policy.recording = allowed)
     }
 }

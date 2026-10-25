@@ -4,14 +4,17 @@ use crate::{CloseCause, ServicePhase, SharingPolicy};
 
 impl Core {
     pub fn sharing_policy(&self) -> Result<SharingPolicy, Error> {
+        let _engine = self.engine();
         Ok(self.alive_state()?.trust.sharing)
     }
 
     pub fn change_sharing_policy(&self, update: crate::SharingPolicyUpdate) -> Result<(), Error> {
+        let _engine = self.engine();
         self.update_sharing_policy(|policy| update.apply(policy))
     }
 
     pub fn set_sharing_policy(&self, policy: SharingPolicy) -> Result<(), Error> {
+        let _engine = self.engine();
         self.update_sharing_policy(|current| *current = policy)
     }
 

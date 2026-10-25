@@ -44,6 +44,7 @@ impl Core {
     /// Files service authorization remains independent and is checked on each
     /// operation. Existing folder-only access can still be explicitly selected.
     pub fn enable_filesystem_access(&self) -> Result<(), Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         if state
             .incoming
@@ -60,6 +61,7 @@ impl Core {
     /// access on their own. Refused while a controlling session is active,
     /// like the transfer directory.
     pub fn set_file_roots(&self, paths: Vec<std::path::PathBuf>) -> Result<(), Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         if state
             .incoming
@@ -75,6 +77,7 @@ impl Core {
 
     /// Snapshots the approved roots as `(id, path)` pairs.
     pub fn file_roots(&self) -> Result<Vec<(u64, std::path::PathBuf)>, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         Ok(lock(&self.shared.file_roots).snapshot())
     }
@@ -88,6 +91,7 @@ impl Core {
 
     /// This computer's roots, home folder and usual folders.
     pub fn places(&self) -> Result<fs::Places, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         Ok(fs::places(&current_roots(&self.shared)))
     }
@@ -97,6 +101,7 @@ impl Core {
     /// resolved and the item is not, so a link is copied as itself rather
     /// than as what it points to. `None` when it is outside every root.
     pub fn locate(&self, path: &std::path::Path) -> Result<Option<(u64, String, String)>, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         let (Some(folder), Some(name)) = (
             path.parent(),
@@ -129,6 +134,7 @@ impl Core {
 
     /// Creates one directory level under an approved root.
     pub fn create_dir(&self, root: u64, path: &str, name: &str) -> Result<(), Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         let roots = lock(&self.shared.file_roots);
         fs::create_dir(&roots, root, path, name)

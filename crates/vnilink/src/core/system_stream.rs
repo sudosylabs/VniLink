@@ -4,6 +4,7 @@
 //! connection, then sends framed requests and reads framed replies. Error
 //! replies reuse the shared status triple; success replies start with a zero
 //! byte so the two can never be confused.
+// trace: records every ignored failure
 
 use super::service_stream::{preamble, read, status, write, VERSION};
 use super::*;
@@ -327,6 +328,7 @@ impl Core {
     }
 
     pub fn system_policy(&self) -> Result<crate::system::SystemPolicy, Error> {
+        let _engine = self.engine();
         Ok(self.alive_state()?.system_policy)
     }
 
@@ -336,6 +338,7 @@ impl Core {
     /// lease granted under the old policy must not survive it; the holding
     /// owner stays connected, only the local facilities restore.
     pub fn set_system_policy(&self, policy: crate::system::SystemPolicy) -> Result<(), Error> {
+        let _engine = self.engine();
         let policy = policy.validate()?;
         let mut state = self.alive_state()?;
         let previous = std::mem::replace(&mut state.system_policy, policy);
@@ -359,6 +362,7 @@ impl Core {
 
     /// Local backend facilities and session boundaries, without a peer.
     pub fn system_support(&self) -> Result<(SystemSupport, HostSessionState), Error> {
+        let _engine = self.engine();
         let _state = self.alive_state()?;
         match lock(&self.shared.system_actions).clone() {
             Some(actions) => Ok((actions.support(), actions.session_state())),
@@ -368,6 +372,7 @@ impl Core {
 
     /// Restarts and shutdowns counting down on this computer.
     pub fn scheduled_system_actions(&self) -> Result<Vec<ScheduledSystemAction>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let mut scheduled: Vec<_> = state
             .system_operations
@@ -389,6 +394,7 @@ impl Core {
     /// Cancels a restart or shutdown counting down on this computer, as its
     /// user chose in the notice. One that already ended is left as it is.
     pub fn cancel_system_action(&self, id: u64) -> Result<SystemOperation, Error> {
+        let _engine = self.engine();
         drop(self.alive_state()?);
         cancel(&self.shared, None, id, "cancelled at that computer")
             .map_err(|_| Error::InvalidSetting("no such system action"))
@@ -396,6 +402,7 @@ impl Core {
 
     /// Runs a scheduled restart or shutdown now, as its user chose in the notice.
     pub fn run_system_action_now(&self, id: u64) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         let record = state
             .system_operations
@@ -414,11 +421,13 @@ impl Core {
     /// Shortens the notice a restart or shutdown waits out, for tests.
     #[cfg(any(test, feature = "test-probes"))]
     pub fn set_system_action_notice(&self, notice: Duration) {
+        let _engine = self.engine();
         *lock(&self.shared.system_notice) = notice;
     }
 
     /// Local privacy/input state and its holding connection, if any.
     pub fn system_privacy(&self) -> Result<PrivacyState, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         Ok(current_privacy(&state))
     }
@@ -461,11 +470,19 @@ impl Core {
                 .await;
             let (mut send, mut recv) = match connection {
                 Ok(pair) => {
-                    let _ = ready.send(Ok(()));
+                    crate::ignored!(
+                        crate::trace::SYSTEM,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Ok(()))
+                    );
                     pair
                 }
                 Err(error) => {
-                    let _ = ready.send(Err(error));
+                    crate::ignored!(
+                        crate::trace::SYSTEM,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Err(error))
+                    );
                     return;
                 }
             };
@@ -491,7 +508,11 @@ impl Core {
                     },
                 };
                 if std::time::Instant::now() >= work.deadline {
-                    let _ = work.reply.send(Err(Error::Timeout));
+                    crate::ignored!(
+                        crate::trace::SYSTEM,
+                        "the caller stopped waiting for its answer",
+                        work.reply.send(Err(Error::Timeout))
+                    );
                     continue;
                 }
                 let outcome = lease
@@ -512,12 +533,20 @@ impl Core {
                         | Error::StaleSession
                         | Error::NoSession)
                 );
-                let _ = work.reply.send(outcome);
+                crate::ignored!(
+                    crate::trace::SYSTEM,
+                    "the caller stopped waiting for its answer",
+                    work.reply.send(outcome)
+                );
                 if fatal {
                     break;
                 }
             }
-            let _ = send.finish();
+            crate::ignored!(
+                crate::trace::SYSTEM,
+                "a stream that cannot finish is closed with its link",
+                send.finish()
+            );
             let cause = if lease.is_cancelled() || owner_done {
                 CloseCause::OwnerClose
             } else {
@@ -718,7 +747,11 @@ async fn run_scheduled(
             let asker_present = asker_present(&state, &admission);
             if !asker_present {
                 drop(state);
-                let _ = cancel(&shared, None, id, "the computer that asked disconnected");
+                crate::ignored!(
+                    crate::trace::SYSTEM,
+                    "an operation already settled needs no change",
+                    cancel(&shared, None, id, "the computer that asked disconnected")
+                );
                 return;
             }
             (notice.wake.clone(), notice.deadline, notice.run_now)
@@ -749,7 +782,11 @@ async fn run_scheduled(
     let Ok(outcome) = start(&shared, admission, action).await else {
         return;
     };
-    let _ = finish(&shared, id, action, outcome, true);
+    crate::ignored!(
+        crate::trace::SYSTEM,
+        "an operation already settled needs no change",
+        finish(&shared, id, action, outcome, true)
+    );
 }
 
 /// Whether the connection and System owner that asked are still active.

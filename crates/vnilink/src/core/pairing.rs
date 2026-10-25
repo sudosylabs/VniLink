@@ -144,11 +144,13 @@ impl Core {
     ///
     /// The host sees the same digits on [`CoreEvent::ControlRequested`].
     pub fn control_check(&self) -> String {
+        let _engine = self.engine();
         crate::pairing::control_digits(&self.local_endpoint_id())
     }
 
     /// The authenticated peer waiting for this host to remember its identity.
     pub fn control_request(&self) -> Result<Option<ControlRequest>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         Ok(state
             .control_request

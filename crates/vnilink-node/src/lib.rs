@@ -3,6 +3,7 @@
 //! subscriptions instead of holding pollers in JavaScript.
 //! Management calls run on libuv workers. The separate data module uses
 //! bounded, nonblocking native drains and input queues outside this mutex.
+// trace: records every ignored failure
 mod native;
 mod storage;
 mod system;
@@ -2660,6 +2661,8 @@ impl EngineBridge {
 pub struct CommandTask {
     bridge: EngineBridge,
     command: Command,
+    /// Its type, which the shape check admitted from the known ones.
+    kind: String,
 }
 #[napi]
 impl Engine {
@@ -2674,23 +2677,44 @@ impl Engine {
         let raw: serde_json::Value = serde_json::from_str(&command)
             .map_err(|_| Error::new(Status::InvalidArg, "Invalid engine command"))?;
         if !CommandShape::check(&raw) {
+            // Its type may be anything the caller sent: not recorded.
+            tracing::info!(target: vnilink::trace::BRIDGE, "a command of an unknown shape was refused");
             return Err(Error::new(Status::InvalidArg, "Invalid engine command"));
         }
-        let decoded: Command = serde_json::from_value(raw)
-            .map_err(|_| Error::new(Status::InvalidArg, "Invalid engine command"))?;
+        let kind = raw["type"].as_str().unwrap_or_default().to_owned();
+        let decoded: Command = serde_json::from_value(raw).map_err(|_| {
+            tracing::info!(target: vnilink::trace::BRIDGE, command = kind.as_str(), "a command's fields were refused");
+            Error::new(Status::InvalidArg, "Invalid engine command")
+        })?;
         Ok(AsyncTask::new(CommandTask {
             bridge: EngineBridge {
                 state: self.state.clone(),
             },
             command: decoded,
+            kind,
         }))
     }
 }
 impl Task for CommandTask {
     type Output = String;
     type JsValue = String;
+    /// Runs the command inside a `command` span, so what it records says
+    /// which command it served; a failure is recorded by name.
     fn compute(&mut self) -> Result<String> {
-        self.bridge.run(&self.command)
+        let span =
+            tracing::info_span!(target: "vnilink::bridge", "command", name = self.kind.as_str());
+        let _command = span.enter();
+        let started = std::time::Instant::now();
+        let reply = self.bridge.run(&self.command);
+        if let Err(error) = &reply {
+            tracing::info!(
+                target: vnilink::trace::BRIDGE,
+                status = ?error.status,
+                took_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                "command failed"
+            );
+        }
+        reply
     }
     fn resolve(&mut self, _: Env, output: String) -> Result<String> {
         Ok(output)
@@ -2933,6 +2957,7 @@ fn ffi_error_name(error: &FfiError) -> &'static str {
 }
 
 fn core_error(error: FfiError) -> Error {
+    tracing::debug!(target: vnilink::trace::BRIDGE, failure = ffi_error_name(&error), "an engine call failed");
     Error::from_reason(format!("{}: {error}", ffi_error_name(&error)))
 }
 

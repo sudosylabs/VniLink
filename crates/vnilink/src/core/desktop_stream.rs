@@ -744,12 +744,14 @@ impl Core {
         Ok(())
     }
     pub fn hosted_desktop_info(&self, id: u64, generation: u64) -> Result<DesktopInfo, Error> {
+        let _engine = self.engine();
         Ok(runtime(&*self.alive_state()?, id, generation, true)?.metadata())
     }
     /// The largest still picture, in encoded bytes, this hosted owner's link
     /// takes now within [`crate::STILL_DRAIN`]: what the link carries,
     /// capped at the agreed bitrate. A larger one is not sent.
     pub fn desktop_still_budget(&self, id: u64, generation: u64) -> Result<usize, Error> {
+        let _engine = self.engine();
         Ok(runtime(&*self.alive_state()?, id, generation, true)?.still_budget())
     }
     /// Measured successful encode/preparation and native capture read costs.
@@ -797,6 +799,7 @@ impl Core {
     /// The platform backend's view of whether the screen is on a desktop
     /// it cannot capture. Every viewer learns it with its next feedback.
     pub fn report_secure_desktop(&self, active: bool) -> Result<(), Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         self.shared
             .secure_desktop
@@ -805,6 +808,7 @@ impl Core {
     }
     /// The host opened its encoder again for this viewer's new settings.
     pub fn report_desktop_encoder_reopen(&self, id: u64, generation: u64) -> Result<(), Error> {
+        let _engine = self.engine();
         runtime(&*self.alive_state()?, id, generation, true)?
             .counters
             .encoder_reopened();
@@ -856,6 +860,7 @@ impl Core {
         Ok(())
     }
     pub fn take_desktop_keyframe_request(&self, id: u64, generation: u64) -> Result<bool, Error> {
+        let _engine = self.engine();
         Ok(runtime(&*self.alive_state()?, id, generation, true)?
             .keyframe
             .take())

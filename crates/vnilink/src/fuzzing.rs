@@ -4,6 +4,7 @@
 //! what that parser promises of them; a broken promise panics, which the
 //! fuzzer records as a crash. Not an API: present only with the `fuzzing`
 //! feature, which production builds leave off.
+// trace: records every ignored failure
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -96,10 +97,11 @@ pub fn reassemble<'a>(datagrams: impl IntoIterator<Item = &'a [u8]>) {
     let mut reassembler = Reassembler::new();
     for datagram in datagrams {
         if let Some(body) = reassembler.push(datagram) {
-            let _ = decode_video_body(&body);
+            // The fuzz case is that decoding never panics, whatever it returns.
+            drop(decode_video_body(&body));
         }
-        let _ = reassembler.take_loss();
-        let _ = reassembler.take_fragments();
+        drop(reassembler.take_loss());
+        drop(reassembler.take_fragments());
     }
 }
 
@@ -329,7 +331,7 @@ pub fn job_message(which: u8, bytes: &[u8]) {
     };
     if let Some(manifest) = manifest.filter(|manifest| crate::manifest::validate(manifest).is_ok())
     {
-        let _ = (manifest.total_bytes(), manifest.file_count());
+        drop((manifest.total_bytes(), manifest.file_count()));
     }
 }
 
@@ -351,7 +353,11 @@ fn scratch() -> &'static PathBuf {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
         let dir = std::env::temp_dir().join(format!("vnilink-fuzz-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        crate::ignored!(
+            crate::trace::FILES,
+            "a fuzz run starts from nothing",
+            std::fs::remove_dir_all(&dir)
+        );
         std::fs::create_dir_all(&dir).expect("a scratch directory");
         dir
     })

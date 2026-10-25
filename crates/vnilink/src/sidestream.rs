@@ -10,6 +10,7 @@
 //! the exchange differ by stream, and a generic over both would trade two
 //! readable wirings for higher-order plumbing. Establishment lives here;
 //! framing lives in each stream.
+// trace: records every ignored failure
 
 use std::time::Duration;
 
@@ -75,7 +76,11 @@ where
                     }
                 }
                 Err(error) => {
-                    let _ = frames_tx.send(Err(error)).await;
+                    crate::ignored!(
+                        crate::trace::SESSION,
+                        "a reader whose consumer left stops reading",
+                        frames_tx.send(Err(error)).await
+                    );
                     break;
                 }
             }

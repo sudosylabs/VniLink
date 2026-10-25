@@ -1,3 +1,4 @@
+// trace: records every ignored failure
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -222,11 +223,19 @@ fn signing_bytes(invitation: &Invitation, nonce: [u8; 16]) -> Vec<u8> {
     bytes.extend_from_slice(&invitation.endpoint_id);
     bytes.extend_from_slice(&nonce);
     bytes.extend_from_slice(&invitation.expires_at_ms.to_be_bytes());
-    let _ = write_relays(&mut bytes, &invitation.relays);
-    let _ = write_addrs(&mut bytes, &invitation.direct);
+    crate::ignored!(
+        crate::trace::PAIRING,
+        "an invitation that encoded once encodes the same here",
+        write_relays(&mut bytes, &invitation.relays)
+    );
+    crate::ignored!(
+        crate::trace::PAIRING,
+        "an invitation that encoded once encodes the same here",
+        write_addrs(&mut bytes, &invitation.direct)
+    );
     // The display name is signed too: a holder of the file cannot rename
     // the writer without invalidating the invitation.
-    let _ = write_hostname(&mut bytes, &invitation.hostname);
+    write_hostname(&mut bytes, &invitation.hostname);
     bytes.push(invitation.os.encode());
     bytes
 }

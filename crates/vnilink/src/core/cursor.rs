@@ -11,6 +11,7 @@ pub(super) type CursorInbox = Arc<Mutex<Option<(SessionStamp, Arc<CursorState>)>
 impl Core {
     /// Native viewers enable this only when they render cursor metadata.
     pub fn set_cursor_receiver(&self, enabled: bool) -> Result<(), Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         self.shared
             .cursor_receiver
@@ -19,6 +20,7 @@ impl Core {
     }
     /// True only after this direction negotiated independent cursor rendering.
     pub fn separate_cursor(&self, id: u64, role: SessionRole) -> Result<bool, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let session = match role {
             SessionRole::Host => state.incoming.get(&id),
@@ -56,6 +58,7 @@ impl Core {
     }
     /// A snapshot for this exact outgoing generation; stale cursor data stays hidden.
     pub fn cursor(&self, id: u64, generation: u64) -> Result<Option<Arc<CursorState>>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let session = state
             .outgoing

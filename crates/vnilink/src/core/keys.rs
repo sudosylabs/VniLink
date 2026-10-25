@@ -26,6 +26,7 @@ impl Core {
     /// An idle neutral connection may configure its adapter before Desktop Open.
     /// Refused while Desktop is active or releasing held input.
     pub fn set_desktop(&self, desktop: Box<dyn HostDesktop>) -> Result<(), Error> {
+        let _engine = self.engine();
         let monitor = desktop.monitor();
         // The candidate lives outside the admission scope, so rejection also
         // destroys native resources only after the global State guard is gone.
@@ -64,10 +65,12 @@ impl Core {
     /// On macOS this can prompt for Accessibility permission. It does not capture
     /// the screen. Linux support is the X11 backend; Wayland is not claimed.
     pub fn enable_os_input_without_prompt(&self) -> Result<(), Error> {
+        let _engine = self.engine();
         self.set_desktop(Box::new(OsInput::open_with_prompt(false)?))
     }
 
     pub fn enable_os_input(&self) -> Result<(), Error> {
+        let _engine = self.engine();
         self.set_desktop(Box::new(OsInput::open()?))
     }
 
@@ -199,6 +202,7 @@ impl Core {
     /// Release held modifiers before changing it, so the key that goes down
     /// is the key that comes up.
     pub fn set_swap_control_and_command(&self, enabled: bool) -> Result<(), Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         if state.outgoing.values().any(|s| {
             !finished(&s.phase)
@@ -223,6 +227,7 @@ impl Core {
 
     /// Whether this controller exchanges Control and Command.
     pub fn swap_control_and_command(&self) -> Result<bool, Error> {
+        let _engine = self.engine();
         drop(self.alive_state()?);
         Ok(self.shared.swap_control_command.load(Ordering::Relaxed))
     }
@@ -235,6 +240,7 @@ impl Core {
     /// press the chord in its own layout. The choice belongs to this process
     /// and is not saved. Release held keys before changing it.
     pub fn set_keyboard_mode(&self, mode: KeyboardMode) -> Result<(), Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         if state.outgoing.values().any(|s| {
             !finished(&s.phase)
@@ -259,6 +265,7 @@ impl Core {
 
     /// How this controller turns a local key into host input.
     pub fn keyboard_mode(&self) -> Result<KeyboardMode, Error> {
+        let _engine = self.engine();
         drop(self.alive_state()?);
         Ok(KeyboardMode::from_u8(
             self.shared.keyboard_mode.load(Ordering::Relaxed),
@@ -303,6 +310,7 @@ impl Core {
 
     /// Releases this tab's held keys/buttons without disconnecting it.
     pub fn release_session_input(&self, id: u64, generation: u64) -> Result<(), Error> {
+        let _engine = self.engine();
         let outbox = self.live_outbox(id, generation)?;
         let controller = self.controller_state(id, generation)?;
         let mut plan = lock(&controller.keyboard);
@@ -320,6 +328,7 @@ impl Core {
     }
 
     pub fn session_keyboard_mode(&self, id: u64, generation: u64) -> Result<KeyboardMode, Error> {
+        let _engine = self.engine();
         Ok(KeyboardMode::from_u8(
             self.controller_state(id, generation)?
                 .mode
@@ -381,6 +390,7 @@ impl Core {
     /// Returns when the text is queued, not when the host has typed it.
     /// A dropped session does not send it again.
     pub fn submit_text(&self, session_id: u64, generation: u64, text: &str) -> Result<(), Error> {
+        let _engine = self.engine();
         input::check_key_text(text)?;
         let outbox = self.live_outbox(session_id, generation)?;
         outbox.push_text(text.to_owned())

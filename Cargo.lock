@@ -5851,6 +5851,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "tracing",
+ "vnilink",
  "vnilink-app",
  "vnilink-log",
  "windows 0.61.3",

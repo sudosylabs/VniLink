@@ -5,6 +5,7 @@
 //! longer in the snapshot is not applied, and it is not retargeted onto a
 //! remaining display. One desktop stream shows one selected display; another
 //! display is another desktop owner.
+// trace: records every ignored failure
 
 use super::*;
 
@@ -29,6 +30,7 @@ impl Core {
     /// stamped with `revision`, so callers cannot mix revisions in one snapshot.
     /// An empty list removes every display at that revision.
     pub fn set_topology(&self, revision: u64, displays: &[DisplayInfo]) -> Result<(), Error> {
+        let _engine = self.engine();
         if revision == 0 {
             return Err(Error::InvalidSetting("a display revision is invalid"));
         }
@@ -84,7 +86,11 @@ impl Core {
             revision,
             displays: stamped,
         };
-        let _ = self.shared.topology_watch.send(revision);
+        crate::ignored!(
+            crate::trace::TOPOLOGY,
+            "no viewer watches the topology now",
+            self.shared.topology_watch.send(revision)
+        );
         self.shared
             .events
             .publish(CoreEvent::TopologyChanged { revision });
@@ -100,6 +106,7 @@ impl Core {
     /// Selection and failure are one state transaction; a concurrent reselection
     /// cannot close a healthy owner. Neutral parents and Files are preserved.
     pub fn fail_desktop_source(&self, display_id: u64, message: &str) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         let routing = super::video::video_routing_locked(&self.shared, &state);
         let routes_to_source = |selected: &[u64]| routing.serves_selection(selected, display_id);
@@ -154,6 +161,7 @@ impl Core {
 
     /// The published snapshot. Revision 0 and an empty list means none yet.
     pub fn topology(&self) -> Result<TopologySnapshot, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         Ok(lock(&self.shared.topology).clone())
     }
@@ -175,6 +183,7 @@ impl Core {
     /// Displays a capture supervisor should open. One id per desktop owner,
     /// the display that owner selected. Unselected owners are absent.
     pub fn capture_displays(&self) -> Result<Vec<u64>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let mut ids = Vec::new();
         for record in state.hosted_services.values() {
@@ -205,6 +214,7 @@ impl Core {
     }
 
     pub fn hosted_display_selection(&self, id: u64, generation: u64) -> Result<Vec<u64>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let desktop = super::desktop_stream::runtime(&state, id, generation, true)?;
         let selected = lock(&desktop.selected).clone();

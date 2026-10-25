@@ -17,6 +17,7 @@ reset-installation = []
 
 [dependencies]
 tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
+vnilink = { path = "../vnilink" }
 vnilink-app = { path = "../vnilink-app" }
 vnilink-log = { path = "../vnilink-log" }
 napi = { version = "=3.12.2", default-features = false, features = ["napi8", "dyn-symbols"] }

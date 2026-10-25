@@ -1,4 +1,5 @@
 //! Encoded frames for one control session.
+// trace: records every ignored failure
 
 use super::*;
 
@@ -105,6 +106,7 @@ impl Core {
     /// Capture workers stop this generation's encoder without stopping the
     /// peer connection. Avoid a full installation snapshot on every frame.
     pub fn host_desktop_active(&self, id: u64, generation: u64) -> Result<bool, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         Ok(state.incoming.get(&id).is_some_and(|s| {
             s.generation == generation
@@ -120,6 +122,7 @@ impl Core {
     /// Frames are not core events. A slow subscriber does not block input. Drop the
     /// subscription to free the slot.
     pub fn subscribe_video(&self) -> Result<VideoSubscription, Error> {
+        let _engine = self.engine();
         let selected = {
             let state = self.alive_state()?;
             if state
@@ -180,6 +183,7 @@ impl Core {
     /// An idle neutral connection may configure capture before Desktop Open.
     /// Refused while Desktop is active or completing teardown.
     pub fn set_capture(&self, capture: Box<dyn HostCapture>) -> Result<(), Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         if state
             .incoming
@@ -211,6 +215,7 @@ impl Core {
     /// bit must mean a backend processed a sample; a failed probe registers
     /// cleared bits, never assumed ones.
     pub fn set_video_codecs(&self, caps: crate::video_caps::VideoCodecCaps) -> Result<(), Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         caps.validate()?;
         *lock(&self.shared.video_caps) = caps;
@@ -219,6 +224,7 @@ impl Core {
 
     /// Currently registered video codec abilities.
     pub fn video_codecs(&self) -> Result<crate::video_caps::VideoCodecCaps, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         Ok(lock(&self.shared.video_caps).clone())
     }
@@ -226,12 +232,14 @@ impl Core {
     /// Live capture consumers. The list is a snapshot: a later open, close or
     /// revoke changes the next call. Order is service flag, then id.
     pub fn video_targets(&self) -> Result<Vec<VideoTarget>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         Ok(video_targets_locked(&self.shared, &state))
     }
 
     /// Frame, cursor and failure attribution share this atomic routing snapshot.
     pub fn video_routing(&self) -> Result<VideoRouting, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         Ok(video_routing_locked(&self.shared, &state))
     }
@@ -240,6 +248,7 @@ impl Core {
     /// `CODEC_H264_HIGH`). The serve path opens the matching encoder
     /// profile with it.
     pub fn host_codec(&self, session_id: u64) -> Result<u8, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let session = state.incoming.get(&session_id).ok_or(Error::NoSession)?;
         if session.phase != SessionPhase::Active {
@@ -251,6 +260,7 @@ impl Core {
     /// The matrix the viewer of one hosted session asked its stream to be
     /// converted and declared in; the serve path opens its encoder with it.
     pub fn host_matrix(&self, session_id: u64) -> Result<crate::YuvMatrix, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let session = state.incoming.get(&session_id).ok_or(Error::NoSession)?;
         if session.phase != SessionPhase::Active {
@@ -264,6 +274,7 @@ impl Core {
     /// A full queue drops predicted frames until the next keyframe and still returns
     /// `Ok`. The frame bytes are not logged.
     pub fn publish_video(&self, session_id: u64, mut frame: EncodedFrame) -> Result<(), Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         frame.check()?;
         let outbox = {
@@ -300,6 +311,7 @@ impl Core {
     /// Poll alongside `session_paths` RTT/relay to drive adaptive quality:
     /// rising `queued` or `dropped` means the encoder outruns the path.
     pub fn video_backpressure(&self, session_id: u64) -> Result<(usize, u64), Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         let state = self.alive_state()?;
         let session = state.incoming.get(&session_id).ok_or(Error::NoSession)?;
@@ -313,11 +325,13 @@ impl Core {
     /// Starting limits for outgoing sessions and newly opened Desktop owners.
     /// The application persists this preference and restores it before dialing.
     pub fn desktop_quality_defaults(&self) -> Result<Quality, Error> {
+        let _engine = self.engine();
         Ok(self.alive_state()?.desktop_quality_default)
     }
 
     /// Codec for new outgoing Desktop owners; None negotiates automatically.
     pub fn desktop_codec_default(&self) -> Result<Option<crate::VideoCodec>, Error> {
+        let _engine = self.engine();
         Ok(self.alive_state()?.desktop_codec_default)
     }
 
@@ -343,11 +357,13 @@ impl Core {
 
     /// Saves a preference without changing existing owners or requiring a decoder now.
     pub fn set_desktop_codec_default(&self, codec: Option<crate::VideoCodec>) -> Result<(), Error> {
+        let _engine = self.engine();
         self.alive_state()?.desktop_codec_default = codec;
         Ok(())
     }
 
     pub fn set_desktop_quality_defaults(&self, quality: Quality) -> Result<(), Error> {
+        let _engine = self.engine();
         let quality = Quality::new(
             quality.max_bitrate_kbps,
             quality.max_frame_rate,
@@ -519,7 +535,11 @@ pub(super) async fn host_video_loop(
                 // Loss-tolerant by design: older queued datagrams may be
                 // dropped to make room, and expiry plus keyframe requests
                 // recover the decoder.
-                let _ = connection.send_many_datagrams(&datagrams);
+                crate::ignored!(
+                    crate::trace::STREAM,
+                    "datagrams the link could not take are lost; the viewer asks for a keyframe",
+                    connection.send_many_datagrams(&datagrams)
+                );
                 continue;
             }
         }
@@ -592,7 +612,11 @@ pub(super) async fn video_recv_loop(
                 let Ok(mut stream) = incoming else { return; };
                 // At most one video stream and one cursor stream. Unknown or
                 // stalled streams cannot accumulate tasks or block datagrams.
-                if streams.len() >= 2 { let _ = stream.stop(0u8.into()); continue; }
+                if streams.len() >= 2 { crate::ignored!(
+                    crate::trace::STREAM,
+                    "a stream that cannot be stopped is closed with its link",
+                    stream.stop(0u8.into())
+                ); continue; }
                 let inbox = Arc::clone(&inbox);
                 let keyframe = Arc::clone(&keyframe);
                 let cursor = cursor.clone();

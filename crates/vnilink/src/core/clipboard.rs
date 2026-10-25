@@ -108,6 +108,7 @@ impl Core {
     /// hosted session exists. Native code publishes OS clipboard changes to
     /// this session only.
     pub fn clipboard_owner_session(&self) -> Result<Option<SessionInfo>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         Ok(state
             .clipboard_owner
@@ -121,6 +122,7 @@ impl Core {
     /// `None` before the first paste of this session. The text is replaced,
     /// not queued. Do not log the returned string.
     pub fn clipboard_text(&self) -> Result<Option<String>, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         let state = self.alive_state()?;
         if state
@@ -251,6 +253,7 @@ impl Core {
     /// selection is replaced, not queued, and each offer carries a fresh
     /// source-assigned revision. Do not log the returned paths.
     pub fn clipboard_files(&self) -> Result<Option<StoredFileSelection>, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         let state = self.alive_state()?;
         if state

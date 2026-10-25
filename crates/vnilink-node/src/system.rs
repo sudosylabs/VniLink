@@ -1,5 +1,6 @@
 //! Lock, restart and shut down: asking a paired computer, and the notice
 //! this computer's user answers when one asks it.
+// trace: records every ignored failure
 use super::{core_error, parse_id, session_target, Command, Reply, State};
 use napi::{Error, Result};
 use serde::Serialize;
@@ -88,7 +89,11 @@ fn service(state: &mut State, session: u64, generation: u64) -> Result<Arc<Syste
                 .close_controller_service(owner.id, owner.generation)
                 .is_ok()
             {
-                let _ = state.core.forget_controller_service(owner.id);
+                vnilink::ignored!(
+                    vnilink::trace::BRIDGE,
+                    "a closed owner already forgotten needs no forgetting",
+                    state.core.forget_controller_service(owner.id)
+                );
             }
             return Err(core_error(error));
         }

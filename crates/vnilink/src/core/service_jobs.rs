@@ -195,6 +195,7 @@ impl Core {
         )
     }
     pub fn files_service_jobs(&self, id: u64, generation: u64) -> Result<Vec<JobSnapshot>, Error> {
+        let _engine = self.engine();
         // Retained records remain inspectable after their owner closes.
         let service = self.controller_service(id)?;
         if service.generation != generation {

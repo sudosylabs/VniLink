@@ -52,6 +52,7 @@ impl Core {
     /// path payload. Export with
     /// [`export_json`](crate::diagnostics::export_json).
     pub fn diagnostic_snapshot(&self) -> Result<DiagnosticSnapshot, Error> {
+        let _engine = self.engine();
         // Jobs come before state in the lock order (`interrupt_orphaned`),
         // so they are counted before the state lock is taken.
         let active_jobs = lock(&self.shared.jobs)

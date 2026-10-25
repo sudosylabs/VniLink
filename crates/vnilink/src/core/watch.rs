@@ -85,6 +85,7 @@ impl Core {
     /// published, settled, as [`CoreEvent::FolderChanged`] with the id this
     /// returns, until [`Core::unwatch_folder`].
     pub fn watch_folder(&self, root: u64, path: &str) -> Result<u64, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         let folder = lock(&self.shared.file_roots).resolve_dir(root, path)?;
         let watch = self.shared.watch_next.fetch_add(1, Ordering::Relaxed);
@@ -118,6 +119,7 @@ impl Core {
 
     /// Stops a watch from [`Core::watch_folder`]; an unknown id is ignored.
     pub fn unwatch_folder(&self, watch: u64) {
+        let _engine = self.engine();
         lock(&self.shared.folder_watches).remove(&watch);
     }
 }

@@ -4,6 +4,7 @@
 //! exchange home relay URLs and direct addresses on the authenticated control
 //! stream. The receiver keeps that list for that peer only; a later dial,
 //! including a reconnect after a dropped link, uses the stored list.
+// trace: records every ignored failure
 
 use super::*;
 
@@ -75,7 +76,13 @@ pub(super) fn remember_peer_addresses(
     let endpoint_id = device.display_id.clone();
     state.trust.pair(device)?;
     if let Err(error) = persist(shared, &mut state) {
-        let _ = state.trust.pair(previous);
+        if let Err(restore) = state.trust.pair(previous) {
+            tracing::warn!(
+                target: crate::trace::RELAY,
+                failure = restore.name(),
+                "the peer's previous addresses could not be put back after a failed save: memory holds the new one"
+            );
+        }
         return Err(error);
     }
     drop(state);
@@ -109,7 +116,13 @@ pub(super) fn remember_peer_hostname(
     if let Err(error) = persist(shared, &mut state) {
         match previous {
             Some(previous) => {
-                let _ = state.trust.set_hostname(peer_key, previous);
+                if let Err(restore) = state.trust.set_hostname(peer_key, previous) {
+                    tracing::warn!(
+                        target: crate::trace::RELAY,
+                        failure = restore.name(),
+                        "the peer's previous name could not be put back after a failed save: memory holds the new one"
+                    );
+                }
             }
             None => state.trust.clear_hostname(peer_key),
         }
@@ -144,6 +157,7 @@ impl Core {
     /// Local display override. Never sent to the peer and never changes trust.
     /// Pass None to return to the reported hostname.
     pub fn set_peer_pet_name(&self, endpoint_id: &str, name: Option<&str>) -> Result<(), Error> {
+        let _engine = self.engine();
         let key = parse_endpoint_id(endpoint_id)?;
         let name = name
             .map(|name| {
@@ -163,7 +177,13 @@ impl Core {
         if let Err(error) = persist(&self.shared, &mut state) {
             match previous {
                 Some(name) => {
-                    let _ = state.trust.set_pet_name(&key, name);
+                    if let Err(restore) = state.trust.set_pet_name(&key, name) {
+                        tracing::warn!(
+                            target: crate::trace::RELAY,
+                            failure = restore.name(),
+                            "the peer's previous nickname could not be put back after a failed save: memory holds the new one"
+                        );
+                    }
                 }
                 None => state.trust.clear_pet_name(&key),
             }
@@ -182,6 +202,7 @@ impl Core {
     /// falls back to the key fragment when this is `None`. Unknown devices
     /// report `NotPaired`: a name never implies trust.
     pub fn peer_hostname(&self, endpoint_id: &str) -> Result<Option<String>, Error> {
+        let _engine = self.engine();
         let key = parse_endpoint_id(endpoint_id)?;
         let state = self.alive_state()?;
         state.trust.get(&key).cloned().ok_or(Error::NotPaired)?;
@@ -190,6 +211,7 @@ impl Core {
 
     /// Paths for a controller's local handle, independent of host id collisions.
     pub fn controller_session_paths(&self, id: u64) -> Result<Vec<SessionPath>, Error> {
+        let _engine = self.engine();
         let link = self
             .alive_state()?
             .outgoing
@@ -213,6 +235,7 @@ impl Core {
     /// round-trip estimate. For diagnostics and the measurement hooks; the
     /// list is a snapshot taken at call time.
     pub fn session_paths(&self, session_id: u64) -> Result<Vec<SessionPath>, Error> {
+        let _engine = self.engine();
         let link = {
             let state = self.alive_state()?;
             let session = state

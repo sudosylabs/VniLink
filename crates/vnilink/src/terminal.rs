@@ -1,4 +1,5 @@
 //! Opt-in terminal backends. Remote peers cannot choose a program or directory.
+// trace: records every ignored failure
 use crate::Error;
 
 pub const TERMINAL_CHUNK: usize = 16 * 1024;
@@ -131,19 +132,35 @@ mod native {
             // Stop both the foreground job and shell group. This is an ordinary
             // user terminal, not containment of deliberately detached processes.
             if let Some(group) = self.master.process_group_leader().filter(|pid| *pid > 0) {
-                let _ = nix::sys::signal::killpg(
-                    nix::unistd::Pid::from_raw(group),
-                    nix::sys::signal::Signal::SIGKILL,
+                crate::ignored!(
+                    crate::trace::TERMINAL,
+                    "a shell already gone needs no signal",
+                    nix::sys::signal::killpg(
+                        nix::unistd::Pid::from_raw(group),
+                        nix::sys::signal::Signal::SIGKILL,
+                    )
                 );
             }
             if let Some(pid) = self.child.process_id().filter(|pid| *pid > 0) {
-                let _ = nix::sys::signal::killpg(
-                    nix::unistd::Pid::from_raw(pid as i32),
-                    nix::sys::signal::Signal::SIGKILL,
+                crate::ignored!(
+                    crate::trace::TERMINAL,
+                    "a shell already gone needs no signal",
+                    nix::sys::signal::killpg(
+                        nix::unistd::Pid::from_raw(pid as i32),
+                        nix::sys::signal::Signal::SIGKILL,
+                    )
                 );
             }
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+            crate::ignored!(
+                crate::trace::TERMINAL,
+                "a shell already gone needs no signal",
+                self.child.kill()
+            );
+            crate::ignored!(
+                crate::trace::TERMINAL,
+                "a shell already gone needs no signal",
+                self.child.wait()
+            );
         }
     }
     /// How often an idle worker looks whether its terminal was closed.
@@ -186,14 +203,22 @@ mod native {
                         break;
                     }
                     // A full pipe already holds a wake-up.
-                    let _ = wake.write(&[1]);
+                    crate::ignored!(
+                        crate::trace::TERMINAL,
+                        "a full pipe already holds a wake-up",
+                        wake.write(&[1])
+                    );
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
         drop(worker);
-        let _ = wake.write(&[1]);
+        crate::ignored!(
+            crate::trace::TERMINAL,
+            "a full pipe already holds a wake-up",
+            wake.write(&[1])
+        );
     }
 
     /// Owns a shell and its terminal: writes the input it is given, reads
@@ -391,7 +416,7 @@ mod native {
             let longest = u16::try_from(longest.as_millis()).unwrap_or(u16::MAX);
             let wake = PollFd::new(self.wake.as_fd(), PollFlags::POLLIN);
             // An interrupted or failed wait only means looking again sooner.
-            let _ = match self.process.master.as_fd() {
+            let _woken = match self.process.master.as_fd() {
                 Some(terminal) => poll(&mut [wake, PollFd::new(terminal, interest)], longest),
                 // A master without a descriptor: look again at the longest wait.
                 None => poll(&mut [wake], longest),
