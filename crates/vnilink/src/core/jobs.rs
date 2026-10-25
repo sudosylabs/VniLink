@@ -152,6 +152,19 @@ pub(super) struct JobRecord {
 }
 
 impl JobRecord {
+    /// The only way a job changes state, so that every change is recorded:
+    /// which job, which side, from and to. Never a path or a peer's message.
+    pub(super) fn enter(&mut self, state: JobState) {
+        if self.state != state {
+            let (from, to) = (self.state.name(), state.name());
+            if state.is_terminal() {
+                tracing::info!(target: crate::trace::FILES, job = self.id, sender = self.sender, from, to, files_done = self.files_done, done_bytes = self.done_bytes, "job state");
+            } else {
+                tracing::debug!(target: crate::trace::FILES, job = self.id, sender = self.sender, from, to, "job state");
+            }
+        }
+        self.state = state;
+    }
     /// A download of one `size`-byte file, as a receiver holds it.
     #[cfg(test)]
     pub(super) fn test_receiver(id: u64, size: u64) -> Self {
@@ -711,7 +724,7 @@ impl Core {
                 record.local_root,
                 &mut record.local_pin,
             )?;
-            record.state = JobState::Serving;
+            record.enter(JobState::Serving);
             jobs.insert(id, record);
         }
         let announced = (|| {
@@ -1075,7 +1088,7 @@ impl Core {
             let mut jobs = lock(&self.shared.jobs);
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             if !record.state.is_terminal() {
-                record.state = JobState::Cancelled;
+                record.enter(JobState::Cancelled);
                 record.error = None;
             }
             (record.peer_key, record.outgoing)
@@ -1144,11 +1157,11 @@ impl Core {
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             let state = lock(&self.shared.state);
             super::service_jobs::check_owner(&state, record.owner)?;
-            record.state = if record.manifest.is_some() {
+            record.enter(if record.manifest.is_some() {
                 JobState::Transferring
             } else {
                 JobState::Preparing
-            };
+            });
             record.waiting_file = None;
             record.error = None;
             drop(state);
@@ -1214,7 +1227,7 @@ impl Core {
             // Receivers own their conflicts; senders mirror and forward.
             // Optimistically advance local state; the next status poll
             // reconciles if forwarding failed.
-            record.state = JobState::Transferring;
+            record.enter(JobState::Transferring);
             record.waiting_file = None;
             (record.sender, record.peer_key, record.outgoing)
         };
@@ -1341,17 +1354,17 @@ impl Core {
                 record.skipped_files = reply.skipped_files;
                 match state {
                     JobState::Complete => {
-                        record.state = JobState::Complete;
+                        record.enter(JobState::Complete);
                         record.error = None;
                         record.waiting_file = None;
                     }
                     JobState::Failed | JobState::Cancelled | JobState::Interrupted => {
-                        record.state = state;
+                        record.enter(state);
                         record.error = reply.error.map(|text| truncate_error(&text));
                         record.waiting_file = None;
                     }
                     JobState::WaitingDecision => {
-                        record.state = JobState::WaitingDecision;
+                        record.enter(JobState::WaitingDecision);
                         record.error = None;
                         // Map the receiver's waiting path back to this
                         // record's file index (manifests correlate by id).
@@ -1367,7 +1380,7 @@ impl Core {
                     }
                     JobState::Transferring if record.state == JobState::WaitingDecision => {
                         super::service_jobs::check_owner(&lock(&self.shared.state), record.owner)?;
-                        record.state = JobState::Serving;
+                        record.enter(JobState::Serving);
                         record.waiting_file = None;
                     }
                     _ => {}
@@ -1449,7 +1462,7 @@ impl Core {
             if matches!(record.state, JobState::Cancelled | JobState::Interrupted) {
                 return Ok(record.snapshot());
             }
-            record.state = JobState::WaitingDecision;
+            record.enter(JobState::WaitingDecision);
             record.waiting_file = Some(file_index);
             drop(jobs);
             save_jobs(&self.shared)?;
@@ -1587,7 +1600,7 @@ impl Core {
             Ok(Received::Cancelled) => {
                 let mut jobs = lock(&self.shared.jobs);
                 let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
-                record.state = JobState::Cancelled;
+                record.enter(JobState::Cancelled);
                 drop(jobs);
                 save_jobs(&self.shared)?;
                 return self.job_snapshot(id);
@@ -1698,7 +1711,7 @@ impl Core {
             }
             record.manifest = Some(manifest);
             if record.state == JobState::Preparing {
-                record.state = JobState::Transferring;
+                record.enter(JobState::Transferring);
             }
         }
         save_jobs(&self.shared)?;
@@ -2034,7 +2047,7 @@ impl Core {
                     let mut jobs = lock(&self.shared.jobs);
                     let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
                     record.choices.remove(&record.file_index);
-                    record.state = JobState::WaitingDecision;
+                    record.enter(JobState::WaitingDecision);
                     record.waiting_file = Some(record.file_index);
                     drop(jobs);
                     save_jobs(&self.shared)?;
@@ -2357,7 +2370,7 @@ impl Core {
             };
             if !granted || super::service_jobs::check_owner(&state_guard, record.owner).is_err() {
                 if record.state != JobState::Cancelled {
-                    record.state = JobState::Interrupted;
+                    record.enter(JobState::Interrupted);
                     let reason = if granted { OWNER_GONE } else { PERMISSION_OFF };
                     record.error = Some(reason.to_owned());
                     record.waiting_file = None;
@@ -2386,7 +2399,7 @@ impl Core {
                         || record.apply_remaining == Some(ConflictChoice::Replace);
                     if dest_exists && !explicit_replace {
                         record.choices.remove(&at);
-                        record.state = JobState::WaitingDecision;
+                        record.enter(JobState::WaitingDecision);
                         record.waiting_file = Some(at);
                         drop(state_guard);
                         drop(jobs);
@@ -2406,7 +2419,7 @@ impl Core {
                         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                             // Lost auto-Replace race (dest appeared): conflict.
                             record.choices.remove(&record.file_index);
-                            record.state = JobState::WaitingDecision;
+                            record.enter(JobState::WaitingDecision);
                             record.waiting_file = Some(record.file_index);
                             drop(state_guard);
                             drop(jobs);
@@ -2417,7 +2430,7 @@ impl Core {
                             // Remount raced the pre-stage check: stand down
                             // retryably; the next poll re-detects volumes.
                             if record.state != JobState::Cancelled {
-                                record.state = JobState::Interrupted;
+                                record.enter(JobState::Interrupted);
                                 record.error = Some(VOLUME_CHANGED.to_owned());
                                 record.waiting_file = None;
                             }
@@ -2451,7 +2464,7 @@ impl Core {
                             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                                 // Lost race: re-enter conflict.
                                 record.choices.remove(&record.file_index);
-                                record.state = JobState::WaitingDecision;
+                                record.enter(JobState::WaitingDecision);
                                 record.waiting_file = Some(record.file_index);
                                 drop(state_guard);
                                 drop(jobs);
@@ -2460,7 +2473,7 @@ impl Core {
                             }
                             Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
                                 if record.state != JobState::Cancelled {
-                                    record.state = JobState::Interrupted;
+                                    record.enter(JobState::Interrupted);
                                     record.error = Some(VOLUME_CHANGED.to_owned());
                                     record.waiting_file = None;
                                 }
@@ -2488,7 +2501,7 @@ impl Core {
                             }
                             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                                 record.choices.remove(&record.file_index);
-                                record.state = JobState::WaitingDecision;
+                                record.enter(JobState::WaitingDecision);
                                 record.waiting_file = Some(record.file_index);
                                 drop(state_guard);
                                 drop(jobs);
@@ -2497,7 +2510,7 @@ impl Core {
                             }
                             Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
                                 if record.state != JobState::Cancelled {
-                                    record.state = JobState::Interrupted;
+                                    record.enter(JobState::Interrupted);
                                     record.error = Some(VOLUME_CHANGED.to_owned());
                                     record.waiting_file = None;
                                 }
@@ -2580,7 +2593,7 @@ impl Core {
             if matches!(record.state, JobState::Cancelled | JobState::Interrupted) {
                 return Ok(record.snapshot());
             }
-            record.state = JobState::Complete;
+            record.enter(JobState::Complete);
             record.error = None;
             drop(jobs);
         }
@@ -2645,7 +2658,7 @@ impl Core {
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             record.retry = None;
             if record.state != JobState::Cancelled {
-                record.state = JobState::Interrupted;
+                record.enter(JobState::Interrupted);
                 record.error = Some(reason.to_owned());
             }
         }
@@ -2669,7 +2682,7 @@ impl Core {
         {
             let mut jobs = lock(&self.shared.jobs);
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
-            record.state = JobState::Failed;
+            record.enter(JobState::Failed);
             record.error = Some(reason.to_owned());
         }
         // Failed jobs do not resume: their partial only takes disk.
@@ -2726,7 +2739,7 @@ impl Core {
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             let state = lock(&self.shared.state);
             super::service_jobs::check_owner(&state, record.owner)?;
-            record.state = JobState::Serving;
+            record.enter(JobState::Serving);
             record.error = None;
             drop(state);
             drop(jobs);
@@ -3364,7 +3377,7 @@ fn interrupt_jobs(shared: &Shared, peer: &[u8; 32], controller_only: bool, reaso
             if record.peer_key == *peer && (!controller_only || record.outgoing) {
                 match record.state {
                     JobState::Serving | JobState::Transferring | JobState::WaitingDecision => {
-                        record.state = JobState::Interrupted;
+                        record.enter(JobState::Interrupted);
                         record.error = Some(reason.to_owned());
                         record.waiting_file = None;
                         ids.push(record.id);
@@ -3555,11 +3568,11 @@ pub(super) fn load_jobs(shared: &Shared) {
             // nothing to resume from.
             match record.state {
                 _ if record.preparing_here() && !record.state.is_terminal() => {
-                    record.state = JobState::Failed;
+                    record.enter(JobState::Failed);
                     record.error = Some(PREPARE_STOPPED.to_owned());
                 }
                 JobState::Preparing | JobState::Serving | JobState::Transferring => {
-                    record.state = JobState::Interrupted;
+                    record.enter(JobState::Interrupted);
                     record.error = Some(APP_CLOSED.to_owned());
                 }
                 _ => {}
@@ -3824,7 +3837,7 @@ async fn handle_cancel(
         let mut jobs = lock(&shared.jobs);
         match wire_job_mut(&mut jobs, peer, cancel.job_id) {
             Some(record) if record.peer_key == *peer && !record.state.is_terminal() => {
-                record.state = JobState::Cancelled;
+                record.enter(JobState::Cancelled);
                 record.error = None;
                 record.waiting_file = None;
                 Some(record.id)
@@ -4026,7 +4039,7 @@ async fn handle_resolve(
                 if resolve.apply_to_remaining {
                     record.apply_remaining = Some(choice);
                 }
-                record.state = JobState::Transferring;
+                record.enter(JobState::Transferring);
                 record.waiting_file = None;
                 job::STATUS_OK
             }
@@ -4194,7 +4207,7 @@ async fn handle_resume(
                     )
                     .is_err()
                     {
-                        record.state = JobState::Failed;
+                        record.enter(JobState::Failed);
                         record.error = Some(fs::ROOTS_REBOUND.to_owned());
                         PinDecision::Rebound
                     } else {
@@ -4235,7 +4248,7 @@ async fn handle_resume(
             {
                 let mut jobs = lock(&shared.jobs);
                 if let Some(record) = wire_job_mut(&mut jobs, peer, resume.job_id) {
-                    record.state = JobState::Failed;
+                    record.enter(JobState::Failed);
                     record.error = Some(reason.to_owned());
                 }
             }
@@ -4255,7 +4268,7 @@ async fn handle_resume(
                 if super::service_jobs::check_owner(&lock(&shared.state), record.owner).is_err() {
                     return Err(());
                 }
-                record.state = JobState::Serving;
+                record.enter(JobState::Serving);
                 record.error = None;
             }
         }
@@ -4266,7 +4279,7 @@ async fn handle_resume(
             if super::service_jobs::check_owner(&lock(&shared.state), record.owner).is_err() {
                 return Err(());
             }
-            record.state = JobState::Transferring;
+            record.enter(JobState::Transferring);
             record.waiting_file = None;
             record.error = None;
         }
@@ -4599,7 +4612,7 @@ impl Drop for Unprepared<'_> {
             .get_mut(&self.id)
             .filter(|record| record.state == JobState::Preparing)
             .map(|record| {
-                record.state = JobState::Failed;
+                record.enter(JobState::Failed);
                 record.error = Some(PREPARE_STOPPED.to_owned());
             })
             .is_some();
@@ -4639,7 +4652,7 @@ fn finish_preparation(
         ) && super::service_jobs::check_owner(&state, record.owner).is_ok();
         match prepared {
             Ok(_) if !permitted => {
-                record.state = JobState::Failed;
+                record.enter(JobState::Failed);
                 record.error = Some(PREPARE_FAILED.to_owned());
                 Err(job::STATUS_DENIED)
             }
@@ -4647,11 +4660,11 @@ fn finish_preparation(
                 record.manifest = Some(manifest.clone());
                 record.skipped_symlinks = skipped;
                 record.source_ids = source_ids;
-                record.state = JobState::Serving;
+                record.enter(JobState::Serving);
                 Ok(manifest)
             }
             Err(status) => {
-                record.state = JobState::Failed;
+                record.enter(JobState::Failed);
                 record.error = Some(PREPARE_FAILED.to_owned());
                 Err(status)
             }
@@ -5164,7 +5177,7 @@ mod retry_tests {
     fn retries_back_off_reset_on_progress_and_give_up() {
         let core = core();
         let mut record = JobRecord::test_receiver(7, 1000);
-        record.state = JobState::Transferring;
+        record.enter(JobState::Transferring);
         lock(&core.shared.jobs).insert(7, record);
         let retry = |core: &Core| lock(&core.shared.jobs)[&7].retry.clone();
 
@@ -5220,15 +5233,15 @@ mod retry_tests {
             record.files().get(index).map(|entry| entry.path.clone())
         }
         let paths: Vec<_> = (0..3).map(path).collect();
-        record.state = JobState::Transferring;
+        record.enter(JobState::Transferring);
         record.file_index = 1;
         assert_eq!(record.snapshot().current_file, paths[1]);
         record.sender = true;
-        record.state = JobState::Serving;
+        record.enter(JobState::Serving);
         record.files_done = 1;
         record.skipped_files = 1;
         assert_eq!(record.snapshot().current_file, paths[2]);
-        record.state = JobState::Interrupted;
+        record.enter(JobState::Interrupted);
         assert_eq!(record.snapshot().current_file, None);
     }
 
@@ -5239,7 +5252,7 @@ mod retry_tests {
         let core = core();
         let mut record = JobRecord::test_receiver_of(7, 3);
         record.sender = true;
-        record.state = JobState::Serving;
+        record.enter(JobState::Serving);
         record.peer_key = [4; 32];
         lock(&core.shared.jobs).insert(7, record);
         let sent_at = |core: &Core| lock(&core.shared.jobs)[&7].sent_at;
@@ -5286,7 +5299,7 @@ mod served_job_tests {
         record.sender = true;
         record.wire_id = wire_id;
         record.peer_key = [peer; 32];
-        record.state = state;
+        record.enter(state);
         record
     }
 

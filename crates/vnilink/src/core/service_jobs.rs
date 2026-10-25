@@ -97,10 +97,10 @@ pub(super) fn interrupt_orphaned(shared: &Shared) {
                 {
                     // A download still being prepared has nothing to resume.
                     if r.preparing_here() {
-                        r.state = JobState::Failed;
+                        r.enter(JobState::Failed);
                         r.error = Some("the transfer stopped before it was prepared".to_owned());
                     } else {
-                        r.state = JobState::Interrupted;
+                        r.enter(JobState::Interrupted);
                         r.error = Some(super::jobs::OWNER_GONE.to_owned());
                     }
                     r.waiting_file = None;
