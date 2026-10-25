@@ -1,7 +1,9 @@
-import { Emitter } from '../../src/base/common/event.js';
+import { Emitter, Event } from '../../src/base/common/event.js';
 import { DisposableStore } from '../../src/base/common/lifecycle.js';
+import { IConfigurationService } from '../../src/platform/configuration/common/configuration.js';
 import { InstantiationService } from '../../src/platform/instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
+import { INativeHostService } from '../../src/platform/native/common/native.js';
 import '../../src/workbench/contrib/remoteDesktop/remoteDesktop.contribution.js';
 import { ViewScreenAction } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopActions.js';
 import { RemoteDesktopView } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopView.js';
@@ -62,6 +64,8 @@ export async function verifyRemoteDesktopStill(): Promise<void> {
 	const services = disposables.add(new InstantiationService(new ServiceCollection(
 		[ITabService, tabService],
 		[IDeviceService, { _serviceBrand: undefined, devices: [device] }],
+		[INativeHostService, { _serviceBrand: undefined, onDidChangeWindowState: Event.None, setFullScreen: () => Promise.resolve() }],
+		[IConfigurationService, { _serviceBrand: undefined, getValue: () => undefined }],
 		[IRemoteDesktopService, {
 			_serviceBrand: undefined,
 			open: (_deviceId: string, control: boolean) => {

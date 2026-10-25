@@ -1,12 +1,15 @@
 import * as nls from '../../../nls.js';
 import { $, addDisposableListener, append, DisposableResizeObserver, EventType, getWindow } from '../../../base/browser/dom.js';
 import { status as announce } from '../../../base/browser/ui/aria/aria.js';
+import { renderIcon } from '../../../base/browser/ui/icon/icon.js';
 import { Icons } from '../../../base/common/icons.js';
 import { isMacintosh, isWindows } from '../../../base/common/platform.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../../base/common/lifecycle.js';
+import { IConfigurationService } from '../../../platform/configuration/common/configuration.js';
 import type { DesktopCondition } from '../../../platform/engine/common/dataChannel.js';
 import type { DisplayInfo } from '../../../platform/engine/common/engine.js';
 import { hidUsage } from '../../../platform/engine/common/keyUsage.js';
+import { INativeHostService } from '../../../platform/native/common/native.js';
 import type { DeviceSummary } from '../../services/devices/deviceService.js';
 import { latencyStages, type LatencyStage } from '../../services/remoteDesktop/desktopLatency.js';
 import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopPointer, type DesktopPointerShape, type DesktopStats, type IDesktopSession } from '../../services/remoteDesktop/remoteDesktopService.js';
@@ -106,6 +109,54 @@ interface PointerLook {
 	readonly height: number;
 	readonly hotspotX: number;
 	readonly hotspotY: number;
+}
+
+/**
+ * How the picture is sized in its tab: fitted, never larger than its own
+ * pixels; stretched to fill the tab; or zoomed, where 1 puts each pixel of
+ * the picture on one pixel of this screen.
+ */
+export type PictureSize = 'fit' | 'stretch' | number;
+
+/** The zooms offered beside fitting and stretching; 1 is the original size. */
+const zooms: readonly number[] = [0.5, 0.75, 1, 1.5, 2];
+
+function pictureSizeFrom(value: unknown): PictureSize {
+	if (value === 'fit' || value === 'stretch') {
+		return value;
+	}
+	if (value === 'original') {
+		return 1;
+	}
+	const zoom = Number(value);
+	return zooms.includes(zoom) ? zoom : 'fit';
+}
+
+interface Size {
+	readonly width: number;
+	readonly height: number;
+}
+
+/**
+ * The picture's size on screen in CSS pixels, for a picture of `width` ×
+ * `height` pixels in a stage of `stage` CSS pixels on a screen of `ratio`
+ * device pixels per CSS pixel. Whole device pixels, so a picture at its
+ * original size is drawn without resampling.
+ */
+export function shownSize(size: PictureSize, width: number, height: number, stage: Size, ratio: number): Size {
+	const fill = Math.min(stage.width * ratio / width, stage.height * ratio / height);
+	const room = Number.isFinite(fill) && fill > 0 ? fill : 1;
+	const scale = size === 'fit' ? Math.min(1, room) : size === 'stretch' ? room : size;
+	return { width: Math.max(1, Math.floor(width * scale)) / ratio, height: Math.max(1, Math.floor(height * scale)) / ratio };
+}
+
+function pictureSizeLabel(size: PictureSize): string {
+	switch (size) {
+		case 'fit': return nls.localize('desktop.pictureFit', 'Fit');
+		case 'stretch': return nls.localize('desktop.pictureStretch', 'Stretch');
+		default:
+			return size === 1 ? nls.localize('desktop.pictureOriginal', 'Original size') : nls.localize('desktop.pictureZoom', '{0}%', Math.round(size * 100));
+	}
 }
 
 const codecNames: Readonly<Record<string, string>> = { h264: 'H.264', h265: 'HEVC', vp8: 'VP8', vp9: 'VP9', av1: 'AV1' };
@@ -230,10 +281,11 @@ function reconnectReason(name: string, problem: DesktopProblem | undefined): str
 }
 
 /**
- * A paired computer's screen, filling its tab: shown fitted, and, when this
- * computer controls it, the keyboard, pointer and wheel go to it while the
- * screen has focus. One tab per computer. A dropped connection is tried
- * again by itself, over the last picture, dimmed.
+ * A paired computer's screen in its tab, sized as the user chooses (fitted
+ * by default), in the tab or full screen; when this computer controls it,
+ * the keyboard, pointer and wheel go to it while the screen has focus. One
+ * tab per computer. A dropped connection is tried again by itself, over the
+ * last picture, dimmed.
  */
 export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	public static readonly PREFIX = 'desktop:';
@@ -256,6 +308,10 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	private readonly overlayActions: HTMLElement;
 	private readonly statusRole: HTMLElement;
 	private readonly statusSize: HTMLElement;
+	private readonly sizePicker: HTMLSelectElement;
+	private readonly fullScreenButton: HTMLButtonElement;
+	private pictureSize: PictureSize;
+	private fullScreen = false;
 	private readonly statusStats: HTMLElement;
 	/** What is wrong with the live picture, apart from why one ended. */
 	private readonly statusCondition: HTMLElement;
@@ -299,8 +355,11 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		public readonly control: boolean,
 		@IRemoteDesktopService private readonly remoteDesktop: IRemoteDesktopService,
 		@ITabService private readonly tabService: ITabService,
+		@INativeHostService private readonly nativeHost: INativeHostService,
+		@IConfigurationService configurationService: IConfigurationService,
 	) {
 		super();
+		this.pictureSize = pictureSizeFrom(configurationService.getValue<unknown>('desktop.pictureSize'));
 		this.id = RemoteDesktopView.idFor(device.id);
 		this.label = device.name;
 		this.element = $('section.desktop-view');
@@ -319,10 +378,13 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		this.context = this.canvas.getContext('2d');
 		this.pointerMark = append(this.stage, $('.desktop-pointer', { 'aria-hidden': 'true' }));
 		this.pointerMark.hidden = true;
-		const resize = this._register(new DisposableResizeObserver('remoteDesktopPointer', () => {
-			this.showPointer();
+		const resize = this._register(new DisposableResizeObserver('remoteDesktopStage', () => {
+			this.layout();
 		}, getWindow(this.element)));
-		this._register(resize.observe(this.canvas));
+		this._register(resize.observe(this.stage));
+		this._register(addDisposableListener(this.stage, EventType.SCROLL, () => {
+			this.showPointer();
+		}));
 		this._register(addDisposableListener(this.canvas, EventType.MOUSE_ENTER, () => {
 			this.pointerInside = true;
 			this.showPointer();
@@ -344,12 +406,24 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		this.statusCondition.hidden = true;
 		append(status, $('span.desktop-status-space'));
 		this.statusSize = append(status, $('span.desktop-status-size'));
+		const picker = append(status, $('span.desktop-size-picker'));
+		this.sizePicker = append(picker, $<HTMLSelectElement>('select'));
+		this.sizePicker.setAttribute('aria-label', nls.localize('desktop.pictureSize', 'Picture size'));
+		for (const size of ['fit', 'stretch', ...zooms] as const) {
+			append(this.sizePicker, $<HTMLOptionElement>('option', { value: String(size) })).textContent = pictureSizeLabel(size);
+		}
+		this.sizePicker.value = String(this.pictureSize);
+		picker.append(renderIcon(Icons.chevronDown));
+		this.fullScreenButton = append(status, $<HTMLButtonElement>('button.desktop-status-button', { type: 'button' }));
+		this.updateFullScreenButton();
+		this.registerViewControls();
 		if (control) {
 			this.registerInput();
 		}
 		this._register(this.tabService.onDidChange(() => {
 			if (this.tabService.activeTab !== this) {
 				this.releaseInput();
+				void this.setFullScreen(false);
 			}
 		}));
 		this._register(toDisposable(() => {
@@ -360,6 +434,67 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 
 	public static idFor(deviceId: string): string {
 		return `${RemoteDesktopView.PREFIX}${deviceId}`;
+	}
+
+	private registerViewControls(): void {
+		this._register(addDisposableListener(this.sizePicker, EventType.CHANGE, () => {
+			this.pictureSize = pictureSizeFrom(this.sizePicker.value);
+			this.layout();
+		}));
+		this._register(addDisposableListener(this.fullScreenButton, EventType.CLICK, () => {
+			void this.setFullScreen(!this.fullScreen);
+		}));
+		this._register(this.nativeHost.onDidChangeWindowState(state => {
+			// The window left full screen another way, such as its green button.
+			if (this.fullScreen && !state.fullscreen) {
+				this.applyFullScreen(false);
+			}
+		}));
+		this._register(toDisposable(() => {
+			if (this.fullScreen) {
+				void this.nativeHost.setFullScreen(false);
+			}
+		}));
+	}
+
+	/**
+	 * The window goes full screen and the screen covers it, the status bar
+	 * kept below it: keys go to the other computer, so leaving is a button
+	 * there, or the window's own controls.
+	 */
+	public async setFullScreen(fullScreen: boolean): Promise<void> {
+		if (fullScreen === this.fullScreen) {
+			return;
+		}
+		this.applyFullScreen(fullScreen);
+		await this.nativeHost.setFullScreen(fullScreen);
+	}
+
+	private applyFullScreen(fullScreen: boolean): void {
+		this.fullScreen = fullScreen;
+		this.element.classList.toggle('desktop-view-fullscreen', fullScreen);
+		this.updateFullScreenButton();
+	}
+
+	private updateFullScreenButton(): void {
+		const text = this.fullScreen ? nls.localize('desktop.exitFullScreen', 'Exit Full Screen') : nls.localize('desktop.fullScreen', 'Full Screen');
+		this.fullScreenButton.title = text;
+		this.fullScreenButton.setAttribute('aria-label', text);
+		this.fullScreenButton.replaceChildren(renderIcon(this.fullScreen ? Icons.exitFullScreen : Icons.fullScreen));
+	}
+
+	/** Sizes the picture in its stage as chosen, centred where it is smaller, scrolling where it is larger. */
+	private layout(): void {
+		const ratio = getWindow(this.element).devicePixelRatio || 1;
+		const stage = { width: this.stage.clientWidth, height: this.stage.clientHeight };
+		const shown = shownSize(this.pictureSize, this.canvas.width, this.canvas.height, stage, ratio);
+		// Whole device pixels for the margins too, so the picture is not split across pixels.
+		const margin = (room: number, size: number): string => `${String(Math.max(0, Math.floor((room - size) / 2 * ratio)) / ratio)}px`;
+		this.canvas.style.width = `${String(shown.width)}px`;
+		this.canvas.style.height = `${String(shown.height)}px`;
+		this.canvas.style.marginLeft = margin(stage.width, shown.width);
+		this.canvas.style.marginTop = margin(stage.height, shown.height);
+		this.showPointer();
 	}
 
 	/** Opens the screen, or says in the tab why it can't; `again` after the connection dropped. */
@@ -447,7 +582,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			if (this.canvas.width !== frame.displayWidth || this.canvas.height !== frame.displayHeight) {
 				this.canvas.width = frame.displayWidth;
 				this.canvas.height = frame.displayHeight;
-				this.showPointer();
+				this.layout();
 			}
 			this.context.drawImage(frame, 0, 0);
 			this.session.value?.presented(picture);
@@ -608,24 +743,19 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	}
 
 	/**
-	 * Where the picture is drawn inside the canvas, which fits it with
-	 * margins: its top-left corner in the viewport, and CSS pixels per
-	 * picture pixel.
+	 * Where the picture is on screen: its top-left corner in the viewport,
+	 * and CSS pixels per picture pixel. The canvas is the picture's size.
 	 */
 	private fitted(): { readonly left: number; readonly top: number; readonly scale: number } | undefined {
 		if (!this.canvas.width || !this.canvas.height) {
 			return undefined;
 		}
 		const box = this.canvas.getBoundingClientRect();
-		const scale = Math.min(box.width / this.canvas.width, box.height / this.canvas.height);
+		const scale = box.width / this.canvas.width;
 		if (!(scale > 0)) {
 			return undefined;
 		}
-		return {
-			left: box.left + (box.width - this.canvas.width * scale) / 2,
-			top: box.top + (box.height - this.canvas.height * scale) / 2,
-			scale,
-		};
+		return { left: box.left, top: box.top, scale };
 	}
 
 	/**
@@ -652,9 +782,10 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		const drawn = remote.visible && (!this.control || !this.pointerInside);
 		this.pointerMark.hidden = !drawn;
 		if (drawn) {
+			// The mark is placed in the stage's content, which scrolls.
 			const stage = this.stage.getBoundingClientRect();
-			const x = fit.left - stage.left + remote.x * fit.scale - look.hotspotX;
-			const y = fit.top - stage.top + remote.y * fit.scale - look.hotspotY;
+			const x = fit.left - stage.left + this.stage.scrollLeft + remote.x * fit.scale - look.hotspotX;
+			const y = fit.top - stage.top + this.stage.scrollTop + remote.y * fit.scale - look.hotspotY;
 			this.pointerMark.style.width = `${String(look.width)}px`;
 			this.pointerMark.style.height = `${String(look.height)}px`;
 			this.pointerMark.style.backgroundImage = `url("${look.url}")`;
@@ -699,7 +830,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		return this.pointerLook;
 	}
 
-	/** Where the pointer is on the other computer's display, through the picture as it is fitted on screen. */
+	/** Where the pointer is on the other computer's display, through the picture as it is shown. */
 	private pointer(event: PointerEvent): void {
 		const display = this.currentDisplay();
 		const shown = this.shown;

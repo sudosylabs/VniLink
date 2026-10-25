@@ -180,6 +180,18 @@ registerSettings('user', {
 			description: nls.localize('desktop.qualityHelp', 'The most bandwidth, frame rate and picture size a stream may use. A stream uses what its picture and the connection allow, up to these limits.'),
 			validate: value => isQualityLimits(value) ? undefined : nls.localize('desktop.invalidQuality', 'Enter limits up to 50,000 kbps, 60 fps and 7680 × 7680 px.'),
 		},
+		'desktop.pictureSize': {
+			type: 'string',
+			enum: ['fit', 'stretch', 'original'],
+			enumItemLabels: [nls.localize('desktop.pictureFit', 'Fit'), nls.localize('desktop.pictureStretch', 'Stretch'), nls.localize('desktop.pictureOriginal', 'Original size')],
+			enumDescriptions: [
+				nls.localize('desktop.pictureFitHelp', 'Each pixel of the other screen on one pixel of this one, made smaller when the tab can’t hold it.'),
+				nls.localize('desktop.pictureStretchHelp', 'Made larger or smaller to fill the tab.'),
+				nls.localize('desktop.pictureOriginalHelp', 'Each pixel of the other screen on one pixel of this one; scroll to see what the tab can’t hold.'),
+			],
+			default: 'fit',
+			title: nls.localize('desktop.pictureSize', 'Picture size'),
+		},
 		'desktop.codec': {
 			type: 'string',
 			default: 'auto',

@@ -2,11 +2,13 @@ import { Emitter } from '../../src/base/common/event.js';
 import { DisposableStore } from '../../src/base/common/lifecycle.js';
 import type { DesktopCondition, DesktopMediaStatus, DesktopRateLimit } from '../../src/platform/engine/common/dataChannel.js';
 import type { DisplayInfo } from '../../src/platform/engine/common/engine.js';
+import { IConfigurationService } from '../../src/platform/configuration/common/configuration.js';
+import { INativeHostService, type IWindowState } from '../../src/platform/native/common/native.js';
 import { InstantiationService } from '../../src/platform/instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
 import '../../src/workbench/contrib/remoteDesktop/remoteDesktop.contribution.js';
 import { OpenRemoteDesktopAction, ViewScreenAction } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopActions.js';
-import { RemoteDesktopView } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopView.js';
+import { RemoteDesktopView, shownSize } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopView.js';
 import { IDeviceService, type DeviceSummary } from '../../src/workbench/services/devices/deviceService.js';
 import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopPictureRole, type DesktopPointer, type DesktopStats, type IDesktopSession } from '../../src/workbench/services/remoteDesktop/remoteDesktopService.js';
 import { ITabService } from '../../src/workbench/services/tabs/tabService.js';
@@ -105,8 +107,19 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 	const sessions: FakeSession[] = [];
 	const answers: (DesktopFailure | undefined)[] = [];
 	const tabService = disposables.add(new TabService());
+	const windowState = disposables.add(new Emitter<IWindowState>());
+	const fullScreen: boolean[] = [];
 	const services = disposables.add(new InstantiationService(new ServiceCollection(
 		[ITabService, tabService],
+		[INativeHostService, {
+			_serviceBrand: undefined,
+			onDidChangeWindowState: windowState.event,
+			setFullScreen: (value: boolean) => {
+				fullScreen.push(value);
+				return Promise.resolve();
+			},
+		}],
+		[IConfigurationService, { _serviceBrand: undefined, getValue: (key: string) => key === 'desktop.pictureSize' ? 'fit' : undefined }],
 		[IDeviceService, { _serviceBrand: undefined, devices: [device] }],
 		[IRemoteDesktopService, {
 			_serviceBrand: undefined,
@@ -221,8 +234,17 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 			press(canvas, 'keyup', 'Digit0', '@', { altKey: true });
 		}
 
-		// The pointer lands on the other computer's display, through the fitted picture.
+		// Fitted by default: its own pixels, smaller when the tab can't hold it, centred.
+		const stage = view.element.querySelector<HTMLElement>('.desktop-stage');
+		assert(stage !== null, 'The tab has no stage');
+		const ratio = window.devicePixelRatio || 1;
+		const room = { width: stage.clientWidth, height: stage.clientHeight };
+		const fitted = shownSize('fit', 1920, 1080, room, ratio);
 		const box = canvas.getBoundingClientRect();
+		assert(Math.abs(box.width - fitted.width) < 0.5 && Math.abs(box.height - fitted.height) < 0.5 && fitted.width * ratio <= 1920, `The picture was not fitted: ${String(box.width)} × ${String(box.height)}`);
+		const stageBox = stage.getBoundingClientRect();
+		assert(Math.abs(box.left - stageBox.left - (room.width - box.width) / 2) < 1 && Math.abs(box.top - stageBox.top - (room.height - box.height) / 2) < 1, 'The fitted picture is not centred');
+		// The pointer lands on the other computer's display, through the picture as shown.
 		const center = { clientX: box.left + box.width / 2, clientY: box.top + box.height / 2, bubbles: true, cancelable: true, pointerId: 1 };
 		canvas.dispatchEvent(new PointerEvent('pointermove', center));
 		canvas.dispatchEvent(new PointerEvent('pointerdown', { ...center, button: 0 }));
@@ -232,10 +254,10 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		assert(sessions[0].sent.filter(input => input.type === 'submitButton').map(input => JSON.stringify(input)).join() === [
 			JSON.stringify({ type: 'submitButton', button: 'Left', down: true }), JSON.stringify({ type: 'submitButton', button: 'Left', down: false }),
 		].join(), 'The click did not reach the other computer');
-		// Above the picture, in the margin, the pointer goes nowhere.
+		// Above the picture, as a drag captured from it reports, the pointer goes nowhere.
 		const before = sessions[0].sent.length;
-		canvas.dispatchEvent(new PointerEvent('pointermove', { ...center, clientY: box.top + 1 }));
-		assert(sessions[0].sent.length === before || box.height <= box.width * 1080 / 1920, 'The pointer was sent from outside the picture');
+		canvas.dispatchEvent(new PointerEvent('pointermove', { ...center, clientY: box.top - 2 }));
+		assert(sessions[0].sent.length === before, 'The pointer was sent from outside the picture');
 		// A notch of the wheel is 120 of the engine's units.
 		canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, bubbles: true, cancelable: true }));
 		assert(JSON.stringify(sessions[0].sent.at(-1)) === JSON.stringify({ type: 'submitPreciseWheel', dx: 0, dy: 120 }), `Wrong wheel: ${JSON.stringify(sessions[0].sent.at(-1))}`);
@@ -249,10 +271,51 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		canvas.dispatchEvent(new MouseEvent('mouseleave'));
 		const drawn = (): boolean => mark.hidden !== true;
 		assert(drawn(), 'The other pointer was not drawn while this one is away');
-		const scale = Math.min(box.width / 1920, box.height / 1080);
+		const scale = box.width / 1920;
 		const placed = mark.getBoundingClientRect();
-		assert(Math.abs(placed.left - (box.left + (box.width - 1920 * scale) / 2 + 960 * scale)) < 1.5
-			&& Math.abs(placed.top - (box.top + (box.height - 1080 * scale) / 2 + 540 * scale)) < 1.5, `The other pointer is in the wrong place: ${String(placed.left)}, ${String(placed.top)}`);
+		assert(Math.abs(placed.left - (box.left + 960 * scale)) < 1.5 && Math.abs(placed.top - (box.top + 540 * scale)) < 1.5, `The other pointer is in the wrong place: ${String(placed.left)}, ${String(placed.top)}`);
+		// Original size: one picture pixel on one screen pixel, scrolling where the tab is smaller.
+		const picker = view.element.querySelector<HTMLSelectElement>('.desktop-size-picker select');
+		assert(picker !== null && picker.value === 'fit' && picker.getAttribute('aria-label') === 'Picture size', 'The picture size choice is missing');
+		assert([...picker.options].map(option => option.textContent).join() === 'Fit,Stretch,50%,75%,Original size,150%,200%', `Wrong picture sizes: ${[...picker.options].map(option => option.textContent).join()}`);
+		const choose = (value: string): void => {
+			picker.value = value;
+			picker.dispatchEvent(new Event('change'));
+		};
+		choose('1');
+		const original = canvas.getBoundingClientRect();
+		assert(Math.abs(original.width * ratio - 1920) < 0.5 && Math.abs(original.height * ratio - 1080) < 0.5, `Original size is not one pixel per pixel: ${String(original.width * ratio)}`);
+		const scrolls = stage.scrollWidth > stage.clientWidth;
+		assert(scrolls === original.width > room.width, 'The stage does not scroll exactly when the picture is larger');
+		if (scrolls) {
+			stage.scrollLeft = 200;
+			stage.dispatchEvent(new Event('scroll'));
+		}
+		// The pointer follows the scrolled picture: what is under it is what is sent.
+		const shown = canvas.getBoundingClientRect();
+		const inside = { clientX: Math.max(shown.left, stageBox.left) + 100, clientY: Math.max(shown.top, stageBox.top) + 100 };
+		const at = { ...inside, bubbles: true, cancelable: true, pointerId: 1 };
+		canvas.dispatchEvent(new PointerEvent('pointermove', at));
+		const scrolled = sessions[0].sent.at(-1);
+		const expectX = 1920 + Math.floor((at.clientX - shown.left) / shown.width * 1920);
+		assert(scrolled?.type === 'submitPointer' && scrolled.x === expectX, `The pointer missed the scrolled picture: ${JSON.stringify(scrolled)}, expected x ${String(expectX)}`);
+		const markAt = mark.getBoundingClientRect();
+		assert(Math.abs(markAt.left - (shown.left + 960 * shown.width / 1920)) < 1.5, `The other pointer did not follow the scrolled picture: ${String(markAt.left)}`);
+		// Stretch fills the tab both ways it can, keeping the picture's shape.
+		choose('stretch');
+		const stretched = canvas.getBoundingClientRect();
+		assert(Math.abs(Math.min(room.width - stretched.width, room.height - stretched.height)) < 1 && stage.scrollWidth <= stage.clientWidth, `Stretch did not fill the tab: ${String(stretched.width)} × ${String(stretched.height)}`);
+		choose('fit');
+		// Full screen covers the window and is left from its button or the window itself, not by a key, which goes to the other computer.
+		const toggle = view.element.querySelector<HTMLButtonElement>('.desktop-status-button');
+		assert(toggle?.getAttribute('aria-label') === 'Full Screen', 'The full screen button is missing');
+		toggle.click();
+		await until(() => fullScreen.join() === 'true' && view.element.classList.contains('desktop-view-fullscreen') && toggle.getAttribute('aria-label') === 'Exit Full Screen', 'Full screen did not cover the window');
+		toggle.click();
+		await until(() => fullScreen.join() === 'true,false' && !view.element.classList.contains('desktop-view-fullscreen'), 'The button did not leave full screen');
+		toggle.click();
+		windowState.fire({ windowId: 1, revision: 1, focused: true, maximized: false, fullscreen: false, alwaysOnTop: false, zoomFactor: 1, backgroundMaterial: 'none' });
+		assert(!view.element.classList.contains('desktop-view-fullscreen') && toggle.getAttribute('aria-label') === 'Full Screen', 'Leaving full screen from the window did not restore the tab');
 		sessions[0].pointer(960, 540, false);
 		assert(!drawn() && canvas.style.cursor === 'none', 'A hidden pointer still shows');
 		// Leaving the screen lets go of everything held there.

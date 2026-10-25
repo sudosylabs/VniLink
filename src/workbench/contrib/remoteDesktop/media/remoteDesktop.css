@@ -1,5 +1,6 @@
-/* The other computer's screen fills the tab, fitted with dark margins, and
- * a status bar in the Files tab's form says what the session is doing. */
+/* The other computer's screen in the tab, sized as chosen with dark margins
+ * around it or scrolling when larger, and a status bar in the Files tab's
+ * form says what the session is doing. */
 
 .desktop-view {
 	display: grid;
@@ -15,17 +16,25 @@
 .desktop-stage {
 	position: relative;
 	min-height: 0;
-	overflow: hidden;
+	overflow: auto;
 	background: var(--camera-stage);
 }
 
+/* The view sets the size and centring margins in whole device pixels. */
 .desktop-screen {
 	display: block;
-	width: 100%;
-	height: 100%;
-	object-fit: contain;
 	outline: none;
 	transition: opacity 0.2s;
+}
+
+/* Full screen: the window goes full screen and the screen covers it. */
+.desktop-view.desktop-view-fullscreen {
+	position: fixed;
+	inset: 0;
+	z-index: 1000;
+
+	/* The titlebar's drag region underneath would otherwise take the pointer. */
+	-webkit-app-region: no-drag;
 }
 
 /* The other computer's pointer, placed by the view in the stage's pixels. */
@@ -189,7 +198,55 @@
 	flex: 1;
 }
 
-.desktop-view :is(button, .desktop-screen, .desktop-status-condition):focus-visible {
+.desktop-size-picker {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+}
+
+.desktop-size-picker select {
+	appearance: none;
+	height: 20px;
+	padding: 0 22px 0 6px;
+	border: 1px solid transparent;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text);
+	font: inherit;
+}
+
+.desktop-size-picker select:hover {
+	background: var(--surface-hover);
+}
+
+.desktop-size-picker > .vnilink-icon {
+	--icon-size: 12px;
+
+	position: absolute;
+	right: 6px;
+	pointer-events: none;
+	color: var(--muted);
+}
+
+.desktop-status-button {
+	display: inline-grid;
+	place-items: center;
+	width: 22px;
+	height: 20px;
+	padding: 0;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text);
+
+	--icon-size: 14px;
+}
+
+.desktop-status-button:hover {
+	background: var(--surface-hover);
+}
+
+.desktop-view :is(button, select, .desktop-screen, .desktop-status-condition):focus-visible {
 	outline: 2px solid var(--accent);
 	outline-offset: -2px;
 }

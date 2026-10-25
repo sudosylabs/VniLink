@@ -107,6 +107,7 @@ const pages: readonly ISettingsPageDescriptor[] = [
 		className: 'remote-desktop-page',
 		...form,
 		sections: [
+			{ id: 'picture', title: nls.localize('desktop.pictureTitle', 'Picture'), settings: ['desktop.pictureSize'] },
 			{ id: 'quality', title: nls.localize('desktop.quality', 'Stream limits'), settings: ['desktop.quality'] },
 			{ id: 'codec', title: nls.localize('desktop.codecTitle', 'Video codec'), settings: ['desktop.codec'] },
 		],
