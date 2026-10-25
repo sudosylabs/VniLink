@@ -188,10 +188,8 @@ const ANCHOR_BOTTOM_RIGHT = ${String(ANCHOR_BOTTOM_RIGHT)};
 const CARD_PERIOD_MS = ${String(CARD_PERIOD_MS)};
 const canvas = document.querySelector('canvas');
 const context = canvas.getContext('2d', { alpha: false });
-const ratio = window.devicePixelRatio;
-canvas.width = Math.round(innerWidth * ratio);
-canvas.height = Math.round(innerHeight * ratio);
-const layout = perceivedLayout(canvas.width, canvas.height, ratio);
+let ratio = 1;
+let layout;
 const values = { frame: 0, clicks: 0, pointerX: 0, pointerY: 0, card: 0 };
 const order = ['anchor', 'frame', 'clicks', 'pointerX', 'pointerY', 'card', 'width', 'height'];
 function strip(rect, value) {
@@ -211,10 +209,20 @@ function card(variant) {
 		context.fillRect(x + rect.x, y + rect.y, rect.width, rect.height);
 	}
 }
-context.fillStyle = '#fff';
-context.fillRect(0, 0, canvas.width, canvas.height);
-strip(layout.anchorBottomRight, ANCHOR_BOTTOM_RIGHT);
-card(0);
+// Lays the page out for the window's size, again whenever it changes: the
+// window is maximised, which a desktop may finish after the first frame.
+function place() {
+	ratio = window.devicePixelRatio;
+	canvas.width = Math.round(innerWidth * ratio);
+	canvas.height = Math.round(innerHeight * ratio);
+	layout = perceivedLayout(canvas.width, canvas.height, ratio);
+	context.fillStyle = '#fff';
+	context.fillRect(0, 0, canvas.width, canvas.height);
+	strip(layout.anchorBottomRight, ANCHOR_BOTTOM_RIGHT);
+	card(values.card % 2);
+}
+place();
+addEventListener('resize', place);
 const started = performance.now();
 addEventListener('pointermove', event => {
 	values.pointerX = Math.round(event.clientX * ratio);

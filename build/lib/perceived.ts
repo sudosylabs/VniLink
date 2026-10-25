@@ -357,7 +357,7 @@ export async function measurePerceived(root: string, signal: AbortSignal, args: 
 			'systemd-run', '--user', '--collect', '--quiet', `--unit=${unit}`, `--working-directory=${options.remote.root}`,
 			electron, '--ozone-platform=x11', `${options.remote.root}/out/perceived.cjs`,
 		].map(shellWord).join(' '));
-		console.log(`The stimulus is full screen on ${options.remote.destination}. Open ${options.label} on this Mac to it now, full screen, showing its whole screen; measuring starts when the page is found (up to ${String(options.waitSeconds)} s), then the pointer moves by itself for about 45 s.`);
+		console.log(`The stimulus is maximised on ${options.remote.destination}. Open ${options.label} on this Mac to it now, full screen, showing its whole screen; measuring starts when the page is found (up to ${String(options.waitSeconds)} s), then the pointer moves by itself for about 45 s.`);
 		await processes.run(join(root, 'target/release/examples/perceived'), [options.output, String(options.waitSeconds), ...(pixels ? [String(pixels)] : [])]);
 		await analysePerceived(options.output, options.label, signal);
 	} finally {
