@@ -154,15 +154,15 @@ fn gpu_conversion_matches_the_cpu_conversion_in(matrix: vnilink::YuvMatrix) {
     }
 }
 
-/// One picture's share of the bitrate is the HRD buffer and the window rate
+/// A quarter second of the bitrate is the HRD buffer and the window rate
 /// control holds; a change starts rate control over once, on the picture
 /// that carries it, and the same rate again changes nothing.
 #[test]
-fn rate_control_holds_one_picture_and_resets_once_per_change() {
+fn rate_control_holds_a_quarter_second_and_resets_once_per_change() {
     use crate::vaapi::RateControl;
 
     let mut rate = RateControl::new(12_000_000, 60);
-    assert_eq!((rate.buffer_bits(), rate.window_ms()), (200_000, 16));
+    assert_eq!((rate.buffer_bits(), rate.window_ms()), (3_000_000, 250));
     assert!(!rate.reset);
     rate.retune(12_000_000, 60);
     assert!(!rate.reset, "the same rate is no change");
@@ -171,7 +171,7 @@ fn rate_control_holds_one_picture_and_resets_once_per_change() {
         (rate.bitrate_bps, rate.frame_rate, rate.reset),
         (6_000_000, 30, true)
     );
-    assert_eq!((rate.buffer_bits(), rate.window_ms()), (200_000, 33));
+    assert_eq!((rate.buffer_bits(), rate.window_ms()), (1_500_000, 250));
 }
 
 /// Only the first picture is a keyframe however long the stream runs, and

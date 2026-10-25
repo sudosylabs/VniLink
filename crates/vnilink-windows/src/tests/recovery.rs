@@ -209,6 +209,8 @@ fn keyframe_caps() {
     };
     let bitrate_bps = 2_000_000u32;
     let frame = bitrate_bps / 30;
+    // What the encoder opens with, restored after each change.
+    let buffer = vnilink::picture_buffer_bits(bitrate_bps);
     type Change = (&'static str, Vec<(windows::core::GUID, u32, u32)>);
     use windows::Win32::Media::MediaFoundation::CODECAPI_AVEncVideoEncodeQP;
     let changes: Vec<Change> = vec![
@@ -246,7 +248,7 @@ fn keyframe_caps() {
         ),
         (
             "buffer 1/4 picture",
-            vec![(CODECAPI_AVEncCommonBufferSize, frame / 4, frame)],
+            vec![(CODECAPI_AVEncCommonBufferSize, frame / 4, buffer)],
         ),
         (
             "bitrate 1/4",
@@ -256,7 +258,7 @@ fn keyframe_caps() {
                     bitrate_bps / 4,
                     bitrate_bps,
                 ),
-                (CODECAPI_AVEncCommonBufferSize, frame / 4, frame),
+                (CODECAPI_AVEncCommonBufferSize, frame / 4, buffer),
             ],
         ),
         (
@@ -267,7 +269,7 @@ fn keyframe_caps() {
                     bitrate_bps / 8,
                     bitrate_bps,
                 ),
-                (CODECAPI_AVEncCommonBufferSize, frame / 8, frame),
+                (CODECAPI_AVEncCommonBufferSize, frame / 8, buffer),
             ],
         ),
     ];

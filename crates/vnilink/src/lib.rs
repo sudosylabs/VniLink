@@ -172,9 +172,9 @@ pub use system::{
     SystemAction, SystemOperation, SystemPolicy, SystemSupport, SYSTEM_ACTION_NOTICE,
 };
 pub use video::{
-    CodecSupport, Condition, ConditionEntry, ConditionSet, EncodedFrame, Evidence, FrameRole,
-    FrameTiming, HostCapture, RecordingVideoTap, VideoCodec, VideoSubscription, YuvMatrix,
-    MAX_VIDEO_FRAME, STILL_DRAIN,
+    picture_buffer_bits, CodecSupport, Condition, ConditionEntry, ConditionSet, EncodedFrame,
+    Evidence, FrameRole, FrameTiming, HostCapture, RecordingVideoTap, VideoCodec,
+    VideoSubscription, YuvMatrix, MAX_VIDEO_FRAME, PICTURE_DRAIN, STILL_DRAIN,
 };
 pub use video_caps::{
     clamp_quality, negotiate as negotiate_video_codec, AgreedCodec, EncoderImplementation,

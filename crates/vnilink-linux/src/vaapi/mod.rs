@@ -14,7 +14,7 @@
 //!
 //! Keyframes come only when asked for: the first picture, and those the
 //! host asks for after a loss or a refresh. Rate control holds a picture to
-//! one picture's share of the bitrate ([`RateControl`]), and takes a new
+//! [`vnilink::PICTURE_DRAIN`] of the bitrate ([`RateControl`]), and takes a new
 //! bitrate or frame rate between pictures without reopening
 //! ([`Session::retune`]).
 
@@ -360,19 +360,16 @@ impl RateControl {
         }
     }
 
-    /// One picture's share of the bitrate, in bits: the HRD buffer, as
-    /// NVENC's VBV and Media Foundation's buffer are sized, so that no
-    /// picture, a keyframe included, takes the link longer than a picture's
-    /// interval to send.
+    /// The HRD buffer, in bits, as NVENC's VBV and Media Foundation's
+    /// buffer are sized: [`vnilink::PICTURE_DRAIN`] of the bitrate.
     pub(crate) fn buffer_bits(&self) -> u32 {
-        (self.bitrate_bps / self.frame_rate).max(1)
+        vnilink::picture_buffer_bits(self.bitrate_bps)
     }
 
     /// The window rate control holds the bitrate over, in milliseconds:
-    /// the time the buffer takes to drain at the bitrate, one picture's
-    /// interval.
+    /// the time the buffer takes to drain at the bitrate.
     pub(crate) fn window_ms(&self) -> u32 {
-        (1000 / self.frame_rate).max(1)
+        vnilink::PICTURE_DRAIN.as_millis() as u32
     }
 }
 

@@ -42,6 +42,22 @@ pub const MAX_VIDEO_FRAME: usize = 1_048_576;
 /// waits behind it.
 pub const STILL_DRAIN: std::time::Duration = std::time::Duration::from_millis(250);
 
+/// How long one encoded picture may hold the link: every encoder's rate
+/// control buffer. A change of the whole screen then arrives sharp in one
+/// picture rather than smeared over seconds of refinement, at the cost of
+/// holding the pictures after it this long at most on a link no faster than
+/// the bitrate. FFmpeg's NVENC default, which RustDesk keeps, is two
+/// seconds; one picture's interval left a changed screen coarse while
+/// anything else on it moved.
+pub const PICTURE_DRAIN: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The rate control buffer for `bitrate_bps`, in bits: [`PICTURE_DRAIN`]
+/// of it.
+pub fn picture_buffer_bits(bitrate_bps: u32) -> u32 {
+    let bits = u64::from(bitrate_bps) * PICTURE_DRAIN.as_millis() as u64 / 1000;
+    u32::try_from(bits).unwrap_or(u32::MAX).max(1)
+}
+
 /// The bytes a link carrying `bits_per_second` drains within
 /// [`STILL_DRAIN`]: what a still picture, and anything queued ahead of it,
 /// may take on the wire.

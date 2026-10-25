@@ -293,10 +293,10 @@ impl WindowsEncoder {
         }
         let rate = u32::from(frame_rate.max(1));
         if !camera {
-            // Constant bitrate with one picture of buffer, so no picture,
-            // a keyframe included, outruns the link; and the scenario this
-            // transform tunes for screens. Settings it does not know are
-            // left at its defaults.
+            // Constant bitrate with `vnilink::PICTURE_DRAIN` of buffer, so a
+            // changed screen arrives sharp in one picture; and the scenario
+            // this transform tunes for screens. Settings it does not know
+            // are left at its defaults.
             let _ = set_codec_u32(
                 &transform,
                 &CODECAPI_AVEncCommonRateControlMode,
@@ -305,7 +305,7 @@ impl WindowsEncoder {
             let _ = set_codec_u32(
                 &transform,
                 &CODECAPI_AVEncCommonBufferSize,
-                bitrate_bps / rate,
+                vnilink::picture_buffer_bits(bitrate_bps),
             );
             let _ = set_codec_u32(
                 &transform,
@@ -422,7 +422,6 @@ impl VideoEncoder for WindowsEncoder {
             if frame_rate != self.frame_rate || bitrate_bps == 0 || !self.vendor.retunes() {
                 return Ok(false);
             }
-            let rate = u32::from(frame_rate.max(1));
             // SAFETY: `transform` is this encoder's live transform, used from
             // the thread that owns it, as every other call here.
             let taken = unsafe {
@@ -439,7 +438,7 @@ impl VideoEncoder for WindowsEncoder {
                     set_codec_u32(
                         &self.transform,
                         &CODECAPI_AVEncCommonBufferSize,
-                        bitrate_bps / rate,
+                        vnilink::picture_buffer_bits(bitrate_bps),
                     )
                 };
             }

@@ -455,7 +455,7 @@ impl Encoder {
         let rc = &mut config.rcParams;
         rc.rateControlMode = NV_ENC_PARAMS_RC_CBR;
         rc.multiPass = NV_ENC_MULTI_PASS_DISABLED;
-        set_rate(rc, bitrate_bps, frame_rate);
+        set_rate(rc, bitrate_bps);
         // SAFETY: each arm writes the union member of the codec opened.
         unsafe {
             match self.codec {
@@ -555,7 +555,7 @@ impl Encoder {
             return Ok(false);
         };
         let _current = Current::new(api, self.context)?;
-        set_rate(&mut self.config.rcParams, bitrate_bps, frame_rate);
+        set_rate(&mut self.config.rcParams, bitrate_bps);
         self.init.frameRateNum = u32::from(frame_rate.max(1));
         self.init.encodeConfig = &mut *self.config;
         let mut params = Box::new(NV_ENC_RECONFIGURE_PARAMS {
@@ -683,12 +683,12 @@ impl Encoder {
     }
 }
 
-/// Constant bitrate with one picture's worth of buffer: a picture leaves as
-/// it is made, a keyframe included.
-fn set_rate(rc: &mut NV_ENC_RC_PARAMS, bitrate_bps: u32, frame_rate: u8) {
+/// Constant bitrate with [`vnilink::PICTURE_DRAIN`] of buffer, so a changed
+/// screen arrives sharp in one picture.
+fn set_rate(rc: &mut NV_ENC_RC_PARAMS, bitrate_bps: u32) {
     rc.averageBitRate = bitrate_bps;
     rc.maxBitRate = bitrate_bps;
-    rc.vbvBufferSize = bitrate_bps / u32::from(frame_rate.max(1));
+    rc.vbvBufferSize = vnilink::picture_buffer_bits(bitrate_bps);
     rc.vbvInitialDelay = rc.vbvBufferSize;
 }
 
