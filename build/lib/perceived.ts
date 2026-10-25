@@ -89,6 +89,8 @@ export interface PerceivedSummary {
 	readonly scale: number;
 	readonly host: { readonly width: number; readonly height: number };
 	readonly viewer: { readonly width: number; readonly height: number };
+	/** How often the picture moved and the measurement started again. */
+	readonly restarts: number;
 	/** From a pointer move to the first picture showing the host's pointer there, ms. */
 	readonly pointerJump: Spread | undefined;
 	/** Moves never seen arriving within their window. */
@@ -124,11 +126,14 @@ const number = (value: unknown): number | undefined => typeof value === 'number'
 
 /** The driver's events and each crop's SSIM (by file) as one summary. */
 export function summarisePerceived(label: string, lines: string, ssim: ReadonlyMap<string, number>): PerceivedSummary {
-	const events = lines.split('\n').filter(line => line.trim()).map(line => JSON.parse(line) as Event);
-	const located = events.find(event => event.type === 'located');
-	if (!located) {
+	const all = lines.split('\n').filter(line => line.trim()).map(line => JSON.parse(line) as Event);
+	// The picture moving restarts the measurement: only the last run counts.
+	const last = all.findLastIndex(event => event.type === 'located');
+	if (last < 0) {
 		throw new Error('The driver never found the page on this screen');
 	}
+	const events = all.slice(last);
+	const located = events[0];
 	const frames = events
 		.filter(event => event.type === 'frame' && number(event.t) !== undefined)
 		.map(event => ({ t: number(event.t) ?? 0, frame: number(event.frame), clicks: number(event.clicks), x: number(event.x), y: number(event.y) }));
@@ -215,6 +220,7 @@ export function summarisePerceived(label: string, lines: string, ssim: ReadonlyM
 		scale: number(located.scaleX) ?? 0,
 		host: { width: number(located.hostWidth) ?? 0, height: number(located.hostHeight) ?? 0 },
 		viewer: { width: number(located.viewerWidth) ?? 0, height: number(located.viewerHeight) ?? 0 },
+		restarts: all.filter(event => event.type === 'moved').length,
 		pointerJump: spread(jumpLatency),
 		pointerMissed,
 		pointerError: spread(jumpError),
@@ -243,6 +249,7 @@ export function renderPerceived(runs: readonly PerceivedSummary[]): string {
 		`| | ${runs.map(run => run.label).join(' | ')} |`,
 		`|---|${runs.map(() => '---').join('|')}|`,
 		row('Picture scale (viewer px per host px)', run => `${run.scale.toFixed(2)} (${String(run.host.width)}x${String(run.host.height)} on ${String(run.viewer.width)}x${String(run.viewer.height)})`),
+		row('Picture moved, measurement restarted', run => String(run.restarts)),
 		row('Pointer jump, p50 / p95 ms', run => `${ms(run.pointerJump)}${run.pointerMissed ? ` (${String(run.pointerMissed)} missed)` : ''}`),
 		row('Pointer error, p50 / max host px', run => run.pointerError ? `${run.pointerError.p50.toFixed(1)} / ${run.pointerError.max.toFixed(1)}` : '-'),
 		row('Pointer trail in motion, p50 / p95 ms', run => ms(run.pointerTrail)),

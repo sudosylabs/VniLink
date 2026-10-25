@@ -44,6 +44,10 @@ test('a run is summarised from what the viewer screen showed', () => {
 	const line = value => JSON.stringify(value);
 	const frame = (t, fields) => line({ type: 'frame', t, frame: Math.round(t / 16.7), clicks: 0, x: 0, y: 0, card: 0, ...fields });
 	const events = [
+		// A first lock the picture moved away from: its events do not count.
+		line({ type: 'located', t: -900, scaleX: 1, scaleY: 1, cell: 12, hostWidth: 1920, hostHeight: 1080, viewerWidth: 3840, viewerHeight: 2160 }),
+		line({ type: 'click', t: -800 }),
+		line({ type: 'moved', t: -500 }),
 		line({ type: 'located', t: 0, scaleX: 1.6, scaleY: 1.6, cell: 12, hostWidth: 1920, hostHeight: 1080, viewerWidth: 3840, viewerHeight: 2160 }),
 		line({ type: 'move', kind: 'jump', t: 100, hostX: 500, hostY: 300 }),
 		frame(130, { x: 0, y: 0 }),
@@ -67,6 +71,7 @@ test('a run is summarised from what the viewer screen showed', () => {
 	const ssim = new Map([['crop-0.bgra', 0.7], ['crop-1.bgra', 0.95], ['crop-2.bgra', 0.955]]);
 	const summary = summarisePerceived('Test', events, ssim);
 	assert.equal(summary.scale, 1.6);
+	assert.equal(summary.restarts, 1);
 	assert.deepEqual([summary.pointerJump?.p50, summary.pointerJump?.count, summary.pointerMissed], [50, 2, 0]);
 	assert.equal(summary.pointerError?.max, 1);
 	assert.deepEqual([summary.pointerTrail?.p50, summary.pointerTrail?.max], [50, 62]);
@@ -77,4 +82,5 @@ test('a run is summarised from what the viewer screen showed', () => {
 	const text = renderPerceived([summary, { ...summary, label: 'Other' }]);
 	assert.match(text, /\| \| Test \| Other \|/);
 	assert.match(text, /\| Card sharp after a swap, ms \| 250 \| 250 \|/);
+	assert.match(text, /\| Picture moved, measurement restarted \| 1 \| 1 \|/);
 });

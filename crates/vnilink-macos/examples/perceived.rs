@@ -300,45 +300,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         CGEvent::post(CGEventTapLocation::HIDEventTap, event.as_deref());
     };
 
-    // The page, once both anchors and the host's size read alike.
-    let deadline = started + Duration::from_secs(wait);
-    let mapping: Mapping = loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err("the perceived page did not appear on the main display".into());
+    // The page, once it has stayed put for `STEADY`: an application still
+    // placing its window, or going full screen, moves it.
+    const STEADY: Duration = Duration::from_secs(1);
+    // The column unread for this long means the picture moved or is covered.
+    const LOST: Duration = Duration::from_millis(500);
+    #[derive(Debug)]
+    struct Moved;
+    impl std::fmt::Display for Moved {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("the picture moved")
         }
-        if let Ok(picture) = capture
-            .pictures
-            .recv_timeout(remaining.min(Duration::from_millis(200)))
+    }
+    impl std::error::Error for Moved {}
+    let same = |a: &Mapping, b: &Mapping| {
+        (a.offset_x - b.offset_x).abs() <= 1.5
+            && (a.offset_y - b.offset_y).abs() <= 1.5
+            && (a.scale_x / b.scale_x - 1.0).abs() <= 0.002
+            && (a.scale_y / b.scale_y - 1.0).abs() <= 0.002
+    };
+    let lock = || -> Result<Mapping, Box<dyn std::error::Error>> {
         {
-            if let Some(mapping) = locate(&picture.column) {
-                break mapping;
+            let mut want = capture
+                .want
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            want.column = None;
+            want.card = None;
+        }
+        let deadline = Instant::now() + Duration::from_secs(wait);
+        let mut held: Option<(Mapping, Instant)> = None;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(
+                    "the perceived page did not appear, or did not stay put, on the main display"
+                        .into(),
+                );
+            }
+            let Ok(picture) = capture
+                .pictures
+                .recv_timeout(remaining.min(Duration::from_millis(200)))
+            else {
+                continue;
+            };
+            let Some(mapping) = locate(&picture.column) else {
+                held = None;
+                continue;
+            };
+            match held {
+                Some((first, since)) if same(&first, &mapping) => {
+                    if since.elapsed() >= STEADY {
+                        return Ok(mapping);
+                    }
+                }
+                _ => held = Some((mapping, Instant::now())),
             }
         }
     };
-    let column = mapping.column();
-    let card = mapping.card();
-    capture
-        .want
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .column = Some(column);
-    writeln!(
-        log,
-        r#"{{"type":"located","t":{:.3},"scaleX":{},"scaleY":{},"offsetX":{},"offsetY":{},"cell":{},"hostWidth":{},"hostHeight":{},"viewerWidth":{width},"viewerHeight":{height},"pointsPerPixel":{points},"cardX":{},"cardY":{},"cardWidth":{},"cardHeight":{}}}"#,
-        ms(Instant::now()),
-        mapping.scale_x,
-        mapping.scale_y,
-        mapping.offset_x,
-        mapping.offset_y,
-        mapping.cell,
-        mapping.width,
-        mapping.height,
-        card.x,
-        card.y,
-        card.width,
-        card.height,
-    )?;
+    // Where the top-left anchor reads inside the column, with its tolerance,
+    // and when it last read there.
+    let home = std::cell::Cell::new((0.0f64, 0.0f64, 0.0f64));
+    let last_seen = std::cell::Cell::new(Instant::now());
+    let crops = std::cell::Cell::new(0u32);
     type Each<'a> = dyn FnMut(
             &mut dyn Write,
             f64,
@@ -348,6 +372,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         + 'a;
     // Reads every new picture until `until`, logging what the column says;
     // `each` sees every reading, and a card crop when one was asked for.
+    // Fails with `Moved` once the column has not read in place for `LOST`.
     let observe = |log: &mut dyn Write,
                    until: Instant,
                    each: &mut Each|
@@ -358,6 +383,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let work = Instant::now();
             let reading = read(&picture.column);
+            let (x, y, tolerance) = home.get();
+            if reading.anchor.is_some_and(|anchor| {
+                (f64::from(anchor.x) - x).abs() <= tolerance
+                    && (f64::from(anchor.y) - y).abs() <= tolerance
+            }) {
+                last_seen.set(work);
+            } else if work.duration_since(last_seen.get()) > LOST {
+                return Err(Box::new(Moved));
+            }
             let at = picture.column.captured_at().map_or(f64::NAN, ms);
             let field = |role: Role| {
                 reading
@@ -384,153 +418,206 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     };
     let mut idle = |_: &mut dyn Write, _: f64, _: &Reading, _: Option<&RawFrame>| Ok(());
-    // Viewer pixels for a host point, rounded to the point the event takes.
-    let at = |hx: f64, hy: f64| -> (f64, f64) {
-        let (vx, vy) = mapping.to_viewer(hx, hy);
-        (
-            (vx * points).round() / points,
-            (vy * points).round() / points,
-        )
-    };
-    let (host_width, host_height) = (f64::from(mapping.width), f64::from(mapping.height));
 
-    // Pointer accuracy: jumps across a grid, each left to settle.
-    observe(
-        &mut log,
-        Instant::now() + Duration::from_millis(500),
-        &mut idle,
-    )?;
-    for gy in 1..=4 {
-        for gx in 1..=6 {
-            let (vx, vy) = at(
-                host_width * f64::from(gx) / 7.0,
-                host_height * f64::from(gy) / 5.0,
-            );
-            let (hx, hy) = mapping.to_host(vx, vy);
-            post(CGEventType::MouseMoved, vx, vy);
-            writeln!(
-                log,
-                r#"{{"type":"move","kind":"jump","t":{:.3},"hostX":{hx:.2},"hostY":{hy:.2}}}"#,
-                ms(Instant::now())
-            )?;
+    // Every phase, against one placement of the picture.
+    let mut run = |mapping: Mapping,
+                   log: &mut dyn Write|
+     -> Result<(), Box<dyn std::error::Error>> {
+        let card = mapping.card();
+        // Viewer pixels for a host point, rounded to the point the event takes.
+        let at = |hx: f64, hy: f64| -> (f64, f64) {
+            let (vx, vy) = mapping.to_viewer(hx, hy);
+            (
+                (vx * points).round() / points,
+                (vy * points).round() / points,
+            )
+        };
+        let (host_width, host_height) = (f64::from(mapping.width), f64::from(mapping.height));
+
+        // Pointer accuracy: jumps across a grid, each left to settle.
+        observe(
+            &mut *log,
+            Instant::now() + Duration::from_millis(500),
+            &mut idle,
+        )?;
+        for gy in 1..=4 {
+            for gx in 1..=6 {
+                let (vx, vy) = at(
+                    host_width * f64::from(gx) / 7.0,
+                    host_height * f64::from(gy) / 5.0,
+                );
+                let (hx, hy) = mapping.to_host(vx, vy);
+                post(CGEventType::MouseMoved, vx, vy);
+                writeln!(
+                    log,
+                    r#"{{"type":"move","kind":"jump","t":{:.3},"hostX":{hx:.2},"hostY":{hy:.2}}}"#,
+                    ms(Instant::now())
+                )?;
+                observe(
+                    &mut *log,
+                    Instant::now() + Duration::from_millis(400),
+                    &mut idle,
+                )?;
+            }
+        }
+
+        // Pointer under motion: a circle at 120 events a second for 3 s.
+        let (cx, cy, radius) = (host_width / 2.0, host_height / 2.0, host_height / 4.0);
+        let path_start = Instant::now();
+        let mut step = 0u32;
+        while path_start.elapsed() < Duration::from_secs(3) {
+            let due = path_start + Duration::from_micros(u64::from(step) * 8_333);
+            if Instant::now() >= due {
+                let angle = f64::from(step) / 120.0 * std::f64::consts::TAU;
+                let (vx, vy) = at(cx + radius * angle.cos(), cy + radius * angle.sin());
+                let (hx, hy) = mapping.to_host(vx, vy);
+                post(CGEventType::MouseMoved, vx, vy);
+                writeln!(
+                    log,
+                    r#"{{"type":"move","kind":"path","t":{:.3},"hostX":{hx:.2},"hostY":{hy:.2}}}"#,
+                    ms(Instant::now())
+                )?;
+                step += 1;
+            }
             observe(
-                &mut log,
+                &mut *log,
+                Instant::now() + Duration::from_millis(1),
+                &mut idle,
+            )?;
+        }
+        observe(
+            &mut *log,
+            Instant::now() + Duration::from_millis(500),
+            &mut idle,
+        )?;
+
+        // Click to photon: twenty clicks on the card.
+        let (vx, vy) = at(host_width * 0.6, host_height * 0.4);
+        post(CGEventType::MouseMoved, vx, vy);
+        observe(
+            &mut *log,
+            Instant::now() + Duration::from_millis(300),
+            &mut idle,
+        )?;
+        for _ in 0..20 {
+            post(CGEventType::LeftMouseDown, vx, vy);
+            post(CGEventType::LeftMouseUp, vx, vy);
+            writeln!(log, r#"{{"type":"click","t":{:.3}}}"#, ms(Instant::now()))?;
+            observe(
+                &mut *log,
                 Instant::now() + Duration::from_millis(400),
                 &mut idle,
             )?;
         }
-    }
 
-    // Pointer under motion: a circle at 120 events a second for 3 s.
-    let (cx, cy, radius) = (host_width / 2.0, host_height / 2.0, host_height / 4.0);
-    let path_start = Instant::now();
-    let mut step = 0u32;
-    while path_start.elapsed() < Duration::from_secs(3) {
-        let due = path_start + Duration::from_micros(u64::from(step) * 8_333);
-        if Instant::now() >= due {
-            let angle = f64::from(step) / 120.0 * std::f64::consts::TAU;
-            let (vx, vy) = at(cx + radius * angle.cos(), cy + radius * angle.sin());
-            let (hx, hy) = mapping.to_host(vx, vy);
-            post(CGEventType::MouseMoved, vx, vy);
-            writeln!(
-                log,
-                r#"{{"type":"move","kind":"path","t":{:.3},"hostX":{hx:.2},"hostY":{hy:.2}}}"#,
-                ms(Instant::now())
-            )?;
-            step += 1;
-        }
-        observe(
-            &mut log,
-            Instant::now() + Duration::from_millis(1),
-            &mut idle,
-        )?;
-    }
-    observe(
-        &mut log,
-        Instant::now() + Duration::from_millis(500),
-        &mut idle,
-    )?;
-
-    // Click to photon: twenty clicks on the card.
-    let (vx, vy) = at(host_width * 0.6, host_height * 0.4);
-    post(CGEventType::MouseMoved, vx, vy);
-    observe(
-        &mut log,
-        Instant::now() + Duration::from_millis(300),
-        &mut idle,
-    )?;
-    for _ in 0..20 {
-        post(CGEventType::LeftMouseDown, vx, vy);
-        post(CGEventType::LeftMouseUp, vx, vy);
-        writeln!(log, r#"{{"type":"click","t":{:.3}}}"#, ms(Instant::now()))?;
-        observe(
-            &mut log,
-            Instant::now() + Duration::from_millis(400),
-            &mut idle,
-        )?;
-    }
-
-    // Pacing and sharpness: the pointer rests on the moving band, out of
-    // the card, while every picture is read and the card is cropped at set
-    // times after each swap.
-    let cell = f64::from(mapping.cell);
-    let (vx, vy) = at(14.0 * cell, host_height - 10.0 * cell);
-    post(CGEventType::MouseMoved, vx, vy);
-    const AFTER_MS: [f64; 12] = [
-        0.0, 100.0, 250.0, 500.0, 750.0, 1000.0, 1500.0, 2000.0, 3000.0, 4000.0, 6000.0, 7500.0,
-    ];
-    let mut swap: Option<(u32, f64)> = None;
-    let mut known: Option<u32> = None;
-    let mut taken = 0usize;
-    let mut asked = false;
-    let mut crops = 0u32;
-    let want = std::sync::Arc::clone(&capture.want);
-    let directory = out.clone();
-    let mut sharpness = |log: &mut dyn Write,
-                         now: f64,
-                         reading: &Reading,
-                         piece: Option<&RawFrame>|
-     -> Result<(), Box<dyn std::error::Error>> {
-        if let (Some(piece), Some((generation, since))) = (piece, swap) {
-            let file = format!("crop-{crops}.bgra");
-            std::fs::write(directory.join(&file), piece.pixels())?;
-            writeln!(
-                log,
-                r#"{{"type":"crop","t":{now:.3},"card":{generation},"sinceMs":{:.3},"file":"{file}","width":{},"height":{}}}"#,
-                now - since,
-                piece.width(),
-                piece.height(),
-            )?;
-            crops += 1;
-            asked = false;
-        }
-        let Some(generation) = reading.value(Role::Card) else {
-            return Ok(());
-        };
-        if known.is_some_and(|known| known != generation) {
-            swap = Some((generation, now));
-            taken = 0;
-        }
-        known = Some(generation);
-        if let Some((_, since)) = swap {
-            if !asked && taken < AFTER_MS.len() && now - since >= AFTER_MS[taken] {
-                want.lock()
-                    .unwrap_or_else(|poison| poison.into_inner())
-                    .card = Some(card);
-                asked = true;
-                taken += 1;
+        // Pacing and sharpness: the pointer rests on the moving band, out of
+        // the card, while every picture is read and the card is cropped at set
+        // times after each swap.
+        let cell = f64::from(mapping.cell);
+        let (vx, vy) = at(14.0 * cell, host_height - 10.0 * cell);
+        post(CGEventType::MouseMoved, vx, vy);
+        const AFTER_MS: [f64; 12] = [
+            0.0, 100.0, 250.0, 500.0, 750.0, 1000.0, 1500.0, 2000.0, 3000.0, 4000.0, 6000.0, 7500.0,
+        ];
+        let mut swap: Option<(u32, f64)> = None;
+        let mut known: Option<u32> = None;
+        let mut taken = 0usize;
+        let mut asked = false;
+        let want = std::sync::Arc::clone(&capture.want);
+        let directory = out.clone();
+        let mut sharpness = |log: &mut dyn Write,
+                             now: f64,
+                             reading: &Reading,
+                             piece: Option<&RawFrame>|
+         -> Result<(), Box<dyn std::error::Error>> {
+            if let (Some(piece), Some((generation, since))) = (piece, swap) {
+                let file = format!("crop-{}.bgra", crops.get());
+                std::fs::write(directory.join(&file), piece.pixels())?;
+                writeln!(
+                    log,
+                    r#"{{"type":"crop","t":{now:.3},"card":{generation},"sinceMs":{:.3},"file":"{file}","width":{},"height":{}}}"#,
+                    now - since,
+                    piece.width(),
+                    piece.height(),
+                )?;
+                crops.set(crops.get() + 1);
+                asked = false;
             }
-        }
+            let Some(generation) = reading.value(Role::Card) else {
+                return Ok(());
+            };
+            if known.is_some_and(|known| known != generation) {
+                swap = Some((generation, now));
+                taken = 0;
+            }
+            known = Some(generation);
+            if let Some((_, since)) = swap {
+                if !asked && taken < AFTER_MS.len() && now - since >= AFTER_MS[taken] {
+                    want.lock()
+                        .unwrap_or_else(|poison| poison.into_inner())
+                        .card = Some(card);
+                    asked = true;
+                    taken += 1;
+                }
+            }
+            Ok(())
+        };
+        observe(
+            &mut *log,
+            Instant::now() + Duration::from_secs(20),
+            &mut sharpness,
+        )?;
         Ok(())
     };
-    observe(
-        &mut log,
-        Instant::now() + Duration::from_secs(20),
-        &mut sharpness,
-    )?;
+
+    loop {
+        let mapping = lock()?;
+        let column = mapping.column();
+        let card = mapping.card();
+        // The anchor's cell 0 is 4 host cells in and its middle row 3.5
+        // down; the column crop starts one host cell in.
+        let cell = f64::from(mapping.cell);
+        let (anchor_x, anchor_y) = mapping.to_viewer(4.0 * cell, 3.5 * cell);
+        home.set((
+            anchor_x - column.x.max(0.0).floor(),
+            anchor_y - column.y.max(0.0).floor(),
+            cell * mapping.scale_x / 2.0 + 2.0,
+        ));
+        last_seen.set(Instant::now());
+        capture
+            .want
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .column = Some(column);
+        writeln!(
+            log,
+            r#"{{"type":"located","t":{:.3},"scaleX":{},"scaleY":{},"offsetX":{},"offsetY":{},"cell":{},"hostWidth":{},"hostHeight":{},"viewerWidth":{width},"viewerHeight":{height},"pointsPerPixel":{points},"cardX":{},"cardY":{},"cardWidth":{},"cardHeight":{}}}"#,
+            ms(Instant::now()),
+            mapping.scale_x,
+            mapping.scale_y,
+            mapping.offset_x,
+            mapping.offset_y,
+            mapping.cell,
+            mapping.width,
+            mapping.height,
+            card.x,
+            card.y,
+            card.width,
+            card.height,
+        )?;
+        match run(mapping, &mut log) {
+            Ok(()) => break,
+            Err(error) if error.is::<Moved>() => {
+                writeln!(log, r#"{{"type":"moved","t":{:.3}}}"#, ms(Instant::now()))?;
+                eprintln!("perceived: the picture moved; measuring again once it stays put");
+            }
+            Err(error) => return Err(error),
+        }
+    }
     log.flush()?;
     println!(
-        "perceived: {crops} card crops, events in {}",
+        "perceived: {} card crops, events in {}",
+        crops.get(),
         out.join("events.jsonl").display()
     );
     Ok(())
