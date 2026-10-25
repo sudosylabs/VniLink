@@ -7,7 +7,7 @@ use arbitrary::Arbitrary;
 #[derive(Debug, Arbitrary)]
 struct Input {
     quality: (u32, u8, u16, u16),
-    source: (u16, u16),
+    ceiling: (u32, u8, u16, u16),
     intervals: Vec<Interval>,
 }
 
@@ -31,6 +31,10 @@ libfuzzer_sys::fuzz_target!(|input: Input| {
     let Ok(quality) = vnilink::Quality::new(bitrate, frame_rate, width, height) else {
         return;
     };
+    let (bitrate, frame_rate, width, height) = input.ceiling;
+    let Ok(ceiling) = vnilink::Quality::new(bitrate, frame_rate, width, height) else {
+        return;
+    };
     let intervals: Vec<_> = input
         .intervals
         .iter()
@@ -48,5 +52,5 @@ libfuzzer_sys::fuzz_target!(|input: Input| {
             elapsed_ms: interval.elapsed_ms,
         })
         .collect();
-    vnilink::fuzzing::host_feedback(quality, input.source, &intervals);
+    vnilink::fuzzing::host_feedback(quality, ceiling, &intervals);
 });

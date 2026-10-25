@@ -1580,8 +1580,9 @@ async fn client_send(
                     };
                     let (next, signals) = {
                         let mut adaptive = lock(&desktop.adaptive);
-                        let next = adaptive.step(current,
-                            (desktop.info.monitor_width, desktop.info.monitor_height), elapsed, feedback);
+                        // The quality the host agreed at Accept is what
+                        // the viewer chose, within the host's limits.
+                        let next = adaptive.step(current, desktop.info.quality, elapsed, feedback);
                         (next, adaptive.signals)
                     };
                     let decoder = *lock(&desktop.decoder);

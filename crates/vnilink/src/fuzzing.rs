@@ -177,8 +177,10 @@ pub struct Interval<'a> {
 }
 
 /// Host feedback decodes back to its bytes, and no feedback leads the
-/// adaptation loop to a quality outside the agreed limits.
-pub fn host_feedback(mut quality: Quality, source: (u16, u16), intervals: &[Interval<'_>]) {
+/// adaptation loop to a quality outside the agreed limits, or above the
+/// viewer's `ceiling` where it started at or below it.
+pub fn host_feedback(mut quality: Quality, ceiling: Quality, intervals: &[Interval<'_>]) {
+    let start = quality;
     let mut adaptive = Adaptive::default();
     for interval in intervals {
         let host = HostFeedback::decode(interval.host).ok();
@@ -199,7 +201,7 @@ pub fn host_feedback(mut quality: Quality, source: (u16, u16), intervals: &[Inte
             path_changed: interval.path_changed,
             decode_us: interval.decode_us,
         };
-        if let Some(changed) = adaptive.step(quality, source, interval.elapsed_ms, next) {
+        if let Some(changed) = adaptive.step(quality, ceiling, interval.elapsed_ms, next) {
             assert!(
                 Quality::new(
                     changed.max_bitrate_kbps,
@@ -209,6 +211,13 @@ pub fn host_feedback(mut quality: Quality, source: (u16, u16), intervals: &[Inte
                 )
                 .is_ok(),
                 "adaptation chose {changed:?}"
+            );
+            assert!(
+                changed.max_bitrate_kbps <= ceiling.max_bitrate_kbps.max(start.max_bitrate_kbps)
+                    && changed.max_frame_rate <= ceiling.max_frame_rate.max(start.max_frame_rate)
+                    && changed.max_width <= ceiling.max_width.max(start.max_width)
+                    && changed.max_height <= ceiling.max_height.max(start.max_height),
+                "adaptation chose {changed:?} above {ceiling:?}"
             );
             quality = changed;
         }

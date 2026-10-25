@@ -203,10 +203,13 @@ pub(crate) struct Adaptive {
     pub signals: Option<Signals>,
 }
 impl Adaptive {
+    /// One sampling interval. `ceiling` is the quality the viewer chose,
+    /// as the host agreed it: recovery climbs back toward it and never
+    /// past it, in bitrate, frame rate or size.
     pub fn step(
         &mut self,
         current: Quality,
-        source: (u16, u16),
+        ceiling: Quality,
         elapsed_ms: u64,
         next: Feedback,
     ) -> Option<Quality> {
@@ -452,11 +455,11 @@ impl Adaptive {
         self.healthy_ms = 0;
         self.cooldown_ms = 2000;
         let mut quality = current;
-        // Toward the host's monitor, but no further than a quality holds.
-        let width = source.0.max(current.max_width).min(MAX_EDGE);
-        let height = source.1.max(current.max_height).min(MAX_EDGE);
-        // The host announces its monitor; any u16 by u16 counts in u64.
-        let cap = ((u64::from(width) * u64::from(height) * 3) / 1000).clamp(6000, 50_000) as u32;
+        // Back toward what the viewer chose, but no further than a quality
+        // holds.
+        let width = ceiling.max_width.min(MAX_EDGE);
+        let height = ceiling.max_height.min(MAX_EDGE);
+        let cap = ceiling.max_bitrate_kbps;
         // Only a stream using its bitrate proves the link carries more: a
         // still screen sending a fraction of it proves nothing.
         let used = u64::from(self.status.received_kbps) * 2 >= u64::from(current.max_bitrate_kbps);
@@ -489,6 +492,7 @@ impl Adaptive {
             .max_frame_rate
             .saturating_add(10)
             .min(decoder_cap)
+            .min(ceiling.max_frame_rate)
             .max(current.max_frame_rate);
         quality.max_width = quality
             .max_width
@@ -506,6 +510,16 @@ impl Adaptive {
         }
     }
 }
+
+/// A ceiling no test reaches: the largest bitrate a quality holds, at the
+/// size and rate the tests start from.
+#[cfg(test)]
+const WIDE: Quality = Quality {
+    max_bitrate_kbps: 50_000,
+    max_frame_rate: 60,
+    max_width: 1920,
+    max_height: 1080,
+};
 
 #[cfg(test)]
 mod tests {
@@ -534,56 +548,38 @@ mod tests {
     fn stable_high_latency_path_recovers_without_a_relay_penalty() {
         let mut state = Adaptive::default();
         let mut quality = Quality::new(1000, 15, 1280, 720).unwrap();
-        assert!(state
-            .step(quality, (1920, 1080), 1000, frame_sample(0))
-            .is_none());
+        assert!(state.step(quality, WIDE, 1000, frame_sample(0)).is_none());
         for second in 1..6 {
             assert!(state
-                .step(quality, (1920, 1080), 1000, frame_sample(second))
+                .step(quality, WIDE, 1000, frame_sample(second))
                 .is_none());
         }
-        quality = state
-            .step(quality, (1920, 1080), 1000, frame_sample(6))
-            .unwrap();
+        quality = state.step(quality, WIDE, 1000, frame_sample(6)).unwrap();
         assert_eq!(quality, Quality::new(1250, 25, 1600, 900).unwrap());
         assert_eq!(state.status.reason, AdaptationReason::Recovering);
         assert_eq!(state.status.received_fps, 30);
         assert_eq!(state.status.received_kbps, 2000);
     }
-    /// Found by the `host_feedback` fuzz target: the host's monitor size
-    /// comes from its Accept, and the largest one overflowed the bitrate
-    /// cap's pixel count when the link recovered.
+    /// Found by the `host_feedback` fuzz target, when recovery still grew
+    /// toward the host's monitor: the largest one overflowed the bitrate
+    /// cap's pixel count, and the size grew past what a quality may hold,
+    /// which the host refused as malformed. The largest ceiling a quality
+    /// holds stays a quality.
     #[test]
-    fn the_largest_monitor_a_host_announces_caps_recovery_without_overflow() {
-        let mut state = Adaptive::default();
-        let quality = Quality::new(1000, 15, 1280, 720).unwrap();
-        let monitor = (u16::MAX, u16::MAX);
-        state.step(quality, monitor, 1000, frame_sample(0));
-        for second in 1..6 {
-            assert!(state
-                .step(quality, monitor, 1000, frame_sample(second))
-                .is_none());
-        }
-        let next = state.step(quality, monitor, 1000, frame_sample(6)).unwrap();
-        assert_eq!(next.max_bitrate_kbps, 1250);
-        assert_eq!(state.status.reason, AdaptationReason::Recovering);
-    }
-    /// Found by the `host_feedback` fuzz target: recovery grew the size
-    /// toward a host's monitor past what a quality may hold, and the host
-    /// refused the update as malformed and ended the stream.
-    #[test]
-    fn recovery_toward_a_monitor_past_the_quality_limit_stays_a_quality() {
+    fn recovery_toward_the_largest_ceiling_stays_a_quality() {
         let mut state = Adaptive::default();
         let quality = Quality::new(1000, 15, 7000, 7000).unwrap();
-        let monitor = (7936, 8000);
-        state.step(quality, monitor, 1000, frame_sample(0));
+        let ceiling = Quality::new(50_000, 60, MAX_EDGE, MAX_EDGE).unwrap();
+        state.step(quality, ceiling, 1000, frame_sample(0));
         for second in 1..6 {
             assert!(state
-                .step(quality, monitor, 1000, frame_sample(second))
+                .step(quality, ceiling, 1000, frame_sample(second))
                 .is_none());
         }
-        let next = state.step(quality, monitor, 1000, frame_sample(6)).unwrap();
+        let next = state.step(quality, ceiling, 1000, frame_sample(6)).unwrap();
+        assert_eq!(next.max_bitrate_kbps, 1250);
         assert_eq!((next.max_width, next.max_height), (MAX_EDGE, MAX_EDGE));
+        assert_eq!(state.status.reason, AdaptationReason::Recovering);
         let encoded = crate::protocol::ControlMessage::Quality {
             stamp: crate::protocol::SessionStamp::new(1, 1),
             quality: next,
@@ -591,19 +587,73 @@ mod tests {
         .encode();
         assert!(crate::protocol::ControlMessage::decode(&encoded).is_ok());
     }
+    /// The frame rate, size and bitrate the viewer chose are a ceiling:
+    /// after a strain took them down, recovery climbs back to them and
+    /// stops there, however healthy the link and however large the host's
+    /// screen. It once climbed to 60 fps from a choice of 30.
+    #[test]
+    fn recovery_stops_at_the_quality_the_viewer_chose() {
+        let mut state = Adaptive::default();
+        let chosen = Quality::new(12_000, 30, 1920, 1080).unwrap();
+        let mut quality = Quality::new(4000, 15, 1280, 720).unwrap();
+        // Using its bitrate: every second carries what the quality allows.
+        let sample = |second: u64, kbps: u64| Feedback {
+            receiver: crate::video::QueueTelemetry {
+                received_frames: second * 30,
+                received_bytes: second * kbps * 125,
+                ..Default::default()
+            },
+            host: Some(HostFeedback {
+                sent_bytes: second * kbps * 125,
+                encode_us: 5000,
+                ..Default::default()
+            }),
+            frames_lost: 0,
+            rtt_ms: 10,
+            path_changed: false,
+            decode_us: Some(2000),
+        };
+        state.step(quality, chosen, 1000, sample(0, 0));
+        for second in 1..=120 {
+            let used = u64::from(quality.max_bitrate_kbps);
+            if let Some(next) = state.step(quality, chosen, 1000, sample(second, used)) {
+                assert!(next.max_frame_rate <= 30, "{next:?}");
+                assert!(next.max_bitrate_kbps <= 12_000, "{next:?}");
+                assert!(
+                    next.max_width <= 1920 && next.max_height <= 1080,
+                    "{next:?}"
+                );
+                quality = next;
+            }
+        }
+        assert_eq!(quality, chosen, "recovery reaches the choice");
+    }
+    /// A choice below what the link and coders could take stays where it
+    /// is: a healthy stream at the chosen quality is not raised.
+    #[test]
+    fn a_healthy_stream_at_its_ceiling_stays_there() {
+        let mut state = Adaptive::default();
+        let chosen = Quality::new(1000, 15, 1280, 720).unwrap();
+        state.step(chosen, chosen, 1000, frame_sample(0));
+        for second in 1..=30 {
+            assert!(state
+                .step(chosen, chosen, 1000, frame_sample(second))
+                .is_none());
+        }
+    }
     #[test]
     fn decoder_pressure_reduces_frame_rate_before_bitrate_or_text_resolution() {
         let mut state = Adaptive::default();
         let quality = initial();
-        state.step(quality, (1920, 1080), 1000, frame_sample(0));
+        state.step(quality, WIDE, 1000, frame_sample(0));
         let mut first = frame_sample(1);
         first.receiver.queued = 7;
         first.receiver.oldest_ms = 200;
-        assert!(state.step(quality, (1920, 1080), 1000, first).is_none());
+        assert!(state.step(quality, WIDE, 1000, first).is_none());
         let mut second = frame_sample(2);
         second.receiver.queued = 6;
         second.receiver.oldest_ms = 190;
-        let next = state.step(quality, (1920, 1080), 1000, second).unwrap();
+        let next = state.step(quality, WIDE, 1000, second).unwrap();
         assert_eq!(next, Quality::new(8000, 45, 1920, 1080).unwrap());
         assert_eq!(state.status.reason, AdaptationReason::ReceiverPressure);
         assert_eq!(state.status.send_loss_per_mille, 0);
@@ -612,33 +662,33 @@ mod tests {
     fn sender_loss_reduces_bitrate_and_cooldown_prevents_per_tick_oscillation() {
         let mut state = Adaptive::default();
         let quality = initial();
-        state.step(quality, (1920, 1080), 1000, frame_sample(0));
+        state.step(quality, WIDE, 1000, frame_sample(0));
         let mut sample = frame_sample(1);
         sample.host.as_mut().unwrap().lost_bytes = 10_000;
-        assert!(state.step(quality, (1920, 1080), 1000, sample).is_none());
+        assert!(state.step(quality, WIDE, 1000, sample).is_none());
         sample = frame_sample(2);
         sample.host.as_mut().unwrap().lost_bytes = 20_000;
         // 4% of bytes lost is a mild strain: 15% off.
-        let next = state.step(quality, (1920, 1080), 1000, sample).unwrap();
+        let next = state.step(quality, WIDE, 1000, sample).unwrap();
         assert_eq!(next, Quality::new(6800, 60, 1920, 1080).unwrap());
         assert_eq!(state.status.send_loss_per_mille, 40);
         assert_eq!(state.status.reason, AdaptationReason::NetworkPressure);
         sample = frame_sample(3);
         sample.host.as_mut().unwrap().lost_bytes = 30_000;
-        assert!(state.step(next, (1920, 1080), 1000, sample).is_none());
+        assert!(state.step(next, WIDE, 1000, sample).is_none());
     }
     #[test]
     fn frames_that_keep_going_missing_lower_the_bitrate_and_many_halve_it() {
         let quality = initial();
         let run = |samples: &[(u64, u64)]| {
             let mut state = Adaptive::default();
-            state.step(quality, (1920, 1080), 1000, frame_sample(0));
+            state.step(quality, WIDE, 1000, frame_sample(0));
             let mut stepped = None;
             for (second, &(lost, dropped)) in (1..).zip(samples) {
                 let mut sample = frame_sample(second);
                 sample.frames_lost = lost;
                 sample.host.as_mut().unwrap().send_dropped = dropped;
-                stepped = stepped.or(state.step(quality, (1920, 1080), 1000, sample));
+                stepped = stepped.or(state.step(quality, WIDE, 1000, sample));
             }
             stepped.map(|quality| quality.max_bitrate_kbps)
         };
@@ -659,13 +709,13 @@ mod tests {
     fn a_standing_backlog_in_the_transport_lowers_the_bitrate() {
         let mut state = Adaptive::default();
         let quality = initial();
-        state.step(quality, (1920, 1080), 1000, frame_sample(0));
+        state.step(quality, WIDE, 1000, frame_sample(0));
         let mut sample = frame_sample(1);
         sample.host.as_mut().unwrap().backlog_ms = 300;
-        assert!(state.step(quality, (1920, 1080), 1000, sample).is_none());
+        assert!(state.step(quality, WIDE, 1000, sample).is_none());
         let mut sample = frame_sample(2);
         sample.host.as_mut().unwrap().backlog_ms = 320;
-        let next = state.step(quality, (1920, 1080), 1000, sample).unwrap();
+        let next = state.step(quality, WIDE, 1000, sample).unwrap();
         assert_eq!(next.max_bitrate_kbps, 6000);
         assert_eq!(state.status.reason, AdaptationReason::NetworkPressure);
     }
@@ -693,7 +743,7 @@ mod tests {
             for _ in 0..seconds {
                 second += 1;
                 lost += loss;
-                if let Some(next) = state.step(*quality, (1920, 1080), 1000, sample(second, lost)) {
+                if let Some(next) = state.step(*quality, WIDE, 1000, sample(second, lost)) {
                     *quality = next;
                     changes.push((second, next.max_bitrate_kbps));
                 }
@@ -729,10 +779,10 @@ mod tests {
         let mut state = Adaptive::default();
         // Samples carry 2,000 kb/s against an 8,000 kb/s quality.
         let quality = Quality::new(8000, 30, 1280, 720).unwrap();
-        state.step(quality, (1920, 1080), 1000, frame_sample(0));
+        state.step(quality, WIDE, 1000, frame_sample(0));
         let mut raised = None;
         for second in 1..=7 {
-            raised = raised.or(state.step(quality, (1920, 1080), 1000, frame_sample(second)));
+            raised = raised.or(state.step(quality, WIDE, 1000, frame_sample(second)));
         }
         let raised = raised.unwrap();
         assert_eq!(raised.max_bitrate_kbps, 8000);
@@ -743,33 +793,27 @@ mod tests {
     fn idle_counter_reset_and_path_change_never_pretend_to_prove_capacity() {
         let mut state = Adaptive::default();
         let quality = initial();
-        state.step(quality, (3840, 2160), 1000, frame_sample(0));
+        state.step(quality, WIDE, 1000, frame_sample(0));
         for _ in 0..20 {
-            assert!(state
-                .step(quality, (3840, 2160), 1000, frame_sample(0))
-                .is_none());
+            assert!(state.step(quality, WIDE, 1000, frame_sample(0)).is_none());
         }
         assert_eq!(state.status.reason, AdaptationReason::Idle);
         let mut sample = frame_sample(1);
         sample.path_changed = true;
-        assert!(state.step(quality, (3840, 2160), 1000, sample).is_none());
+        assert!(state.step(quality, WIDE, 1000, sample).is_none());
         assert_eq!(state.status.reason, AdaptationReason::WarmingUp);
-        assert!(state
-            .step(quality, (3840, 2160), 1000, frame_sample(0))
-            .is_none());
-        assert!(state
-            .step(quality, (3840, 2160), 20_000, frame_sample(1))
-            .is_none());
+        assert!(state.step(quality, WIDE, 1000, frame_sample(0)).is_none());
+        assert!(state.step(quality, WIDE, 20_000, frame_sample(1)).is_none());
     }
     #[test]
     fn keyframe_replacement_drops_without_backlog_do_not_lower_quality() {
         let mut state = Adaptive::default();
         let quality = initial();
-        state.step(quality, (1920, 1080), 1000, frame_sample(0));
+        state.step(quality, WIDE, 1000, frame_sample(0));
         for second in 1..5 {
             let mut sample = frame_sample(second);
             sample.receiver.dropped = second * 2;
-            assert!(state.step(quality, (1920, 1080), 1000, sample).is_none());
+            assert!(state.step(quality, WIDE, 1000, sample).is_none());
             assert_eq!(state.status.reason, AdaptationReason::Stable);
         }
     }
@@ -844,9 +888,9 @@ mod decoder_tests {
             path_changed: false,
             decode_us: Some(25_000),
         };
-        adaptive.step(quality, (1920, 1080), 1000, sample(0));
+        adaptive.step(quality, WIDE, 1000, sample(0));
         for second in 1..=8 {
-            if let Some(next) = adaptive.step(quality, (1920, 1080), 1000, sample(second)) {
+            if let Some(next) = adaptive.step(quality, WIDE, 1000, sample(second)) {
                 quality = next;
             }
         }
@@ -854,13 +898,13 @@ mod decoder_tests {
         assert_eq!(quality.max_bitrate_kbps, 8000);
         assert_eq!((quality.max_width, quality.max_height), (1920, 1080));
         for second in 9..=14 {
-            if let Some(next) = adaptive.step(quality, (1920, 1080), 1000, sample(second)) {
+            if let Some(next) = adaptive.step(quality, WIDE, 1000, sample(second)) {
                 quality = next;
             }
         }
         assert_eq!(quality.max_frame_rate, 30);
         for second in 15..=40 {
-            if let Some(next) = adaptive.step(quality, (1920, 1080), 1000, sample(second)) {
+            if let Some(next) = adaptive.step(quality, WIDE, 1000, sample(second)) {
                 quality = next;
             }
         }
@@ -892,17 +936,11 @@ mod producer_tests {
             path_changed: false,
             decode_us: None,
         };
-        state.step(quality, (1920, 1080), 1000, sample(0, 1000));
-        assert!(state
-            .step(quality, (1920, 1080), 1000, sample(1, 1000))
-            .is_none());
+        state.step(quality, WIDE, 1000, sample(0, 1000));
+        assert!(state.step(quality, WIDE, 1000, sample(1, 1000)).is_none());
         assert_eq!(state.status.reason, AdaptationReason::Stable);
-        assert!(state
-            .step(quality, (1920, 1080), 1000, sample(2, 30_000))
-            .is_none());
-        let next = state
-            .step(quality, (1920, 1080), 1000, sample(3, 30_000))
-            .unwrap();
+        assert!(state.step(quality, WIDE, 1000, sample(2, 30_000)).is_none());
+        let next = state.step(quality, WIDE, 1000, sample(3, 30_000)).unwrap();
         assert_eq!(next, Quality::new(8000, 45, 1920, 1080).unwrap());
         assert_eq!(state.status.reason, AdaptationReason::EncoderPressure);
         assert_eq!(state.status.send_loss_per_mille, 0);
