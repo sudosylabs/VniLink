@@ -11,7 +11,7 @@ use std::sync::atomic::AtomicBool;
 
 pub use vnilink_media::HostSession;
 #[cfg(target_os = "linux")]
-use vnilink_media::{Error, FrameSource, PublishError, Quality, RawFrame};
+use vnilink_media::{Error, FrameSource, FrameWait, PublishError, Quality, RawFrame};
 
 #[cfg(target_os = "linux")]
 use crate::encode::LinuxEncoder;
@@ -24,6 +24,10 @@ impl FrameSource for crate::pipewire::PortalCapture {
 
     fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
         self.poll_frame(timestamp_us)
+    }
+
+    fn wait_frame(&self, deadline: std::time::Instant) -> FrameWait {
+        FrameWait::from_arrived(crate::pipewire::PortalCapture::wait_frame(self, deadline))
     }
 
     fn attested_at(&self) -> Option<std::time::Instant> {

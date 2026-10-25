@@ -17,7 +17,7 @@ use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -123,6 +123,8 @@ pub struct PortalCapture {
     wake: UnixDatagram,
     thread: Option<JoinHandle<()>>,
     shared: Arc<Shared>,
+    /// The channel's generation when the picture last polled was read.
+    seen: AtomicU64,
 }
 
 impl PortalCapture {
@@ -203,6 +205,7 @@ impl PortalCapture {
                     wake,
                     thread: Some(thread),
                     shared,
+                    seen: AtomicU64::new(0),
                 };
                 startup.check().map_err(|_| {
                     Error::CaptureRejected("desktop capture startup cancelled or expired")
@@ -246,7 +249,28 @@ impl PortalCapture {
     }
 
     /// Return the latest picture, retaining it while the desktop is idle.
+    ///
+    /// The capture thread stores each picture in the channel as PipeWire
+    /// delivers it and keeps iterating its loop, so a stored picture is read
+    /// here without asking that thread: pictures are shared, never reused
+    /// buffers, and a GPU picture is a handle the channel owns. Only a
+    /// capture without a picture yet, or whose thread has ended, takes the
+    /// round trip, which reports the failure.
     pub fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
+        // Before the read, so a picture stored during it still counts as new.
+        let generation = self.shared.channel.generation();
+        if self
+            .thread
+            .as_ref()
+            .is_some_and(|thread| !thread.is_finished())
+        {
+            if let Some(slot) = self.shared.channel.try_latest()? {
+                self.seen.store(generation, Ordering::Release);
+                let (frame, delivery) = frame_from_slot(&self.shared, slot, timestamp_us)?;
+                *self.delivery.lock().expect("portal delivery") = Some(delivery);
+                return Ok(Some(frame));
+            }
+        }
         let (reply_tx, reply_rx) = mpsc::channel();
         self.tx
             .send(Command::Frame {
@@ -257,6 +281,7 @@ impl PortalCapture {
         let _ = self.wake.send(&[1]);
         match reply_rx.recv_timeout(FRAME_TIMEOUT) {
             Ok(Ok(Some((frame, delivery)))) => {
+                self.seen.store(generation, Ordering::Release);
                 *self.delivery.lock().expect("portal delivery") = Some(delivery);
                 Ok(Some(frame))
             }
@@ -266,6 +291,13 @@ impl PortalCapture {
                 Error::CaptureRejected("the screen cast portal did not start"),
             ),
         }
+    }
+
+    /// Waits for a picture newer than the last poll's, until `deadline`. The
+    /// PipeWire thread wakes it as it stores the picture.
+    pub fn wait_frame(&self, deadline: Instant) -> bool {
+        let seen = self.seen.load(Ordering::Acquire);
+        self.shared.channel.wait_newer(seen, deadline) != seen
     }
 }
 
@@ -514,10 +546,18 @@ fn wait_frame(
     let _ = mainloop
         .loop_()
         .iterate(pw::loop_::Timeout::Finite(Duration::ZERO));
-    let slot = match shared.channel.try_latest()? {
-        Some(slot) => slot,
-        None => return Ok(None),
-    };
+    match shared.channel.try_latest()? {
+        Some(slot) => frame_from_slot(shared, slot, timestamp_us).map(Some),
+        None => Ok(None),
+    }
+}
+
+/// `slot` as a frame in the arrangement the stream negotiated.
+fn frame_from_slot(
+    shared: &Shared,
+    slot: ChannelSlot,
+    timestamp_us: u64,
+) -> Result<(RawFrame, PortalDelivery), Error> {
     let delivery = shared
         .delivery
         .lock()
@@ -548,7 +588,7 @@ fn wait_frame(
         )?
     }
     .with_captured_at(slot.captured_at);
-    Ok(Some((frame, delivery)))
+    Ok((frame, delivery))
 }
 
 fn remember_format(shared: &Shared, id: u32, param: Option<&Pod>) {
