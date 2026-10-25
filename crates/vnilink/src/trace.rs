@@ -24,6 +24,103 @@
 //! peer only as [`crate::diagnostics::fingerprint`]. Counts, sizes, timings,
 //! codecs, roles and reasons are what it holds.
 
+#[doc(hidden)]
+pub use tracing as __tracing;
+
+/// Records a failure this code chose not to act on, instead of `let _ =`
+/// or `.ok()`: `ignored!(trace::FILES, "the viewer already left", reply.send(x))`.
+/// The record names the area (a target here), why ignoring it is right,
+/// and what failed by name only ([`failure`]), never its text; and it is
+/// counted ([`ignored_counts`]). It evaluates to the result's `Ok` value
+/// as an `Option`.
+#[macro_export]
+macro_rules! ignored {
+    ($target:expr, $why:literal, $result:expr $(,)?) => {
+        match $result {
+            Ok(value) => Some(value),
+            Err(error) => {
+                $crate::trace::__tracing::debug!(
+                    target: $target,
+                    why = $why,
+                    failure = $crate::trace::failure(&error),
+                    "ignored"
+                );
+                $crate::trace::count_ignored($target, $why);
+                None
+            }
+        }
+    };
+}
+
+/// What failed, by name: a VniLink [`crate::Error`]'s [`crate::Error::name`],
+/// otherwise the failure's type, such as `SendError` or `Elapsed`. Never
+/// its text, which can carry a library's addresses or a path.
+pub fn failure<E: 'static>(error: &E) -> &'static str {
+    if let Some(error) = (error as &dyn std::any::Any).downcast_ref::<crate::Error>() {
+        return error.name();
+    }
+    if let Some(error) = (error as &dyn std::any::Any).downcast_ref::<std::io::Error>() {
+        return io_failure(error.kind());
+    }
+    let full = std::any::type_name::<E>();
+    let outer = full.split('<').next().unwrap_or(full);
+    outer.rsplit("::").next().unwrap_or(outer)
+}
+
+/// An I/O failure by its kind.
+pub fn io_failure(kind: std::io::ErrorKind) -> &'static str {
+    use std::io::ErrorKind;
+    match kind {
+        ErrorKind::NotFound => "not found",
+        ErrorKind::PermissionDenied => "permission denied",
+        ErrorKind::AlreadyExists => "already exists",
+        ErrorKind::WouldBlock => "would block",
+        ErrorKind::InvalidInput => "invalid input",
+        ErrorKind::InvalidData => "invalid data",
+        ErrorKind::TimedOut => "timed out",
+        ErrorKind::Interrupted => "interrupted",
+        ErrorKind::UnexpectedEof => "unexpected end",
+        ErrorKind::BrokenPipe => "broken pipe",
+        ErrorKind::ConnectionReset => "connection reset",
+        ErrorKind::ConnectionRefused => "connection refused",
+        ErrorKind::StorageFull => "storage full",
+        ErrorKind::ReadOnlyFilesystem => "read-only file system",
+        ErrorKind::CrossesDevices => "crosses devices",
+        ErrorKind::DirectoryNotEmpty => "directory not empty",
+        ErrorKind::IsADirectory => "is a directory",
+        ErrorKind::NotADirectory => "not a directory",
+        ErrorKind::Unsupported => "unsupported",
+        _ => "other I/O",
+    }
+}
+
+fn ignored_map(
+) -> &'static std::sync::Mutex<std::collections::BTreeMap<(&'static str, &'static str), u64>> {
+    static IGNORED: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<(&'static str, &'static str), u64>>,
+    > = std::sync::OnceLock::new();
+    IGNORED.get_or_init(Default::default)
+}
+
+#[doc(hidden)]
+pub fn count_ignored(target: &'static str, why: &'static str) {
+    *ignored_map()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .entry((target, why))
+        .or_default() += 1;
+}
+
+/// How many failures each area ignored, by reason, in this process.
+pub fn ignored_counts() -> Vec<(&'static str, &'static str, u64)> {
+    ignored_map()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .iter()
+        .map(|((target, why), count)| (*target, *why, *count))
+        .collect()
+}
+
 /// The span that names an engine; see the module documentation.
 pub const ENGINE: &str = "vnilink::engine";
 
@@ -33,7 +130,7 @@ pub(crate) fn engine_span() -> tracing::Span {
 }
 
 /// `work`, to run on another thread inside `span`.
-pub(crate) fn within<T>(span: tracing::Span, work: impl FnOnce() -> T) -> impl FnOnce() -> T {
+pub fn within<T>(span: tracing::Span, work: impl FnOnce() -> T) -> impl FnOnce() -> T {
     move || span.in_scope(work)
 }
 
@@ -92,3 +189,49 @@ pub const STORAGE: &str = "vnilink::storage";
 pub const BRIDGE: &str = "vnilink::bridge";
 /// The log itself: its filter and its file.
 pub const LOG: &str = "vnilink::log";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A failure is named by what it is, never by its text.
+    #[test]
+    fn a_failure_is_named_without_its_text() {
+        assert_eq!(
+            failure(&crate::Error::Network("192.0.2.1:4433 refused".into())),
+            "network"
+        );
+        let (sender, receiver) = std::sync::mpsc::channel::<u8>();
+        drop(receiver);
+        let sent = sender.send(7).unwrap_err();
+        assert_eq!(failure(&sent), "SendError");
+        let missing = std::fs::read("/no/such/file/for/vnilink").unwrap_err();
+        assert_eq!(failure(&missing), "not found");
+    }
+
+    /// An ignored failure is counted under its area and reason, and the
+    /// value of a success passes through.
+    #[test]
+    fn an_ignored_failure_is_counted_and_a_success_passes() {
+        let before = |why| {
+            ignored_counts()
+                .into_iter()
+                .find(|(target, reason, _)| *target == FILES && *reason == why)
+                .map_or(0, |(_, _, count)| count)
+        };
+        let earlier = before("the test ignores it");
+        assert_eq!(
+            crate::ignored!(FILES, "the test ignores it", Ok::<u8, crate::Error>(3)),
+            Some(3)
+        );
+        assert_eq!(
+            crate::ignored!(
+                FILES,
+                "the test ignores it",
+                Err::<u8, _>(crate::Error::Busy)
+            ),
+            None
+        );
+        assert_eq!(before("the test ignores it"), earlier + 1);
+    }
+}

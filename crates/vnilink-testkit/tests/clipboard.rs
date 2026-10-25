@@ -107,3 +107,74 @@ fn the_largest_text_crosses_and_more_is_refused() {
     assert!(session.service.submit_clipboard(&(largest + "a")).is_err());
     assert_eq!(texts.lock().unwrap().len(), 1);
 }
+
+/// A file selection offered on a control session reaches the host as names
+/// and sizes, and the story is recorded on both sides, by the engine that
+/// lived it, without a single name.
+#[test]
+fn a_file_selection_crosses_a_session_and_its_story_is_recorded() {
+    let trace = traced();
+    let share = vnilink::Grants {
+        view: true,
+        control: true,
+        clipboard: true,
+        transfer: false,
+    };
+    let none = vnilink::Grants {
+        view: false,
+        control: false,
+        clipboard: false,
+        transfer: false,
+    };
+    let pair = vnilink_testkit::Pair::new(share, none);
+    let session = pair.controller.core.connect(&pair.host.endpoint()).unwrap();
+    let offer = vnilink::FileSelection {
+        entries: vec![vnilink::ClipboardFileEntry {
+            path: "quarterly-report.pdf".into(),
+            size: 12_000,
+            dir: false,
+        }],
+    };
+    pair.controller
+        .core
+        .submit_clipboard_files(session.id, session.generation, &offer)
+        .unwrap();
+    let hosted = pair.host.core.snapshot().unwrap().incoming.unwrap();
+    let stored = pair
+        .host
+        .core
+        .incoming_clipboard_files(hosted.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.selection, offer);
+
+    let story = |message: &str| -> Vec<(String, String)> {
+        trace
+            .named(message)
+            .iter()
+            .filter(|event| event["kind"] == "files")
+            .map(|event| {
+                (
+                    event["engine"].as_str().unwrap_or_default().to_owned(),
+                    event["refused"].as_str().unwrap_or("delivered").to_owned(),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(
+        story("clipboard sent"),
+        [("controller".into(), "delivered".into())]
+    );
+    assert_eq!(
+        story("clipboard received"),
+        [("host".into(), "delivered".into())]
+    );
+    assert_eq!(
+        story("clipboard answered"),
+        [("controller".into(), "delivered".into())]
+    );
+    assert!(
+        !trace.events().join("\n").contains("quarterly"),
+        "a file's name was recorded"
+    );
+}

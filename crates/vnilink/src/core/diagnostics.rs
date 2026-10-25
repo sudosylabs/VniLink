@@ -180,6 +180,14 @@ impl Core {
             queues,
             transfers: self.shared.transfer_counters.summary(),
             last_end: lock(&self.shared.last_desktop_end).clone(),
+            ignored: crate::trace::ignored_counts()
+                .into_iter()
+                .map(|(area, why, count)| crate::diagnostics::IgnoredCount {
+                    area: area.into(),
+                    why: why.into(),
+                    count,
+                })
+                .collect(),
         });
         Ok(snapshot)
     }

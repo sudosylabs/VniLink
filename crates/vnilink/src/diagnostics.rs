@@ -10,7 +10,7 @@
 use serde::Serialize;
 
 /// Snapshot format version. Bump when fields change meaning.
-pub const SNAPSHOT_VERSION: u32 = 4;
+pub const SNAPSHOT_VERSION: u32 = 5;
 /// Hard cap on exported JSON bytes.
 pub const MAX_EXPORT_BYTES: usize = 64 * 1024;
 /// Per-list cap before `truncated` is set.
@@ -242,7 +242,18 @@ pub struct DiagnosticSnapshot {
     pub queues: QueueDepths,
     pub transfers: TransferSummary,
     pub last_end: Option<EndSummary>,
+    /// Failures each area chose to ignore, by reason; see
+    /// [`crate::trace::ignored_counts`].
+    pub ignored: Vec<IgnoredCount>,
     pub truncated: bool,
+}
+
+/// How often one area ignored one kind of failure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct IgnoredCount {
+    pub area: String,
+    pub why: String,
+    pub count: u64,
 }
 
 /// Facts the snapshot builder needs. The [`Core`](crate::Core) query maps
@@ -258,6 +269,7 @@ pub struct SnapshotInputs {
     pub queues: QueueDepths,
     pub transfers: TransferSummary,
     pub last_end: Option<EndSummary>,
+    pub ignored: Vec<IgnoredCount>,
 }
 
 pub fn build_snapshot(mut inputs: SnapshotInputs) -> DiagnosticSnapshot {
@@ -274,6 +286,13 @@ pub fn build_snapshot(mut inputs: SnapshotInputs) -> DiagnosticSnapshot {
         inputs.pipelines.truncate(MAX_SNAPSHOT_LISTED);
         truncated = true;
     }
+    if inputs.ignored.len() > MAX_SNAPSHOT_LISTED {
+        inputs
+            .ignored
+            .sort_by(|left, right| right.count.cmp(&left.count));
+        inputs.ignored.truncate(MAX_SNAPSHOT_LISTED);
+        truncated = true;
+    }
     DiagnosticSnapshot {
         version: SNAPSHOT_VERSION,
         monotonic_ms: inputs.monotonic_ms,
@@ -285,6 +304,7 @@ pub fn build_snapshot(mut inputs: SnapshotInputs) -> DiagnosticSnapshot {
         queues: inputs.queues,
         transfers: inputs.transfers,
         last_end: inputs.last_end,
+        ignored: inputs.ignored,
         truncated,
     }
 }

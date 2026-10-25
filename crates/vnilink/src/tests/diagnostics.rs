@@ -91,6 +91,7 @@ fn inputs_pipelines(connections: usize, services: usize, pipelines: usize) -> Sn
         queues: QueueDepths::default(),
         transfers: Default::default(),
         last_end: None,
+        ignored: Vec::new(),
     }
 }
 
@@ -149,6 +150,7 @@ fn export_round_trips_small_snapshots_as_expected_keys() {
         [
             "connections",
             "hosting",
+            "ignored",
             "last_end",
             "monotonic_ms",
             "pipelines",
@@ -178,6 +180,7 @@ fn export_sheds_lists_to_fit_the_cap_and_says_so() {
         queues: QueueDepths::default(),
         transfers: Default::default(),
         last_end: None,
+        ignored: Vec::new(),
         truncated: false,
     };
     // Sanity: the untrimmed form really exceeds the cap.
@@ -389,7 +392,7 @@ fn live_snapshot_names_the_coders_and_the_last_end() {
         .into_iter()
         .find(|s| s.kind == ServiceKind::Desktop)
         .unwrap();
-    assert_eq!(host.diagnostic_snapshot().unwrap().version, 4);
+    assert_eq!(host.diagnostic_snapshot().unwrap().version, 5);
     host.report_desktop_encoder(
         remote.id,
         remote.generation,
@@ -424,4 +427,29 @@ fn live_snapshot_names_the_coders_and_the_last_end() {
     }
     let export = export_json(&controller.diagnostic_snapshot().unwrap()).unwrap();
     assert!(export.contains("\"last_end\""));
+}
+
+/// Failures an area ignored reach the snapshot by area and reason, never
+/// by what failed, and an engine's snapshot carries them.
+#[test]
+fn ignored_failures_reach_the_snapshot_by_area_and_reason() {
+    crate::ignored!(
+        crate::trace::CLIPBOARD,
+        "the diagnostics test ignores it",
+        Err::<(), _>(crate::Error::Network("192.0.2.9".into()))
+    );
+    let core = super::support::start_direct();
+    let snapshot = core.diagnostic_snapshot().unwrap();
+    let counted = snapshot
+        .ignored
+        .iter()
+        .find(|count| count.why == "the diagnostics test ignores it")
+        .expect("the ignored failure is counted");
+    assert_eq!(counted.area, crate::trace::CLIPBOARD);
+    assert!(counted.count >= 1);
+    assert!(
+        !export_json(&snapshot).unwrap().contains("192.0.2.9"),
+        "a failure's text was exported"
+    );
+    core.shutdown();
 }

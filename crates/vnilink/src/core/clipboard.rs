@@ -1,4 +1,5 @@
 //! Clipboard stream for one control session.
+// trace: records every ignored failure
 
 use super::*;
 
@@ -18,6 +19,7 @@ impl Core {
     /// The library does not read or write the operating-system clipboard.
     /// An idle neutral connection may configure it before Desktop Open.
     pub fn set_clipboard(&self, clipboard: Box<dyn HostClipboard>) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut slot = lock(&self.shared.clipboard);
         let state = self.alive_state()?;
         if state
@@ -41,6 +43,7 @@ impl Core {
         self.shared
             .clipboard_available
             .store(true, std::sync::atomic::Ordering::Release);
+        tracing::info!(target: crate::trace::CLIPBOARD, "clipboard adapter installed");
         Ok(())
     }
 
@@ -57,12 +60,17 @@ impl Core {
         generation: u64,
         text: &str,
     ) -> Result<(), Error> {
-        crate::clipboard::check_text(text)?;
-        let tx = {
-            let state = self.alive_state()?;
-            clipboard_sender(&state, false, session_id, Some(generation))?
-        };
-        clipboard_round_trip(tx, text)
+        let _engine = self.engine();
+        let result = (|| {
+            crate::clipboard::check_text(text)?;
+            let tx = {
+                let state = self.alive_state()?;
+                clipboard_sender(&state, false, session_id, Some(generation))?
+            };
+            clipboard_round_trip(tx, text)
+        })();
+        note_sent("text", "to the host", &result);
+        result
     }
 
     /// Sends this host's clipboard text to the controller.
@@ -71,24 +79,29 @@ impl Core {
     /// when the clipboard grant is off. Empty text clears the controller's
     /// copy. This does not read the operating-system clipboard.
     pub fn publish_clipboard(&self, session_id: u64, text: &str) -> Result<(), Error> {
-        crate::clipboard::check_text(text)?;
-        let tx = {
-            let state = self.alive_state()?;
-            let session = live_session(&state, true, session_id)?;
-            if !state.trust.granted(&session.peer_key, Grant::Clipboard) {
-                return Err(Error::ClipboardDenied);
-            }
-            // Host clipboard changes publish only to the selected session;
-            // native code targets it via `clipboard_owner_session`.
-            if state.clipboard_owner != Some(session_id) {
-                return Err(Error::Busy);
-            }
-            session
-                .clipboard
-                .clone()
-                .ok_or(Error::Unsupported("clipboard stream is not open"))?
-        };
-        clipboard_round_trip(tx, text)
+        let _engine = self.engine();
+        let result = (|| {
+            crate::clipboard::check_text(text)?;
+            let tx = {
+                let state = self.alive_state()?;
+                let session = live_session(&state, true, session_id)?;
+                if !state.trust.granted(&session.peer_key, Grant::Clipboard) {
+                    return Err(Error::ClipboardDenied);
+                }
+                // Host clipboard changes publish only to the selected session;
+                // native code targets it via `clipboard_owner_session`.
+                if state.clipboard_owner != Some(session_id) {
+                    return Err(Error::Busy);
+                }
+                session
+                    .clipboard
+                    .clone()
+                    .ok_or(Error::Unsupported("clipboard stream is not open"))?
+            };
+            clipboard_round_trip(tx, text)
+        })();
+        note_sent("text", "to the controller", &result);
+        result
     }
 
     /// Hosted session currently selected for host clipboard sync, if a live
@@ -148,33 +161,38 @@ impl Core {
         generation: u64,
         selection: &FileSelection,
     ) -> Result<(), Error> {
-        selection.validate()?;
-        let (controller, tx) = {
-            let state = self.alive_state()?;
-            let tx = clipboard_sender(&state, false, session_id, Some(generation))?;
-            let controller = state
-                .outgoing
-                .get(&session_id)
-                .and_then(|s| s.controller.clone())
-                .ok_or(Error::NoSession)?;
-            (controller, tx)
-        };
-        // Issue before sending so concurrent offers never share a revision.
-        let revision = controller
-            .published_rev
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            .saturating_add(1)
-            .max(1);
-        clipboard_round_trip_files(tx, revision, selection)?;
-        // Record only delivered offers: a paste serves exactly the latest own
-        // offer, so an undelivered offer must not authorize a fetch. An empty
-        // offer stores an empty selection at a fresh revision, so the chain
-        // stays unbroken and older revisions stay stale.
-        *lock(&controller.published_files) = Some(StoredFileSelection {
-            revision,
-            selection: selection.clone(),
-        });
-        Ok(())
+        let _engine = self.engine();
+        let result = (|| {
+            selection.validate()?;
+            let (controller, tx) = {
+                let state = self.alive_state()?;
+                let tx = clipboard_sender(&state, false, session_id, Some(generation))?;
+                let controller = state
+                    .outgoing
+                    .get(&session_id)
+                    .and_then(|s| s.controller.clone())
+                    .ok_or(Error::NoSession)?;
+                (controller, tx)
+            };
+            // Issue before sending so concurrent offers never share a revision.
+            let revision = controller
+                .published_rev
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                .saturating_add(1)
+                .max(1);
+            clipboard_round_trip_files(tx, revision, selection)?;
+            // Record only delivered offers: a paste serves exactly the latest own
+            // offer, so an undelivered offer must not authorize a fetch. An empty
+            // offer stores an empty selection at a fresh revision, so the chain
+            // stays unbroken and older revisions stay stale.
+            *lock(&controller.published_files) = Some(StoredFileSelection {
+                revision,
+                selection: selection.clone(),
+            });
+            Ok(())
+        })();
+        note_sent("files", "to the host", &result);
+        result
     }
 
     /// Sends this host's file selection to the controller.
@@ -187,39 +205,44 @@ impl Core {
         session_id: u64,
         selection: &FileSelection,
     ) -> Result<(), Error> {
-        selection.validate()?;
-        let (revision, tx) = {
-            let state = self.alive_state()?;
-            let session = live_session(&state, true, session_id)?;
-            if !state.trust.granted(&session.peer_key, Grant::Clipboard) {
-                return Err(Error::ClipboardDenied);
+        let _engine = self.engine();
+        let result = (|| {
+            selection.validate()?;
+            let (revision, tx) = {
+                let state = self.alive_state()?;
+                let session = live_session(&state, true, session_id)?;
+                if !state.trust.granted(&session.peer_key, Grant::Clipboard) {
+                    return Err(Error::ClipboardDenied);
+                }
+                // Host selections publish only to the selected session, like text.
+                if state.clipboard_owner != Some(session_id) {
+                    return Err(Error::Busy);
+                }
+                // Issue before sending so concurrent offers never share a revision.
+                let revision = session
+                    .published_rev
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    .saturating_add(1)
+                    .max(1);
+                let tx = session
+                    .clipboard
+                    .clone()
+                    .ok_or(Error::Unsupported("clipboard stream is not open"))?;
+                (revision, tx)
+            };
+            clipboard_round_trip_files(tx, revision, selection)?;
+            if let Some(session) = lock(&self.shared.state).incoming.get_mut(&session_id) {
+                // An empty offer stores an empty selection at a fresh revision,
+                // so the chain stays unbroken and older revisions stay stale.
+                session.published_files = Some(StoredFileSelection {
+                    revision,
+                    selection: selection.clone(),
+                });
             }
-            // Host selections publish only to the selected session, like text.
-            if state.clipboard_owner != Some(session_id) {
-                return Err(Error::Busy);
-            }
-            // Issue before sending so concurrent offers never share a revision.
-            let revision = session
-                .published_rev
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                .saturating_add(1)
-                .max(1);
-            let tx = session
-                .clipboard
-                .clone()
-                .ok_or(Error::Unsupported("clipboard stream is not open"))?;
-            (revision, tx)
-        };
-        clipboard_round_trip_files(tx, revision, selection)?;
-        if let Some(session) = lock(&self.shared.state).incoming.get_mut(&session_id) {
-            // An empty offer stores an empty selection at a fresh revision,
-            // so the chain stays unbroken and older revisions stay stale.
-            session.published_files = Some(StoredFileSelection {
-                revision,
-                selection: selection.clone(),
-            });
-        }
-        Ok(())
+            Ok(())
+        })();
+        note_sent("files", "to the controller", &result);
+        result
     }
 
     /// Latest file selection published by the controlled computer.
@@ -272,6 +295,22 @@ impl Core {
             .clipboard_files
             .clone()
             .filter(|stored| !stored.selection.entries.is_empty()))
+    }
+}
+
+/// Records a paste that did not reach the other computer: refused here
+/// (grant, owner, stream) or answered with a refusal there. What crossed is
+/// recorded by the stream.
+fn note_sent(kind: &'static str, direction: &'static str, result: &Result<(), Error>) {
+    if let Err(error) = result {
+        tracing::info!(
+            target: crate::trace::CLIPBOARD,
+            kind,
+            direction,
+            refused = error.name(),
+            reason = error.reason(),
+            "clipboard not delivered"
+        );
     }
 }
 
@@ -402,7 +441,17 @@ pub(super) fn apply_clipboard(shared: &Shared, peer: &[u8; 32], text: &str) -> R
     let Some(adapter) = slot.as_mut() else {
         return Err(Error::Unsupported("no clipboard adapter is installed"));
     };
-    adapter.set_text(text)
+    let applied = adapter.set_text(text);
+    if let Err(error) = &applied {
+        tracing::warn!(
+            target: crate::trace::CLIPBOARD,
+            bytes = text.len(),
+            failure = error.name(),
+            reason = error.reason(),
+            "this computer's clipboard refused the text"
+        );
+    }
+    applied
 }
 
 /// Stores a controller's file selection on one hosted session. The revision

@@ -1,4 +1,5 @@
 //! A bounded, acknowledged clipboard pipe owned by one Desktop instance.
+// trace: records every ignored failure
 use super::desktop_stream::{runtime, DesktopRuntime};
 use super::*;
 use crate::clipboard::{self, Frame};
@@ -314,15 +315,15 @@ async fn exchange(
             .unwrap_or_else(|| tokio::time::Instant::now() + TIMEOUT);
         tokio::select! {
             _ = tokio::time::sleep_until(deadline), if pending.is_some() => {
-                if let Some(request) = pending.take() { let _ = request.reply.send(Err(Error::Timeout)); }
+                if let Some(request) = pending.take() { crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(Err(Error::Timeout))); }
                 return Err(Error::Timeout);
             }
             request = requests.recv(), if pending.is_none() => {
                 let Some(request) = request else { return Err(Error::NoSession); };
-                if request.deadline <= tokio::time::Instant::now() { let _ = request.reply.send(Err(Error::Timeout)); continue; }
-                if let Err(error) = validate(&shared, &desktop, hosted) { let _ = request.reply.send(Err(error)); continue; }
+                if request.deadline <= tokio::time::Instant::now() { crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(Err(Error::Timeout))); continue; }
+                if let Err(error) = validate(&shared, &desktop, hosted) { crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(Err(error))); continue; }
                 let result = tokio::time::timeout_at(request.deadline, write(&mut send, Frame::Text(request.text.clone()))).await.map_err(|_| Error::Timeout).and_then(|r| r);
-                if let Err(error) = result { let _ = request.reply.send(Err(error)); return Err(Error::NoSession); }
+                if let Err(error) = result { crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(Err(error))); return Err(Error::NoSession); }
                 pending = Some(request);
             }
             frame = incoming.recv() => match frame.ok_or(Error::NoSession)?? {
@@ -342,10 +343,10 @@ async fn exchange(
                 Frame::Status(status) => {
                     let request = pending.take().ok_or(Error::Malformed)?;
                     if request.deadline <= tokio::time::Instant::now() {
-                        let _ = request.reply.send(Err(Error::Timeout));
+                        crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(Err(Error::Timeout)));
                         return Err(Error::Timeout);
                     }
-                    let _ = request.reply.send(clipboard::status_result(status));
+                    crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(clipboard::status_result(status)));
                 }
                 Frame::Ready => return Err(Error::Malformed),
                 // File selections ride the session clipboard stream, never
