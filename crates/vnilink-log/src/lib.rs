@@ -32,9 +32,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Instant;
 
+use tracing::span::{Attributes, Id, Record};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::filter::FilterExt;
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{reload, EnvFilter};
 
 pub use filter::{FilterSource, FilterState, InvalidFilter, DEFAULT_FILTER, MAX_FILTER_BYTES};
@@ -82,11 +84,72 @@ fn ours(target: &str) -> bool {
     target == "vnilink" || target.starts_with("vnilink::") || target.starts_with("vnilink_")
 }
 
+/// Keeps what a new span gives its events ([`line::SpanFields`]).
+fn on_new_span<S>(attrs: &Attributes<'_>, id: &Id, ctx: &Context<'_, S>)
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    let Some(span) = ctx.span(id) else {
+        return;
+    };
+    let mut extensions = span.extensions_mut();
+    if extensions.get_mut::<line::SpanFields>().is_none() {
+        let mut fields = line::SpanFields::default();
+        attrs.record(&mut line::SpanVisit {
+            span: span.name(),
+            fields: &mut fields,
+        });
+        extensions.insert(fields);
+    }
+}
+
+/// Updates it when the span records a field again, as an engine's name.
+fn on_record<S>(id: &Id, values: &Record<'_>, ctx: &Context<'_, S>)
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    let Some(span) = ctx.span(id) else {
+        return;
+    };
+    let name = span.name();
+    let mut extensions = span.extensions_mut();
+    if let Some(fields) = extensions.get_mut::<line::SpanFields>() {
+        values.record(&mut line::SpanVisit { span: name, fields });
+    }
+}
+
+/// What the spans around `event` give it, the outermost first.
+fn inherited<S>(
+    event: &Event<'_>,
+    ctx: &Context<'_, S>,
+) -> serde_json::Map<String, serde_json::Value>
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    let mut fields = serde_json::Map::new();
+    if let Some(scope) = ctx.event_scope(event) {
+        for span in scope.from_root() {
+            if let Some(given) = span.extensions().get::<line::SpanFields>() {
+                fields.extend(given.0.clone());
+            }
+        }
+    }
+    fields
+}
+
 /// The log file and standard error.
 struct Output;
 
-impl<S: Subscriber> Layer<S> for Output {
-    fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Output {
+    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+        on_new_span(attrs, id, &ctx);
+    }
+
+    fn on_record(&self, id: &Id, values: &Record<'_>, ctx: Context<'_, S>) {
+        on_record(id, values, &ctx);
+    }
+
+    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
         let metadata = event.metadata();
         if !ours(metadata.target()) && *metadata.level() > Level::WARN {
             return;
@@ -96,7 +159,7 @@ impl<S: Subscriber> Layer<S> for Output {
         if file.is_none() && !log.stderr {
             return;
         }
-        let line = line::Line::of(event, log.started);
+        let line = line::Line::of(event, log.started, inherited(event, &ctx));
         if let Some(file) = file.as_mut() {
             file.write(&line.json());
         }
@@ -110,14 +173,22 @@ impl<S: Subscriber> Layer<S> for Output {
 /// The flight recorder.
 struct Recording;
 
-impl<S: Subscriber> Layer<S> for Recording {
-    fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Recording {
+    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+        on_new_span(attrs, id, &ctx);
+    }
+
+    fn on_record(&self, id: &Id, values: &Record<'_>, ctx: Context<'_, S>) {
+        on_record(id, values, &ctx);
+    }
+
+    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
         if !ours(event.metadata().target()) {
             return;
         }
         let log = log();
-        let line = line::Line::of(event, log.started);
-        lock(&log.recorder).push(line.service(), line.json(), line.ms());
+        let line = line::Line::of(event, log.started, inherited(event, &ctx));
+        lock(&log.recorder).push(line.service(), line.json());
     }
 }
 

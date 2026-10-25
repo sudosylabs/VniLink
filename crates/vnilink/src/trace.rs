@@ -7,6 +7,13 @@
 //! as the field `service`: the recorder keeps each service's recent events
 //! apart, so a busy session elsewhere does not push them out.
 //!
+//! Each engine runs in a span named `engine` whose field `name` says which
+//! engine it is (`engine` in the application, which has one; `host` and
+//! `controller` in tests, which run two in one process). Its runtime enters
+//! it on every thread, and threads it starts run in it ([`within`]), so
+//! every event recorded there says which engine recorded it. A public call
+//! that records on its caller's thread enters it too.
+//!
 //! The filter (`vnilink-log`) chooses areas by these targets, for example
 //! `vnilink=info,vnilink::files=debug`. Spans name what an event belongs
 //! to: a session, a service and its generation, a job or an operation.
@@ -16,6 +23,19 @@
 //! clipboard or terminal content, secrets, tokens or absolute paths, and a
 //! peer only as [`crate::diagnostics::fingerprint`]. Counts, sizes, timings,
 //! codecs, roles and reasons are what it holds.
+
+/// The span that names an engine; see the module documentation.
+pub const ENGINE: &str = "vnilink::engine";
+
+/// A new engine's span, named `engine` until [`crate::Core::set_trace_name`].
+pub(crate) fn engine_span() -> tracing::Span {
+    tracing::error_span!(target: ENGINE, "engine", name = "engine")
+}
+
+/// `work`, to run on another thread inside `span`.
+pub(crate) fn within<T>(span: tracing::Span, work: impl FnOnce() -> T) -> impl FnOnce() -> T {
+    move || span.in_scope(work)
+}
 
 // Connections and their services.
 /// A session's connection, its services and how each ended.

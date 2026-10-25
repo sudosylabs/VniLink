@@ -87,6 +87,8 @@ impl Drop for PipeGuard {
 impl RemoteDesktopService {
     /// Returns only after the host acknowledges native clipboard application.
     pub fn submit_clipboard(&self, text: &str) -> Result<(), Error> {
+        let span = self.shared.upgrade().map(|shared| shared.span.clone());
+        let _engine = span.as_ref().map(tracing::Span::enter);
         let desktop = self.active_desktop()?;
         desktop.clipboard.submit(desktop.info.service.id, text)
     }
@@ -109,6 +111,7 @@ impl Core {
         generation: u64,
         text: &str,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let desktop = runtime(&*self.alive_state()?, id, generation, false)?;
         desktop.clipboard.submit(id, text)
     }
@@ -131,6 +134,7 @@ impl Core {
         generation: u64,
         text: &str,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let desktop = {
             let state = self.alive_state()?;
             let desktop = runtime(&state, id, generation, true)?;

@@ -16,6 +16,7 @@ use crate::trust::Device;
 
 impl Core {
     pub fn create_invitation(&self, ttl: Duration) -> Result<String, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         let relays = self.shared.relay.relay_urls()?;
         let direct = direct_addresses(&self.shared.endpoint);
@@ -51,6 +52,7 @@ impl Core {
         ttl: Duration,
         allow_control: bool,
     ) -> Result<PairingFile, Error> {
+        let _engine = self.engine();
         self.export_pairing_file_at(ttl, allow_control, SystemTime::now())
     }
 
@@ -100,6 +102,7 @@ impl Core {
     /// Show `preview.check` and confirm with the digits on the computer that
     /// wrote the file.
     pub fn open_pairing_file(&self, bytes: &[u8]) -> Result<PairingPreview, Error> {
+        let _engine = self.engine();
         self.open_pairing_file_at(bytes, SystemTime::now())
     }
 
@@ -129,6 +132,7 @@ impl Core {
         preview: &PairingPreview,
         check_from_other_screen: &str,
     ) -> Result<DeviceInfo, Error> {
+        let _engine = self.engine();
         if let Err(error) = crate::pairing::require_same_check(preview, check_from_other_screen) {
             tracing::info!(target: crate::trace::PAIRING, "pairing digits did not match");
             return Err(error);
@@ -170,6 +174,7 @@ impl Core {
 
     /// Rejects the waiting controller. The pairing file stays open until it expires.
     pub fn reject_control_request(&self) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         let pending = state
             .control_request
@@ -183,6 +188,7 @@ impl Core {
 
     /// Saves the device an invitation names; records how it went.
     pub fn accept_invitation(&self, token: &str) -> Result<DeviceInfo, Error> {
+        let _engine = self.engine();
         let accepted = self.accept(token);
         tracing::info!(
             target: crate::trace::PAIRING,
@@ -265,6 +271,7 @@ impl Core {
     }
 
     pub(super) fn finish_control_request(&self, check: &str) -> Result<DeviceInfo, Error> {
+        let _engine = self.engine();
         let answered = self.answer_control_request(check);
         tracing::info!(
             target: crate::trace::PAIRING,

@@ -27,7 +27,7 @@ fn source_tree(folder: &std::path::Path) {
 
 #[test]
 fn an_upload_lands_exactly() {
-    let _trace = traced();
+    let trace = traced();
     let pair = Pair::for_files();
     drive(&pair);
     source_tree(&pair.controller.root().join("set"));
@@ -54,6 +54,20 @@ fn an_upload_lands_exactly() {
         tree(&pair.host.root().join("inbox/set")),
         tree(&pair.controller.root().join("set"))
     );
+    // Each side's job records say which engine kept them.
+    let states = trace.named("job state");
+    assert!(!states.is_empty(), "no job state was recorded");
+    for event in states {
+        let expected = if event["sender"] == true {
+            "controller"
+        } else {
+            "host"
+        };
+        assert_eq!(
+            event["engine"], expected,
+            "a job state was recorded by the wrong engine: {event}"
+        );
+    }
 }
 
 #[test]

@@ -11,6 +11,9 @@ pub(super) struct ServiceRecord {
     pub(super) stream_open: bool,
     pub(super) stop: tokio::sync::watch::Sender<bool>,
     pub(super) desktop: Option<Arc<super::desktop_stream::DesktopRuntime>>,
+    /// The engine that owns it, so its changes say so whichever thread
+    /// makes them.
+    pub(super) span: tracing::Span,
 }
 
 impl ServiceRecord {
@@ -20,6 +23,7 @@ impl ServiceRecord {
         {
             return false;
         }
+        let _engine = self.span.enter();
         tracing::debug!(
             target: crate::trace::SERVICE,
             service = self.info.id,
@@ -228,6 +232,7 @@ impl Core {
                 stream_open: false,
                 desktop: None,
                 stop,
+                span: self.shared.span.clone(),
             },
         );
         state.next_service_id = next_id;

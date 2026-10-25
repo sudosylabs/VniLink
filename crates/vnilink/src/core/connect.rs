@@ -61,6 +61,7 @@ impl Core {
     /// only and is not propagated to the peer. A failed save restores the
     /// device and reports the store error.
     pub fn unpair(&self, endpoint_id: &str) -> Result<(), Error> {
+        let _engine = self.engine();
         let key = parse_endpoint_id(endpoint_id)?;
         tracing::info!(
             target: crate::trace::PAIRING,

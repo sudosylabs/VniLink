@@ -525,6 +525,8 @@ struct Shared {
     store: Option<Arc<dyn InstallationStore>>,
     /// Closes the endpoint after a storage fence without borrowing `Core`.
     runtime_handle: tokio::runtime::Handle,
+    /// Names this engine in what it records; see `crate::trace`.
+    span: tracing::Span,
     self_weak: Weak<Shared>,
     /// 0 idle, 1 closing, 2 finished. A claim that does not finish the close
     /// returns to 0 so a later shutdown can retry. The core stays fenced.
@@ -689,6 +691,25 @@ impl Core {
         } else {
             Ok(())
         }
+    }
+
+    /// Enters this engine's span on the caller's thread, so what a public
+    /// call records there says which engine recorded it; see `crate::trace`.
+    fn engine(&self) -> tracing::span::Entered<'_> {
+        self.shared.span.enter()
+    }
+
+    /// The span naming this engine. Work a caller runs on its threads for
+    /// this engine, such as a capture and encoding pipeline, enters it so
+    /// what that work records says which engine it served.
+    pub fn trace_span(&self) -> tracing::Span {
+        self.shared.span.clone()
+    }
+
+    /// Names this engine in what it records: `host` and `controller` when a
+    /// test runs two in one process. The application keeps `engine`.
+    pub fn set_trace_name(&self, name: &str) {
+        self.shared.span.record("name", name);
     }
 
     fn alive_state(&self) -> Result<std::sync::MutexGuard<'_, State>, Error> {

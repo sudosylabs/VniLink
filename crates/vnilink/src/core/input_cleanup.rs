@@ -5,16 +5,16 @@ type Job = Box<dyn FnOnce() + Send>;
 const CAPACITY: usize = 32; // 16 scoped Desktop slots plus at most 4 legacy peers.
 pub(super) struct Executor(std::sync::mpsc::SyncSender<Job>);
 impl Executor {
-    pub(super) fn new() -> std::io::Result<Self> {
+    pub(super) fn new(span: tracing::Span) -> std::io::Result<Self> {
         let (send, receive) = std::sync::mpsc::sync_channel::<Job>(CAPACITY);
         std::thread::Builder::new()
             .name("vnilink-input-cleanup".into())
-            .spawn(move || {
+            .spawn(crate::trace::within(span, move || {
                 while let Ok(job) = receive.recv() {
                     // A backend panic must not kill the only cleanup executor.
                     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
                 }
-            })?;
+            }))?;
         Ok(Self(send))
     }
     pub(super) fn submit(&self, job: impl FnOnce() + Send + 'static) {

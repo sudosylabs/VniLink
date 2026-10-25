@@ -983,6 +983,7 @@ pub(super) async fn serve(
                     stream_open: false,
                     stop: tokio::sync::watch::channel(false).0,
                     desktop: None,
+                    span: shared.span.clone(),
                 },
             );
             if kind == 1 {

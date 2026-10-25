@@ -33,11 +33,11 @@ fn a_ring_drops_its_oldest_past_its_bounds() {
 #[test]
 fn services_are_kept_apart_and_exported_in_time_order() {
     let mut recorder = Recorder::default();
-    recorder.push(Some(7), "a".into(), 1);
-    recorder.push(None, "b".into(), 2);
-    recorder.push(Some(7), "c".into(), 3);
+    recorder.push(Some(7), "a".into());
+    recorder.push(None, "b".into());
+    recorder.push(Some(7), "c".into());
     for service in 100..120 {
-        recorder.push(Some(service), "busy".into(), 4);
+        recorder.push(Some(service), "busy".into());
     }
     assert_eq!(recorder.services.len(), 16);
     assert!(
@@ -45,9 +45,9 @@ fn services_are_kept_apart_and_exported_in_time_order() {
         "the quietest service makes room"
     );
     let mut recorder = Recorder::default();
-    recorder.push(Some(7), "a".into(), 1);
-    recorder.push(None, "b".into(), 2);
-    recorder.push(Some(7), "c".into(), 3);
+    recorder.push(Some(7), "a".into());
+    recorder.push(None, "b".into());
+    recorder.push(Some(7), "c".into());
     assert_eq!(recorder.export(), "a\nb\nc\n");
 }
 
@@ -56,7 +56,7 @@ fn an_export_past_its_bound_keeps_the_newest_and_says_so() {
     let mut recorder = Recorder::default();
     let line = "x".repeat(1024 * 1024);
     for at in 0..6 {
-        recorder.push(Some(at), format!("{at}{line}"), at);
+        recorder.push(Some(at), format!("{at}{line}"));
     }
     let exported = recorder.export();
     assert!(exported.len() <= MAX_EXPORT_BYTES + 64);
@@ -227,7 +227,7 @@ fn an_event_field_never_replaces_when_it_happened() {
             self.0
                 .lock()
                 .unwrap()
-                .push(line::Line::of(event, started).json());
+                .push(line::Line::of(event, started, serde_json::Map::new()).json());
         }
     }
     let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -240,4 +240,46 @@ fn an_event_field_never_replaces_when_it_happened() {
     assert_eq!(line["level"], "INFO");
     assert_eq!(line["field.ms"], 3);
     assert_eq!(line["field.level"], "x");
+}
+
+/// Events say which engine recorded them, from the span they run in, and
+/// the name follows the engine when it is renamed; a span's other fields
+/// stay with it.
+#[test]
+fn events_inherit_the_engine_and_job_of_their_spans() {
+    use tracing_subscriber::layer::SubscriberExt;
+    let subscriber = tracing_subscriber::registry().with(Recording);
+    tracing::subscriber::with_default(subscriber, || {
+        let engine = tracing::error_span!(target: "vnilink::engine", "engine", name = "engine");
+        let _entered = engine.enter();
+        engine.record("name", "host");
+        let job = tracing::debug_span!(target: "vnilink::files", "job", id = 7u64, path = "secret");
+        let _job = job.enter();
+        tracing::info!(target: "vnilink::files", "job state");
+    });
+    let line = export()
+        .lines()
+        .find(|line| line.contains("job state") && line.contains("\"job\":7"))
+        .map(str::to_owned)
+        .expect("the event was recorded with its spans");
+    let line: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(
+        line["engine"], "host",
+        "the renamed engine was not inherited: {line}"
+    );
+    assert!(
+        line.get("path").is_none(),
+        "a span field other than its name or id leaked: {line}"
+    );
+}
+
+/// Events of the same millisecond in different services' rings export in
+/// the order they were recorded, not the order of the rings.
+#[test]
+fn events_of_one_millisecond_keep_their_order_across_services() {
+    let mut recorder = Recorder::default();
+    for (index, service) in [5u64, 3, 9, 1, 7].into_iter().enumerate() {
+        recorder.push(Some(service), format!("{index}"));
+    }
+    assert_eq!(recorder.export(), "0\n1\n2\n3\n4\n");
 }

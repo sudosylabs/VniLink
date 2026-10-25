@@ -10,6 +10,9 @@ pub const DEFAULT_FILTER: &str = "warn,vnilink=info";
 /// The longest filter accepted.
 pub const MAX_FILTER_BYTES: usize = 1024;
 
+/// The engine's span (`vnilink::trace::ENGINE`).
+const ENGINE: &str = "vnilink::engine";
+
 /// What the flight recorder keeps whatever the filter, unless it is `off`.
 const RECORDED: &str = "vnilink=debug";
 
@@ -101,9 +104,16 @@ impl Filters {
         FilterState { directives, source }
     }
 
-    /// The log file's and standard error's filter.
+    /// The log file's and standard error's filter. Unless it is `off`, it
+    /// always lets the engine's span through, so every line says which
+    /// engine recorded it whichever areas the filter chooses.
     pub(crate) fn output(&self) -> EnvFilter {
-        parse(&self.state().directives).unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER))
+        let directives = self.state().directives;
+        if directives.trim() == "off" {
+            return EnvFilter::new("off");
+        }
+        parse(&format!("{directives},{ENGINE}=error"))
+            .unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER))
     }
 
     /// What the flight recorder keeps besides what [`Self::output`] lets

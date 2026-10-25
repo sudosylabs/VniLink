@@ -610,6 +610,7 @@ impl Core {
         dst_rel: &str,
         owner: Option<super::service_jobs::JobOwner>,
     ) -> Result<u64, Error> {
+        let _engine = self.engine();
         let peer = parse_endpoint_id(peer_endpoint_id)?;
         self.ensure_alive()?;
         check_sources(src_folder, names)?;
@@ -788,6 +789,7 @@ impl Core {
         dst_rel: &str,
         owner: Option<super::service_jobs::JobOwner>,
     ) -> Result<u64, Error> {
+        let _engine = self.engine();
         let peer = parse_endpoint_id(peer_endpoint_id)?;
         self.ensure_alive()?;
         check_sources(src_folder, names)?;
@@ -927,6 +929,7 @@ impl Core {
     /// driver plus window ticks) serialize through a per-job driving guard:
     /// the second caller observes the current snapshot without advancing.
     pub fn job_poll(&self, id: u64) -> Result<JobSnapshot, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         super::service_jobs::interrupt_orphaned(&self.shared);
         let sender = {
@@ -1008,7 +1011,7 @@ impl Core {
         const IDLE: Duration = Duration::from_secs(1);
         let weak = std::sync::Arc::downgrade(self);
         let shared = self.shared.clone();
-        std::thread::spawn(move || {
+        std::thread::spawn(crate::trace::within(self.shared.span.clone(), move || {
             let mut seen = shared.job_revision.load(Ordering::Acquire);
             loop {
                 let Some(core) = weak.upgrade() else {
@@ -1021,7 +1024,7 @@ impl Core {
                 drop(core);
                 seen = wait_for_job_change(&shared, seen, IDLE);
             }
-        });
+        }));
     }
 
     /// Gives each job with a step to take a worker, unless it has one.
@@ -1037,7 +1040,10 @@ impl Core {
         for id in ids {
             let weak = std::sync::Arc::downgrade(self);
             let shared = self.shared.clone();
-            std::thread::spawn(move || work_job(weak, shared, id));
+            let span = shared.span.clone();
+            std::thread::spawn(crate::trace::within(span, move || {
+                work_job(weak, shared, id)
+            }));
         }
     }
 
@@ -1083,6 +1089,7 @@ impl Core {
     /// cancellation before every publication, so a sender cancel still
     /// prevents delivery even when bytes already arrived.
     pub fn job_cancel(&self, id: u64) -> Result<JobSnapshot, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         let (peer_key, outgoing) = {
             let mut jobs = lock(&self.shared.jobs);
@@ -1137,6 +1144,7 @@ impl Core {
     /// retry works from either side. Source changes fail instead of moving
     /// different bytes.
     pub fn job_resume(&self, id: u64) -> Result<JobSnapshot, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         self.check_job_owner(id)?;
         let (sender, peer_key, outgoing) = {
@@ -1209,6 +1217,7 @@ impl Core {
         choice: ConflictChoice,
         apply_to_remaining: bool,
     ) -> Result<JobSnapshot, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         let (sender, peer_key, outgoing) = {
             let mut jobs = lock(&self.shared.jobs);
@@ -3507,7 +3516,7 @@ fn follow_arrival(
     id: u64,
     arriving: std::sync::mpsc::Receiver<u64>,
 ) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
+    std::thread::spawn(crate::trace::within(shared.span.clone(), move || {
         const EVERY: std::time::Duration = std::time::Duration::from_millis(250);
         let mut shown = std::time::Instant::now() - EVERY;
         let mut latest = None;
@@ -3527,7 +3536,7 @@ fn follow_arrival(
                 latest = None;
             }
         }
-    })
+    }))
 }
 
 /// Removes the partial files of job `id`, stopping its fetches ahead.

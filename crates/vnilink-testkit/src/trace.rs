@@ -63,9 +63,32 @@ impl Traced {
     }
 }
 
+impl Traced {
+    /// The events recorded during this test that do not say which engine
+    /// recorded them, the log's own aside.
+    pub fn unnamed(&self) -> Vec<String> {
+        self.events()
+            .into_iter()
+            .filter(|line| {
+                serde_json::from_str::<serde_json::Value>(line).is_ok_and(|event| {
+                    event.get("engine").is_none() && event["target"] != "vnilink::log"
+                })
+            })
+            .collect()
+    }
+}
+
 impl Drop for Traced {
     fn drop(&mut self) {
         if !std::thread::panicking() {
+            // Every record says which engine kept it (`vnilink::trace`).
+            let unnamed = self.unnamed();
+            assert!(
+                unnamed.is_empty(),
+                "{} events do not say which engine recorded them:\n{}",
+                unnamed.len(),
+                unnamed.join("\n")
+            );
             return;
         }
         let events = self.events();

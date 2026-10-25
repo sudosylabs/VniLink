@@ -19,14 +19,15 @@ const SERVICES: usize = 16;
 /// left out.
 pub const MAX_EXPORT_BYTES: usize = 4 * 1024 * 1024;
 
-/// An event as recorded: when, and its JSON line.
+/// An event as recorded: its place in the order events were recorded, and
+/// its JSON line.
 type Recorded = (u64, String);
 
 #[derive(Default)]
 pub(crate) struct Ring {
     pub(crate) events: VecDeque<Recorded>,
     pub(crate) bytes: usize,
-    /// When it last took an event, to choose which service's ring goes.
+    /// The last event it took, to choose which service's ring goes.
     touched: u64,
 }
 
@@ -48,10 +49,15 @@ impl Ring {
 pub(crate) struct Recorder {
     process: Ring,
     pub(crate) services: HashMap<u64, Ring>,
+    /// The next event's place. Events of one millisecond in different
+    /// rings keep the order they happened in.
+    next: u64,
 }
 
 impl Recorder {
-    pub(crate) fn push(&mut self, service: Option<u64>, line: String, at: u64) {
+    pub(crate) fn push(&mut self, service: Option<u64>, line: String) {
+        let at = self.next;
+        self.next += 1;
         let Some(service) = service else {
             self.process.push(at, line);
             return;
@@ -74,7 +80,6 @@ impl Recorder {
         for ring in self.services.values() {
             lines.extend(ring.events.iter());
         }
-        // Stable, so events of one millisecond keep their ring's order.
         lines.sort_by_key(|(at, _)| *at);
         let mut kept = Vec::new();
         let mut bytes = 0;

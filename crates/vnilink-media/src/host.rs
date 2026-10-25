@@ -285,6 +285,7 @@ where
     C: FrameSource,
     E: VideoEncoder,
 {
+    let _engine = core.trace_span().entered();
     let mut session = HostSession::open(capture.size().0, capture.size().1, quality, open_encoder)?;
     let events = core.subscribe()?;
     let mut sink = CoreSink::new(core);
@@ -387,6 +388,7 @@ where
     C: FrameSource,
     E: VideoEncoder,
 {
+    let _engine = core.trace_span().entered();
     let mut info = core.hosted_desktop_info(service_id, generation)?;
     let mut session = HostSession::open(
         capture.size().0,

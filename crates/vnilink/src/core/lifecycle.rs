@@ -201,25 +201,44 @@ impl Core {
                 crate::system::SystemPolicy::default(),
             ),
         };
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .thread_name("vnilink")
-            .build()
-            .map_err(Error::network)?;
+        let span = crate::trace::engine_span();
+        let runtime = {
+            thread_local! {
+                /// The engine span this runtime thread runs in, for its life.
+                static ENTERED: std::cell::RefCell<Option<tracing::span::EnteredSpan>> =
+                    const { std::cell::RefCell::new(None) };
+            }
+            let entering = span.clone();
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .thread_name("vnilink")
+                .on_thread_start(move || {
+                    ENTERED
+                        .with(|entered| *entered.borrow_mut() = Some(entering.clone().entered()));
+                })
+                .on_thread_stop(|| {
+                    ENTERED.with(|entered| entered.borrow_mut().take());
+                })
+                .build()
+                .map_err(Error::network)?
+        };
         let runtime_handle = runtime.handle().clone();
         let listen = if direct_only {
             Listen::Loopback
         } else {
             config.listen
         };
-        let endpoint = runtime.block_on(bind_endpoint(
-            secret.clone(),
-            relay_mode,
-            listen,
-            direct_only || !bound_relay.is_public(),
-        ))?;
+        let endpoint = span.in_scope(|| {
+            runtime.block_on(bind_endpoint(
+                secret.clone(),
+                relay_mode,
+                listen,
+                direct_only || !bound_relay.is_public(),
+            ))
+        })?;
         let input_cleanup = Arc::new(AtomicUsize::new(0));
-        let cleanup_executor = input_cleanup::Executor::new().map_err(Error::network)?;
+        let cleanup_executor =
+            input_cleanup::Executor::new(span.clone()).map_err(Error::network)?;
         let shared = Arc::new_cyclic(move |weak| Shared {
             sharing_serial: Mutex::new(()),
             power_factory: Mutex::new(power::Factory {
@@ -235,6 +254,7 @@ impl Core {
             relay: bound_relay,
             store,
             runtime_handle,
+            span,
             self_weak: weak.clone(),
             teardown_phase: AtomicU8::new(0),
             teardown_lock: Mutex::new(()),

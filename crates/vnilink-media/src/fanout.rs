@@ -801,6 +801,9 @@ where
     E: VideoEncoder + 'static,
     F: Fn(&VideoTarget, u16, u16, u8, u32) -> Result<E, Error> + Send + Sync + 'static,
 {
+    // What this pipeline records says which engine it serves.
+    let engine = core.trace_span();
+    let _engine = engine.enter();
     let open_encoder = Arc::new(open_encoder);
     let slot = PictureSlot::new();
     let events = core.subscribe().ok();
@@ -913,7 +916,9 @@ where
                 let worker_open = Arc::clone(&open_encoder);
                 let worker_target = *target;
                 let worker_revision = Arc::clone(&capture_revision);
+                let worker_engine = engine.clone();
                 let handle = scope.spawn(move || {
+                    let _engine = worker_engine.enter();
                     consume(
                         worker_core,
                         worker_slot,

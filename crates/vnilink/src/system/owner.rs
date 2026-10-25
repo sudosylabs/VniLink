@@ -72,7 +72,9 @@ impl Owner {
         let flag = blocked.clone();
         std::thread::Builder::new()
             .name("vnilink-input-owner".into())
-            .spawn(move || run_owner(&mut block, &mut inject, rx, &flag))
+            .spawn(crate::trace::within(tracing::Span::current(), move || {
+                run_owner(&mut block, &mut inject, rx, &flag)
+            }))
             .map_err(|_| Error::Unsupported("the input owner did not start"))?;
         Ok(Self { tx, blocked })
     }

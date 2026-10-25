@@ -42,22 +42,53 @@ impl Visit for Line {
     }
 }
 
+/// What a span gives the events inside it: its `name` or `id` field, under
+/// the span's own name, so `engine{name = "host"}` reads `"engine":"host"`
+/// and `job{id = 3}` reads `"job":3`. Other span fields stay with the span.
+#[derive(Default)]
+pub(crate) struct SpanFields(pub(crate) Map<String, Value>);
+
+pub(crate) struct SpanVisit<'a> {
+    pub(crate) span: &'static str,
+    pub(crate) fields: &'a mut SpanFields,
+}
+
+impl SpanVisit<'_> {
+    fn keep(&mut self, field: &Field, value: Value) {
+        if matches!(field.name(), "name" | "id") {
+            self.fields.0.insert(self.span.into(), value);
+        }
+    }
+}
+
+impl Visit for SpanVisit<'_> {
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.keep(field, value.into());
+    }
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.keep(field, value.into());
+    }
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.keep(field, value.into());
+    }
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.keep(field, format!("{value:?}").into());
+    }
+}
+
 impl Line {
-    pub(crate) fn of(event: &Event<'_>, started: Instant) -> Self {
+    /// `event` as a line, with `inherited`, what its spans give it, first.
+    pub(crate) fn of(event: &Event<'_>, started: Instant, inherited: Map<String, Value>) -> Self {
         let metadata = event.metadata();
         let mut line = Self {
             ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             level: metadata.level().as_str(),
             target: metadata.target().to_owned(),
-            fields: Map::new(),
-            service: None,
+            service: inherited.get("service").and_then(Value::as_u64),
+            fields: inherited,
         };
         event.record(&mut line);
         line
-    }
-
-    pub(crate) fn ms(&self) -> u64 {
-        self.ms
     }
 
     /// The desktop service the event names, as its field `service`.

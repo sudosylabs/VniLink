@@ -1987,6 +1987,7 @@ pub(super) async fn serve(
                         stream_open: false,
                         stop,
                         desktop: Some(desktop.clone()),
+                        span: shared.span.clone(),
                     },
                 );
                 shared

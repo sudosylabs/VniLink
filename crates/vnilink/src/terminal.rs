@@ -578,7 +578,9 @@ mod native {
             let forwarding = stop.clone();
             std::thread::Builder::new()
                 .name("vnilink-terminal-input".into())
-                .spawn(move || forward(rx, forwarded, std::fs::File::from(wake_tx), forwarding))
+                .spawn(crate::trace::within(tracing::Span::current(), move || {
+                    forward(rx, forwarded, std::fs::File::from(wake_tx), forwarding)
+                }))
                 .map_err(|_| Error::Unsupported("terminal worker"))?;
             let worker = PtyWorker {
                 process,
@@ -591,7 +593,9 @@ mod native {
             };
             std::thread::Builder::new()
                 .name("vnilink-terminal".into())
-                .spawn(move || worker.run())
+                .spawn(crate::trace::within(tracing::Span::current(), move || {
+                    worker.run()
+                }))
                 .map_err(|_| Error::Unsupported("terminal worker"))?;
             Ok(TerminalBackend {
                 process_id,

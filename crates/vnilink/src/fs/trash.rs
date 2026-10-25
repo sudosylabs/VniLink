@@ -45,7 +45,9 @@ pub(crate) fn stage_trash(
 pub(crate) fn finish_trash(path: PathBuf) -> Result<(), Error> {
     std::thread::Builder::new()
         .name("vnilink-trash".into())
-        .spawn(move || move_to_trash(&path))
+        .spawn(crate::trace::within(tracing::Span::current(), move || {
+            move_to_trash(&path)
+        }))
         .map_err(|_| Error::Unsupported(NO_TRASH))?
         .join()
         .map_err(|_| Error::Unsupported(NO_TRASH))?
