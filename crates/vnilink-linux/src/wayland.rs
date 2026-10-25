@@ -14,7 +14,7 @@ use ashpd::desktop::{
     PersistMode, Session,
 };
 use vnilink::{HostDesktop, InputEvent, PointerButton};
-use vnilink_media::{Error, FrameSource, RawFrame};
+use vnilink_media::{Error, FrameSource, FrameWait, RawFrame};
 
 use crate::{PortalCapture, ScreenGrant};
 use futures_util::StreamExt;
@@ -211,6 +211,12 @@ impl FrameSource for WaylandCapture {
 
     fn cursor(&self) -> Option<vnilink::CursorState> {
         WaylandCapture::cursor(self)
+    }
+
+    /// The portal capture's wake, in slices short enough that the grant's
+    /// end is seen between them.
+    fn wait_frame(&self, deadline: std::time::Instant) -> FrameWait {
+        FrameWait::from_arrived(self.capture.wait_frame(deadline))
     }
 
     fn poll_frame(&self, time: u64) -> Result<Option<RawFrame>, Error> {
