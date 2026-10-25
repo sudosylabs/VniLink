@@ -1,4 +1,4 @@
-import { showsStreamColour } from './decoderColour.js';
+import { hardwareMatrix, type StreamMatrix } from './decoderColour.js';
 import type { CameraChunk, CameraDecoder, CameraDecoderFactory } from './engineCameraStream.js';
 
 /** A WebCodecs H.264 decoder for Annex-B pictures, hardware first. */
@@ -57,19 +57,21 @@ class WebCodecsDecoder implements CameraDecoder {
 }
 
 /**
- * Whether this window decodes with `config`: WebCodecs' own answer, a refusal
- * to answer being no, and for a hardware decoder also whether it shows the
- * stream's colour ({@link showsStreamColour}).
+ * The matrix this window decodes `config` in, or `undefined` where it does
+ * not decode with it: WebCodecs' own answer, a refusal to answer being no,
+ * and for a hardware decoder the matrix it shows correctly
+ * ({@link hardwareMatrix}), none being no. A software decoder follows the
+ * stream, so BT.709, the default.
  */
-export async function webCodecsSupport(config: VideoDecoderConfig): Promise<boolean> {
+export async function webCodecsSupport(config: VideoDecoderConfig): Promise<StreamMatrix | undefined> {
 	try {
 		if ((await VideoDecoder.isConfigSupported(config)).supported !== true) {
-			return false;
+			return undefined;
 		}
 	} catch {
-		return false;
+		return undefined;
 	}
-	return config.hardwareAcceleration !== 'prefer-hardware' || showsStreamColour(config);
+	return config.hardwareAcceleration === 'prefer-hardware' ? hardwareMatrix(config) : 'bt709';
 }
 
 /**
@@ -80,7 +82,7 @@ export async function webCodecsSupport(config: VideoDecoderConfig): Promise<bool
 export const createWebCodecsDecoder: CameraDecoderFactory = async (codec, output, error) => {
 	for (const hardwareAcceleration of ['prefer-hardware', 'prefer-software'] as const) {
 		const config: VideoDecoderConfig = { codec, hardwareAcceleration, optimizeForLatency: true };
-		if (!await webCodecsSupport(config)) {
+		if (await webCodecsSupport(config) === undefined) {
 			continue;
 		}
 		const decoder = new VideoDecoder({ output, error });

@@ -148,17 +148,22 @@ export type VideoCodec = 'h264' | 'h265' | 'vp8' | 'vp9' | 'av1';
 
 export const videoCodecNames: readonly VideoCodec[] = ['h264', 'h265', 'vp8', 'vp9', 'av1'];
 
-/** A codec the window decodes, whether in hardware, and whether at 4:4:4. */
+/**
+ * A codec the window decodes, whether in hardware, whether at 4:4:4, and
+ * whether its decoder shows BT.601 pictures correctly and BT.709 ones not,
+ * so that a host encodes it in BT.601.
+ */
 export interface WindowDecoder {
 	readonly codec: VideoCodec;
 	readonly hardware: boolean;
 	readonly chroma444: boolean;
+	readonly bt601: boolean;
 }
 
 function isWindowDecoders(value: unknown): value is WindowDecoder[] {
 	return Array.isArray(value) && value.length <= videoCodecNames.length
-		&& value.every((decoder: unknown, index) => record(decoder) && Object.keys(decoder).length === 3
-			&& videoCodecNames.includes(decoder.codec as VideoCodec) && typeof decoder.hardware === 'boolean' && typeof decoder.chroma444 === 'boolean'
+		&& value.every((decoder: unknown, index) => record(decoder) && Object.keys(decoder).length === 4
+			&& videoCodecNames.includes(decoder.codec as VideoCodec) && typeof decoder.hardware === 'boolean' && typeof decoder.chroma444 === 'boolean' && typeof decoder.bt601 === 'boolean'
 			&& !value.slice(0, index).some((earlier: unknown) => record(earlier) && earlier.codec === decoder.codec));
 }
 

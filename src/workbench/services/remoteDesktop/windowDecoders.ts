@@ -1,4 +1,5 @@
 import { videoCodecNames, type VideoCodec, type WindowDecoder } from '../../../platform/engine/common/engine.js';
+import type { StreamMatrix } from '../camera/decoderColour.js';
 
 /**
  * The WebCodecs string each codec is asked about, as pictures are decoded
@@ -20,21 +21,25 @@ const probes: Readonly<Record<VideoCodec, string>> = {
  */
 export const stillDecoderConfig: VideoDecoderConfig = { codec: 'av01.1.08M.08.0.000', hardwareAcceleration: 'no-preference', optimizeForLatency: true };
 
-/** Whether this window can decode with a configuration. */
-export type DecoderSupport = (config: VideoDecoderConfig) => Promise<boolean>;
+/**
+ * The matrix this window decodes a configuration in, or `undefined` where it
+ * cannot decode with it.
+ */
+export type DecoderSupport = (config: VideoDecoderConfig) => Promise<StreamMatrix | undefined>;
 
 /**
- * The codecs this window decodes, each marked when its decoder is hardware,
- * and AV1 when it also shows still pictures at 4:4:4.
+ * The codecs this window decodes, each marked when its decoder is hardware
+ * and when that decoder shows only BT.601 pictures correctly, and AV1 when it
+ * also shows still pictures at 4:4:4.
  */
 export async function probeWindowDecoders(supported: DecoderSupport): Promise<WindowDecoder[]> {
 	const answers = await Promise.all(videoCodecNames.map(async codec => {
 		const config = { codec: probes[codec], optimizeForLatency: true };
 		const hardware = await supported({ ...config, hardwareAcceleration: 'prefer-hardware' });
-		if (!hardware && !await supported({ ...config, hardwareAcceleration: 'prefer-software' })) {
+		if (hardware === undefined && await supported({ ...config, hardwareAcceleration: 'prefer-software' }) === undefined) {
 			return undefined;
 		}
-		return { codec, hardware, chroma444: codec === 'av1' && await supported(stillDecoderConfig) };
+		return { codec, hardware: hardware !== undefined, chroma444: codec === 'av1' && await supported(stillDecoderConfig) !== undefined, bt601: hardware === 'bt601' };
 	}));
 	return answers.filter(answer => answer !== undefined);
 }

@@ -11,7 +11,7 @@ const result = await build({
 		name: 'stubs', setup(builder) {
 			builder.onResolve({ filter: /(dataChannelClient|webCodecsDecoder|extensions)\.js$/ }, args => ({ path: args.path, namespace: 'stub' }));
 			builder.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({
-				contents: 'export const DataChannelClient = { open() { throw new Error("no channel in tests"); } }; export const createWebCodecsDecoder = async () => undefined; export const webCodecsSupport = async () => false; export const registerSingleton = () => {}; export const InstantiationType = {};',
+				contents: 'export const DataChannelClient = { open() { throw new Error("no channel in tests"); } }; export const createWebCodecsDecoder = async () => undefined; export const webCodecsSupport = async () => undefined; export const registerSingleton = () => {}; export const InstantiationType = {};',
 				loader: 'js',
 			}));
 		},
@@ -163,19 +163,22 @@ test('a screen opens only where it is shared: the picture first, then the input 
 	assert.deepEqual(opened, ['video', 'input', 'closed video'], 'a refused input left the picture open');
 });
 
-test('the window says which codecs it decodes, hardware ones marked, each once, and whether it shows stills', async () => {
-	// A hardware decoder that shows the wrong colours answers no for `prefer-hardware`, as VP9's does here.
-	const answers = { 'avc1.640028': ['prefer-hardware', 'prefer-software'], 'hev1.1.6.L153.B0': ['prefer-software'], 'vp09.00.40.08': ['prefer-software'], 'av01.0.08M.08': ['prefer-software'], 'av01.1.08M.08.0.000': ['no-preference'] };
-	const decoders = await probeWindowDecoders(async config => (answers[config.codec] ?? []).includes(config.hardwareAcceleration));
-	assert.deepEqual(decoders, [{ codec: 'h264', hardware: true, chroma444: false }, { codec: 'h265', hardware: false, chroma444: false }, { codec: 'vp9', hardware: false, chroma444: false }, { codec: 'av1', hardware: false, chroma444: true }]);
+test('the window says which codecs it decodes, hardware ones marked with their matrix, each once, and whether it shows stills', async () => {
+	// A hardware decoder that shows neither matrix right answers nothing for `prefer-hardware`, as VP9's does here.
+	// H.264 shows BT.709 in hardware; H.265 only BT.601, as Chromium's VA-API path converts.
+	const answers = { 'avc1.640028': { 'prefer-hardware': 'bt709', 'prefer-software': 'bt709' }, 'hev1.1.6.L153.B0': { 'prefer-hardware': 'bt601', 'prefer-software': 'bt709' }, 'vp09.00.40.08': { 'prefer-software': 'bt709' }, 'av01.0.08M.08': { 'prefer-software': 'bt709' }, 'av01.1.08M.08.0.000': { 'no-preference': 'bt709' } };
+	const decoders = await probeWindowDecoders(async config => answers[config.codec]?.[config.hardwareAcceleration]);
+	assert.deepEqual(decoders, [{ codec: 'h264', hardware: true, chroma444: false, bt601: false }, { codec: 'h265', hardware: true, chroma444: false, bt601: true }, { codec: 'vp9', hardware: false, chroma444: false, bt601: false }, { codec: 'av1', hardware: false, chroma444: true, bt601: false }]);
 	assert(isEngineCommand({ type: 'setWindowDecoders', decoders }));
 	assert(isEngineCommand({ type: 'setWindowDecoders', decoders: [] }));
 	for (const bad of [
-		[{ codec: 'h264', hardware: true, chroma444: false }, { codec: 'h264', hardware: false, chroma444: false }],
-		[{ codec: 'mjpeg', hardware: true, chroma444: false }],
-		[{ codec: 'h264', hardware: true }],
-		[{ codec: 'h264', hardware: true, chroma444: 1 }],
-		[{ codec: 'h264', hardware: true, chroma444: false, extra: 1 }],
+		[{ codec: 'h264', hardware: true, chroma444: false, bt601: false }, { codec: 'h264', hardware: false, chroma444: false, bt601: false }],
+		[{ codec: 'mjpeg', hardware: true, chroma444: false, bt601: false }],
+		[{ codec: 'h264', hardware: true, bt601: false }],
+		[{ codec: 'h264', hardware: true, chroma444: false }],
+		[{ codec: 'h264', hardware: true, chroma444: 1, bt601: false }],
+		[{ codec: 'h264', hardware: true, chroma444: false, bt601: 1 }],
+		[{ codec: 'h264', hardware: true, chroma444: false, bt601: false, extra: 1 }],
 	]) {
 		assert(!isEngineCommand({ type: 'setWindowDecoders', decoders: bad }), JSON.stringify(bad));
 	}
@@ -196,7 +199,7 @@ test('a screen offers only what the window decodes, and leaves out a codec it co
 	let probes = 0;
 	service.decoderSupport = async config => {
 		probes++;
-		return config.codec === 'avc1.640028' || (config.codec === 'hev1.1.6.L153.B0' && config.hardwareAcceleration === 'prefer-software');
+		return config.codec === 'avc1.640028' || (config.codec === 'hev1.1.6.L153.B0' && config.hardwareAcceleration === 'prefer-software') ? 'bt709' : undefined;
 	};
 	let consume;
 	service.openChannel = async (request, consumer) => {
@@ -207,7 +210,7 @@ test('a screen offers only what the window decodes, and leaves out a codec it co
 	};
 	const registered = () => calls.filter(command => command.type === 'setWindowDecoders').map(command => command.decoders);
 	const first = await service.open('peer', false);
-	assert.deepEqual(registered(), [[{ codec: 'h264', hardware: true, chroma444: false }, { codec: 'h265', hardware: false, chroma444: false }]]);
+	assert.deepEqual(registered(), [[{ codec: 'h264', hardware: true, chroma444: false, bt601: false }, { codec: 'h265', hardware: false, chroma444: false, bt601: false }]]);
 	// The decoder this test's window has can show nothing: the H.264 keyframe ends it.
 	const ends = [];
 	first.session.onEnd(end => ends.push(end));
@@ -216,7 +219,7 @@ test('a screen offers only what the window decodes, and leaves out a codec it co
 	assert.deepEqual(ends, ['cantShow']);
 	const asked = probes;
 	const second = await service.open('peer', false);
-	assert.deepEqual(registered().at(-1), [{ codec: 'h265', hardware: false, chroma444: false }], 'the codec it could not show was offered again');
+	assert.deepEqual(registered().at(-1), [{ codec: 'h265', hardware: false, chroma444: false, bt601: false }], 'the codec it could not show was offered again');
 	assert.equal(probes, asked, 'the window was asked again');
 	second.session.dispose();
 });
