@@ -16,6 +16,7 @@ const CHANGED = 16;
 /** The share of tiles that, once changed, makes the stream's picture replace the still everywhere. */
 const MOST = 0.5;
 
+
 /** A part of the picture, in its pixels. */
 export interface PictureRect {
 	readonly x: number;
@@ -37,13 +38,12 @@ interface Sample {
  * Keeps a 4:4:4 still where the screen has not changed since it. The stream
  * goes on behind a still: its repeats of the same screen are not drawn over
  * it, and a changed picture is compared tile by tile with the stream's
- * picture of the screen the still shows, so a clock or a caret changing
- * redraws only its tiles. Once most of the screen changed, the stream
+ * picture before it, so a clock or a caret changing redraws only its tiles. Once most of the screen changed, the stream
  * replaces the still everywhere, as it does when it cannot compare.
  */
 export class StillCompositor {
 	private showing = false;
-	/** The stream's latest picture of the screen, sampled; taken from repeats, which change nothing. */
+	/** The stream's latest picture of the screen, sampled while a still shows. */
 	private base: Sample | undefined;
 	/** Tiles the stream has redrawn over the still, by row. */
 	private changed = new Uint8Array(0);
@@ -55,21 +55,24 @@ export class StillCompositor {
 		return this.showing;
 	}
 
-	/** What of `frame`, a picture in its `role`, to draw now. */
-	public plan(frame: VideoFrame, role: DesktopPictureRole): StillPlan {
+	/**
+	 * What of `frame`, a picture in its `role`, to draw now over `shown`,
+	 * the picture on screen before it: when a still comes, that is the
+	 * stream's picture of the screen the still shows, to compare with.
+	 */
+	public plan(frame: VideoFrame, role: DesktopPictureRole, shown: CanvasImageSource): StillPlan {
 		const width = frame.displayWidth;
 		const height = frame.displayHeight;
 		if (role === 'still') {
 			this.showing = true;
+			this.base = this.sample(shown, width, height);
 			this.changed = new Uint8Array(this.columns(width) * this.rows(height));
 			return 'whole';
 		}
 		if (!this.showing) {
-			// Only a repeat is a picture of a screen a still may show next.
-			this.base = role === 'unchanged' ? this.sample(frame) : undefined;
 			return 'whole';
 		}
-		const sample = this.sample(frame);
+		const sample = this.sample(frame, width, height);
 		const base = this.base;
 		this.base = sample;
 		if (!sample || this.changed.length !== this.columns(width) * this.rows(height)) {
@@ -110,20 +113,20 @@ export class StillCompositor {
 		return Math.ceil(height / TILE);
 	}
 
-	/** The picture at half its size, or nothing where the browser cannot read it back. */
-	private sample(frame: VideoFrame): Sample | undefined {
+	/** `source`, a `pictureWidth` by `pictureHeight` picture, at half its size, or nothing where the browser cannot read it back. */
+	private sample(source: CanvasImageSource, pictureWidth: number, pictureHeight: number): Sample | undefined {
 		const context = this.samplerContext;
 		if (!context) {
 			return undefined;
 		}
-		const width = Math.ceil(frame.displayWidth / SAMPLE_SCALE);
-		const height = Math.ceil(frame.displayHeight / SAMPLE_SCALE);
+		const width = Math.ceil(pictureWidth / SAMPLE_SCALE);
+		const height = Math.ceil(pictureHeight / SAMPLE_SCALE);
 		if (this.sampler.width !== width || this.sampler.height !== height) {
 			this.sampler.width = width;
 			this.sampler.height = height;
 		}
 		try {
-			context.drawImage(frame, 0, 0, width, height);
+			context.drawImage(source, 0, 0, width, height);
 			return { width, height, pixels: context.getImageData(0, 0, width, height).data };
 		} catch {
 			return undefined;

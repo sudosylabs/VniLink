@@ -587,7 +587,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 				this.canvas.height = frame.displayHeight;
 				this.layout();
 			}
-			const plan = this.stills.plan(frame, role);
+			const plan = this.stills.plan(frame, role, this.canvas);
 			if (plan === 'whole') {
 				this.context.drawImage(frame, 0, 0);
 			} else {

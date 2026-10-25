@@ -205,6 +205,20 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		await frame();
 		await frame();
 		assert(shownColour() === '0,0,255', `A changed screen did not replace the still: ${shownColour()}`);
+		// A screen whose clock ticks sends no repeats: its changed pictures are compared with instead.
+		sessions[0].picture('changed', '#808080');
+		await frame();
+		await frame();
+		sessions[0].picture('still', '#ff8000');
+		await frame();
+		await frame();
+		sessions[0].picture('changed', '#808080', '#00ff00');
+		await frame();
+		await frame();
+		assert(shownColour(110, 110) === '0,255,0' && shownColour() === '255,128,0', `A tick with no repeat before the still replaced it: ${shownColour()}`);
+		sessions[0].picture('changed', '#0000ff');
+		await frame();
+		await frame();
 		// How the picture is doing, once a second.
 		await until(() => view.element.querySelector('.desktop-status-stats')?.textContent === '60 fps · H.264 · 9.4 Mb/s · 18 ms · Lowered for the network', `Wrong stats: ${view.element.querySelector('.desktop-status-stats')?.textContent ?? ''}`, 3000);
 		// A bitrate that is held says what holds it, and only when no cut already explains the picture.
