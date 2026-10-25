@@ -1,4 +1,4 @@
-import type { DesktopPictureRole } from '../../services/remoteDesktop/remoteDesktopService.js';
+import type { DesktopPictureRole, DesktopRegion } from '../../services/remoteDesktop/remoteDesktopService.js';
 
 /** A tile's side in picture pixels: what is redrawn when part of a still changes. */
 const TILE = 32;
@@ -37,8 +37,10 @@ interface Sample {
 /**
  * Keeps a 4:4:4 still where the screen has not changed since it. The stream
  * goes on behind a still: its repeats of the same screen are not drawn over
- * it, and a changed picture is compared tile by tile with the stream's
- * picture before it, so a clock or a caret changing redraws only its tiles. Once most of the screen changed, the stream
+ * it, and a changed picture redraws only the tiles it changed, so a clock
+ * or a caret changing leaves the rest sharp. Where it changed is what the
+ * other computer says; a picture that cannot say is compared tile by tile
+ * with the stream's picture before it. Once most of the screen changed, the stream
  * replaces the still everywhere, as it does when it cannot compare.
  */
 export class StillCompositor {
@@ -56,11 +58,12 @@ export class StillCompositor {
 	}
 
 	/**
-	 * What of `frame`, a picture in its `role`, to draw now over `shown`,
-	 * the picture on screen before it: when a still comes, that is the
-	 * stream's picture of the screen the still shows, to compare with.
+	 * What of `frame`, a picture in its `role` that changed in `regions`
+	 * when it says, to draw now over `shown`, the picture on screen before
+	 * it: when a still comes, that is the stream's picture of the screen the
+	 * still shows, to compare with.
 	 */
-	public plan(frame: VideoFrame, role: DesktopPictureRole, shown: CanvasImageSource): StillPlan {
+	public plan(frame: VideoFrame, role: DesktopPictureRole, shown: CanvasImageSource, regions?: readonly DesktopRegion[]): StillPlan {
 		const width = frame.displayWidth;
 		const height = frame.displayHeight;
 		if (role === 'still') {
@@ -78,12 +81,16 @@ export class StillCompositor {
 		if (!sample || this.changed.length !== this.columns(width) * this.rows(height)) {
 			return this.release();
 		}
-		if (role === 'changed') {
+		if (role === 'changed' && regions) {
+			this.cover(regions, width, height);
+		} else if (role === 'changed') {
 			// A change with nothing of the stream to compare it with may be anywhere.
 			if (base?.width !== sample.width || base.height !== sample.height) {
 				return this.release();
 			}
 			this.mark(base, sample, width, height);
+		}
+		if (role === 'changed') {
 			if (this.changed.reduce((count, tile) => count + tile, 0) > this.changed.length * MOST) {
 				return this.release();
 			}
@@ -130,6 +137,24 @@ export class StillCompositor {
 			return { width, height, pixels: context.getImageData(0, 0, width, height).data };
 		} catch {
 			return undefined;
+		}
+	}
+
+	/** Marks the tiles `regions` touch. */
+	private cover(regions: readonly DesktopRegion[], width: number, height: number): void {
+		const columns = this.columns(width);
+		const rows = this.rows(height);
+		for (const { x, y, width: across, height: down } of regions) {
+			if (across <= 0 || down <= 0) {
+				continue;
+			}
+			const right = Math.min(columns, Math.ceil((x + across) / TILE));
+			const bottom = Math.min(rows, Math.ceil((y + down) / TILE));
+			for (let row = Math.floor(y / TILE); row < bottom; row++) {
+				for (let column = Math.floor(x / TILE); column < right; column++) {
+					this.changed[row * columns + column] = 1;
+				}
+			}
 		}
 	}
 

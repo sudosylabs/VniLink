@@ -12,7 +12,7 @@ import { hidUsage } from '../../../platform/engine/common/keyUsage.js';
 import { INativeHostService } from '../../../platform/native/common/native.js';
 import type { DeviceSummary } from '../../services/devices/deviceService.js';
 import { latencyStages, type LatencyStage } from '../../services/remoteDesktop/desktopLatency.js';
-import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopPointer, type DesktopPointerShape, type DesktopStats, type IDesktopSession } from '../../services/remoteDesktop/remoteDesktopService.js';
+import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopPointer, type DesktopPointerShape, type DesktopRegion, type DesktopStats, type IDesktopSession } from '../../services/remoteDesktop/remoteDesktopService.js';
 import { ITabService, type WorkbenchTab } from '../../services/tabs/tabService.js';
 import { StillCompositor } from './stillCompositor.js';
 
@@ -43,11 +43,26 @@ interface OverlayAction {
 }
 
 /**
+ * `next` in place of `first`, which it replaces before it is drawn: a change
+ * when either is, where either says it changed. A repeat changes nothing; a
+ * still, or a change that cannot say, may have changed anything.
+ */
+function replacing(first: DesktopPicture, next: DesktopPicture): DesktopPicture {
+	if (first.role !== 'changed' && next.role !== 'changed') {
+		return next;
+	}
+	const where = (picture: DesktopPicture): readonly DesktopRegion[] | undefined => picture.role === 'unchanged' ? [] : picture.role === 'changed' ? picture.regions : undefined;
+	const before = where(first);
+	const after = where(next);
+	return { ...next, role: 'changed', regions: before && after ? [...before, ...after] : undefined };
+}
+
+/**
  * Holds the newest decoded picture until the screen's next frame, then
  * draws it: pictures that arrive faster than the screen refreshes replace
  * the one waiting, so the shown picture is never behind the decoder. A
  * still waiting is not replaced by a repeat of the same screen, and a
- * change waiting, when a repeat replaces it, is still drawn as a change.
+ * picture that replaces another carries its changes too.
  */
 class NextFramePresenter extends Disposable {
 	private pending: DesktopPicture | undefined;
@@ -68,9 +83,7 @@ class NextFramePresenter extends Disposable {
 		}
 		let next = picture;
 		if (this.pending) {
-			if (picture.role === 'unchanged' && this.pending.role === 'changed') {
-				next = { ...picture, role: 'changed' };
-			}
+			next = replacing(this.pending, picture);
 			this.pending.frame.close();
 			this.skip(this.pending);
 		}
@@ -561,7 +574,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	}
 
 	private draw(picture: DesktopPicture): void {
-		const { frame, display, revision, role } = picture;
+		const { frame, display, revision, role, regions } = picture;
 		try {
 			if (!this.hasPicture || this.overlay.dataset.state) {
 				this.hasPicture = true;
@@ -587,7 +600,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 				this.canvas.height = frame.displayHeight;
 				this.layout();
 			}
-			const plan = this.stills.plan(frame, role, this.canvas);
+			const plan = this.stills.plan(frame, role, this.canvas, regions);
 			if (plan === 'whole') {
 				this.context.drawImage(frame, 0, 0);
 			} else {

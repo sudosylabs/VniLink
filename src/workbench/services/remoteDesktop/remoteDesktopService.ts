@@ -84,10 +84,23 @@ export const engineDesktopEnds: readonly DesktopEnd[] = ['linkLost', 'relayUnrea
  */
 export type DesktopPictureRole = 'changed' | 'unchanged' | 'still';
 
+/** A part of a picture, in its pixels. */
+export interface DesktopRegion {
+	readonly x: number;
+	readonly y: number;
+	readonly width: number;
+	readonly height: number;
+}
+
 export interface DesktopPicture {
 	/** Belongs to the listener, which closes it once drawn. */
 	readonly frame: VideoFrame;
 	readonly role: DesktopPictureRole;
+	/**
+	 * Where a changed picture differs from the stream's picture before it, as
+	 * the other computer says; absent when it cannot say, as if all of it did.
+	 */
+	readonly regions?: readonly DesktopRegion[];
 	readonly display: string;
 	readonly revision: string;
 	/** When it came out of the decoder, on `performance.now()`. */

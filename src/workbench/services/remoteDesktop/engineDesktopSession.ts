@@ -6,12 +6,44 @@ import type { CameraDecoder, CameraDecoderFactory } from '../camera/engineCamera
 import { avcCodec } from '../camera/h264.js';
 import { DesktopLatency } from './desktopLatency.js';
 import { stillDecoderConfig } from './windowDecoders.js';
-import { engineDesktopEnds, type DesktopEnd, type DesktopPictureRole, type DesktopInput, type DesktopPicture, type DesktopPointerShape, type DesktopPointer, type DesktopStats, type IDesktopSession } from './remoteDesktopService.js';
+import { engineDesktopEnds, type DesktopEnd, type DesktopPictureRole, type DesktopRegion, type DesktopInput, type DesktopPicture, type DesktopPointerShape, type DesktopPointer, type DesktopStats, type IDesktopSession } from './remoteDesktopService.js';
 
 /** Pictures allowed to wait for the decoder before the channel stops acknowledging. */
 const decodeQueueLimit = 2;
 
 const pictureRoles: readonly DesktopPictureRole[] = ['changed', 'unchanged', 'still'];
+
+/** What a packet said of the picture it carries, until the decoder gives the picture. */
+interface TakenPicture {
+	readonly display: string;
+	readonly revision: string;
+	readonly role: DesktopPictureRole;
+	readonly regions: readonly DesktopRegion[] | undefined;
+	readonly at: number;
+}
+
+/** The most regions a picture says, as the engine carries them. */
+const MAX_REGIONS = 64;
+
+/** A packet's regions: absent, or up to {@link MAX_REGIONS} of `[x, y, width, height]` in 16 bits each. */
+function regionsOf(value: unknown): readonly DesktopRegion[] | undefined | false {
+	if (value === undefined || value === null) {
+		return undefined;
+	}
+	const sixteen = (part: unknown): part is number => typeof part === 'number' && Number.isInteger(part) && part >= 0 && part <= 0xffff;
+	if (!Array.isArray(value) || value.length > MAX_REGIONS) {
+		return false;
+	}
+	const regions: DesktopRegion[] = [];
+	for (const region of value) {
+		if (!Array.isArray(region) || region.length !== 4 || !region.every(sixteen)) {
+			return false;
+		}
+		const [x, y, width, height] = region as [number, number, number, number];
+		regions.push({ x, y, width, height });
+	}
+	return regions;
+}
 
 function isVideoCodec(value: string | undefined): value is VideoCodec {
 	return videoCodecNames.includes(value as VideoCodec);
@@ -88,7 +120,7 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 	private decoder: Promise<CameraDecoder | undefined> | undefined;
 	private codec: string | undefined;
 	/** Where each picture waiting in the decoder was taken, by its timestamp. */
-	private readonly taken = new Map<number, { readonly display: string; readonly revision: string; readonly role: DesktopPictureRole; readonly at: number }>();
+	private readonly taken = new Map<number, TakenPicture>();
 	/**
 	 * Still pictures' own decoder, apart from the stream's so a still never
 	 * replaces it: `undefined` until the first still, then for good, even
@@ -200,10 +232,11 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 			return;
 		}
 		const role = record(fields) ? pictureRoles.find(known => known === fields.role) : undefined;
+		const regions = record(fields) ? regionsOf(fields.regions) : false;
 		if (packet.kind !== 'video' || !packet.data || !record(fields) || typeof fields.codec !== 'string' || typeof fields.keyframe !== 'boolean'
 			|| typeof fields.timestampUs !== 'string' || !/^\d{1,20}$/.test(fields.timestampUs)
 			|| typeof fields.displayId !== 'string' || typeof fields.revision !== 'string'
-			|| !micros(fields.hostUs) || !micros(fields.queuedUs) || !role) {
+			|| !micros(fields.hostUs) || !micros(fields.queuedUs) || !role || regions === false) {
 			throw new Error('Invalid desktop packet');
 		}
 		if (role === 'still') {
@@ -250,7 +283,7 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 		}
 		this.software = decoder.software;
 		const timestamp = Number(fields.timestampUs);
-		this.taken.set(timestamp, { display: fields.displayId, revision: fields.revision, role, at: performance.now() });
+		this.taken.set(timestamp, { display: fields.displayId, revision: fields.revision, role, regions, at: performance.now() });
 		decoder.decode({ key, timestamp, data: packet.data });
 		await decoder.drained(decodeQueueLimit);
 	}
@@ -355,7 +388,7 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 			frame.close();
 			return;
 		}
-		this.pictureEmitter.fire({ frame, role: taken.role, display: taken.display, revision: taken.revision, decodedAt });
+		this.pictureEmitter.fire({ frame, role: taken.role, regions: taken.regions, display: taken.display, revision: taken.revision, decodedAt });
 	}
 
 	public presented(picture: DesktopPicture): void {

@@ -10,7 +10,7 @@ import '../../src/workbench/contrib/remoteDesktop/remoteDesktop.contribution.js'
 import { OpenRemoteDesktopAction, ViewScreenAction } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopActions.js';
 import { RemoteDesktopView, shownSize } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopView.js';
 import { IDeviceService, type DeviceSummary } from '../../src/workbench/services/devices/deviceService.js';
-import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopPictureRole, type DesktopPointer, type DesktopStats, type IDesktopSession } from '../../src/workbench/services/remoteDesktop/remoteDesktopService.js';
+import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopPictureRole, type DesktopPointer, type DesktopRegion, type DesktopStats, type IDesktopSession } from '../../src/workbench/services/remoteDesktop/remoteDesktopService.js';
 import { ITabService } from '../../src/workbench/services/tabs/tabService.js';
 import { TabService } from '../../src/workbench/services/tabs/tabServiceImpl.js';
 
@@ -76,7 +76,7 @@ class FakeSession implements IDesktopSession {
 	}
 
 	/** A 1920 × 1080 picture of display 7 at revision 3, in one colour, with a 40 × 40 patch of another at 100, 100. */
-	public picture(role: DesktopPictureRole = 'changed', colour = '#1d4b6c', patch?: string): void {
+	public picture(role: DesktopPictureRole = 'changed', colour = '#1d4b6c', patch?: string, regions?: readonly DesktopRegion[]): void {
 		const canvas = new OffscreenCanvas(1920, 1080);
 		const context = canvas.getContext('2d');
 		if (context) {
@@ -87,7 +87,7 @@ class FakeSession implements IDesktopSession {
 				context.fillRect(100, 100, 40, 40);
 			}
 		}
-		this.pictures.fire({ frame: new VideoFrame(canvas, { timestamp: 0 }), role, display: '7', revision: '3', decodedAt: performance.now() });
+		this.pictures.fire({ frame: new VideoFrame(canvas, { timestamp: 0 }), role, regions, display: '7', revision: '3', decodedAt: performance.now() });
 	}
 
 	/** The other computer's pointer at `x`, `y` in the picture: a white 4 × 4 square, its hot spot at the top left. */
@@ -216,6 +216,12 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		await frame();
 		await frame();
 		assert(shownColour(110, 110) === '0,255,0' && shownColour() === '255,128,0', `A tick with no repeat before the still replaced it: ${shownColour()}`);
+		// A picture that says where it changed redraws only there, however
+		// much the stream refined elsewhere: this one differs everywhere.
+		sessions[0].picture('changed', '#707070', '#ff00ff', [{ x: 96, y: 96, width: 64, height: 64 }]);
+		await frame();
+		await frame();
+		assert(shownColour(110, 110) === '255,0,255' && shownColour() === '255,128,0' && shownColour(300, 300) === '255,128,0', `Said regions were not all that was redrawn: ${shownColour(110, 110)}, ${shownColour()}`);
 		sessions[0].picture('changed', '#0000ff');
 		await frame();
 		await frame();
