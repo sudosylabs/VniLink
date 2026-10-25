@@ -50,6 +50,16 @@ pub struct WindowsCapture {
     embeds_cursor: AtomicBool,
     /// Last successful acquire or timeout. An error clears it.
     attested: Mutex<Option<std::time::Instant>>,
+    /// What [`WindowsCapture::wait_frame`] acquired for the next poll.
+    waited: Mutex<Waited>,
+}
+
+/// An acquire made by a wait, handed to the poll that follows it.
+enum Waited {
+    Nothing,
+    /// A new picture, already in the cache.
+    Picture,
+    Failed(Error),
 }
 
 /// Desktop Duplication handles before the format and size are validated.
@@ -85,6 +95,7 @@ impl WindowsCapture {
             pointer: Mutex::new(crate::cursor::Pointer::default()),
             embeds_cursor: AtomicBool::new(true),
             attested: Mutex::new(None),
+            waited: Mutex::new(Waited::Nothing),
         })
     }
 
@@ -109,24 +120,31 @@ impl WindowsCapture {
     }
 
     /// `Ok(None)` when the desktop has not produced a new frame yet. The call
-    /// itself never waits: blocking until a newer frame arrives lives with
-    /// the host caller behind the frame-source seam.
+    /// itself never waits: [`WindowsCapture::wait_frame`] is where the host
+    /// caller blocks until a newer frame arrives, behind the frame-source seam.
     pub fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
         let mut last = self
             .last
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        // Check the native source even when pixels are cached: access loss or
-        // permission denial must not be hidden by an old picture.
-        let acquired = unsafe { self.acquire(timestamp_us) };
-        {
-            let mut attested = self
-                .attested
+        let waited = std::mem::replace(
+            &mut *self
+                .waited
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            *attested = crate::idle::attestation(*attested, &acquired, std::time::Instant::now());
+                .unwrap_or_else(|poison| poison.into_inner()),
+            Waited::Nothing,
+        );
+        match waited {
+            Waited::Failed(error) => return Err(error),
+            // The wait took the picture; this poll has nothing more to ask.
+            Waited::Picture => {}
+            // Check the native source even when pixels are cached: access
+            // loss or permission denial must not be hidden by an old picture.
+            Waited::Nothing => {
+                self.refresh(&mut last, 0, timestamp_us)?;
+            }
         }
-        let frame = crate::idle::picture(acquired, &mut last, timestamp_us)?;
+        let frame = last.clone().map(|frame| frame.with_timestamp(timestamp_us));
         if !self.embeds_cursor.load(Ordering::Acquire) {
             return Ok(frame);
         }
@@ -138,6 +156,50 @@ impl WindowsCapture {
                     .composite(frame)
             })
             .transpose()
+    }
+
+    /// One acquire of at most `timeout_ms`, into the cached picture and the
+    /// attestation. Whether a new picture arrived.
+    fn refresh(
+        &self,
+        last: &mut Option<RawFrame>,
+        timeout_ms: u32,
+        timestamp_us: u64,
+    ) -> Result<bool, Error> {
+        let acquired = unsafe { self.acquire(timeout_ms, timestamp_us) };
+        let arrived = matches!(acquired, Ok(Some(_)));
+        {
+            let mut attested = self
+                .attested
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            *attested = crate::idle::attestation(*attested, &acquired, std::time::Instant::now());
+        }
+        crate::idle::picture(acquired, last, timestamp_us)?;
+        Ok(arrived)
+    }
+
+    /// Waits in Desktop Duplication for the desktop's next picture, until
+    /// `deadline`. Whether one arrived or the capture failed; the poll that
+    /// follows returns it without acquiring again.
+    pub fn wait_frame(&self, deadline: std::time::Instant) -> bool {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        // Rounded up: a wait must not end a millisecond early and spin.
+        let timeout_ms = u32::try_from(remaining.as_micros().div_ceil(1000)).unwrap_or(u32::MAX);
+        let mut last = self
+            .last
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let outcome = match self.refresh(&mut last, timeout_ms, 0) {
+            Ok(true) => Waited::Picture,
+            Ok(false) => return false,
+            Err(error) => Waited::Failed(error),
+        };
+        *self
+            .waited
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = outcome;
+        true
     }
 
     /// The device pictures live on, to open an encoder that reads them there.
@@ -276,12 +338,16 @@ impl WindowsCapture {
         Ok(())
     }
 
-    unsafe fn acquire(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
+    unsafe fn acquire(
+        &self,
+        timeout_ms: u32,
+        timestamp_us: u64,
+    ) -> Result<Option<RawFrame>, Error> {
         let mut info = windows::Win32::Graphics::Dxgi::DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource = None;
         if let Err(err) = self
             .duplication
-            .AcquireNextFrame(0, &mut info, &mut resource)
+            .AcquireNextFrame(timeout_ms, &mut info, &mut resource)
         {
             if err.code() == DXGI_ERROR_WAIT_TIMEOUT {
                 return Ok(None);

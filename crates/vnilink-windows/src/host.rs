@@ -10,7 +10,7 @@
 use std::sync::atomic::AtomicBool;
 pub use vnilink_media::HostSession;
 #[cfg(windows)]
-use vnilink_media::{Error, FrameSource, PublishError, Quality, RawFrame};
+use vnilink_media::{Error, FrameSource, FrameWait, PublishError, Quality, RawFrame};
 
 #[cfg(windows)]
 use crate::encode::WindowsEncoder;
@@ -24,6 +24,11 @@ impl FrameSource for crate::capture::WindowsCapture {
     /// A zero-timeout native acquire, with cached pixels for an idle desktop.
     fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
         self.poll_frame(timestamp_us)
+    }
+
+    /// Blocks in Desktop Duplication until the next picture or `deadline`.
+    fn wait_frame(&self, deadline: std::time::Instant) -> FrameWait {
+        FrameWait::from_arrived(crate::capture::WindowsCapture::wait_frame(self, deadline))
     }
 
     fn attested_at(&self) -> Option<std::time::Instant> {
