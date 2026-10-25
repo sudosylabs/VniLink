@@ -18,6 +18,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use vnilink::YuvMatrix;
 use vnilink::{
     camera::{
         CameraApproval, CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory,
@@ -315,6 +316,7 @@ fn capture(
         config.fps as u8,
         BITRATE,
         false,
+        YuvMatrix::Bt709,
     )
     .map_err(|_| Error::Unsupported("camera H.264 encoder"))?;
     let (frames, receiver) = mpsc::sync_channel(2);
@@ -410,6 +412,7 @@ fn capture(
                         config.fps as u8,
                         BITRATE,
                         false,
+                        YuvMatrix::Bt709,
                     )
                     .map_err(|_| Error::Unsupported("camera H.264 encoder"))?;
                 }
@@ -513,7 +516,7 @@ mod tests {
         for y in 0..64 {
             assert_eq!(frame.row(y), [20, 80, 180, 255].repeat(64));
         }
-        let mut encoder = MacEncoder::open(64, 64, 30, BITRATE, false).unwrap();
+        let mut encoder = MacEncoder::open(64, 64, 30, BITRATE, false, YuvMatrix::Bt709).unwrap();
         let sample = encoder
             .encode(
                 &frame,

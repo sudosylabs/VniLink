@@ -33,6 +33,9 @@ pub const CODEC_H264: u8 = 1;
 
 /// Agreed H.264 High profile, carried in Accept when both sides handle it.
 pub const CODEC_H264_HIGH: u8 = 2;
+/// The offer bits a Hello's `bt601` mask may set: H.264, H.265, VP8, VP9
+/// and AV1, one each.
+const BT601_CODECS: u8 = 1 | 4 | 8 | 16 | 32;
 
 /// QUIC ALPN for the VniLink control channel. Bytes, not a string type, so the
 /// value matches what Iroh negotiates.
@@ -190,6 +193,11 @@ pub(crate) enum ControlMessage {
         /// Whether the controller draws a cursor sent as its own stream. The
         /// host separates the cursor only when both sides support it.
         separate_cursor: bool,
+        /// The codecs, by their offer bits, whose decoder in the controller's
+        /// window shows BT.601 pictures correctly and BT.709 ones not (a
+        /// bit set means BT.601). The host encodes the agreed codec in that
+        /// matrix and declares it. Zero for every other controller.
+        bt601: u8,
         /// The controller's display name, if it has one. Stored on the peer
         /// record so the host's device list can name it. Display-only.
         hostname: Option<String>,
@@ -291,10 +299,11 @@ impl ControlMessage {
                 files_only,
                 services_only,
                 separate_cursor,
+                bt601,
                 hostname,
                 os,
             } => {
-                let mut bytes = Vec::with_capacity(19);
+                let mut bytes = Vec::with_capacity(20);
                 bytes.push(1);
                 bytes.extend_from_slice(&version.to_be_bytes());
                 bytes.push(*codec);
@@ -306,6 +315,7 @@ impl ControlMessage {
                 bytes.push(u8::from(*files_only));
                 bytes.push(u8::from(*services_only));
                 bytes.push(u8::from(*separate_cursor));
+                bytes.push(*bt601);
                 write_hostname(&mut bytes, hostname);
                 bytes.push(os.encode());
                 bytes
@@ -422,7 +432,7 @@ impl ControlMessage {
             return Err(Error::Malformed);
         }
         match bytes[0] {
-            1 if bytes.len() >= 19 => {
+            1 if bytes.len() >= 20 => {
                 let quality = Quality::new(
                     u32::from_be_bytes([bytes[9], bytes[10], bytes[11], bytes[12]]),
                     bytes[8],
@@ -440,11 +450,15 @@ impl ControlMessage {
                 let files_only = flag(bytes[14])?;
                 let services_only = flag(bytes[15])?;
                 let separate_cursor = flag(bytes[16])?;
+                let bt601 = bytes[17];
+                if bt601 & !BT601_CODECS != 0 {
+                    return Err(Error::Malformed);
+                }
                 // A service-only connection never starts desktop transport.
                 if services_only && !files_only {
                     return Err(Error::Malformed);
                 }
-                let hostname_start = 17;
+                let hostname_start = 18;
                 Ok(Self::Hello {
                     version,
                     codec: bytes[3],
@@ -453,6 +467,7 @@ impl ControlMessage {
                     files_only,
                     services_only,
                     separate_cursor,
+                    bt601,
                     hostname: read_hostname(
                         bytes
                             .get(hostname_start..bytes.len() - 1)

@@ -7,6 +7,7 @@ use libva::{
     BufferType, EncPackedHeaderParameter, EncPackedHeaderType, EncPictureParameter,
     EncSequenceParameter, EncSliceParameter, PictureHEVC, VA_INVALID_ID, VA_PICTURE_HEVC_INVALID,
 };
+use vnilink::YuvMatrix;
 use vnilink_media::{hevc_sample, hevc_units, EncodedSample, Error};
 
 use super::PictureJob;
@@ -33,10 +34,11 @@ impl Syntax {
         packed: bool,
         width: u16,
         height: u16,
+        matrix: YuvMatrix,
     ) -> Result<Self, Error> {
         Ok(Self {
             layout,
-            header: parameter_sets(&layout, width, height)?,
+            header: parameter_sets(&layout, width, height, matrix)?,
             packed,
             poc: 0,
             previous: None,

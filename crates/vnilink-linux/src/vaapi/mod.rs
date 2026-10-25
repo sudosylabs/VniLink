@@ -5,7 +5,7 @@
 //! codec refuses to open.
 //! libva's context is not [`Send`]: this module's thread is its only caller
 //! and the encoder handle on the other side is a channel. Pictures arrive as
-//! BGRA and the GPU converts them to NV12 (BT.709, limited range) where the
+//! BGRA and the GPU converts them to NV12 (the session's matrix, limited range) where the
 //! node offers video processing; elsewhere they arrive as NV12 converted on
 //! the CPU.
 //! Each codec's module fills the driver's parameters and writes the
@@ -46,6 +46,7 @@ use libva::VAEntrypoint;
 use libva::VAProfile;
 use libva::VA_FOURCC_NV12;
 use libva::VA_RT_FORMAT_YUV420;
+use vnilink::YuvMatrix;
 use vnilink_media::{EncodedSample, Error, RawFrame};
 
 use self::convert::Converter;
@@ -179,6 +180,7 @@ impl Session {
         height: u16,
         frame_rate: u8,
         bitrate_bps: u32,
+        matrix: YuvMatrix,
     ) -> Result<Self, Error> {
         let (tx, rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::channel();
@@ -193,6 +195,7 @@ impl Session {
                     height,
                     frame_rate,
                     bitrate_bps,
+                    matrix,
                     rx,
                     ready_tx,
                 )
@@ -273,19 +276,21 @@ fn worker(
     height: u16,
     frame_rate: u8,
     bitrate_bps: u32,
+    matrix: YuvMatrix,
     jobs: Receiver<Job>,
     ready: Sender<Result<bool, Error>>,
 ) {
-    let mut encoder = match Encoder::open(node, codec, width, height, frame_rate, bitrate_bps) {
-        Ok(encoder) => {
-            let _ = ready.send(Ok(encoder.converter.is_some()));
-            encoder
-        }
-        Err(err) => {
-            let _ = ready.send(Err(err));
-            return;
-        }
-    };
+    let mut encoder =
+        match Encoder::open(node, codec, width, height, frame_rate, bitrate_bps, matrix) {
+            Ok(encoder) => {
+                let _ = ready.send(Ok(encoder.converter.is_some()));
+                encoder
+            }
+            Err(err) => {
+                let _ = ready.send(Err(err));
+                return;
+            }
+        };
     while let Ok(job) = jobs.recv() {
         match job {
             Job::Stop => break,
@@ -379,11 +384,12 @@ impl Encoder {
         height: u16,
         frame_rate: u8,
         bitrate_bps: u32,
+        matrix: YuvMatrix,
     ) -> Result<Self, Error> {
         if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
             return Err(Error::InvalidFrame("width and height must be even"));
         }
-        try_open(node, codec, width, height, frame_rate, bitrate_bps)
+        try_open(node, codec, width, height, frame_rate, bitrate_bps, matrix)
             .ok_or(Error::Unsupported(codec.name()))
     }
 
@@ -539,6 +545,7 @@ fn try_open(
     height: u16,
     frame_rate: u8,
     bitrate_bps: u32,
+    matrix: YuvMatrix,
 ) -> Option<Encoder> {
     let display = Display::open_drm_display(path).ok()?;
     let profile = codec.profile();
@@ -547,7 +554,7 @@ fn try_open(
     let (config, packed) = encode_config(&display, profile, entrypoint, codec.packed_headers())?;
     let syntax = match codec {
         VaCodec::H264 { high } => {
-            Syntax::H264(h264::Syntax::new(high, width, height, frame_rate).ok()?)
+            Syntax::H264(h264::Syntax::new(high, width, height, frame_rate, matrix).ok()?)
         }
         VaCodec::H265 => Syntax::H265(
             hevc::Syntax::new(
@@ -555,6 +562,7 @@ fn try_open(
                 packed != 0,
                 width,
                 height,
+                matrix,
             )
             .ok()?,
         ),
@@ -587,6 +595,7 @@ fn try_open(
         u32::from(height),
         (coded_width, coded_height),
         &surfaces,
+        matrix,
     );
     let mut stored = [None, None];
     for (slot, surface) in stored.iter_mut().zip(surfaces) {

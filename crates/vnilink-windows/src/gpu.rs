@@ -14,6 +14,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use vnilink::YuvMatrix;
 use vnilink_media::{Error, NativePicture};
 use windows::core::Interface;
 use windows::Win32::Foundation::RECT;
@@ -29,8 +30,9 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_VPOV_DIMENSION_TEXTURE2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709,
-    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
+    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P601,
+    DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12,
+    DXGI_RATIONAL, DXGI_SAMPLE_DESC,
 };
 
 /// Lets the capture thread and encoder threads share one device's
@@ -172,7 +174,7 @@ impl NativePicture for WindowsPicture {
     }
 }
 
-/// Converts captured pictures to BT.709 limited NV12 at one output size on
+/// Converts captured pictures to limited NV12 in the session's matrix at one output size on
 /// their GPU, and reads the NV12 back for a transform that takes memory.
 pub(crate) struct Nv12Converter {
     device: ID3D11Device,
@@ -200,6 +202,7 @@ impl Nv12Converter {
         context: &ID3D11DeviceContext,
         input: (u32, u32),
         size: (u32, u32),
+        matrix: YuvMatrix,
     ) -> windows::core::Result<Self> {
         let video_device: ID3D11VideoDevice = device.cast()?;
         let video: ID3D11VideoContext1 = context.cast()?;
@@ -244,7 +247,8 @@ impl Nv12Converter {
                 view.ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?;
             outputs.push((output, view));
         }
-        // Full-range RGB in, the stream's colour out: BT.709, limited range.
+        // Full-range RGB in, the stream's colour out: the session's matrix,
+        // limited range.
         video.VideoProcessorSetStreamColorSpace1(
             &processor,
             0,
@@ -252,7 +256,10 @@ impl Nv12Converter {
         );
         video.VideoProcessorSetOutputColorSpace1(
             &processor,
-            DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709,
+            match matrix {
+                YuvMatrix::Bt709 => DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709,
+                YuvMatrix::Bt601 => DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P601,
+            },
         );
         video.VideoProcessorSetStreamAutoProcessingMode(&processor, 0, false);
         video.VideoProcessorSetStreamFrameFormat(

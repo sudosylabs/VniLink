@@ -47,6 +47,37 @@ impl VideoCodec {
         }
     }
 }
+
+/// The matrix a stream converts RGB to Y'CbCr with, and declares. A host
+/// encodes each session in the matrix its viewer's decoder shows correctly:
+/// BT.709 for every decoder that follows the stream, BT.601 for Chromium's
+/// VA-API path, which converts as BT.601 whatever the stream says.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum YuvMatrix {
+    #[default]
+    Bt709,
+    Bt601,
+}
+impl YuvMatrix {
+    /// The matrix code H.264 VUI and ITU-T H.273 carry: 1 for BT.709, 6
+    /// (SMPTE 170M) for BT.601.
+    pub fn code(self) -> u8 {
+        match self {
+            Self::Bt709 => 1,
+            Self::Bt601 => 6,
+        }
+    }
+
+    /// The matrix a Hello's `bt601` mask gives `codec`.
+    pub fn of_codec(bt601: u8, codec: VideoCodec) -> Self {
+        if bt601 & codec.offer_bit() != 0 {
+            Self::Bt601
+        } else {
+            Self::Bt709
+        }
+    }
+}
+
 /// Probe-validated abilities. Hardware describes this codec's encoder, not the
 /// entire installation; software fallback remains independently observable.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

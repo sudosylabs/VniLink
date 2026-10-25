@@ -1,7 +1,6 @@
-use vnilink::VideoCodec;
+use vnilink::{VideoCodec, YuvMatrix};
 use vnilink_media::{
-    bgra_to_nv12, nv12_to_bgra, parse_annex_b, RawFrame, SoftwareDecoder, VideoDecoder,
-    STREAM_SIGNAL,
+    bgra_to_nv12, nv12_to_bgra, parse_annex_b, RawFrame, SoftwareDecoder, VideoDecoder, VideoSignal,
 };
 
 use crate::codecs::{decodes, PROBE_SIDE};
@@ -15,8 +14,17 @@ fn nvenc_output_decodes_where_the_gpu_offers_the_codec() {
         if !offers(None, codec) {
             continue;
         }
-        let mut encoder =
-            Encoder::open(None, codec, PROBE_SIDE, PROBE_SIDE, 30, 1_000_000, false).unwrap();
+        let mut encoder = Encoder::open(
+            None,
+            codec,
+            PROBE_SIDE,
+            PROBE_SIDE,
+            30,
+            1_000_000,
+            false,
+            vnilink::YuvMatrix::Bt709,
+        )
+        .unwrap();
         assert!(
             decodes(codec, |picture, key| encoder.encode(picture, key)),
             "{codec:?} from NVENC does not decode"
@@ -40,6 +48,7 @@ fn nvenc_h264_keyframes_carry_their_parameter_sets() {
             30,
             1_000_000,
             high,
+            vnilink::YuvMatrix::Bt709,
         )
         .unwrap();
         let picture = vnilink_media::RawFrame::bgra(
@@ -74,6 +83,7 @@ fn nvenc_anchor_outlives_overlapping_sessions() {
             30,
             1_000_000,
             false,
+            vnilink::YuvMatrix::Bt709,
         )
         .unwrap()
     };
@@ -93,12 +103,15 @@ fn nvenc_anchor_outlives_overlapping_sessions() {
 }
 
 /// NVENC converts BGRA to the colour the stream declares as the CPU
-/// conversion does ([`bgra_to_nv12`]): flat pictures, black, white and the
-/// primaries included, decode to the same pixels. The conversion comes
-/// before the codec; H.264 has no software decoder here.
+/// conversion does ([`bgra_to_nv12`]), in either matrix: flat pictures,
+/// black, white and the primaries included, decode to the same pixels. The
+/// conversion comes before the codec; H.264 has no software decoder here.
 #[test]
 fn nvenc_conversion_matches_the_cpu_conversion() {
-    for codec in [VideoCodec::H265, VideoCodec::Av1] {
+    for (codec, matrix) in [VideoCodec::H265, VideoCodec::Av1]
+        .into_iter()
+        .flat_map(|codec| [YuvMatrix::Bt709, YuvMatrix::Bt601].map(move |matrix| (codec, matrix)))
+    {
         if !offers(None, codec) {
             continue;
         }
@@ -114,8 +127,10 @@ fn nvenc_conversion_matches_the_cpu_conversion() {
         ] {
             let picture =
                 RawFrame::bgra(PROBE_SIDE, PROBE_SIDE, 0, bgra.repeat(side * side)).unwrap();
-            let mut encoder =
-                Encoder::open(None, codec, PROBE_SIDE, PROBE_SIDE, 30, 8_000_000, false).unwrap();
+            let mut encoder = Encoder::open(
+                None, codec, PROBE_SIDE, PROBE_SIDE, 30, 8_000_000, false, matrix,
+            )
+            .unwrap();
             let sample = encoder.encode(&picture, true).unwrap();
             let frame =
                 vnilink::EncodedFrame::new(codec, true, 0, sample.bytes().to_vec()).unwrap();
@@ -125,14 +140,22 @@ fn nvenc_conversion_matches_the_cpu_conversion() {
                 .unwrap();
             let middle = side / 2 * decoded.stride() + side / 2 * 4;
             let gpu = &decoded.pixels()[middle..middle + 3];
-            let (y, uv) = bgra_to_nv12(&picture).unwrap().into_planes();
-            let cpu = nv12_to_bgra(PROBE_SIDE, PROBE_SIDE, 0, &y, &uv, STREAM_SIGNAL).unwrap();
+            let (y, uv) = bgra_to_nv12(&picture, matrix).unwrap().into_planes();
+            let cpu = nv12_to_bgra(
+                PROBE_SIDE,
+                PROBE_SIDE,
+                0,
+                &y,
+                &uv,
+                VideoSignal::stream(matrix),
+            )
+            .unwrap();
             let cpu = &cpu.pixels()[middle..middle + 3];
             assert!(
                 gpu.iter()
                     .zip(cpu)
                     .all(|(gpu, cpu)| gpu.abs_diff(*cpu) <= 2),
-                "{codec:?} {bgra:?} decoded as {gpu:?} from NVENC, {cpu:?} through the CPU"
+                "{codec:?} {matrix:?} {bgra:?} decoded as {gpu:?} from NVENC, {cpu:?} through the CPU"
             );
         }
     }
@@ -193,6 +216,7 @@ fn nvenc_keyframes_come_only_when_asked_and_a_retune_makes_none() {
         30,
         4_000_000,
         true,
+        YuvMatrix::Bt709,
     )
     .unwrap();
     let mut sizes = Vec::new();

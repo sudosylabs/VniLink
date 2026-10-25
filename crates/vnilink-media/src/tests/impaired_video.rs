@@ -329,7 +329,7 @@ impl VideoEncoder for Encoder {
             Some((index, Instant::now()));
         self.opened = true;
         self.since_keyframe = if keyframe { 0 } else { self.since_keyframe + 1 };
-        EncodedSample::annex_b(keyframe, payload)
+        EncodedSample::annex_b(keyframe, payload, vnilink::YuvMatrix::Bt709)
     }
 }
 
@@ -1256,6 +1256,7 @@ fn run_stills(stream: &Stream, on: bool) -> Value {
         codec,
         hardware: false,
         chroma444,
+        bt601: false,
     };
     viewer
         .set_window_decoders(vec![

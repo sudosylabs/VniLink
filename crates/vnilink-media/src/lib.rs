@@ -48,7 +48,7 @@ pub use recording_worker::{recover_desktop_recording, Recorder, RecordingPhase, 
 mod recording_recovery;
 pub use recording_recovery::{scan_recording_prefix, RecordingRecovery};
 mod colour;
-pub use colour::{VideoSignal, YuvMatrix, STREAM_SIGNAL};
+pub use colour::{VideoSignal, YuvMatrix, UNDECLARED_SIGNAL};
 mod sps;
 pub use recording::{MatroskaRecorder, RecordingError, RecordingLimits};
 pub use sps::{h264_picture_size, h264_stream_sps, h264_video_signal};

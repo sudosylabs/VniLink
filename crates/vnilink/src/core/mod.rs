@@ -227,6 +227,9 @@ struct LiveSession {
     /// Hello/Accept; the serve path opens the matching encoder profile.
     /// `None` for files-only sessions (no video).
     codec: u8,
+    /// The matrix the stream is converted and declared in: the viewer's
+    /// choice for the agreed codec.
+    matrix: crate::YuvMatrix,
     separate_cursor: bool,
     /// Files-only session (Transfer grant, no Control): suppresses desktop
     /// video, cursor, input and automatic clipboard transport. File roots,

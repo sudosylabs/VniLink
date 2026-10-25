@@ -7,6 +7,7 @@ use libva::{
     BufferType, EncPictureParameter, EncSequenceParameter, EncSliceParameter, PictureH264,
     VA_INVALID_ID, VA_INVALID_SURFACE, VA_PICTURE_H264_SHORT_TERM_REFERENCE,
 };
+use vnilink::YuvMatrix;
 use vnilink_media::{parse_annex_b, EncodedSample, Error};
 
 use super::PictureJob;
@@ -25,10 +26,18 @@ pub(super) struct Syntax {
     idr_id: u16,
     /// `frame_num` and picture order of the picture the next one predicts from.
     previous: Option<(u32, i32)>,
+    /// The matrix every SPS this encoder hands out says.
+    matrix: YuvMatrix,
 }
 
 impl Syntax {
-    pub(super) fn new(high: bool, width: u16, height: u16, frame_rate: u8) -> Result<Self, Error> {
+    pub(super) fn new(
+        high: bool,
+        width: u16,
+        height: u16,
+        frame_rate: u8,
+        matrix: YuvMatrix,
+    ) -> Result<Self, Error> {
         let profile = if high {
             EncodeProfile::High
         } else {
@@ -41,6 +50,7 @@ impl Syntax {
             poc: 0,
             idr_id: 0,
             previous: None,
+            matrix,
         })
     }
 
@@ -101,7 +111,7 @@ impl Syntax {
         } else {
             bitstream.to_vec()
         };
-        EncodedSample::annex_b(parsed.has_idr(), bytes)
+        EncodedSample::annex_b(parsed.has_idr(), bytes, self.matrix)
             .map_err(|_| Error::EncodeRejected("a keyframe needs SPS, PPS, and an IDR"))
     }
 }

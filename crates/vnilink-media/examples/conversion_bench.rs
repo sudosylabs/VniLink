@@ -4,7 +4,7 @@
 //! screen larger than 1920x1080, not end-to-end latency.
 
 use std::{hint::black_box, time::Instant};
-use vnilink_media::{bgra_to_nv12, encoded_size, scale_bgra, RawFrame};
+use vnilink_media::{bgra_to_nv12, encoded_size, scale_bgra, RawFrame, YuvMatrix};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -26,12 +26,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let frame = RawFrame::bgra(width, height, 0, pixels)?;
     for _ in 0..3 {
-        black_box(bgra_to_nv12(black_box(&frame))?);
+        black_box(bgra_to_nv12(black_box(&frame), YuvMatrix::Bt709)?);
     }
     let mut timings = Vec::with_capacity(iterations);
     for _ in 0..iterations {
         let started = Instant::now();
-        black_box(bgra_to_nv12(black_box(&frame))?);
+        black_box(bgra_to_nv12(black_box(&frame), YuvMatrix::Bt709)?);
         timings.push(started.elapsed().as_secs_f64() * 1000.0);
     }
     timings.sort_by(f64::total_cmp);

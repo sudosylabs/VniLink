@@ -84,6 +84,9 @@ pub struct DesktopInfo {
     /// viewer's window shows them and the host's capture sends them. Agreed
     /// at Open for the owner's lifetime.
     pub stills: bool,
+    /// The matrix the stream is converted and declared in, agreed at Open
+    /// from the viewer's window and fixed for the owner's lifetime.
+    pub matrix: crate::YuvMatrix,
 }
 
 pub(super) struct DesktopRuntime {
@@ -1177,6 +1180,8 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
     };
     let codec_preference = core.desktop_codec_default()?;
     let codec_offer = decoder_caps.preferred_offer(codec_preference)?;
+    let window_decoders = core.alive_state()?.window_decoders.clone();
+    let bt601 = crate::video_caps::VideoCodecCaps::bt601_mask(window_decoders.as_deref());
     // Reserve once per owner, including while Open awaits a reply.
     let reservation = DesktopRuntime::new(
         DesktopInfo {
@@ -1187,6 +1192,7 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
             quality: offer,
             separate_cursor: false,
             stills: false,
+            matrix: crate::YuvMatrix::Bt709,
         },
         SessionStamp::new(0, 0),
     );
@@ -1229,6 +1235,7 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                             files_only: false,
                             services_only: false,
                             separate_cursor: cursor,
+                            bt601,
                             hostname: None,
                             os: crate::OperatingSystem::local(),
                         }
@@ -1294,6 +1301,10 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                             quality,
                             separate_cursor: codec & crate::protocol::SEPARATE_CURSOR != 0,
                             stills: codec & crate::protocol::STILLS != 0,
+                            matrix: crate::VideoCodec::from_wire_id(codec & !flags)
+                                .map_or(crate::YuvMatrix::Bt709, |agreed| {
+                                    crate::YuvMatrix::of_codec(bt601, agreed)
+                                }),
                         };
                         if !decoder_caps.supports_decode(
                             crate::VideoCodec::from_wire_id(info.codec)
@@ -1818,6 +1829,7 @@ pub(super) async fn serve(
         decode,
         files_only: false,
         services_only: false,
+        bt601,
         ..
     } = ControlMessage::decode(&body[26..])?
     else {
@@ -1864,6 +1876,10 @@ pub(super) async fn serve(
                 Err(1)
             } else if let Some(agreed) = crate::video_caps::negotiate(codec, &caps) {
                 let codec = agreed.codec;
+                let matrix = crate::VideoCodec::from_wire_id(codec)
+                    .map_or(crate::YuvMatrix::Bt709, |agreed| {
+                        crate::YuvMatrix::of_codec(bt601, agreed)
+                    });
                 let peer_id = session.peer_id.clone();
                 let id = state.next_service_id;
                 state.next_service_id = id.checked_add(1).ok_or(Error::Busy)?;
@@ -1891,6 +1907,7 @@ pub(super) async fn serve(
                         quality: crate::session::agree_quality(&quality, monitor, &caps),
                         separate_cursor: separate,
                         stills,
+                        matrix,
                     },
                     SessionStamp::new(id, parent.generation),
                 );
@@ -2997,6 +3014,7 @@ mod tests {
                 quality: crate::session::controller_offer(),
                 separate_cursor: false,
                 stills: false,
+                matrix: crate::YuvMatrix::Bt709,
             },
             SessionStamp::new(1, 3),
         )

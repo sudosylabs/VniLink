@@ -1,7 +1,7 @@
 //! The chroma measurement's page and metrics measure what they say.
 
 use crate::measure::{chroma_psnr, colour_text_page, edge_psnr, psnr, psnr_channels};
-use crate::{bgra_to_nv12, nv12_to_bgra, RawFrame, STREAM_SIGNAL};
+use crate::{bgra_to_nv12, nv12_to_bgra, RawFrame, VideoSignal, YuvMatrix};
 
 fn changed(frame: &RawFrame, at: impl Fn(u16, u16) -> bool, edit: impl Fn(&mut [u8])) -> RawFrame {
     let mut pixels = Vec::new();
@@ -58,8 +58,16 @@ fn each_metric_answers_only_its_own_question() {
 #[test]
 fn the_colour_page_loses_chroma_to_subsampling_alone() {
     let page = colour_text_page(640, 360, 0);
-    let nv12 = bgra_to_nv12(&page).unwrap();
-    let back = nv12_to_bgra(640, 360, 0, nv12.y_plane(), nv12.uv_plane(), STREAM_SIGNAL).unwrap();
+    let nv12 = bgra_to_nv12(&page, YuvMatrix::Bt709).unwrap();
+    let back = nv12_to_bgra(
+        640,
+        360,
+        0,
+        nv12.y_plane(),
+        nv12.uv_plane(),
+        VideoSignal::stream(YuvMatrix::Bt709),
+    )
+    .unwrap();
     let (chroma, edges) = (chroma_psnr(&page, &back), edge_psnr(&page, &back));
     assert!(chroma < 32.0, "chroma {chroma}");
     assert!(edges < 26.0, "edges {edges}");
@@ -73,7 +81,15 @@ fn the_colour_page_loses_chroma_to_subsampling_alone() {
             pixel[..3].fill(mean);
         },
     );
-    let nv12 = bgra_to_nv12(&grey).unwrap();
-    let back = nv12_to_bgra(640, 360, 0, nv12.y_plane(), nv12.uv_plane(), STREAM_SIGNAL).unwrap();
+    let nv12 = bgra_to_nv12(&grey, YuvMatrix::Bt709).unwrap();
+    let back = nv12_to_bgra(
+        640,
+        360,
+        0,
+        nv12.y_plane(),
+        nv12.uv_plane(),
+        VideoSignal::stream(YuvMatrix::Bt709),
+    )
+    .unwrap();
     assert!(chroma_psnr(&grey, &back) > 45.0);
 }

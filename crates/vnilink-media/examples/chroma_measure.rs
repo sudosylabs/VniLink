@@ -12,7 +12,7 @@
 
 use shiguredo_aom as aom;
 use vnilink_media::measure::{chroma_psnr, colour_text_page, edge_psnr, psnr};
-use vnilink_media::{bgra_to_nv12, nv12_to_bgra, RawFrame, STREAM_SIGNAL};
+use vnilink_media::{bgra_to_nv12, nv12_to_bgra, RawFrame, VideoSignal, YuvMatrix};
 
 const PICTURES: u64 = 60;
 const FPS: u32 = 30;
@@ -30,14 +30,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("|---|---|---|---|---|---|---|---|---|---|");
     for (width, height) in [(1280u16, 720u16), (1920, 1080)] {
         let page = colour_text_page(width, height, PICTURES - 1);
-        let nv12 = bgra_to_nv12(&page)?;
+        let nv12 = bgra_to_nv12(&page, YuvMatrix::Bt709)?;
         let subsampled = nv12_to_bgra(
             width,
             height,
             0,
             nv12.y_plane(),
             nv12.uv_plane(),
-            STREAM_SIGNAL,
+            VideoSignal::stream(YuvMatrix::Bt709),
         )?;
         println!(
             "| {width}x{height} | 4:2:0, no codec | - | - | - | - | - | {:.1} | {:.1} | {:.1} |",
@@ -150,7 +150,7 @@ fn run(
 /// with the same coefficients per pixel.
 fn planes(frame: &RawFrame, chroma: Chroma) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     if chroma == Chroma::Yuv420 {
-        let nv12 = bgra_to_nv12(frame).expect("an even page");
+        let nv12 = bgra_to_nv12(frame, YuvMatrix::Bt709).expect("an even page");
         let (u, v) = nv12
             .uv_plane()
             .chunks_exact(2)
@@ -203,7 +203,7 @@ fn picture_bgra(
             0,
             &luma,
             &uv,
-            STREAM_SIGNAL,
+            VideoSignal::stream(YuvMatrix::Bt709),
         )?);
     }
     let mut bgra = Vec::with_capacity(w * h * 4);

@@ -90,6 +90,10 @@ pub struct WindowDecoder {
     pub codec: crate::VideoCodec,
     pub hardware: bool,
     pub chroma444: bool,
+    /// The decoder shows BT.601 pictures correctly and BT.709 ones not, as
+    /// Chromium's VA-API path converts as BT.601 whatever a stream says. A
+    /// host encodes this codec for the window in BT.601.
+    pub bt601: bool,
 }
 
 impl VideoCodecCaps {
@@ -189,6 +193,22 @@ impl VideoCodecCaps {
             .iter()
             .any(|decoder| decoder.codec == crate::VideoCodec::Av1 && decoder.chroma444);
         caps
+    }
+
+    /// The `bt601` mask of a Hello for these window decoders: the offer bit
+    /// of every codec the window shows correctly only as BT.601. Zero
+    /// without window decoders.
+    pub fn bt601_mask(decoders: Option<&[WindowDecoder]>) -> u8 {
+        decoders
+            .unwrap_or_default()
+            .iter()
+            .fold(0, |mask, decoder| {
+                mask | if decoder.bt601 {
+                    decoder.codec.offer_bit()
+                } else {
+                    0
+                }
+            })
     }
 
     /// Offers only the selected codec; unavailable explicit choices never fall back.

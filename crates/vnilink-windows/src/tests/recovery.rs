@@ -34,9 +34,16 @@ fn open(
     height: u16,
     bitrate_bps: u32,
 ) -> Option<WindowsEncoder> {
-    WindowsEncoder::open_candidate(candidate, width, height, 30, bitrate_bps)
-        .inspect_err(|err| println!("{width}x{height}: did not open: {err}"))
-        .ok()
+    WindowsEncoder::open_candidate(
+        candidate,
+        width,
+        height,
+        30,
+        bitrate_bps,
+        vnilink::YuvMatrix::Bt709,
+    )
+    .inspect_err(|err| println!("{width}x{height}: did not open: {err}"))
+    .ok()
 }
 
 /// Sizes of the forced keyframes in a stream asking for one every `every`

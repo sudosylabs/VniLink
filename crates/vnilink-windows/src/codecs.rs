@@ -14,7 +14,7 @@ pub fn probe_video_codecs() -> vnilink::VideoCodecCaps {
     }
     #[cfg(windows)]
     {
-        let encoder = WindowsEncoder::open(64, 64, 30, 500_000).ok();
+        let encoder = WindowsEncoder::open(64, 64, 30, 500_000, vnilink::YuvMatrix::Bt709).ok();
         let encode = encoder.is_some();
         vnilink::VideoCodecCaps {
             encode_baseline: encode,

@@ -12,7 +12,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         VideoCodec::Vp9,
         VideoCodec::Av1,
     ] {
-        let mut encoder = vnilink_media::SoftwareEncoder::open(codec, 64, 64, 30, 500_000)?;
+        let mut encoder = vnilink_media::SoftwareEncoder::open(
+            codec,
+            vnilink_media::YuvMatrix::Bt709,
+            64,
+            64,
+            30,
+            500_000,
+        )?;
         let mut decoder = vnilink_media::SoftwareDecoder::open(codec)?;
         let mut recorder: Option<MatroskaRecorder<std::fs::File>> = None;
         for index in 0..3 {

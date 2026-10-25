@@ -12,6 +12,7 @@ use vnilink::Quality;
 use vnilink::{Core, CoreEvent, EncodedFrame, MAX_VIDEO_FRAME};
 
 use crate::annexb::parse_annex_b;
+use crate::colour::YuvMatrix;
 use crate::error::{Error, PublishError};
 use crate::frame::{encoded_size, scale_bgra, RawFrame};
 use crate::sps::h264_stream_sps;
@@ -39,7 +40,7 @@ pub struct EncodedSample {
 }
 
 impl EncodedSample {
-    pub fn annex_b(keyframe: bool, annex_b: Vec<u8>) -> Result<Self, Error> {
+    pub fn annex_b(keyframe: bool, annex_b: Vec<u8>, matrix: YuvMatrix) -> Result<Self, Error> {
         if annex_b.is_empty() {
             return Err(Error::InvalidFrame("encoded frame is empty"));
         }
@@ -58,9 +59,9 @@ impl EncodedSample {
             for unit in parsed.units() {
                 stream.extend_from_slice(&[0, 0, 0, 1]);
                 if unit.nal_type == 7 {
-                    let sps = h264_stream_sps(unit.bytes()).ok_or(Error::EncodeRejected(
-                        "the encoder wrote an SPS that cannot be read",
-                    ))?;
+                    let sps = h264_stream_sps(unit.bytes(), matrix).ok_or(
+                        Error::EncodeRejected("the encoder wrote an SPS that cannot be read"),
+                    )?;
                     stream.extend_from_slice(&sps);
                 } else {
                     stream.extend_from_slice(unit.bytes());
@@ -80,13 +81,15 @@ impl EncodedSample {
         })
     }
 
+    /// A packet of any codec but H.264, which has [`Self::annex_b`] and
+    /// its matrix.
     pub fn packet(
         codec: vnilink::VideoCodec,
         keyframe: bool,
         bytes: Vec<u8>,
     ) -> Result<Self, Error> {
         if codec == vnilink::VideoCodec::H264 {
-            return Self::annex_b(keyframe, bytes);
+            return Err(Error::Unsupported("an H.264 packet without a matrix"));
         }
         if bytes.is_empty() || bytes.len() > MAX_VIDEO_FRAME {
             return Err(Error::InvalidFrame("encoded packet size"));

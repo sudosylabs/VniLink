@@ -31,8 +31,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if (input_width, input_height) != (width, height) {
         return scale(input_width, input_height, width, height, fps);
     }
-    let mut encoder =
-        vnilink_macos::MacEncoder::open_codec(width, height, fps, 12_000_000, codec, true)?;
+    let mut encoder = vnilink_macos::MacEncoder::open_codec(
+        width,
+        height,
+        fps,
+        12_000_000,
+        codec,
+        true,
+        vnilink::YuvMatrix::Bt709,
+    )?;
     println!("hardware: {}", encoder.hardware());
     // Pictures that change everywhere, the encoder's hardest case, made
     // before timing starts.

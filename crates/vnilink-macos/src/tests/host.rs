@@ -27,7 +27,7 @@ fn the_platform_encoder_plugs_into_the_generic_session() {
 
     let quality = Quality::new(500, 30, 32, 32).unwrap();
     let mut session = HostSession::open(64, 64, quality, |w, h, fps, bps| {
-        MacEncoder::open(w, h, fps, bps, false)
+        MacEncoder::open(w, h, fps, bps, false, vnilink::YuvMatrix::Bt709)
     })
     .unwrap();
     assert_eq!(session.capture_size(), (64, 64));
@@ -235,7 +235,14 @@ mod twin {
                     |_, width, height, fps, bps| {
                         assert_eq!((width, height), (64, 64));
                         assert!(fps > 0 && bps > 0);
-                        let encoder = MacEncoder::open(width, height, fps, bps, false);
+                        let encoder = MacEncoder::open(
+                            width,
+                            height,
+                            fps,
+                            bps,
+                            false,
+                            vnilink::YuvMatrix::Bt709,
+                        );
                         if let Err(error) = &encoder {
                             eprintln!("encoder open failed: {error:?}");
                         }

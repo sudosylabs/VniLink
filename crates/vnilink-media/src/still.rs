@@ -2,18 +2,22 @@
 //! changing, sharp where the stream's 4:2:0 blurs coloured text. The viewer
 //! shows it until the screen changes ([`vnilink::FrameRole::Still`]).
 //!
-//! The picture is encoded at the capture's own size, in the stream's colour
-//! (BT.709, limited range, [`crate::STREAM_SIGNAL`]), and is screen content:
-//! do not log it.
+//! The picture is encoded at the capture's own size, in BT.709 limited range
+//! whatever matrix the stream is in ([`STILL_SIGNAL`]): the viewer's still
+//! decoder is software AV1, which follows the picture's own declaration.
+//! It is screen content: do not log it.
 
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 
 use shiguredo_aom as aom;
 
-use crate::colour::{ToRgb, STREAM_SIGNAL};
+use crate::colour::{ToRgb, VideoSignal, YuvMatrix};
 use crate::error::Error;
 use crate::frame::RawFrame;
+
+/// The colour every still carries.
+const STILL_SIGNAL: VideoSignal = VideoSignal::stream(YuvMatrix::Bt709);
 
 /// How long the screen stays unchanged before its still picture is made:
 /// the stream's own refinement of a still screen ends then.
@@ -70,7 +74,7 @@ impl StillEncoder {
     /// a 4:2:0 round trip of it in the stream's colour. A frame 4:2:0 cannot
     /// hold, of odd size, has no such bound: any still beats it.
     fn beats_subsampling(&self, frame: &RawFrame, picture: &[u8]) -> Result<bool, Error> {
-        let Ok(nv12) = crate::bgra_to_nv12(frame) else {
+        let Ok(nv12) = crate::bgra_to_nv12(frame, STILL_SIGNAL.yuv_matrix()) else {
             return Ok(true);
         };
         let subsampled = crate::nv12_to_bgra(
@@ -79,7 +83,7 @@ impl StillEncoder {
             0,
             nv12.y_plane(),
             nv12.uv_plane(),
-            STREAM_SIGNAL,
+            STILL_SIGNAL,
         )?;
         let shown = decode_i444(picture)?;
         Ok(crate::measure::psnr(frame, &shown)
@@ -109,10 +113,10 @@ impl StillEncoder {
         config.rc_min_quantizer = level;
         config.rc_max_quantizer = level;
         config.tune_content = Some(aom::ContentType::Screen);
-        config.color_primaries = Some(STREAM_SIGNAL.primaries.into());
-        config.transfer_characteristics = Some(STREAM_SIGNAL.transfer.into());
-        config.matrix_coefficients = Some(STREAM_SIGNAL.matrix.into());
-        config.color_range = Some(u32::from(STREAM_SIGNAL.full_range));
+        config.color_primaries = Some(STILL_SIGNAL.primaries.into());
+        config.transfer_characteristics = Some(STILL_SIGNAL.transfer.into());
+        config.matrix_coefficients = Some(STILL_SIGNAL.matrix.into());
+        config.color_range = Some(u32::from(STILL_SIGNAL.full_range));
         let mut encoder =
             aom::Encoder::new(config).map_err(|_| Error::Unsupported("libaom 4:4:4 encoder"))?;
         encoder
@@ -268,7 +272,7 @@ fn decode_i444(picture: &[u8]) -> Result<RawFrame, Error> {
         decoded.u_stride().map_err(rejected)?,
         decoded.v_stride().map_err(rejected)?,
     );
-    let to_rgb = ToRgb::of(STREAM_SIGNAL);
+    let to_rgb = ToRgb::of(STILL_SIGNAL);
     let clamp = |value: i32| (value >> 8).clamp(0, 255) as u8;
     let mut bgra = Vec::with_capacity(width * height * 4);
     for row in 0..height {
@@ -328,7 +332,7 @@ pub(crate) fn area_scale(frame: &RawFrame, (width, height): (u16, u16)) -> Resul
     RawFrame::bgra(width, height, frame.timestamp_us(), bgra)
 }
 
-/// BGRA to BT.709 limited-range planar 4:4:4: one chroma sample per pixel.
+/// BGRA to limited-range planar 4:4:4 in the still signal: one chroma sample per pixel.
 fn bgra_to_i444(frame: &RawFrame) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let pixels = usize::from(frame.width()) * usize::from(frame.height());
     let (mut y, mut u, mut v) = (
@@ -338,7 +342,8 @@ fn bgra_to_i444(frame: &RawFrame) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     );
     for row in 0..frame.height() {
         for pixel in frame.row(row).chunks_exact(4) {
-            let (luma, blue, red) = crate::nv12::yuv(pixel[2], pixel[1], pixel[0]);
+            let (luma, blue, red) =
+                crate::nv12::yuv(STILL_SIGNAL.yuv_matrix(), pixel[2], pixel[1], pixel[0]);
             y.push(luma);
             u.push(blue);
             v.push(red);

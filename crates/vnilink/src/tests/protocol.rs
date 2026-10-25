@@ -19,6 +19,7 @@ fn control_messages_round_trip() {
             services_only: false,
 
             separate_cursor: true,
+            bt601: 1 | 4,
             hostname: Some("mac-mini".to_string()),
             os: crate::OperatingSystem::local(),
         },
@@ -31,6 +32,7 @@ fn control_messages_round_trip() {
             services_only: false,
 
             separate_cursor: false,
+            bt601: 0,
             hostname: None,
             os: crate::OperatingSystem::local(),
         },
@@ -43,6 +45,7 @@ fn control_messages_round_trip() {
             services_only: false,
 
             separate_cursor: false,
+            bt601: 0,
             hostname: Some("mac-mini".to_string()),
             os: crate::OperatingSystem::local(),
         },
@@ -119,6 +122,7 @@ fn hello_accept_and_quality_shapes_are_validated() {
         services_only: false,
 
         separate_cursor: false,
+        bt601: 0,
         hostname: None,
         os: crate::OperatingSystem::local(),
     }
@@ -138,6 +142,7 @@ fn hello_accept_and_quality_shapes_are_validated() {
         services_only: false,
 
         separate_cursor: false,
+        bt601: 0,
         hostname: None,
         os: crate::OperatingSystem::local(),
     }
@@ -175,15 +180,16 @@ fn hostname_shapes_are_validated() {
         services_only: false,
 
         separate_cursor: false,
+        bt601: 0,
         hostname,
         os: crate::OperatingSystem::local(),
     };
-    // The head is 17 bytes: tag, version, codec, quality, then the decode,
-    // files-only, services-only and cursor flags. An absent name is one
+    // The head is 18 bytes: tag, version, codec, quality, then the decode,
+    // files-only, services-only and cursor flags and the BT.601 mask. An absent name is one
     // length byte, and the OS byte ends the frame.
     // An invalid name encodes as absent; it never breaks the session.
     let encoded = hello(Some("  ".to_string())).encode();
-    assert_eq!(encoded.len(), 19);
+    assert_eq!(encoded.len(), 20);
     assert_eq!(ControlMessage::decode(&encoded).unwrap(), hello(None));
     // Files-only round-trips its flag.
     let mut files_hello = hello(Some("mac-mini".to_string()));
@@ -449,6 +455,7 @@ fn hello_mode_and_cursor_flags_are_strict() {
         files_only: true,
         services_only: true,
         separate_cursor: true,
+        bt601: 1 | 4,
         hostname: Some("service-host".into()),
         os: crate::OperatingSystem::local(),
     };
@@ -458,6 +465,17 @@ fn hello_mode_and_cursor_flags_are_strict() {
     for flag in [13, 14, 15, 16] {
         let mut malformed = bytes.clone();
         malformed[flag] = 2;
+        assert!(matches!(
+            ControlMessage::decode(&malformed),
+            Err(Error::Malformed)
+        ));
+    }
+    // The mask names codecs by their offer bits: H.264 High's bit, the
+    // flag bit and the reserved bit name none.
+    assert_eq!(bytes[17], 1 | 4);
+    for unknown in [2, 0x40, 0x80] {
+        let mut malformed = bytes.clone();
+        malformed[17] = unknown;
         assert!(matches!(
             ControlMessage::decode(&malformed),
             Err(Error::Malformed)
@@ -614,6 +632,7 @@ fn handshake_os_is_bounded_and_every_truncation_is_rejected_without_panicking() 
                 services_only: true,
 
                 separate_cursor: false,
+                bt601: 0,
                 hostname: Some("workstation".into()),
                 os,
             },

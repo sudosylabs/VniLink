@@ -106,7 +106,7 @@ fn sample(keyframe: bool) -> Result<EncodedSample, Error> {
         parameter_sets: &sets,
         keyframe,
     })?;
-    EncodedSample::annex_b(keyframe, annex)
+    EncodedSample::annex_b(keyframe, annex, vnilink::YuvMatrix::Bt709)
 }
 
 fn boot() -> Core {
@@ -1076,11 +1076,13 @@ fn roles_of_an_unchanged_screen(shows: bool, watch: Duration) -> Vec<vnilink::Fr
                 codec: vnilink::VideoCodec::H264,
                 hardware: false,
                 chroma444: false,
+                bt601: false,
             },
             vnilink::WindowDecoder {
                 codec: vnilink::VideoCodec::Av1,
                 hardware: false,
                 chroma444: shows,
+                bt601: false,
             },
         ])
         .unwrap();

@@ -38,7 +38,7 @@ use libva::VA_RT_FORMAT_YUV420;
 use vnilink::EncodedFrame;
 use vnilink_media::{
     h264_video_signal, nv12_to_bgra, parse_annex_b, Error, RawFrame, VideoDecoder, VideoSignal,
-    STREAM_SIGNAL,
+    UNDECLARED_SIGNAL,
 };
 
 use crate::gpu::ranked_render_nodes;
@@ -251,11 +251,11 @@ fn decode_picture(
     // each on a keyframe. Two passes, so a PPS never depends on SPS order
     // inside the access unit.
     let mut fresh_sps = None;
-    let mut signal = STREAM_SIGNAL;
+    let mut signal = UNDECLARED_SIGNAL;
     for set in &parameter_sets {
         if set.first().map(|header| header & 0x1F) == Some(7) {
             fresh_sps = Some(Sps::parse(set)?);
-            signal = h264_video_signal(set)?.unwrap_or(STREAM_SIGNAL);
+            signal = h264_video_signal(set)?.unwrap_or(UNDECLARED_SIGNAL);
         }
     }
     let mut fresh_pps = None;

@@ -19,9 +19,18 @@ fn prefers_a_hardware_transform_that_opens() {
         .iter()
         .filter(|candidate| candidate.hardware())
         .any(|candidate| {
-            WindowsEncoder::open_candidate(candidate, 1280, 720, 30, 4_000_000).is_ok()
+            WindowsEncoder::open_candidate(
+                candidate,
+                1280,
+                720,
+                30,
+                4_000_000,
+                vnilink::YuvMatrix::Bt709,
+            )
+            .is_ok()
         });
-    let encoder = WindowsEncoder::open(1280, 720, 30, 4_000_000).unwrap();
+    let encoder =
+        WindowsEncoder::open(1280, 720, 30, 4_000_000, vnilink::YuvMatrix::Bt709).unwrap();
     assert_eq!(encoder.hardware(), hardware_opens);
     assert_eq!(crate::probe_video_codecs().hardware, hardware_opens);
 }
@@ -52,7 +61,15 @@ fn the_capture_adapter_decides_the_encoder() {
         );
         let chosen: Vec<_> = (0..3)
             .map(|_| {
-                let encoder = WindowsEncoder::open_on(1280, 720, 30, 4_000_000, &device).unwrap();
+                let encoder = WindowsEncoder::open_on(
+                    1280,
+                    720,
+                    30,
+                    4_000_000,
+                    vnilink::YuvMatrix::Bt709,
+                    &device,
+                )
+                .unwrap();
                 (encoder.vendor(), encoder.implementation())
             })
             .collect();
@@ -68,7 +85,8 @@ fn the_capture_adapter_decides_the_encoder() {
             assert_eq!(implementation.input, Some(EncoderInput::GpuReadBack));
         }
     }
-    let mut encoder = WindowsEncoder::open(1280, 720, 30, 4_000_000).unwrap();
+    let mut encoder =
+        WindowsEncoder::open(1280, 720, 30, 4_000_000, vnilink::YuvMatrix::Bt709).unwrap();
     assert_eq!(
         encoder.implementation().input,
         Some(EncoderInput::GpuReadBack)
@@ -106,8 +124,14 @@ fn sps_profile(annex_b: &[u8]) -> Option<u8> {
 #[test]
 fn every_transform_encodes_each_picture() {
     for candidate in unsafe { h264_encoders() } {
-        let Ok(mut encoder) = WindowsEncoder::open_candidate(&candidate, 1280, 720, 30, 4_000_000)
-        else {
+        let Ok(mut encoder) = WindowsEncoder::open_candidate(
+            &candidate,
+            1280,
+            720,
+            30,
+            4_000_000,
+            vnilink::YuvMatrix::Bt709,
+        ) else {
             continue;
         };
         let mut decoder = WindowsDecoder::new();
@@ -139,9 +163,9 @@ fn every_transform_encodes_each_picture() {
     }
 }
 
-/// Every transform's stream says BT.709 limited range, and pictures
-/// converted with that matrix come back through Media Foundation's decoder
-/// in the colours they went in with.
+/// Every transform's stream says the session's matrix in limited range,
+/// and pictures converted with that matrix come back through Media
+/// Foundation's decoder in the colours they went in with.
 #[test]
 fn every_transform_keeps_the_stream_colour() {
     // (b, g, r)
@@ -156,12 +180,15 @@ fn every_transform_keeps_the_stream_colour() {
     ];
     // 1080 rows are coded as 1088: the top rows show whether chroma was
     // read from where the decoder put it.
-    for (width, height) in [(640u16, 480u16), (1920, 1080)] {
+    for (matrix, (width, height)) in [vnilink::YuvMatrix::Bt709, vnilink::YuvMatrix::Bt601]
+        .into_iter()
+        .flat_map(|matrix| [(640u16, 480u16), (1920, 1080)].map(move |size| (matrix, size)))
+    {
         for candidate in unsafe { h264_encoders() } {
             for colour in colours {
-                let Ok(mut encoder) =
-                    WindowsEncoder::open_candidate(&candidate, width, height, 30, 8_000_000)
-                else {
+                let Ok(mut encoder) = WindowsEncoder::open_candidate(
+                    &candidate, width, height, 30, 8_000_000, matrix,
+                ) else {
                     break;
                 };
                 let mut decoder = WindowsDecoder::new();
@@ -195,8 +222,8 @@ fn every_transform_keeps_the_stream_colour() {
                             .unwrap();
                         assert_eq!(
                             vnilink_media::h264_video_signal(sps.bytes()).unwrap(),
-                            Some(vnilink_media::STREAM_SIGNAL),
-                            "{}",
+                            Some(vnilink_media::VideoSignal::stream(matrix)),
+                            "{} {matrix:?}",
                             candidate.name
                         );
                     }
@@ -218,7 +245,7 @@ fn every_transform_keeps_the_stream_colour() {
                         let drift = (i16::from(pixel[channel]) - i16::from(colour[channel])).abs();
                         assert!(
                             drift <= 6,
-                            "{} {width}x{height} row {row}: {colour:?} came back as {pixel:?}",
+                            "{} {matrix:?} {width}x{height} row {row}: {colour:?} came back as {pixel:?}",
                             candidate.name
                         );
                     }
@@ -243,9 +270,14 @@ fn chroma_quality() {
         for (width, height) in [(1280u16, 720u16), (1920, 1080)] {
             for megabits in [2u32, 8] {
                 let bitrate = megabits * 1_000_000;
-                let Ok(mut encoder) =
-                    WindowsEncoder::open_candidate(&candidate, width, height, 30, bitrate)
-                else {
+                let Ok(mut encoder) = WindowsEncoder::open_candidate(
+                    &candidate,
+                    width,
+                    height,
+                    30,
+                    bitrate,
+                    vnilink::YuvMatrix::Bt709,
+                ) else {
                     continue;
                 };
                 let mut decoder = WindowsDecoder::new();
@@ -461,9 +493,14 @@ fn every_transform_encodes_a_picture_converted_on_the_gpu() {
     for candidate in unsafe { h264_encoders() } {
         for (width, height) in [(1280u16, 720u16), (640, 360)] {
             let encode = |frame: &vnilink_media::RawFrame| {
-                let Ok(encoder) =
-                    WindowsEncoder::open_candidate(&candidate, width, height, 30, 8_000_000)
-                else {
+                let Ok(encoder) = WindowsEncoder::open_candidate(
+                    &candidate,
+                    width,
+                    height,
+                    30,
+                    8_000_000,
+                    vnilink::YuvMatrix::Bt709,
+                ) else {
                     return None;
                 };
                 let mut host =
@@ -581,18 +618,40 @@ fn capture_to_encode_cost() {
     ];
     for mode in modes.iter().chain(modes.iter()).copied() {
         let encoder = match mode {
-            "zero copy" => WindowsEncoder::open_on(1280, 720, 30, 4_000_000, &captured_on).unwrap(),
+            "zero copy" => WindowsEncoder::open_on(
+                1280,
+                720,
+                30,
+                4_000_000,
+                vnilink::YuvMatrix::Bt709,
+                &captured_on,
+            )
+            .unwrap(),
             "shared" => match &shared {
-                Ok(shared) => {
-                    WindowsEncoder::open_on(1280, 720, 30, 4_000_000, &shared.device()).unwrap()
-                }
+                Ok(shared) => WindowsEncoder::open_on(
+                    1280,
+                    720,
+                    30,
+                    4_000_000,
+                    vnilink::YuvMatrix::Bt709,
+                    &shared.device(),
+                )
+                .unwrap(),
                 Err(_) => continue,
             },
             "read-back across" => match &other {
-                Some(other) => WindowsEncoder::open_on(1280, 720, 30, 4_000_000, other).unwrap(),
+                Some(other) => WindowsEncoder::open_on(
+                    1280,
+                    720,
+                    30,
+                    4_000_000,
+                    vnilink::YuvMatrix::Bt709,
+                    other,
+                )
+                .unwrap(),
                 None => continue,
             },
-            _ => WindowsEncoder::open(1280, 720, 30, 4_000_000).unwrap(),
+            _ => WindowsEncoder::open(1280, 720, 30, 4_000_000, vnilink::YuvMatrix::Bt709).unwrap(),
         };
         let vendor = encoder.vendor();
         let reads_textures = encoder.reads_textures();
@@ -666,12 +725,28 @@ fn reopen_cost() {
     };
     let open = |mode: &str| -> WindowsEncoder {
         if mode == "texture" {
-            return WindowsEncoder::open_on(1280, 720, 30, 4_000_000, &device).unwrap();
+            return WindowsEncoder::open_on(
+                1280,
+                720,
+                30,
+                4_000_000,
+                vnilink::YuvMatrix::Bt709,
+                &device,
+            )
+            .unwrap();
         }
         // As `open_on` once no texture is read: candidates as they are listed.
         unsafe { crate::transform::h264_encoders_for(Some(adapter)) }
             .find_map(|candidate| {
-                WindowsEncoder::open_candidate(&candidate, 1280, 720, 30, 4_000_000).ok()
+                WindowsEncoder::open_candidate(
+                    &candidate,
+                    1280,
+                    720,
+                    30,
+                    4_000_000,
+                    vnilink::YuvMatrix::Bt709,
+                )
+                .ok()
             })
             .unwrap()
     };
@@ -892,8 +967,14 @@ fn a_captured_picture_is_converted_on_the_cpu_when_the_gpu_cannot() {
     use vnilink_media::{HostVideo, PumpOutput, Quality};
     let page = text_page(1280, 720, 0);
     for candidate in unsafe { h264_encoders() } {
-        let Ok(mut encoder) = WindowsEncoder::open_candidate(&candidate, 640, 360, 30, 8_000_000)
-        else {
+        let Ok(mut encoder) = WindowsEncoder::open_candidate(
+            &candidate,
+            640,
+            360,
+            30,
+            8_000_000,
+            vnilink::YuvMatrix::Bt709,
+        ) else {
             continue;
         };
         assert_eq!(encoder.converts_on_gpu(), None);
@@ -919,8 +1000,15 @@ fn a_captured_picture_is_converted_on_the_cpu_when_the_gpu_cannot() {
             assert!(quality > 25.0, "{}: {quality:.1} dB", candidate.name);
         }
         // An encoder that has not been refused converts on the GPU.
-        let mut encoder =
-            WindowsEncoder::open_candidate(&candidate, 640, 360, 30, 8_000_000).unwrap();
+        let mut encoder = WindowsEncoder::open_candidate(
+            &candidate,
+            640,
+            360,
+            30,
+            8_000_000,
+            vnilink::YuvMatrix::Bt709,
+        )
+        .unwrap();
         let _ = encoder.encode(
             &on_gpu(&page),
             &EncodeParams {
@@ -944,7 +1032,8 @@ fn a_picture_on_the_software_renderer_is_encoded() {
         &page,
         windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_WARP,
     );
-    let mut encoder = WindowsEncoder::open(640, 360, 30, 8_000_000).unwrap();
+    let mut encoder =
+        WindowsEncoder::open(640, 360, 30, 8_000_000, vnilink::YuvMatrix::Bt709).unwrap();
     let sample = encoder
         .encode(
             &frame,
@@ -1067,7 +1156,15 @@ fn an_encoder_opened_on_the_capture_device_reads_its_textures() {
         let gpu = crate::gpu::GpuDevice::new(device.clone());
         for (width, height) in [(1280u16, 720u16), (640, 360)] {
             let encode = |frame: &vnilink_media::RawFrame| {
-                let encoder = WindowsEncoder::open_on(width, height, 30, 8_000_000, &gpu).unwrap();
+                let encoder = WindowsEncoder::open_on(
+                    width,
+                    height,
+                    30,
+                    8_000_000,
+                    vnilink::YuvMatrix::Bt709,
+                    &gpu,
+                )
+                .unwrap();
                 assert!(
                     encoder.reads_textures(),
                     "{name}: no transform reads textures there"

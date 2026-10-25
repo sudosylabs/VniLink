@@ -568,6 +568,7 @@ fn capture(
         config.fps as u8,
         BITRATE,
         false,
+        vnilink::YuvMatrix::Bt709,
     )
     .map_err(|_| Error::Unsupported("camera H.264 encoder"))?;
     let mut stream = Stream::with_buffers(&device, Type::VideoCapture, 2)

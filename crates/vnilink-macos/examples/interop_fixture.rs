@@ -5,7 +5,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = std::path::PathBuf::from(std::env::args().nth(1).ok_or("output directory required")?);
     std::fs::create_dir_all(&dir)?;
     for (width, height) in [(64u16, 64u16), (1920, 1080)] {
-        let mut encoder = MacEncoder::open(width, height, 30, 8_000_000, true)?;
+        let mut encoder = MacEncoder::open(
+            width,
+            height,
+            30,
+            8_000_000,
+            true,
+            vnilink::YuvMatrix::Bt709,
+        )?;
         for index in 0..3u64 {
             let mut pixels = Vec::new();
             for y in 0..height {

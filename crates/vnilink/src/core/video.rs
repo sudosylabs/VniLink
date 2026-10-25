@@ -25,6 +25,8 @@ pub struct VideoTarget {
     pub quality: Quality,
     pub separate_cursor: bool,
     pub codec: u8,
+    /// The matrix its pictures are converted and declared in.
+    pub matrix: crate::YuvMatrix,
     /// Display this consumer selected. Zero means it has not chosen one and
     /// still follows whichever capture the supervisor opened.
     pub display_id: u64,
@@ -244,6 +246,17 @@ impl Core {
             return Err(Error::NoSession);
         }
         Ok(session.codec)
+    }
+
+    /// The matrix the viewer of one hosted session asked its stream to be
+    /// converted and declared in; the serve path opens its encoder with it.
+    pub fn host_matrix(&self, session_id: u64) -> Result<crate::YuvMatrix, Error> {
+        let state = self.alive_state()?;
+        let session = state.incoming.get(&session_id).ok_or(Error::NoSession)?;
+        if session.phase != SessionPhase::Active {
+            return Err(Error::NoSession);
+        }
+        Ok(session.matrix)
     }
 
     /// Queues one encoded frame for the active hosted session.
@@ -671,6 +684,7 @@ fn video_targets_locked(shared: &Shared, state: &State) -> Vec<VideoTarget> {
             quality: info.quality,
             separate_cursor: info.separate_cursor,
             codec: info.codec,
+            matrix: info.matrix,
             display_id,
             revision: revision_of(display_id),
         });
@@ -695,6 +709,7 @@ fn video_targets_locked(shared: &Shared, state: &State) -> Vec<VideoTarget> {
             quality,
             separate_cursor: session.separate_cursor,
             codec: session.codec,
+            matrix: session.matrix,
             display_id,
             revision: revision_of(display_id),
         });

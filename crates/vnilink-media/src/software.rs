@@ -1,25 +1,24 @@
 //! In-process realtime software fallback. No subprocess or whole-frame JSON.
 //!
-//! Encoders convert to the stream's colour ([`STREAM_SIGNAL`]) and declare
-//! it where the codec can; the decoder shows each picture in the colour its
+//! Encoders convert to the session's matrix ([`VideoSignal::stream`]) and
+//! declare it where the codec can; the decoder shows each picture in the colour its
 //! stream declares.
-use crate::colour::declared_signal;
+use crate::colour::{declared_signal, VideoSignal, YuvMatrix};
 use crate::nv12::{bgra_to_i420, i420_to_bgra};
-use crate::{
-    EncodeParams, EncodedSample, Error, RawFrame, VideoDecoder, VideoEncoder, STREAM_SIGNAL,
-};
+use crate::{EncodeParams, EncodedSample, Error, RawFrame, VideoDecoder, VideoEncoder};
 use shiguredo_aom as aom;
 use shiguredo_libvpx as vpx;
 use vnilink::{CodecSupport, EncodedFrame, VideoCodec};
 
 pub enum SoftwareEncoder {
-    Vpx(vpx::Encoder, VideoCodec),
-    Av1(aom::Encoder),
-    Hevc(vnilink_hevc::Encoder),
+    Vpx(vpx::Encoder, VideoCodec, YuvMatrix),
+    Av1(aom::Encoder, YuvMatrix),
+    Hevc(vnilink_hevc::Encoder, YuvMatrix),
 }
 impl SoftwareEncoder {
     pub fn open(
         codec: VideoCodec,
+        matrix: YuvMatrix,
         width: u16,
         height: u16,
         fps: u8,
@@ -40,6 +39,7 @@ impl SoftwareEncoder {
         let threads = std::thread::available_parallelism()
             .map(|n| n.get().min(8))
             .unwrap_or(1);
+        let signal = VideoSignal::stream(matrix);
         match codec {
             VideoCodec::H265 => Ok(Self::Hevc(
                 vnilink_hevc::Encoder::open(
@@ -49,13 +49,14 @@ impl SoftwareEncoder {
                     bitrate,
                     threads,
                     vnilink_hevc::Colour {
-                        primaries: STREAM_SIGNAL.primaries,
-                        transfer: STREAM_SIGNAL.transfer,
-                        matrix: STREAM_SIGNAL.matrix,
-                        full_range: STREAM_SIGNAL.full_range,
+                        primaries: signal.primaries,
+                        transfer: signal.transfer,
+                        matrix: signal.matrix,
+                        full_range: signal.full_range,
                     },
                 )
                 .map_err(|_| Error::Unsupported("Kvazaar encoder"))?,
+                matrix,
             )),
             VideoCodec::Vp8 | VideoCodec::Vp9 => {
                 let profile = if codec == VideoCodec::Vp8 {
@@ -64,8 +65,11 @@ impl SoftwareEncoder {
                     vpx::CodecConfig::Vp9(vpx::Vp9Config {
                         row_mt: true,
                         tune_content: Some(vpx::ContentType::Screen),
-                        color_space: Some(vpx::ColorSpace::Bt709),
-                        full_range: Some(STREAM_SIGNAL.full_range),
+                        color_space: Some(match matrix {
+                            YuvMatrix::Bt709 => vpx::ColorSpace::Bt709,
+                            YuvMatrix::Bt601 => vpx::ColorSpace::Bt601,
+                        }),
+                        full_range: Some(signal.full_range),
                         ..Default::default()
                     })
                 };
@@ -86,6 +90,7 @@ impl SoftwareEncoder {
                 Ok(Self::Vpx(
                     vpx::Encoder::new(config).map_err(|_| Error::Unsupported("libvpx encoder"))?,
                     codec,
+                    matrix,
                 ))
             }
             VideoCodec::Av1 => {
@@ -102,12 +107,13 @@ impl SoftwareEncoder {
                 config.rc_end_usage = aom::RateControlMode::Cbr;
                 config.rc_target_bitrate = (bitrate / 1000).max(1);
                 config.tune_content = Some(aom::ContentType::Screen);
-                config.color_primaries = Some(STREAM_SIGNAL.primaries.into());
-                config.transfer_characteristics = Some(STREAM_SIGNAL.transfer.into());
-                config.matrix_coefficients = Some(STREAM_SIGNAL.matrix.into());
-                config.color_range = Some(STREAM_SIGNAL.full_range.into());
+                config.color_primaries = Some(signal.primaries.into());
+                config.transfer_characteristics = Some(signal.transfer.into());
+                config.matrix_coefficients = Some(signal.matrix.into());
+                config.color_range = Some(signal.full_range.into());
                 Ok(Self::Av1(
                     aom::Encoder::new(config).map_err(|_| Error::Unsupported("libaom encoder"))?,
+                    matrix,
                 ))
             }
             _ => Err(Error::Unsupported("software codec")),
@@ -119,23 +125,26 @@ impl VideoEncoder for SoftwareEncoder {
         vnilink::EncoderImplementation {
             name: match self {
                 Self::Vpx(..) => "libvpx",
-                Self::Av1(_) => "libaom",
-                Self::Hevc(_) => "x265",
+                Self::Av1(..) => "libaom",
+                Self::Hevc(..) => "x265",
             },
             hardware: Some(false),
             input: Some(vnilink::EncoderInput::Cpu),
         }
     }
     fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
-        let (y, u, v) = bgra_to_i420(frame, STREAM_SIGNAL)?;
+        let matrix = match self {
+            Self::Vpx(_, _, matrix) | Self::Av1(_, matrix) | Self::Hevc(_, matrix) => *matrix,
+        };
+        let (y, u, v) = bgra_to_i420(frame, VideoSignal::stream(matrix))?;
         match self {
-            Self::Hevc(encoder) => {
+            Self::Hevc(encoder, _) => {
                 let (key, bytes) = encoder
                     .encode(&y, &u, &v, params.force_keyframe)
                     .map_err(|_| Error::EncodeRejected("Kvazaar frame"))?;
                 EncodedSample::packet(VideoCodec::H265, key, bytes)
             }
-            Self::Vpx(encoder, codec) => {
+            Self::Vpx(encoder, codec, _) => {
                 encoder
                     .encode(
                         &vpx::ImageData::I420 {
@@ -160,7 +169,7 @@ impl VideoEncoder for SoftwareEncoder {
                 }
                 Ok(sample)
             }
-            Self::Av1(encoder) => {
+            Self::Av1(encoder, _) => {
                 encoder
                     .encode(
                         &aom::ImageData::I420 {
@@ -371,7 +380,7 @@ pub fn probe_software_codecs() -> Vec<CodecSupport> {
 }
 fn probe(codec: VideoCodec) -> Result<(), Error> {
     let frame = RawFrame::bgra(64, 64, 0, [32u8, 64, 128, 255].repeat(4096))?;
-    let mut encoder = SoftwareEncoder::open(codec, 64, 64, 30, 500_000)?;
+    let mut encoder = SoftwareEncoder::open(codec, YuvMatrix::Bt709, 64, 64, 30, 500_000)?;
     let sample = encoder.encode(
         &frame,
         &EncodeParams {
@@ -395,6 +404,7 @@ fn probe(codec: VideoCodec) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::colour::UNDECLARED_SIGNAL;
 
     /// A platform encoder that only ever opens; it is never asked to encode.
     struct Platform;
@@ -407,14 +417,22 @@ mod tests {
     #[test]
     fn the_platform_encoder_takes_any_codec_and_only_h264_has_no_fallback() {
         let opened = |codec: VideoCodec, platform: bool| {
-            CodecEncoder::open(codec.wire_id(), 64, 64, 30, 500_000, |asked, _, _, _, _| {
-                assert_eq!(asked, codec);
-                if platform {
-                    Ok(Platform)
-                } else {
-                    Err(Error::Unsupported("platform encoder"))
-                }
-            })
+            CodecEncoder::open(
+                codec.wire_id(),
+                YuvMatrix::Bt709,
+                64,
+                64,
+                30,
+                500_000,
+                |asked, _, _, _, _| {
+                    assert_eq!(asked, codec);
+                    if platform {
+                        Ok(Platform)
+                    } else {
+                        Err(Error::Unsupported("platform encoder"))
+                    }
+                },
+            )
         };
         assert!(matches!(
             opened(VideoCodec::H265, true),
@@ -431,8 +449,11 @@ mod tests {
     }
     #[test]
     fn hevc_owners_keep_separate_references_and_recover_at_a_forced_keyframe() {
-        let mut first = SoftwareEncoder::open(VideoCodec::H265, 64, 64, 30, 500_000).unwrap();
-        let mut second = SoftwareEncoder::open(VideoCodec::H265, 128, 64, 30, 500_000).unwrap();
+        let mut first =
+            SoftwareEncoder::open(VideoCodec::H265, YuvMatrix::Bt709, 64, 64, 30, 500_000).unwrap();
+        let mut second =
+            SoftwareEncoder::open(VideoCodec::H265, YuvMatrix::Bt709, 128, 64, 30, 500_000)
+                .unwrap();
         let mut decoders = [
             SoftwareDecoder::open(VideoCodec::H265).unwrap(),
             SoftwareDecoder::open(VideoCodec::H265).unwrap(),
@@ -493,7 +514,8 @@ mod tests {
             VideoCodec::H265,
         ] {
             probe(codec).unwrap();
-            let mut encoder = SoftwareEncoder::open(codec, 64, 64, 30, 500_000).unwrap();
+            let mut encoder =
+                SoftwareEncoder::open(codec, YuvMatrix::Bt709, 64, 64, 30, 500_000).unwrap();
             let mut decoder = SoftwareDecoder::open(codec).unwrap();
             for i in 0..3 {
                 let frame =
@@ -526,16 +548,21 @@ mod tests {
     }
 
     /// Black, white, grey, a mid tone and the primaries come back as they
-    /// went in through every software codec: each converts to the stream's
-    /// colour and the decoder reads that colour back.
+    /// went in through every software codec, in either matrix: each
+    /// converts to the session's colour and the decoder reads that colour
+    /// back. VP8 cannot declare BT.601, so its decoder shows BT.709 only.
     #[test]
     fn software_codecs_show_each_colour_as_it_went_in() {
-        for codec in [
+        for (codec, matrix) in [
             VideoCodec::Vp8,
             VideoCodec::Vp9,
             VideoCodec::Av1,
             VideoCodec::H265,
-        ] {
+        ]
+        .into_iter()
+        .flat_map(|codec| [YuvMatrix::Bt709, YuvMatrix::Bt601].map(move |matrix| (codec, matrix)))
+        .filter(|(codec, matrix)| !(*codec == VideoCodec::Vp8 && *matrix == YuvMatrix::Bt601))
+        {
             for bgra in [
                 [200u8, 120, 40, 255],
                 [0, 0, 0, 255],
@@ -545,7 +572,8 @@ mod tests {
                 [0, 255, 0, 255],
                 [255, 0, 0, 255],
             ] {
-                let mut encoder = SoftwareEncoder::open(codec, 64, 64, 30, 4_000_000).unwrap();
+                let mut encoder =
+                    SoftwareEncoder::open(codec, matrix, 64, 64, 30, 4_000_000).unwrap();
                 let frame = RawFrame::bgra(64, 64, 0, bgra.repeat(4096)).unwrap();
                 let params = EncodeParams {
                     force_keyframe: true,
@@ -566,16 +594,22 @@ mod tests {
                         .iter()
                         .zip(&bgra)
                         .all(|(shown, sent)| shown.abs_diff(*sent) <= 3),
-                    "{codec:?} {bgra:?} came back as {shown:?}"
+                    "{codec:?} {matrix:?} {bgra:?} came back as {shown:?}"
                 );
             }
         }
     }
 
-    /// H.265, AV1 and VP9 streams say they are BT.709 in limited range;
-    /// VP8 has nowhere to say it.
+    /// H.265, AV1 and VP9 streams say they are in the session's matrix in
+    /// limited range; VP8 has nowhere to say it.
     #[test]
     fn software_encoders_declare_their_colour() {
+        for matrix in [YuvMatrix::Bt709, YuvMatrix::Bt601] {
+            software_encoders_declare(matrix);
+        }
+    }
+
+    fn software_encoders_declare(matrix: YuvMatrix) {
         let params = EncodeParams {
             force_keyframe: true,
             recovery: false,
@@ -584,7 +618,7 @@ mod tests {
         };
         let frame = RawFrame::bgra(64, 64, 0, [200u8, 120, 40, 255].repeat(4096)).unwrap();
         let encode = |codec| {
-            SoftwareEncoder::open(codec, 64, 64, 30, 500_000)
+            SoftwareEncoder::open(codec, matrix, 64, 64, 30, 500_000)
                 .unwrap()
                 .encode(&frame, &params)
                 .unwrap()
@@ -595,7 +629,7 @@ mod tests {
             .unwrap()
             .decode(hevc.bytes())
             .unwrap();
-        assert_eq!((picture.matrix, picture.full_range), (1, false));
+        assert_eq!((picture.matrix, picture.full_range), (matrix.code(), false));
 
         let av1 = encode(VideoCodec::Av1);
         let mut decoder = aom::Decoder::new(aom::DecoderConfig::new()).unwrap();
@@ -603,11 +637,17 @@ mod tests {
         let picture = decoder.next_frame().unwrap();
         assert_eq!(
             (picture.matrix_coefficients(), picture.full_range()),
-            (1, false)
+            (u32::from(matrix.code()), false)
         );
 
         for (codec, declared) in [
-            (VideoCodec::Vp9, Some(vpx::ColorSpace::Bt709)),
+            (
+                VideoCodec::Vp9,
+                Some(match matrix {
+                    YuvMatrix::Bt709 => vpx::ColorSpace::Bt709,
+                    YuvMatrix::Bt601 => vpx::ColorSpace::Bt601,
+                }),
+            ),
             (VideoCodec::Vp8, None),
         ] {
             let sample = encode(codec);
@@ -639,9 +679,9 @@ mod tests {
         );
         let full = declared_signal(Some(1), true);
         assert!(full.full_range && full.yuv_matrix() == YuvMatrix::Bt709);
-        assert_eq!(declared_signal(Some(2), false), STREAM_SIGNAL);
-        assert_eq!(declared_signal(None, true), STREAM_SIGNAL);
-        assert_eq!(declared_signal(Some(9), false), STREAM_SIGNAL);
+        assert_eq!(declared_signal(Some(2), false), UNDECLARED_SIGNAL);
+        assert_eq!(declared_signal(None, true), UNDECLARED_SIGNAL);
+        assert_eq!(declared_signal(Some(9), false), UNDECLARED_SIGNAL);
     }
 }
 
@@ -657,6 +697,7 @@ impl<N: VideoEncoder> CodecEncoder<N> {
     /// platform failure is final; any other codec falls back to software.
     pub fn open(
         codec: u8,
+        matrix: YuvMatrix,
         w: u16,
         h: u16,
         fps: u8,
@@ -669,7 +710,7 @@ impl<N: VideoEncoder> CodecEncoder<N> {
             Ok(encoder) => Ok(Self::Native(encoder)),
             Err(error) if codec == vnilink::VideoCodec::H264 => Err(error),
             Err(_) => Ok(Self::Software(SoftwareEncoder::open(
-                codec, w, h, fps, bps,
+                codec, matrix, w, h, fps, bps,
             )?)),
         }
     }

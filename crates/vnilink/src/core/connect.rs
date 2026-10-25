@@ -386,6 +386,7 @@ pub(super) fn start_outgoing(
                     Some(state.desktop_quality_default)
                 },
                 codec: crate::protocol::CODEC_H264,
+                matrix: crate::YuvMatrix::Bt709,
                 separate_cursor: false,
                 files_only,
                 services_only,
@@ -588,6 +589,7 @@ pub(super) async fn establish(
                 files_only,
                 services_only,
                 separate_cursor: cursor_receiver,
+                bt601: 0,
                 hostname: crate::hostname::local_hostname(),
                 os: crate::OperatingSystem::local(),
             },

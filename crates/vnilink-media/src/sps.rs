@@ -1,6 +1,6 @@
 //! Checked SPS geometry and colour shared by decoders and recording, and the
 //! one VUI every VniLink H.264 stream carries.
-use crate::colour::{VideoSignal, STREAM_SIGNAL};
+use crate::colour::{VideoSignal, YuvMatrix};
 use crate::Error;
 /// Visible picture size from a sequence parameter set NAL unit, without the
 /// header byte. The coded size rounds up to macroblocks; the crop rectangle
@@ -36,8 +36,8 @@ pub fn h264_video_signal(sps: &[u8]) -> Result<Option<VideoSignal>, Error> {
     parse(sps).map(|facts| facts.signal)
 }
 
-/// `sps` saying the stream's colour, [`STREAM_SIGNAL`], or `None` when it
-/// cannot be read. Applied to every H.264 keyframe a host sends
+/// `sps` saying the stream's colour, [`VideoSignal::stream`] in `matrix`, or
+/// `None` when it cannot be read. Applied to every H.264 keyframe a host sends
 /// ([`crate::EncodedSample::annex_b`]).
 ///
 /// An SPS with VUI keeps everything its encoder wrote there (timing, HRD,
@@ -50,7 +50,7 @@ pub fn h264_video_signal(sps: &[u8]) -> Result<Option<VideoSignal>, Error> {
 /// the stream's reference frames, as Media Foundation's low-delay SPS says.
 /// Without it a decoder must assume reordering and may hold back a whole
 /// picture buffer.
-pub fn h264_stream_sps(sps: &[u8]) -> Option<Vec<u8>> {
+pub fn h264_stream_sps(sps: &[u8], matrix: YuvMatrix) -> Option<Vec<u8>> {
     let facts = parse(sps).ok()?;
     let payload = rbsp(&sps[1..]);
     let mut out = BitWriter::default();
@@ -60,7 +60,7 @@ pub fn h264_stream_sps(sps: &[u8]) -> Option<Vec<u8>> {
         for _ in 0..vui.signal_flag_at {
             out.bit(bits.bit()?);
         }
-        stream_signal(&mut out);
+        stream_signal(&mut out, matrix);
         // The rest of the VUI as written, through the RBSP stop bit.
         let stop = payload
             .iter()
@@ -80,7 +80,7 @@ pub fn h264_stream_sps(sps: &[u8]) -> Option<Vec<u8>> {
     out.bit(1); // vui_parameters_present_flag
     out.bit(0); // aspect_ratio_info_present_flag
     out.bit(0); // overscan_info_present_flag
-    stream_signal(&mut out);
+    stream_signal(&mut out, matrix);
     // Chroma location, timing, NAL HRD, VCL HRD and picture structure: none.
     for _ in 0..5 {
         out.bit(0);
@@ -100,15 +100,16 @@ pub fn h264_stream_sps(sps: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// `video_signal_type_present_flag` and the fields it introduces, saying
-/// [`STREAM_SIGNAL`].
-fn stream_signal(out: &mut BitWriter) {
+/// [`VideoSignal::stream`] in `matrix`.
+fn stream_signal(out: &mut BitWriter, matrix: YuvMatrix) {
+    let signal = VideoSignal::stream(matrix);
     out.bit(1); // video_signal_type_present_flag
     out.bits(5, 3); // video_format: unspecified
-    out.bit(u32::from(STREAM_SIGNAL.full_range));
+    out.bit(u32::from(signal.full_range));
     out.bit(1); // colour_description_present_flag
-    out.bits(u32::from(STREAM_SIGNAL.primaries), 8);
-    out.bits(u32::from(STREAM_SIGNAL.transfer), 8);
-    out.bits(u32::from(STREAM_SIGNAL.matrix), 8);
+    out.bits(u32::from(signal.primaries), 8);
+    out.bits(u32::from(signal.transfer), 8);
+    out.bits(u32::from(signal.matrix), 8);
 }
 
 fn parse(sps: &[u8]) -> Result<SpsFacts, Error> {
@@ -460,13 +461,31 @@ mod tests {
     }
 
     #[test]
+    fn the_stream_sps_says_the_matrix_it_was_asked_for() {
+        let valid = [0x67, 0x42, 0x00, 0x1e, 0xda, 0x10, 0x99];
+        let stream = h264_stream_sps(&valid, YuvMatrix::Bt601).unwrap();
+        let signal = h264_video_signal(&stream).unwrap().unwrap();
+        assert_eq!(signal, VideoSignal::stream(YuvMatrix::Bt601));
+        assert_eq!(signal.yuv_matrix(), YuvMatrix::Bt601);
+        // Asked again for another matrix, a stream's SPS is rewritten.
+        let again = h264_stream_sps(&stream, YuvMatrix::Bt709).unwrap();
+        assert_eq!(
+            h264_video_signal(&again).unwrap(),
+            Some(VideoSignal::stream(YuvMatrix::Bt709))
+        );
+    }
+
+    #[test]
     fn the_stream_sps_keeps_the_picture_says_its_colour_and_that_nothing_is_reordered() {
         let valid = [0x67, 0x42, 0x00, 0x1e, 0xda, 0x10, 0x99];
         assert_eq!(h264_video_signal(&valid).unwrap(), None);
-        let stream = h264_stream_sps(&valid).unwrap();
+        let stream = h264_stream_sps(&valid, YuvMatrix::Bt709).unwrap();
         // The same sequence, now with VUI that a decoder reads back.
         assert_eq!(h264_picture_size(&stream).unwrap(), (64, 64));
-        assert_eq!(h264_video_signal(&stream).unwrap(), Some(STREAM_SIGNAL));
+        assert_eq!(
+            h264_video_signal(&stream).unwrap(),
+            Some(VideoSignal::stream(YuvMatrix::Bt709))
+        );
         let facts = parse(&stream).unwrap();
         assert!(facts.vui_present);
         assert_eq!(facts.max_num_ref_frames, 1);
@@ -506,12 +525,15 @@ mod tests {
         assert_eq!(bits.bit(), Some(1), "rbsp_stop_one_bit");
         // VideoToolbox's 720p Constrained Baseline SPS, which has no VUI.
         let videotoolbox = [0x27, 0x42, 0xc0, 0x1f, 0xab, 0x40, 0x28, 0x02, 0xdc, 0x80];
-        let vt = h264_stream_sps(&videotoolbox).unwrap();
+        let vt = h264_stream_sps(&videotoolbox, YuvMatrix::Bt709).unwrap();
         assert_eq!(h264_picture_size(&vt).unwrap(), (1280, 720));
-        assert_eq!(h264_video_signal(&vt).unwrap(), Some(STREAM_SIGNAL));
+        assert_eq!(
+            h264_video_signal(&vt).unwrap(),
+            Some(VideoSignal::stream(YuvMatrix::Bt709))
+        );
         // Applying it again changes nothing; an unreadable SPS is refused.
-        assert_eq!(h264_stream_sps(&stream).unwrap(), stream);
-        assert_eq!(h264_stream_sps(&valid[..5]), None);
+        assert_eq!(h264_stream_sps(&stream, YuvMatrix::Bt709).unwrap(), stream);
+        assert_eq!(h264_stream_sps(&valid[..5], YuvMatrix::Bt709), None);
     }
 
     #[test]
@@ -557,9 +579,12 @@ mod tests {
             }
         );
         assert_eq!(signal.yuv_matrix(), crate::YuvMatrix::Bt601);
-        let replaced = h264_stream_sps(&other).unwrap();
+        let replaced = h264_stream_sps(&other, YuvMatrix::Bt709).unwrap();
         assert_eq!(h264_picture_size(&replaced).unwrap(), (64, 64));
-        assert_eq!(h264_video_signal(&replaced).unwrap(), Some(STREAM_SIGNAL));
+        assert_eq!(
+            h264_video_signal(&replaced).unwrap(),
+            Some(VideoSignal::stream(YuvMatrix::Bt709))
+        );
         // Only the signal changed: the aspect ratio and overscan before it
         // and the six flags after it are as written.
         let facts = parse(&replaced).unwrap();
@@ -574,7 +599,10 @@ mod tests {
             assert_eq!(bits.bit(), Some(0));
         }
         assert_eq!(bits.bit(), Some(1), "rbsp_stop_one_bit");
-        assert_eq!(h264_stream_sps(&replaced).unwrap(), replaced);
+        assert_eq!(
+            h264_stream_sps(&replaced, YuvMatrix::Bt709).unwrap(),
+            replaced
+        );
     }
 
     /// NVIDIA's 64x64 SPS through Media Foundation: VUI with timing and HRD.
@@ -589,10 +617,10 @@ mod tests {
         ];
         let before = parse(&nvidia).unwrap();
         assert_eq!(before.size, (64, 64));
-        let stream = h264_stream_sps(&nvidia).unwrap();
+        let stream = h264_stream_sps(&nvidia, YuvMatrix::Bt709).unwrap();
         let after = parse(&stream).unwrap();
         assert_eq!(after.size, (64, 64));
-        assert_eq!(after.signal, Some(STREAM_SIGNAL));
+        assert_eq!(after.signal, Some(VideoSignal::stream(YuvMatrix::Bt709)));
         // Everything after the signal section is the same bits.
         let (old, new) = (rbsp(&nvidia[1..]), rbsp(&stream[1..]));
         let (mut a, mut b) = (Bits::new(&old), Bits::new(&new));
@@ -601,7 +629,7 @@ mod tests {
         while a.at < old.len() * 8 {
             assert_eq!(a.bit(), b.bit(), "bit {} of the original", a.at);
         }
-        assert_eq!(h264_stream_sps(&stream).unwrap(), stream);
+        assert_eq!(h264_stream_sps(&stream, YuvMatrix::Bt709).unwrap(), stream);
     }
 
     #[test]

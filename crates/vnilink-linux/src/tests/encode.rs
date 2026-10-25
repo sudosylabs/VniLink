@@ -5,11 +5,27 @@ use crate::encode::LinuxEncoder;
 #[test]
 fn an_odd_encoder_size_is_rejected() {
     assert!(matches!(
-        LinuxEncoder::open(vnilink::VideoCodec::H264, 63, 64, 30, 500_000, false),
+        LinuxEncoder::open(
+            vnilink::VideoCodec::H264,
+            63,
+            64,
+            30,
+            500_000,
+            false,
+            vnilink::YuvMatrix::Bt709
+        ),
         Err(Error::InvalidFrame("width and height must be even"))
     ));
     assert!(matches!(
-        LinuxEncoder::open(vnilink::VideoCodec::H264, 64, 63, 30, 500_000, true),
+        LinuxEncoder::open(
+            vnilink::VideoCodec::H264,
+            64,
+            63,
+            30,
+            500_000,
+            true,
+            vnilink::YuvMatrix::Bt709
+        ),
         Err(Error::InvalidFrame("width and height must be even"))
     ));
 }
@@ -18,7 +34,15 @@ fn an_odd_encoder_size_is_rejected() {
 #[test]
 fn the_software_encoder_is_not_linked() {
     assert!(matches!(
-        LinuxEncoder::open(vnilink::VideoCodec::H264, 64, 64, 30, 500_000, false),
+        LinuxEncoder::open(
+            vnilink::VideoCodec::H264,
+            64,
+            64,
+            30,
+            500_000,
+            false,
+            vnilink::YuvMatrix::Bt709
+        ),
         Err(Error::Unsupported("VA-API"))
     ));
     let caps = crate::video_codec_caps();
@@ -28,12 +52,19 @@ fn the_software_encoder_is_not_linked() {
 #[cfg(target_os = "linux")]
 #[test]
 fn vaapi_encodes_a_synthetic_picture_when_a_render_node_is_open() {
-    let mut encoder =
-        match LinuxEncoder::open(vnilink::VideoCodec::H264, 64, 64, 30, 500_000, false) {
-            Ok(encoder) => encoder,
-            Err(Error::Unsupported("VA-API H.264")) => return,
-            Err(err) => panic!("VA-API failed to open: {err}"),
-        };
+    let mut encoder = match LinuxEncoder::open(
+        vnilink::VideoCodec::H264,
+        64,
+        64,
+        30,
+        500_000,
+        false,
+        vnilink::YuvMatrix::Bt709,
+    ) {
+        Ok(encoder) => encoder,
+        Err(Error::Unsupported("VA-API H.264")) => return,
+        Err(err) => panic!("VA-API failed to open: {err}"),
+    };
     let params = vnilink_media::EncodeParams {
         force_keyframe: true,
         recovery: false,
@@ -121,12 +152,19 @@ fn assert_red_picture(annex_b: &[u8], width: u16, height: u16) {
 fn higher_bitrate_changes_the_hardware_output_budget() {
     fn encoded_bytes(bitrate: u32) -> Option<usize> {
         let (width, height) = (1280u16, 720u16);
-        let mut encoder =
-            match LinuxEncoder::open(vnilink::VideoCodec::H264, width, height, 60, bitrate, true) {
-                Ok(encoder) => encoder,
-                Err(Error::Unsupported("VA-API H.264")) => return None,
-                Err(error) => panic!("encoder failed: {error}"),
-            };
+        let mut encoder = match LinuxEncoder::open(
+            vnilink::VideoCodec::H264,
+            width,
+            height,
+            60,
+            bitrate,
+            true,
+            vnilink::YuvMatrix::Bt709,
+        ) {
+            Ok(encoder) => encoder,
+            Err(Error::Unsupported("VA-API H.264")) => return None,
+            Err(error) => panic!("encoder failed: {error}"),
+        };
         let mut total = 0;
         for index in 0..30u64 {
             let mut pixels = vec![255; usize::from(width) * usize::from(height) * 4];
@@ -193,7 +231,15 @@ fn encoder_choice_on_this_machine() {
         vnilink::VideoCodec::H265,
         vnilink::VideoCodec::Av1,
     ] {
-        match LinuxEncoder::open(codec, 1280, 720, 30, 4_000_000, false) {
+        match LinuxEncoder::open(
+            codec,
+            1280,
+            720,
+            30,
+            4_000_000,
+            false,
+            vnilink::YuvMatrix::Bt709,
+        ) {
             Ok(encoder) => println!("{codec:?}: {}", encoder.implementation().name),
             Err(error) => println!("{codec:?}: no hardware encoder ({error})"),
         }

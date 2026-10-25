@@ -77,8 +77,15 @@ pub fn video_codec_caps() -> VideoCodecCaps {
 /// Whether the encoder the normal choice opens for `codec` passes
 /// [`decodes`].
 pub(crate) fn round_trips(codec: VideoCodec) -> bool {
-    let Ok(mut encoder) = LinuxEncoder::open(codec, PROBE_SIDE, PROBE_SIDE, 30, 1_000_000, false)
-    else {
+    let Ok(mut encoder) = LinuxEncoder::open(
+        codec,
+        PROBE_SIDE,
+        PROBE_SIDE,
+        30,
+        1_000_000,
+        false,
+        vnilink::YuvMatrix::Bt709,
+    ) else {
         return false;
     };
     decodes(codec, |picture, key| {

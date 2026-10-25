@@ -77,7 +77,7 @@ fn sample(keyframe: bool) -> Result<EncodedSample, Error> {
         parameter_sets: &sets,
         keyframe,
     })?;
-    EncodedSample::annex_b(keyframe, annex)
+    EncodedSample::annex_b(keyframe, annex, vnilink::YuvMatrix::Bt709)
 }
 
 fn solid(width: u16, height: u16, timestamp_us: u64) -> RawFrame {

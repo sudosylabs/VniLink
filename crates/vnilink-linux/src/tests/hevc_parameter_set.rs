@@ -1,3 +1,4 @@
+use vnilink::YuvMatrix;
 use vnilink_media::hevc_units;
 
 use crate::hevc_parameter_set::{parameter_sets, slice_header, Layout};
@@ -40,7 +41,7 @@ fn the_layout_follows_the_drivers_block_sizes_and_turns_on_what_it_allows() {
 
 #[test]
 fn the_sps_names_the_coded_size_and_crops_it_to_the_visible_one() {
-    let sets = parameter_sets(&layout(), 1920, 1080).unwrap();
+    let sets = parameter_sets(&layout(), 1920, 1080, vnilink::YuvMatrix::Bt709).unwrap();
     let units = hevc_units(&sets).unwrap();
     let kinds: Vec<u8> = units.iter().map(|nal| (nal[0] >> 1) & 63).collect();
     assert_eq!(kinds, [32, 33, 34]);
@@ -57,7 +58,7 @@ fn the_sps_names_the_coded_size_and_crops_it_to_the_visible_one() {
     assert_eq!(bits.bit(), Some(1), "conformance window");
     let window: Vec<_> = (0..4).map(|_| bits.ue().unwrap()).collect();
     assert_eq!(window, [0, 0, 0, 4], "8 luma rows off the bottom");
-    assert!(parameter_sets(&layout(), 1921, 1080).is_err());
+    assert!(parameter_sets(&layout(), 1921, 1080, vnilink::YuvMatrix::Bt709).is_err());
 }
 
 /// `slice_type` and the bits after it, from a slice header NAL.
@@ -85,4 +86,41 @@ fn slice_headers_mark_keyframes_and_predicted_pictures_by_the_drivers_rules() {
     // Byte aligned: the last byte ends with the stop bit or later zeros.
     let last = *slice_header(&layout, false, 4095).last().unwrap();
     assert_ne!(last, 0);
+}
+
+/// The SPS says the matrix it was asked for: its last fields are the VUI
+/// with only a video signal type, the extension flag and the stop bit.
+#[test]
+fn the_sps_declares_the_matrix_in_its_vui() {
+    for (matrix, code) in [(YuvMatrix::Bt709, 1u32), (YuvMatrix::Bt601, 6)] {
+        let sets = parameter_sets(&layout(), 1920, 1080, matrix).unwrap();
+        let units = hevc_units(&sets).unwrap();
+        let mut bits: Vec<bool> = rbsp(&units[1][2..])
+            .iter()
+            .flat_map(|byte| (0..8).rev().map(move |at| byte >> at & 1 == 1))
+            .collect();
+        // The stop bit is the last one set; the extension flag is before it.
+        while bits.pop() == Some(false) {}
+        assert_eq!(bits.pop(), Some(false), "no SPS extension");
+        let value = |bits: &[bool]| {
+            bits.iter()
+                .fold(0u32, |all, bit| all << 1 | u32::from(*bit))
+        };
+        // chroma location, neutral chroma, field sequence, frame field info,
+        // default display window, timing and bitstream restriction: absent.
+        let tail = bits.split_off(bits.len() - 7);
+        assert_eq!(value(&tail), 0);
+        let (primaries, transfer, matrix_coefficients) = {
+            let end = bits.len();
+            (
+                value(&bits[end - 24..end - 16]),
+                value(&bits[end - 16..end - 8]),
+                value(&bits[end - 8..]),
+            )
+        };
+        assert_eq!((primaries, transfer, matrix_coefficients), (1, 1, code));
+        // video_signal_type_present, format 5, limited range, description.
+        let head = &bits[bits.len() - 24 - 6..bits.len() - 24];
+        assert_eq!(value(head), 0b1_101_0_1);
+    }
 }

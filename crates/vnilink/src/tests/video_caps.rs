@@ -517,6 +517,7 @@ fn offers_keep_to_what_the_window_decodes_in_hardware_when_it_can() {
         codec,
         hardware,
         chroma444: false,
+        bt601: false,
     };
     assert_eq!(caps.for_window(None), caps, "a window that said nothing");
     // HEVC decodes only in software here, H.264 in hardware: offer H.264.
@@ -572,11 +573,13 @@ fn h264_stays_offered_when_only_another_codec_decodes_in_hardware() {
             codec: VideoCodec::H264,
             hardware: false,
             chroma444: false,
+            bt601: false,
         },
         WindowDecoder {
             codec: VideoCodec::Vp9,
             hardware: true,
             chroma444: false,
+            bt601: false,
         },
     ];
     let shown = viewer.for_window(Some(&window));
@@ -602,6 +605,7 @@ fn a_window_lists_each_codec_once() {
         codec: crate::VideoCodec::H264,
         hardware: true,
         chroma444: false,
+        bt601: false,
     };
     assert!(core.set_window_decoders(vec![decoder, decoder]).is_err());
     core.set_window_decoders(vec![decoder]).unwrap();
@@ -616,6 +620,7 @@ fn a_window_shows_stills_only_when_its_av1_decoder_takes_444() {
         codec,
         hardware: false,
         chroma444,
+        bt601: false,
     };
     assert!(
         !caps.for_window(None).chroma444,
@@ -633,4 +638,32 @@ fn a_window_shows_stills_only_when_its_av1_decoder_takes_444() {
         !caps.for_window(Some(&other)).chroma444,
         "stills are AV1 pictures"
     );
+}
+
+#[test]
+fn a_hello_masks_the_codecs_the_window_shows_as_bt601() {
+    use crate::{VideoCodec, YuvMatrix};
+    let decoder = |codec, bt601| WindowDecoder {
+        codec,
+        hardware: true,
+        chroma444: false,
+        bt601,
+    };
+    let decoders = [
+        decoder(VideoCodec::H264, true),
+        decoder(VideoCodec::H265, true),
+        decoder(VideoCodec::Vp9, false),
+    ];
+    let mask = VideoCodecCaps::bt601_mask(Some(&decoders));
+    assert_eq!(
+        mask,
+        VideoCodec::H264.offer_bit() | VideoCodec::H265.offer_bit()
+    );
+    assert_eq!(VideoCodecCaps::bt601_mask(None), 0);
+    assert_eq!(
+        YuvMatrix::of_codec(mask, VideoCodec::H265),
+        YuvMatrix::Bt601
+    );
+    assert_eq!(YuvMatrix::of_codec(mask, VideoCodec::Vp9), YuvMatrix::Bt709);
+    assert_eq!((YuvMatrix::Bt709.code(), YuvMatrix::Bt601.code()), (1, 6));
 }

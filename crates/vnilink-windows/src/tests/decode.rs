@@ -46,7 +46,7 @@ fn the_decoder_is_unavailable() {
 #[cfg(windows)]
 #[test]
 fn media_foundation_decodes_what_it_encoded() {
-    let mut encoder = WindowsEncoder::open(64, 64, 30, 500_000).unwrap();
+    let mut encoder = WindowsEncoder::open(64, 64, 30, 500_000, vnilink::YuvMatrix::Bt709).unwrap();
     let sample = encoder
         .encode(
             &solid(64, 64, 0, 0, 0, 255),
@@ -96,9 +96,14 @@ fn every_picture_decodes_on_its_own_input() {
     };
     for candidate in unsafe { crate::transform::h264_encoders() } {
         let name = &candidate.name;
-        let Ok(mut encoder) =
-            WindowsEncoder::open_candidate(&candidate, width, height, 30, 8_000_000)
-        else {
+        let Ok(mut encoder) = WindowsEncoder::open_candidate(
+            &candidate,
+            width,
+            height,
+            30,
+            8_000_000,
+            vnilink::YuvMatrix::Bt709,
+        ) else {
             continue;
         };
         let mut decoder = WindowsDecoder::new();
@@ -139,8 +144,14 @@ fn every_picture_decodes_on_its_own_input() {
         drop(encoder);
         for attempt in 0..KEYFRAMES {
             // Some hardware transforms refuse a picture this small.
-            let Ok(mut encoder) = WindowsEncoder::open_candidate(&candidate, 64, 64, 30, 500_000)
-            else {
+            let Ok(mut encoder) = WindowsEncoder::open_candidate(
+                &candidate,
+                64,
+                64,
+                30,
+                500_000,
+                vnilink::YuvMatrix::Bt709,
+            ) else {
                 break;
             };
             let sample = encoder
@@ -176,9 +187,14 @@ fn decode_wait() {
     const PICTURES: u64 = 120;
     let (width, height) = (1920u16, 1080u16);
     for candidate in unsafe { crate::transform::h264_encoders() } {
-        let Ok(mut encoder) =
-            WindowsEncoder::open_candidate(&candidate, width, height, 30, 8_000_000)
-        else {
+        let Ok(mut encoder) = WindowsEncoder::open_candidate(
+            &candidate,
+            width,
+            height,
+            30,
+            8_000_000,
+            vnilink::YuvMatrix::Bt709,
+        ) else {
             println!("{} ({:?}): did not open", candidate.name, candidate.vendor);
             continue;
         };

@@ -54,12 +54,13 @@ pub fn serve_windows(
     stop: &AtomicBool,
 ) -> Result<(), PublishError> {
     let codec = core.host_codec(session_id).unwrap_or(vnilink::CODEC_H264);
+    let matrix = core.host_matrix(session_id).unwrap_or_default();
     vnilink_media::serve_capture(
         capture,
         core,
         session_id,
         quality,
         stop,
-        move |w, h, fps, bps| WindowsEncoder::open_codec(w, h, fps, bps, codec),
+        move |w, h, fps, bps| WindowsEncoder::open_codec(w, h, fps, bps, codec, matrix),
     )
 }

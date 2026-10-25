@@ -2,6 +2,7 @@
 //! sit on the output media type. The pump publishes Annex-B, and a keyframe
 //! has to carry both parameter sets and an IDR.
 
+use vnilink::YuvMatrix;
 use vnilink_media::{parse_annex_b, to_annex_b, AvccAccessUnit, EncodedSample, Error};
 
 /// `sequence_header` is `MF_MT_MPEG_SEQUENCE_HEADER`: Annex-B, or an AVC
@@ -10,6 +11,7 @@ use vnilink_media::{parse_annex_b, to_annex_b, AvccAccessUnit, EncodedSample, Er
 pub(crate) fn h264_access_unit(
     sample: &[u8],
     sequence_header: &[u8],
+    matrix: YuvMatrix,
 ) -> Result<EncodedSample, Error> {
     if sample.is_empty() {
         return Err(Error::InvalidFrame("encoded frame is empty"));
@@ -22,7 +24,7 @@ pub(crate) fn h264_access_unit(
     };
     let parsed = parse_annex_b(&annex_b)?;
     let keyframe = parsed.has_sps() && parsed.has_pps() && parsed.has_idr();
-    EncodedSample::annex_b(keyframe, annex_b)
+    EncodedSample::annex_b(keyframe, annex_b, matrix)
 }
 
 fn avcc_to_annex_b(sample: &[u8], sets: &[Vec<u8>]) -> Result<Vec<u8>, Error> {

@@ -5,7 +5,7 @@
 //! time, so a machine without them only reports NVENC missing. Sessions
 //! run on the primary CUDA context of the GPU the caller names by PCI
 //! address ([`crate::gpu`]), which is made current around every call. Pictures go in as the captured BGRA and NVENC converts them
-//! to the stream's colour, BT.709 limited range, which the stream declares.
+//! to the stream's colour, the session's matrix in limited range, which the stream declares.
 //! Each
 //! picture is encoded synchronously, without B pictures or lookahead, and
 //! a keyframe carries its parameter sets or sequence header. Keyframes come
@@ -39,7 +39,7 @@ use std::ffi::{c_char, c_void, CString};
 use std::sync::{Mutex, OnceLock};
 
 use bindings::*;
-use vnilink::VideoCodec;
+use vnilink::{VideoCodec, YuvMatrix};
 use vnilink_media::{hevc_sample, EncodedSample, Error, RawFrame};
 
 /// The API this module is written against: 12.1, drivers from 530.
@@ -57,9 +57,10 @@ const fn struct_version(version: u32, high: bool) -> u32 {
 const KEYFRAME_INTERVAL: u32 = NVENC_INFINITE_GOPLENGTH;
 
 /// The stream's colour, as [`vnilink_media::bgra_to_nv12`] converts for the
-/// other encoders: BT.709 primaries, transfer and matrix, limited range.
-/// NVENC converts BGRA input with the matrix and range declared here.
-fn stream_colour() -> NV_ENC_CONFIG_H264_VUI_PARAMETERS {
+/// other encoders: BT.709 primaries and transfer, the session's matrix,
+/// limited range. NVENC converts BGRA input with the matrix and range
+/// declared here.
+fn stream_colour(matrix: YuvMatrix) -> NV_ENC_CONFIG_H264_VUI_PARAMETERS {
     NV_ENC_CONFIG_H264_VUI_PARAMETERS {
         videoSignalTypePresentFlag: 1,
         videoFormat: NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED,
@@ -67,7 +68,10 @@ fn stream_colour() -> NV_ENC_CONFIG_H264_VUI_PARAMETERS {
         colourDescriptionPresentFlag: 1,
         colourPrimaries: NV_ENC_VUI_COLOR_PRIMARIES_BT709,
         transferCharacteristics: NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709,
-        colourMatrix: NV_ENC_VUI_MATRIX_COEFFS_BT709,
+        colourMatrix: match matrix {
+            YuvMatrix::Bt709 => NV_ENC_VUI_MATRIX_COEFFS_BT709,
+            YuvMatrix::Bt601 => NV_ENC_VUI_MATRIX_COEFFS_SMPTE170M,
+        },
         ..Default::default()
     }
 }
@@ -249,7 +253,17 @@ macro_rules! call {
 /// Whether this machine's NVIDIA driver loads and the GPU at
 /// `pci_address` (CUDA's first when `None`) has `codec`.
 pub(crate) fn offers(pci_address: Option<&str>, codec: VideoCodec) -> bool {
-    Encoder::open(pci_address, codec, 256, 144, 30, 1_000_000, false).is_ok()
+    Encoder::open(
+        pci_address,
+        codec,
+        256,
+        144,
+        30,
+        1_000_000,
+        false,
+        YuvMatrix::Bt709,
+    )
+    .is_ok()
 }
 
 /// The session initialized before every other open session and closed after
@@ -284,6 +298,8 @@ pub(crate) struct Encoder {
     config: Box<NV_ENC_CONFIG>,
     init: Box<NV_ENC_INITIALIZE_PARAMS>,
     codec: VideoCodec,
+    /// The matrix the session converts and declares.
+    matrix: YuvMatrix,
     width: u16,
     height: u16,
     pictures: u32,
@@ -306,6 +322,7 @@ impl Encoder {
         frame_rate: u8,
         bitrate_bps: u32,
         high: bool,
+        matrix: YuvMatrix,
     ) -> Result<Self, Error> {
         // Held while the session opens, so no other session is initialized
         // between the anchor and this one.
@@ -319,6 +336,7 @@ impl Encoder {
                 30,
                 1_000_000,
                 false,
+                YuvMatrix::Bt709,
             )?);
         }
         match Self::open_session(
@@ -329,6 +347,7 @@ impl Encoder {
             frame_rate,
             bitrate_bps,
             high,
+            matrix,
         ) {
             Ok(mut encoder) => {
                 encoder.anchored = true;
@@ -353,6 +372,7 @@ impl Encoder {
         frame_rate: u8,
         bitrate_bps: u32,
         high: bool,
+        matrix: YuvMatrix,
     ) -> Result<Self, Error> {
         let api = api().ok_or(Error::Unsupported("NVENC"))?;
         let encode_guid = match codec {
@@ -387,6 +407,7 @@ impl Encoder {
             config: Box::default(),
             init: Box::default(),
             codec,
+            matrix,
             width,
             height,
             pictures: 0,
@@ -447,14 +468,14 @@ impl Encoder {
                     let h264 = &mut config.encodeCodecConfig.h264Config;
                     h264.idrPeriod = KEYFRAME_INTERVAL;
                     h264.set_repeatSPSPPS(1);
-                    h264.h264VUIParameters = stream_colour();
+                    h264.h264VUIParameters = stream_colour(self.matrix);
                 }
                 VideoCodec::H265 => {
                     config.profileGUID = guid::HEVC_PROFILE_MAIN;
                     let hevc = &mut config.encodeCodecConfig.hevcConfig;
                     hevc.idrPeriod = KEYFRAME_INTERVAL;
                     hevc.set_repeatSPSPPS(1);
-                    hevc.hevcVUIParameters = stream_colour();
+                    hevc.hevcVUIParameters = stream_colour(self.matrix);
                     hevc.set_chromaFormatIDC(1);
                     hevc.set_pixelBitDepthMinus8(0);
                 }
@@ -466,7 +487,7 @@ impl Encoder {
                     av1.set_chromaFormatIDC(1);
                     av1.set_inputPixelBitDepthMinus8(0);
                     av1.set_pixelBitDepthMinus8(0);
-                    let colour = stream_colour();
+                    let colour = stream_colour(self.matrix);
                     av1.colorPrimaries = colour.colourPrimaries;
                     av1.transferCharacteristics = colour.transferCharacteristics;
                     av1.matrixCoefficients = colour.colourMatrix;
@@ -655,7 +676,7 @@ impl Encoder {
             NV_ENC_PIC_TYPE_IDR | NV_ENC_PIC_TYPE_I
         );
         match self.codec {
-            VideoCodec::H264 => EncodedSample::annex_b(key, bytes).map_err(rejected),
+            VideoCodec::H264 => EncodedSample::annex_b(key, bytes, self.matrix).map_err(rejected),
             VideoCodec::H265 => hevc_sample(bytes),
             _ => EncodedSample::packet(VideoCodec::Av1, key, bytes),
         }

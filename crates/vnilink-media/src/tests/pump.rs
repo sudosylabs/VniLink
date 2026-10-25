@@ -85,7 +85,7 @@ fn sample(keyframe: bool) -> Result<EncodedSample, Error> {
         parameter_sets: &sets,
         keyframe,
     })?;
-    EncodedSample::annex_b(keyframe, annex)
+    EncodedSample::annex_b(keyframe, annex, vnilink::YuvMatrix::Bt709)
 }
 
 fn picture(width: u16, height: u16, timestamp_us: u64) -> RawFrame {
@@ -383,7 +383,7 @@ fn an_idr_without_parameter_sets_is_not_a_sample() {
     })
     .unwrap();
     assert!(matches!(
-        EncodedSample::annex_b(true, annex),
+        EncodedSample::annex_b(true, annex, vnilink::YuvMatrix::Bt709),
         Err(Error::EncodeRejected(
             "a keyframe needs SPS, PPS, and an IDR"
         ))

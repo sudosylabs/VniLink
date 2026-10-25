@@ -47,13 +47,14 @@ pub fn serve_stream(
     stop: &AtomicBool,
 ) -> Result<(), PublishError> {
     let codec = core.host_codec(session_id).unwrap_or(vnilink::CODEC_H264);
+    let matrix = core.host_matrix(session_id).unwrap_or_default();
     vnilink_media::serve_capture(
         capture,
         core,
         session_id,
         quality,
         stop,
-        move |w, h, fps, bps| MacVideoEncoder::open(w, h, fps, bps, codec),
+        move |w, h, fps, bps| MacVideoEncoder::open(w, h, fps, bps, codec, matrix),
     )
 }
 
@@ -92,7 +93,7 @@ pub fn serve_shared(
         },
         |target, width, height, fps, bps| {
             let codec = target.codec;
-            MacVideoEncoder::open(width, height, fps, bps, codec)
+            MacVideoEncoder::open(width, height, fps, bps, codec, target.matrix)
         },
     )
 }
@@ -149,13 +150,13 @@ pub fn serve_desktop(
     stop: &AtomicBool,
 ) -> Result<(), PublishError> {
     let info = core.hosted_desktop_info(service_id, generation)?;
-    let codec = info.codec;
+    let (codec, matrix) = (info.codec, info.matrix);
     vnilink_media::serve_desktop_capture(
         capture,
         core,
         service_id,
         generation,
         stop,
-        move |w, h, fps, bps| MacVideoEncoder::open(w, h, fps, bps, codec),
+        move |w, h, fps, bps| MacVideoEncoder::open(w, h, fps, bps, codec, matrix),
     )
 }

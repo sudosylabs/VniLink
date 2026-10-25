@@ -13,7 +13,13 @@ use crate::host::HostSession;
 fn the_host_encoder_is_unavailable() {
     let quality = Quality::new(500, 30, 64, 64).unwrap();
     assert!(matches!(
-        HostSession::open(64, 64, quality, WindowsEncoder::open),
+        HostSession::open(64, 64, quality, |w, h, fps, bps| WindowsEncoder::open(
+            w,
+            h,
+            fps,
+            bps,
+            vnilink::YuvMatrix::Bt709
+        )),
         Err(Error::Unsupported("Media Foundation H.264"))
     ));
 }
@@ -24,7 +30,10 @@ fn the_platform_encoder_plugs_into_the_generic_session() {
     use vnilink::CoreEvent;
 
     let quality = Quality::new(500, 30, 64, 64).unwrap();
-    let mut session = HostSession::open(128, 128, quality, WindowsEncoder::open).unwrap();
+    let mut session = HostSession::open(128, 128, quality, |w, h, fps, bps| {
+        WindowsEncoder::open(w, h, fps, bps, vnilink::YuvMatrix::Bt709)
+    })
+    .unwrap();
     assert_eq!(session.capture_size(), (128, 128));
     assert_eq!(session.encoded_size(), (64, 64));
     let mut sink = MemorySink::default();

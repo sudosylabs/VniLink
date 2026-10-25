@@ -334,6 +334,7 @@ pub(super) async fn handle_host_request(
             files_only,
             services_only,
             separate_cursor: cursor_receiver,
+            bt601,
             hostname: hello_hostname,
             os: hello_os,
         } => {
@@ -414,6 +415,10 @@ pub(super) async fn handle_host_request(
                     let codec_id = agreed_codec
                         .map(|agreed| agreed.codec)
                         .unwrap_or(crate::protocol::CODEC_H264);
+                    let matrix = crate::VideoCodec::from_wire_id(codec_id)
+                        .map_or(crate::YuvMatrix::Bt709, |agreed| {
+                            crate::YuvMatrix::of_codec(bt601, agreed)
+                        });
                     let separate_cursor = !files_only
                         && cursor_receiver
                         && lock(&shared.capture)
@@ -425,6 +430,7 @@ pub(super) async fn handle_host_request(
                         stop,
                         Some(agreed),
                         codec_id,
+                        matrix,
                         separate_cursor,
                         files_only,
                         services_only,
@@ -593,6 +599,7 @@ pub(super) fn register_incoming(
     stop: &tokio::sync::watch::Sender<bool>,
     quality: Option<Quality>,
     codec: u8,
+    matrix: crate::YuvMatrix,
     separate_cursor: bool,
     files_only: bool,
     services_only: bool,
@@ -659,6 +666,7 @@ pub(super) fn register_incoming(
             peer_key: *peer.as_bytes(),
             quality,
             codec,
+            matrix,
             separate_cursor: separate_cursor && !files_only,
             files_only,
             services_only,

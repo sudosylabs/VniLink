@@ -14,8 +14,10 @@
 //! Microsoft's decoder it loses the pictures after it until a keyframe.
 
 use vnilink::EncodedFrame;
+#[cfg(windows)]
+use vnilink::YuvMatrix;
 use vnilink_media::{
-    h264_video_signal, parse_annex_b, Error, RawFrame, VideoDecoder, STREAM_SIGNAL,
+    h264_video_signal, parse_annex_b, Error, RawFrame, VideoDecoder, UNDECLARED_SIGNAL,
 };
 #[cfg(windows)]
 use vnilink_media::{nv12_to_bgra, VideoSignal};
@@ -132,7 +134,7 @@ impl WindowsDecoder {
                 "a keyframe needs SPS, PPS, and an IDR",
             ))?;
         let (width, height) = picture_size(sps)?;
-        let signal = h264_video_signal(sps)?.unwrap_or(STREAM_SIGNAL);
+        let signal = h264_video_signal(sps)?.unwrap_or(UNDECLARED_SIGNAL);
         #[cfg(windows)]
         {
             let transform = open_transform(width, height)
@@ -176,9 +178,9 @@ fn open_transform(width: u16, height: u16) -> windows::core::Result<IMFTransform
         // The parameter sets travel in band on keyframes, so the input type
         // carries no sequence-header blob.
         let rate = 30u32;
-        let input = video_type(MFVideoFormat_H264, width, height, rate)?;
+        let input = video_type(MFVideoFormat_H264, width, height, rate, YuvMatrix::Bt709)?;
         transform.SetInputType(0, &input, 0)?;
-        let output = video_type(MFVideoFormat_NV12, width, height, rate)?;
+        let output = video_type(MFVideoFormat_NV12, width, height, rate, YuvMatrix::Bt709)?;
         transform.SetOutputType(0, &output, 0)?;
         transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
         transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;

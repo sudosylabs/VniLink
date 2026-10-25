@@ -1,5 +1,5 @@
-//! BGRA to BT.709 limited-range NV12, the stream's colour
-//! ([`crate::STREAM_SIGNAL`]), and back from NV12 in the colour a stream
+//! BGRA to limited-range NV12 in the session's matrix
+//! ([`crate::VideoSignal::stream`]), and back from NV12 in the colour a stream
 //! says. Media Foundation and VA-API take this layout. The software codecs
 //! take and return planar I420 through the same conversions.
 //! The planes are screen content: do not log them.
@@ -56,7 +56,7 @@ impl fmt::Debug for Nv12 {
 
 /// Convert NV12 in the colour `signal` names to tightly packed BGRA.
 ///
-/// With [`crate::STREAM_SIGNAL`] this is the inverse of [`bgra_to_nv12`]
+/// With [`crate::VideoSignal::stream`] this is the inverse of [`bgra_to_nv12`]
 /// within integer rounding: each channel lands within 2 of the original.
 /// Width and height must be even.
 pub fn nv12_to_bgra(
@@ -167,24 +167,19 @@ where
     bgra
 }
 
-/// Convert BGRA to BT.709 limited-range NV12, the stream's colour.
+/// Convert BGRA to limited-range NV12 in the session's `matrix`.
 ///
 /// Width and height must be even. Chroma is the average of each 2 by 2 block.
-pub fn bgra_to_nv12(frame: &RawFrame) -> Result<Nv12, Error> {
+pub fn bgra_to_nv12(frame: &RawFrame, matrix: YuvMatrix) -> Result<Nv12, Error> {
     if frame.width() % 2 != 0 || frame.height() % 2 != 0 {
         return Err(Error::InvalidFrame("NV12 width and height must be even"));
     }
     let width = usize::from(frame.width());
     let mut y = vec![0u8; width * usize::from(frame.height())];
     let mut uv = vec![0u8; y.len() / 2];
-    bgra_to_yuv420(
-        frame,
-        ToYuv::of(YuvMatrix::Bt709),
-        &mut y,
-        |row, column, cb, cr| {
-            uv[row * width + column * 2..][..2].copy_from_slice(&[cb, cr]);
-        },
-    );
+    bgra_to_yuv420(frame, ToYuv::of(matrix), &mut y, |row, column, cb, cr| {
+        uv[row * width + column * 2..][..2].copy_from_slice(&[cb, cr]);
+    });
     Ok(Nv12 {
         width: frame.width(),
         height: frame.height(),
@@ -256,9 +251,9 @@ fn bgra_to_yuv420(
     }
 }
 
-/// BT.709 limited-range Y'CbCr of one pixel, the stream's colour.
-pub(crate) fn yuv(red: u8, green: u8, blue: u8) -> (u8, u8, u8) {
-    ToYuv::of(YuvMatrix::Bt709).convert(red, green, blue)
+/// Limited-range Y'CbCr of one pixel in `matrix`.
+pub(crate) fn yuv(matrix: YuvMatrix, red: u8, green: u8, blue: u8) -> (u8, u8, u8) {
+    ToYuv::of(matrix).convert(red, green, blue)
 }
 
 fn clamp(value: i32) -> u8 {

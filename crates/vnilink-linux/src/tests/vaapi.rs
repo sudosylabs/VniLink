@@ -63,10 +63,19 @@ fn h265_from_a_node_that_offers_it_decodes_in_software() {
     let Some(node) = crate::vaapi::offering(VaCodec::H265) else {
         return;
     };
-    let session =
-        Session::open(&node, VaCodec::H265, PROBE_SIDE, PROBE_SIDE, 30, 1_000_000).unwrap();
+    let session = Session::open(
+        &node,
+        VaCodec::H265,
+        PROBE_SIDE,
+        PROBE_SIDE,
+        30,
+        1_000_000,
+        vnilink::YuvMatrix::Bt709,
+    )
+    .unwrap();
     assert!(decodes(vnilink::VideoCodec::H265, |picture, key| {
-        let (y, uv) = vnilink_media::bgra_to_nv12(picture)?.into_planes();
+        let (y, uv) =
+            vnilink_media::bgra_to_nv12(picture, vnilink::YuvMatrix::Bt709)?.into_planes();
         session.encode(Input::Nv12 { y, uv }, key)
     }));
     assert!(crate::video_codec_caps().additional.iter().any(|codec| {
@@ -75,10 +84,18 @@ fn h265_from_a_node_that_offers_it_decodes_in_software() {
 }
 
 /// The GPU converts to the stream's colour as the CPU does
-/// ([`vnilink_media::bgra_to_nv12`]): flat pictures, black, white and the
-/// primaries included, decode to the same pixels either way.
+/// ([`vnilink_media::bgra_to_nv12`]), in either matrix: flat pictures,
+/// black, white and the primaries included, decode to the same pixels either
+/// way, the SPS saying the matrix.
 #[test]
 fn gpu_conversion_matches_the_cpu_conversion() {
+    use vnilink::YuvMatrix;
+    for matrix in [YuvMatrix::Bt709, YuvMatrix::Bt601] {
+        gpu_conversion_matches_the_cpu_conversion_in(matrix);
+    }
+}
+
+fn gpu_conversion_matches_the_cpu_conversion_in(matrix: vnilink::YuvMatrix) {
     use vnilink_media::{RawFrame, SoftwareDecoder, VideoDecoder};
 
     use crate::codecs::PROBE_SIDE;
@@ -87,8 +104,16 @@ fn gpu_conversion_matches_the_cpu_conversion() {
     let Some(node) = crate::vaapi::offering(VaCodec::H265) else {
         return;
     };
-    let session =
-        Session::open(&node, VaCodec::H265, PROBE_SIDE, PROBE_SIDE, 30, 8_000_000).unwrap();
+    let session = Session::open(
+        &node,
+        VaCodec::H265,
+        PROBE_SIDE,
+        PROBE_SIDE,
+        30,
+        8_000_000,
+        matrix,
+    )
+    .unwrap();
     if !session.converts() {
         return;
     }
@@ -116,13 +141,15 @@ fn gpu_conversion_matches_the_cpu_conversion() {
     ] {
         let picture = RawFrame::bgra(PROBE_SIDE, PROBE_SIDE, 0, bgra.repeat(side * side)).unwrap();
         let gpu = shown(Input::Bgra(picture.clone()));
-        let (y, uv) = vnilink_media::bgra_to_nv12(&picture).unwrap().into_planes();
+        let (y, uv) = vnilink_media::bgra_to_nv12(&picture, matrix)
+            .unwrap()
+            .into_planes();
         let cpu = shown(Input::Nv12 { y, uv });
         assert!(
             gpu.iter()
                 .zip(&cpu)
                 .all(|(gpu, cpu)| gpu.abs_diff(*cpu) <= 2),
-            "{bgra:?} decoded as {gpu:?} from the GPU, {cpu:?} from the CPU"
+            "{matrix:?} {bgra:?} decoded as {gpu:?} from the GPU, {cpu:?} from the CPU"
         );
     }
 }
@@ -159,7 +186,16 @@ fn keyframes_come_only_when_asked_and_a_retune_makes_none() {
     let Some(node) = crate::vaapi::offering(codec) else {
         return;
     };
-    let session = Session::open(&node, codec, PROBE_SIDE, PROBE_SIDE, 30, 4_000_000).unwrap();
+    let session = Session::open(
+        &node,
+        codec,
+        PROBE_SIDE,
+        PROBE_SIDE,
+        30,
+        4_000_000,
+        vnilink::YuvMatrix::Bt709,
+    )
+    .unwrap();
     let side = usize::from(PROBE_SIDE);
     let moving = |index: usize| {
         let pixels = (0..side * side)
@@ -171,7 +207,9 @@ fn keyframes_come_only_when_asked_and_a_retune_makes_none() {
             .collect();
         let picture =
             vnilink_media::RawFrame::bgra(PROBE_SIDE, PROBE_SIDE, index as u64, pixels).unwrap();
-        let (y, uv) = vnilink_media::bgra_to_nv12(&picture).unwrap().into_planes();
+        let (y, uv) = vnilink_media::bgra_to_nv12(&picture, vnilink::YuvMatrix::Bt709)
+            .unwrap()
+            .into_planes();
         Input::Nv12 { y, uv }
     };
     let mut sizes = Vec::new();

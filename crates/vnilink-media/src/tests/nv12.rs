@@ -1,4 +1,4 @@
-use crate::colour::{VideoSignal, STREAM_SIGNAL};
+use crate::colour::{VideoSignal, YuvMatrix};
 use crate::error::Error;
 use crate::frame::RawFrame;
 use crate::nv12::{bgra_to_nv12, nv12_to_bgra};
@@ -14,58 +14,91 @@ fn solid(width: u16, height: u16, pixel: [u8; 4]) -> RawFrame {
 #[test]
 fn nv12_uses_limited_range_and_rejects_odd_sizes() {
     let black = solid(2, 2, [0, 0, 0, 255]);
-    let nv12 = bgra_to_nv12(&black).unwrap();
+    let nv12 = bgra_to_nv12(&black, YuvMatrix::Bt709).unwrap();
     assert!(nv12.y_plane().iter().all(|sample| *sample == 16));
     assert!(nv12.uv_plane().iter().all(|sample| *sample == 128));
     let white = solid(2, 2, [255, 255, 255, 255]);
-    let nv12 = bgra_to_nv12(&white).unwrap();
+    let nv12 = bgra_to_nv12(&white, YuvMatrix::Bt709).unwrap();
     assert!(nv12.y_plane().iter().all(|sample| *sample == 235));
     assert_eq!(nv12.uv_plane().len(), 2);
     let rendered = format!("{nv12:?}");
     assert!(!rendered.contains("235"));
     // BT.709: red is Y' 63, Cb 102, Cr 240; grey has no chroma.
-    let red = bgra_to_nv12(&solid(2, 2, [0, 0, 255, 255])).unwrap();
+    let red = bgra_to_nv12(&solid(2, 2, [0, 0, 255, 255]), YuvMatrix::Bt709).unwrap();
     assert!(red.y_plane().iter().all(|sample| *sample == 63));
     assert_eq!(red.uv_plane(), [102, 240]);
-    let grey = bgra_to_nv12(&solid(2, 2, [90, 90, 90, 255])).unwrap();
+    let grey = bgra_to_nv12(&solid(2, 2, [90, 90, 90, 255]), YuvMatrix::Bt709).unwrap();
     assert_eq!(grey.uv_plane(), [128, 128]);
     assert!(matches!(
-        bgra_to_nv12(&solid(3, 2, [0, 0, 0, 255])),
+        bgra_to_nv12(&solid(3, 2, [0, 0, 0, 255]), YuvMatrix::Bt709),
         Err(Error::InvalidFrame("NV12 width and height must be even"))
     ));
 }
 
 #[test]
 fn nv12_returns_within_rounding_of_the_original_picture() {
-    for pixel in [
-        [255, 0, 0, 255],
-        [0, 255, 0, 255],
-        [0, 0, 255, 255],
-        [13, 77, 200, 255],
-    ] {
+    for (matrix, pixel) in [YuvMatrix::Bt709, YuvMatrix::Bt601]
+        .into_iter()
+        .flat_map(|matrix| {
+            [
+                [255, 0, 0, 255],
+                [0, 255, 0, 255],
+                [0, 0, 255, 255],
+                [13, 77, 200, 255],
+            ]
+            .map(move |pixel| (matrix, pixel))
+        })
+    {
         let frame = solid(4, 4, pixel);
-        let nv12 = bgra_to_nv12(&frame).unwrap();
-        let back = nv12_to_bgra(4, 4, 10, nv12.y_plane(), nv12.uv_plane(), STREAM_SIGNAL).unwrap();
+        let nv12 = bgra_to_nv12(&frame, matrix).unwrap();
+        let back = nv12_to_bgra(
+            4,
+            4,
+            10,
+            nv12.y_plane(),
+            nv12.uv_plane(),
+            VideoSignal::stream(matrix),
+        )
+        .unwrap();
         assert_eq!((back.width(), back.height()), (4, 4));
         for y in 0..4 {
-            let row = back.row(y);
-            for chunk in row.chunks_exact(4) {
+            for chunk in back.row(y).chunks_exact(4) {
                 for channel in 0..3 {
                     let drift = (i16::from(chunk[channel]) - i16::from(pixel[channel])).abs();
-                    assert!(drift <= 2, "channel drifted by {drift}");
+                    assert!(drift <= 2, "{matrix:?} channel drifted by {drift}");
                 }
                 assert_eq!(chunk[3], 255);
             }
         }
     }
+    let bt709 = VideoSignal::stream(YuvMatrix::Bt709);
     assert!(matches!(
-        nv12_to_bgra(2, 2, 0, &[0; 3], &[0; 2], STREAM_SIGNAL),
+        nv12_to_bgra(2, 2, 0, &[0; 3], &[0; 2], bt709),
         Err(Error::InvalidFrame("frame is missing pixels"))
     ));
     assert!(matches!(
-        nv12_to_bgra(3, 2, 0, &[0; 12], &[0; 6], STREAM_SIGNAL),
+        nv12_to_bgra(3, 2, 0, &[0; 12], &[0; 6], bt709),
         Err(Error::InvalidFrame("NV12 width and height must be even"))
     ));
+}
+
+#[test]
+fn nv12_in_one_matrix_read_as_the_other_is_visibly_wrong() {
+    let frame = solid(4, 4, [40, 120, 200, 255]);
+    let nv12 = bgra_to_nv12(&frame, YuvMatrix::Bt601).unwrap();
+    let wrong = nv12_to_bgra(
+        4,
+        4,
+        0,
+        nv12.y_plane(),
+        nv12.uv_plane(),
+        VideoSignal::stream(YuvMatrix::Bt709),
+    )
+    .unwrap();
+    assert!(wrong.row(0)[..3]
+        .iter()
+        .zip(&frame.row(0)[..3])
+        .any(|(a, b)| a.abs_diff(*b) > 6));
 }
 
 #[test]
@@ -85,7 +118,7 @@ fn nv12_matches_scalar_conversion_for_varied_pixels_and_row_padding() {
             }
         }
         let frame = RawFrame::with_stride(width as u16, height as u16, stride, 0, pixels).unwrap();
-        let actual = bgra_to_nv12(&frame).unwrap();
+        let actual = bgra_to_nv12(&frame, YuvMatrix::Bt709).unwrap();
         let reference = |x: usize, y: usize| {
             let pixel = &frame.row(y as u16)[x * 4..][..4];
             let (r, g, b) = (

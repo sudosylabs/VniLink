@@ -7,7 +7,12 @@ fn a_length_prefixed_idr_gains_parameter_sets() {
     let sps = [0x67, 0x42, 0x00, 0x1e, 0xda, 0x10, 0x99];
     let pps = [0x68, 0xce];
     let header = avc_decoder_config(&sps, &pps);
-    let sample = h264_access_unit(&length_prefixed(&[0x65, 0x88]), &header).unwrap();
+    let sample = h264_access_unit(
+        &length_prefixed(&[0x65, 0x88]),
+        &header,
+        vnilink::YuvMatrix::Bt709,
+    )
+    .unwrap();
     assert!(sample.keyframe());
     let parsed = parse_annex_b(sample.bytes()).unwrap();
     let types: Vec<u8> = parsed.units().iter().map(|unit| unit.nal_type).collect();
@@ -19,7 +24,12 @@ fn an_annex_b_sequence_header_is_prefixed_onto_an_idr() {
     let header = [
         0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1e, 0xda, 0x10, 0x99, 0, 0, 0, 1, 0x68, 0xce,
     ];
-    let sample = h264_access_unit(&length_prefixed(&[0x65, 0x10]), &header).unwrap();
+    let sample = h264_access_unit(
+        &length_prefixed(&[0x65, 0x10]),
+        &header,
+        vnilink::YuvMatrix::Bt709,
+    )
+    .unwrap();
     assert!(sample.keyframe());
     let parsed = parse_annex_b(sample.bytes()).unwrap();
     assert!(parsed.has_sps() && parsed.has_pps() && parsed.has_idr());
@@ -27,7 +37,12 @@ fn an_annex_b_sequence_header_is_prefixed_onto_an_idr() {
 
 #[test]
 fn a_predicted_frame_does_not_repeat_parameter_sets() {
-    let sample = h264_access_unit(&length_prefixed(&[0x41, 0x9a]), &[]).unwrap();
+    let sample = h264_access_unit(
+        &length_prefixed(&[0x41, 0x9a]),
+        &[],
+        vnilink::YuvMatrix::Bt709,
+    )
+    .unwrap();
     assert!(!sample.keyframe());
     let parsed = parse_annex_b(sample.bytes()).unwrap();
     assert_eq!(parsed.units().len(), 1);
@@ -37,7 +52,11 @@ fn a_predicted_frame_does_not_repeat_parameter_sets() {
 #[test]
 fn an_idr_without_parameter_sets_is_rejected() {
     assert!(matches!(
-        h264_access_unit(&length_prefixed(&[0x65, 0x88]), &[]),
+        h264_access_unit(
+            &length_prefixed(&[0x65, 0x88]),
+            &[],
+            vnilink::YuvMatrix::Bt709
+        ),
         Err(Error::EncodeRejected(
             "a keyframe needs SPS, PPS, and an IDR"
         ))
@@ -50,7 +69,7 @@ fn an_annex_b_keyframe_is_kept() {
         0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1e, 0xda, 0x10, 0x99, 0, 0, 0, 1, 0x68, 0xce, 0, 0, 0, 1,
         0x65, 0x88,
     ];
-    let sample = h264_access_unit(&bytes, &[]).unwrap();
+    let sample = h264_access_unit(&bytes, &[], vnilink::YuvMatrix::Bt709).unwrap();
     assert!(sample.keyframe());
 }
 

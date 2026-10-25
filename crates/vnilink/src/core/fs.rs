@@ -956,6 +956,7 @@ mod listing_tests {
             peer_key: STALE_PEER,
             quality: None,
             codec: 0,
+            matrix: crate::YuvMatrix::Bt709,
             separate_cursor: false,
             files_only: true,
             services_only: false,

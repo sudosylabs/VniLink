@@ -1,8 +1,8 @@
 //! BGRA to NV12 on the GPU, for the encoder on the same node.
 //!
-//! The video processor writes the stream's colour (BT.709, limited range:
-//! [`vnilink_media::colour::STREAM_SIGNAL`]) straight into the encoder's
-//! picture, so the host does not convert on the CPU. Capture is sRGB, full
+//! The video processor writes the stream's colour (the session's matrix,
+//! limited range: [`vnilink_media::VideoSignal::stream`]) straight into the
+//! encoder's picture, so the host does not convert on the CPU. Capture is sRGB, full
 //! range. A node without a video processor, or one that refuses BGRX, keeps
 //! the CPU conversion.
 //!
@@ -23,6 +23,7 @@ use libva::{
     BufferType, Display, Image, Picture, ProcColorProperties, ProcPipelineParameterBuffer, Surface,
     VAEntrypoint, VAProfile, VARectangle,
 };
+use vnilink::YuvMatrix;
 use vnilink_media::{scale_bgra, Error, RawFrame};
 
 use crate::gpu_picture::{self, GpuPicture, Prime};
@@ -32,14 +33,15 @@ const FILTER_SCALING_HQ: u32 = 0x0000_0200;
 
 /// `VAProcColorStandardType` in `va_vpp.h`.
 const STANDARD_BT709: u8 = libva::_VAProcColorStandardType_VAProcColorStandardBT709 as u8;
+const STANDARD_BT601: u8 = libva::_VAProcColorStandardType_VAProcColorStandardBT601 as u8;
 const STANDARD_SRGB: u8 = libva::_VAProcColorStandardType_VAProcColorStandardSRGB as u8;
-/// H.273 code points: BT.709 primaries, the sRGB and BT.709 transfers and
-/// the BT.709 matrix. RGB has the identity matrix.
+/// H.273 code points: BT.709 primaries, the sRGB and BT.709 transfers. RGB
+/// has the identity matrix; the output matrix is the session's
+/// ([`YuvMatrix::code`]).
 const PRIMARIES_BT709: u8 = 1;
 const TRANSFER_SRGB: u8 = 13;
 const TRANSFER_BT709: u8 = 1;
 const MATRIX_RGB: u8 = 0;
-const MATRIX_BT709: u8 = 1;
 
 pub(super) struct Converter {
     display: Arc<Display>,
@@ -53,6 +55,8 @@ pub(super) struct Converter {
     width: u32,
     height: u32,
     coded: (u32, u32),
+    /// The matrix written into the encoder's pictures.
+    matrix: YuvMatrix,
 }
 
 impl Converter {
@@ -65,6 +69,7 @@ impl Converter {
         height: u32,
         coded: (u32, u32),
         targets: &Vec<Surface<()>>,
+        matrix: YuvMatrix,
     ) -> Option<Self> {
         let entrypoints = display
             .query_config_entrypoints(VAProfile::VAProfileNone)
@@ -108,6 +113,7 @@ impl Converter {
             width,
             height,
             coded,
+            matrix,
         })
     }
 
@@ -190,7 +196,8 @@ impl Converter {
     }
 
     /// The processor's conversion of `source` into `target`: sRGB, full range
-    /// in; BT.709, limited range out, into `region` when there is one.
+    /// in; the session's matrix, limited range out, into `region` when there
+    /// is one.
     fn process(
         &self,
         source: libva::VASurfaceID,
@@ -205,7 +212,10 @@ impl Converter {
             STANDARD_SRGB,
             region,
             0xff00_0000,
-            STANDARD_BT709,
+            match self.matrix {
+                YuvMatrix::Bt709 => STANDARD_BT709,
+                YuvMatrix::Bt601 => STANDARD_BT601,
+            },
             0,
             filter_flags,
             None,
@@ -229,7 +239,7 @@ impl Converter {
                 libva::VA_SOURCE_RANGE_REDUCED as u8,
                 PRIMARIES_BT709,
                 TRANSFER_BT709,
-                MATRIX_BT709,
+                self.matrix.code(),
             ),
             0,
             None,

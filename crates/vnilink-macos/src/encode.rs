@@ -25,6 +25,7 @@ use apple_cf::iosurface::IOSurface;
 use videotoolbox::compression::{CompressionSession, FrameProperties, ProfileLevel};
 #[cfg(target_os = "macos")]
 use videotoolbox::session::Codec;
+use vnilink::YuvMatrix;
 #[cfg(target_os = "macos")]
 use vnilink_media::RecoveryQp;
 use vnilink_media::{
@@ -50,6 +51,9 @@ enum Scaler {
 
 pub struct MacEncoder {
     codec: vnilink::VideoCodec,
+    /// The matrix the session converts and declares.
+    #[cfg(target_os = "macos")]
+    matrix: YuvMatrix,
     #[cfg(target_os = "macos")]
     session: CompressionSession,
     /// VideoToolbox opened the session requiring a hardware encoder.
@@ -103,6 +107,7 @@ impl MacEncoder {
         frame_rate: u8,
         bitrate_bps: u32,
         high: bool,
+        matrix: YuvMatrix,
     ) -> Result<Self, Error> {
         Self::open_codec(
             width,
@@ -111,6 +116,7 @@ impl MacEncoder {
             bitrate_bps,
             vnilink::VideoCodec::H264,
             high,
+            matrix,
         )
     }
     pub fn open_codec(
@@ -120,6 +126,7 @@ impl MacEncoder {
         bitrate_bps: u32,
         codec: vnilink::VideoCodec,
         high: bool,
+        matrix: YuvMatrix,
     ) -> Result<Self, Error> {
         if !matches!(codec, vnilink::VideoCodec::H264 | vnilink::VideoCodec::H265) {
             return Err(Error::Unsupported("VideoToolbox encoder codec"));
@@ -190,12 +197,13 @@ impl MacEncoder {
                         .map(|session| (session, false))
                 })
                 .map_err(|_| Error::Unsupported("VideoToolbox H.264"))?;
-            low_latency(&session);
+            low_latency(&session, matrix);
             set_rate(&session, bitrate, frame_rate);
             let surface = IOSurface::create(usize::from(width), usize::from(height), BGRA, 4)
                 .ok_or(Error::Unsupported("VideoToolbox H.264"))?;
             Ok(Self {
                 codec,
+                matrix,
                 session,
                 required_hardware,
                 surface,
@@ -209,7 +217,7 @@ impl MacEncoder {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = (bitrate, high);
+            let _ = (bitrate, high, matrix);
             Err(Error::Unsupported("VideoToolbox H.264"))
         }
     }
@@ -279,15 +287,15 @@ fn set_qp_floor(session: &CompressionSession, qp: i64) -> bool {
 #[cfg(target_os = "macos")]
 const NO_QP_FLOOR: i64 = 0;
 
-/// No frame held back for later output, and colour marked as BT.709, the
-/// matrix VideoToolbox converts the BGRA pictures with, so decoders do not
-/// guess.
+/// No frame held back for later output, and colour marked as the session's
+/// matrix, the one VideoToolbox converts the BGRA pictures with, so decoders
+/// do not guess.
 #[cfg(target_os = "macos")]
-fn low_latency(session: &CompressionSession) {
+fn low_latency(session: &CompressionSession, matrix: YuvMatrix) {
     use apple_cf::cf::{CFNumber, CFString};
     use videotoolbox::ffi;
     // SAFETY: VideoToolbox's exported constant keys, as in `set_rate`.
-    let (delay, primaries, transfer, matrix) = unsafe {
+    let (delay, primaries, transfer, key_matrix) = unsafe {
         (
             ffi::kVTCompressionPropertyKey_MaxFrameDelayCount,
             ffi::kVTCompressionPropertyKey_ColorPrimaries,
@@ -296,11 +304,20 @@ fn low_latency(session: &CompressionSession) {
         )
     };
     set(session, delay, &CFNumber::from_i64(0));
-    // The value of kCVImageBuffer…_ITU_R_709_2 for all three.
+    // The values of kCVImageBuffer…_ITU_R_709_2 for primaries and transfer
+    // whatever the matrix (see `VideoSignal::stream`), and of
+    // kCVImageBufferYCbCrMatrix_ITU_R_601_4 for BT.601.
     let bt709 = CFString::new("ITU_R_709_2");
     set(session, primaries, &bt709);
     set(session, transfer, &bt709);
-    set(session, matrix, &bt709);
+    set(
+        session,
+        key_matrix,
+        &CFString::new(match matrix {
+            YuvMatrix::Bt709 => "ITU_R_709_2",
+            YuvMatrix::Bt601 => "ITU_R_601_4",
+        }),
+    );
 }
 
 impl MacEncoder {
@@ -480,7 +497,7 @@ impl VideoEncoder for MacEncoder {
                 keyframe,
             })?;
             self.frame_index = self.frame_index.saturating_add(1);
-            EncodedSample::annex_b(keyframe, annex_b)
+            EncodedSample::annex_b(keyframe, annex_b, self.matrix)
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -547,7 +564,14 @@ pub enum MacVideoEncoder {
     Software(vnilink_media::SoftwareEncoder),
 }
 impl MacVideoEncoder {
-    pub fn open(width: u16, height: u16, fps: u8, bitrate: u32, codec: u8) -> Result<Self, Error> {
+    pub fn open(
+        width: u16,
+        height: u16,
+        fps: u8,
+        bitrate: u32,
+        codec: u8,
+        matrix: YuvMatrix,
+    ) -> Result<Self, Error> {
         let kind = vnilink::VideoCodec::from_wire_id(codec)
             .ok_or(Error::Unsupported("negotiated codec"))?;
         if matches!(kind, vnilink::VideoCodec::H264 | vnilink::VideoCodec::H265) {
@@ -558,16 +582,19 @@ impl MacVideoEncoder {
                 bitrate,
                 kind,
                 codec == vnilink::CODEC_H264_HIGH,
+                matrix,
             ) {
                 Ok(encoder) => Ok(Self::Native(encoder)),
-                Err(_) if kind == vnilink::VideoCodec::H265 => Ok(Self::Software(
-                    vnilink_media::SoftwareEncoder::open(kind, width, height, fps, bitrate)?,
-                )),
+                Err(_) if kind == vnilink::VideoCodec::H265 => {
+                    Ok(Self::Software(vnilink_media::SoftwareEncoder::open(
+                        kind, matrix, width, height, fps, bitrate,
+                    )?))
+                }
                 Err(error) => Err(error),
             }
         } else {
             Ok(Self::Software(vnilink_media::SoftwareEncoder::open(
-                kind, width, height, fps, bitrate,
+                kind, matrix, width, height, fps, bitrate,
             )?))
         }
     }
@@ -613,8 +640,15 @@ pub fn probe_hevc() -> vnilink::CodecSupport {
     let result = (|| -> Result<bool, Error> {
         use vnilink_media::VideoDecoder;
         let raw = RawFrame::bgra(64, 64, 0, [32u8, 64, 128, 255].repeat(4096))?;
-        let mut encoder =
-            MacEncoder::open_codec(64, 64, 30, 500_000, vnilink::VideoCodec::H265, false)?;
+        let mut encoder = MacEncoder::open_codec(
+            64,
+            64,
+            30,
+            500_000,
+            vnilink::VideoCodec::H265,
+            false,
+            YuvMatrix::Bt709,
+        )?;
         let sample = encoder.encode(
             &raw,
             &EncodeParams {

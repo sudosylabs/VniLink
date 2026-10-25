@@ -833,6 +833,7 @@ mod display_filter {
             quality: Quality::new(1_000, 30, 1280, 720).unwrap(),
             separate_cursor: false,
             codec: 1,
+            matrix: vnilink::YuvMatrix::Bt709,
             display_id,
             revision: 1,
         }
@@ -873,6 +874,7 @@ mod capture_target_tests {
             quality: Quality::new(8_000, 60, width, height).unwrap(),
             separate_cursor: false,
             codec: 1,
+            matrix: vnilink::YuvMatrix::Bt709,
             display_id: 0,
             revision: 1,
         }

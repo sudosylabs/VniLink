@@ -96,14 +96,14 @@ fn rgba_psnr(left: &[u8], right: &[u8]) -> f64 {
 /// The crop where a 4:2:0 round trip in the stream's colour loses most,
 /// and that loss.
 fn colourful_crop(page: &RawFrame) -> ((usize, usize, usize, usize), f64) {
-    let nv12 = crate::bgra_to_nv12(page).unwrap();
+    let nv12 = crate::bgra_to_nv12(page, crate::YuvMatrix::Bt709).unwrap();
     let subsampled = crate::nv12_to_bgra(
         page.width(),
         page.height(),
         0,
         nv12.y_plane(),
         nv12.uv_plane(),
-        crate::STREAM_SIGNAL,
+        crate::VideoSignal::stream(crate::YuvMatrix::Bt709),
     )
     .unwrap();
     let (width, height) = (usize::from(page.width()), usize::from(page.height()));

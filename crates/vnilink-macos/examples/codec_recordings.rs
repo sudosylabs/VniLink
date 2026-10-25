@@ -14,8 +14,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         VideoCodec::Vp9,
         VideoCodec::Av1,
     ] {
-        let mut encoder =
-            vnilink_macos::MacVideoEncoder::open(64, 64, 30, 500_000, codec.wire_id())?;
+        let mut encoder = vnilink_macos::MacVideoEncoder::open(
+            64,
+            64,
+            30,
+            500_000,
+            codec.wire_id(),
+            vnilink::YuvMatrix::Bt709,
+        )?;
         let mut decoder = vnilink_macos::MacDecoder::new();
         let mut recorder: Option<MatroskaRecorder<std::fs::File>> = None;
         for index in 0..3 {

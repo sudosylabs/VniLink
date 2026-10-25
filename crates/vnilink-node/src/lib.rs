@@ -59,6 +59,7 @@ struct TransferWindowDecoder {
     codec: String,
     hardware: bool,
     chroma444: bool,
+    bt601: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1456,6 +1457,7 @@ impl EngineBridge {
                             codec,
                             hardware: decoder.hardware,
                             chroma444: decoder.chroma444,
+                            bt601: decoder.bt601,
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;

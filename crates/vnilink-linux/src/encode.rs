@@ -11,6 +11,7 @@
 //! source build compiled here, and x264 is GPL. Other codecs fall back to
 //! the shared software encoders ([`vnilink_media::CodecEncoder`]).
 
+use vnilink::YuvMatrix;
 #[cfg(target_os = "linux")]
 use vnilink_media::bgra_to_nv12;
 use vnilink_media::{EncodeParams, EncodedSample, Error, RawFrame, VideoEncoder};
@@ -26,6 +27,9 @@ pub struct LinuxEncoder {
     /// Whether the last picture was scaled and converted in GPU memory it
     /// was already in.
     on_gpu: bool,
+    /// The matrix the CPU conversion writes, when a session leaves it to us.
+    #[cfg(target_os = "linux")]
+    matrix: YuvMatrix,
     #[cfg(target_os = "linux")]
     backend: Backend,
 }
@@ -37,7 +41,8 @@ enum Backend {
 }
 
 impl LinuxEncoder {
-    /// A hardware encoder for `codec`; `high` asks for H.264 High.
+    /// A hardware encoder for `codec` converting and declaring `matrix`;
+    /// `high` asks for H.264 High.
     pub fn open(
         codec: vnilink::VideoCodec,
         width: u16,
@@ -45,6 +50,7 @@ impl LinuxEncoder {
         frame_rate: u8,
         bitrate_bps: u32,
         high: bool,
+        matrix: YuvMatrix,
     ) -> Result<Self, Error> {
         if width == 0 || height == 0 {
             return Err(Error::InvalidFrame(
@@ -82,6 +88,7 @@ impl LinuxEncoder {
                         frame_rate,
                         bitrate_bps,
                         high,
+                        matrix,
                     )
                     .map(Backend::Nvenc),
                     EncoderChoice::Vaapi { render_node } => match va_codec {
@@ -92,6 +99,7 @@ impl LinuxEncoder {
                             height,
                             frame_rate,
                             bitrate_bps,
+                            matrix,
                         )
                         .map(Backend::Vaapi),
                         None => continue,
@@ -103,6 +111,7 @@ impl LinuxEncoder {
                             width,
                             height,
                             on_gpu: false,
+                            matrix,
                             backend,
                         })
                     }
@@ -113,7 +122,7 @@ impl LinuxEncoder {
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = (codec, high);
+            let _ = (codec, high, matrix);
             Err(Error::Unsupported("VA-API"))
         }
     }
@@ -125,9 +134,18 @@ impl LinuxEncoder {
         fps: u8,
         bps: u32,
         codec: u8,
+        matrix: YuvMatrix,
     ) -> Result<vnilink_media::CodecEncoder<Self>, Error> {
-        vnilink_media::CodecEncoder::open(codec, w, h, fps, bps, |kind, w, h, fps, bps| {
-            Self::open(kind, w, h, fps, bps, codec == vnilink::CODEC_H264_HIGH)
+        vnilink_media::CodecEncoder::open(codec, matrix, w, h, fps, bps, |kind, w, h, fps, bps| {
+            Self::open(
+                kind,
+                w,
+                h,
+                fps,
+                bps,
+                codec == vnilink::CODEC_H264_HIGH,
+                matrix,
+            )
         })
     }
 }
@@ -204,7 +222,7 @@ impl VideoEncoder for LinuxEncoder {
                     let input = if session.converts() {
                         Input::Bgra(frame.clone())
                     } else {
-                        let (y, uv) = bgra_to_nv12(frame)?.into_planes();
+                        let (y, uv) = bgra_to_nv12(frame, self.matrix)?.into_planes();
                         Input::Nv12 { y, uv }
                     };
                     session.encode(input, params.force_keyframe)

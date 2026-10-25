@@ -27,6 +27,7 @@
 //! it: near the budget on the hardware ones, several times over it on
 //! Microsoft's.
 
+use vnilink::YuvMatrix;
 #[cfg(windows)]
 use vnilink_media::{bgra_to_nv12, RecoveryQp};
 use vnilink_media::{EncodeParams, EncodedSample, Error, RawFrame, VideoEncoder};
@@ -41,12 +42,12 @@ use windows::Win32::Media::MediaFoundation::{
     IMFTransform, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Video,
     MFNominalRange_16_235, MFStartup, MFVideoFormat_H264, MFVideoFormat_NV12,
     MFVideoInterlace_Progressive, MFVideoPrimaries_BT709, MFVideoTransFunc_709,
-    MFVideoTransferMatrix_BT709, MFSTARTUP_NOSOCKET, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
-    MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES,
-    MF_E_TRANSFORM_NEED_MORE_INPUT, MF_LOW_LATENCY, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE,
-    MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_MAX_KEYFRAME_SPACING,
-    MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_SUBTYPE, MF_MT_TRANSFER_FUNCTION, MF_MT_VIDEO_NOMINAL_RANGE,
-    MF_MT_VIDEO_PRIMARIES, MF_MT_YUV_MATRIX, MF_VERSION,
+    MFVideoTransferMatrix_BT601, MFVideoTransferMatrix_BT709, MFSTARTUP_NOSOCKET,
+    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER,
+    MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MF_E_TRANSFORM_NEED_MORE_INPUT, MF_LOW_LATENCY,
+    MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
+    MF_MT_MAX_KEYFRAME_SPACING, MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_SUBTYPE, MF_MT_TRANSFER_FUNCTION,
+    MF_MT_VIDEO_NOMINAL_RANGE, MF_MT_VIDEO_PRIMARIES, MF_MT_YUV_MATRIX, MF_VERSION,
 };
 #[cfg(windows)]
 use windows::Win32::Media::MediaFoundation::{
@@ -83,6 +84,9 @@ pub struct WindowsEncoder {
     hardware: bool,
     width: u32,
     height: u32,
+    /// The matrix pictures are converted to and the SPS declares.
+    #[cfg(windows)]
+    matrix: YuvMatrix,
     #[cfg(windows)]
     provides_samples: bool,
     #[cfg(windows)]
@@ -125,20 +129,33 @@ enum GpuConversion {
 unsafe impl Send for WindowsEncoder {}
 
 impl WindowsEncoder {
-    pub fn open(width: u16, height: u16, frame_rate: u8, bitrate_bps: u32) -> Result<Self, Error> {
+    pub fn open(
+        width: u16,
+        height: u16,
+        frame_rate: u8,
+        bitrate_bps: u32,
+        matrix: YuvMatrix,
+    ) -> Result<Self, Error> {
         if width % 2 != 0 || height % 2 != 0 {
             return Err(Error::InvalidFrame("NV12 width and height must be even"));
         }
         #[cfg(windows)]
         {
             return unsafe {
-                Self::open_first(|| h264_encoders(), width, height, frame_rate, bitrate_bps)
+                Self::open_first(
+                    || h264_encoders(),
+                    width,
+                    height,
+                    frame_rate,
+                    bitrate_bps,
+                    matrix,
+                )
             }
             .map_err(|_| Error::Unsupported("Media Foundation H.264"));
         }
         #[cfg(not(windows))]
         {
-            let _ = (width, height, frame_rate, bitrate_bps);
+            let _ = (width, height, frame_rate, bitrate_bps, matrix);
             Err(Error::Unsupported("Media Foundation H.264"))
         }
     }
@@ -153,6 +170,7 @@ impl WindowsEncoder {
         height: u16,
         frame_rate: u8,
         bitrate_bps: u32,
+        matrix: YuvMatrix,
     ) -> windows::core::Result<Self> {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)?;
@@ -166,6 +184,7 @@ impl WindowsEncoder {
                 bitrate_bps,
                 false,
                 None,
+                matrix,
             ) {
                 Ok(encoder) => return Ok(encoder),
                 Err(err) => failure = err,
@@ -182,6 +201,7 @@ impl WindowsEncoder {
         height: u16,
         frame_rate: u8,
         bitrate_bps: u32,
+        matrix: YuvMatrix,
     ) -> windows::core::Result<Self> {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
@@ -194,6 +214,7 @@ impl WindowsEncoder {
                 bitrate_bps,
                 false,
                 None,
+                matrix,
             )
         }
     }
@@ -238,6 +259,7 @@ impl WindowsEncoder {
             bitrate_bps,
             true,
             None,
+            YuvMatrix::Bt709,
         )
         .map_err(|_| Error::Unsupported("Media Foundation camera H.264"))
     }
@@ -251,6 +273,7 @@ impl WindowsEncoder {
         bitrate_bps: u32,
         camera: bool,
         manager: Option<&IMFDXGIDeviceManager>,
+        matrix: YuvMatrix,
     ) -> windows::core::Result<Self> {
         let transform = candidate.create()?;
         if let Some(manager) = manager {
@@ -290,7 +313,7 @@ impl WindowsEncoder {
                 eAVScenarioInfo_DisplayRemoting.0 as u32,
             );
         }
-        let output = video_type(MFVideoFormat_H264, width, height, rate)?;
+        let output = video_type(MFVideoFormat_H264, width, height, rate, matrix)?;
         output.SetUINT32(&MF_MT_AVG_BITRATE, bitrate_bps)?;
         // A desktop viewer asks for a keyframe when it needs one; the
         // periodic one is only a backstop, every ten seconds.
@@ -316,7 +339,7 @@ impl WindowsEncoder {
         } else {
             transform.SetOutputType(0, &output, 0)?;
         }
-        let input = video_type(MFVideoFormat_NV12, width, height, rate)?;
+        let input = video_type(MFVideoFormat_NV12, width, height, rate, matrix)?;
         transform.SetInputType(0, &input, 0)?;
         let events = if candidate.hardware() {
             Some(TransformEvents::listen(&transform)?)
@@ -339,6 +362,7 @@ impl WindowsEncoder {
             hardware: candidate.hardware(),
             width: u32::from(width),
             height: u32::from(height),
+            matrix,
             provides_samples,
             output_size,
             frame_rate,
@@ -469,7 +493,7 @@ impl VideoEncoder for WindowsEncoder {
             } else if params.force_keyframe {
                 self.recovery_qp.observe_full(sample.bytes.len(), params);
             }
-            return h264_access_unit(&sample.bytes, &sample.header);
+            return h264_access_unit(&sample.bytes, &sample.header, self.matrix);
         }
         #[cfg(not(windows))]
         {
@@ -507,6 +531,7 @@ impl WindowsEncoder {
                     picture.context(),
                     (u32::from(width), u32::from(height)),
                     (self.width, self.height),
+                    self.matrix,
                 )
             };
             self.gpu = made.map_or(GpuConversion::Unavailable, GpuConversion::Ready);
@@ -578,10 +603,10 @@ impl WindowsEncoder {
     fn convert_on_cpu(&self, frame: &RawFrame) -> Result<(Vec<u8>, Vec<u8>), Error> {
         let size = (u32::from(frame.width()), u32::from(frame.height()));
         if size == (self.width, self.height) {
-            return Ok(bgra_to_nv12(frame)?.into_planes());
+            return Ok(bgra_to_nv12(frame, self.matrix)?.into_planes());
         }
         let scaled = vnilink_media::scale_bgra(frame, self.width as u16, self.height as u16)?;
-        Ok(bgra_to_nv12(&scaled)?.into_planes())
+        Ok(bgra_to_nv12(&scaled, self.matrix)?.into_planes())
     }
 
     /// Whether captured pictures are converted on the GPU: `None` before the
@@ -807,6 +832,7 @@ pub(crate) unsafe fn video_type(
     width: u16,
     height: u16,
     frame_rate: u32,
+    matrix: YuvMatrix,
 ) -> windows::core::Result<IMFMediaType> {
     let media_type = MFCreateMediaType()?;
     media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
@@ -822,10 +848,17 @@ pub(crate) unsafe fn video_type(
         // Numerator travels in the high word, denominator in the low word.
         pack_hi_lo(frame_rate, 1),
     )?;
-    // Pictures are converted to NV12 in the stream's colour, BT.709 in
-    // limited range (`vnilink_media::STREAM_SIGNAL`). Every keyframe's SPS
-    // says so whatever the transform writes; the type tells it the same.
-    media_type.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)?;
+    // Pictures are converted to NV12 in the session's matrix, in limited
+    // range (`vnilink_media::VideoSignal::stream`). Every keyframe's SPS says
+    // so whatever the transform writes; the type tells it the same.
+    media_type.SetUINT32(
+        &MF_MT_YUV_MATRIX,
+        match matrix {
+            YuvMatrix::Bt709 => MFVideoTransferMatrix_BT709,
+            YuvMatrix::Bt601 => MFVideoTransferMatrix_BT601,
+        }
+        .0 as u32,
+    )?;
     media_type.SetUINT32(&MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709.0 as u32)?;
     media_type.SetUINT32(&MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709.0 as u32)?;
     media_type.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)?;
@@ -853,10 +886,11 @@ impl WindowsEncoder {
         fps: u8,
         bps: u32,
         codec: u8,
+        matrix: YuvMatrix,
     ) -> Result<vnilink_media::CodecEncoder<Self>, Error> {
-        vnilink_media::CodecEncoder::open(codec, w, h, fps, bps, |codec, w, h, fps, bps| {
+        vnilink_media::CodecEncoder::open(codec, matrix, w, h, fps, bps, |codec, w, h, fps, bps| {
             h264_only(codec)?;
-            Self::open(w, h, fps, bps)
+            Self::open(w, h, fps, bps, matrix)
         })
     }
 
@@ -868,11 +902,12 @@ impl WindowsEncoder {
         fps: u8,
         bps: u32,
         codec: u8,
+        matrix: YuvMatrix,
         device: &crate::gpu::GpuDevice,
     ) -> Result<vnilink_media::CodecEncoder<Self>, Error> {
-        vnilink_media::CodecEncoder::open(codec, w, h, fps, bps, |codec, w, h, fps, bps| {
+        vnilink_media::CodecEncoder::open(codec, matrix, w, h, fps, bps, |codec, w, h, fps, bps| {
             h264_only(codec)?;
-            Self::open_on(w, h, fps, bps, device)
+            Self::open_on(w, h, fps, bps, matrix, device)
         })
     }
 
@@ -890,19 +925,20 @@ impl WindowsEncoder {
         height: u16,
         frame_rate: u8,
         bitrate_bps: u32,
+        matrix: YuvMatrix,
         device: &crate::gpu::GpuDevice,
     ) -> Result<Self, Error> {
         if width % 2 != 0 || height % 2 != 0 {
             return Err(Error::InvalidFrame("NV12 width and height must be even"));
         }
-        if let Some(encoder) =
-            unsafe { Self::open_reading_textures(width, height, frame_rate, bitrate_bps, device) }
-        {
+        if let Some(encoder) = unsafe {
+            Self::open_reading_textures(width, height, frame_rate, bitrate_bps, matrix, device)
+        } {
             return Ok(encoder);
         }
         unsafe {
             let candidates = || h264_encoders_for(device.adapter().ok());
-            Self::open_first(candidates, width, height, frame_rate, bitrate_bps)
+            Self::open_first(candidates, width, height, frame_rate, bitrate_bps, matrix)
         }
         .map_err(|_| Error::Unsupported("Media Foundation H.264"))
     }
@@ -913,6 +949,7 @@ impl WindowsEncoder {
         height: u16,
         frame_rate: u8,
         bitrate_bps: u32,
+        matrix: YuvMatrix,
         device: &crate::gpu::GpuDevice,
     ) -> Option<Self> {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
@@ -930,6 +967,7 @@ impl WindowsEncoder {
                     bitrate_bps,
                     false,
                     Some(&manager),
+                    matrix,
                 )
                 .ok()
             })

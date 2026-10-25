@@ -33,11 +33,13 @@ fn window(core: &Core, shows_stills: bool) {
             codec: VideoCodec::H264,
             hardware: false,
             chroma444: false,
+            bt601: false,
         },
         WindowDecoder {
             codec: VideoCodec::Av1,
             hardware: false,
             chroma444: shows_stills,
+            bt601: false,
         },
     ])
     .unwrap();

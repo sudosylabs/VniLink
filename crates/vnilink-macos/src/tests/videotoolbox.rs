@@ -1,4 +1,5 @@
 use vnilink::EncodedFrame;
+use vnilink::YuvMatrix;
 use vnilink_media::{
     parse_annex_b, EncodeParams, HostVideo, PumpOutput, Quality, VideoDecoder, VideoEncoder,
 };
@@ -23,7 +24,8 @@ fn solid(
 
 #[test]
 fn videotoolbox_encodes_and_decodes_a_synthetic_picture() {
-    let mut encoder = MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
+    let mut encoder =
+        MacEncoder::open(64, 64, 30, 500_000, false, vnilink::YuvMatrix::Bt709).unwrap();
     let params = EncodeParams {
         force_keyframe: true,
         recovery: false,
@@ -66,9 +68,10 @@ fn videotoolbox_encodes_and_decodes_a_synthetic_picture() {
     assert!(MacDecoder::new().decode(&junk).is_err());
 }
 
-/// The SPS says BT.709 limited range, and VideoToolbox converts the BGRA
-/// pictures with that matrix: saturated colours come back as they went in.
-/// Tagged BT.601 instead, pure red comes back 9 low (measured 2026-10-22).
+/// The SPS says the session's matrix in limited range, and VideoToolbox
+/// converts the BGRA pictures with that matrix: saturated colours come back
+/// as they went in. (Measured 2026-10-22: tagged BT.601 and read as BT.709,
+/// pure red comes back 9 low.)
 #[test]
 fn videotoolbox_colours_match_the_stream_signal() {
     let params = EncodeParams {
@@ -78,17 +81,23 @@ fn videotoolbox_colours_match_the_stream_signal() {
         frame_rate: 30,
     };
     // (b, g, r)
-    for colour in [
-        [0, 0, 255],
-        [0, 255, 0],
-        [255, 0, 0],
-        [0, 255, 255],
-        [255, 255, 0],
-        [255, 0, 255],
-        [0, 128, 255],
-        [128, 128, 128],
-    ] {
-        let mut encoder = MacEncoder::open(64, 64, 30, 8_000_000, false).unwrap();
+    for (matrix, colour) in [YuvMatrix::Bt709, YuvMatrix::Bt601]
+        .into_iter()
+        .flat_map(|matrix| {
+            [
+                [0, 0, 255],
+                [0, 255, 0],
+                [255, 0, 0],
+                [0, 255, 255],
+                [255, 255, 0],
+                [255, 0, 255],
+                [0, 128, 255],
+                [128, 128, 128],
+            ]
+            .map(move |colour| (matrix, colour))
+        })
+    {
+        let mut encoder = MacEncoder::open(64, 64, 30, 8_000_000, false, matrix).unwrap();
         let picture = solid(64, 64, 0, colour[0], colour[1], colour[2]);
         let sample = encoder.encode(&picture, &params).unwrap();
         let parsed = parse_annex_b(sample.bytes()).unwrap();
@@ -99,14 +108,14 @@ fn videotoolbox_colours_match_the_stream_signal() {
             .unwrap();
         assert_eq!(
             vnilink_media::h264_video_signal(sps.bytes()).unwrap(),
-            Some(vnilink_media::STREAM_SIGNAL)
+            Some(vnilink_media::VideoSignal::stream(matrix))
         );
         let encoded = EncodedFrame::h264(true, 0, sample.bytes().to_vec()).unwrap();
         let decoded = MacDecoder::new().decode(&encoded).unwrap();
         let pixel = &decoded.row(32)[32 * 4..32 * 4 + 3];
         for channel in 0..3 {
             let drift = (i16::from(pixel[channel]) - i16::from(colour[channel])).abs();
-            assert!(drift <= 6, "{colour:?} came back as {pixel:?}");
+            assert!(drift <= 6, "{matrix:?} {colour:?} came back as {pixel:?}");
         }
     }
 }
@@ -114,7 +123,7 @@ fn videotoolbox_colours_match_the_stream_signal() {
 #[test]
 fn the_pump_accepts_a_videotoolbox_keyframe() {
     let quality = Quality::new(500, 30, 64, 64).unwrap();
-    let encoder = MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
+    let encoder = MacEncoder::open(64, 64, 30, 500_000, false, vnilink::YuvMatrix::Bt709).unwrap();
     let mut video = HostVideo::new(quality, encoder);
     let output = video.push(&solid(64, 64, 0, 0, 255, 0)).unwrap();
     match output {
@@ -125,7 +134,8 @@ fn the_pump_accepts_a_videotoolbox_keyframe() {
 
 #[test]
 fn videotoolbox_high_decodes_and_marks_profile_100() {
-    let mut encoder = MacEncoder::open(64, 64, 30, 500_000, true).unwrap();
+    let mut encoder =
+        MacEncoder::open(64, 64, 30, 500_000, true, vnilink::YuvMatrix::Bt709).unwrap();
     let sample = encoder
         .encode(
             &solid(64, 64, 0, 0, 0, 255),
@@ -160,7 +170,8 @@ fn videotoolbox_high_decodes_and_marks_profile_100() {
 fn recording_remuxes_native_h264_without_reencoding() {
     use std::io::Cursor;
     use vnilink_media::{MatroskaRecorder, RecordingLimits};
-    let mut encoder = MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
+    let mut encoder =
+        MacEncoder::open(64, 64, 30, 500_000, false, vnilink::YuvMatrix::Bt709).unwrap();
     let mut recorder = None;
     for index in 0..60u64 {
         let time = index * 33_333;
@@ -341,7 +352,8 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
     host.set_recording_sharing(true).unwrap();
     wait(|| desktop.recording_allowed().unwrap());
     // Capture is already encoding when a viewer starts a recording.
-    let mut encoder = MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
+    let mut encoder =
+        MacEncoder::open(64, 64, 30, 500_000, false, vnilink::YuvMatrix::Bt709).unwrap();
     let recorder = Recorder::start(
         &desktop,
         &path,
@@ -468,7 +480,7 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
         },
     )
     .unwrap();
-    let mut high = MacEncoder::open(64, 64, 30, 500_000, true).unwrap();
+    let mut high = MacEncoder::open(64, 64, 30, 500_000, true, vnilink::YuvMatrix::Bt709).unwrap();
     for index in 0..10u64 {
         let time = 2_000_000 + index * 33_333;
         let sample = encoder
@@ -575,7 +587,8 @@ fn hevc_probe_and_negotiated_encoder_process_real_synthetic_frames() {
         support.encode && support.decode,
         "VideoToolbox HEVC roundtrip failed"
     );
-    let mut encoder = crate::MacVideoEncoder::open(64, 64, 30, 500_000, 3).unwrap();
+    let mut encoder =
+        crate::MacVideoEncoder::open(64, 64, 30, 500_000, 3, vnilink::YuvMatrix::Bt709).unwrap();
     let mut decoder = crate::MacDecoder::new();
     for i in 0..3 {
         let raw = solid(64, 64, i * 33333, 32, 64, 128);
@@ -608,7 +621,8 @@ fn hevc_probe_and_negotiated_encoder_process_real_synthetic_frames() {
 /// the pictures after it decode on from the same keyframe.
 #[test]
 fn videotoolbox_takes_a_new_rate_without_a_keyframe() {
-    let mut encoder = MacEncoder::open(64, 64, 30, 500_000, false).unwrap();
+    let mut encoder =
+        MacEncoder::open(64, 64, 30, 500_000, false, vnilink::YuvMatrix::Bt709).unwrap();
     let params = |force_keyframe, bitrate_bps, frame_rate| EncodeParams {
         force_keyframe,
         recovery: false,
@@ -657,7 +671,15 @@ fn forced_keyframes(
     every: u64,
     count: u64,
 ) -> (Vec<usize>, u64) {
-    let mut encoder = MacEncoder::open(width, height, 30, bitrate_bps, true).unwrap();
+    let mut encoder = MacEncoder::open(
+        width,
+        height,
+        30,
+        bitrate_bps,
+        true,
+        vnilink::YuvMatrix::Bt709,
+    )
+    .unwrap();
     let mut decoder = MacDecoder::new();
     let (mut sizes, mut dropped, mut owed) = (Vec::new(), 0, false);
     for index in 0..every * (count + 1) {
@@ -743,7 +765,8 @@ fn recovery_keyframe_pictures() {
     );
     std::fs::create_dir_all(&directory).unwrap();
     for recovery in [false, true] {
-        let mut encoder = MacEncoder::open(1280, 720, 30, 2_000_000, true).unwrap();
+        let mut encoder =
+            MacEncoder::open(1280, 720, 30, 2_000_000, true, vnilink::YuvMatrix::Bt709).unwrap();
         let mut decoder = MacDecoder::new();
         let mut owed = false;
         for index in 0..76u64 {
@@ -798,7 +821,8 @@ fn recovery_keyframe_pictures() {
 fn still_screen_refinement() {
     let psnr = vnilink_media::measure::psnr;
     for recovery in [false, true] {
-        let mut encoder = MacEncoder::open(1280, 720, 30, 2_000_000, true).unwrap();
+        let mut encoder =
+            MacEncoder::open(1280, 720, 30, 2_000_000, true, vnilink::YuvMatrix::Bt709).unwrap();
         let mut decoder = MacDecoder::new();
         let still = page(1280, 720, 0);
         let mut line = Vec::new();
@@ -852,7 +876,9 @@ fn chroma_quality() {
     for (width, height) in [(1280u16, 720u16), (1920, 1080)] {
         for megabits in [1u32, 2, 4, 8] {
             let bitrate = megabits * 1_000_000;
-            let mut encoder = MacEncoder::open(width, height, 30, bitrate, false).unwrap();
+            let mut encoder =
+                MacEncoder::open(width, height, 30, bitrate, false, vnilink::YuvMatrix::Bt709)
+                    .unwrap();
             let mut decoder = MacDecoder::new();
             let (mut bytes, mut key, mut last) = (0usize, None, None);
             for index in 0..60u64 {
@@ -959,7 +985,15 @@ fn a_captured_picture_is_encoded_in_its_surface_at_any_size() {
     let encode = |frame: &vnilink_media::RawFrame, width: u16, height: u16| {
         let mut host = HostVideo::new(
             Quality::new(8_000, 30, width, height).unwrap(),
-            MacEncoder::open(width, height, 30, 8_000_000, false).unwrap(),
+            MacEncoder::open(
+                width,
+                height,
+                30,
+                8_000_000,
+                false,
+                vnilink::YuvMatrix::Bt709,
+            )
+            .unwrap(),
         );
         let PumpOutput::Encoded(frame) = host.push(frame).unwrap() else {
             panic!("the first picture is encoded");
@@ -985,7 +1019,8 @@ fn a_captured_picture_is_encoded_in_its_surface_at_any_size() {
 fn a_captured_picture_is_scaled_on_the_cpu_when_the_gpu_cannot() {
     use vnilink_media::measure::{psnr, text_page};
     let page = text_page(1280, 720, 0);
-    let mut encoder = MacEncoder::open(640, 360, 30, 8_000_000, false).unwrap();
+    let mut encoder =
+        MacEncoder::open(640, 360, 30, 8_000_000, false, vnilink::YuvMatrix::Bt709).unwrap();
     assert_eq!(encoder.scales_on_gpu(), None);
     encoder.refuse_gpu_scaling();
     let mut host = HostVideo::new(Quality::new(8_000, 30, 640, 360).unwrap(), encoder);
@@ -997,7 +1032,8 @@ fn a_captured_picture_is_scaled_on_the_cpu_when_the_gpu_cannot() {
     let reference = vnilink_media::scale_bgra(&page, 640, 360).unwrap();
     assert!(psnr(&reference, &decoded) > 30.0);
     // An encoder that has not been refused scales on the GPU.
-    let mut encoder = MacEncoder::open(640, 360, 30, 8_000_000, false).unwrap();
+    let mut encoder =
+        MacEncoder::open(640, 360, 30, 8_000_000, false, vnilink::YuvMatrix::Bt709).unwrap();
     encoder
         .encode(
             &captured(&page),

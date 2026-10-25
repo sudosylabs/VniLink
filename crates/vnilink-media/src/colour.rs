@@ -1,9 +1,12 @@
-//! The one colour signal VniLink's H.264 streams carry, and how a decoder
-//! reads another.
+//! The colour signal a VniLink stream carries, and how a decoder reads
+//! another.
 //!
-//! Every H.264 stream is BT.709 in limited range and says so: the host
-//! converts with BT.709 (`bgra_to_nv12`, or VideoToolbox from BGRA), and the
-//! SPS of every keyframe carries that video signal in its VUI
+//! Every stream is in limited range and says so, in the matrix its viewer
+//! asked for ([`YuvMatrix`]): BT.709 unless the viewer's decoder is
+//! Chromium's VA-API path, which converts as BT.601 whatever a stream says
+//! and so shows a BT.601 stream exactly. The host converts with that matrix
+//! (`bgra_to_nv12`, or the platform's converter from BGRA), and the SPS of
+//! every H.264 keyframe carries the video signal in its VUI
 //! ([`crate::h264_stream_sps`]). A decoder that converts to BGRA itself
 //! follows the SPS ([`crate::h264_video_signal`]), so a stream from
 //! elsewhere is shown as it says, and WebCodecs does the same.
@@ -12,11 +15,13 @@
 //! for an untagged high-definition stream. Limited range is what H.264
 //! decoders, Media Foundation's included, handle most consistently.
 //!
-//! The software codecs follow the same rule: they convert to BT.709, and
-//! H.265, AV1 and VP9 declare it. VP8 cannot declare a colour; Chromium
-//! shows an undeclared VP8 picture as BT.709 too (Electron 44, Chromium 152).
-//! Their decoder shows each picture in the colour its stream declares
-//! ([`declared_signal`]).
+//! The software codecs follow the same rule: they convert to the session's
+//! matrix, and H.265, AV1 and VP9 declare it. VP8 cannot declare a colour;
+//! Chromium shows an undeclared VP8 picture as BT.709 too (Electron 44,
+//! Chromium 152). Their decoder shows each picture in the colour its
+//! stream declares ([`declared_signal`]).
+
+pub use vnilink::YuvMatrix;
 
 /// A stream's colour, as H.264 VUI and ITU-T H.273 code it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,34 +32,39 @@ pub struct VideoSignal {
     pub full_range: bool,
 }
 
-/// BT.709 primaries, transfer and matrix, in limited range: what every
-/// VniLink H.264 stream carries.
-pub const STREAM_SIGNAL: VideoSignal = VideoSignal {
-    primaries: 1,
-    transfer: 1,
-    matrix: 1,
-    full_range: false,
-};
+impl VideoSignal {
+    /// What a VniLink stream in `matrix` carries: BT.709 primaries and
+    /// transfer in limited range, whatever the matrix, so that only the
+    /// matrix differs between sessions.
+    pub const fn stream(matrix: YuvMatrix) -> Self {
+        Self {
+            primaries: 1,
+            transfer: 1,
+            matrix: match matrix {
+                YuvMatrix::Bt709 => 1,
+                YuvMatrix::Bt601 => 6,
+            },
+            full_range: false,
+        }
+    }
+}
+
+/// What a stream that declares no matrix is shown as: BT.709 in limited
+/// range, as Chromium shows an untagged high-definition stream.
+pub const UNDECLARED_SIGNAL: VideoSignal = VideoSignal::stream(YuvMatrix::Bt709);
 
 /// The colour a decoder shows a picture in: the matrix and range its stream
-/// declares, or [`STREAM_SIGNAL`] when the matrix is unspecified (H.273
+/// declares, or [`UNDECLARED_SIGNAL`] when the matrix is unspecified (H.273
 /// code 2), not handled, or cannot be declared, as in VP8.
 pub(crate) fn declared_signal(matrix: Option<u8>, full_range: bool) -> VideoSignal {
     match matrix {
         Some(matrix @ (1 | 5 | 6)) => VideoSignal {
             matrix,
             full_range,
-            ..STREAM_SIGNAL
+            ..UNDECLARED_SIGNAL
         },
-        _ => STREAM_SIGNAL,
+        _ => UNDECLARED_SIGNAL,
     }
-}
-
-/// The matrix that turns Y'CbCr back into R'G'B'.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum YuvMatrix {
-    Bt601,
-    Bt709,
 }
 
 impl VideoSignal {

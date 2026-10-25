@@ -179,6 +179,7 @@ fn serve(core: &Arc<Core>, stop: &Arc<AtomicBool>, error: &Mutex<Option<String>>
                         fps,
                         bps,
                         target.codec,
+                        target.matrix,
                         &device,
                     )
                 },

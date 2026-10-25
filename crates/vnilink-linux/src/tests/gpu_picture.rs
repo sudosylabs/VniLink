@@ -157,7 +157,16 @@ fn a_picture_on_the_gpu_is_scaled_into_an_encoder_picture() {
     held.truncate(1);
     let picture = held.pop().unwrap();
 
-    let session = Session::open(&node, VaCodec::H265, 640, 360, 30, 4_000_000).unwrap();
+    let session = Session::open(
+        &node,
+        VaCodec::H265,
+        640,
+        360,
+        30,
+        4_000_000,
+        vnilink::YuvMatrix::Bt709,
+    )
+    .unwrap();
     if !session.converts() {
         eprintln!("{} has no video processor for the encoder", node.display());
         return;

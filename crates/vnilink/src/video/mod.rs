@@ -5,7 +5,7 @@
 //! payload. Those bytes are screen content: do not log them.
 
 mod codec;
-pub use codec::{CodecSupport, VideoCodec};
+pub use codec::{CodecSupport, VideoCodec, YuvMatrix};
 mod condition;
 pub use condition::{Condition, ConditionEntry, ConditionSet, Evidence};
 pub(crate) use condition::{Conditions, HostState, Observation};

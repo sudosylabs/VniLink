@@ -224,7 +224,14 @@ fn probe_caps() -> Result<vnilink::VideoCodecCaps, FfiError> {
     let result = (|| -> Result<bool, vnilink_media::Error> {
         let mut hardware = true;
         for high in [false, true] {
-            let mut encoder = vnilink_macos::MacEncoder::open(64, 64, 30, 500_000, high)?;
+            let mut encoder = vnilink_macos::MacEncoder::open(
+                64,
+                64,
+                30,
+                500_000,
+                high,
+                vnilink::YuvMatrix::Bt709,
+            )?;
             let raw = RawFrame::bgra(64, 64, 0, vec![255; 64 * 64 * 4])?;
             let sample = encoder.encode(
                 &raw,
@@ -1499,6 +1506,7 @@ mod viewer_tests {
                 .hosted_desktop_info(target.id, target.generation)
                 .unwrap()
                 .codec,
+            vnilink::YuvMatrix::Bt709,
         )
         .unwrap();
         let raw = RawFrame::bgra(64, 64, 0, vec![255; 64 * 64 * 4]).unwrap();
@@ -1600,7 +1608,15 @@ mod viewer_tests {
         }
         let raw = RawFrame::bgra(64, 64, 0, pixels).unwrap();
         let codec = host.inner.video_targets().unwrap()[0].codec;
-        let mut encoder = vnilink_macos::MacVideoEncoder::open(64, 64, 30, 500_000, codec).unwrap();
+        let mut encoder = vnilink_macos::MacVideoEncoder::open(
+            64,
+            64,
+            30,
+            500_000,
+            codec,
+            vnilink::YuvMatrix::Bt709,
+        )
+        .unwrap();
         let sample = encoder
             .encode(
                 &raw,
@@ -2009,6 +2025,7 @@ mod host_cursor_tests {
             quality: vnilink::Quality::new(4000, 30, 1920, 1080).unwrap(),
             separate_cursor: true,
             codec: vnilink::CODEC_H264,
+            matrix: vnilink::YuvMatrix::Bt709,
             display_id: 2,
             revision: 1,
         };

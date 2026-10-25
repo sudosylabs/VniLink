@@ -405,7 +405,14 @@ fn serve(
             // The cursor mode is fixed by the grant.
             |_| {},
             |target, width, height, fps, bps| {
-                vnilink_linux::LinuxEncoder::open_codec(width, height, fps, bps, target.codec)
+                vnilink_linux::LinuxEncoder::open_codec(
+                    width,
+                    height,
+                    fps,
+                    bps,
+                    target.codec,
+                    target.matrix,
+                )
             },
         );
         idle_since = std::time::Instant::now();

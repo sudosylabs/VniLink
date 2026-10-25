@@ -390,13 +390,15 @@ impl std::fmt::Debug for FfiEncodedFrame {
     }
 }
 
-/// A codec the app's window decodes, whether in hardware, and whether at
-/// 4:4:4; see [`vnilink::WindowDecoder`].
+/// A codec the app's window decodes, whether in hardware, whether at
+/// 4:4:4, and whether it shows only BT.601 pictures right; see
+/// [`vnilink::WindowDecoder`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiWindowDecoder {
     pub codec: FfiVideoCodec,
     pub hardware: bool,
     pub chroma444: bool,
+    pub bt601: bool,
 }
 
 impl From<FfiWindowDecoder> for vnilink::WindowDecoder {
@@ -405,6 +407,7 @@ impl From<FfiWindowDecoder> for vnilink::WindowDecoder {
             codec: value.codec.into(),
             hardware: value.hardware,
             chroma444: value.chroma444,
+            bt601: value.bt601,
         }
     }
 }

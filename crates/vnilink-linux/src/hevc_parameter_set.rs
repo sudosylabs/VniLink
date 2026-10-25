@@ -3,10 +3,12 @@
 //!
 //! The coded size is the visible size rounded up to 16; the SPS conformance
 //! window crops the padding back off. Each picture predicts from the one
-//! before it, so one reference picture is decoded ahead. Video signal type
-//! is left out, as the H.264 SPS leaves it out.
+//! before it, so one reference picture is decoded ahead. The SPS carries the
+//! stream's colour in its VUI ([`vnilink_media::VideoSignal::stream`]), as
+//! every H.264 SPS does once the media crate has rewritten it.
 
-use vnilink_media::Error;
+use vnilink::YuvMatrix;
+use vnilink_media::{Error, VideoSignal};
 
 use crate::parameter_set::{push_nal, round_up_16, Bits};
 
@@ -137,7 +139,12 @@ fn profile_tier_level(bits: &mut Bits, level: u8) {
 }
 
 /// Annex-B VPS, SPS and PPS for a visible picture. Dimensions are even.
-pub(crate) fn parameter_sets(layout: &Layout, width: u16, height: u16) -> Result<Vec<u8>, Error> {
+pub(crate) fn parameter_sets(
+    layout: &Layout,
+    width: u16,
+    height: u16,
+    matrix: YuvMatrix,
+) -> Result<Vec<u8>, Error> {
     if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
         return Err(Error::InvalidFrame("H.265 width and height must be even"));
     }
@@ -207,8 +214,26 @@ pub(crate) fn parameter_sets(layout: &Layout, width: u16, height: u16) -> Result
     sps.bit(0);
     sps.bit(u32::from(layout.temporal_mvp));
     sps.bit(u32::from(layout.strong_intra_smoothing));
-    sps.bit(0);
-    sps.bit(0);
+    // vui_parameters_present_flag: the video signal type and nothing else.
+    let signal = VideoSignal::stream(matrix);
+    sps.bit(1);
+    sps.bit(0); // aspect_ratio_info_present_flag
+    sps.bit(0); // overscan_info_present_flag
+    sps.bit(1); // video_signal_type_present_flag
+    sps.bits(5, 3); // video_format: unspecified
+    sps.bit(u32::from(signal.full_range));
+    sps.bit(1); // colour_description_present_flag
+    sps.bits(u32::from(signal.primaries), 8);
+    sps.bits(u32::from(signal.transfer), 8);
+    sps.bits(u32::from(signal.matrix), 8);
+    sps.bit(0); // chroma_loc_info_present_flag
+    sps.bit(0); // neutral_chroma_indication_flag
+    sps.bit(0); // field_seq_flag
+    sps.bit(0); // frame_field_info_present_flag
+    sps.bit(0); // default_display_window_flag
+    sps.bit(0); // vui_timing_info_present_flag
+    sps.bit(0); // bitstream_restriction_flag
+    sps.bit(0); // sps_extension_present_flag
     sps.trailing();
 
     let mut pps = Bits::default();
