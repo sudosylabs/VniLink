@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub use vnilink_media::HostSession;
 #[cfg(target_os = "macos")]
-use vnilink_media::{Error, FrameSource, PublishError, Quality, RawFrame};
+use vnilink_media::{Error, FrameSource, FrameWait, PublishError, Quality, RawFrame};
 
 #[cfg(target_os = "macos")]
 use crate::encode::MacVideoEncoder;
@@ -24,6 +24,10 @@ impl FrameSource for crate::capture::ScreenCapture {
 
     fn poll_frame(&self, timestamp_us: u64) -> Result<Option<RawFrame>, Error> {
         self.poll_frame(timestamp_us)
+    }
+
+    fn wait_frame(&self, deadline: std::time::Instant) -> FrameWait {
+        FrameWait::from_arrived(crate::capture::ScreenCapture::wait_frame(self, deadline))
     }
 
     fn attested_at(&self) -> Option<std::time::Instant> {
@@ -129,6 +133,10 @@ impl FrameSource for SharedSource<'_> {
             self.inner.set_shows_cursor(embedded)?;
         }
         self.inner.poll_frame(timestamp_us)
+    }
+
+    fn wait_frame(&self, deadline: std::time::Instant) -> FrameWait {
+        FrameWait::from_arrived(self.inner.wait_frame(deadline))
     }
 
     /// The capture's own: without it the shared capture could never tell an

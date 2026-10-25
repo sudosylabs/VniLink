@@ -271,6 +271,8 @@ pub struct ScreenCapture {
     full: (u16, u16),
     size: Arc<std::sync::atomic::AtomicU32>,
     channel: Arc<FrameChannel>,
+    /// The channel's generation when the picture last polled was read.
+    seen: std::sync::atomic::AtomicU64,
 }
 
 #[cfg(target_os = "macos")]
@@ -333,6 +335,7 @@ impl ScreenCapture {
             full: (plan.width(), plan.height()),
             size,
             channel,
+            seen: std::sync::atomic::AtomicU64::new(0),
         };
         // Own the stream before checking so late success runs stop_capture.
         check()?;
@@ -407,7 +410,19 @@ impl ScreenCapture {
     /// Current pixels without waiting for screen damage. Failure is checked
     /// before cached pixels, so a stopped capture cannot look healthy forever.
     pub fn poll_frame(&self, timestamp_us: u64) -> Result<Option<vnilink_media::RawFrame>, Error> {
+        // Before the read, so a picture pushed during it still counts as new.
+        self.seen.store(
+            self.channel.generation(),
+            std::sync::atomic::Ordering::Release,
+        );
         poll_channel(&self.channel, timestamp_us)
+    }
+
+    /// Waits for a picture newer than the last poll's, until `deadline`.
+    /// ScreenCaptureKit's callback wakes it as the picture is stored.
+    pub fn wait_frame(&self, deadline: std::time::Instant) -> bool {
+        let seen = self.seen.load(std::sync::atomic::Ordering::Acquire);
+        self.channel.wait_newer(seen, deadline) != seen
     }
 
     /// Opens the primary display at a fitted thumbnail size. The first polled
