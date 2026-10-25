@@ -9,6 +9,7 @@
 //! the system scales them as it captures, and each is compared with the one
 //! before at that size. Tests construct the plan and do not call `start`.
 //! FileVault preboot is not a logged-in display and is not captured.
+// trace: records every ignored failure
 
 use vnilink_media::{CapturePlan, ChannelSlot, CursorPolicy, Error, FrameChannel};
 
@@ -205,7 +206,10 @@ impl SCStreamOutputTrait for Handler {
                     changed,
                 });
             }
-            Err(Error::Unsupported(reason)) => self.channel.fail(reason),
+            Err(Error::Unsupported(reason)) => {
+                tracing::warn!(target: vnilink::trace::CAPTURE, reason, "ScreenCaptureKit capture failed");
+                self.channel.fail(reason)
+            }
             Err(_) => self
                 .channel
                 .fail("ScreenCaptureKit did not deliver a frame"),
@@ -285,8 +289,32 @@ impl ScreenCapture {
         Self::start_display(plan, None, startup)
     }
 
-    /// Capture the selected main display rather than assuming enumeration order.
+    /// Capture the selected main display rather than assuming enumeration
+    /// order; records whether capture started, and why not.
     pub fn start_display(
+        plan: &ScreenPlan,
+        display_id: Option<u32>,
+        startup: &vnilink::BackendStartup,
+    ) -> Result<Self, Error> {
+        let started = Self::open_display(plan, display_id, startup);
+        match &started {
+            Ok(capture) => tracing::info!(
+                target: vnilink::trace::CAPTURE,
+                width = capture.full.0,
+                height = capture.full.1,
+                "ScreenCaptureKit capture started"
+            ),
+            Err(error) => tracing::warn!(
+                target: vnilink::trace::CAPTURE,
+                failure = vnilink::trace::Failure::failure_name(error),
+                reason = vnilink::trace::Failure::failure_reason(error),
+                "ScreenCaptureKit capture did not start"
+            ),
+        }
+        started
+    }
+
+    fn open_display(
         plan: &ScreenPlan,
         display_id: Option<u32>,
         startup: &vnilink::BackendStartup,
@@ -533,6 +561,10 @@ mod idle_tests {
 #[cfg(target_os = "macos")]
 impl Drop for ScreenCapture {
     fn drop(&mut self) {
-        let _ = self.stream.stop_capture();
+        vnilink::ignored!(
+            vnilink::trace::CAPTURE,
+            "a stream that cannot stop ends with its capture",
+            self.stream.stop_capture()
+        );
     }
 }

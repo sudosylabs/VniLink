@@ -3,13 +3,15 @@
 //! assumed ones. Decode is reported alongside encode: both ride the same
 //! Media Foundation component, and the decoder path fails its owner
 //! explicitly if a stream ever defeats it.
+// trace: records every ignored failure
 
 use crate::encode::WindowsEncoder;
 
 pub fn probe_video_codecs() -> vnilink::VideoCodecCaps {
     #[cfg(not(windows))]
     {
-        let _ = &WindowsEncoder::open;
+        // Keeps the import used where the probe does not run.
+        let _probe = &WindowsEncoder::open;
         return vnilink::VideoCodecCaps::default();
     }
     #[cfg(windows)]

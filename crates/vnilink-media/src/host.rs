@@ -7,6 +7,7 @@
 //! are not logged. Stop is noticed between bounded reads, even before the
 //! first picture. A session that is no
 //! longer active ends the loop.
+// trace: records every ignored failure
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -226,6 +227,10 @@ impl<E: VideoEncoder> HostSession<E> {
             // A frame larger than one may be is dropped, not fatal: the next
             // starts from a recovery keyframe, at a quarter less bitrate.
             Err(PublishError::Media(error)) if error.is_too_large() => {
+                tracing::debug!(
+                    target: vnilink::trace::ENCODE,
+                    "an encoded picture was too large to send: the next is a smaller keyframe"
+                );
                 self.shrink()?;
                 self.video.request_recovery_keyframe();
                 Ok(PumpOutput::Skipped)
@@ -273,6 +278,16 @@ pub(crate) fn event_session(event: &CoreEvent) -> Option<u64> {
 /// The caller has already started `capture`. This function does not open a
 /// capture. `stop` is read between frames, so a frame already being copied is
 /// finished first.
+/// Records a screen read that failed, which ends the pipeline reading it.
+fn read_failed(error: &Error) {
+    tracing::warn!(
+        target: vnilink::trace::CAPTURE,
+        failure = vnilink::trace::Failure::failure_name(error),
+        reason = vnilink::trace::Failure::failure_reason(error),
+        "the screen could not be read: capture ends"
+    );
+}
+
 pub fn serve_capture<C, E>(
     capture: &C,
     core: &Core,
@@ -320,7 +335,7 @@ where
             1_000_000 / u64::from(session.control.settings().frame_rate),
         );
         let timestamp_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
-        let Some(mut frame) = capture.poll_frame(timestamp_us)? else {
+        let Some(mut frame) = capture.poll_frame(timestamp_us).inspect_err(read_failed)? else {
             std::thread::sleep(std::time::Duration::from_millis(10));
             continue;
         };
@@ -337,7 +352,14 @@ where
                     Err(error) => return Err(error.into()),
                 }
             } else {
-                frame = crate::cursor::composite(&frame, &cursor)?;
+                frame = crate::cursor::composite(&frame, &cursor).inspect_err(|error| {
+                    tracing::warn!(
+                        target: vnilink::trace::CAPTURE,
+                        failure = vnilink::trace::Failure::failure_name(error),
+                        reason = vnilink::trace::Failure::failure_reason(error),
+                        "the pointer could not be drawn into the picture: capture ends"
+                    );
+                })?;
             }
         }
         match session.publish(&frame, &mut sink, session_id) {
@@ -437,7 +459,7 @@ where
         }
         let capture_started = std::time::Instant::now();
         let timestamp = started.elapsed().as_micros().try_into().unwrap_or(u64::MAX);
-        let Some(mut frame) = capture.poll_frame(timestamp)? else {
+        let Some(mut frame) = capture.poll_frame(timestamp).inspect_err(read_failed)? else {
             std::thread::sleep(std::time::Duration::from_millis(10));
             continue;
         };
@@ -454,7 +476,14 @@ where
                     Err(error) => return Err(error.into()),
                 }
             } else {
-                frame = crate::cursor::composite(&frame, &cursor)?;
+                frame = crate::cursor::composite(&frame, &cursor).inspect_err(|error| {
+                    tracing::warn!(
+                        target: vnilink::trace::CAPTURE,
+                        failure = vnilink::trace::Failure::failure_name(error),
+                        reason = vnilink::trace::Failure::failure_reason(error),
+                        "the pointer could not be drawn into the picture: capture ends"
+                    );
+                })?;
             }
         }
         match session.publish(&frame, &mut sink, service_id) {

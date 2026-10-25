@@ -8,6 +8,7 @@
 //! A source that can scale as it captures ([`FrameSource::deliver_at`]) is
 //! asked for the largest size any consumer encodes, so that consumer's
 //! encoder takes the picture as it comes; smaller consumers scale it down.
+// trace: records every ignored failure
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -343,13 +344,49 @@ fn ended(error: &vnilink::Error) -> bool {
     )
 }
 
-/// Ends one consumer because its producer failed: a desktop service tells
-/// its viewer what failed; a legacy session peer is stopped.
-fn fail_target(core: &Core, target: &VideoTarget, failure: StreamFailure) {
+/// A failure for records: its name and fixed reason, never its text.
+fn named(error: &dyn vnilink::trace::Failure) -> (&'static str, Option<&'static str>) {
+    (error.failure_name(), error.failure_reason())
+}
+
+fn named_publish(error: &PublishError) -> (&'static str, Option<&'static str>) {
+    match error {
+        PublishError::Media(error) => named(error),
+        PublishError::Session(error) => named(error),
+    }
+}
+
+/// Ends one consumer because its producer failed, recording `why` and what
+/// failed: a desktop service tells its viewer what failed; a legacy session
+/// peer is stopped.
+fn fail_target(
+    core: &Core,
+    target: &VideoTarget,
+    failure: StreamFailure,
+    why: &'static str,
+    error: Option<(&'static str, Option<&'static str>)>,
+) {
+    tracing::warn!(
+        target: vnilink::trace::STREAM,
+        service = target.id,
+        part = ?failure,
+        why,
+        failure = error.map(|(name, _)| name),
+        reason = error.and_then(|(_, reason)| reason),
+        "the picture stream failed"
+    );
     if target.service {
-        let _ = core.fail_hosted_service(target.id, target.generation, failure);
+        vnilink::ignored!(
+            vnilink::trace::STREAM,
+            "a viewer already gone needs no failure",
+            core.fail_hosted_service(target.id, target.generation, failure)
+        );
     } else {
-        let _ = core.stop_hosted_peer(target.id);
+        vnilink::ignored!(
+            vnilink::trace::STREAM,
+            "a peer already gone needs no stop",
+            core.stop_hosted_peer(target.id)
+        );
     }
 }
 
@@ -524,8 +561,14 @@ fn consume<E, F>(
     );
     let mut session = match opened {
         Ok(session) => session,
-        Err(_) => {
-            fail_target(core, &target, StreamFailure::Encoder);
+        Err(error) => {
+            fail_target(
+                core,
+                &target,
+                StreamFailure::Encoder,
+                "no encoder opened",
+                Some(named(&error)),
+            );
             return;
         }
     };
@@ -547,7 +590,11 @@ fn consume<E, F>(
     // a picture took another input than the one before.
     let mut reported = session.implementation();
     if target.service {
-        let _ = core.report_desktop_encoder(target.id, target.generation, reported);
+        vnilink::ignored!(
+            vnilink::trace::STREAM,
+            "a report about an ended service is not needed",
+            core.report_desktop_encoder(target.id, target.generation, reported)
+        );
     }
     let mut applied_quality = target.quality;
     let mut seen = 0u64;
@@ -560,14 +607,17 @@ fn consume<E, F>(
             .unwrap_or_else(|poison| poison.into_inner())
             .take()
         {
-            if session
-                .observe(&CoreEvent::QualityUpdated {
-                    id: target.id,
-                    quality,
-                })
-                .is_err()
-            {
-                fail_target(core, &target, StreamFailure::Encoder);
+            if let Err(error) = session.observe(&CoreEvent::QualityUpdated {
+                id: target.id,
+                quality,
+            }) {
+                fail_target(
+                    core,
+                    &target,
+                    StreamFailure::Encoder,
+                    "the encoder did not take the new quality",
+                    Some(named(&error)),
+                );
                 return;
             }
             applied_quality = quality;
@@ -577,14 +627,17 @@ fn consume<E, F>(
                 Ok(info) => {
                     stills.agreed = info.stills;
                     if info.quality != applied_quality {
-                        if session
-                            .observe(&CoreEvent::QualityUpdated {
-                                id: target.id,
-                                quality: info.quality,
-                            })
-                            .is_err()
-                        {
-                            fail_target(core, &target, StreamFailure::Encoder);
+                        if let Err(error) = session.observe(&CoreEvent::QualityUpdated {
+                            id: target.id,
+                            quality: info.quality,
+                        }) {
+                            fail_target(
+                                core,
+                                &target,
+                                StreamFailure::Encoder,
+                                "the encoder did not take the viewer's quality",
+                                Some(named(&error)),
+                            );
                             return;
                         }
                         applied_quality = info.quality;
@@ -597,19 +650,32 @@ fn consume<E, F>(
                 .take_desktop_keyframe_request(target.id, target.generation)
                 .unwrap_or(false)
             {
-                session
-                    .observe(&CoreEvent::KeyframeRequested { id: target.id })
-                    .ok();
+                vnilink::ignored!(
+                    vnilink::trace::STREAM,
+                    "a keyframe the encoder could not start comes at the next request",
+                    session.observe(&CoreEvent::KeyframeRequested { id: target.id })
+                );
             }
         } else if control.keyframe.swap(false, Ordering::AcqRel) {
-            session
-                .observe(&CoreEvent::KeyframeRequested { id: target.id })
-                .ok();
+            vnilink::ignored!(
+                vnilink::trace::STREAM,
+                "a keyframe the encoder could not start comes at the next request",
+                session.observe(&CoreEvent::KeyframeRequested { id: target.id })
+            );
         }
         if target.service && session.reopens() != reopens {
-            let _ = core.report_desktop_encoder_reopen(target.id, target.generation);
+            tracing::info!(target: vnilink::trace::ENCODE, service = target.id, "encoder reopened");
+            vnilink::ignored!(
+                vnilink::trace::STREAM,
+                "a report about an ended service is not needed",
+                core.report_desktop_encoder_reopen(target.id, target.generation)
+            );
             reported = session.implementation();
-            let _ = core.report_desktop_encoder(target.id, target.generation, reported);
+            vnilink::ignored!(
+                vnilink::trace::STREAM,
+                "a report about an ended service is not needed",
+                core.report_desktop_encoder(target.id, target.generation, reported)
+            );
         }
         if let Some(still) = stills.made() {
             sink.captured_at = None;
@@ -712,12 +778,20 @@ fn consume<E, F>(
                     applied_quality.max_width,
                     applied_quality.max_height,
                 );
-                let Ok(cursor) =
-                    picture.and_then(|picture| for_picture(&cursor, capture_size, picture))
-                else {
-                    fail_target(core, &target, StreamFailure::Capture);
-                    return;
-                };
+                let cursor =
+                    match picture.and_then(|picture| for_picture(&cursor, capture_size, picture)) {
+                        Ok(cursor) => cursor,
+                        Err(error) => {
+                            fail_target(
+                                core,
+                                &target,
+                                StreamFailure::Capture,
+                                "the pointer could not be placed on the picture",
+                                Some(named(&error)),
+                            );
+                            return;
+                        }
+                    };
                 let published = if target.service {
                     core.publish_desktop_cursor(target.id, target.generation, cursor)
                 } else {
@@ -726,8 +800,14 @@ fn consume<E, F>(
                 match published {
                     Ok(()) => {}
                     Err(error) if ended(&error) => return,
-                    Err(_) => {
-                        fail_target(core, &target, StreamFailure::Capture);
+                    Err(error) => {
+                        fail_target(
+                            core,
+                            &target,
+                            StreamFailure::Capture,
+                            "the pointer could not be sent",
+                            Some(named(&error)),
+                        );
                         return;
                     }
                 }
@@ -742,8 +822,14 @@ fn consume<E, F>(
             }
             match composite(&frame, cursor) {
                 Ok(composited) => frame = composited,
-                Err(_) => {
-                    fail_target(core, &target, StreamFailure::Capture);
+                Err(error) => {
+                    fail_target(
+                        core,
+                        &target,
+                        StreamFailure::Capture,
+                        "the pointer could not be drawn into the picture",
+                        Some(named(&error)),
+                    );
                     return;
                 }
             }
@@ -753,22 +839,36 @@ fn consume<E, F>(
             Ok(crate::PumpOutput::Encoded(_)) => {
                 if target.service && session.implementation() != reported {
                     reported = session.implementation();
-                    let _ = core.report_desktop_encoder(target.id, target.generation, reported);
+                    vnilink::ignored!(
+                        vnilink::trace::STREAM,
+                        "a report about an ended service is not needed",
+                        core.report_desktop_encoder(target.id, target.generation, reported)
+                    );
                 }
                 if target.service {
-                    let _ = core.report_desktop_producer_duration(
-                        target.id,
-                        target.generation,
-                        capture_us,
-                        encode_started.elapsed().as_micros().min(5_000_000) as u64,
+                    vnilink::ignored!(
+                        vnilink::trace::STREAM,
+                        "a report about an ended service is not needed",
+                        core.report_desktop_producer_duration(
+                            target.id,
+                            target.generation,
+                            capture_us,
+                            encode_started.elapsed().as_micros().min(5_000_000) as u64,
+                        )
                     );
                 }
             }
             Ok(_) => {}
             Err(PublishError::Session(error)) if ended(&error) => return,
             // The encoder failed, or what it made could not be sent.
-            Err(_) => {
-                fail_target(core, &target, StreamFailure::Encoder);
+            Err(error) => {
+                fail_target(
+                    core,
+                    &target,
+                    StreamFailure::Encoder,
+                    "the encoder failed or its picture could not be sent",
+                    Some(named_publish(&error)),
+                );
                 return;
             }
         }
@@ -989,7 +1089,15 @@ where
                     }
                     continue;
                 }
-                Err(error) => break Err(error.into()),
+                Err(error) => {
+                    tracing::warn!(
+                        target: vnilink::trace::CAPTURE,
+                        failure = vnilink::trace::Failure::failure_name(&error),
+                        reason = vnilink::trace::Failure::failure_reason(&error),
+                        "the screen could not be read: capture ends"
+                    );
+                    break Err(error.into());
+                }
             };
             // Reading a platform-held picture's pixels copies it: only when wanted.
             if let Some(at) = capture

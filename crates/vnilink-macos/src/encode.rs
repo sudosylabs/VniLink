@@ -16,6 +16,7 @@
 //! `MinAllowedFrameQP` did. The floor is a session property, set for that
 //! one picture and cleared after it; `encode_with_properties` waits for the
 //! picture, so no other picture is encoded under it.
+// trace: records every ignored failure
 
 #[cfg(target_os = "macos")]
 use apple_cf::cm::CMTime;
@@ -585,12 +586,27 @@ impl MacVideoEncoder {
                 matrix,
             ) {
                 Ok(encoder) => Ok(Self::Native(encoder)),
-                Err(_) if kind == vnilink::VideoCodec::H265 => {
+                Err(error) if kind == vnilink::VideoCodec::H265 => {
+                    tracing::info!(
+                        target: vnilink::trace::ENCODE,
+                        failure = vnilink::trace::Failure::failure_name(&error),
+                        reason = vnilink::trace::Failure::failure_reason(&error),
+                        "VideoToolbox HEVC did not open: the software encoder serves instead"
+                    );
                     Ok(Self::Software(vnilink_media::SoftwareEncoder::open(
                         kind, matrix, width, height, fps, bitrate,
                     )?))
                 }
-                Err(error) => Err(error),
+                Err(error) => {
+                    tracing::warn!(
+                        target: vnilink::trace::ENCODE,
+                        codec = ?kind,
+                        failure = vnilink::trace::Failure::failure_name(&error),
+                        reason = vnilink::trace::Failure::failure_reason(&error),
+                        "VideoToolbox did not open"
+                    );
+                    Err(error)
+                }
             }
         } else {
             Ok(Self::Software(vnilink_media::SoftwareEncoder::open(

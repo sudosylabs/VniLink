@@ -3,6 +3,7 @@
 //! base/node/powershell.ts): PowerShell first, then Windows PowerShell, Git
 //! Bash, Command Prompt and WSL distributions. Cygwin, MSYS2 and Cmder are left
 //! out; their default paths sit at the root of a drive any user can write to.
+// trace: records every ignored failure
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
@@ -298,8 +299,16 @@ impl ShellHost for SystemShellHost {
                     std::thread::sleep(std::time::Duration::from_millis(20))
                 }
                 _ => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    vnilink::ignored!(
+                        vnilink::trace::TERMINAL,
+                        "a shell probe past its time is ended at best",
+                        child.kill()
+                    );
+                    vnilink::ignored!(
+                        vnilink::trace::TERMINAL,
+                        "a shell probe past its time is ended at best",
+                        child.wait()
+                    );
                     return None;
                 }
             }

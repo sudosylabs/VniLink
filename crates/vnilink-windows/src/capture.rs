@@ -10,6 +10,7 @@
 //! Pictures stay on the GPU that captured them ([`crate::gpu`]): the encoder
 //! converts and scales them there, and anything else that reads their pixels
 //! copies them out once.
+// trace: records every ignored failure
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -224,7 +225,11 @@ impl WindowsCapture {
     }
 
     unsafe fn open_desktop(startup: &vnilink::BackendStartup) -> Result<UnvalidatedDesktop, Error> {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        ignored_hr!(
+            vnilink::trace::CAPTURE,
+            "a thread with COM already set up keeps it",
+            CoInitializeEx(None, COINIT_MULTITHREADED).ok()
+        );
         check_startup(startup)?;
         let factory: IDXGIFactory1 = CreateDXGIFactory1().map_err(map_error)?;
         check_startup(startup)?;

@@ -1,5 +1,6 @@
 //! A local black window excluded from Desktop Duplication. The window and its
 //! message pump live on one owner thread and are destroyed on revocation/drop.
+// trace: records every ignored failure
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -120,7 +121,11 @@ impl Overlay {
 impl Drop for Overlay {
     fn drop(&mut self) {
         unsafe {
-            let _ = DestroyWindow(self.0);
+            ignored_hr!(
+                vnilink::trace::SYSTEM,
+                "an overlay that cannot be destroyed goes with its thread",
+                DestroyWindow(self.0)
+            );
         }
     }
 }
@@ -158,7 +163,11 @@ impl Privacy {
                         match recv.recv_timeout(Duration::from_millis(100)) {
                             Ok(command) => {
                                 if Instant::now() >= command.deadline {
-                                    let _ = command.reply.send(Err(Error::Timeout));
+                                    vnilink::ignored!(
+                                        vnilink::trace::SYSTEM,
+                                        "the caller stopped waiting for its answer",
+                                        command.reply.send(Err(Error::Timeout))
+                                    );
                                     continue;
                                 }
                                 let result = if command.on && overlay.is_none() {
@@ -183,7 +192,8 @@ impl Privacy {
                         unsafe {
                             let mut message = MSG::default();
                             while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
-                                let _ = TranslateMessage(&message);
+                                // Whether it was translated changes nothing here.
+                                let _translated = TranslateMessage(&message);
                                 DispatchMessageW(&message);
                             }
                         }
@@ -226,7 +236,9 @@ impl Drop for Privacy {
             .take()
         {
             drop(worker.send);
-            let _ = worker.thread.join();
+            if worker.thread.join().is_err() {
+                tracing::warn!(target: vnilink::trace::SYSTEM, "the privacy worker panicked");
+            }
         }
     }
 }

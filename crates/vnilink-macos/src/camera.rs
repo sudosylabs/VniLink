@@ -1,4 +1,5 @@
 //! AVFoundation camera capture into a bounded callback queue and VideoToolbox.
+// trace: records every ignored failure
 use crate::MacEncoder;
 use dispatch2::DispatchQueue;
 use objc2::{
@@ -106,7 +107,17 @@ impl HostCameraFactory for MacCameraFactory {
                     autoreleasepool(|_| capture(config, source.clone(), &ready, &worker_startup));
                 if let Err(error) = run {
                     // The cause, such as missing permission or no usable format, reaches availability.
-                    let _ = ready.try_send(Err(error));
+                    tracing::warn!(
+                        target: vnilink::trace::CAMERA,
+                        failure = vnilink::trace::Failure::failure_name(&error),
+                        reason = vnilink::trace::Failure::failure_reason(&error),
+                        "the camera did not run"
+                    );
+                    vnilink::ignored!(
+                        vnilink::trace::CAMERA,
+                        "the opener stopped waiting for the camera",
+                        ready.try_send(Err(error))
+                    );
                     source.fail();
                 }
                 source.close();
@@ -150,9 +161,21 @@ define_class!(
                 )
             } {
                 Ok(frame) => {
-                    let _ = state.frames.try_send(frame);
+                    vnilink::ignored!(
+                        vnilink::trace::CAMERA,
+                        "the camera's encoder is behind; a newer frame follows",
+                        state.frames.try_send(frame)
+                    );
                 }
-                Err(_) => state.source.fail(),
+                Err(error) => {
+                    tracing::warn!(
+                        target: vnilink::trace::CAMERA,
+                        failure = vnilink::trace::Failure::failure_name(&error),
+                        reason = vnilink::trace::Failure::failure_reason(&error),
+                        "a camera frame could not be read: the camera stops"
+                    );
+                    state.source.fail()
+                }
             }
         }
     }
@@ -205,10 +228,14 @@ impl Drop for CaptureGuard {
     fn drop(&mut self) {
         // A session left mid-configuration by a refused setting may throw
         // again here; the engine outlives a camera that could not stop.
-        let _ = objc2::exception::catch(std::panic::AssertUnwindSafe(|| unsafe {
+        if objc2::exception::catch(std::panic::AssertUnwindSafe(|| unsafe {
             self.session.stopRunning();
             self.output.setSampleBufferDelegate_queue(None, None);
-        }));
+        }))
+        .is_err()
+        {
+            tracing::warn!(target: vnilink::trace::CAMERA, "the camera threw while it stopped");
+        }
     }
 }
 /// The whole frame rate a range offers nearest `requested`. Ranges are

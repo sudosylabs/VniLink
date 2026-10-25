@@ -12,6 +12,7 @@
 //! picture is out. A viewer never shows the picture before the one it was
 //! sent. Draining would also give the picture out, but measured on
 //! Microsoft's decoder it loses the pictures after it until a keyframe.
+// trace: records every ignored failure
 
 use vnilink::EncodedFrame;
 #[cfg(windows)]
@@ -159,7 +160,11 @@ impl WindowsDecoder {
 #[cfg(windows)]
 fn open_transform(width: u16, height: u16) -> windows::core::Result<IMFTransform> {
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        ignored_hr!(
+            vnilink::trace::DECODE,
+            "a thread with COM already set up keeps it",
+            CoInitializeEx(None, COINIT_MULTITHREADED).ok()
+        );
         MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)?;
         let transform: IMFTransform =
             CoCreateInstance(&CLSID_MSH264DecoderMFT, None, CLSCTX_INPROC_SERVER)?;
@@ -173,7 +178,11 @@ fn open_transform(width: u16, height: u16) -> windows::core::Result<IMFTransform
         let mut on = VARIANT::default();
         (*on.Anonymous.Anonymous).vt = VT_UI4;
         (*on.Anonymous.Anonymous).Anonymous.ulVal = 1;
-        let _ = api.SetValue(&CODECAPI_AVLowLatencyMode, &on);
+        ignored_hr!(
+            vnilink::trace::DECODE,
+            "a decoder without low latency mode still decodes",
+            api.SetValue(&CODECAPI_AVLowLatencyMode, &on)
+        );
         // The nominal rate only fills the media type. Decoding follows input.
         // The parameter sets travel in band on keyframes, so the input type
         // carries no sequence-header blob.

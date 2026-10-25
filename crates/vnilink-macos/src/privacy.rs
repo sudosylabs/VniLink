@@ -1,5 +1,6 @@
 //! Owned macOS privacy restrictions. A dedicated run loop owns native pointers;
 //! commands acknowledge OS outcomes, and teardown restores the exact displays.
+// trace: records every ignored failure
 use std::{
     ffi::c_void,
     sync::{
@@ -206,7 +207,14 @@ impl DisplayPrivacy {
 }
 impl Drop for DisplayPrivacy {
     fn drop(&mut self) {
-        let _ = self.restore();
+        if let Err(error) = self.restore() {
+            tracing::warn!(
+                target: vnilink::trace::SYSTEM,
+                failure = vnilink::trace::Failure::failure_name(&error),
+                reason = vnilink::trace::Failure::failure_reason(&error),
+                "the display could not be restored: it may stay dark"
+            );
+        }
     }
 }
 struct TapContext {
@@ -373,7 +381,9 @@ impl Drop for Privacy {
             .take()
         {
             drop(worker.send);
-            let _ = worker.thread.join();
+            if worker.thread.join().is_err() {
+                tracing::warn!(target: vnilink::trace::SYSTEM, "the privacy worker panicked");
+            }
         }
     }
 }
@@ -386,7 +396,11 @@ fn run(recv: mpsc::Receiver<Command>, observed: Arc<AtomicU8>) {
         match recv.recv_timeout(Duration::from_millis(20)) {
             Ok(Command::Display(on, deadline, reply)) => {
                 if std::time::Instant::now() >= deadline {
-                    let _ = reply.send(Err(Error::Timeout));
+                    vnilink::ignored!(
+                        vnilink::trace::SYSTEM,
+                        "the caller stopped waiting for its answer",
+                        reply.send(Err(Error::Timeout))
+                    );
                     continue;
                 }
                 let result = if on {
@@ -411,7 +425,11 @@ fn run(recv: mpsc::Receiver<Command>, observed: Arc<AtomicU8>) {
             }
             Ok(Command::Input(on, deadline, reply)) => {
                 if std::time::Instant::now() >= deadline {
-                    let _ = reply.send(Err(Error::Timeout));
+                    vnilink::ignored!(
+                        vnilink::trace::SYSTEM,
+                        "the caller stopped waiting for its answer",
+                        reply.send(Err(Error::Timeout))
+                    );
                     continue;
                 }
                 let result = if on && tap.is_none() {
@@ -449,10 +467,24 @@ fn run(recv: mpsc::Receiver<Command>, observed: Arc<AtomicU8>) {
             observed.store(u8::from(private), Ordering::Release);
         }
         if !private && refresh_due && !display.saved.is_empty() {
-            let _ = display.restore();
+            if let Err(error) = display.restore() {
+                tracing::warn!(
+                    target: vnilink::trace::SYSTEM,
+                    failure = vnilink::trace::Failure::failure_name(&error),
+                    reason = vnilink::trace::Failure::failure_reason(&error),
+                    "the display could not be restored: it may stay dark"
+                );
+            }
         }
     }
     drop(tap);
-    let _ = display.restore();
+    if let Err(error) = display.restore() {
+        tracing::warn!(
+            target: vnilink::trace::SYSTEM,
+            failure = vnilink::trace::Failure::failure_name(&error),
+            reason = vnilink::trace::Failure::failure_reason(&error),
+            "the display could not be restored: it may stay dark"
+        );
+    }
     observed.store(0, Ordering::Release);
 }

@@ -1,5 +1,6 @@
 //! Locally approved Media Foundation camera capture. OS samples are copied in
 //! asynchronous callbacks; no COM sample or borrowed native buffer crosses threads.
+// trace: records every ignored failure
 use crate::{
     camera_format::{choose_mode, Format},
     WindowsEncoder,
@@ -41,7 +42,11 @@ impl Foundation {
 impl Drop for Foundation {
     fn drop(&mut self) {
         unsafe {
-            let _ = MFShutdown();
+            ignored_hr!(
+                vnilink::trace::CAMERA,
+                "Media Foundation that cannot shut down ends with the process",
+                MFShutdown()
+            );
             CoUninitialize();
         }
     }
@@ -296,8 +301,16 @@ struct OwnedSource(IMFMediaSource, IMFActivate);
 impl Drop for OwnedSource {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.0.Shutdown();
-            let _ = self.1.ShutdownObject();
+            ignored_hr!(
+                vnilink::trace::CAMERA,
+                "a camera source that cannot shut down is released anyway",
+                self.0.Shutdown()
+            );
+            ignored_hr!(
+                vnilink::trace::CAMERA,
+                "a camera source that cannot shut down is released anyway",
+                self.1.ShutdownObject()
+            );
         }
     }
 }
@@ -308,9 +321,12 @@ struct Capture {
 impl Drop for Capture {
     fn drop(&mut self) {
         unsafe {
-            let _ = self
-                .reader
-                .Flush(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32);
+            ignored_hr!(
+                vnilink::trace::CAMERA,
+                "a reader that cannot flush is released anyway",
+                self.reader
+                    .Flush(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)
+            );
             drop(self.source.take());
         }
     }

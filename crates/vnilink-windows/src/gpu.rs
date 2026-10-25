@@ -11,6 +11,7 @@
 //!
 //! The device is multithread-protected: the capture thread and each encoder
 //! thread use its immediate context.
+// trace: records every ignored failure
 
 use std::sync::{Arc, Mutex};
 
@@ -39,7 +40,8 @@ use windows::Win32::Graphics::Dxgi::Common::{
 /// immediate context: D3D11 serialises its calls.
 pub(crate) unsafe fn protect(device: &ID3D11Device) -> windows::core::Result<()> {
     let multithread: ID3D11Multithread = device.cast()?;
-    let _ = multithread.SetMultithreadProtected(true);
+    // Returns whether it was protected before, not whether it worked.
+    let _was_protected = multithread.SetMultithreadProtected(true);
     Ok(())
 }
 

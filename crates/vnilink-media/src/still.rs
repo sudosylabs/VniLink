@@ -6,6 +6,7 @@
 //! whatever matrix the stream is in ([`STILL_SIGNAL`]): the viewer's still
 //! decoder is software AV1, which follows the picture's own declaration.
 //! It is screen content: do not log it.
+// trace: records every ignored failure
 
 use std::sync::mpsc;
 use std::thread::JoinHandle;
@@ -236,7 +237,9 @@ impl Drop for StillWorker {
     fn drop(&mut self) {
         self.jobs = None;
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+            if thread.join().is_err() {
+                tracing::warn!(target: vnilink::trace::STILL, "the still picture worker panicked");
+            }
         }
     }
 }

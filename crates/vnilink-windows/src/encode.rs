@@ -26,6 +26,7 @@
 //! keyframe is as small as the transform's constant-bitrate control makes
 //! it: near the budget on the hardware ones, several times over it on
 //! Microsoft's.
+// trace: records every ignored failure
 
 use vnilink::YuvMatrix;
 #[cfg(windows)]
@@ -172,7 +173,11 @@ impl WindowsEncoder {
         bitrate_bps: u32,
         matrix: YuvMatrix,
     ) -> windows::core::Result<Self> {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        ignored_hr!(
+            vnilink::trace::ENCODE,
+            "a thread with COM already set up keeps it",
+            CoInitializeEx(None, COINIT_MULTITHREADED).ok()
+        );
         MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)?;
         let mut failure = windows::core::Error::from(windows::Win32::Foundation::E_FAIL);
         for candidate in candidates() {
@@ -186,10 +191,31 @@ impl WindowsEncoder {
                 None,
                 matrix,
             ) {
-                Ok(encoder) => return Ok(encoder),
-                Err(err) => failure = err,
+                Ok(encoder) => {
+                    tracing::info!(
+                        target: vnilink::trace::ENCODE,
+                        transform = candidate.name.as_str(),
+                        vendor = ?candidate.vendor,
+                        "Media Foundation encoder opened"
+                    );
+                    return Ok(encoder);
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        target: vnilink::trace::ENCODE,
+                        transform = candidate.name.as_str(),
+                        hresult = format_args!("{:#010x}", err.code().0),
+                        "a Media Foundation encoder did not open; trying the next"
+                    );
+                    failure = err
+                }
             }
         }
+        tracing::warn!(
+            target: vnilink::trace::ENCODE,
+            hresult = format_args!("{:#010x}", failure.code().0),
+            "no Media Foundation encoder opened"
+        );
         Err(failure)
     }
 
@@ -204,7 +230,11 @@ impl WindowsEncoder {
         matrix: YuvMatrix,
     ) -> windows::core::Result<Self> {
         unsafe {
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            ignored_hr!(
+                vnilink::trace::ENCODE,
+                "a thread with COM already set up keeps it",
+                CoInitializeEx(None, COINIT_MULTITHREADED).ok()
+            );
             MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)?;
             Self::create_transform(
                 candidate,
@@ -289,7 +319,11 @@ impl WindowsEncoder {
             transform.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, manager.as_raw() as usize)?;
         }
         if let Ok(attributes) = transform.GetAttributes() {
-            let _ = attributes.SetUINT32(&MF_LOW_LATENCY, 1);
+            ignored_hr!(
+                vnilink::trace::ENCODE,
+                "an encoder without low latency mode still encodes",
+                attributes.SetUINT32(&MF_LOW_LATENCY, 1)
+            );
         }
         let rate = u32::from(frame_rate.max(1));
         if !camera {
@@ -297,20 +331,32 @@ impl WindowsEncoder {
             // changed screen arrives sharp in one picture; and the scenario
             // this transform tunes for screens. Settings it does not know
             // are left at its defaults.
-            let _ = set_codec_u32(
-                &transform,
-                &CODECAPI_AVEncCommonRateControlMode,
-                eAVEncCommonRateControlMode_CBR.0 as u32,
+            ignored_hr!(
+                vnilink::trace::ENCODE,
+                "an encoder refusing constant bit rate keeps its own rate control",
+                set_codec_u32(
+                    &transform,
+                    &CODECAPI_AVEncCommonRateControlMode,
+                    eAVEncCommonRateControlMode_CBR.0 as u32,
+                )
             );
-            let _ = set_codec_u32(
-                &transform,
-                &CODECAPI_AVEncCommonBufferSize,
-                vnilink::picture_buffer_bits(bitrate_bps),
+            ignored_hr!(
+                vnilink::trace::ENCODE,
+                "an encoder refusing the buffer size keeps its own",
+                set_codec_u32(
+                    &transform,
+                    &CODECAPI_AVEncCommonBufferSize,
+                    vnilink::picture_buffer_bits(bitrate_bps),
+                )
             );
-            let _ = set_codec_u32(
-                &transform,
-                &CODECAPI_AVScenarioInfo,
-                eAVScenarioInfo_DisplayRemoting.0 as u32,
+            ignored_hr!(
+                vnilink::trace::ENCODE,
+                "an encoder refusing the screen scenario keeps its default tuning",
+                set_codec_u32(
+                    &transform,
+                    &CODECAPI_AVScenarioInfo,
+                    eAVScenarioInfo_DisplayRemoting.0 as u32,
+                )
             );
         }
         let output = video_type(MFVideoFormat_H264, width, height, rate, matrix)?;
@@ -434,13 +480,17 @@ impl VideoEncoder for WindowsEncoder {
             .is_ok();
             if taken {
                 // SAFETY: as above.
-                let _ = unsafe {
-                    set_codec_u32(
-                        &self.transform,
-                        &CODECAPI_AVEncCommonBufferSize,
-                        vnilink::picture_buffer_bits(bitrate_bps),
-                    )
-                };
+                ignored_hr!(
+                    vnilink::trace::ENCODE,
+                    "an encoder refusing the buffer size keeps its own",
+                    unsafe {
+                        set_codec_u32(
+                            &self.transform,
+                            &CODECAPI_AVEncCommonBufferSize,
+                            vnilink::picture_buffer_bits(bitrate_bps),
+                        )
+                    }
+                );
             }
             Ok(taken)
         }
@@ -484,7 +534,11 @@ impl VideoEncoder for WindowsEncoder {
                 .is_ok();
             let sample = self.encode_picture(frame, captured, params);
             if floored {
-                let _ = unsafe { set_codec_u32(&self.transform, &CODECAPI_AVEncVideoMinQP, 0) };
+                ignored_hr!(
+                    vnilink::trace::ENCODE,
+                    "a quality floor that cannot be lifted is lifted with the next one",
+                    unsafe { set_codec_u32(&self.transform, &CODECAPI_AVEncVideoMinQP, 0) }
+                );
             }
             let sample = sample?;
             if floored {
@@ -951,11 +1005,29 @@ impl WindowsEncoder {
         matrix: YuvMatrix,
         device: &crate::gpu::GpuDevice,
     ) -> Option<Self> {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-        MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET).ok()?;
-        let manager = device_manager(device).ok()?;
-        let adapter = device.adapter().ok()?;
-        crate::transform::hardware_encoders_on(adapter)
+        ignored_hr!(
+            vnilink::trace::ENCODE,
+            "a thread with COM already set up keeps it",
+            CoInitializeEx(None, COINIT_MULTITHREADED).ok()
+        );
+        let step = |step: &'static str| {
+            move |error: windows::core::Error| {
+                tracing::info!(
+                    target: vnilink::trace::ENCODE,
+                    step,
+                    hresult = format_args!("{:#010x}", error.code().0),
+                    "the GPU encoder could not be prepared: pictures are copied to the CPU instead"
+                );
+            }
+        };
+        MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)
+            .map_err(step("Media Foundation"))
+            .ok()?;
+        let manager = device_manager(device)
+            .map_err(step("device manager"))
+            .ok()?;
+        let adapter = device.adapter().map_err(step("adapter")).ok()?;
+        let opened = crate::transform::hardware_encoders_on(adapter)
             .iter()
             .find_map(|candidate| {
                 Self::create_transform(
@@ -968,12 +1040,33 @@ impl WindowsEncoder {
                     Some(&manager),
                     matrix,
                 )
+                .map_err(|error| {
+                    tracing::debug!(
+                        target: vnilink::trace::ENCODE,
+                        transform = candidate.name.as_str(),
+                        hresult = format_args!("{:#010x}", error.code().0),
+                        "a GPU encoder did not take textures; trying the next"
+                    );
+                })
                 .ok()
-            })
-            .map(|mut encoder| {
-                encoder.textures = Some(device.clone());
-                encoder
-            })
+                .inspect(|_| {
+                    tracing::info!(
+                        target: vnilink::trace::ENCODE,
+                        transform = candidate.name.as_str(),
+                        "GPU encoder opened reading textures"
+                    );
+                })
+            });
+        if opened.is_none() {
+            tracing::info!(
+                target: vnilink::trace::ENCODE,
+                "no GPU encoder takes textures here: pictures are copied to the CPU instead"
+            );
+        }
+        opened.map(|mut encoder| {
+            encoder.textures = Some(device.clone());
+            encoder
+        })
     }
 
     /// Whether this encoder reads converted pictures as textures.

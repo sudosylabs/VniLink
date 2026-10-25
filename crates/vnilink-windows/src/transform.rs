@@ -16,6 +16,7 @@
 //! bitrate is measured per vendor (`recovery_tests`), not assumed from its
 //! controls: every transform measured accepts `AVEncVideoMinQP` or reports
 //! it unsupported, and none applies it.
+// trace: records every ignored failure
 
 use windows::core::{GUID, PWSTR};
 use windows::Win32::Foundation::LUID;
@@ -172,7 +173,11 @@ impl Drop for CreatedTransform {
     fn drop(&mut self) {
         if let Some(activate) = &self.activate {
             // SAFETY: the activation object created this transform.
-            let _ = unsafe { activate.ShutdownObject() };
+            ignored_hr!(
+                vnilink::trace::ENCODE,
+                "a transform that cannot shut down is released anyway",
+                unsafe { activate.ShutdownObject() }
+            );
         }
     }
 }

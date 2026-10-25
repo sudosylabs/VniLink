@@ -1,4 +1,5 @@
 //! Native macOS actions and owned privacy restrictions. OS consent may reject a request.
+// trace: records every ignored failure
 use std::process::Command;
 use vnilink::system::{HostSessionState, HostSystemActions, SystemSupport};
 use vnilink::Error;
@@ -111,15 +112,32 @@ fn request_session_action(action: &str) -> Result<(), Error> {
                 }
             }
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                vnilink::ignored!(
+                    vnilink::trace::SYSTEM,
+                    "a session action that cannot be waited on is ended at best",
+                    child.kill()
+                );
+                vnilink::ignored!(
+                    vnilink::trace::SYSTEM,
+                    "a session action that cannot be waited on is ended at best",
+                    child.wait()
+                );
                 return Err(Error::Unsupported("macOS session action"));
             }
             Ok(None) => {}
         }
         if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            tracing::warn!(target: vnilink::trace::SYSTEM, "a session action did not finish in time and was ended");
+            vnilink::ignored!(
+                vnilink::trace::SYSTEM,
+                "a session action past its time is ended at best",
+                child.kill()
+            );
+            vnilink::ignored!(
+                vnilink::trace::SYSTEM,
+                "a session action past its time is ended at best",
+                child.wait()
+            );
             return Err(Error::Timeout);
         }
         std::thread::sleep(std::time::Duration::from_millis(20));

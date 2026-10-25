@@ -7,6 +7,7 @@
 //! A requested keyframe answers a loss, so it is a recovery keyframe: the
 //! encoder may cap its size and let quality refine over the pictures after
 //! it. The first picture and a size change still get a full keyframe.
+// trace: records every ignored failure
 
 use vnilink::Quality;
 use vnilink::{Core, CoreEvent, EncodedFrame, MAX_VIDEO_FRAME};
@@ -294,7 +295,10 @@ impl FramePump {
         let sample = match encoder.encode(input, &params) {
             // A dropped picture is not a failure: the stream goes on, and a
             // keyframe still owed is asked of the next picture.
-            Err(error) if error.is_dropped() => return Ok(PumpOutput::Skipped),
+            Err(error) if error.is_dropped() => {
+                tracing::trace!(target: vnilink::trace::ENCODE, "the encoder's rate control dropped a picture");
+                return Ok(PumpOutput::Skipped);
+            }
             sample => sample?,
         };
         let keyframe = sample.keyframe();

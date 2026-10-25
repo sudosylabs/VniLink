@@ -9,6 +9,7 @@
 //! The pending callback holds the event generator. Shutting the transform
 //! down ([`crate::transform::CreatedTransform`] does when dropped) completes
 //! it with an error, and the chain ends.
+// trace: records every ignored failure
 
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::Instant;
@@ -152,7 +153,11 @@ impl Callback_Impl {
         let callback: IMFAsyncCallback = self.to_interface();
         // SAFETY: the generator is live while this callback is referenced.
         if unsafe { self.generator.BeginGetEvent(&callback, None) }.is_err() {
-            let _ = self.sender.send(Event::Ended);
+            vnilink::ignored!(
+                vnilink::trace::ENCODE,
+                "nobody waits for the end of events that already ended",
+                self.sender.send(Event::Ended)
+            );
         }
         Ok(())
     }

@@ -8,6 +8,24 @@
 //! neither one reaches the secure UAC desktop.
 //! A build on macOS or Linux does not execute the Win32 code.
 
+/// Records a Windows call's failure this crate carries on from: why, and
+/// its HRESULT, a system code, never text; counted like `vnilink::ignored!`.
+#[allow(unused_macros)]
+macro_rules! ignored_hr {
+    ($target:expr, $why:literal, $result:expr $(,)?) => {
+        if let Err(error) = $result {
+            let error: windows::core::Error = error;
+            tracing::debug!(
+                target: $target,
+                why = $why,
+                hresult = format_args!("{:#010x}", error.code().0),
+                "ignored"
+            );
+            vnilink::trace::count_ignored($target, $why);
+        }
+    };
+}
+
 mod bitstream;
 mod codecs;
 #[cfg(any(windows, test))]
