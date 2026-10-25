@@ -617,6 +617,7 @@ where
     let mut last_published: Option<Instant> = None;
     // A size the source would not deliver is not asked for again.
     let mut refused = None;
+    let mut next_read = Instant::now();
     std::thread::scope(|scope| {
         let mut running: Vec<Running<'_>> = Vec::new();
         let mut draining: Vec<Running<'_>> = Vec::new();
@@ -797,10 +798,16 @@ where
                     unchanged,
                 );
             }
-            // Always wait out the period: a slow read is no reason to read
-            // again at once.
-            if let Some(remaining) = period.checked_sub(read_started.elapsed()) {
-                std::thread::sleep(remaining);
+            // Reads keep the frame rate's cadence: the loop's own work is
+            // part of the period, not added to it, which had a 30 fps
+            // stream read 25 times a second and a 60 fps one 52. A read
+            // that ran past its time starts the cadence again from now
+            // rather than reading again at once to catch up.
+            let now = Instant::now();
+            next_read += period;
+            match next_read.checked_duration_since(now) {
+                Some(remaining) => std::thread::sleep(remaining),
+                None => next_read = now,
             }
         };
         for worker in running.iter().chain(draining.iter()) {

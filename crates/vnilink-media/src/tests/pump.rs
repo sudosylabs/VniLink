@@ -129,11 +129,12 @@ fn frames_inside_the_interval_are_skipped_until_a_keyframe_is_requested() {
     let (encoder, log) = Scripted::honoring();
     let mut host = HostVideo::new(quality(30, 32, 32), encoder);
     host.push(&picture(32, 32, 0)).unwrap();
+    // An eighth of the 33 ms interval early is read jitter, and due.
     assert!(matches!(
-        host.push(&picture(32, 32, 33_332)).unwrap(),
+        host.push(&picture(32, 32, 29_166)).unwrap(),
         PumpOutput::Skipped
     ));
-    let frame = encoded(host.push(&picture(32, 32, 33_333)).unwrap());
+    let frame = encoded(host.push(&picture(32, 32, 29_167)).unwrap());
     assert!(!frame.keyframe);
     {
         let log = log.lock().unwrap();

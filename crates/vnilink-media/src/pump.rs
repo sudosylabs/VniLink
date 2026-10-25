@@ -324,11 +324,18 @@ impl FramePump {
             None => true,
             Some(previous) if timestamp_us < previous => true,
             Some(previous) => {
-                timestamp_us.saturating_sub(previous) >= interval_us(self.quality.max_frame_rate)
+                let interval = interval_us(self.quality.max_frame_rate);
+                timestamp_us.saturating_sub(previous) >= interval - interval / JITTER_SHARE
             }
         }
     }
 }
+
+/// A picture this share of the interval early is still due: pictures read
+/// at the frame rate come a little early or late, and one read late made
+/// the next, on time, look early and be skipped, a picture lost a time.
+/// A source faster than the frame rate still gets no more than it.
+const JITTER_SHARE: u64 = 8;
 
 fn interval_us(frame_rate: u8) -> u64 {
     1_000_000 / u64::from(frame_rate)
