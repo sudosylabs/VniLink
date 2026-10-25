@@ -14,6 +14,7 @@ import type { DeviceSummary } from '../../services/devices/deviceService.js';
 import { latencyStages, type LatencyStage } from '../../services/remoteDesktop/desktopLatency.js';
 import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopPointer, type DesktopPointerShape, type DesktopStats, type IDesktopSession } from '../../services/remoteDesktop/remoteDesktopService.js';
 import { ITabService, type WorkbenchTab } from '../../services/tabs/tabService.js';
+import { StillCompositor } from './stillCompositor.js';
 
 type DesktopProblem = DesktopFailure | DesktopEnd;
 
@@ -45,14 +46,12 @@ interface OverlayAction {
  * Holds the newest decoded picture until the screen's next frame, then
  * draws it: pictures that arrive faster than the screen refreshes replace
  * the one waiting, so the shown picture is never behind the decoder. A
- * still picture stays until the screen changes: the stream's pictures of
- * the same screen behind it are not drawn over it.
+ * still waiting is not replaced by a repeat of the same screen, and a
+ * change waiting, when a repeat replaces it, is still drawn as a change.
  */
 class NextFramePresenter extends Disposable {
 	private pending: DesktopPicture | undefined;
 	private handle: number | undefined;
-	/** The newest picture taken is a still. */
-	private still = false;
 
 	constructor(
 		private readonly targetWindow: Window,
@@ -63,18 +62,19 @@ class NextFramePresenter extends Disposable {
 	}
 
 	public show(picture: DesktopPicture): void {
-		if (picture.role === 'unchanged' && this.still) {
+		if (picture.role === 'unchanged' && this.pending?.role === 'still') {
 			picture.frame.close();
 			return;
 		}
-		if (picture.role !== 'unchanged') {
-			this.still = picture.role === 'still';
-		}
+		let next = picture;
 		if (this.pending) {
+			if (picture.role === 'unchanged' && this.pending.role === 'changed') {
+				next = { ...picture, role: 'changed' };
+			}
 			this.pending.frame.close();
 			this.skip(this.pending);
 		}
-		this.pending = picture;
+		this.pending = next;
 		this.handle ??= this.targetWindow.requestAnimationFrame(() => {
 			this.handle = undefined;
 			const next = this.pending;
@@ -327,6 +327,8 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	/** Whether this tab already reconnected once after a picture it couldn't show. */
 	private retriedCodec = false;
 	private hasPicture = false;
+	/** Keeps a still where the screen has not changed since it. */
+	private readonly stills = new StillCompositor();
 	/** The end of the running picture that the current reconnect answers. */
 	private reconnectingFor: DesktopProblem | undefined;
 	/** The display shown, and its bounds, as the other computer reports them at the picture's revision. */
@@ -535,6 +537,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			this.showProblem(end, true);
 		}));
 		this.session.value = session;
+		this.stills.reset();
 		this.remotePointer = undefined;
 		this.showPointer();
 		this.selected = undefined;
@@ -558,7 +561,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	}
 
 	private draw(picture: DesktopPicture): void {
-		const { frame, display, revision } = picture;
+		const { frame, display, revision, role } = picture;
 		try {
 			if (!this.hasPicture || this.overlay.dataset.state) {
 				this.hasPicture = true;
@@ -584,7 +587,14 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 				this.canvas.height = frame.displayHeight;
 				this.layout();
 			}
-			this.context.drawImage(frame, 0, 0);
+			const plan = this.stills.plan(frame, role);
+			if (plan === 'whole') {
+				this.context.drawImage(frame, 0, 0);
+			} else {
+				for (const { x, y, width, height } of plan) {
+					this.context.drawImage(frame, x, y, width, height, x, y, width, height);
+				}
+			}
 			this.session.value?.presented(picture);
 		} finally {
 			frame.close();

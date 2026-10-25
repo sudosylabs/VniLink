@@ -75,13 +75,17 @@ class FakeSession implements IDesktopSession {
 		this.skippedPictures.push(picture);
 	}
 
-	/** A 1920 × 1080 picture of display 7 at revision 3, in one colour. */
-	public picture(role: DesktopPictureRole = 'changed', colour = '#1d4b6c'): void {
+	/** A 1920 × 1080 picture of display 7 at revision 3, in one colour, with a 40 × 40 patch of another at 100, 100. */
+	public picture(role: DesktopPictureRole = 'changed', colour = '#1d4b6c', patch?: string): void {
 		const canvas = new OffscreenCanvas(1920, 1080);
 		const context = canvas.getContext('2d');
 		if (context) {
 			context.fillStyle = colour;
 			context.fillRect(0, 0, 1920, 1080);
+			if (patch) {
+				context.fillStyle = patch;
+				context.fillRect(100, 100, 40, 40);
+			}
 		}
 		this.pictures.fire({ frame: new VideoFrame(canvas, { timestamp: 0 }), role, display: '7', revision: '3', decodedAt: performance.now() });
 	}
@@ -168,11 +172,15 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		await new Promise(resolve => requestAnimationFrame(resolve));
 		assert(sessions[0].presentedPictures.length === presented + 1 && sessions[0].skippedPictures.length === 2, `Pictures behind the newest were drawn: ${String(sessions[0].presentedPictures.length - presented)} drawn, ${String(sessions[0].skippedPictures.length)} skipped`);
 		// A still picture stays until the screen changes: the stream's pictures of the same screen are not drawn over it.
-		const shownColour = (): string => {
-			const [red, green, blue] = canvas.getContext('2d')?.getImageData(960, 540, 1, 1).data ?? [];
+		const shownColour = (x = 960, y = 540): string => {
+			const [red, green, blue] = canvas.getContext('2d')?.getImageData(x, y, 1, 1).data ?? [];
 			return `${String(red)},${String(green)},${String(blue)}`;
 		};
 		const frame = (): Promise<unknown> => new Promise(resolve => requestAnimationFrame(resolve));
+		// The stream's repeat of the screen the still will show, to compare changes with.
+		sessions[0].picture('unchanged', '#808080');
+		await frame();
+		await frame();
 		sessions[0].picture('still', '#ff8000');
 		await frame();
 		await frame();
@@ -181,6 +189,18 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		await frame();
 		await frame();
 		assert(shownColour() === '255,128,0', `A picture of the same screen was drawn over the still: ${shownColour()}`);
+		// A small change, such as a clock's, redraws only its tiles: the still stays everywhere else.
+		sessions[0].picture('changed', '#808080', '#00ff00');
+		await frame();
+		await frame();
+		assert(shownColour(110, 110) === '0,255,0', `A small change was not drawn: ${shownColour(110, 110)}`);
+		assert(shownColour() === '255,128,0' && shownColour(300, 300) === '255,128,0', `A small change replaced the still: ${shownColour()}, ${shownColour(300, 300)}`);
+		// Repeats after it keep both: the changed tiles from the stream, the rest from the still.
+		sessions[0].picture('unchanged', '#808080', '#00ff00');
+		await frame();
+		await frame();
+		assert(shownColour(110, 110) === '0,255,0' && shownColour() === '255,128,0', 'A repeat after a small change undid it');
+		// Most of the screen changing replaces the still everywhere.
 		sessions[0].picture('changed', '#0000ff');
 		await frame();
 		await frame();
