@@ -666,8 +666,11 @@ async function measureAcross(root: string, signal: AbortSignal, options: Latency
 			`--working-directory=${remote.root}`,
 			'-p', `StandardOutput=file:${remoteOutput}/${there}.log`, '-p', `StandardError=file:${remoteOutput}/${there}.log`,
 			...Object.entries(remoteEnvironment).map(([name, value]) => `--setenv=${name}=${value}`),
-			// As on Linux here: the sides run under XWayland.
-			executable, '--ozone-platform=x11', `${remote.root}/out/latency.cjs`,
+			// The viewer reads no screen, so it needs no placed window and runs
+			// as a Wayland client: Chromium decodes in hardware through VA-API
+			// there, which is what a viewer measured across two computers
+			// should show. Under XWayland it decodes in software.
+			executable, '--ozone-platform=wayland', `${remote.root}/out/latency.cjs`,
 		].map(shellWord).join(' ');
 		const other = processes.start('ssh', [...shell.args, `mkdir -p ${shellWord(`${remoteRendezvous}-profile`)} && ${launch}`], { stdio: 'ignore' });
 		for (const side of [local, other]) {
