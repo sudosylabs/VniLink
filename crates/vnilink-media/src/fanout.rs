@@ -373,18 +373,29 @@ fn small_change(frame: &RawFrame) -> bool {
 }
 
 /// One target's still pictures: asked for once the screen has had no more
-/// than small changes for [`STILL_AFTER`], once per still period, and
-/// published only if the screen did not change more than that meanwhile.
+/// than small changes for [`STILL_AFTER`], once per such still period, and
+/// published only if the screen did not change at all while it was made: a
+/// small change then would leave the still showing what the stream already
+/// replaced, and the viewer redraws only where the stream says it changed.
 struct Stills {
     /// The viewer agreed to still pictures.
     agreed: bool,
     worker: Option<StillWorker>,
-    /// Changes seen, and when the last came.
+    /// Changes beyond small ones, and when the last came.
     change: u64,
     changed_at: Instant,
-    /// The change a still was last asked for after.
-    asked: Option<u64>,
+    /// Every change, small ones included, and when the last came.
+    screen: u64,
+    screen_at: Instant,
+    /// The change and the screen a still was last asked for at.
+    asked: Option<(u64, u64)>,
+    /// The change a still was last published for.
+    sent: Option<u64>,
 }
+
+/// How long the screen stays the same before a still is asked for again,
+/// after one was made while it changed.
+const STILL_SETTLE: Duration = Duration::from_millis(100);
 
 impl Stills {
     fn new() -> Self {
@@ -393,22 +404,36 @@ impl Stills {
             worker: None,
             change: 0,
             changed_at: Instant::now(),
+            screen: 0,
+            screen_at: Instant::now(),
             asked: None,
+            sent: None,
         }
     }
 
+    /// The screen changed, more than a little.
     fn changed(&mut self) {
         self.change = self.change.wrapping_add(1);
         self.changed_at = Instant::now();
+        self.changed_a_little();
     }
 
-    /// Whether to ask for a still now: agreed, still for long enough, not
-    /// asked for since the last change, and no keyframe owed.
+    /// The screen changed a little: a clock or a caret.
+    fn changed_a_little(&mut self) {
+        self.screen = self.screen.wrapping_add(1);
+        self.screen_at = Instant::now();
+    }
+
+    /// Whether to ask for a still now: agreed, no more than small changes
+    /// for long enough, none sent since the last larger change, not asked
+    /// for at this screen, the screen settled, and no keyframe owed.
     fn due(&self, keyframe_pending: bool) -> bool {
         self.agreed
             && !keyframe_pending
-            && self.asked != Some(self.change)
+            && self.sent != Some(self.change)
+            && self.asked != Some((self.change, self.screen))
             && self.changed_at.elapsed() >= STILL_AFTER
+            && self.screen_at.elapsed() >= STILL_SETTLE
     }
 
     fn make(&mut self, frame: RawFrame, size: (u16, u16), budget: usize) {
@@ -418,19 +443,22 @@ impl Stills {
         if self
             .worker
             .as_ref()
-            .is_some_and(|worker| worker.make(self.change, frame, size, budget))
+            .is_some_and(|worker| worker.make(self.screen, frame, size, budget))
         {
-            self.asked = Some(self.change);
+            self.asked = Some((self.change, self.screen));
         }
     }
 
-    /// A still made since, unless the screen changed after it was asked for.
+    /// A still made since, unless the screen changed at all after it was
+    /// asked for.
     fn made(&mut self) -> Option<vnilink::EncodedFrame> {
         let made = self.worker.as_ref()?.take()?;
-        if made.change != self.change {
+        if made.change != self.screen {
             return None;
         }
-        vnilink::EncodedFrame::still(made.timestamp_us, made.picture?).ok()
+        let still = vnilink::EncodedFrame::still(made.timestamp_us, made.picture?).ok()?;
+        self.sent = Some(self.change);
+        Some(still)
     }
 }
 
@@ -618,7 +646,9 @@ fn consume<E, F>(
                     .changed()
                     .and_then(|changes| changes.regions.as_deref()),
             );
-            if !small_change(&frame) {
+            if small_change(&frame) {
+                stills.changed_a_little();
+            } else {
                 stills.changed();
             }
         }
