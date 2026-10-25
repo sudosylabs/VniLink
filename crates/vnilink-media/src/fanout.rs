@@ -757,11 +757,12 @@ where
             // Reads keep to the frame rate, however fast pictures come: a
             // 120 Hz display at 60 fps takes the newest once the period has
             // passed. They follow a grid a period apart, and one may come a
-            // sixteenth of a period before its place on it, so a source whose
-            // pictures come a hair faster than the period is not held back
-            // a little more with every read. Waits and sleeps are short, so
-            // stop is seen.
-            let slack = period / 16;
+            // quarter of a period before its place on it: a compositor's
+            // pictures are some milliseconds early or late, and a read held
+            // for the grid would wait that long for nothing. A read long
+            // after its place starts the grid again at itself. Waits and
+            // sleeps are short, so stop is seen.
+            let slack = period / 4;
             let now = Instant::now();
             if now + slack < next_read {
                 std::thread::sleep((next_read - slack - now).min(WAKE_SLICE));
