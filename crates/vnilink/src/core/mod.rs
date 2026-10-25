@@ -105,6 +105,10 @@ pub enum Listen {
     Default,
     /// IPv4 loopback only. Same-machine tests use this.
     Loopback,
+    /// No direct address at all: the configured relay is the only way in or
+    /// out, so tests on one computer exercise a relayed connection.
+    #[cfg(any(test, feature = "test-probes"))]
+    RelayOnly,
 }
 
 /// Per-installation settings. Nothing here is compiled in for a particular person.

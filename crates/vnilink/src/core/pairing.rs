@@ -27,6 +27,13 @@ impl Core {
             SystemTime::now(),
             crate::hostname::local_hostname(),
         )?;
+        tracing::info!(
+            target: crate::trace::PAIRING,
+            ttl_s = ttl.as_secs(),
+            relays = relays.len(),
+            direct = direct.len(),
+            "invitation issued"
+        );
         Ok(token)
     }
 
@@ -73,6 +80,14 @@ impl Core {
             expires_at_ms: invitation.expires_at_ms,
             allow_control,
         });
+        tracing::info!(
+            target: crate::trace::PAIRING,
+            ttl_s = ttl.as_secs(),
+            allow_control,
+            relays = relays.len(),
+            direct = direct.len(),
+            "pairing file exported"
+        );
         Ok(PairingFile {
             bytes,
             check,
@@ -94,7 +109,15 @@ impl Core {
         now: SystemTime,
     ) -> Result<PairingPreview, Error> {
         self.ensure_alive()?;
-        crate::pairing::inspect(bytes, now, self.local_endpoint_id())
+        let preview = crate::pairing::inspect(bytes, now, self.local_endpoint_id());
+        tracing::info!(
+            target: crate::trace::PAIRING,
+            bytes = bytes.len(),
+            refused = preview.as_ref().err().map(Error::name),
+            reason = preview.as_ref().err().and_then(Error::reason),
+            "pairing file opened"
+        );
+        preview
     }
 
     /// Saves the device that wrote `preview` when the digits match that screen.
@@ -106,7 +129,10 @@ impl Core {
         preview: &PairingPreview,
         check_from_other_screen: &str,
     ) -> Result<DeviceInfo, Error> {
-        crate::pairing::require_same_check(preview, check_from_other_screen)?;
+        if let Err(error) = crate::pairing::require_same_check(preview, check_from_other_screen) {
+            tracing::info!(target: crate::trace::PAIRING, "pairing digits did not match");
+            return Err(error);
+        }
         self.accept_invitation(&preview.token)
     }
 
@@ -150,11 +176,29 @@ impl Core {
             .take()
             .ok_or(Error::NoControlRequest)?;
         drop(state);
+        tracing::info!(target: crate::trace::PAIRING, "control request rejected");
         let _ = pending.decision.send(false);
         Ok(())
     }
 
+    /// Saves the device an invitation names; records how it went.
     pub fn accept_invitation(&self, token: &str) -> Result<DeviceInfo, Error> {
+        let accepted = self.accept(token);
+        tracing::info!(
+            target: crate::trace::PAIRING,
+            refused = accepted.as_ref().err().map(Error::name),
+            reason = accepted.as_ref().err().and_then(Error::reason),
+            peer = accepted
+                .as_ref()
+                .ok()
+                .and_then(|device| parse_endpoint_id(&device.endpoint_id).ok())
+                .map(|key| crate::diagnostics::fingerprint(&key)),
+            "invitation accepted"
+        );
+        accepted
+    }
+
+    fn accept(&self, token: &str) -> Result<DeviceInfo, Error> {
         let (opened, nonce) = invitation::open(token, SystemTime::now())?;
         if opened.endpoint_id == *self.shared.secret.public().as_bytes() {
             return Err(Error::InvalidInvitation(
@@ -221,6 +265,16 @@ impl Core {
     }
 
     pub(super) fn finish_control_request(&self, check: &str) -> Result<DeviceInfo, Error> {
+        let answered = self.answer_control_request(check);
+        tracing::info!(
+            target: crate::trace::PAIRING,
+            refused = answered.as_ref().err().map(Error::name),
+            "control request answered"
+        );
+        answered
+    }
+
+    fn answer_control_request(&self, check: &str) -> Result<DeviceInfo, Error> {
         let mut state = self.alive_state()?;
         let pending = state
             .control_request

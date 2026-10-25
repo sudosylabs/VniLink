@@ -160,6 +160,7 @@ pub(super) async fn bind_endpoint(
     listen: Listen,
     clear_lookup: bool,
 ) -> Result<Endpoint, Error> {
+    let relayed = !matches!(relay_mode, RelayMode::Disabled);
     let mut builder = Endpoint::builder(presets::N0)
         .secret_key(secret)
         .alpns(vec![ALPN.to_vec(), FILES_ALPN.to_vec()])
@@ -174,7 +175,18 @@ pub(super) async fn bind_endpoint(
             .bind_addr("127.0.0.1:0")
             .map_err(Error::network_debug)?;
     }
-    builder.bind().await.map_err(Error::network_debug)
+    #[cfg(any(test, feature = "test-probes"))]
+    if listen == Listen::RelayOnly {
+        builder = builder.clear_ip_transports();
+    }
+    let endpoint = builder.bind().await.map_err(Error::network_debug)?;
+    tracing::info!(
+        target: crate::trace::RELAY,
+        relay = relayed,
+        listen = ?listen,
+        "endpoint bound"
+    );
+    Ok(endpoint)
 }
 
 pub(super) async fn accept_loop(shared: Arc<Shared>) {

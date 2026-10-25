@@ -62,6 +62,11 @@ impl Core {
     /// device and reports the store error.
     pub fn unpair(&self, endpoint_id: &str) -> Result<(), Error> {
         let key = parse_endpoint_id(endpoint_id)?;
+        tracing::info!(
+            target: crate::trace::PAIRING,
+            peer = crate::diagnostics::fingerprint(&key),
+            "unpair requested"
+        );
         let mut incoming_stop = Vec::new();
         let mut outgoing_stop = None;
         {

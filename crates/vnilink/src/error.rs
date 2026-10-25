@@ -76,6 +76,56 @@ pub enum Error {
 }
 
 impl Error {
+    /// What failed, by name, for records (`crate::trace`): unlike its text,
+    /// never a library's message, an address or a path.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::ShutDown => "shut down",
+            Self::InvalidRelay(_) | Self::InvalidRelayUrl { .. } => "invalid relay",
+            Self::InvalidSetting(_) => "invalid setting",
+            Self::InvalidInvitation(_) => "invalid invitation",
+            Self::InvitationExpired => "invitation expired",
+            Self::InvitationReplayed => "invitation replayed",
+            Self::InvitationCacheFull => "too many invitations",
+            Self::NotPaired => "not paired",
+            Self::NotHosting => "not hosting",
+            Self::Busy => "busy",
+            Self::Unauthorized => "unauthorized",
+            Self::ClipboardDenied => "clipboard denied",
+            Self::TransferDenied => "transfer denied",
+            Self::FileExists => "file exists",
+            Self::NoSession => "no session",
+            Self::StaleSession => "stale session",
+            Self::Unsupported(_) => "unsupported",
+            Self::InputFailed(_) => "input failed",
+            Self::IncompatibleVersion => "incompatible version",
+            Self::Malformed => "malformed",
+            Self::Timeout => "timeout",
+            Self::Network(_) => "network",
+            Self::TooManyDevices(_) => "too many devices",
+            Self::StoreUnavailable => "store unavailable",
+            Self::StoreLocked => "store locked",
+            Self::CorruptRecord => "corrupt record",
+            Self::StoreRecoveryRequired => "store recovery required",
+            Self::InvalidPairingFile => "invalid pairing file",
+            Self::PairingCheckMismatch => "pairing check mismatch",
+            Self::NoControlRequest => "no control request",
+        }
+    }
+
+    /// The fixed reason some errors carry, such as which setting or backend:
+    /// product text, safe to record.
+    pub fn reason(&self) -> Option<&'static str> {
+        match self {
+            Self::InvalidRelay(reason)
+            | Self::InvalidSetting(reason)
+            | Self::InvalidInvitation(reason)
+            | Self::Unsupported(reason)
+            | Self::InputFailed(reason) => Some(reason),
+            _ => None,
+        }
+    }
+
     pub(crate) fn network(err: impl fmt::Display) -> Self {
         Self::network_text(err.to_string())
     }

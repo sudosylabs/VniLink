@@ -80,6 +80,8 @@ pub struct AudioSource {
     failed: AtomicBool,
     queue: Mutex<VecDeque<AudioPacket>>,
     notify: tokio::sync::Notify,
+    /// Packets dropped because nobody took them in time.
+    dropped: std::sync::atomic::AtomicU64,
 }
 impl AudioSource {
     pub fn new() -> Arc<Self> {
@@ -89,6 +91,7 @@ impl AudioSource {
             failed: AtomicBool::new(false),
             queue: Mutex::new(VecDeque::with_capacity(8)),
             notify: tokio::sync::Notify::new(),
+            dropped: std::sync::atomic::AtomicU64::new(0),
         })
     }
     pub fn publish(&self, packet: AudioPacket) -> Result<(), Error> {
@@ -99,11 +102,17 @@ impl AudioSource {
         }
         if queue.len() == 8 {
             queue.pop_front();
-        } // loss is observable through sequence gaps.
+            // Loss is also observable through sequence gaps.
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
         queue.push_back(packet);
         drop(queue);
         self.notify.notify_one();
         Ok(())
+    }
+    /// Packets dropped so far because nobody took them in time.
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
     }
     pub fn is_cancelled(&self) -> bool {
         self.stopped.load(Ordering::Acquire)

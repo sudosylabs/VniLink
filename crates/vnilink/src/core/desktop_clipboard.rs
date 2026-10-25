@@ -37,7 +37,22 @@ impl ClipboardState {
         lock(&self.rx).take();
         *lock(&self.latest) = None;
     }
-    fn submit(&self, text: &str) -> Result<(), Error> {
+    /// Sends `text` and waits for the other side to apply it; records the
+    /// outcome, its size and how long it took, never the text.
+    fn submit(&self, service: u64, text: &str) -> Result<(), Error> {
+        let started = std::time::Instant::now();
+        let result = self.offer(text);
+        tracing::debug!(
+            target: crate::trace::CLIPBOARD,
+            service,
+            bytes = text.len(),
+            ended = result.as_ref().err().map(Error::name),
+            took_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "clipboard sent"
+        );
+        result
+    }
+    fn offer(&self, text: &str) -> Result<(), Error> {
         clipboard::check_text(text)?;
         if self.closed.load(Ordering::Acquire) {
             return Err(Error::Unsupported("Desktop clipboard pipe ended"));
@@ -72,7 +87,8 @@ impl Drop for PipeGuard {
 impl RemoteDesktopService {
     /// Returns only after the host acknowledges native clipboard application.
     pub fn submit_clipboard(&self, text: &str) -> Result<(), Error> {
-        self.active_desktop()?.clipboard.submit(text)
+        let desktop = self.active_desktop()?;
+        desktop.clipboard.submit(desktop.info.service.id, text)
     }
     /// Latest host text for this Desktop; never reads the local OS clipboard.
     pub fn clipboard_text(&self) -> Result<Option<String>, Error> {
@@ -94,7 +110,7 @@ impl Core {
         text: &str,
     ) -> Result<(), Error> {
         let desktop = runtime(&*self.alive_state()?, id, generation, false)?;
-        desktop.clipboard.submit(text)
+        desktop.clipboard.submit(id, text)
     }
     pub fn controller_desktop_clipboard_text(
         &self,
@@ -121,7 +137,7 @@ impl Core {
             allowed(&state, &desktop)?;
             desktop
         };
-        desktop.clipboard.submit(text)
+        desktop.clipboard.submit(id, text)
     }
 }
 fn allowed(state: &State, desktop: &DesktopRuntime) -> Result<(), Error> {
@@ -308,6 +324,15 @@ async fn exchange(
             frame = incoming.recv() => match frame.ok_or(Error::NoSession)?? {
                 Frame::Text(text) => {
                     let result = receive(&shared, &desktop, hosted, &text);
+                    tracing::debug!(
+                        target: crate::trace::CLIPBOARD,
+                        service = desktop.info.service.id,
+                        hosted,
+                        bytes = text.len(),
+                        refused = result.as_ref().err().map(Error::name),
+                        reason = result.as_ref().err().and_then(Error::reason),
+                        "clipboard received"
+                    );
                     tokio::time::timeout(TIMEOUT, write(&mut send, Frame::Status(clipboard::status_code(&result)))).await.map_err(|_| Error::Timeout)??;
                 }
                 Frame::Status(status) => {

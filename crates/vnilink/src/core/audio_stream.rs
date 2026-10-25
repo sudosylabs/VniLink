@@ -181,7 +181,17 @@ impl Core {
                         }
                         Ok(())
                     };
-                    if lease.run(run).await.is_err() && !lease.is_cancelled() {
+                    let ended = lease.run(run).await;
+                    tracing::info!(
+                        target: crate::trace::AUDIO,
+                        service = id,
+                        kind = ?kind,
+                        ended = ended.as_ref().err().map(Error::name),
+                        closed_here = lease.is_cancelled(),
+                        dropped = packets.dropped(),
+                        "audio ended"
+                    );
+                    if ended.is_err() && !lease.is_cancelled() {
                         phase = ServicePhase::Failed("audio pipe ended".into());
                     } else if lease.is_cancelled() {
                         phase = ServicePhase::Closed(CloseCause::OwnerClose);
@@ -347,7 +357,24 @@ pub(super) async fn serve(
             }
             Ok(backend)
         };
-        let backend = match tokio::time::timeout(TIMEOUT, opening).await {
+        let opened = tokio::time::timeout(TIMEOUT, opening).await;
+        if !matches!(opened, Ok(Ok(_))) {
+            tracing::info!(
+                target: crate::trace::AUDIO,
+                service = id,
+                kind = ?kind,
+                error = match &opened {
+                    Ok(Err(error)) => error.name(),
+                    _ => "timeout",
+                },
+                reason = match &opened {
+                    Ok(Err(error)) => error.reason(),
+                    _ => None,
+                },
+                "audio not opened"
+            );
+        }
+        let backend = match opened {
             Ok(Ok(backend)) => backend,
             _ => {
                 response(&mut send, 1).await?;
@@ -371,12 +398,27 @@ pub(super) async fn serve(
             serde_json::to_vec(&backend.config).map_err(|_| Error::Malformed)?,
         )
         .await?;
+        tracing::info!(
+            target: crate::trace::AUDIO,
+            service = id,
+            kind = ?kind,
+            channels = backend.config.channels,
+            voice = backend.config.voice,
+            "audio opened"
+        );
         let sending = async {
             let mut tick = tokio::time::interval(Duration::from_millis(10));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut last_write = std::time::Instant::now();
             loop {
                 if backend.source.is_cancelled() {
+                    tracing::info!(
+                        target: crate::trace::AUDIO,
+                        service = id,
+                        failed = backend.source.has_failed(),
+                        dropped = backend.source.dropped(),
+                        "audio capture ended"
+                    );
                     write(
                         &mut send,
                         vec![if backend.source.has_failed() { 2 } else { 0 }],

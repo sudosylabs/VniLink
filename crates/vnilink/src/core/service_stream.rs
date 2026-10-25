@@ -798,13 +798,33 @@ impl Drop for HostedGuard {
                     }
                 };
                 record.info.phase = ServicePhase::Closed(cause);
+                tracing::info!(
+                    target: crate::trace::HOSTING,
+                    service = self.id,
+                    kind = ?record.info.kind,
+                    phase = record.info.phase.label(),
+                    "service ended without closing"
+                );
                 self.shared.events.publish(CoreEvent::HostedServiceChanged {
                     service: record.info,
                 });
             }
         }
         drop(state);
+        tracing::debug!(target: crate::trace::HOSTING, service = self.id, "service released");
         super::service_jobs::interrupt_orphaned(&self.shared);
+    }
+}
+
+/// A refusal's wire status by what it means.
+fn refusal(status: u8) -> &'static str {
+    match status {
+        1 => "unsupported",
+        2 | 6 => "not permitted",
+        3 => "stale session",
+        4 => "busy",
+        5 => "malformed",
+        _ => "other",
     }
 }
 
@@ -983,6 +1003,13 @@ pub(super) async fn serve(
     };
     let id = match outcome {
         Err(status) => {
+            tracing::info!(
+                target: crate::trace::HOSTING,
+                connection = connection_id,
+                kind = ?service_kind,
+                status = refusal(status),
+                "service refused"
+            );
             write(&mut send, vec![VERSION, status, 0]).await?;
             return Ok(());
         }
@@ -1040,7 +1067,16 @@ pub(super) async fn serve(
             .await?;
             return Ok(());
         }
-        Ok(Some(id)) => id,
+        Ok(Some(id)) => {
+            tracing::info!(
+                target: crate::trace::HOSTING,
+                service = id,
+                connection = connection_id,
+                kind = ?service_kind,
+                "service opened"
+            );
+            id
+        }
     };
     let _owner = HostedGuard {
         shared: shared.clone(),

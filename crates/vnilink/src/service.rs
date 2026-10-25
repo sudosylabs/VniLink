@@ -31,6 +31,20 @@ pub enum ServicePhase {
     Failed(String),
 }
 
+impl ServicePhase {
+    /// The phase as a record names it: its state and, closed, its cause.
+    /// Never a failure's message, which can carry a network library's text.
+    pub(crate) fn label(&self) -> String {
+        match self {
+            Self::Waiting => "waiting".into(),
+            Self::Active => "active".into(),
+            Self::Suspended => "suspended".into(),
+            Self::Closed(cause) => format!("closed: {cause:?}"),
+            Self::Failed(_) => "failed".into(),
+        }
+    }
+}
+
 /// Why a service record reached [`ServicePhase::Closed`]. Every close
 /// carries one; there is no unknown close. Suspend/reconnect is not a
 /// close: it parks the record in [`ServicePhase::Suspended`].

@@ -268,6 +268,11 @@ impl Core {
                                 continue;
                             }
                             if matches!(frames.push(frame), VideoPush::KeyframeNeeded) {
+                                tracing::debug!(
+                                    target: crate::trace::CAMERA,
+                                    service = id,
+                                    "camera pictures dropped for a slow viewer; keyframe asked"
+                                );
                                 needs_keyframe = true;
                                 keyframes.notify_one();
                             }
@@ -282,6 +287,13 @@ impl Core {
                     } else if lease.is_cancelled() {
                         phase = ServicePhase::Closed(CloseCause::OwnerClose);
                     }
+                    tracing::info!(
+                        target: crate::trace::CAMERA,
+                        service = id,
+                        reason = ?reason,
+                        closed_here = lease.is_cancelled(),
+                        "camera picture ended"
+                    );
                     end_reason = Some(reason);
                     let _ = send.finish();
                 }
@@ -437,7 +449,7 @@ async fn read_video(recv: &mut RecvStream) -> Result<Vec<u8>, Error> {
 }
 pub(super) async fn serve(
     shared: Arc<Shared>,
-    _id: u64,
+    id: u64,
     mut send: SendStream,
     mut recv: RecvStream,
     mut parent: tokio::sync::watch::Receiver<bool>,
@@ -524,7 +536,19 @@ pub(super) async fn serve(
             }
             Ok::<_, Error>(backend)
         };
-        let backend = match tokio::time::timeout(TIMEOUT, startup).await {
+        let opened = tokio::time::timeout(TIMEOUT, startup).await;
+        if let Ok(Err(error)) = &opened {
+            tracing::info!(
+                target: crate::trace::CAMERA,
+                service = id,
+                error = error.name(),
+                reason = error.reason(),
+                "camera not opened"
+            );
+        } else if opened.is_err() {
+            tracing::info!(target: crate::trace::CAMERA, service = id, error = "timeout", "camera not opened");
+        }
+        let backend = match opened {
             Ok(Ok(backend)) => backend,
             Ok(Err(Error::NoSession)) | Err(_)
                 if *startup_parent.borrow() || *startup_stop.borrow() =>
@@ -549,6 +573,15 @@ pub(super) async fn serve(
             serde_json::to_vec(&backend.config).map_err(|_| Error::Malformed)?,
         )
         .await?;
+        tracing::info!(
+            target: crate::trace::CAMERA,
+            service = id,
+            width = backend.config.width,
+            height = backend.config.height,
+            fps = backend.config.fps,
+            "camera opened"
+        );
+        let mut sent = 0u64;
         let commands = async {
             loop {
                 if read(&mut recv).await? != [1] {
@@ -568,6 +601,13 @@ pub(super) async fn serve(
                     recording = Some(allowed);
                 }
                 if backend.source.is_cancelled() {
+                    tracing::info!(
+                        target: crate::trace::CAMERA,
+                        service = id,
+                        failed = backend.source.has_failed(),
+                        sent,
+                        "camera capture ended"
+                    );
                     write(
                         &mut send,
                         vec![if backend.source.has_failed() {
@@ -581,6 +621,7 @@ pub(super) async fn serve(
                 }
                 for frame in backend.source.frames.drain() {
                     write(&mut send, crate::video::encode_video_body(&frame)).await?;
+                    sent += 1;
                 }
                 tokio::select! { _ = backend.source.frames.notified() => {}, _ = timer.tick() => {} }
             }
@@ -593,6 +634,13 @@ pub(super) async fn serve(
     }
     let mut withdrawn = false;
     let result = tokio::select! { biased; _ = parent.changed() => Err(Error::NoSession), _ = stop.changed() => { withdrawn = true; Err(Error::NoSession) }, result = run => result };
+    tracing::debug!(
+        target: crate::trace::CAMERA,
+        service = id,
+        withdrawn,
+        ended = result.as_ref().err().map(Error::name),
+        "camera stream ended"
+    );
     if withdrawn {
         // Tell the viewer why the picture stopped; it may already be gone.
         let _ = tokio::time::timeout(TIMEOUT, write(&mut send, vec![END_WITHDRAWN])).await;

@@ -327,6 +327,15 @@ impl Core {
                         tokio::select! { result = sending => result, result = receiving => result }
                     };
                     let result = lease.run(run).await;
+                    if let Err(error) = &result {
+                        tracing::info!(
+                            target: crate::trace::TERMINAL,
+                            service = id,
+                            error = error.name(),
+                            closed_here = lease.is_cancelled(),
+                            "terminal pipe ended"
+                        );
+                    }
                     if result.is_err() && !lease.is_cancelled() {
                         phase = ServicePhase::Failed("terminal pipe ended".into());
                         if !matches!(result, Err(Error::InputFailed(_))) {
@@ -515,6 +524,14 @@ pub(super) async fn serve(
         let runtime = match opened {
             Ok(runtime) => runtime,
             Err(error) => {
+                tracing::info!(
+                    target: crate::trace::TERMINAL,
+                    service = id,
+                    error = error.name(),
+                    reason = error.reason(),
+                    resume = options.resume_id.is_some(),
+                    "terminal not opened"
+                );
                 let status = match error {
                     Error::Unauthorized => 6,
                     Error::Busy => 4,
@@ -525,6 +542,15 @@ pub(super) async fn serve(
                 return Err(error);
             }
         };
+        tracing::info!(
+            target: crate::trace::TERMINAL,
+            service = id,
+            rows = options.size.rows,
+            columns = options.size.columns,
+            persistent = options.persistent,
+            resumed = options.resume_id.is_some(),
+            "terminal opened"
+        );
         attached = Some(terminal_runtime::Attachment {
             terminal: runtime.clone(),
             explicit_close: explicit_close.clone(),
@@ -586,6 +612,12 @@ pub(super) async fn serve(
                 }
                 let (first, bytes, ended) = runtime.read(offset);
                 if first > offset {
+                    tracing::debug!(
+                        target: crate::trace::TERMINAL,
+                        service = id,
+                        lost = first - offset,
+                        "terminal output dropped before it was sent"
+                    );
                     write(
                         &mut send,
                         encode_event(TerminalEvent::OutputGap(first - offset)),
@@ -599,6 +631,19 @@ pub(super) async fn serve(
                     continue;
                 }
                 if let Some(event) = ended {
+                    match &event {
+                        TerminalEvent::Exited(code) => tracing::info!(
+                            target: crate::trace::TERMINAL,
+                            service = id,
+                            code,
+                            "terminal shell exited"
+                        ),
+                        _ => tracing::warn!(
+                            target: crate::trace::TERMINAL,
+                            service = id,
+                            "terminal backend failed"
+                        ),
+                    }
                     write(&mut send, encode_event(event)).await?;
                     explicit_close.store(true, std::sync::atomic::Ordering::Release);
                     return Ok(());
@@ -615,6 +660,13 @@ pub(super) async fn serve(
     if matches!(result, Err(Error::Malformed)) {
         explicit_close.store(true, std::sync::atomic::Ordering::Release);
     }
+    tracing::debug!(
+        target: crate::trace::TERMINAL,
+        service = id,
+        ended = result.as_ref().err().map(Error::name),
+        explicit_close = explicit_close.load(std::sync::atomic::Ordering::Acquire),
+        "terminal stream ended"
+    );
     drop(attached);
     let _ = send.finish();
     result

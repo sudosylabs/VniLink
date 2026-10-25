@@ -411,8 +411,9 @@ impl Core {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_system_action_notice(&self, notice: Duration) {
+    /// Shortens the notice a restart or shutdown waits out, for tests.
+    #[cfg(any(test, feature = "test-probes"))]
+    pub fn set_system_action_notice(&self, notice: Duration) {
         *lock(&self.shared.system_notice) = notice;
     }
 
@@ -884,6 +885,22 @@ fn finish(
         ),
         Started::StoodDown(detail) => (OperationState::Refused, detail.to_string()),
     };
+    tracing::info!(
+        target: crate::trace::SYSTEM,
+        operation = id,
+        action = ?action,
+        state = ?next,
+        scheduled,
+        error = match &outcome {
+            Started::Ran(Err(error)) => Some(error.name()),
+            _ => None,
+        },
+        stood_down = match &outcome {
+            Started::StoodDown(detail) => Some(*detail),
+            _ => None,
+        },
+        "system action ended"
+    );
     record.operation.state = next;
     record.operation.detail = truncate_detail(detail);
     let operation = with_remaining(record);
@@ -904,6 +921,14 @@ fn refuse_locked(
 ) -> Vec<u8> {
     let id = state.next_operation_id;
     state.next_operation_id = id.saturating_add(1).max(1);
+    tracing::info!(
+        target: crate::trace::SYSTEM,
+        operation = id,
+        action = ?action,
+        connection = admission.connection_id,
+        detail,
+        "system action refused"
+    );
     let operation = SystemOperation {
         id,
         action,
@@ -1110,6 +1135,15 @@ fn set_privacy_inner(
     let display_ok = !display_tried || actions.set_display_private(display_private).is_ok();
     let input_ok =
         !input_tried || (authorized() && actions.set_input_blocked(input_blocked).is_ok());
+    tracing::info!(
+        target: crate::trace::SYSTEM,
+        connection = admission.connection_id,
+        display_private,
+        input_blocked,
+        display_ok,
+        input_ok,
+        "privacy applied"
+    );
     let mut state = lock(&shared.state);
     if !privacy_authorized(&state, admission, cancelled)
         || ((display_private || input_blocked) && !state.system_policy.allow_privacy)

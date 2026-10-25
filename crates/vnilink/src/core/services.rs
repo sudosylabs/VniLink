@@ -20,6 +20,15 @@ impl ServiceRecord {
         {
             return false;
         }
+        tracing::debug!(
+            target: crate::trace::SERVICE,
+            service = self.info.id,
+            kind = ?self.info.kind,
+            generation,
+            from = self.info.phase.label(),
+            to = phase.label(),
+            "service phase"
+        );
         // Every non-active transition and generation change fences old work.
         self.stop.send_replace(true);
         self.stream_open = false;
