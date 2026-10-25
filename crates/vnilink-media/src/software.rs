@@ -701,6 +701,13 @@ impl<N: VideoEncoder> VideoEncoder for CodecEncoder<N> {
             Self::Software(encoder) => encoder.implementation(),
         }
     }
+
+    fn scales_native(&self) -> bool {
+        match self {
+            Self::Native(encoder) => encoder.scales_native(),
+            Self::Software(encoder) => encoder.scales_native(),
+        }
+    }
 }
 #[derive(Default)]
 pub struct SoftwareDecoderSlot(Option<(VideoCodec, SoftwareDecoder)>);
