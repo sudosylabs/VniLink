@@ -46,6 +46,8 @@ export interface LatencyOptions {
 	readonly holdSeconds: number;
 	/** The viewer's frame rate at the Smooth preset's bitrate and size; undefined keeps the default quality. */
 	readonly frameRate: number | undefined;
+	/** The viewer's bitrate limit in kb/s with `--fps`; undefined keeps the Smooth preset's 12 Mb/s. */
+	readonly bitrate: number | undefined;
 	/** Two computers: the other one; undefined runs both sides on this one. */
 	readonly remote: RemoteComputer | undefined;
 }
@@ -70,7 +72,7 @@ export function latencyOptions(root: string, args: readonly string[]): LatencyOp
 		args: [...args],
 		options: {
 			seconds: { type: 'string', default: '20' }, settle: { type: 'string', default: '3' }, output: { type: 'string' }, app: { type: 'string' }, hold: { type: 'string', default: '0' },
-			fps: { type: 'string' }, remote: { type: 'string' }, 'remote-root': { type: 'string' }, hosts: { type: 'string', default: 'here' }, 'ssh-config': { type: 'string' },
+			fps: { type: 'string' }, bitrate: { type: 'string' }, remote: { type: 'string' }, 'remote-root': { type: 'string' }, hosts: { type: 'string', default: 'here' }, 'ssh-config': { type: 'string' },
 		},
 		strict: true,
 	});
@@ -90,6 +92,10 @@ export function latencyOptions(root: string, args: readonly string[]): LatencyOp
 	if (frameRate !== undefined && (!Number.isInteger(frameRate) || frameRate < 1 || frameRate > 120)) {
 		throw new Error('--fps must be 1..120');
 	}
+	const bitrate = values.bitrate === undefined ? undefined : Number(values.bitrate);
+	if (bitrate !== undefined && (!Number.isInteger(bitrate) || bitrate < 1 || bitrate > 50_000)) {
+		throw new Error('--bitrate must be 1..50000 kb/s');
+	}
 	if (values.hosts !== 'here' && values.hosts !== 'remote') {
 		throw new Error('--hosts must be here or remote');
 	}
@@ -108,7 +114,7 @@ export function latencyOptions(root: string, args: readonly string[]): LatencyOp
 	}
 	// Absolute: the two sides run from another directory.
 	const output = resolve(values.output ?? join(root, '.build/latency', new Date().toISOString().replaceAll(':', '-')));
-	return { seconds, settleSeconds, output, app: values.app, holdSeconds, frameRate, remote };
+	return { seconds, settleSeconds, output, app: values.app, holdSeconds, frameRate, bitrate, remote };
 }
 
 /** Each stage one side measures of itself, sampled once a second: its p50, p95 and samples. */
@@ -647,6 +653,7 @@ async function measureAcross(root: string, signal: AbortSignal, options: Latency
 			VNILINK_LATENCY_OUTPUT: output,
 			VNILINK_LATENCY_HOLD_MS: '0',
 			VNILINK_LATENCY_FPS: String(options.frameRate ?? 0),
+			VNILINK_LATENCY_BITRATE: String(options.bitrate ?? 0),
 			// Each side on its own computer, as a person uses them.
 			VNILINK_LATENCY_ACROSS: '1',
 			// A Linux host's portal asks someone there; the other side waits as long.
@@ -705,7 +712,7 @@ async function measureAcross(root: string, signal: AbortSignal, options: Latency
 			{ host: await cpuOf('host-cpu'), viewer: await cpuOf('viewer-cpu') },
 		);
 		const run = {
-			seconds: options.seconds, settle: options.settleSeconds, fps: options.frameRate ?? null,
+			seconds: options.seconds, settle: options.settleSeconds, fps: options.frameRate ?? null, bitrate: options.bitrate ?? null,
 			host: here === 'host' ? `${process.platform} (here)` : `${remote.destination} (linux)`,
 			viewer: here === 'viewer' ? `${process.platform} (here)` : `${remote.destination} (linux)`,
 			date: new Date().toISOString(),
@@ -760,6 +767,7 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 				VNILINK_LATENCY_OUTPUT: options.output,
 				VNILINK_LATENCY_HOLD_MS: String(options.holdSeconds * 1000),
 				VNILINK_LATENCY_FPS: String(options.frameRate ?? 0),
+				VNILINK_LATENCY_BITRATE: String(options.bitrate ?? 0),
 				VNILINK_LATENCY_SCREEN_GRANT: join(grants, 'host-screen-grant'),
 			};
 			const side = platform.launch(role, environment, join(options.output, `${role}.log`));

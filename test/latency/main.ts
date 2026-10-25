@@ -27,6 +27,8 @@ const output = process.env.VNILINK_LATENCY_OUTPUT;
 const holdMs = Number(process.env.VNILINK_LATENCY_HOLD_MS ?? '0');
 /** The viewer's frame rate, at the Smooth preset's bitrate and size; 0 keeps the default quality. */
 const frameRate = Number(process.env.VNILINK_LATENCY_FPS ?? '0');
+/** The viewer's bitrate limit in kb/s with a frame rate; 0 keeps the Smooth preset's. */
+const bitrate = Number(process.env.VNILINK_LATENCY_BITRATE ?? '0');
 /** Where the host keeps the desktop portal's grant between runs. */
 const screenGrant = process.env.VNILINK_LATENCY_SCREEN_GRANT;
 
@@ -305,7 +307,7 @@ async function viewer(driver: WindowDriver): Promise<void> {
 	if (holdMs > 0 || frameRate > 0) {
 		// The Smooth preset: stills of a 4K screen fit only a fast stream's
 		// budget. A frame rate given keeps its bitrate and size.
-		const quality = { max_bitrate_kbps: 12000, max_frame_rate: frameRate > 0 ? frameRate : 60, max_width: 1920, max_height: 1080 };
+		const quality = { max_bitrate_kbps: bitrate > 0 ? bitrate : 12000, max_frame_rate: frameRate > 0 ? frameRate : 60, max_width: 1920, max_height: 1080 };
 		await driver.window.webContents.executeJavaScript(`window.driver.mainProcess.getChannel('configuration').call('updateValue', { key: 'desktop.quality', value: ${JSON.stringify(quality)} })`);
 	}
 	publish('viewer', { token: await invitation(driver) });
