@@ -113,7 +113,7 @@ The report includes:
 - each core's selected path once connected and once finished;
 - the viewer's conditions (`vnilink::Condition`), sampled with the timeline: the one held as worst most often, when it covers a fifth of the samples, and every one held.
 
-A video scenario fails when its conditions miss its profile's expectation (`expectedConditions` in `build/lib/impaired.ts`): none on `clean` and `delay-*`, link loss from 2% random or burst loss, congestion on `rate-2`, a held blackout when `--burst-ms` is 2500 or more, and the relayed path in relay mode, where loss on the relay's TCP leg shows as a relay backlog. `loss-0.5` and `loss-1` sit under the rate controller's loss threshold; their conditions are recorded, not asserted.
+A video scenario fails when its conditions miss its profile's expectation (`expectedConditions` in `build/lib/impaired.ts`): none on `clean` and `delay-*`, link loss from 2% random or burst loss, congestion held at some point on `rate-2` (not dominant: a stream starts at 4 Mb/s and leaves a 2 Mb/s link within seconds), a held blackout when `--burst-ms` is 2500 or more, and the relayed path in relay mode, where loss on the relay's TCP leg shows as a relay backlog. `loss-0.5` and `loss-1` sit under the rate controller's loss threshold; their conditions are recorded, not asserted.
 
 **Combined** (`impaired_desktop_stream_during_upload` and `impaired_desktop_stream_during_download`, beside the video scenario) runs the video scenario while one file of `--large-size` moves between the cores:
 - `combined`: the viewer uploads it to the host, against the video;

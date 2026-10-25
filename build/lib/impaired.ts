@@ -288,7 +288,8 @@ export interface ConditionExpectation {
 
 /**
  * The plan's expectation per profile: loss profiles from 2% lose, a 2 Mb/s link
- * congests, an unimpaired or merely delayed link shows nothing, a blackout
+ * congests (held, not dominant: the stream starts at 4 Mb/s and leaves the
+ * link within seconds), an unimpaired or merely delayed link shows nothing, a blackout
  * of seconds is one, and a relayed path says so. Profiles not named, such
  * as rate-5, are recorded but not asserted.
  */
@@ -317,7 +318,7 @@ export function expectedConditions(profile: string, path: LinkPath, burstMs: num
 		return { dominant: path === 'relay' ? 'relay.backlog' : 'link.loss', seen };
 	}
 	if (profile === 'rate-2') {
-		return { dominant: 'link.congestion', seen };
+		return { seen: [...seen, 'link.congestion'] };
 	}
 	return { seen };
 }

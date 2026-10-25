@@ -225,7 +225,7 @@ test('each profile expects its dominant condition, and a mismatch says what the 
 	assert.deepEqual(expectedConditions('loss-5', 'relay', 250, 5), { dominant: 'relay.backlog', seen: ['relay.path'] }, 'TCP repairs a relayed leg\'s loss');
 	assert.deepEqual(expectedConditions('loss-5', 'direct', 250, 5), { dominant: 'link.loss', seen: [] });
 	assert.deepEqual(expectedConditions('rate-2', 'direct', 3000, 5), { seen: ['link.blackout'] }, 'long blackouts dominate by construction');
-	assert.deepEqual(expectedConditions('rate-2', 'direct', 250, 5), { dominant: 'link.congestion', seen: [] });
+	assert.deepEqual(expectedConditions('rate-2', 'direct', 250, 5), { seen: ['link.congestion'] });
 	assert.deepEqual(expectedConditions('rate-5', 'direct', 3000, 0), { seen: [] });
 	assert.deepEqual(expectedConditions('loss-1', 'direct', 250, 5), { seen: [] }, 'under the controller\'s loss threshold');
 	assert.deepEqual(expectedConditions('loss-burst', 'direct', 250, 5), { dominant: 'link.loss', seen: [] });
