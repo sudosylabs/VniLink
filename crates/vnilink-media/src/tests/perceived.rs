@@ -49,6 +49,8 @@ fn viewer(width: u16, height: u16, scale: f64, left: f64, top: f64, values: [u32
         values[4],
         HOST.0,
         HOST.1,
+        12,
+        0x1234,
     ];
     for (index, value) in column.into_iter().enumerate() {
         strip(value, 2.0 * CELL, 2.0 * CELL + index as f64 * 5.0 * CELL);
@@ -70,6 +72,8 @@ fn the_mapping_and_the_column_come_back_from_an_enlarged_picture() {
     assert_eq!(reading.value(Role::PointerX), Some(960));
     assert_eq!(reading.value(Role::PointerY), Some(540));
     assert_eq!(reading.value(Role::Card), Some(3));
+    assert_eq!(reading.value(Role::Keys), Some(12));
+    assert_eq!(reading.value(Role::Typed), Some(0x1234));
     let mapping = reading.mapping().expect("both anchors and the size");
     assert_eq!(
         (mapping.cell, mapping.width, mapping.height),

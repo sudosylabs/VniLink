@@ -249,6 +249,123 @@ mod capture {
     }
 }
 
+/// What the keys of this Mac's current keyboard layout type, as a person
+/// typing here gets it: the driver presses the keys a character needs.
+#[cfg(target_os = "macos")]
+mod layout {
+    use std::ffi::c_void;
+
+    #[link(name = "Carbon", kind = "framework")]
+    extern "C" {
+        fn TISCopyCurrentKeyboardLayoutInputSource() -> *mut c_void;
+        fn TISGetInputSourceProperty(source: *mut c_void, key: *const c_void) -> *const c_void;
+        static kTISPropertyUnicodeKeyLayoutData: *const c_void;
+        fn LMGetKbdType() -> u8;
+        fn UCKeyTranslate(
+            layout: *const c_void,
+            key: u16,
+            action: u16,
+            modifiers: u32,
+            keyboard: u32,
+            options: u32,
+            dead: *mut u32,
+            room: usize,
+            length: *mut usize,
+            text: *mut u16,
+        ) -> i32;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFDataGetBytePtr(data: *const c_void) -> *const c_void;
+        fn CFRelease(object: *const c_void);
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventCreateKeyboardEvent(source: *const c_void, key: u16, down: bool) -> *mut c_void;
+        fn CGEventSetFlags(event: *mut c_void, flags: u64);
+        fn CGEventPost(tap: u32, event: *mut c_void);
+    }
+
+    /// Shift and Option as event flags.
+    pub const SHIFT_FLAG: u64 = 0x2_0000;
+    pub const OPTION_FLAG: u64 = 0x8_0000;
+
+    /// Posts `key` going down or up with `flags`, as the keyboard would.
+    pub fn post_key(key: u16, down: bool, flags: u64) {
+        // SAFETY: the event is created, posted to the HID tap and released here.
+        unsafe {
+            let event = CGEventCreateKeyboardEvent(std::ptr::null(), key, down);
+            if event.is_null() {
+                return;
+            }
+            CGEventSetFlags(event, flags);
+            CGEventPost(0, event);
+            CFRelease(event);
+        }
+    }
+
+    /// Shift and Option, as `UCKeyTranslate` takes modifiers.
+    pub const SHIFT: u32 = 2;
+    pub const OPTION: u32 = 8;
+
+    /// The character `key` types with `modifiers`, unless it is a dead key,
+    /// types nothing or more than one character, or a control character.
+    pub fn typed(key: u16, modifiers: u32) -> Option<char> {
+        // SAFETY: the input source is copied and released here; its layout
+        // data is a CFData it owns, read while the source is held.
+        unsafe {
+            let source = TISCopyCurrentKeyboardLayoutInputSource();
+            if source.is_null() {
+                return None;
+            }
+            let data = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData);
+            let result = if data.is_null() {
+                None
+            } else {
+                let mut dead = 0u32;
+                let mut text = [0u16; 4];
+                let mut length = 0usize;
+                let status = UCKeyTranslate(
+                    CFDataGetBytePtr(data),
+                    key,
+                    0,
+                    modifiers,
+                    u32::from(LMGetKbdType()),
+                    0,
+                    &mut dead,
+                    text.len(),
+                    &mut length,
+                    text.as_mut_ptr(),
+                );
+                (status == 0 && dead == 0)
+                    .then(|| String::from_utf16(&text[..length]).ok())
+                    .flatten()
+                    .and_then(|text| {
+                        let mut chars = text.chars();
+                        chars
+                            .next()
+                            .filter(|ch| !ch.is_control() && chars.next().is_none())
+                    })
+            };
+            CFRelease(source);
+            result
+        }
+    }
+}
+
+/// The 20-bit hash of `text` the page shows: `perceivedTextHash` in
+/// `test/perceived/stimulus.ts`.
+#[cfg(target_os = "macos")]
+fn text_hash(text: &str) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for unit in text.encode_utf16() {
+        hash = (hash ^ u32::from(unit)).wrapping_mul(0x0100_0193);
+    }
+    ((hash >> 20) ^ hash) & 0xfffff
+}
+
 #[cfg(target_os = "macos")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
@@ -408,12 +525,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             writeln!(
                 log,
-                r#"{{"type":"frame","t":{at:.3},"frame":{},"clicks":{},"x":{},"y":{},"card":{}}}"#,
+                r#"{{"type":"frame","t":{at:.3},"frame":{},"clicks":{},"x":{},"y":{},"card":{},"keys":{},"typed":{}}}"#,
                 field(Role::Frame),
                 field(Role::Clicks),
                 field(Role::PointerX),
                 field(Role::PointerY),
                 field(Role::Card),
+                field(Role::Keys),
+                field(Role::Typed),
             )?;
             each(log, at, &reading, picture.card.as_ref())?;
             writeln!(
@@ -469,11 +588,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // Pointer under motion: a circle at 120 events a second for 3 s.
+        // Pointer under motion: a circle at 120 events a second for 6 s,
+        // long enough for a lag that builds up to show.
         let (cx, cy, radius) = (host_width / 2.0, host_height / 2.0, host_height / 4.0);
         let path_start = Instant::now();
         let mut step = 0u32;
-        while path_start.elapsed() < Duration::from_secs(3) {
+        while path_start.elapsed() < Duration::from_secs(6) {
             let due = path_start + Duration::from_micros(u64::from(step) * 8_333);
             if Instant::now() >= due {
                 let angle = f64::from(step) / 120.0 * std::f64::consts::TAU;
@@ -514,6 +634,87 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             observe(
                 &mut *log,
                 Instant::now() + Duration::from_millis(400),
+                &mut idle,
+            )?;
+        }
+
+        // Keyboard: keys of this Mac's layout, plain, with Shift and with
+        // Option, and Backspace and Enter, each held 30 ms as a person
+        // types, first one every 250 ms, then a burst of one every 30 ms.
+        // After each the page should show one more key and the text's hash.
+        const BACKSPACE: u16 = 51;
+        const RETURN: u16 = 36;
+        const SHIFT_KEY: u16 = 56;
+        const OPTION_KEY: u16 = 58;
+        let mut presses: Vec<(u16, u32, Option<char>)> = Vec::new();
+        for (modifiers, take) in [(0, 24), (layout::SHIFT, 10), (layout::OPTION, 6)] {
+            presses.extend(
+                (0u16..=50)
+                    .filter(|key| ![36, 48, 49].contains(key))
+                    .filter_map(|key| {
+                        layout::typed(key, modifiers).map(|ch| (key, modifiers, Some(ch)))
+                    })
+                    .take(take),
+            );
+        }
+        presses.insert(12, (BACKSPACE, 0, None));
+        presses.insert(30, (BACKSPACE, 0, None));
+        presses.push((RETURN, 0, None));
+        let burst: Vec<_> = presses.iter().take(20).copied().collect();
+        let mut text = String::new();
+        let mut keys = 0u32;
+        let key_event = layout::post_key;
+        for (phase, list, gap) in [("paced", &presses, 250u64), ("burst", &burst, 30)] {
+            for &(key, modifiers, typed) in list {
+                let flags = match modifiers {
+                    layout::SHIFT => layout::SHIFT_FLAG,
+                    layout::OPTION => layout::OPTION_FLAG,
+                    _ => 0,
+                };
+                let modifier = match modifiers {
+                    layout::SHIFT => Some(SHIFT_KEY),
+                    layout::OPTION => Some(OPTION_KEY),
+                    _ => None,
+                };
+                if let Some(modifier) = modifier {
+                    key_event(modifier, true, flags);
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let pressed_at = ms(Instant::now());
+                key_event(key, true, flags);
+                match (key, typed) {
+                    (BACKSPACE, _) => {
+                        text.pop();
+                    }
+                    (RETURN, _) => text.push('\n'),
+                    (_, Some(ch)) => text.push(ch),
+                    _ => {}
+                }
+                keys += 1;
+                writeln!(
+                    log,
+                    r#"{{"type":"key","phase":"{phase}","t":{pressed_at:.3},"key":{key},"modifiers":{modifiers},"char":{},"keys":{keys},"typed":{}}}"#,
+                    typed.map_or("null".to_owned(), |ch| format!("{:?}", ch.to_string())),
+                    text_hash(&text),
+                )?;
+                observe(
+                    &mut *log,
+                    Instant::now() + Duration::from_millis(30),
+                    &mut idle,
+                )?;
+                key_event(key, false, flags);
+                if let Some(modifier) = modifier {
+                    key_event(modifier, false, 0);
+                }
+                observe(
+                    &mut *log,
+                    Instant::now() + Duration::from_millis(gap.saturating_sub(30)),
+                    &mut idle,
+                )?;
+            }
+            observe(
+                &mut *log,
+                Instant::now() + Duration::from_millis(1_000),
                 &mut idle,
             )?;
         }

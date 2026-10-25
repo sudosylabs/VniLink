@@ -7,8 +7,9 @@
  * In device pixels, with `S` the strip cell:
  * - a column of timecode strips at the top left, read by
  *   `vnilink_media::measure::timecode`: an anchor, the frame counter, the
- *   click count, the pointer's x and y, the test card's generation, and the
- *   page's width and height;
+ *   click count, the pointer's x and y, the test card's generation, the
+ *   page's width and height, the keys that typed or edited text, and
+ *   {@link perceivedTextHash} of that text;
  * - a second anchor at the bottom right; the two anchors give the mapping
  *   between viewer and host pixels;
  * - a band below the column that moves on every frame, an encoding load;
@@ -34,7 +35,19 @@ export const ANCHOR_BOTTOM_RIGHT = 0x5a5a5;
 export const CARD_PERIOD_MS = 8000;
 
 /** Strips in the top-left column, in order from the top. */
-export const COLUMN = ['anchor', 'frame', 'clicks', 'pointerX', 'pointerY', 'card', 'width', 'height'] as const;
+export const COLUMN = ['anchor', 'frame', 'clicks', 'pointerX', 'pointerY', 'card', 'width', 'height', 'keys', 'typed'] as const;
+
+/**
+ * A 20-bit hash of `text`, the width of a strip: FNV-1a over its UTF-16
+ * code units, folded. Self-contained: the page carries its source.
+ */
+export function perceivedTextHash(text: string): number {
+	let hash = 0x811c9dc5;
+	for (let index = 0; index < text.length; index++) {
+		hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193) >>> 0;
+	}
+	return ((hash >>> 20) ^ hash) & 0xfffff;
+}
 
 export interface Rect {
 	readonly x: number;
@@ -66,11 +79,11 @@ export function perceivedLayout(width: number, height: number, ratio: number): P
 	const stripHeight = 3 * cell;
 	const pitch = stripHeight + 2 * cell;
 	const column = [];
-	for (let index = 0; index < 8; index++) {
+	for (let index = 0; index < 10; index++) {
 		column.push({ x: margin, y: margin + index * pitch, width: stripWidth, height: stripHeight });
 	}
 	const bottom = height - margin - stripHeight;
-	const bandTop = margin + 8 * pitch;
+	const bandTop = margin + 10 * pitch;
 	const cardLeft = margin + stripWidth + 4 * cell;
 	const cardWidth = Math.max(64, Math.floor(Math.min(1024, width - cardLeft - margin) / 8) * 8);
 	const cardHeight = Math.max(64, Math.floor(Math.min(768, bottom - 2 * cell - margin) / 8) * 8);
@@ -187,6 +200,7 @@ export function perceivedPage(): string {
 ${perceivedLayout.toString()}
 ${perceivedCard.toString()}
 ${perceivedCells.toString()}
+${perceivedTextHash.toString()}
 const ANCHOR_TOP_LEFT = ${String(ANCHOR_TOP_LEFT)};
 const ANCHOR_BOTTOM_RIGHT = ${String(ANCHOR_BOTTOM_RIGHT)};
 const CARD_PERIOD_MS = ${String(CARD_PERIOD_MS)};
@@ -194,8 +208,9 @@ const canvas = document.querySelector('canvas');
 const context = canvas.getContext('2d', { alpha: false });
 let ratio = 1;
 let layout;
-const values = { frame: 0, clicks: 0, pointerX: 0, pointerY: 0, card: 0 };
-const order = ['anchor', 'frame', 'clicks', 'pointerX', 'pointerY', 'card', 'width', 'height'];
+const values = { frame: 0, clicks: 0, pointerX: 0, pointerY: 0, card: 0, keys: 0, typed: perceivedTextHash('') };
+const order = ['anchor', 'frame', 'clicks', 'pointerX', 'pointerY', 'card', 'width', 'height', 'keys', 'typed'];
+let text = '';
 function strip(rect, value) {
 	context.fillStyle = '#fff';
 	context.fillRect(rect.x, rect.y, rect.width, rect.height);
@@ -244,6 +259,23 @@ addEventListener('pointerdown', event => {
 });
 addEventListener('contextmenu', event => {
 	event.preventDefault();
+});
+// Keys that type a character, Enter and Backspace edit the text; every
+// press of one counts, repeats included, so a doubled or lost key shows.
+addEventListener('keydown', event => {
+	const point = event.key.codePointAt(0);
+	if (point !== undefined && String.fromCodePoint(point) === event.key) {
+		text += event.key;
+	} else if (event.key === 'Enter') {
+		text += '\\n';
+	} else if (event.key === 'Backspace') {
+		text = Array.from(text).slice(0, -1).join('');
+	} else {
+		return;
+	}
+	event.preventDefault();
+	values.keys++;
+	values.typed = perceivedTextHash(text);
 });
 let phase = 0;
 function draw(time) {

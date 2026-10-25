@@ -99,6 +99,14 @@ export interface PerceivedSummary {
 	readonly pointerError: Spread | undefined;
 	/** Along a continuous circle, how old the shown pointer position was, ms. */
 	readonly pointerTrail: Spread | undefined;
+	/** The same over the circle's first and last two seconds: a lag that builds up shows as the difference. */
+	readonly pointerTrailEarly: Spread | undefined;
+	readonly pointerTrailLate: Spread | undefined;
+	/** Pictures during the circle showing none of the last half second's positions. */
+	readonly pointerTrailLost: number;
+	/** Keys typed one every 250 ms, and in a burst one every 30 ms. */
+	readonly keys: KeysSummary | undefined;
+	readonly keyBurst: KeysSummary | undefined;
 	/** From a click to the first picture showing it counted, ms. */
 	readonly click: Spread | undefined;
 	readonly clicksMissed: number;
@@ -124,6 +132,17 @@ export interface PerceivedSummary {
 	readonly stillSharpAfterMs: number | undefined;
 }
 
+/** What a run of key presses showed. */
+export interface KeysSummary {
+	readonly pressed: number;
+	/** Keys the page counted over the run; above `pressed` some were doubled, below some were lost. */
+	readonly shown: number | undefined;
+	/** Whether the page's text came out as typed. */
+	readonly textRight: boolean | undefined;
+	/** From a key going down to the first picture counting it, ms. */
+	readonly latency: Spread | undefined;
+}
+
 interface Event {
 	readonly type: string;
 	readonly [field: string]: unknown;
@@ -143,7 +162,15 @@ export function summarisePerceived(label: string, lines: string, ssim: ReadonlyM
 	const located = events[0];
 	const frames = events
 		.filter(event => event.type === 'frame' && number(event.t) !== undefined)
-		.map(event => ({ t: number(event.t) ?? 0, frame: number(event.frame), clicks: number(event.clicks), x: number(event.x), y: number(event.y) }));
+		.map(event => ({
+			t: number(event.t) ?? 0,
+			frame: number(event.frame),
+			clicks: number(event.clicks),
+			x: number(event.x),
+			y: number(event.y),
+			keys: number(event.keys),
+			typed: number(event.typed),
+		}));
 	type Frame = (typeof frames)[number];
 	const after = (t: number, until: number, ok: (frame: Frame) => boolean): Frame | undefined =>
 		frames.find(frame => frame.t > t && frame.t <= until && ok(frame));
@@ -171,8 +198,10 @@ export function summarisePerceived(label: string, lines: string, ssim: ReadonlyM
 			jumpError.push(Math.hypot(settled.x - x, settled.y - y));
 		}
 	});
-	// Each picture during the circle against the move it shows.
-	const trail: number[] = [];
+	// Each picture during the circle against the move it shows, and the
+	// pictures that show none of the last half second's.
+	const trail: { readonly t: number; readonly lag: number }[] = [];
+	let trailLost = 0;
 	if (path.length) {
 		const first = number(path[0].t) ?? 0;
 		const last = (number(path.at(-1)?.t) ?? first) + 500;
@@ -183,7 +212,9 @@ export function summarisePerceived(label: string, lines: string, ssim: ReadonlyM
 				return t < frame.t && t > frame.t - 500 && near(frame, number(move.hostX) ?? 0, number(move.hostY) ?? 0, 2);
 			});
 			if (shown) {
-				trail.push(frame.t - (number(shown.t) ?? 0));
+				trail.push({ t: frame.t, lag: frame.t - (number(shown.t) ?? 0) });
+			} else {
+				trailLost++;
 			}
 		}
 	}
@@ -200,8 +231,37 @@ export function summarisePerceived(label: string, lines: string, ssim: ReadonlyM
 			clicksMissed++;
 		}
 	});
-	// Pacing: the pictures after the clicks, the pointer resting.
-	const settledFrom = (number(clicks.at(-1)?.t) ?? 0) + 500;
+	// Keys: each press against the first picture that counts it, and
+	// whether each run ended with every key counted once and the text right.
+	const presses = events.filter(event => event.type === 'key');
+	const typing = (phase: string): KeysSummary | undefined => {
+		const run = presses.filter(press => press.phase === phase);
+		if (!run.length) {
+			return undefined;
+		}
+		const latency: number[] = [];
+		run.forEach(press => {
+			const t = number(press.t) ?? 0;
+			const keys = number(press.keys) ?? 0;
+			const hit = after(t, t + 2000, frame => frame.keys !== undefined && frame.keys >= keys);
+			if (hit) {
+				latency.push(hit.t - t);
+			}
+		});
+		const last = run[run.length - 1];
+		const end = number(last.t) ?? 0;
+		const shown = frames.filter(frame => frame.t > end && frame.t <= end + 1000 && frame.keys !== undefined).at(-1);
+		const expected = (number(last.keys) ?? 0) - (number(run[0].keys) ?? 0) + 1;
+		const before = frames.filter(frame => frame.t <= (number(run[0].t) ?? 0) && frame.keys !== undefined).at(-1)?.keys ?? 0;
+		return {
+			pressed: expected,
+			shown: shown?.keys === undefined ? undefined : shown.keys - before,
+			textRight: shown ? shown.typed === number(last.typed) : undefined,
+			latency: spread(latency),
+		};
+	};
+	// Pacing: the pictures after the clicks and keys, the pointer resting.
+	const settledFrom = Math.max(number(clicks.at(-1)?.t) ?? 0, number(presses.at(-1)?.t) ?? 0) + 500;
 	const freeze = events.find(event => event.type === 'freeze');
 	const frozenAt = number(freeze?.t) ?? Infinity;
 	const pacing = frames.filter(frame => frame.t > settledFrom && frame.t < frozenAt);
@@ -240,7 +300,12 @@ export function summarisePerceived(label: string, lines: string, ssim: ReadonlyM
 		pointerJump: spread(jumpLatency),
 		pointerMissed,
 		pointerError: spread(jumpError),
-		pointerTrail: spread(trail),
+		pointerTrail: spread(trail.map(point => point.lag)),
+		pointerTrailEarly: spread(trail.filter(point => point.t < (number(path[0]?.t) ?? 0) + 2000).map(point => point.lag)),
+		pointerTrailLate: spread(trail.filter(point => point.t > (number(path.at(-1)?.t) ?? 0) - 2000).map(point => point.lag)),
+		pointerTrailLost: trailLost,
+		keys: typing('paced'),
+		keyBurst: typing('burst'),
 		click: spread(clickLatency),
 		clicksMissed,
 		framesPerSecond: span > 0 ? (pacing.length - 1) / span : undefined,
@@ -259,6 +324,10 @@ export function summarisePerceived(label: string, lines: string, ssim: ReadonlyM
 
 const ms = (spread: Spread | undefined): string => spread ? `${spread.p50.toFixed(0)} / ${spread.p95.toFixed(0)}` : '-';
 
+const keyRow = (keys: KeysSummary | undefined): string => keys
+	? `${keys.shown === undefined ? '-' : String(keys.shown)} / ${String(keys.pressed)}, ${keys.textRight === undefined ? '-' : keys.textRight ? 'yes' : 'no'}`
+	: '-';
+
 /** Several runs side by side, one column each. */
 export function renderPerceived(runs: readonly PerceivedSummary[]): string {
 	const row = (name: string, cell: (run: PerceivedSummary) => string): string => `| ${name} | ${runs.map(cell).join(' | ')} |`;
@@ -273,6 +342,11 @@ export function renderPerceived(runs: readonly PerceivedSummary[]): string {
 		row('Pointer jump, p50 / p95 ms', run => `${ms(run.pointerJump)}${run.pointerMissed ? ` (${String(run.pointerMissed)} missed)` : ''}`),
 		row('Pointer error, p50 / max host px', run => run.pointerError ? `${run.pointerError.p50.toFixed(1)} / ${run.pointerError.max.toFixed(1)}` : '-'),
 		row('Pointer trail in motion, p50 / p95 ms', run => ms(run.pointerTrail)),
+		row('Pointer trail, first / last 2 s, p50 ms', run => `${run.pointerTrailEarly ? run.pointerTrailEarly.p50.toFixed(0) : '-'} / ${run.pointerTrailLate ? run.pointerTrailLate.p50.toFixed(0) : '-'}${run.pointerTrailLost ? ` (${String(run.pointerTrailLost)} pictures over 500 ms behind)` : ''}`),
+		row('Key to picture, p50 / p95 ms', run => ms(run.keys?.latency)),
+		row('Keys shown / pressed, text right', run => keyRow(run.keys)),
+		row('Fast typing: key to picture, p50 / p95 ms', run => ms(run.keyBurst?.latency)),
+		row('Fast typing: keys shown / pressed, text right', run => keyRow(run.keyBurst)),
 		row('Click to picture, p50 / p95 ms', run => `${ms(run.click)}${run.clicksMissed ? ` (${String(run.clicksMissed)} missed)` : ''}`),
 		row('Pictures a second', run => fixed(run.framesPerSecond, 1)),
 		row('Picture interval, p50 / p95 ms', run => ms(run.frameInterval)),

@@ -63,6 +63,13 @@ test('a run is summarised from what the viewer screen showed', () => {
 		frame(1560, { clicks: 1 }),
 		// Never seen: the count stays at one.
 		line({ type: 'click', t: 1900 }),
+		// Two keys typed and both shown; one more in a burst that never shows.
+		line({ type: 'key', phase: 'paced', t: 2000, keys: 1, typed: 11 }),
+		frame(2040, { clicks: 1, keys: 1, typed: 11 }),
+		line({ type: 'key', phase: 'paced', t: 2100, keys: 2, typed: 22 }),
+		frame(2190, { clicks: 1, keys: 2, typed: 22 }),
+		line({ type: 'key', phase: 'burst', t: 2300, keys: 3, typed: 33 }),
+		frame(2310, { clicks: 1, keys: 2, typed: 22 }),
 		...Array.from({ length: 61 }, (_, index) => frame(2500 + index * 16.7, { clicks: 1, card: index > 30 ? 1 : 0 })),
 		line({ type: 'crop', t: 3020, card: 1, sinceMs: 0, file: 'crop-0.bgra', width: 8, height: 8 }),
 		line({ type: 'crop', t: 3270, card: 1, sinceMs: 250, file: 'crop-1.bgra', width: 8, height: 8 }),
@@ -87,9 +94,12 @@ test('a run is summarised from what the viewer screen showed', () => {
 	// Still pictures are their own measure, and the frozen page is not a stutter.
 	assert.deepEqual([summary.frozen, summary.stillSsim, summary.stillSharpAfterMs, summary.stutters], [true, 0.99, 2400, 0]);
 	assert.equal(summary.sharpness.length, 3);
+	assert.deepEqual([summary.keys?.pressed, summary.keys?.shown, summary.keys?.textRight, summary.keys?.latency?.p50], [2, 2, true, 40]);
+	assert.deepEqual([summary.keyBurst?.pressed, summary.keyBurst?.shown, summary.keyBurst?.textRight], [1, 0, false]);
 	const text = renderPerceived([summary, { ...summary, label: 'Other' }]);
 	assert.match(text, /\| \| Test \| Other \|/);
 	assert.match(text, /\| Card sharp after a swap, ms \| 250 \| 250 \|/);
 	assert.match(text, /\| Picture moved, measurement restarted \| 1 \| 1 \|/);
 	assert.match(text, /\| Still screen: card SSIM first \/ last \| 0\.8000 \/ 0\.9900 \|/);
+	assert.match(text, /\| Keys shown \/ pressed, text right \| 2 \/ 2, yes \|/);
 });

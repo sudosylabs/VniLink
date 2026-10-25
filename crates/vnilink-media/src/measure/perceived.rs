@@ -3,7 +3,8 @@
 //! controlled, comes back through whichever remote desktop application is
 //! under test. Two anchor strips at known corners give the mapping between
 //! viewer and host pixels; a column of strips gives the host's frame
-//! counter, click count, pointer position, test card generation and size.
+//! counter, click count, pointer position, test card generation and size,
+//! and the keys that typed text with a hash of that text.
 //! The application is a black box: nothing here asks it anything.
 //!
 //! The host's cell size and pixel density are not needed: the anchors'
@@ -26,9 +27,11 @@ pub enum Role {
     Card = 5,
     Width = 6,
     Height = 7,
+    Keys = 8,
+    Typed = 9,
 }
 
-const ROLES: [Role; 7] = [
+const ROLES: [Role; 9] = [
     Role::Frame,
     Role::Clicks,
     Role::PointerX,
@@ -36,6 +39,8 @@ const ROLES: [Role; 7] = [
     Role::Card,
     Role::Width,
     Role::Height,
+    Role::Keys,
+    Role::Typed,
 ];
 
 /// A rectangle in either computer's pixels.
@@ -113,7 +118,7 @@ impl Mapping {
             x: cell,
             y: cell,
             width: 53.0 * cell,
-            height: 42.0 * cell,
+            height: 52.0 * cell,
         })
     }
 
@@ -127,7 +132,7 @@ impl Mapping {
 pub struct Reading {
     pub anchor: Option<Timecode>,
     pub bottom_right: Option<Timecode>,
-    pub values: [Option<u32>; 8],
+    pub values: [Option<u32>; 10],
 }
 
 impl Reading {
@@ -255,7 +260,7 @@ fn reading(codes: &[Timecode]) -> Reading {
             .iter()
             .copied()
             .find(|code| code.value == ANCHOR_BOTTOM_RIGHT),
-        values: [None; 8],
+        values: [None; 10],
     };
     let Some(anchor) = reading.anchor else {
         return reading;
