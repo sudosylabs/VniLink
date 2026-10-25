@@ -512,6 +512,19 @@
           }
         }
       }
+    },
+    "ffmpeg": {
+      "title": "FFmpeg",
+      "platforms": ["darwin"],
+      "optional": true,
+      "purpose": "Scores the sharpness of the test card in perceived-quality runs.",
+      "check": {
+        "commands": {
+          "ffmpeg": {
+            "darwin": "`brew install ffmpeg`"
+          }
+        }
+      }
     }
   },
   "tasks": {
@@ -614,6 +627,11 @@
       "description": "Measure glass-to-glass latency",
       "same": "build",
       "requires": ["linux-runtime-libraries", "desktop-session", "linux-sandbox", "ssh"]
+    },
+    "measure:perceived": {
+      "description": "Measure what a remote desktop application's viewer shows",
+      "platforms": ["darwin"],
+      "requires": ["platform", "node", "rust", "xcode-tools", "ssh", "ffmpeg"]
     },
     "check:product": {
       "description": "Check the product metadata",

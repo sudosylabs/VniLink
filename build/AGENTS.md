@@ -8,4 +8,4 @@ Build definitions, resources and native artifact selection are shared by the one
 
 `build/vscode-source.json` and `node build/run.ts check:upstream` own copied-source provenance; `workbench-architecture` defines permitted upstream adaptations. `build/lint/vscode` holds verbatim VS Code lint rules. Toolchain changes also require `cross-platform-validation`.
 
-`IMPAIRED_NETWORK.md` documents the Linux netem measurement harness (`npm run measure:impaired`), its profiles and what its evidence does not cover. `LATENCY.md` documents the glass-to-glass measurement (`npm run measure:latency`) and the limits of its evidence.
+`IMPAIRED_NETWORK.md` documents the Linux netem measurement harness (`npm run measure:impaired`), its profiles and what its evidence does not cover. `LATENCY.md` documents the glass-to-glass measurement (`npm run measure:latency`) and the limits of its evidence. `PERCEIVED.md` documents the black-box comparison of remote desktop applications from the viewing Mac (`npm run measure:perceived`).
