@@ -754,12 +754,17 @@ where
                 })
                 .min()
                 .unwrap_or(Duration::from_millis(33));
-            // Reads are at least a period apart, however fast pictures come:
-            // a 120 Hz display at 60 fps takes the newest once the period
-            // has passed. Waits and sleeps are short, so stop is seen.
+            // Reads keep to the frame rate, however fast pictures come: a
+            // 120 Hz display at 60 fps takes the newest once the period has
+            // passed. They follow a grid a period apart, and one may come a
+            // sixteenth of a period before its place on it, so a source whose
+            // pictures come a hair faster than the period is not held back
+            // a little more with every read. Waits and sleeps are short, so
+            // stop is seen.
+            let slack = period / 16;
             let now = Instant::now();
-            if now < next_read {
-                std::thread::sleep((next_read - now).min(WAKE_SLICE));
+            if now + slack < next_read {
+                std::thread::sleep((next_read - slack - now).min(WAKE_SLICE));
                 continue;
             }
             // Due: a picture that arrived meanwhile is read at once, and
@@ -833,13 +838,14 @@ where
             // had a 30 fps stream read 25 times a second and a 60 fps one
             // 52. A read that ran past its time starts the cadence again
             // from now rather than reading again at once to catch up. A
-            // source that wakes the read only holds the next one back a
-            // period from this one.
+            // source that wakes the read keeps the grid described above.
             let now = Instant::now();
             next_read = if timed {
                 (next_read + period).max(now)
             } else {
-                read_started + period
+                // The grid moves on a period; a read long after its place
+                // starts it again, with no more than the slack in credit.
+                (next_read + period).max(read_started + period - slack)
             };
         };
         for worker in running.iter().chain(draining.iter()) {

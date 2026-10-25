@@ -1358,9 +1358,17 @@ fn pictures_faster_than_the_frame_rate_are_read_no_faster_than_it() {
         .map(|pair| pair[1].duration_since(pair[0]))
         .min()
         .unwrap();
+    // A read may come an eighth of a period early at the least.
     assert!(
-        closest + Duration::from_micros(500) >= observed,
+        closest + Duration::from_micros(500) >= observed.mul_f64(7.0 / 8.0),
         "reads {closest:?} apart at a period of {observed:?}"
+    );
+    let span = reads.last().unwrap().duration_since(reads[0]);
+    let allowed = (span.as_secs_f64() / observed.as_secs_f64()) as usize + 2;
+    assert!(
+        reads.len() <= allowed,
+        "{} reads in {span:?} at a period of {observed:?}",
+        reads.len()
     );
 }
 
