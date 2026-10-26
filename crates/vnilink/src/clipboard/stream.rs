@@ -139,20 +139,24 @@ pub(crate) async fn exchange<OnPayload, Allow>(
     // The offer waiting for the other side's answer, and what it was.
     let mut pending: Option<std::sync::mpsc::SyncSender<Result<(), Error>>> = None;
     let mut waiting: Option<(&'static str, usize, std::time::Instant)> = None;
-    let mut ended = "stopped";
+    // Records how the stream ended once it ends, even when its task is
+    // dropped as the session tears down.
+    let mut end = ExchangeEnd::default();
     loop {
         if *stop_rx.borrow() {
+            end.ended = "stopped";
             break;
         }
         tokio::select! {
             changed = stop_rx.changed() => {
                 if changed.is_err() || *stop_rx.borrow() {
+                    end.ended = "stopped";
                     break;
                 }
             }
             request = requests.recv(), if pending.is_none() => {
                 let Some(ClipboardRequest { payload, reply }) = request else {
-                    ended = "the session dropped its sender";
+                    end.ended = "the session dropped its sender";
                     break;
                 };
                 if let Err(error) = allow_outgoing() {
@@ -187,7 +191,7 @@ pub(crate) async fn exchange<OnPayload, Allow>(
                         "clipboard not written"
                     );
                     ignored!(CLIPBOARD, "the caller stopped waiting for its answer", reply.send(Err(error)));
-                    ended = "a write failed";
+                    end.ended = "a write failed";
                     break;
                 }
                 tracing::debug!(
@@ -232,7 +236,7 @@ pub(crate) async fn exchange<OnPayload, Allow>(
                             .await
                             .is_err()
                         {
-                            ended = "an answer could not be written";
+                            end.ended = "an answer could not be written";
                             break;
                         }
                     }
@@ -253,16 +257,25 @@ pub(crate) async fn exchange<OnPayload, Allow>(
                             ignored!(CLIPBOARD, "the caller stopped waiting for its answer", reply.send(answer));
                         }
                     }
+                    // A lost connection ends the stream; anything else the other
+                    // side sent is refused.
+                    Some(Err(error @ Error::Network(_))) => {
+                        if let Some(reply) = pending.take() {
+                            ignored!(CLIPBOARD, "the caller stopped waiting for its answer", reply.send(Err(error)));
+                        }
+                        end.ended = "the connection ended";
+                        break;
+                    }
                     Some(Err(error)) => {
                         tracing::info!(target: CLIPBOARD, error = error.name(), "clipboard frame refused");
                         if let Some(reply) = pending.take() {
                             ignored!(CLIPBOARD, "the caller stopped waiting for its answer", reply.send(Err(error)));
                         }
-                        ended = "a frame was refused";
+                        end.ended = "a frame was refused";
                         break;
                     }
                     None => {
-                        ended = "the peer closed the stream";
+                        end.ended = "the peer closed the stream";
                         break;
                     }
                 }
@@ -285,5 +298,32 @@ pub(crate) async fn exchange<OnPayload, Allow>(
             request.reply.send(Err(Error::NoSession))
         );
     }
-    tracing::debug!(target: CLIPBOARD, ended, abandoned, "clipboard stream ended");
+    end.abandoned = Some(abandoned);
+}
+
+/// How a clipboard stream ended, recorded once it ends: when its task is
+/// dropped, it ended as `dropped`, and what it abandoned is unknown.
+struct ExchangeEnd {
+    ended: &'static str,
+    abandoned: Option<u64>,
+}
+
+impl Default for ExchangeEnd {
+    fn default() -> Self {
+        Self {
+            ended: "dropped",
+            abandoned: None,
+        }
+    }
+}
+
+impl Drop for ExchangeEnd {
+    fn drop(&mut self) {
+        tracing::debug!(
+            target: CLIPBOARD,
+            ended = self.ended,
+            abandoned = self.abandoned,
+            "clipboard stream ended"
+        );
+    }
 }
