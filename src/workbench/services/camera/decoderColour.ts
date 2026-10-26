@@ -56,8 +56,14 @@ const pictures: Readonly<Record<StreamMatrix, Readonly<Record<Family, Picture>>>
 /** What the pictures show, blue first. */
 export const pictureColour = [200, 120, 40] as const;
 
-/** Levels each channel may be off: codec rounding, not a wrong matrix (8 at least). */
-export const colourTolerance = 4;
+/**
+ * Levels each channel may be off: rounding, not a wrong matrix, which moves
+ * these pictures' red 7 levels at least. Chromium's software decoders on
+ * Linux convert through libyuv, which caps the blue coefficient at 2.0
+ * where BT.709 needs 2.112 (`max(128, round(2.112 * 64))` in its
+ * `row_common.cc`), so the BT.709 picture's blue shows 6 low there.
+ */
+export const colourTolerance = 6;
 
 /** Each family's answer per acceleration, asked once per window. */
 const answers = new Map<string, Promise<StreamMatrix | undefined>>();
