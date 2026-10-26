@@ -79,6 +79,7 @@ fn privacy_is_one_controller_s_until_its_service_closes() -> TestResult {
     expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=true
+          system: privacy refused connection=2 display_private=true input_blocked=false why=another viewer holds privacy
           system: privacy restored connection=1 display=true input=true
           system: privacy applied connection=2 display_ok=true display_private=true input_blocked=false input_ok=true
           system: privacy restored connection=2 display=true input=false
@@ -343,6 +344,7 @@ fn privacy_narrowing_restores_exactly_once_and_failed_save_preserves_lease() -> 
         host:
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=true
           system: privacy restored connection=1 display=true input=true
+          system: privacy refused connection=1 display_private=true input_blocked=false why=the host's policy does not allow privacy
     "#]].assert_eq(&trace.story(&["system"]));
     Ok(())
 }

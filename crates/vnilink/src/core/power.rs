@@ -161,6 +161,11 @@ pub(super) fn start(shared: Weak<Shared>) {
                     let locked = actions
                         .as_ref()
                         .is_some_and(|actions| actions.lock_workstation().is_ok());
+                    tracing::info!(
+                        target: crate::trace::POWER,
+                        locked,
+                        "locked after control"
+                    );
                     events.publish(CoreEvent::HostLocked { locked });
                 });
             }
@@ -168,6 +173,13 @@ pub(super) fn start(shared: Weak<Shared>) {
                 let slot = &mut slots[kind.index()];
                 let count = watchers.len() as u32;
                 if count == 0 || slot.revision != revision {
+                    if slot.inhibitor.is_some() {
+                        tracing::info!(
+                            target: crate::trace::POWER,
+                            kind = ?kind,
+                            "power hold released"
+                        );
+                    }
                     slot.clear();
                     slot.revision = revision;
                 }
@@ -189,11 +201,37 @@ pub(super) fn start(shared: Weak<Shared>) {
                     let (startup, _guard, task) = slot.pending.take().unwrap();
                     match task.await {
                         Ok(Ok(inhibitor)) if !startup.is_cancelled() && count != 0 => {
+                            tracing::info!(
+                                target: crate::trace::POWER,
+                                kind = ?kind,
+                                owners = count,
+                                "power held"
+                            );
                             slot.inhibitor = Some(inhibitor)
                         }
-                        Ok(Ok(_)) => {} // Drop a late native success immediately.
-                        Ok(Err(error)) => slot.failure = Some(error.to_string()),
-                        Err(_) => slot.failure = Some("native power worker ended".into()),
+                        // Drop a late native success immediately.
+                        Ok(Ok(_)) => tracing::debug!(
+                            target: crate::trace::POWER,
+                            kind = ?kind,
+                            "a power hold that came late was released"
+                        ),
+                        Ok(Err(error)) => {
+                            tracing::warn!(
+                                target: crate::trace::POWER,
+                                kind = ?kind,
+                                failure = error.name(),
+                                "power not held"
+                            );
+                            slot.failure = Some(error.to_string())
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                target: crate::trace::POWER,
+                                kind = ?kind,
+                                "power not held: its worker ended"
+                            );
+                            slot.failure = Some("native power worker ended".into())
+                        }
                     }
                 }
                 let phase = if count == 0 {

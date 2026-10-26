@@ -138,6 +138,15 @@ async fn keep_link(shared: Arc<Shared>, handle: tokio::runtime::Handle, peer: [u
         if !running(&shared) {
             break;
         }
+        // A computer forgotten while its link was up is not tried again.
+        if lock(&shared.state).trust.get(&peer).is_none() {
+            tracing::debug!(
+                target: crate::trace::RELAY,
+                peer = crate::diagnostics::fingerprint(&peer),
+                "a link to a computer no longer paired ended"
+            );
+            break;
+        }
         let refused = lock(&shared.state).link_refused.contains(&peer);
         set_presence(
             &shared,

@@ -162,10 +162,13 @@ fn a_lock_runs_and_a_restart_waits_for_the_host_s_policy() -> TestResult {
     trace.wait_for_records("system action ended", 3);
     expect![[r#"
         host:
+          system: system action admitted action=Lock connection=1 operation=1 scheduled=false
           system: system action ended action=Lock operation=1 scheduled=false state=Executed
           system: system action refused action=Restart connection=1 detail=disabled by host policy operation=2
           system: system action refused action=Shutdown connection=1 detail=disabled by host policy operation=3
+          system: system action admitted action=Restart connection=1 operation=4 scheduled=true
           system: system action ended action=Restart operation=4 scheduled=true state=Executed
+          system: system action admitted action=Shutdown connection=1 operation=5 scheduled=true
           system: system action ended action=Shutdown operation=5 scheduled=true state=Executed
     "#]]
     .assert_eq(&trace.story(&["system"]));
@@ -271,6 +274,8 @@ fn an_action_that_never_answers_does_not_hold_the_service() -> TestResult {
     trace.wait_for_records("system action ended", 1);
     expect![[r#"
         host:
+          system: system action admitted action=Lock connection=1 operation=1 scheduled=false
+          system: system action admitted action=Restart connection=1 operation=2 scheduled=true
           system: system action ended action=Restart operation=2 scheduled=true state=Executed
     "#]]
     .assert_eq(&trace.story(&["system"]));
@@ -355,6 +360,7 @@ fn a_restart_waits_out_its_notice_and_tells_the_host() -> TestResult {
     trace.wait_for_records("system action ended", 1);
     expect![[r#"
         host:
+          system: system action admitted action=Restart connection=1 operation=1 scheduled=true
           system: system action ended action=Restart operation=1 scheduled=true state=Executed
     "#]]
     .assert_eq(&trace.story(&["system"]));
@@ -442,6 +448,7 @@ fn another_connection_cannot_cancel_and_run_now_starts_at_once() -> TestResult {
     trace.wait_for_records("system action ended", 1);
     expect![[r#"
         host:
+          system: system action admitted action=Restart connection=1 operation=1 scheduled=true
           system: system action ended action=Restart operation=1 scheduled=true state=Executed
     "#]]
     .assert_eq(&trace.story(&["system"]));
@@ -492,7 +499,11 @@ fn a_restart_ends_when_the_computer_that_asked_leaves_or_policy_changes() -> Tes
     assert_eq!(locked.state, OperationState::Executed, "a lock still runs");
     expect![[r#"
         host:
+          system: system action admitted action=Restart connection=1 operation=1 scheduled=true
+          system: system action cancelled action=Restart by_viewer=false detail=the computer that asked disconnected operation=1
+          system: system action admitted action=Restart connection=2 operation=2 scheduled=true
           system: system action ended action=Restart operation=2 scheduled=true state=Refused stood_down=disabled by host policy
+          system: system action admitted action=Lock connection=2 operation=3 scheduled=false
           system: system action ended action=Lock operation=3 scheduled=false state=Executed
     "#]].assert_eq(&trace.story(&["system"]));
     Ok(())
@@ -523,6 +534,7 @@ fn backend_failure_is_a_failed_operation_not_a_lost_request() -> TestResult {
     );
     expect![[r#"
         host:
+          system: system action admitted action=Lock connection=1 operation=1 scheduled=false
           system: system action ended action=Lock error=unsupported operation=1 scheduled=false state=Failed
     "#]].assert_eq(&trace.story(&["system"]));
     Ok(())
@@ -563,7 +575,9 @@ fn operations_never_replay_across_reconnect() -> TestResult {
     assert_ne!(second.id, first.id, "a new lock is a new operation");
     expect![[r#"
         host:
+          system: system action admitted action=Lock connection=1 operation=1 scheduled=false
           system: system action ended action=Lock operation=1 scheduled=false state=Executed
+          system: system action admitted action=Lock connection=2 operation=2 scheduled=false
           system: system action ended action=Lock operation=2 scheduled=false state=Executed
     "#]]
     .assert_eq(&trace.story(&["system"]));

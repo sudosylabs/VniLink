@@ -677,6 +677,16 @@ async fn execute(
             .ok_or(Error::NoSession)?;
         let id = state.next_operation_id;
         state.next_operation_id = id.saturating_add(1).max(1);
+        // Its end is recorded as it ends; an action the computer never
+        // answers shows as admitted and never ended.
+        tracing::info!(
+            target: crate::trace::SYSTEM,
+            operation = id,
+            action = ?action,
+            connection = admission.connection_id,
+            scheduled,
+            "system action admitted"
+        );
         // A restart or shutdown waits out its notice first; a lock runs now.
         let notice = scheduled.then(|| Notice {
             deadline: std::time::Instant::now() + *lock(&shared.system_notice),
@@ -1042,6 +1052,14 @@ fn cancel(
     if let Some(notice) = record.notice.take() {
         notice.wake.notify_one();
     }
+    tracing::info!(
+        target: crate::trace::SYSTEM,
+        operation = id,
+        action = ?record.operation.action,
+        by_viewer = from.is_some(),
+        detail,
+        "system action cancelled"
+    );
     let operation = with_remaining(record);
     shared.events.publish(CoreEvent::SystemActionEnded {
         operation_id: id,
@@ -1114,19 +1132,30 @@ fn set_privacy_inner(
     // One lock order, serial then state: the adapter call below runs without
     // the state lock, and a concurrent restore cannot interleave with it.
     let _serial = lock(&shared.privacy_serial);
+    let refused = |status: u8, why: &'static str| {
+        tracing::info!(
+            target: crate::trace::SYSTEM,
+            connection = admission.connection_id,
+            display_private,
+            input_blocked,
+            why,
+            "privacy refused"
+        );
+        Err(status)
+    };
     let (actions, previous) = {
         let state = lock(&shared.state);
         if !privacy_authorized(&state, admission, cancelled) {
-            return Err(3);
+            return refused(3, "the viewer may not use system actions now");
         }
         if let Some(lease) = state.privacy.as_ref() {
             if lease.connection_id != admission.connection_id || lease.service_id != service_id {
-                return Err(4);
+                return refused(4, "another viewer holds privacy");
             }
         }
         let enabling = display_private || input_blocked;
         if enabling && !state.system_policy.allow_privacy {
-            return Err(6);
+            return refused(6, "the host's policy does not allow privacy");
         }
         if !enabling && state.privacy.is_none() {
             return Ok(encode_privacy(PrivacyState::default()));
