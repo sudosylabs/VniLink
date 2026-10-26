@@ -18,11 +18,12 @@ import { closeSync, existsSync, openSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { assertBundleFresh } from './bundles.ts';
 import { electronExecutable } from './electron.ts';
 import { assertNativeFresh, defaultNativeOptions } from './native.ts';
+import { osName } from './platform.ts';
 import { type LaunchedProcess, ProcessRunner } from './processes.ts';
-import { loadProduct } from './product.ts';
-import { remoteShell, shellWord, type RemoteShell } from './remote.ts';
+import { agentPeer, openAgentSession, type AgentPeer, type AgentSession } from './remote.ts';
 
 export interface LatencyOptions {
 	/** How long the reader samples, after the stream has settled. */
@@ -50,23 +51,14 @@ export interface LatencyOptions {
 	readonly bitrate: number | undefined;
 	/** The stimulus fills the screen below the strip with detail that changes every frame. */
 	readonly busy: boolean;
-	/** Two computers: the other one; undefined runs both sides on this one. */
-	readonly remote: RemoteComputer | undefined;
+	/** Two computers: the test agent on the other one; undefined runs both sides on this one. */
+	readonly peer: LatencyPeer | undefined;
 }
 
-/**
- * The other computer of a two-computer run, reached over SSH. It runs Linux
- * and has a built checkout of this repository.
- */
-export interface RemoteComputer {
-	/** The SSH destination, as `ssh` takes it. */
-	readonly destination: string;
-	/** The checkout there, absolute. */
-	readonly root: string;
-	/** Which computer hosts its screen: this one, or the remote one. */
-	readonly hosts: 'here' | 'remote';
-	/** An SSH configuration file for every connection, or the user's own. */
-	readonly sshConfig: string | undefined;
+/** The other computer of a two-computer run: the test agent there, built from the same commit. */
+export interface LatencyPeer extends AgentPeer {
+	/** Which computer hosts its screen: this one, or the agent's. */
+	readonly hosts: 'here' | 'peer';
 }
 
 export function latencyOptions(root: string, args: readonly string[]): LatencyOptions {
@@ -74,7 +66,7 @@ export function latencyOptions(root: string, args: readonly string[]): LatencyOp
 		args: [...args],
 		options: {
 			seconds: { type: 'string', default: '20' }, settle: { type: 'string', default: '3' }, output: { type: 'string' }, app: { type: 'string' }, hold: { type: 'string', default: '0' },
-			fps: { type: 'string' }, bitrate: { type: 'string' }, busy: { type: 'boolean', default: false }, remote: { type: 'string' }, 'remote-root': { type: 'string' }, hosts: { type: 'string', default: 'here' }, 'ssh-config': { type: 'string' },
+			fps: { type: 'string' }, bitrate: { type: 'string' }, busy: { type: 'boolean', default: false }, peer: { type: 'string' }, 'peer-check': { type: 'string' }, hosts: { type: 'string', default: 'here' },
 		},
 		strict: true,
 	});
@@ -98,28 +90,23 @@ export function latencyOptions(root: string, args: readonly string[]): LatencyOp
 	if (bitrate !== undefined && (!Number.isInteger(bitrate) || bitrate < 1 || bitrate > 50_000)) {
 		throw new Error('--bitrate must be 1..50000 kb/s');
 	}
-	if (values.busy && values.remote === undefined) {
-		throw new Error('--busy needs --remote: the stimulus then fills the screen, and no viewer shares it');
+	const agent = agentPeer(values.peer, values['peer-check']);
+	if (values.busy && agent === undefined) {
+		throw new Error('--busy needs --peer: the stimulus then fills the screen, and no viewer shares it');
 	}
-	if (values.hosts !== 'here' && values.hosts !== 'remote') {
-		throw new Error('--hosts must be here or remote');
+	if (values.hosts !== 'here' && values.hosts !== 'peer') {
+		throw new Error('--hosts must be here or peer');
 	}
-	let remote: RemoteComputer | undefined;
-	if (values.remote !== undefined) {
-		const remoteRoot = values['remote-root'];
-		if (!remoteRoot?.startsWith('/')) {
-			throw new Error('--remote needs --remote-root, the absolute path of a built checkout there');
-		}
-		if (holdSeconds > 0) {
-			throw new Error('--hold reads one screen and cannot run across two computers');
-		}
-		remote = { destination: values.remote, root: remoteRoot, hosts: values.hosts, sshConfig: values['ssh-config'] === undefined ? undefined : resolve(values['ssh-config']) };
-	} else if (values['remote-root'] !== undefined || values.hosts !== 'here' || values['ssh-config'] !== undefined) {
-		throw new Error('--remote-root, --hosts and --ssh-config need --remote');
+	if (agent === undefined && values.hosts !== 'here') {
+		throw new Error('--hosts needs --peer');
 	}
+	if (agent !== undefined && holdSeconds > 0) {
+		throw new Error('--hold reads one screen and cannot run across two computers');
+	}
+	const peer = agent === undefined ? undefined : { ...agent, hosts: values.hosts === 'peer' ? 'peer' as const : 'here' as const };
 	// Absolute: the two sides run from another directory.
 	const output = resolve(values.output ?? join(root, '.build/latency', new Date().toISOString().replaceAll(':', '-')));
-	return { seconds, settleSeconds, output, app: values.app, holdSeconds, frameRate, bitrate, busy: values.busy, remote };
+	return { seconds, settleSeconds, output, app: values.app, holdSeconds, frameRate, bitrate, busy: values.busy, peer };
 }
 
 /** Each stage one side measures of itself, sampled once a second: its p50, p95 and samples. */
@@ -457,6 +444,18 @@ export function renderLatencySummary(summary: LatencySummary, cpu?: LatencyCpu, 
 	return rows.join('\n');
 }
 
+/** Waits until `work` settles or `ms` pass, whichever is first, leaving no timer behind to keep the process alive. */
+async function settledWithin(work: Promise<unknown>, ms: number): Promise<void> {
+	let timer: NodeJS.Timeout | undefined;
+	try {
+		await Promise.race([work.catch(() => undefined), new Promise(resolve => {
+			timer = setTimeout(resolve, ms);
+		})]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 /** Publishes `value` under `name` for the sides, whole or not at all. */
 async function publish(directory: string, name: string, value: unknown): Promise<void> {
 	const path = join(directory, `${name}.json`);
@@ -490,11 +489,12 @@ interface LatencyPlatform {
 	launch(role: 'host' | 'viewer', environment: Readonly<Record<string, string>>, log: string): LaunchedProcess;
 }
 
-async function latencyPlatform(root: string, options: LatencyOptions, processes: ProcessRunner, signal: AbortSignal): Promise<LatencyPlatform> {
+/** `app`: on macOS, the `.app` that runs the sides; this checkout's development VniLink when undefined. */
+async function latencyPlatform(root: string, app: string | undefined, processes: ProcessRunner, signal: AbortSignal): Promise<LatencyPlatform> {
 	const entry = join(root, 'out/latency.cjs');
 	if (process.platform === 'darwin') {
 		// .../VniLink.app/Contents/MacOS/Electron
-		const bundle = options.app ?? dirname(dirname(dirname(await electronExecutable(root, signal))));
+		const bundle = app ?? dirname(dirname(dirname(await electronExecutable(root, signal))));
 		return {
 			readerCrate: 'vnilink-macos',
 			reader: join(root, 'target/release/examples/glass_latency'),
@@ -511,14 +511,14 @@ async function latencyPlatform(root: string, options: LatencyOptions, processes:
 			]),
 		};
 	}
-	if (options.app !== undefined) {
+	if (app !== undefined) {
 		throw new Error('--app names a macOS application');
 	}
 	const electron = await electronExecutable(root, signal);
-	const direct = (args: readonly string[]): LatencyPlatform['launch'] => (_role, environment, log) => {
+	const direct = (args: (role: 'host' | 'viewer', environment: Readonly<Record<string, string>>) => readonly string[]): LatencyPlatform['launch'] => (role, environment, log) => {
 		const output = openSync(log, 'a');
 		try {
-			return processes.start(electron, [...args, entry], { env: { ...process.env, ...environment }, stdio: ['ignore', output, output] });
+			return processes.start(electron, [...args(role, environment), entry], { env: { ...process.env, ...environment }, stdio: ['ignore', output, output] });
 		} finally {
 			closeSync(output);
 		}
@@ -531,7 +531,7 @@ async function latencyPlatform(root: string, options: LatencyOptions, processes:
 			readerCrate: 'vnilink-windows',
 			reader: join(root, 'target', ...(target ? [target] : []), 'release/examples/glass_latency.exe'),
 			consentMs: 0,
-			launch: direct([]),
+			launch: direct(() => []),
 		};
 	}
 	if (process.platform === 'linux') {
@@ -539,143 +539,176 @@ async function latencyPlatform(root: string, options: LatencyOptions, processes:
 		// screen and for the reader's, and needs the graphical session's
 		// bus. The sides run under XWayland: a Wayland client cannot place
 		// the stimulus at the top of the display or the viewer below it.
+		// Across two computers the viewer reads no screen, so it needs no
+		// placed window and runs as a Wayland client: Chromium decodes in
+		// hardware through VA-API there, which is what a viewer measured
+		// across two computers should show. Under XWayland it decodes in
+		// software.
 		return {
 			readerCrate: 'vnilink-linux',
 			reader: join(root, 'target/release/examples/glass_latency'),
 			consentMs: 5 * 60000,
-			launch: direct(['--ozone-platform=x11']),
+			launch: direct((role, environment) => [role === 'viewer' && environment.VNILINK_LATENCY_ACROSS === '1' ? '--ozone-platform=wayland' : '--ozone-platform=x11']),
 		};
 	}
 	throw new Error('measure:latency reads a macOS, Windows or Linux display');
 }
 
 /**
- * Copies each side's rendezvous files to the other until `stopped`: both
- * sides write a file once, whole, by renaming, so a file is copied once.
+ * Carries each side's rendezvous files to the other through the agent
+ * until `stopped`: both sides write a file once, whole, by renaming, so a
+ * file is carried once. `running` hears whether the agent's side still runs.
  */
-async function mirrorRendezvous(shell: RemoteShell, here: string, there: string, stopped: () => boolean, signal: AbortSignal): Promise<void> {
-	const copied = new Set<string>();
+async function relayRendezvous(
+	session: AgentSession, here: string, there: 'host' | 'viewer', stopped: () => boolean, running: (running: boolean) => void, signal: AbortSignal,
+): Promise<void> {
+	const carried = new Set<string>();
+	const taken = agentSideTakes[there].map(name => `${name}.json`);
 	while (!stopped()) {
 		signal.throwIfAborted();
-		const local = (await readdir(here)).filter(name => name.endsWith('.json'));
-		const remote = (await shell.output(`ls -1 ${shellWord(there)}`)).split('\n').filter(name => name.endsWith('.json'));
-		for (const name of local.filter(name => !remote.includes(name) && !copied.has(name))) {
-			const content = (await readFile(join(here, name))).toString('base64');
-			const target = `${there}/${name}`;
-			await shell.output(`printf %s ${shellWord(content)} | base64 -d > ${shellWord(`${target}.partial`)} && mv ${shellWord(`${target}.partial`)} ${shellWord(target)}`);
-			copied.add(name);
+		for (const name of (await readdir(here)).filter(name => taken.includes(name) && !carried.has(name))) {
+			await session.put(name, await readFile(join(here, name)));
+			carried.add(name);
 		}
-		for (const name of remote.filter(name => !local.includes(name) && !copied.has(name))) {
-			const content = await shell.output(`cat ${shellWord(`${there}/${name}`)}`);
-			await writeFile(join(here, `${name}.partial`), content);
-			await rename(join(here, `${name}.partial`), join(here, name));
-			copied.add(name);
+		const polled = await session.poll();
+		const strange = polled.files.find(file => !rendezvousFile(file.name));
+		if (strange) {
+			throw new Error(`The agent returned a file that is no rendezvous file: ${JSON.stringify(strange.name.slice(0, 80))}`);
 		}
+		for (const file of polled.files.filter(file => !carried.has(file.name))) {
+			await writeFile(join(here, `${file.name}.partial`), file.data);
+			await rename(join(here, `${file.name}.partial`), join(here, file.name));
+			carried.add(file.name);
+		}
+		running(polled.running);
 		await new Promise(resolve => setTimeout(resolve, 250));
 	}
 }
 
+/** The variables a latency side on the agent may be given: `LATENCY_VARIABLES` in the test kit's `src/peer/scenarios/launch.rs`. */
+export const agentLatencyVariables = {
+	VNILINK_LATENCY_FPS: [0, 240],
+	VNILINK_LATENCY_BITRATE: [0, 50_000],
+	VNILINK_LATENCY_BUSY: [0, 1],
+	VNILINK_LATENCY_CONSENT_MS: [0, 600_000],
+} as const;
+
+/** Whether `name` is a rendezvous file's: as the agent names them, so a file it returns lands only in the rendezvous folder. */
+export function rendezvousFile(name: string): boolean {
+	return /^[A-Za-z0-9_-]{1,64}\.json$/.test(name) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])\./i.test(name);
+}
+
 /**
- * One side on this computer and the other on a Linux computer over SSH, the
- * pair a person uses: each side's own stage times, the host's capture and
- * encode and the viewer's queue, decode and drawing, with the round trip
- * for the network. No screen shows both, so there is no glass-to-glass total.
+ * The rendezvous files a side on the agent takes, by role: what the other
+ * role and the runner publish (`accepted` in the test kit's
+ * `src/peer/scenarios/launch.rs`, which also checks what each holds).
  */
-async function measureAcross(root: string, signal: AbortSignal, options: LatencyOptions, remote: RemoteComputer): Promise<void> {
+export const agentSideTakes = {
+	host: ['viewer', 'viewer-streaming', 'read', 'done'],
+	viewer: ['host', 'host-ready', 'read', 'read-done', 'done'],
+} as const;
+
+/** The key an invitation token (`vnl1.` and hex) was made by, as the agent reads it. */
+export function invitationKey(token: unknown): string | undefined {
+	const key = typeof token === 'string' && token.startsWith('vnl1.') ? token.slice(5, 69).toLowerCase() : '';
+	return /^[0-9a-f]{64}$/.test(key) ? key : undefined;
+}
+
+/**
+ * One side on this computer and the other on the test agent's computer,
+ * the pair a person uses: each side's own stage times, the host's capture
+ * and encode and the viewer's queue, decode and drawing, with the round
+ * trip for the network. No screen shows both, so there is no
+ * glass-to-glass total.
+ */
+async function measureAcross(root: string, signal: AbortSignal, options: LatencyOptions, peer: LatencyPeer): Promise<void> {
 	await assertNativeFresh(root);
 	const processes = new ProcessRunner(signal);
 	const work = await mkdtemp(join(tmpdir(), 'vl-'));
-	const shell = remoteShell(remote, work, signal);
-	const here: 'host' | 'viewer' = remote.hosts === 'here' ? 'host' : 'viewer';
+	const here: 'host' | 'viewer' = peer.hosts === 'here' ? 'host' : 'viewer';
 	const there: 'host' | 'viewer' = here === 'host' ? 'viewer' : 'host';
-	const stamp = new Date().toISOString().replaceAll(':', '-');
-	const unit = `vnilink-latency-${String(process.pid)}`;
-	let remoteRendezvous: string | undefined;
-	let remoteOutput: string | undefined;
-	let stopped = false;
+	const rendezvous = join(work, 'rendezvous');
+	let session: AgentSession | undefined;
+	let started = false;
+	// Changed by the sides and the relay while this function waits.
+	const state = { stopped: false, localExited: false, peerRunning: true };
 	const sides: Promise<unknown>[] = [];
 	let fetched = false;
-	/** The remote side's evidence joins this side's, once, for a run that failed too. */
+	/** The agent's side's evidence joins this side's, once, for a run that failed too. */
 	const fetchEvidence = async (): Promise<void> => {
-		if (fetched || !remoteOutput) {
+		if (fetched || !session || !started) {
 			return;
 		}
 		fetched = true;
-		const archive = processes.start('ssh', [...shell.args, `tar -C ${shellWord(remoteOutput)} -cf - .`], { stdio: ['ignore', 'pipe', 'inherit'] });
-		const extract = processes.start('tar', ['-C', options.output, '-xf', '-'], { stdio: ['pipe', 'inherit', 'inherit'] });
-		if (archive.child.stdout && extract.child.stdin) {
-			archive.child.stdout.pipe(extract.child.stdin);
-		}
-		await Promise.all([archive.result, extract.result]);
+		await session.fetch(options.output);
 	};
 	try {
 		await mkdir(options.output, { recursive: true });
-		if ((await shell.output('uname -s')).trim() !== 'Linux') {
-			throw new Error('--remote runs its side on Linux');
-		}
-		const executable = `${remote.root}/.build/electron/${(await loadProduct(root)).applicationName}`;
-		await shell.output(`test -x ${shellWord(executable)} && test -f ${shellWord(`${remote.root}/out/latency.cjs`)}`).catch(() => {
-			throw new Error(`${remote.destination}:${remote.root} has no built VniLink: run npm run build there first`);
-		});
-		remoteRendezvous = (await shell.output('mktemp -d')).trim();
-		remoteOutput = `${remote.root}/.build/latency/${stamp}`;
-		const remoteGrants = `${remote.root}/.build/latency`;
-		await shell.output(`mkdir -p ${shellWord(remoteOutput)} && chmod 700 ${shellWord(remoteGrants)}`);
-		const rendezvous = join(work, 'rendezvous');
 		await mkdir(rendezvous);
+		session = await openAgentSession(root, peer, signal);
 		const grants = join(root, '.build/latency');
 		await mkdir(grants, { recursive: true, mode: 0o700 });
-		const environment = (role: 'host' | 'viewer', rendezvousDirectory: string, output: string, grant: string): Record<string, string> => ({
-			VNILINK_LATENCY_ROLE: role,
-			VNILINK_LATENCY_DIR: rendezvousDirectory,
-			VNILINK_LATENCY_OUTPUT: output,
-			VNILINK_LATENCY_HOLD_MS: '0',
+		// A Linux host's portal asks someone there; the other side waits as long.
+		const hostOs = here === 'host' ? osName : session.platform.os;
+		const shared: Record<keyof typeof agentLatencyVariables, string> = {
 			VNILINK_LATENCY_FPS: String(options.frameRate ?? 0),
 			VNILINK_LATENCY_BITRATE: String(options.bitrate ?? 0),
 			VNILINK_LATENCY_BUSY: options.busy ? '1' : '0',
-			// Each side on its own computer, as a person uses them.
-			VNILINK_LATENCY_ACROSS: '1',
-			// A Linux host's portal asks someone there; the other side waits as long.
-			VNILINK_LATENCY_CONSENT_MS: String(remote.hosts === 'remote' || process.platform === 'linux' ? 5 * 60000 : 0),
-			VNILINK_LATENCY_SCREEN_GRANT: grant,
-		});
-		let exited = false;
-		const platform = await latencyPlatform(root, options, processes, signal);
+			VNILINK_LATENCY_CONSENT_MS: String(hostOs === 'linux' ? 5 * 60000 : 0),
+		};
+		const platform = await latencyPlatform(root, options.app, processes, signal);
 		const profile = join(work, here);
 		await mkdir(profile);
-		const local = platform.launch(here, { ...environment(here, rendezvous, options.output, join(grants, 'host-screen-grant')), VNILINK_TEST_PROFILE: profile }, join(options.output, `${here}.log`));
-		// The remote side runs as a transient unit of the user's session there,
-		// which has the graphical session's bus and the desktop portal.
-		const remoteEnvironment = { ...environment(there, remoteRendezvous, remoteOutput, `${remoteGrants}/host-screen-grant`), VNILINK_TEST_PROFILE: `${remoteRendezvous}-profile` };
-		const launch = [
-			'systemd-run', '--user', '--wait', '--collect', '--quiet', `--unit=${unit}`,
-			`--working-directory=${remote.root}`,
-			'-p', `StandardOutput=file:${remoteOutput}/${there}.log`, '-p', `StandardError=file:${remoteOutput}/${there}.log`,
-			...Object.entries(remoteEnvironment).map(([name, value]) => `--setenv=${name}=${value}`),
-			// The viewer reads no screen, so it needs no placed window and runs
-			// as a Wayland client: Chromium decodes in hardware through VA-API
-			// there, which is what a viewer measured across two computers
-			// should show. Under XWayland it decodes in software.
-			executable, '--ozone-platform=wayland', `${remote.root}/out/latency.cjs`,
-		].map(shellWord).join(' ');
-		const other = processes.start('ssh', [...shell.args, `mkdir -p ${shellWord(`${remoteRendezvous}-profile`)} && ${launch}`], { stdio: 'ignore' });
-		for (const side of [local, other]) {
-			sides.push(side.result.catch(() => undefined).finally(() => {
-				exited = true;
-			}));
+		const local = platform.launch(here, {
+			...shared,
+			// Each side on its own computer, as a person uses them; the agent
+			// sets it for its side itself.
+			VNILINK_LATENCY_ACROSS: '1',
+			VNILINK_LATENCY_ROLE: here,
+			VNILINK_LATENCY_DIR: rendezvous,
+			VNILINK_LATENCY_OUTPUT: options.output,
+			VNILINK_LATENCY_SCREEN_GRANT: join(grants, 'host-screen-grant'),
+			VNILINK_TEST_PROFILE: profile,
+		}, join(options.output, `${here}.log`));
+		sides.push(local.result.catch(() => undefined).finally(() => {
+			state.localExited = true;
+		}));
+		// The agent starts the other side from its own checkout, with its own
+		// folders and grant; this side names only the scenario and the numbers,
+		// and, for a host there, the one viewer it may show its screen to.
+		const params: Record<string, unknown> = { env: shared };
+		if (there === 'host') {
+			await arrival(rendezvous, 'viewer', 120000, () => state.localExited, signal);
+			const viewerKey = invitationKey((JSON.parse(await readFile(join(rendezvous, 'viewer.json'), 'utf8')) as Record<string, unknown>).token);
+			if (!viewerKey) {
+				throw new Error('The viewer here published no invitation');
+			}
+			params.viewer_key = viewerKey;
 		}
-		const mirroring = mirrorRendezvous(shell, rendezvous, remoteRendezvous, () => stopped, signal);
-		mirroring.catch(() => undefined);
+		await session.start(`latency-${there}`, params);
+		started = true;
+		const relaying = relayRendezvous(session, rendezvous, there, () => state.stopped, running => {
+			state.peerRunning = running;
+		}, signal).catch((error: unknown) => {
+			state.peerRunning = false;
+			throw error;
+		});
+		relaying.catch(() => undefined);
+		const exited = (): boolean => state.localExited || !state.peerRunning;
 		// The portal on a Linux host asks someone there once; its answer is kept.
-		await arrival(rendezvous, 'viewer-streaming', 120000 + 5 * 60000, () => exited, signal);
+		await arrival(rendezvous, 'viewer-streaming', 120000 + 5 * 60000, exited, signal);
 		await new Promise(resolve => setTimeout(resolve, options.settleSeconds * 1000));
 		await publish(rendezvous, 'read', { seconds: options.seconds });
-		await arrival(rendezvous, 'read-done', (options.seconds + 60) * 1000, () => exited, signal);
+		await arrival(rendezvous, 'read-done', (options.seconds + 60) * 1000, exited, signal);
 		await arrival(rendezvous, 'viewer-cpu', 5000, () => false, signal).catch(() => undefined);
 		await publish(rendezvous, 'done', {});
-		await Promise.race([Promise.all(sides), new Promise(resolve => setTimeout(resolve, 30000))]);
-		stopped = true;
-		await mirroring.catch(() => undefined);
+		// Both sides quit on `done`, the agent's once the relay carries it.
+		const quit = Date.now() + 30000;
+		while ((!state.localExited || state.peerRunning) && Date.now() < quit) {
+			await new Promise(resolve => setTimeout(resolve, 250));
+		}
+		state.stopped = true;
+		await relaying.catch(() => undefined);
 		await fetchEvidence();
 		const read = async (name: string): Promise<string> => readFile(join(options.output, name), 'utf8').catch(() => '');
 		const cpuOf = async (name: string): Promise<Record<string, number>> => {
@@ -690,10 +723,12 @@ async function measureAcross(root: string, signal: AbortSignal, options: Latency
 			summariseViewerStatus(stages),
 			{ host: await cpuOf('host-cpu'), viewer: await cpuOf('viewer-cpu') },
 		);
+		// Each computer by what it runs, never by its name.
+		const agent = `${session.platform.os} ${session.platform.arch} (the agent)`;
 		const run = {
 			seconds: options.seconds, settle: options.settleSeconds, fps: options.frameRate ?? null, bitrate: options.bitrate ?? null, busy: options.busy,
-			host: here === 'host' ? `${process.platform} (here)` : `${remote.destination} (linux)`,
-			viewer: here === 'viewer' ? `${process.platform} (here)` : `${remote.destination} (linux)`,
+			host: here === 'host' ? `${osName} ${process.arch} (here)` : agent,
+			viewer: here === 'viewer' ? `${osName} ${process.arch} (here)` : agent,
 			date: new Date().toISOString(),
 		};
 		await writeFile(join(options.output, 'run.json'), JSON.stringify(run, null, 2));
@@ -701,22 +736,66 @@ async function measureAcross(root: string, signal: AbortSignal, options: Latency
 		console.log(summary);
 		console.log(`Evidence: ${options.output}`);
 	} finally {
-		stopped = true;
-		await publish(join(work, 'rendezvous'), 'done', {}).catch(() => undefined);
-		await Promise.race([Promise.all(sides), new Promise(resolve => setTimeout(resolve, 20000))]);
+		state.stopped = true;
+		await publish(rendezvous, 'done', {}).catch(() => undefined);
+		await settledWithin(Promise.all(sides), 20000);
 		await fetchEvidence().catch(() => undefined);
-		// A side that did not quit stops with its unit; nothing is left there.
-		await shell.output(`systemctl --user stop ${shellWord(unit)} 2>/dev/null; ${remoteRendezvous ? `rm -rf ${shellWord(remoteRendezvous)} ${shellWord(`${remoteRendezvous}-profile`)}` : 'true'}; ${remoteOutput ? `rm -rf ${shellWord(remoteOutput)}` : 'true'}`).catch(() => undefined);
-		await shell.close();
+		// The agent tells its side `done`, ends it if it does not quit, and
+		// removes its folders; its checkout keeps only the portal's grant.
+		if (started) {
+			await session?.stop().catch(() => undefined);
+		}
+		await session?.close();
 		await processes.stop();
 		await rm(work, { recursive: true, force: true });
 	}
 }
 
+/** The environment a latency side on the agent's computer runs with: what the agent set, and the suite's whitelisted numbers. */
+export function agentLatencyEnvironment(role: 'host' | 'viewer', environment: NodeJS.ProcessEnv): Record<string, string> {
+	// Only the agent starts a side here, and its other half is always on another computer.
+	const result: Record<string, string> = { VNILINK_LATENCY_ROLE: role, VNILINK_LATENCY_ACROSS: '1' };
+	for (const name of ['VNILINK_LATENCY_DIR', 'VNILINK_LATENCY_OUTPUT', 'VNILINK_LATENCY_SCREEN_GRANT', 'VNILINK_TEST_PROFILE']) {
+		const value = environment[name];
+		if (!value) {
+			throw new Error(`The agent sets ${name} for a latency side`);
+		}
+		result[name] = value;
+	}
+	for (const [name, [least, most]] of Object.entries(agentLatencyVariables)) {
+		const value = environment[name];
+		if (value !== undefined && /^\d{1,9}$/.test(value) && Number(value) >= least && Number(value) <= most) {
+			result[name] = value;
+		}
+	}
+	return result;
+}
+
+/**
+ * One side of a two-computer latency run on the test agent's computer
+ * (`testkit:launch latency-host|latency-viewer`), started as a run on one
+ * computer starts it, until `stopped` settles; the side then quits by
+ * itself on the `done` the agent publishes, or is ended.
+ */
+export async function launchLatencySide(root: string, signal: AbortSignal, role: 'host' | 'viewer', stopped: Promise<void>): Promise<void> {
+	await assertNativeFresh(root);
+	await assertBundleFresh(root, 'latency.cjs');
+	const environment = agentLatencyEnvironment(role, process.env);
+	const processes = new ProcessRunner(signal);
+	try {
+		const platform = await latencyPlatform(root, undefined, processes, signal);
+		const side = platform.launch(role, environment, join(environment.VNILINK_LATENCY_OUTPUT, `${role}.log`));
+		await Promise.race([side.result, stopped]);
+		await settledWithin(side.result, 20000);
+	} finally {
+		await processes.stop();
+	}
+}
+
 export async function measureLatency(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
 	const options = latencyOptions(root, args);
-	if (options.remote) {
-		await measureAcross(root, signal, options, options.remote);
+	if (options.peer) {
+		await measureAcross(root, signal, options, options.peer);
 		return;
 	}
 	await assertNativeFresh(root);
@@ -725,7 +804,7 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 	const sides: Promise<unknown>[] = [];
 	try {
 		await mkdir(options.output, { recursive: true });
-		const platform = await latencyPlatform(root, options, processes, signal);
+		const platform = await latencyPlatform(root, options.app, processes, signal);
 		// The reader is built before the sides start, so its compile does not
 		// count against their timeouts.
 		await processes.run('cargo', ['build', '--release', '--locked', '-p', platform.readerCrate, '--example', 'glass_latency'], { cwd: root });
@@ -801,7 +880,7 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 		await publish(join(work, 'rendezvous'), 'done', {}).catch(() => undefined);
 		// A side's process (`open -W` on macOS) returns when it has quit; its
 		// profile is then free to remove.
-		await Promise.race([Promise.all(sides), new Promise(resolve => setTimeout(resolve, 20000))]);
+		await settledWithin(Promise.all(sides), 20000);
 		await processes.stop();
 		await rm(work, { recursive: true, force: true });
 	}

@@ -2,7 +2,8 @@
  * The perceived-quality stimulus window (`npm run measure:perceived`): the
  * page in `stimulus.ts`, maximised above everything, until the runner stops
  * this process. It runs on the Mac doing the measuring by default, or on the
- * second computer being controlled with `--remote`. It needs nothing of
+ * second computer being controlled with `--peer`, started there by the test
+ * agent (`testkit:launch perceived-stimulus`). It needs nothing of
  * VniLink's own: a remote desktop application under test only has to show
  * this screen.
  *

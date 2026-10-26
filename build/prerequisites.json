@@ -506,21 +506,6 @@
         }
       }
     },
-    "ssh": {
-      "title": "OpenSSH client",
-      "optional": true,
-      "purpose": "Only `--remote` measurements use it, to drive a second computer over SSH.",
-      "check": {
-        "commands": {
-          "ssh": {
-            "debian": "openssh-client",
-            "fedora": "openssh-clients",
-            "darwin": "included in macOS",
-            "win32": "Settings > System > Optional features > OpenSSH Client"
-          }
-        }
-      }
-    },
     "ffmpeg": {
       "title": "FFmpeg",
       "platforms": ["darwin"],
@@ -609,7 +594,7 @@
       "title": "A second computer",
       "kind": "computer",
       "optional": true,
-      "purpose": "Every task runs on this computer. `--remote` measurements run one side on a second, Linux computer with a built checkout, reached over SSH; `--peer` runs a suite or measurement against `node build/run.ts testkit:agent` on a second computer built from the same commit.",
+      "purpose": "Every task runs on this computer. `--peer` runs a suite or a measurement's other side against `node build/run.ts testkit:agent` on a second computer built from the same commit, where a person approves this computer by its digits.",
       "check": {
         "custom": "second-computer"
       }
@@ -704,8 +689,12 @@
       "requires": ["second-computer"]
     },
     "testkit:agent": {
-      "description": "Serve suites run with --peer on another computer",
+      "description": "Serve suites and measurements run with --peer on another computer",
       "same": "build"
+    },
+    "testkit:launch": {
+      "description": "Start a measurement's side for the test agent",
+      "requires": ["platform", "node", "linux-runtime-libraries", "desktop-session", "linux-sandbox"]
     },
     "test:linux": {
       "description": "Run the checks and tests in the Linux container",
@@ -736,15 +725,14 @@
         "vnilink-screen-recording",
         "screen-portal",
         "signed-in-desktop",
-        "second-computer",
-        "ssh"
+        "second-computer"
       ]
     },
     "measure:perceived": {
       "description": "Measure what this Mac shows and how fast it answers input",
       "platforms": ["darwin"],
       "same": "build",
-      "requires": ["screen-recording", "accessibility", "ffmpeg", "second-computer", "ssh"]
+      "requires": ["screen-recording", "accessibility", "ffmpeg", "second-computer"]
     },
     "check:product": {
       "description": "Check the product metadata",

@@ -1,27 +1,35 @@
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A folder of a test's own under the system's temporary folder, removed
-/// when it is dropped.
+/// when it is dropped. It is made anew, private to this user, under a name
+/// no other process chose: an existing folder or a link planted at that
+/// name is never used.
 pub struct Scratch {
     path: PathBuf,
+    /// Owns the folder: dropping it removes it.
+    _folder: tempfile::TempDir,
 }
 
 impl Scratch {
     pub fn new(tag: &str) -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        let path = std::env::temp_dir().join(format!(
-            "vnilink-testkit-{tag}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&path).expect("a scratch folder");
         // Engines compare canonical paths: on macOS the temporary folder is
-        // reached through a link. Windows would answer with a verbatim
-        // `\\?\` path, which cmd refuses as its directory.
+        // reached through a link, which is resolved before the folder is
+        // made so the folder itself is never reached through one. Windows
+        // would answer with a verbatim `\\?\` path, which cmd refuses as
+        // its directory.
+        let parent = std::env::temp_dir();
         #[cfg(unix)]
-        let path = std::fs::canonicalize(&path).expect("a scratch folder");
-        Self { path }
+        let parent = std::fs::canonicalize(&parent).expect("the temporary folder");
+        let prefix = format!("vnilink-testkit-{tag}-{}-", std::process::id());
+        let mut builder = tempfile::Builder::new();
+        builder.prefix(&prefix);
+        #[cfg(unix)]
+        builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+        let folder = builder.tempdir_in(parent).expect("a scratch folder");
+        Self {
+            path: folder.path().to_path_buf(),
+            _folder: folder,
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -33,8 +41,34 @@ impl Scratch {
     }
 }
 
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each scratch folder is new, private and gone once dropped.
+    #[test]
+    fn a_scratch_folder_is_new_private_and_removed() {
+        let first = Scratch::new("scratch");
+        let second = Scratch::new("scratch");
+        assert_ne!(first.path(), second.path(), "never a folder another made");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(first.path())
+                .expect("the folder")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o700, "readable by this user only");
+            assert!(
+                !std::fs::symlink_metadata(first.path())
+                    .expect("the folder")
+                    .file_type()
+                    .is_symlink(),
+                "a folder, not a link"
+            );
+        }
+        let path = first.path().to_path_buf();
+        drop(first);
+        assert!(!path.exists(), "removed when dropped");
     }
 }

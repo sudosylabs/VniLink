@@ -15,9 +15,19 @@ import { isLinux, isMacintosh } from '../../src/base/common/platform.js';
 import { isEngineReply, record } from '../../src/platform/engine/common/engine.js';
 import { TestApplication } from '../automation/application.js';
 import type { WindowDriver } from '../automation/driver.js';
+import { ACROSS_SHARING, assertSeenOnly, readRequest } from './across.js';
 import { CELLS, stimulusPage } from './stimulus.js';
 
 const role = process.env.VNILINK_LATENCY_ROLE;
+
+/**
+ * Each side on its own computer: the rendezvous folder is filled from the
+ * other one, so the host runs no program named there and is only seen
+ * (`across.ts`). The test agent sets it for every side it starts, and the
+ * suite on the other computer cannot unset it; on one computer the runner
+ * sets it for its own side of a run across two.
+ */
+const across = process.env.VNILINK_LATENCY_ACROSS === '1';
 
 const directory = process.env.VNILINK_LATENCY_DIR;
 
@@ -66,6 +76,16 @@ if ((role !== 'host' && role !== 'viewer') || !directory || !output) {
 const rendezvous = directory;
 
 const evidence = output;
+
+// The run ends with `done`, or when its rendezvous folder is gone, as when
+// the test agent stopped the scenario and removed it. A side started
+// through LaunchServices on macOS is no child of whoever started it, so it
+// watches for its end itself, from the start, whatever it is waiting on.
+setInterval(() => {
+	if (!existsSync(rendezvous) || existsSync(join(rendezvous, 'done.json'))) {
+		app.exit(0);
+	}
+}, 250).unref();
 
 /** Publishes `value` under `name` for the other side, whole or not at all. */
 function publish(name: string, value: unknown): void {
@@ -222,9 +242,28 @@ async function host(driver: WindowDriver): Promise<void> {
 	}
 	publish('host', { token: await invitation(driver), endpoint });
 	const viewer = await expect('viewer', 60000);
+	// Sharing is a setting; main writes it to the engine, as the Settings tab
+	// does, and it grants control too.
+	const shareScreen = async (): Promise<void> => {
+		await driver.window.webContents.executeJavaScript(`window.driver.mainProcess.getChannel('configuration').call('updateValue', { key: 'sharing.screen', value: true })`);
+	};
+	if (across) {
+		// A viewer on another computer is only shown the screen, from
+		// before it is trusted. Linux hosts only while the setting is on, so
+		// it is turned on first, while no computer is trusted, and control
+		// is then taken away; elsewhere the setting is not written.
+		if (isLinux) {
+			await shareScreen();
+		}
+		await engine(driver, { type: 'setSharingPolicy', policy: ACROSS_SHARING });
+		assertSeenOnly((await engine(driver, { type: 'sharingPolicy' })).policy);
+	}
 	await engine(driver, { type: 'acceptInvitation', token: viewer.token });
-	// Sharing is a setting; main writes it to the engine, as the Settings tab does.
-	await driver.window.webContents.executeJavaScript(`window.driver.mainProcess.getChannel('configuration').call('updateValue', { key: 'sharing.screen', value: true })`);
+	if (across) {
+		assertSeenOnly((await engine(driver, { type: 'sharingPolicy' })).policy);
+	} else {
+		await shareScreen();
+	}
 	// On Linux turning it on asks the desktop portal.
 	if (isLinux) {
 		await portalGrant(driver);
@@ -265,20 +304,21 @@ async function host(driver: WindowDriver): Promise<void> {
 		}
 		// The reader runs as this process's child, so macOS counts it under
 		// this application's Screen Recording permission.
-		const read = await expect('read', 5 * 60000);
+		const read = readRequest(await expect('read', 5 * 60000), across);
 		const [cpuStart, startedAt] = [cpuSeconds(), Date.now()];
 		// Without a reader, as when the viewer is on another computer, the
 		// run is the sampling time alone.
-		const reading = typeof read.reader === 'string'
+		const { reader } = read;
+		const reading = reader
 			? new Promise<{ code: number; output: string }>(resolve => {
-				execFile(String(read.reader), [String(read.seconds), String(read.samples), String(read.grant)], (error, stdout, stderr) => {
+				execFile(reader.path, [String(read.seconds), reader.samples, reader.grant], (error, stdout, stderr) => {
 					resolve({ code: error ? 1 : 0, output: `${stdout}${stderr}` });
 				});
 			})
 			: new Promise<{ code: number; output: string }>(resolve => {
 				setTimeout(() => {
 					resolve({ code: 0, output: '' });
-				}, Number(read.seconds) * 1000);
+				}, read.seconds * 1000);
 			});
 		// Capture and encode times as the host measures them, once a second.
 		const sampling = sampleEverySecond(join(evidence, 'host-stages.jsonl'), reading, async () => (await hostedPipelines(driver)).at(0) ?? {});
@@ -469,7 +509,7 @@ async function viewer(driver: WindowDriver): Promise<void> {
 // prepares it everywhere, as the product's does.
 const application = new TestApplication({
 	showWindow: false,
-	nativeVideo: role === 'host' || !isMacintosh || process.env.VNILINK_LATENCY_ACROSS === '1',
+	nativeVideo: role === 'host' || !isMacintosh || across,
 	screenGrant: role === 'host' ? screenGrant : undefined,
 	timeoutMs: 30 * 60000,
 });

@@ -1,6 +1,6 @@
 /** The application's bundles and resources, shared by the one-shot, release and watch builds. */
 import { build, type BuildOptions } from 'esbuild';
-import { cp, mkdir, rm } from 'node:fs/promises';
+import { cp, mkdir, readFile, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { compileNative, defaultNativeOptions, stageGlass, stageSpdlog, stageNative, type NativeIdentity, type NativeOptions } from './native.ts';
 import { ProcessRunner } from './processes.ts';
@@ -31,6 +31,25 @@ export function bundleOptions(root: string, { production = false, outputDirector
 		browser('src/notice.ts', 'renderer/notice.js'),
 		...(!production ? [browser('test/browser/index.ts', 'browser-tests.js', { format: 'iife', globalName: 'browserTests' })] : []),
 	];
+}
+
+/**
+ * Throws unless `out/<output>` is exactly what building its sources now
+ * writes: the test agent's revision covers a side's sources, so the script
+ * it launches must be built from them, not left from another commit.
+ */
+export async function assertBundleFresh(root: string, output: string, outputDirectory = join(root, 'out')): Promise<void> {
+	const outfile = join(outputDirectory, output);
+	const options = bundleOptions(root, { outputDirectory }).find(candidate => candidate.outfile === outfile);
+	if (!options) {
+		throw new Error(`No bundle writes out/${output}`);
+	}
+	const result = await build({ ...options, write: false, logLevel: 'silent' });
+	const built = result.outputFiles.find(file => file.path === outfile);
+	const current = await readFile(outfile).catch(() => undefined);
+	if (!built || !current || !Buffer.from(built.contents).equals(current)) {
+		throw new Error(`out/${output} is missing or was not built from these sources: run npm run build`);
+	}
 }
 
 export function resources(root: string, outputDirectory = join(root, 'out')): Resource[] {

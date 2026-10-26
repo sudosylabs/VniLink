@@ -6,7 +6,8 @@
  * `test/perceived/stimulus.ts` opens maximised here, and the run measures
  * this computer's own floor (synthetic input, the browser, the display and
  * capture), the baseline every remote desktop application adds to. With
- * `--remote`, the page runs on a second computer, started over SSH, and
+ * `--peer`, the page runs on a second computer, started by the test agent
+ * there (`node build/run.ts testkit:agent`) from its own checkout, and
  * someone opens the application under test on this Mac, full screen,
  * showing that computer; VniLink and RustDesk are measured the same way, as
  * black boxes. In both, the driver
@@ -21,25 +22,23 @@
  * - it does not cover the display panel's own latency, which a photodiode
  *   tester measures.
  *
- * The viewer side runs on macOS; a second, controlled computer runs Linux.
+ * The viewer side runs on macOS; the controlled computer may run any OS
+ * the agent runs on.
  */
 import { execFile } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { parseArgs, promisify } from 'node:util';
 import { perceivedCard, perceivedLayout } from '../../test/perceived/stimulus.ts';
+import { assertBundleFresh } from './bundles.ts';
 import { electronExecutable } from './electron.ts';
-import { ProcessRunner } from './processes.ts';
-import { loadProduct } from './product.ts';
-import { remoteShell, shellWord, type SshTarget } from './remote.ts';
-
-/** A second computer being controlled, and its built checkout. */
-type ControlledComputer = SshTarget & { readonly root: string };
+import { isLinux } from './platform.ts';
+import { type LaunchedProcess, ProcessRunner } from './processes.ts';
+import { agentPeer, openAgentSession, type AgentPeer } from './remote.ts';
 
 export interface PerceivedOptions {
-	/** The second computer; undefined runs the page on this Mac. */
-	readonly remote: ControlledComputer | undefined;
+	/** The test agent on the computer being controlled; undefined runs the page on this Mac. */
+	readonly peer: AgentPeer | undefined;
 	/** What is measured, as the summary names it: the application under test, or this Mac's floor. */
 	readonly label: string;
 	/** How long the driver waits for the page to appear on this screen. */
@@ -61,32 +60,26 @@ floor: synthetic input, the browser, the display and capture. Build first
   --wait <seconds>        how long to wait for the page on this screen, 10..1800 (default: 300)
   --output <directory>    where the evidence goes (default: .build/perceived/<label>-<time>)
 
-Optional, a second computer: the page runs on a Linux computer with a built
-checkout, reached over SSH, and the application under test shows it here.
+Optional, a second computer: the page runs there, started by the test agent
+(node build/run.ts testkit:agent, built from the same commit), and the
+application under test shows it here.
 
-  --remote <destination>  that computer's SSH destination
-  --remote-root <path>    the absolute path of its built checkout
-  --ssh-config <file>     an SSH configuration file for every connection
-  --label <name>          required with --remote: the application under test`;
+  --peer <file.vnl>       the agent's pairing file
+  --peer-check <digits>   the digits the agent printed beside it
+  --label <name>          required with --peer: the application under test`;
 
 export function perceivedOptions(root: string, args: readonly string[]): PerceivedOptions {
 	const { values } = parseArgs({
 		args: [...args],
 		options: {
-			remote: { type: 'string' }, 'remote-root': { type: 'string' }, 'ssh-config': { type: 'string' },
+			peer: { type: 'string' }, 'peer-check': { type: 'string' },
 			label: { type: 'string' }, wait: { type: 'string', default: '300' }, output: { type: 'string' },
 		},
 		strict: true,
 	});
-	const remoteRoot = values['remote-root'];
-	if (values.remote === undefined && (remoteRoot !== undefined || values['ssh-config'] !== undefined)) {
-		throw new Error('--remote-root and --ssh-config need --remote; without them the page runs on this Mac');
-	}
-	if (values.remote !== undefined && !remoteRoot?.startsWith('/')) {
-		throw new Error('--remote names the computer being controlled and --remote-root its built checkout, an absolute path');
-	}
-	if (values.remote !== undefined && values.label === undefined) {
-		throw new Error('--label names the application under test, which --remote measures');
+	const peer = agentPeer(values.peer, values['peer-check']);
+	if (peer !== undefined && values.label === undefined) {
+		throw new Error('--label names the application under test, which --peer measures');
 	}
 	const label = (values.label ?? LOCAL_LABEL).trim();
 	if (!label || !/^[\w .-]{1,40}$/.test(label)) {
@@ -98,9 +91,7 @@ export function perceivedOptions(root: string, args: readonly string[]): Perceiv
 	}
 	const stamp = new Date().toISOString().replaceAll(':', '-');
 	return {
-		remote: values.remote === undefined || remoteRoot === undefined
-			? undefined
-			: { destination: values.remote, root: remoteRoot, sshConfig: values['ssh-config'] === undefined ? undefined : resolve(values['ssh-config']) },
+		peer,
 		label,
 		waitSeconds,
 		output: resolve(values.output ?? join(root, '.build/perceived', `${label.replaceAll(/\W+/g, '-')}-${stamp}`)),
@@ -485,16 +476,22 @@ interface Stimulus {
 }
 
 /**
- * The page on this Mac, in the development Electron `npm run build`
- * prepared, as a child of this task: it needs no permission of its own, and
- * stopping the task stops it.
+ * The page in the development Electron `npm run build` prepared, as a child
+ * of `processes`: it needs no permission of its own, and stopping them
+ * stops it. On Linux it runs under XWayland, where it can be maximised
+ * above every window.
  */
-async function localStimulus(root: string, options: PerceivedOptions, processes: ProcessRunner, signal: AbortSignal): Promise<Stimulus> {
+async function startStimulus(root: string, processes: ProcessRunner, signal: AbortSignal): Promise<LaunchedProcess> {
 	const entry = join(root, 'out/perceived.cjs');
 	await access(entry).catch(() => {
 		throw new Error('out/perceived.cjs is missing: run npm run build first');
 	});
-	const page = processes.start(await electronExecutable(root, signal), [entry], { stdio: 'ignore' });
+	return processes.start(await electronExecutable(root, signal), [...isLinux ? ['--ozone-platform=x11'] : [], entry], { stdio: 'ignore' });
+}
+
+/** The page on this Mac, as a child of this task. */
+async function localStimulus(root: string, options: PerceivedOptions, processes: ProcessRunner, signal: AbortSignal): Promise<Stimulus> {
+	const page = await startStimulus(root, processes, signal);
 	const exited = page.result.then(
 		() => Promise.reject(new Error('The stimulus window closed before the run finished')),
 		(error: unknown) => Promise.reject(new Error(`The stimulus stopped: ${error instanceof Error ? error.message : String(error)}`)),
@@ -507,33 +504,62 @@ async function localStimulus(root: string, options: PerceivedOptions, processes:
 	};
 }
 
-/** The page on the second computer, started over SSH as a transient unit of the user's session there. */
-async function remoteStimulus(root: string, options: PerceivedOptions, remote: ControlledComputer, work: string, signal: AbortSignal): Promise<Stimulus> {
-	const shell = remoteShell(remote, work, signal);
-	const unit = `vnilink-perceived-${String(process.pid)}`;
-	const stop = async (): Promise<void> => {
-		await shell.output(`systemctl --user stop ${shellWord(unit)} 2>/dev/null; true`).catch(() => undefined);
-		await shell.close();
-	};
+/**
+ * The page on the computer being controlled, started by the test agent
+ * there from its own checkout (the `perceived-stimulus` scenario), and
+ * watched until the run stops it.
+ */
+async function agentStimulus(root: string, options: PerceivedOptions, peer: AgentPeer, signal: AbortSignal): Promise<Stimulus> {
+	const session = await openAgentSession(root, peer, signal);
 	try {
-		const electron = `${remote.root}/.build/electron/${(await loadProduct(root)).applicationName}`;
-		await shell.output(`test -x ${shellWord(electron)} && test -f ${shellWord(`${remote.root}/out/perceived.cjs`)}`).catch(() => {
-			throw new Error(`${remote.destination}:${remote.root} has no built stimulus: run npm run build there first`);
-		});
-		await shell.output([
-			'systemd-run', '--user', '--collect', '--quiet', `--unit=${unit}`, `--working-directory=${remote.root}`,
-			electron, '--ozone-platform=x11', `${remote.root}/out/perceived.cjs`,
-		].map(shellWord).join(' '));
+		await session.start('perceived-stimulus');
 	} catch (error) {
-		await stop();
+		await session.close();
 		throw error;
 	}
+	// Set by `stop` while the watch waits.
+	const state = { stopped: false };
+	const exited = (async (): Promise<never> => {
+		while (!state.stopped) {
+			await new Promise(resolve => setTimeout(resolve, 2000));
+			const polled = await session.poll().catch((error: unknown) => {
+				if (state.stopped) {
+					return { running: true };
+				}
+				throw error;
+			});
+			// After `stop` nobody waits on this any more.
+			if (!polled.running) {
+				throw new Error('The stimulus on the agent\'s computer quit before the run finished');
+			}
+		}
+		return new Promise<never>(() => undefined);
+	})();
+	exited.catch(() => undefined);
 	return {
-		instructions: `The stimulus is maximised on ${remote.destination}. Open ${options.label} on this Mac to it now, full screen, showing its whole screen; measuring starts when the page is found (up to ${String(options.waitSeconds)} s), then the pointer moves by itself for about a minute.`,
-		// The unit is not watched: the driver times out when the page is gone.
-		exited: new Promise<never>(() => undefined),
-		stop,
+		instructions: `The stimulus is maximised on the agent's computer (${session.platform.os}). Open ${options.label} on this Mac to it now, full screen, showing its whole screen; measuring starts when the page is found (up to ${String(options.waitSeconds)} s), then the pointer moves by itself for about a minute.`,
+		exited,
+		stop: async () => {
+			state.stopped = true;
+			await session.stop().catch(() => undefined);
+			await session.close();
+		},
 	};
+}
+
+/**
+ * The page alone on the test agent's computer (`testkit:launch
+ * perceived-stimulus`), until `stopped` settles.
+ */
+export async function launchPerceivedStimulus(root: string, signal: AbortSignal, stopped: Promise<void>): Promise<void> {
+	await assertBundleFresh(root, 'perceived.cjs');
+	const processes = new ProcessRunner(signal);
+	try {
+		const page = await startStimulus(root, processes, signal);
+		await Promise.race([page.result, stopped]);
+	} finally {
+		await processes.stop();
+	}
 }
 
 export async function measurePerceived(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
@@ -546,14 +572,13 @@ export async function measurePerceived(root: string, signal: AbortSignal, args: 
 	}
 	const options = perceivedOptions(root, args);
 	const processes = new ProcessRunner(signal);
-	const work = await mkdtemp(join(tmpdir(), 'vp-'));
 	let stimulus: Stimulus | undefined;
 	try {
 		await mkdir(options.output, { recursive: true });
 		await processes.run('cargo', ['build', '--release', '--locked', '-p', 'vnilink-macos', '--example', 'perceived'], { cwd: root });
 		const pixels = await displayPixels(signal);
-		stimulus = options.remote
-			? await remoteStimulus(root, options, options.remote, work, signal)
+		stimulus = options.peer
+			? await agentStimulus(root, options, options.peer, signal)
 			: await localStimulus(root, options, processes, signal);
 		console.log(stimulus.instructions);
 		await Promise.race([
@@ -564,7 +589,6 @@ export async function measurePerceived(root: string, signal: AbortSignal, args: 
 	} finally {
 		await stimulus?.stop();
 		await processes.stop();
-		await rm(work, { recursive: true, force: true });
 	}
 }
 

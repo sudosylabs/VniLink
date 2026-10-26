@@ -19,7 +19,7 @@ import { assertTaskReady } from './lib/prerequisites.ts';
 import { updatePrerequisiteDocs } from './lib/prerequisitesDocs.ts';
 import { checkProduct } from './lib/product.ts';
 import { buildRelease } from './lib/release.ts';
-import { benchService, runTestkitAgent, runUiTests, testRust, testService, validateLinux } from './lib/test.ts';
+import { benchService, launchAgentSide, runTestkitAgent, runUiTests, testRust, testService, validateLinux } from './lib/test.ts';
 import { verifyInstallers, verifyPackage, verifyRelease } from './lib/verify.ts';
 import { formatFiles } from './format.ts';
 import { verifyUpstream } from './vscodeDependencies.ts';
@@ -43,6 +43,7 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 	'test:service': (root, signal, args) => testService(root, signal, args),
 	'bench:service': (root, signal, args) => benchService(root, signal, args),
 	'testkit:agent': (root, signal, args) => runTestkitAgent(root, signal, args),
+	'testkit:launch': (root, signal, args) => launchAgentSide(root, signal, args),
 	'test:linux': (root, signal) => validateLinux(root, signal),
 	'sandbox:linux': (root, signal) => allowLinuxSandbox(root, signal),
 	'measure:impaired': (root, signal, args) => measureImpairedInContainer(root, signal, args),

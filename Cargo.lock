@@ -5885,17 +5885,21 @@ dependencies = [
 name = "vnilink-testkit"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "blake3",
  "expect-test",
  "iroh-relay",
+ "libc",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "vnilink",
  "vnilink-audio",
  "vnilink-log",
  "vnilink-media",
  "vnilink-windows",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

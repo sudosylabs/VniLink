@@ -2,13 +2,18 @@
 //! pairs with by file, and the loop that answers that suite's requests by
 //! running the scenarios compiled in here.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use serde_json::Value;
 use vnilink::probes::{AgentChannel, AgentListener};
 use vnilink::{ControlRequest, PairingFile};
 
 use super::scenarios::{self, Scenario};
-use super::{receive, revision, send, PeerError, Platform, Reply, Request};
+use super::{
+    clock, decode, encode, folders, receive, revision, send, Named, Numbered, PeerError, Platform,
+    Polled, Reply, Request,
+};
 use crate::{Engine, Reach};
 
 /// The most records a report carries, its last ones.
@@ -23,7 +28,12 @@ pub enum Ending {
     PeerGone,
     /// No request came for the idle limit.
     Idle,
+    /// The agent was asked to stop, as by Ctrl-C.
+    Interrupted,
 }
+
+/// How often a waiting agent looks whether it was asked to stop.
+const LOOK_EVERY: Duration = Duration::from_millis(200);
 
 /// The agent's engine, hosting and listening for its suite.
 pub struct Agent {
@@ -31,6 +41,9 @@ pub struct Agent {
     /// before it shuts down.
     listener: AgentListener,
     engine: Engine,
+    /// Whether the agent's owner lets scenarios show or read this
+    /// computer's real screen (`--allow screen`).
+    screen: bool,
 }
 
 impl Agent {
@@ -38,12 +51,24 @@ impl Agent {
     /// sharing nothing until a scenario starts. Its reports carry what the
     /// log (`vnilink_log::install`) kept.
     pub fn open(reach: Reach) -> Result<Self, PeerError> {
+        // The clock the agent answers with starts no later than its engine.
+        clock::now_us();
         let engine = Engine::reachable("agent", reach);
         engine.core.start_hosting()?;
         // Jobs a scenario's peer starts are driven as the application drives them.
         engine.core.start_job_driver();
         let listener = engine.core.serve_agent()?;
-        Ok(Self { engine, listener })
+        Ok(Self {
+            engine,
+            listener,
+            screen: false,
+        })
+    }
+
+    /// Lets scenarios that show or read this computer's real screen run:
+    /// the latency sides. Its owner says so on its command line.
+    pub fn allow_screen(&mut self) {
+        self.screen = true;
     }
 
     pub fn engine(&self) -> &Engine {
@@ -91,10 +116,28 @@ impl Agent {
     /// until it goes away or sends nothing for `idle`. A suite of another
     /// [`revision`] is refused and ends the service.
     pub fn serve(&self, controller: &str, idle: Duration) -> Result<Ending, PeerError> {
+        self.serve_until(controller, idle, &AtomicBool::new(false))
+    }
+
+    /// As [`Self::serve`], until `stop` is set too: the running scenario
+    /// then stops, removing what it made, before this returns.
+    pub fn serve_until(
+        &self,
+        controller: &str,
+        idle: Duration,
+        stop: &AtomicBool,
+    ) -> Result<Ending, PeerError> {
+        let waiting = Instant::now();
         let channel = loop {
-            let channel = match self.listener.accept(idle) {
+            if stop.load(Ordering::Acquire) {
+                return Ok(Ending::Interrupted);
+            }
+            let channel = match self.listener.accept(LOOK_EVERY) {
                 Ok(channel) => channel,
-                Err(vnilink::Error::Timeout) => return Ok(Ending::Idle),
+                Err(vnilink::Error::Timeout) if waiting.elapsed() > idle => {
+                    return Ok(Ending::Idle)
+                }
+                Err(vnilink::Error::Timeout) => continue,
                 Err(error) => return Err(error.into()),
             };
             // Only paired computers reach the listener, and only the
@@ -105,9 +148,10 @@ impl Agent {
         };
         let mut session = Session {
             engine: &self.engine,
+            screen: self.screen,
             running: None,
         };
-        let ending = session.answer(&channel, idle);
+        let ending = session.answer(&channel, idle, stop);
         session.stop();
         ending
     }
@@ -116,6 +160,7 @@ impl Agent {
 /// One suite's requests and the scenario they started.
 struct Session<'a> {
     engine: &'a Engine,
+    screen: bool,
     running: Option<Running>,
 }
 
@@ -126,11 +171,29 @@ struct Running {
 }
 
 impl Session<'_> {
-    fn answer(&mut self, channel: &AgentChannel, idle: Duration) -> Result<Ending, PeerError> {
+    fn answer(
+        &mut self,
+        channel: &AgentChannel,
+        idle: Duration,
+        stop: &AtomicBool,
+    ) -> Result<Ending, PeerError> {
+        let mut asked = Instant::now();
         loop {
-            let request = match receive::<Request>(channel, idle) {
-                Ok(request) => request,
-                Err(PeerError::Engine(vnilink::Error::Timeout)) => return Ok(Ending::Idle),
+            if stop.load(Ordering::Acquire) {
+                return Ok(Ending::Interrupted);
+            }
+            let Numbered {
+                id,
+                message: request,
+            } = match receive::<Numbered<Request>>(channel, LOOK_EVERY) {
+                Ok(numbered) => {
+                    asked = Instant::now();
+                    numbered
+                }
+                Err(PeerError::Engine(vnilink::Error::Timeout)) if asked.elapsed() > idle => {
+                    return Ok(Ending::Idle)
+                }
+                Err(PeerError::Engine(vnilink::Error::Timeout)) => continue,
                 Err(PeerError::Engine(vnilink::Error::NoSession)) => return Ok(Ending::PeerGone),
                 Err(error) => return Err(error),
             };
@@ -145,14 +208,18 @@ impl Session<'_> {
                     );
                     send(
                         channel,
-                        &Reply::Refused {
-                            reason: reason.clone(),
+                        &Numbered {
+                            id,
+                            message: Reply::Refused {
+                                reason: reason.clone(),
+                            },
                         },
                     )?;
                     return Err(PeerError::Refused(reason));
                 }
             }
-            send(channel, &self.reply(request))?;
+            let message = self.reply(request);
+            send(channel, &Numbered { id, message })?;
         }
     }
 
@@ -172,6 +239,11 @@ impl Session<'_> {
                         scenarios::NAMES.join(", ")
                     ));
                 };
+                if scenarios::shows_screen(&scenario) && !self.screen {
+                    return refused(format!(
+                        "the {scenario} scenario shows this computer's screen; its owner allows that by starting the agent with --allow screen"
+                    ));
+                }
                 let since = vnilink_log::now_ms();
                 match started.start(self.engine, &params) {
                     Ok(facts) => {
@@ -193,7 +265,7 @@ impl Session<'_> {
                     match running.scenario.wait(
                         self.engine,
                         &what,
-                        Duration::from_millis(within_ms),
+                        Duration::from_millis(within_ms).min(super::AWAIT_MOST),
                     ) {
                         Ok(facts) => Reply::Done { facts },
                         Err(reason) => refused(reason),
@@ -203,7 +275,67 @@ impl Session<'_> {
             Request::Stop => Reply::Report {
                 records: self.stop(),
             },
+            Request::Clock => Reply::Clock {
+                us: clock::now_us(),
+            },
+            Request::Put { name, data } => {
+                let Some(bytes) = decode(&data) else {
+                    return refused(format!("{name}'s bytes are not base64"));
+                };
+                match self
+                    .scenario()
+                    .and_then(|scenario| scenario.put(&name, &bytes))
+                {
+                    Ok(()) => Reply::Done { facts: Value::Null },
+                    Err(reason) => refused(reason),
+                }
+            }
+            Request::Poll => match self.scenario().and_then(|scenario| scenario.poll()) {
+                Ok(Polled { files, running }) => Reply::Files {
+                    files: files
+                        .into_iter()
+                        .map(|(name, bytes)| Named {
+                            name,
+                            data: encode(&bytes),
+                        })
+                        .collect(),
+                    running,
+                },
+                Err(reason) => refused(reason),
+            },
+            Request::List => match self.output().and_then(|output| folders::list(&output)) {
+                Ok(files) => Reply::Listing { files },
+                Err(reason) => refused(reason),
+            },
+            Request::Fetch { path, offset } => {
+                match self
+                    .output()
+                    .and_then(|output| folders::read_chunk(&output, &path, offset))
+                {
+                    Ok((bytes, end)) => Reply::Chunk {
+                        data: encode(&bytes),
+                        end,
+                    },
+                    Err(reason) => refused(reason),
+                }
+            }
         }
+    }
+
+    /// The running scenario.
+    fn scenario(&mut self) -> Result<&mut dyn Scenario, String> {
+        match self.running.as_mut() {
+            Some(running) => Ok(running.scenario.as_mut()),
+            None => Err("no scenario is running".to_owned()),
+        }
+    }
+
+    /// The running scenario's output folder.
+    fn output(&mut self) -> Result<std::path::PathBuf, String> {
+        self.scenario()?
+            .output()
+            .map(std::path::Path::to_path_buf)
+            .ok_or_else(|| "this scenario leaves no files".to_owned())
     }
 
     /// Ends the running scenario, if any; the records since it started.

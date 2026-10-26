@@ -7,37 +7,38 @@ import { perceivedCard, perceivedLayout, perceivedPage } from '../../test/percei
 
 test('by default the page runs on this Mac and the run is named for it', () => {
 	const options = perceivedOptions('/root', []);
-	assert.deepEqual(Object.keys(options).sort(), ['label', 'output', 'remote', 'waitSeconds']);
-	assert.equal(options.remote, undefined);
+	assert.deepEqual(Object.keys(options).sort(), ['label', 'output', 'peer', 'waitSeconds']);
+	assert.equal(options.peer, undefined);
 	assert.equal(options.label, LOCAL_LABEL);
 	assert.equal(options.waitSeconds, 300);
 	assert.ok(options.output.startsWith(resolve('/root', '.build', 'perceived', 'This-Mac-')));
 	assert.equal(perceivedOptions('/root', ['--label', 'Studio display']).label, 'Studio display');
 	// The second computer's options mean nothing without it.
-	assert.throws(() => perceivedOptions('/root', ['--remote-root', '/r']), /--remote-root and --ssh-config need --remote/);
-	assert.throws(() => perceivedOptions('/root', ['--ssh-config', '/c']), /need --remote/);
+	assert.throws(() => perceivedOptions('/root', ['--peer-check', '123']), /go together/);
+	assert.throws(() => perceivedOptions('/root', ['--peer', 'agent.vnl', '--label', 'x']), /go together/);
 	assert.throws(() => perceivedOptions('/root', ['--label', '']), /--label/);
 	assert.throws(() => perceivedOptions('/root', ['--wait', '1801']), /--wait/);
 	assert.equal(perceivedOptions('/root', ['--wait', '10']).waitSeconds, 10);
-	assert.throws(() => perceivedOptions('/root', ['--remote']));
+	assert.throws(() => perceivedOptions('/root', ['--peer']));
 	assert.throws(() => perceivedOptions('/root', ['--unknown']));
+	// SSH is gone: its options are unknown.
+	assert.throws(() => perceivedOptions('/root', ['--remote', 'host', '--remote-root', '/r', '--label', 'x']));
 	// The usage leads with the one-Mac run; the second computer is optional.
 	assert.ok(perceivedUsage.indexOf('By default the page runs on this Mac') < perceivedUsage.indexOf('Optional, a second computer'));
-	assert.match(perceivedUsage, /--label <name> {10}required with --remote/);
+	assert.match(perceivedUsage, /--label <name> {10}required with --peer/);
 });
 
-test('perceived options name the controlled computer, its checkout and the application', () => {
-	const options = perceivedOptions('/root', ['--remote', 'host', '--remote-root', '/home/someone/vnilink', '--label', 'VniLink']);
-	assert.deepEqual(options.remote, { destination: 'host', root: '/home/someone/vnilink', sshConfig: undefined });
+test('perceived options name the agent on the controlled computer and the application', () => {
+	const peer = ['--peer', 'agent.vnl', '--peer-check', '123'];
+	const options = perceivedOptions('/root', [...peer, '--label', 'VniLink']);
+	assert.deepEqual(options.peer, { file: resolve('agent.vnl'), check: '123' });
 	assert.equal(options.waitSeconds, 300);
 	assert.ok(options.output.startsWith(resolve('/root', '.build', 'perceived', 'VniLink-')));
-	assert.throws(() => perceivedOptions('/root', ['--remote', 'host', '--label', 'x']), /--remote-root/);
-	assert.throws(() => perceivedOptions('/root', ['--remote', 'host', '--remote-root', 'relative', '--label', 'x']), /--remote-root/);
-	assert.throws(() => perceivedOptions('/root', ['--remote', 'host', '--remote-root', '/r']), /--label names the application under test/);
-	assert.equal(perceivedOptions('/root', ['--remote', 'host', '--remote-root', '/r', '--label', 'x', '--ssh-config', '/c']).remote.sshConfig, resolve('/c'));
-	assert.throws(() => perceivedOptions('/root', ['--remote', 'host', '--remote-root', '/r', '--label', 'a;b']), /--label/);
-	assert.throws(() => perceivedOptions('/root', ['--remote', 'host', '--remote-root', '/r', '--label', 'x', '--wait', '5']), /--wait/);
-	assert.equal(perceivedOptions('/root', ['--remote', 'h', '--remote-root', '/r', '--label', 'x', '--output', 'o']).output, join(process.cwd(), 'o'));
+	assert.throws(() => perceivedOptions('/root', ['--peer', 'agent.vnl', '--peer-check', '1234', '--label', 'x']), /three digits/);
+	assert.throws(() => perceivedOptions('/root', peer), /--label names the application under test/);
+	assert.throws(() => perceivedOptions('/root', [...peer, '--label', 'a;b']), /--label/);
+	assert.throws(() => perceivedOptions('/root', [...peer, '--label', 'x', '--wait', '5']), /--wait/);
+	assert.equal(perceivedOptions('/root', [...peer, '--label', 'x', '--output', 'o']).output, join(process.cwd(), 'o'));
 });
 
 test('the layout matches the reader: the card sits where crates/vnilink-media reads it', () => {

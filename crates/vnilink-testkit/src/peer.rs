@@ -15,8 +15,17 @@
 //! is edited in place, never negotiated. Scenarios are compiled into the
 //! agent; a suite names one and never sends a command or a path to run.
 //! A record names the area and the peer's fingerprint, never content.
+//!
+//! Times cross as each side's monotonic clock, related by an estimated
+//! offset ([`clock`]). Files cross only between a scenario's own folders
+//! and the suite (`folders`): rendezvous files by plain name, evidence
+//! read from its output folder. A build script that does not link the kit
+//! reaches the agent through [`bridge`].
 
 pub mod agent;
+pub mod bridge;
+pub mod clock;
+mod folders;
 mod scenarios;
 
 use std::fmt;
@@ -29,6 +38,8 @@ use vnilink::{SessionPath, SessionPhase};
 
 use crate::{Engine, Reach};
 
+pub use clock::{ClockOffset, ClockSample};
+
 /// The agent's pairing file a suite runs against, from `--peer`.
 pub const PEER: &str = "VNILINK_PEER";
 /// The check digits the agent printed beside that file, from `--peer-check`.
@@ -39,6 +50,20 @@ pub const PEER_CHECK: &str = "VNILINK_PEER_CHECK";
 const APPROVAL_WAIT: Duration = Duration::from_secs(75);
 /// How long a request may take to be answered when it does not say.
 const ANSWER_WAIT: Duration = Duration::from_secs(60);
+/// How long a stop may take to be answered: a launched side is given 30 s
+/// to quit and 10 s more to be ended (`scenarios::launch`), well inside.
+const STOP_WAIT: Duration = Duration::from_secs(90);
+/// The longest an `Await` waits on the agent.
+pub const AWAIT_MOST: Duration = Duration::from_secs(10 * 60);
+
+/// A request or reply with its sequence number: each reply carries its
+/// request's, so an answer that arrives after its request gave up is told
+/// apart from the next one's.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Numbered<T> {
+    pub id: u64,
+    pub message: T,
+}
 
 /// What a computer runs: its operating system, architecture and build
 /// profile. Never its name or its user's.
@@ -80,6 +105,46 @@ pub enum Request {
     Await { what: String, within_ms: u64 },
     /// Ends the running scenario, returning what the agent recorded.
     Stop,
+    /// The agent's clock now ([`clock::now_us`]); the suite asks several
+    /// times to estimate how far it is from its own ([`ClockOffset`]).
+    Clock,
+    /// Gives the running scenario's side the rendezvous file `name`, its
+    /// bytes in base64: what the other side published for it.
+    Put { name: String, data: String },
+    /// The rendezvous files the running scenario's side published since
+    /// the last poll, and whether that side still runs.
+    Poll,
+    /// The files under the running scenario's output folder.
+    List,
+    /// Up to [`CHUNK`] bytes of the output file `path`, from `offset`.
+    Fetch { path: String, offset: u64 },
+}
+
+/// The most bytes one [`Reply::Chunk`] carries, well inside a frame once
+/// in base64.
+pub const CHUNK: usize = 4 * 1024 * 1024;
+
+/// The rendezvous files a scenario's side published since the last poll,
+/// by name with their bytes, and whether that side still runs.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Polled {
+    pub files: Vec<(String, Vec<u8>)>,
+    pub running: bool,
+}
+
+/// A file and its bytes in base64.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Named {
+    pub name: String,
+    pub data: String,
+}
+
+/// A file under a scenario's output folder: its path there, with `/`
+/// between folders, and its size.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Listed {
+    pub path: String,
+    pub size: u64,
 }
 
 /// The agent's answer to one [`Request`].
@@ -95,8 +160,44 @@ pub enum Reply {
     /// The scenario ended; the agent's records since it started, as JSON
     /// lines.
     Report { records: Vec<String> },
+    /// The agent's clock when it answered, in microseconds.
+    Clock { us: u64 },
+    /// Rendezvous files the scenario's side published, and whether it
+    /// still runs.
+    Files { files: Vec<Named>, running: bool },
+    /// The files under the scenario's output folder.
+    Listing { files: Vec<Listed> },
+    /// Bytes of an output file in base64; `end` when they are its last.
+    Chunk { data: String, end: bool },
     /// The request was not carried out, and why.
     Refused { reason: String },
+}
+
+/// The files a poll returned, with their bytes: only rendezvous names, so
+/// whoever writes them where the name says stays in its folder.
+fn polled_files(files: Vec<Named>) -> Result<Vec<(String, Vec<u8>)>, PeerError> {
+    files
+        .into_iter()
+        .map(|file| {
+            if !folders::rendezvous_name(&file.name) {
+                return Err(PeerError::Malformed);
+            }
+            let bytes = decode(&file.data).ok_or(PeerError::Malformed)?;
+            Ok((file.name, bytes))
+        })
+        .collect()
+}
+
+/// `bytes` as base64, as the protocol carries file contents.
+pub fn encode(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// The bytes of base64 `data`; `None` when it is not base64.
+pub fn decode(data: &str) -> Option<Vec<u8>> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.decode(data).ok()
 }
 
 /// Why a peer could not be paired with or did not answer.
@@ -131,15 +232,30 @@ impl From<vnilink::Error> for PeerError {
     }
 }
 
-/// The revision both sides must share: a digest of the agent protocol and
-/// its scenarios, so a suite and an agent built from different sources
-/// refuse each other instead of misreading each other. Line endings are
-/// ignored, as a Windows checkout writes them differently.
+/// The revision both sides must share: a digest of the agent protocol, its
+/// scenarios and the code of the measurement sides they launch, so a suite
+/// and an agent built from different sources refuse each other instead of
+/// misreading each other. Line endings are ignored, as a Windows checkout
+/// writes them differently.
 pub fn revision() -> String {
-    const SOURCES: [&str; 3] = [
+    const SOURCES: [&str; 17] = [
+        include_str!("../../../build/lib/latency.ts"),
+        include_str!("../../../build/lib/perceived.ts"),
+        include_str!("../../../build/lib/remote.ts"),
+        include_str!("../../../build/lib/test.ts"),
+        include_str!("../../../test/latency/across.ts"),
+        include_str!("../../../test/latency/main.ts"),
+        include_str!("../../../test/latency/stimulus.ts"),
+        include_str!("../../../test/perceived/main.ts"),
+        include_str!("../../../test/perceived/stimulus.ts"),
         include_str!("peer.rs"),
         include_str!("peer/agent.rs"),
+        include_str!("peer/clock.rs"),
+        include_str!("peer/folders.rs"),
         include_str!("peer/scenarios.rs"),
+        include_str!("peer/scenarios/camera.rs"),
+        include_str!("peer/scenarios/desktop.rs"),
+        include_str!("peer/scenarios/launch.rs"),
     ];
     let mut hasher = blake3::Hasher::new();
     for source in SOURCES {
@@ -192,6 +308,17 @@ impl Remote {
             platform: self.host.platform().clone(),
             relay: path.as_ref().is_some_and(|path| path.relay),
             rtt_ms: path.map_or(0, |path| path.rtt_ms),
+            clock_error_us: None,
+        }
+    }
+
+    /// As [`Self::bench_peer`], for a run that converted the agent's times
+    /// to within `bound_us` ([`ClockOffset::bound_us`]): it records how far
+    /// off they may be.
+    pub fn bench_peer_timed(&self, bound_us: u64) -> crate::bench::Peer {
+        crate::bench::Peer {
+            clock_error_us: Some(bound_us),
+            ..self.bench_peer()
         }
     }
 }
@@ -212,6 +339,8 @@ pub struct RemoteHost {
     endpoint: String,
     session: u64,
     platform: Platform,
+    /// The last request's sequence number.
+    sent: u64,
 }
 
 impl RemoteHost {
@@ -230,12 +359,22 @@ impl RemoteHost {
     /// `check`; connects once the agent's owner typed the digits this
     /// prints; opens the agent's channel and greets it.
     pub fn pair(engine: &Engine, file: &[u8], check: &str) -> Result<Self, PeerError> {
+        Self::pair_announcing(engine, file, check, |digits| {
+            println!("type {digits} on the agent's terminal to approve this computer");
+        })
+    }
+
+    /// As [`Self::pair`], telling `announce` the digits the agent's owner
+    /// must type rather than printing them.
+    pub fn pair_announcing(
+        engine: &Engine,
+        file: &[u8],
+        check: &str,
+        announce: impl FnOnce(&str),
+    ) -> Result<Self, PeerError> {
         let preview = engine.core.open_pairing_file(file)?;
         engine.core.confirm_pairing(&preview, check)?;
-        println!(
-            "type {} on the agent's terminal to approve this computer",
-            engine.core.control_check()
-        );
+        announce(&engine.core.control_check());
         let pending = engine.core.begin_connect_services(&preview.endpoint_id)?;
         let session = active(engine, pending.id, APPROVAL_WAIT)?;
         let channel = engine.core.dial_agent(&preview.endpoint_id)?;
@@ -244,6 +383,7 @@ impl RemoteHost {
             endpoint: preview.endpoint_id,
             session,
             platform: Platform::this(),
+            sent: 0,
         };
         match host.ask(
             &Request::Hello {
@@ -280,10 +420,28 @@ impl RemoteHost {
             .find(|path| path.selected)
     }
 
-    /// Sends `request` and returns its answer, waiting up to `within`.
+    /// Sends `request` and returns its answer, waiting up to `within`. An
+    /// answer to an earlier request that gave up waiting is set aside.
     pub fn ask(&mut self, request: &Request, within: Duration) -> Result<Reply, PeerError> {
-        send(&self.channel, request)?;
-        receive(&self.channel, within)
+        self.sent += 1;
+        let id = self.sent;
+        send(
+            &self.channel,
+            &Numbered {
+                id,
+                message: request,
+            },
+        )?;
+        let deadline = Instant::now() + within;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let reply: Numbered<Reply> = receive(&self.channel, left)?;
+            match reply.id.cmp(&id) {
+                std::cmp::Ordering::Less => continue,
+                std::cmp::Ordering::Equal => return Ok(reply.message),
+                std::cmp::Ordering::Greater => return Err(PeerError::Malformed),
+            }
+        }
     }
 
     /// Starts `scenario` on the agent; the facts its controller half needs.
@@ -301,6 +459,7 @@ impl RemoteHost {
 
     /// Waits up to `within` for the running scenario's `what`.
     pub fn wait(&mut self, what: &str, within: Duration) -> Result<Value, PeerError> {
+        let within = within.min(AWAIT_MOST);
         let request = Request::Await {
             what: what.to_owned(),
             within_ms: u64::try_from(within.as_millis()).unwrap_or(u64::MAX),
@@ -315,10 +474,93 @@ impl RemoteHost {
 
     /// Ends the running scenario; what the agent recorded while it ran.
     pub fn stop(&mut self) -> Result<Vec<String>, PeerError> {
-        match self.ask(&Request::Stop, ANSWER_WAIT)? {
+        match self.ask(&Request::Stop, STOP_WAIT)? {
             Reply::Report { records } => Ok(records),
             Reply::Refused { reason } => Err(PeerError::Refused(reason)),
             _ => Err(PeerError::Malformed),
+        }
+    }
+
+    /// How far the agent's clock is from this process's, from `pings`
+    /// questions of its time: the fastest answer's estimate.
+    pub fn clock_offset(&mut self, pings: usize) -> Result<ClockOffset, PeerError> {
+        let mut samples = Vec::with_capacity(pings);
+        for _ in 0..pings.max(1) {
+            let asked_us = clock::now_us();
+            let Reply::Clock { us } = self.ask(&Request::Clock, ANSWER_WAIT)? else {
+                return Err(PeerError::Malformed);
+            };
+            samples.push(ClockSample {
+                asked_us,
+                agent_us: us,
+                answered_us: clock::now_us(),
+            });
+        }
+        ClockOffset::estimate(&samples).ok_or(PeerError::Malformed)
+    }
+
+    /// Gives the running scenario's side the rendezvous file `name`.
+    pub fn put(&mut self, name: &str, bytes: &[u8]) -> Result<(), PeerError> {
+        let request = Request::Put {
+            name: name.to_owned(),
+            data: encode(bytes),
+        };
+        match self.ask(&request, ANSWER_WAIT)? {
+            Reply::Done { .. } => Ok(()),
+            Reply::Refused { reason } => Err(PeerError::Refused(reason)),
+            _ => Err(PeerError::Malformed),
+        }
+    }
+
+    /// The rendezvous files the running scenario's side published since
+    /// the last poll, with their bytes, and whether that side still runs.
+    pub fn poll(&mut self) -> Result<Polled, PeerError> {
+        match self.ask(&Request::Poll, ANSWER_WAIT)? {
+            Reply::Files { files, running } => Ok(Polled {
+                files: polled_files(files)?,
+                running,
+            }),
+            Reply::Refused { reason } => Err(PeerError::Refused(reason)),
+            _ => Err(PeerError::Malformed),
+        }
+    }
+
+    /// The files under the running scenario's output folder.
+    pub fn list(&mut self) -> Result<Vec<Listed>, PeerError> {
+        match self.ask(&Request::List, ANSWER_WAIT)? {
+            Reply::Listing { files } => Ok(files),
+            Reply::Refused { reason } => Err(PeerError::Refused(reason)),
+            _ => Err(PeerError::Malformed),
+        }
+    }
+
+    /// The output file `listed` of the running scenario, fetched a chunk at
+    /// a time: at most the size it was listed with, so a file that keeps
+    /// growing still ends.
+    pub fn fetch(&mut self, listed: &Listed) -> Result<Vec<u8>, PeerError> {
+        let size = usize::try_from(listed.size).map_err(|_| PeerError::Malformed)?;
+        let mut bytes = Vec::new();
+        loop {
+            let request = Request::Fetch {
+                path: listed.path.clone(),
+                offset: bytes.len() as u64,
+            };
+            match self.ask(&request, ANSWER_WAIT)? {
+                Reply::Chunk { data, end } => {
+                    let chunk = decode(&data).ok_or(PeerError::Malformed)?;
+                    let empty = chunk.is_empty();
+                    bytes.extend(chunk);
+                    if end || bytes.len() >= size {
+                        bytes.truncate(size);
+                        return Ok(bytes);
+                    }
+                    if empty {
+                        return Err(PeerError::Malformed);
+                    }
+                }
+                Reply::Refused { reason } => return Err(PeerError::Refused(reason)),
+                _ => return Err(PeerError::Malformed),
+            }
         }
     }
 }
@@ -345,6 +587,7 @@ mod tests {
     use super::agent::Agent;
     use super::*;
     use crate::{traced, TestResult};
+    use serde_json::json;
 
     /// The agent and a suite in one process pair by the agent's file and
     /// both computers' digits, as two computers do, and greet each other;
@@ -400,6 +643,234 @@ mod tests {
         })
     }
 
+    /// Runs `test` against an agent in this process, paired as two
+    /// computers pair, which serves until the test drops its handle.
+    fn with_agent(test: impl FnOnce(&Engine, &mut RemoteHost) -> TestResult) -> TestResult {
+        let agent = Agent::open(Reach::Loopback)?;
+        let file = agent.export(Duration::from_secs(60))?;
+        let suite = Engine::start("controller");
+        let suite_check = suite.core.control_check();
+        std::thread::scope(|scope| -> TestResult {
+            let serving = scope.spawn(|| {
+                let controller = agent.admit(Instant::now() + APPROVAL_WAIT, |_| {
+                    Some(suite_check.clone())
+                })?;
+                agent.serve(&controller, Duration::from_secs(30))
+            });
+            let mut host = RemoteHost::pair(&suite, &file.bytes, &file.check)?;
+            test(&suite, &mut host)?;
+            drop(host);
+            serving.join().expect("the agent's thread")?;
+            Ok(())
+        })
+    }
+
+    /// The agent answers its clock, and the suite's estimate of how far it
+    /// is holds the truth within the error it states: in one process both
+    /// read one clock, so the truth is no offset at all.
+    #[test]
+    fn the_clock_estimate_holds_the_truth_within_its_stated_error() -> TestResult {
+        let _trace = traced();
+        with_agent(|_suite, host| {
+            let offset = host.clock_offset(10)?;
+            assert!(
+                offset.offset_us.unsigned_abs() <= offset.error_us(),
+                "one clock: {offset:?} is within {} µs of no offset",
+                offset.error_us()
+            );
+            let before = clock::now_us();
+            let Reply::Clock { us } = host.ask(&Request::Clock, ANSWER_WAIT)? else {
+                panic!("the agent answers its clock");
+            };
+            let after = clock::now_us();
+            let converted = offset.suite_us(us);
+            assert!(
+                converted + offset.error_us() >= before && converted <= after + offset.error_us(),
+                "a converted time falls within its error of when it was read"
+            );
+            Ok(())
+        })
+    }
+
+    /// The desktop scenario serves its scripted screen, seen only, and
+    /// says when it started by the agent's clock: every change it sends
+    /// arrives after that start on the suite's clock, and stopping it
+    /// shares nothing again.
+    #[test]
+    fn the_desktop_scenario_serves_a_scripted_screen_timed_by_the_agent() -> TestResult {
+        let _trace = traced();
+        with_agent(|suite, host| {
+            let offset = host.clock_offset(10)?;
+            assert!(
+                matches!(
+                    host.start("desktop", json!({ "script": "drawn" })),
+                    Err(PeerError::Refused(_))
+                ),
+                "a script the scenario does not know is refused"
+            );
+            let facts = host.start(
+                "desktop",
+                json!({ "script": "ticking", "every_ms": 50, "share_percent": 30 }),
+            )?;
+            let started = offset.suite_instant(facts["started_us"].as_u64().expect("its start"));
+            suite
+                .core
+                .set_window_decoders(crate::desktop::window_decoders(false))?;
+            let connection = suite.connect_services_to(host.endpoint())?;
+            let service = suite.open_desktop(&connection)?;
+            let pictures = service.subscribe_video()?;
+            let changes: Vec<Instant> =
+                crate::desktop::watch_pictures(&pictures, Duration::from_secs(2))
+                    .into_iter()
+                    .filter(|(_, frame)| frame.role == vnilink::FrameRole::Changed)
+                    .map(|(at, _)| at)
+                    .collect();
+            assert!(
+                changes.len() >= 5,
+                "the screen's changes arrive: {}",
+                changes.len()
+            );
+            let error = Duration::from_micros(offset.error_us());
+            assert!(
+                changes.iter().all(|at| *at + error >= started),
+                "no change arrives before the screen started"
+            );
+            drop(pictures);
+            service.close();
+            suite.core.disconnect_session(connection.id)?;
+            host.stop()?;
+            Ok(())
+        })
+    }
+
+    /// The camera scenario sends the pictures asked for once the suite
+    /// opens the camera, each stamped with the agent's clock, which the
+    /// offset turns into a time before the picture arrived.
+    #[test]
+    fn the_camera_scenario_sends_pictures_stamped_with_the_agent_clock() -> TestResult {
+        let _trace = traced();
+        with_agent(|suite, host| {
+            let offset = host.clock_offset(10)?;
+            let asked = clock::now_us();
+            host.start(
+                "camera",
+                json!({ "pictures": 12, "bytes": 1024, "fps": 60 }),
+            )?;
+            let connection = suite.connect_services_to(host.endpoint())?;
+            let owner = suite.core.attach_controller_service(
+                connection.id,
+                connection.generation,
+                vnilink::ServiceKind::Camera,
+            )?;
+            let camera = suite.core.open_camera_service(
+                owner.id,
+                owner.generation,
+                crate::camera::config(),
+            )?;
+            let mut stamps = Vec::new();
+            while stamps.len() < 12 {
+                let Some(frame) = camera.recv_timeout(crate::DEFAULT_WAIT) else {
+                    break;
+                };
+                stamps.push((offset.suite_us(frame.timestamp_us), clock::now_us()));
+            }
+            assert_eq!(
+                host.wait("sent", Duration::from_secs(10))?,
+                json!({ "sent": 12 })
+            );
+            assert_eq!(stamps.len(), 12, "every picture arrives on loopback");
+            assert!(
+                stamps
+                    .iter()
+                    .all(|(sent, arrived)| *sent <= arrived + offset.error_us()),
+                "each picture was sent before it arrived: {stamps:?}"
+            );
+            assert!(
+                stamps
+                    .iter()
+                    .all(|(sent, _)| sent + offset.error_us() >= asked),
+                "and after the scenario was asked to start: {stamps:?} from {asked}"
+            );
+            camera.close();
+            suite.core.disconnect_session(connection.id)?;
+            host.stop()?;
+            Ok(())
+        })
+    }
+
+    /// Scenarios that show this computer's real screen run only when the
+    /// agent's owner allowed it on the agent's command line.
+    #[test]
+    fn screen_scenarios_need_the_owner_s_allowance() -> TestResult {
+        let _trace = traced();
+        with_agent(|_suite, host| {
+            for scenario in ["latency-host", "latency-viewer"] {
+                assert!(
+                    matches!(
+                        host.start(scenario, json!({ "viewer_key": "ab".repeat(32) })),
+                        Err(PeerError::Refused(reason)) if reason.contains("--allow screen")
+                    ),
+                    "{scenario} needs --allow screen"
+                );
+            }
+            Ok(())
+        })
+    }
+
+    /// The suite takes a polled file only by a rendezvous name: an agent
+    /// naming a path elsewhere is answering out of protocol.
+    #[test]
+    fn a_polled_file_has_a_rendezvous_name() {
+        let named = |name: &str| Named {
+            name: name.to_owned(),
+            data: encode(b"{}"),
+        };
+        assert!(matches!(
+            polled_files(vec![named("host.json")]).as_deref(),
+            Ok([(name, _)]) if name == "host.json"
+        ));
+        for name in [
+            "../x.json",
+            "/etc/x.json",
+            "a/b.json",
+            "NUL.json",
+            "host.txt",
+        ] {
+            assert!(
+                matches!(polled_files(vec![named(name)]), Err(PeerError::Malformed)),
+                "{name} is refused"
+            );
+        }
+    }
+
+    /// A request that gave up waiting does not shift the answers: its late
+    /// reply is set aside and the next request gets its own.
+    #[test]
+    fn a_late_answer_is_not_taken_for_the_next_one() -> TestResult {
+        let _trace = traced();
+        with_agent(|_suite, host| {
+            host.start("camera", json!({ "pictures": 1 }))?;
+            let waited = host.ask(
+                &Request::Await {
+                    what: "sent".to_owned(),
+                    within_ms: 300,
+                },
+                Duration::from_millis(20),
+            );
+            assert!(
+                matches!(waited, Err(PeerError::Engine(vnilink::Error::Timeout))),
+                "the suite stops waiting before the agent answers: {waited:?}"
+            );
+            std::thread::sleep(Duration::from_millis(500));
+            assert!(
+                matches!(host.ask(&Request::Clock, ANSWER_WAIT)?, Reply::Clock { .. }),
+                "the clock request gets the clock, not the late refusal"
+            );
+            host.stop()?;
+            Ok(())
+        })
+    }
+
     /// A suite built from other sources is refused at Hello, and the agent
     /// says so instead of serving it.
     #[test]
@@ -422,12 +893,17 @@ mod tests {
             let channel = suite.core.dial_agent(&preview.endpoint_id)?;
             send(
                 &channel,
-                &Request::Hello {
-                    revision: "another".to_owned(),
-                    platform: Platform::this(),
+                &Numbered {
+                    id: 1,
+                    message: Request::Hello {
+                        revision: "another".to_owned(),
+                        platform: Platform::this(),
+                    },
                 },
             )?;
-            let reply: Reply = receive(&channel, ANSWER_WAIT)?;
+            let Numbered { id, message: reply } =
+                receive::<Numbered<Reply>>(&channel, ANSWER_WAIT)?;
+            assert_eq!(id, 1, "the refusal answers the Hello");
             assert!(
                 matches!(&reply, Reply::Refused { reason } if reason.contains("revision")),
                 "a suite of another revision is refused: {reply:?}"

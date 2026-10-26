@@ -45,24 +45,35 @@ pub struct Peer {
     pub relay: bool,
     /// The round trip when the run started, in milliseconds.
     pub rtt_ms: u64,
+    /// For a run that converted the agent's times to this computer's
+    /// clock: how far off a converted time may be, half the fastest round
+    /// trip of the clock estimate (`peer::ClockOffset`), in microseconds.
+    pub clock_error_us: Option<u64>,
 }
 
 impl Peer {
     fn record(&self) -> Value {
-        json!({
+        let mut record = json!({
             "os": self.platform.os,
             "arch": self.platform.arch,
             "profile": self.platform.profile,
             "path": if self.relay { "relay" } else { "direct" },
             "rtt_ms": self.rtt_ms,
-        })
+        });
+        if let Some(error) = self.clock_error_us {
+            record["clock_error_ms"] = json!(error as f64 / 1e3);
+        }
+        record
     }
 }
 
-/// What makes two runs' peers comparable: everything but the round trip.
+/// What makes two runs' peers comparable: everything but what the network
+/// was like that run, its round trip and the clock estimate's error.
 fn peer_key(run: &Value) -> Option<Value> {
     let mut peer = run.get("peer")?.clone();
-    peer.as_object_mut()?.remove("rtt_ms");
+    let peer_fields = peer.as_object_mut()?;
+    peer_fields.remove("rtt_ms");
+    peer_fields.remove("clock_error_ms");
     Some(peer)
 }
 
@@ -135,6 +146,12 @@ impl Report {
         });
         if let Some(peer) = &self.peer {
             run["peer"] = peer.record();
+            if let Some(error) = peer.clock_error_us {
+                println!(
+                    "times read on the agent are converted to this computer's clock, each within {:.2} ms (half the fastest round trip of the estimates around each run, and how far they drifted)",
+                    error as f64 / 1e3
+                );
+            }
         }
         let path = folder.join(format!("{now}.json"));
         std::fs::write(&path, serde_json::to_string_pretty(&run).expect("JSON"))

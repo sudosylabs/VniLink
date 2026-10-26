@@ -405,9 +405,9 @@ test('a task is ready only when it can run here; a second computer is optional a
 	const other = ready.results.find(result => result.id === 'second-computer');
 	assert.deepEqual(other, {
 		id: 'second-computer', title: 'A second computer', kind: 'computer', status: 'unknown', optional: true,
-		detail: '--remote runs reach one over SSH, and --peer runs a suite or measurement against `vnilink-testkit agent` there, built from the same commit; every task runs on this computer without it', fix: [], packages: [],
+		detail: '--peer runs a suite or a measurement\'s other side against `vnilink-testkit agent` there, built from the same commit, once a person types this computer\'s digits on its terminal; every task runs on this computer without it', fix: [], packages: [],
 	});
-	assert.equal(ready.results.find(result => result.id === 'ssh').status, 'missing', 'no ssh on this fake PATH, and still ready');
+	assert.equal(ready.results.find(result => result.id === 'ssh'), undefined, 'no task reaches another computer over SSH');
 	// Before, the task was ready with neither permission: the driver then failed.
 	const refused = { ...granted, [preflight('CoreGraphics', 'CGPreflightScreenCaptureAccess')]: 'false\n' };
 	const [missing] = await checkTasks(manifest, mac, perceivedMac(refused), ['measure:perceived']);
@@ -427,7 +427,7 @@ test('a task is ready only when it can run here; a second computer is optional a
 	assert.equal(latency.reason, 'cannot be checked before it runs: Screen Recording for the development VniLink');
 	const text = formatDoctor([ready, latency], 'header', [], []);
 	assert.match(text, /\n\nPermissions\n {2}ok {10}Screen Recording for the application running the task: granted/);
-	assert.match(text, /\n\nOther computers\n {2}optional {4}A second computer: --remote runs reach one over SSH/);
+	assert.match(text, /\n\nOther computers\n {2}optional {4}A second computer: --peer runs a suite or a measurement's other side/);
 	assert.match(text, /\nTasks\n {2}ready {7}measure:perceived\n {2}unknown {5}measure:latency: cannot be checked before it runs: Screen Recording for the development VniLink$/m);
 });
 
@@ -463,16 +463,10 @@ test('requirement and task entries have only known fields, and every task can ru
 		assert.deepEqual(ids.filter(id => !declared.includes(id)), [], task);
 		assert.ok(ids.every(id => !manifest.requirements[id].optional), `${task} cannot run without ${ids.join(', ')}`);
 	}
-	// Only --remote runs use SSH and a second computer, and both are optional.
-	for (const task of ['measure:latency', 'measure:perceived']) {
-		for (const id of ['second-computer', 'ssh']) {
-			assert.ok(taskRequirements(manifest, task).includes(id), `${task} lists ${id}`);
-			assert.equal(manifest.requirements[id].optional, true, id);
-		}
-	}
-	// --peer runs reach the test agent on a second computer without SSH.
-	for (const task of ['test:service', 'bench:service']) {
+	// --peer runs reach the test agent on a second computer, which is optional, and nothing uses SSH.
+	assert.equal(manifest.requirements.ssh, undefined, 'no requirement for SSH');
+	assert.equal(manifest.requirements['second-computer'].optional, true);
+	for (const task of ['test:service', 'bench:service', 'measure:latency', 'measure:perceived']) {
 		assert.ok(taskRequirements(manifest, task).includes('second-computer'), `${task} lists the second computer`);
-		assert.ok(!taskRequirements(manifest, task).includes('ssh'), `${task} needs no SSH`);
 	}
 });

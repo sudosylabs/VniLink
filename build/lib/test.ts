@@ -5,7 +5,9 @@ import { join, resolve } from 'node:path';
 import { ScenarioSelection, scenarioNames } from '../../test/automation/scenarios.ts';
 import { linuxValidationVolumes } from './containers.ts';
 import { electronExecutable } from './electron.ts';
+import { launchLatencySide } from './latency.ts';
 import { assertNativeFresh, defaultNativeOptions, nativeEnvironment } from './native.ts';
+import { launchPerceivedStimulus } from './perceived.ts';
 import { ProcessRunner } from './processes.ts';
 
 /** Runs the selected browser and integration scenarios in Electron with a temporary profile. */
@@ -124,15 +126,45 @@ export async function benchService(root: string, signal: AbortSignal, args: read
 }
 
 /**
- * Runs the test agent (`vnilink-testkit agent`), the host half of suites run
- * with `--peer` on another computer: it writes a pairing file, by default
- * `.build/testkit/agent.vnl`, prints its digits and asks on this terminal for
- * the digits that computer's suite prints.
+ * Runs the test agent (`vnilink-testkit agent`), the host half of suites and
+ * measurements run with `--peer` on another computer: it writes a pairing
+ * file, by default `.build/testkit/agent.vnl`, prints its digits and asks on
+ * this terminal for the digits that computer's suite prints.
  */
 export async function runTestkitAgent(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
 	const out = args.includes('--out') ? [] : ['--out', join(root, '.build/testkit/agent.vnl')];
-	// Measurements need the optimized build that bench:service runs.
-	await runTestkit(root, signal, ['run', '--release', '--bin', 'vnilink-testkit', '--', 'agent', ...out, ...args], { typing: true });
+	// Measurements need the optimized build that bench:service runs. A
+	// measurement's side starts through this Node (`testkit:launch`).
+	await runTestkit(root, signal, ['run', '--release', '--bin', 'vnilink-testkit', '--', 'agent', ...out, ...args], { typing: true, env: { VNILINK_AGENT_NODE: process.execPath } });
+}
+
+/** The measurement sides the test agent starts from this checkout (`testkit:launch <side>`). */
+export const agentSides = ['latency-host', 'latency-viewer', 'perceived-stimulus'] as const;
+
+/**
+ * Starts one side of a measurement for the test agent, which runs this task
+ * from its own checkout with the side's folders in its environment, and
+ * stops it when the agent closes this task's input.
+ */
+export async function launchAgentSide(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
+	const [side, ...rest] = args;
+	if (!agentSides.includes(side as (typeof agentSides)[number]) || rest.length > 0) {
+		throw new Error(`testkit:launch takes one of ${agentSides.join(', ')}`);
+	}
+	const stopped = new Promise<void>(resolve => {
+		process.stdin.once('end', resolve);
+		process.stdin.once('close', resolve);
+		process.stdin.resume();
+	});
+	try {
+		if (side === 'perceived-stimulus') {
+			await launchPerceivedStimulus(root, signal, stopped);
+		} else {
+			await launchLatencySide(root, signal, side === 'latency-host' ? 'host' : 'viewer', stopped);
+		}
+	} finally {
+		process.stdin.destroy();
+	}
 }
 
 interface TestkitOptions {

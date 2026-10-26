@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { define, execute, parallel, series } from '../../build/lib/task.ts';
 import { ProcessRunner } from '../../build/lib/processes.ts';
 import { assertNativeFresh, compileNative, stageNative } from '../../build/lib/native.ts';
-import { selectPeer, selectServices, testkitServices } from '../../build/lib/test.ts';
+import { agentSides, launchAgentSide, selectPeer, selectServices, testkitServices } from '../../build/lib/test.ts';
 
 test('series runs in order, parallel settles every task, and failures stop later steps', async () => {
 	const events = [];
@@ -164,4 +164,15 @@ test('--peer and --peer-check name the agent a suite runs against, and nothing e
 	assert.throws(() => selectPeer(['--peer', '--peer-check', '042']), /--peer needs a value/);
 	assert.throws(() => selectPeer(['--peer', 'agent.vnl', '--peer-check', '42']), /three digits/);
 	assert.throws(() => selectPeer(['--peer', 'agent.vnl', '--peer-check', 'abc']), /three digits/);
+});
+
+test('the agent starts only the measurement sides compiled into it, one at a time', async () => {
+	const scenarios = await readFile(new URL('../../crates/vnilink-testkit/src/peer/scenarios.rs', import.meta.url), 'utf8');
+	for (const side of agentSides) {
+		assert.match(scenarios, new RegExp(`"${side}" =>`), `the agent has a ${side} scenario`);
+	}
+	const signal = new AbortController().signal;
+	for (const args of [[], ['latency-sender'], ['latency-host', 'latency-viewer'], ['../latency-host']]) {
+		await assert.rejects(launchAgentSide('/root', signal, args), /testkit:launch takes one of latency-host, latency-viewer, perceived-stimulus/, JSON.stringify(args));
+	}
 });

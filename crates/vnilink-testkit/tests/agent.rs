@@ -2,7 +2,7 @@
 //! a pairing file and its digits, approves one computer by the digits typed
 //! on its terminal, serves that computer's suite, refuses every other
 //! computer that opens the same file, and stops on its own when nothing is
-//! asked of it.
+//! asked of it. A build script drives it through `vnilink-testkit bridge`.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -27,11 +27,22 @@ struct AgentProcess {
 
 impl AgentProcess {
     fn start(file: &std::path::Path) -> Self {
+        Self::start_with(file, &[])
+    }
+
+    /// As [`Self::start`], with `env` added to the agent's environment.
+    fn start_with(file: &std::path::Path, env: &[(&str, &std::path::Path)]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_vnilink-testkit"))
             .args(["agent", "--loopback", "--ttl", "60", "--idle"])
             .arg(IDLE.to_string())
             .arg("--out")
             .arg(file)
+            .args(if env.is_empty() {
+                &[][..]
+            } else {
+                &["--allow", "screen"][..]
+            })
+            .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -145,5 +156,272 @@ fn the_agent_serves_the_one_computer_its_owner_approved_and_stops_when_idle() ->
         "an idle agent stops cleanly"
     );
     drop(host);
+    Ok(())
+}
+
+/// An agent that allows screen scenarios and runs [`FAKE_SIDE`] as its
+/// Node, and a bridge paired with it as a person pairs them.
+#[cfg(unix)]
+fn paired_with_fake_side(
+    scratch: &Scratch,
+) -> Result<(AgentProcess, BridgeProcess), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let side = scratch.join("node");
+    std::fs::write(&side, FAKE_SIDE)?;
+    std::fs::set_permissions(&side, std::fs::Permissions::from_mode(0o755))?;
+    let file = scratch.join("agent.vnl");
+    let mut agent = AgentProcess::start_with(&file, &[("VNILINK_AGENT_NODE", side.as_path())]);
+    let check = agent.line("check digits: ")["check digits: ".len()..][..3].to_owned();
+    let bridge = BridgeProcess::start(&file, &check);
+    let approve = bridge.next();
+    assert_eq!(
+        approve["event"], "approve",
+        "the bridge says what to type: {approve}"
+    );
+    agent.line("a computer asks to be approved");
+    agent.type_line(approve["digits"].as_str().expect("digits"));
+    let ready = bridge.next();
+    assert_eq!(ready["event"], "ready", "paired: {ready}");
+    assert_eq!(ready["platform"]["os"], std::env::consts::OS);
+    Ok((agent, bridge))
+}
+
+/// Interrupting the agent while it serves stops the running scenario,
+/// ending everything its side started, before the agent exits.
+#[cfg(unix)]
+#[test]
+fn an_interrupted_agent_stops_its_scenario_first() -> TestResult {
+    let _trace = traced();
+    let scratch = Scratch::new("interrupt");
+    let (mut agent, mut bridge) = paired_with_fake_side(&scratch)?;
+    let started = bridge.ask(serde_json::json!({ "op": "start", "scenario": "latency-viewer" }));
+    assert_eq!(started["ok"], true, "{started}");
+    bridge.polled("viewer.json");
+    let evidence = scratch.join("evidence");
+    bridge.ask(serde_json::json!({ "op": "fetch", "into": evidence }));
+    let pid = std::fs::read_to_string(evidence.join("started.pid"))?;
+    let alive = || {
+        Command::new("kill")
+            .args(["-0", pid.trim()])
+            .status()
+            .is_ok_and(|status| status.success())
+    };
+    assert!(alive(), "the side's own process runs");
+    let interrupted = Command::new("kill")
+        .args(["-INT", &agent.child.id().to_string()])
+        .status()?;
+    assert!(interrupted.success(), "the agent was sent SIGINT");
+    agent.line("asked to stop");
+    assert_eq!(
+        agent.exited(Duration::from_secs(60)).code(),
+        Some(130),
+        "the agent exits as interrupted"
+    );
+    assert!(!alive(), "the scenario stopped before the agent exited");
+    Ok(())
+}
+
+/// Stands in for the agent's Node in place of `node build/run.ts
+/// testkit:launch latency-viewer`: a viewer side that publishes, waits for
+/// the host's file, records what it was started with under its output
+/// folder, and quits when its input closes, leaving behind a process it
+/// started in a group of its own, as a launched Electron runs.
+#[cfg(unix)]
+const FAKE_SIDE: &str = r#"#!/bin/bash
+set -m
+sleep 300 &
+echo $! > "$VNILINK_LATENCY_OUTPUT/started.pid"
+publish() { printf '%s' "$2" > "$VNILINK_LATENCY_DIR/$1.partial" && mv "$VNILINK_LATENCY_DIR/$1.partial" "$VNILINK_LATENCY_DIR/$1"; }
+printf '%s %s %s %s %s\n' "$2" "$3" "$VNILINK_LATENCY_ROLE" "$VNILINK_LATENCY_FPS" "$VNILINK_LATENCY_ACROSS" > "$VNILINK_LATENCY_OUTPUT/side.log"
+publish viewer.json '{"token":"viewer"}'
+while [ ! -f "$VNILINK_LATENCY_DIR/host.json" ]; do sleep 0.05; done
+mkdir -p "$VNILINK_LATENCY_OUTPUT/logs"
+cp "$VNILINK_LATENCY_DIR/host.json" "$VNILINK_LATENCY_OUTPUT/logs/host-seen.json"
+publish viewer-streaming.json '{}'
+cat > /dev/null
+"#;
+
+/// The bridge's process, killed if a test fails before it exits.
+#[cfg(unix)]
+struct BridgeProcess {
+    child: Child,
+    stdin: Option<ChildStdin>,
+    lines: mpsc::Receiver<String>,
+}
+
+#[cfg(unix)]
+impl BridgeProcess {
+    fn start(file: &std::path::Path, check: &str) -> Self {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_vnilink-testkit"))
+            .args(["bridge", "--loopback", "--peer-check", check, "--peer"])
+            .arg(file)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("the bridge starts");
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take().expect("the bridge's output");
+        let (sender, lines) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            child,
+            stdin,
+            lines,
+        }
+    }
+
+    /// The next line the bridge prints, as JSON.
+    fn next(&self) -> Value {
+        let line = self
+            .lines
+            .recv_timeout(LINE_WAIT)
+            .expect("the bridge answers");
+        serde_json::from_str(&line).unwrap_or_else(|_| panic!("the bridge prints JSON: {line}"))
+    }
+
+    /// Sends `command` and returns its answer.
+    fn ask(&mut self, command: Value) -> Value {
+        let stdin = self.stdin.as_mut().expect("the bridge's input");
+        writeln!(stdin, "{command}").expect("the bridge reads its input");
+        self.next()
+    }
+
+    /// Polls until the scenario's side published `name`, returning its bytes.
+    fn polled(&mut self, name: &str) -> Vec<u8> {
+        let deadline = Instant::now() + LINE_WAIT;
+        loop {
+            let answer = self.ask(serde_json::json!({ "op": "poll" }));
+            assert_eq!(answer["ok"], true, "a running side is polled: {answer}");
+            if let Some(file) = answer["files"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|file| file["name"] == name)
+            {
+                return vnilink_testkit::peer::decode(file["data"].as_str().unwrap_or_default())
+                    .expect("base64");
+            }
+            assert!(Instant::now() < deadline, "the side never published {name}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for BridgeProcess {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// A build script drives the agent through the bridge as a measurement
+/// does: it starts a side with whitelisted variables only, relays the two
+/// sides' rendezvous files, fetches the side's evidence and stops it, and
+/// the bridge ends when its input closes.
+#[cfg(unix)]
+#[test]
+fn a_build_script_drives_a_launched_side_through_the_bridge() -> TestResult {
+    use vnilink_testkit::peer::encode;
+
+    let _trace = traced();
+    let scratch = Scratch::new("bridge");
+    let (agent, mut bridge) = paired_with_fake_side(&scratch)?;
+
+    let across = bridge.ask(serde_json::json!({
+        "op": "start", "scenario": "latency-viewer", "params": { "env": { "VNILINK_LATENCY_ACROSS": "0" } }
+    }));
+    assert_eq!(
+        across["ok"], false,
+        "that a side runs across computers is not the suite's to say: {across}"
+    );
+    let sneaky = bridge.ask(serde_json::json!({
+        "op": "start", "scenario": "latency-viewer", "params": { "env": { "PATH": "/tmp" } }
+    }));
+    assert_eq!(sneaky["ok"], false, "only whitelisted variables: {sneaky}");
+    let started = bridge.ask(serde_json::json!({
+        "op": "start", "scenario": "latency-viewer", "params": { "env": { "VNILINK_LATENCY_FPS": "60" } }
+    }));
+    assert_eq!(started["ok"], true, "the side starts: {started}");
+    assert_eq!(bridge.polled("viewer.json"), br#"{"token":"viewer"}"#);
+    let escape = bridge
+        .ask(serde_json::json!({ "op": "put", "name": "../host.json", "data": encode(b"{}") }));
+    assert_eq!(
+        escape["ok"], false,
+        "a file goes only into the rendezvous folder: {escape}"
+    );
+    let program = bridge.ask(serde_json::json!({ "op": "put", "name": "read.json", "data": encode(br#"{"seconds":20,"reader":"/bin/sh"}"#) }));
+    assert_eq!(
+        program["ok"], false,
+        "a read naming a program is refused: {program}"
+    );
+    let unasked = bridge
+        .ask(serde_json::json!({ "op": "put", "name": "viewer.json", "data": encode(b"{}") }));
+    assert_eq!(
+        unasked["ok"], false,
+        "a viewer takes only what a host publishes: {unasked}"
+    );
+    let put = bridge.ask(serde_json::json!({ "op": "put", "name": "host.json", "data": encode(br#"{"token":"host","endpoint":"e"}"#) }));
+    assert_eq!(put["ok"], true, "{put}");
+    bridge.polled("viewer-streaming.json");
+
+    let evidence = scratch.join("evidence");
+    let fetched = bridge.ask(serde_json::json!({ "op": "fetch", "into": evidence }));
+    assert_eq!(
+        fetched["files"],
+        serde_json::json!([
+            "agent-launch.log",
+            "logs/host-seen.json",
+            "side.log",
+            "started.pid"
+        ]),
+        "every file of the side's output: {fetched}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(evidence.join("side.log"))?,
+        "testkit:launch latency-viewer viewer 60 1\n",
+        "the agent's own checkout task, its role, the suite's frame rate, and across set by the agent"
+    );
+    assert_eq!(
+        std::fs::read(evidence.join("logs/host-seen.json"))?,
+        br#"{"token":"host","endpoint":"e"}"#,
+        "the side read what was put"
+    );
+
+    let started = std::fs::read_to_string(evidence.join("started.pid"))?;
+    let alive = || {
+        Command::new("kill")
+            .args(["-0", started.trim()])
+            .status()
+            .is_ok_and(|status| status.success())
+    };
+    assert!(alive(), "the side's own process runs");
+    let stopped = bridge.ask(serde_json::json!({ "op": "stop" }));
+    assert_eq!(
+        stopped["ok"], true,
+        "the side stops when its input closes: {stopped}"
+    );
+    assert!(!alive(), "nothing the side started outlives the stop");
+    let after = bridge.ask(serde_json::json!({ "op": "poll" }));
+    assert_eq!(after["ok"], false, "nothing runs after stop: {after}");
+
+    drop(bridge.stdin.take());
+    let deadline = Instant::now() + LINE_WAIT;
+    let status = loop {
+        if let Some(status) = bridge.child.try_wait()? {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "the bridge ends with its input");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(status.success(), "the bridge ends cleanly");
+    agent.line("the suite went away");
     Ok(())
 }

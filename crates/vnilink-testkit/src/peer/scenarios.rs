@@ -2,17 +2,34 @@
 //! a measurement. A scenario shares only its own service while it runs and
 //! works only in the agent's own folders; the suite names it and passes
 //! parameters, never a command or a path.
+//!
+//! `files`, `desktop` and `camera` serve a suite on the agent's engine;
+//! `latency-host`, `latency-viewer` and `perceived-stimulus` start one side
+//! of a measurement from the agent's own checkout ([`launch`]).
+
+mod camera;
+mod desktop;
+mod launch;
 
 use std::collections::HashSet;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use vnilink::Grants;
 
+use super::Polled;
 use crate::Engine;
 
 /// Every scenario's name, for the agent's refusal of another.
-pub(crate) const NAMES: [&str; 1] = ["files"];
+pub(crate) const NAMES: [&str; 6] = [
+    "files",
+    "desktop",
+    "camera",
+    "latency-host",
+    "latency-viewer",
+    "perceived-stimulus",
+];
 
 /// The host half of one scenario, run by the agent between Start and Stop.
 pub(crate) trait Scenario: Send {
@@ -22,13 +39,85 @@ pub(crate) trait Scenario: Send {
     fn wait(&mut self, host: &Engine, what: &str, within: Duration) -> Result<Value, String>;
     /// Shares nothing again and removes what the scenario made.
     fn stop(&mut self, host: &Engine);
+    /// Gives the scenario's side the rendezvous file `name`.
+    fn put(&mut self, _name: &str, _bytes: &[u8]) -> Result<(), String> {
+        Err("this scenario exchanges no files".to_owned())
+    }
+    /// The rendezvous files its side published since the last poll, and
+    /// whether that side still runs.
+    fn poll(&mut self) -> Result<Polled, String> {
+        Err("this scenario exchanges no files".to_owned())
+    }
+    /// The folder of the evidence the scenario's side leaves, which the
+    /// suite may read.
+    fn output(&self) -> Option<&Path> {
+        None
+    }
+}
+
+/// Whether the scenario `name` shows or reads this computer's real screen,
+/// which the agent's owner must allow (`--allow screen`).
+pub(crate) fn shows_screen(name: &str) -> bool {
+    matches!(name, "latency-host" | "latency-viewer")
 }
 
 /// The scenario named `name`.
 pub(crate) fn named(name: &str) -> Option<Box<dyn Scenario>> {
     match name {
         "files" => Some(Box::new(FilesHost::default())),
+        "desktop" => Some(Box::new(desktop::DesktopHost::default())),
+        "camera" => Some(Box::new(camera::CameraHost::default())),
+        "latency-host" => Some(Box::new(launch::Launched::new(launch::Side::LatencyHost))),
+        "latency-viewer" => Some(Box::new(launch::Launched::new(launch::Side::LatencyViewer))),
+        "perceived-stimulus" => Some(Box::new(launch::Launched::new(
+            launch::Side::PerceivedStimulus,
+        ))),
         _ => None,
+    }
+}
+
+/// Waits up to `within` until `host` serves nothing, so the adapters a
+/// scenario installs may be swapped: the last scenario's viewer has gone.
+fn released(host: &Engine, within: Duration) -> Result<(), String> {
+    let started = Instant::now();
+    loop {
+        let hosted = host
+            .core
+            .hosted_services()
+            .map_err(|error| error.to_string())?;
+        if hosted.is_empty() {
+            return Ok(());
+        }
+        if started.elapsed() > within {
+            return Err(format!(
+                "the agent still serves the last scenario's viewer after {} s",
+                within.as_secs()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// A whole number in `params` at `field`, within `range`, or `default`
+/// when absent.
+fn whole(
+    params: &Value,
+    field: &str,
+    range: std::ops::RangeInclusive<u64>,
+    default: u64,
+) -> Result<u64, String> {
+    match params.get(field) {
+        None | Some(Value::Null) => Ok(default),
+        Some(value) => value
+            .as_u64()
+            .filter(|value| range.contains(value))
+            .ok_or_else(|| {
+                format!(
+                    "{field} must be a whole number from {} to {}",
+                    range.start(),
+                    range.end()
+                )
+            }),
     }
 }
 

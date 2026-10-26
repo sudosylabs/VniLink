@@ -198,10 +198,113 @@ impl vnilink::HostClipboard for RecordingClipboard {
     }
 }
 
+/// The input a host's recording desktop applied, with when.
+pub type AppliedInput = Arc<Mutex<Vec<(Instant, InputEvent)>>>;
+
+/// Sets `host` up to serve the scripted screen: a capture of one
+/// [`SCREEN`]-sized display ([`DISPLAY`]) sending stills, and a desktop
+/// that records the input it applies, which it returns. Done before a
+/// viewer connects, as the engine refuses to swap adapters during a
+/// session.
+pub fn install_screen(host: &vnilink::Core) -> Result<AppliedInput, vnilink::Error> {
+    let applied = Arc::new(Mutex::new(Vec::new()));
+    host.set_capture(Box::new(ScreenCapture))?;
+    host.set_desktop(Box::new(RecordingDesktop {
+        applied: Arc::clone(&applied),
+    }))?;
+    host.set_topology(
+        1,
+        &[DisplayInfo {
+            id: DISPLAY,
+            origin_x: 0,
+            origin_y: 0,
+            width: SCREEN.0,
+            height: SCREEN.1,
+            rotation_deg: 0,
+            scale_percent: 100,
+            revision: 1,
+        }],
+    )?;
+    Ok(applied)
+}
+
+/// The host's real picture pipeline (`vnilink_media::serve_shared_capture`)
+/// reading a scripted screen with the stand-in encoder, on a thread of its
+/// own, serving whichever viewers the host admits. Dropping it stops it.
+pub struct ScreenPipeline {
+    /// Pictures the stand-in encoder made.
+    pub encoded: Arc<AtomicUsize>,
+    /// When the scripted screen started; see [`ScriptedScreen::started`].
+    pub screen_started: Instant,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<Result<(), vnilink_media::PublishError>>>,
+}
+
+impl ScreenPipeline {
+    /// Starts serving `screen` from `host`, set up by [`install_screen`].
+    pub fn start(host: &Arc<vnilink::Core>, screen: ScriptedScreen) -> Self {
+        let screen_started = screen.started();
+        let encoded = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let (host, stop, encoded) = (Arc::clone(host), Arc::clone(&stop), Arc::clone(&encoded));
+            std::thread::spawn(move || {
+                vnilink_media::serve_shared_capture(
+                    &screen,
+                    &host,
+                    &stop,
+                    false,
+                    DISPLAY,
+                    |_| {},
+                    move |_, _, _, _, _| {
+                        Ok(StandInEncoder {
+                            encoded: Arc::clone(&encoded),
+                        })
+                    },
+                )
+            })
+        };
+        Self {
+            encoded,
+            screen_started,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    /// Stops the pipeline and says how it ended: `Err` with why when it
+    /// failed or panicked.
+    pub fn finish(mut self) -> Result<(), String> {
+        self.halt().unwrap_or(Ok(()))
+    }
+
+    fn halt(&mut self) -> Option<Result<(), String>> {
+        self.stop.store(true, Ordering::Release);
+        let thread = self.thread.take()?;
+        Some(match thread.join() {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(format!("the host's pipeline failed: {error}")),
+            Err(_) => Err("the host's pipeline panicked".to_owned()),
+        })
+    }
+}
+
+impl Drop for ScreenPipeline {
+    fn drop(&mut self) {
+        if let Some(Err(error)) = self.halt() {
+            if !std::thread::panicking() {
+                panic!("{error}");
+            }
+        }
+    }
+}
+
 /// A viewer watching the host's scripted screen through the Remote Desktop
 /// service, as the application opens it. Dropping it stops the host's
 /// pipeline.
 pub struct DesktopSession {
+    /// Dropped first: the pipeline stops before the engines shut down.
+    pipeline: Option<ScreenPipeline>,
     pub pair: Pair,
     pub service: vnilink::RemoteDesktopService,
     pub frames: vnilink::VideoSubscription,
@@ -211,8 +314,6 @@ pub struct DesktopSession {
     pub encoded: Arc<AtomicUsize>,
     /// When the scripted screen started; see [`ScriptedScreen::started`].
     pub screen_started: Instant,
-    stop: Arc<AtomicBool>,
-    pipeline: Option<std::thread::JoinHandle<Result<(), vnilink_media::PublishError>>>,
 }
 
 /// What a viewer's window decodes: H.264, and AV1 at 4:4:4 when it shows
@@ -248,27 +349,7 @@ impl DesktopSession {
         let pair = Pair::for_desktop();
         prepare(&pair);
         let (host, viewer) = (&pair.host.core, &pair.controller.core);
-        let applied = Arc::new(Mutex::new(Vec::new()));
-        host.set_capture(Box::new(ScreenCapture))
-            .expect("a capture");
-        host.set_desktop(Box::new(RecordingDesktop {
-            applied: Arc::clone(&applied),
-        }))
-        .expect("a desktop");
-        host.set_topology(
-            1,
-            &[DisplayInfo {
-                id: DISPLAY,
-                origin_x: 0,
-                origin_y: 0,
-                width: SCREEN.0,
-                height: SCREEN.1,
-                rotation_deg: 0,
-                scale_percent: 100,
-                revision: 1,
-            }],
-        )
-        .expect("a topology");
+        let applied = install_screen(host).expect("the host's scripted screen");
         viewer
             .set_window_decoders(window_decoders(stills))
             .expect("the window's decoders");
@@ -280,49 +361,21 @@ impl DesktopSession {
             .expect("the desktop service");
         let frames = service.subscribe_video().expect("its pictures");
 
-        let screen_started = screen.started();
-        let encoded = Arc::new(AtomicUsize::new(0));
-        let stop = Arc::new(AtomicBool::new(false));
-        let pipeline = {
-            let (host, stop, encoded) = (Arc::clone(host), Arc::clone(&stop), Arc::clone(&encoded));
-            std::thread::spawn(move || {
-                vnilink_media::serve_shared_capture(
-                    &screen,
-                    &host,
-                    &stop,
-                    false,
-                    DISPLAY,
-                    |_| {},
-                    move |_, _, _, _, _| {
-                        Ok(StandInEncoder {
-                            encoded: Arc::clone(&encoded),
-                        })
-                    },
-                )
-            })
-        };
+        let pipeline = ScreenPipeline::start(host, screen);
         Self {
+            encoded: Arc::clone(&pipeline.encoded),
+            screen_started: pipeline.screen_started,
+            pipeline: Some(pipeline),
             pair,
             service,
             frames,
             applied,
-            encoded,
-            screen_started,
-            stop,
-            pipeline: Some(pipeline),
         }
     }
 
     /// The pictures that arrive within `watch`.
     pub fn watch(&self, watch: Duration) -> Vec<(Instant, EncodedFrame)> {
-        let until = Instant::now() + watch;
-        let mut frames = Vec::new();
-        while Instant::now() < until {
-            if let Some(frame) = self.frames.recv_timeout(Duration::from_millis(20)) {
-                frames.push((Instant::now(), frame));
-            }
-        }
-        frames
+        watch_pictures(&self.frames, watch)
     }
 
     /// The host's side of this Desktop service: its id and generation.
@@ -365,16 +418,23 @@ impl DesktopSession {
 
 impl Drop for DesktopSession {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        if let Some(pipeline) = self.pipeline.take() {
-            let ended = pipeline.join();
-            if !std::thread::panicking() {
-                ended
-                    .expect("the host's pipeline did not panic")
-                    .expect("the host's pipeline ended cleanly");
-            }
+        self.pipeline.take();
+    }
+}
+
+/// The pictures `frames` brings within `watch`, each with when it arrived.
+pub fn watch_pictures(
+    frames: &vnilink::VideoSubscription,
+    watch: Duration,
+) -> Vec<(Instant, EncodedFrame)> {
+    let until = Instant::now() + watch;
+    let mut pictures = Vec::new();
+    while Instant::now() < until {
+        if let Some(frame) = frames.recv_timeout(Duration::from_millis(20)) {
+            pictures.push((Instant::now(), frame));
         }
     }
+    pictures
 }
 
 /// What a host's desktop applied, in order and when: the log of a desktop

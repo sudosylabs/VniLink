@@ -1,6 +1,6 @@
 # Glass-to-glass latency on one computer
 
-`npm run measure:latency` measures how long a change on this computer's screen takes to appear in a VniLink viewer on the same screen. It runs on macOS, Windows and Linux, on one computer: host, viewer and reader all run on it. Use it to record numbers before and after a capture, encode, transport, decode or drawing change. A second computer is optional (`--remote`, below) and never required.
+`npm run measure:latency` measures how long a change on this computer's screen takes to appear in a VniLink viewer on the same screen. It runs on macOS, Windows and Linux, on one computer: host, viewer and reader all run on it. Use it to record numbers before and after a capture, encode, transport, decode or drawing change. A second computer is optional (`--peer`, below) and never required.
 
 ## How it works
 
@@ -92,15 +92,14 @@ The reader prints the p50, p95, p99 and maximum when it finishes.
 | `--hold` | `0` | Hold mode: seconds the stimulus holds still after each 2 s of motion; `0` is off. |
 | `--fps` | the default quality | The viewer's frame rate, at the Smooth preset's 12 Mb/s and 1920x1080. |
 | `--bitrate` | 12000 | With `--fps`: the viewer's bitrate limit in kb/s; 50000 is Automatic. |
-| `--busy` | off | With `--remote`: the stimulus fills the host's work area with detail that changes every frame, so the stream uses the bitrate it is given. Without it the strip is nearly all that changes and a stream uses a fraction of its limit. |
-| `--remote` | | Optional second computer: its SSH destination. |
-| `--remote-root` | | With `--remote`: the absolute path of a built checkout there. |
-| `--hosts` | `here` | With `--remote`: which computer hosts its screen, `here` or `remote`. |
-| `--ssh-config` | the user's | With `--remote`: an SSH configuration file for every connection. |
+| `--busy` | off | With `--peer`: the stimulus fills the host's work area with detail that changes every frame, so the stream uses the bitrate it is given. Without it the strip is nearly all that changes and a stream uses a fraction of its limit. |
+| `--peer` | | Optional second computer: the pairing file of the test agent there. |
+| `--peer-check` | | With `--peer`: the three digits the agent printed beside its file. |
+| `--hosts` | `here` | With `--peer`: which computer hosts its screen, `here` or `peer`. |
 
 ### With a second computer (optional)
 
-Every run above needs one computer. `--remote <destination> --remote-root <path>` runs one side here and the other on a Linux computer over SSH, the pair a person uses, so each side has its own CPU, GPU and media engine and the stream crosses a real network. The viewer picks the codec it would pick in use: a Linux window offers no HEVC, so a Mac host sends it H.264.
+Every run above needs one computer. `--peer <file.vnl> --peer-check <digits>` runs one side here and the other on a second computer, the pair a person uses, so each side has its own CPU, GPU and media engine and the stream crosses a real network. The viewer picks the codec it would pick in use: a Linux window offers no HEVC, so a Mac host sends it H.264.
 
 No screen shows both strips, so there is no glass-to-glass total and no reader. Each side reports itself once a second instead:
 - the host's capture and encode times (`PipelineSummary.capture_us`, `encode_us`; encode includes scaling and copies), its encoder, keyframes, reopens and drops, in `host-stages.jsonl`;
@@ -108,10 +107,16 @@ No screen shows both strips, so there is no glass-to-glass total and no reader. 
 
 Both viewers prepare native video, as the product's do: a Mac viewer whose engine had no decoders of its own offered nothing, and a Linux host refused it. The network leg is the round trip: the clocks differ, so a picture's one-way time is not read. The stimulus still runs on the host: a strip that changes every frame, the motion the stream carries.
 
-The remote side is reached over SSH and runs as a transient unit of the user's session there (`systemd-run --user`), so it has the graphical session's bus and portal. A later change replaces SSH with a test agent that pairs like the application; until then, this path needs SSH. Its checkout must be built (`npm run build` there). The two sides' rendezvous files are copied over one shared SSH connection, and the remote side's evidence is copied back into the output and removed there, with its profile and rendezvous. A Linux host's portal asks someone there on the first run, as on one computer; its answer is kept in that checkout's `.build/latency/`.
+The other side runs under the test agent there, built from the same commit as this checkout (`npm run build`, then `node build/run.ts testkit:agent`, which writes `.build/testkit/agent.vnl` and prints its digits). Copy the file here and pass it with the digits. The run prints three digits of its own; the person at the agent types them on its terminal, and nothing is approved without that. The agent serves this one run, then stops.
+
+The latency sides show and read the agent computer's real screen, so its owner allows them on the agent's command line: `node build/run.ts testkit:agent --allow screen`. Without it the agent refuses both. The agent starts the other side from its own checkout, as a run on one computer starts it (`node build/run.ts testkit:launch latency-host` or `latency-viewer`, which uses the same launch as this task), in folders of its own that it removes when the run stops, and only when `out/latency.cjs` there is exactly what its sources build. This run names only the side and its numbers, each a whole number in its range: frame rate 0 to 240, bitrate 0 to 50000 kb/s (0 keeps the default of each), busy 0 or 1, consent wait up to 600000 ms. The agent refuses any other variable, and it is never given a path or a program to run. That its side runs across two computers is the agent's to say, never this run's. The two sides' rendezvous files travel as messages over the paired connection, and the agent checks each: a side takes only the files the other role and this run publish (a host `viewer`, `viewer-streaming`, `read` and `done`; a viewer `host`, `host-ready`, `read`, `read-done` and `done`), each once, at most 64 files and 4 MiB in a run, and `read` holds only `{"seconds": 1..600}`. A side started across two computers also refuses a `read` that names a reader, and runs none. This run takes back only files with rendezvous names. A host on the agent's computer shows its screen only to the viewer this run names when it starts the scenario (the key of that viewer's invitation, printed whole on the agent's terminal), and only to be seen: before it trusts that viewer it sets its sharing policy to view without control and checks it, and checks it again after. On Linux it turns screen sharing on first, while it trusts no computer, since Linux hosts only while that setting is on; elsewhere it does not write the setting. The agent's side's evidence (its log, stage samples and launch log) is copied into this run's output before the agent removes it. The agent opens each file one step at a time without following links, and refuses hard links; on Windows it opens each step by its full path and refuses reparse points, so a folder swapped for a junction between two steps could still redirect a later step. Stopping the run, the agent losing it, or Ctrl-C on the agent's terminal writes `done`, gives the side 30 s to quit, then ends its process group and every process it started that is still the same process (on Windows, the job object it runs in). The sides watch for `done`, or for their rendezvous folder to be gone, every 250 ms from the start, which is how a Mac side ends: LaunchServices starts it, so it is no process of the agent's. A Linux host's portal asks someone there on the first run, as on one computer; its answer is kept in that checkout's `.build/latency/`. A Mac host there needs Screen Recording for that checkout's development VniLink, and a Windows host the signed-in desktop, as on one computer: start the agent from a terminal in that session. A Mac or Windows side on the agent's computer starts the same way but has not yet been exercised across two computers; the pairs measured so far had a Linux computer on the other side.
 
 ```bash
-npm run measure:latency -- --remote someone@studio.local --remote-root /home/someone/vnilink --hosts here --fps 60 --seconds 30
+# on the other computer
+npm run build
+node build/run.ts testkit:agent --allow screen
+# here, with the file copied over and the digits it printed
+npm run measure:latency -- --peer agent.vnl --peer-check 123 --hosts here --fps 60 --seconds 30
 ```
 
 The evidence is `summary.md`, `run.json`, both sides' logs and the files above. Scaling and copies are inside the host's encode time; `encode_probe` in `vnilink-macos` (GPU scaling of a 4K picture) and `conversion_bench` in `vnilink-media` (CPU scaling and conversion) time them alone.

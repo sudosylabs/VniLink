@@ -3,7 +3,7 @@ import test from 'node:test';
 import { join, resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { build } from 'esbuild';
-import { latencyOptions, renderHoldSummary, summariseHolds } from '../../build/lib/latency.ts';
+import { agentLatencyEnvironment, latencyOptions, renderHoldSummary, summariseHolds } from '../../build/lib/latency.ts';
 
 async function load(entry) {
 	const output = await build({ entryPoints: [entry], bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json', external: ['electron'] });
@@ -38,10 +38,10 @@ test('the page carries the same strip as the module', () => {
 test('latency options are bounded', () => {
 	const options = latencyOptions('/root', ['--seconds', '5', '--settle', '1', '--output', '/out']);
 	// Paths resolve the platform's way: `/out` is `C:\out` on Windows.
-	assert.deepEqual(options, { seconds: 5, settleSeconds: 1, output: resolve('/out'), app: undefined, holdSeconds: 0, frameRate: undefined, bitrate: undefined, busy: false, remote: undefined });
+	assert.deepEqual(options, { seconds: 5, settleSeconds: 1, output: resolve('/out'), app: undefined, holdSeconds: 0, frameRate: undefined, bitrate: undefined, busy: false, peer: undefined });
 	assert.equal(latencyOptions('/root', ['--fps', '60', '--bitrate', '50000']).bitrate, 50000);
 	assert.throws(() => latencyOptions('/root', ['--busy']));
-	assert.equal(latencyOptions('/root', ['--busy', '--remote', 'a@b', '--remote-root', '/r']).busy, true);
+	assert.equal(latencyOptions('/root', ['--busy', '--peer', 'agent.vnl', '--peer-check', '123']).busy, true);
 	assert.throws(() => latencyOptions('/root', ['--bitrate', '0']));
 	assert.throws(() => latencyOptions('/root', ['--bitrate', '50001']));
 	assert.throws(() => latencyOptions('/root', ['--bitrate', 'automatic']));
@@ -137,18 +137,30 @@ test('a hold the capture shows as no pictures at all is a hold too', () => {
 	assert.deepEqual([hold.others?.max, hold.others?.count], [30, 4]);
 });
 
-test('a two-computer run names the other computer, its checkout and which one hosts', () => {
+test('a two-computer run names the agent by its file and digits, and which computer hosts', () => {
 	assert.equal(latencyOptions('/root', ['--fps', '30']).frameRate, 30);
 	assert.throws(() => latencyOptions('/root', ['--fps', '0']));
 	assert.throws(() => latencyOptions('/root', ['--fps', '29.97']));
-	const options = latencyOptions('/root', ['--remote', 'someone@studio.local', '--remote-root', '/home/someone/vnilink', '--hosts', 'remote', '--ssh-config', '/c']);
-	assert.deepEqual(options.remote, { destination: 'someone@studio.local', root: '/home/someone/vnilink', hosts: 'remote', sshConfig: resolve('/c') });
-	assert.equal(latencyOptions('/root', ['--remote', 'someone@studio.local', '--remote-root', '/r']).remote?.hosts, 'here');
-	assert.throws(() => latencyOptions('/root', ['--remote', 'someone@studio.local']), /--remote-root/);
-	assert.throws(() => latencyOptions('/root', ['--remote', 'someone@studio.local', '--remote-root', 'relative']), /--remote-root/);
-	assert.throws(() => latencyOptions('/root', ['--remote', 'someone@studio.local', '--remote-root', '/r', '--hosts', 'both']));
-	assert.throws(() => latencyOptions('/root', ['--remote', 'someone@studio.local', '--remote-root', '/r', '--hold', '5']), /--hold/);
-	assert.throws(() => latencyOptions('/root', ['--hosts', 'remote']), /need --remote/);
+	const options = latencyOptions('/root', ['--peer', 'agent.vnl', '--peer-check', '042', '--hosts', 'peer']);
+	assert.deepEqual(options.peer, { file: resolve('agent.vnl'), check: '042', hosts: 'peer' });
+	assert.equal(latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '123']).peer?.hosts, 'here');
+	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl']), /go together/);
+	assert.throws(() => latencyOptions('/root', ['--peer-check', '123']), /go together/);
+	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '12']), /three digits/);
+	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '123', '--hosts', 'both']));
+	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '123', '--hold', '5']), /--hold/);
+	assert.throws(() => latencyOptions('/root', ['--hosts', 'peer']), /needs --peer/);
+	// SSH is gone: its options are unknown.
+	assert.throws(() => latencyOptions('/root', ['--remote', 'someone@studio.local']));
+	assert.throws(() => latencyOptions('/root', ['--remote-root', '/r']));
+});
+
+test('a side on the agent runs with the folders the agent set, always across, and only whitelisted numbers in range', () => {
+	const set = { VNILINK_LATENCY_DIR: '/a/rendezvous', VNILINK_LATENCY_OUTPUT: '/a/output', VNILINK_LATENCY_SCREEN_GRANT: '/c/.build/latency/host-screen-grant', VNILINK_TEST_PROFILE: '/a/profile' };
+	assert.deepEqual(agentLatencyEnvironment('viewer', {
+		...set, VNILINK_LATENCY_FPS: '60', VNILINK_LATENCY_ACROSS: '0', VNILINK_LATENCY_BITRATE: '60; rm', VNILINK_LATENCY_CONSENT_MS: '600001', PATH: '/usr/bin', VNILINK_LATENCY_ROLE: 'host',
+	}), { VNILINK_LATENCY_ROLE: 'viewer', VNILINK_LATENCY_ACROSS: '1', ...set, VNILINK_LATENCY_FPS: '60' });
+	assert.throws(() => agentLatencyEnvironment('host', { ...set, VNILINK_LATENCY_OUTPUT: '' }), /VNILINK_LATENCY_OUTPUT/);
 });
 
 test('a two-computer run is summarised from each side\'s own samples', async () => {
