@@ -29,6 +29,8 @@ use serde_json::{json, Value};
 use super::Scenario;
 use crate::peer::folders::Folders;
 #[cfg(unix)]
+use crate::peer::processes::reap;
+#[cfg(unix)]
 use crate::peer::processes::{descendants, same, Started};
 use crate::peer::Polled;
 use crate::Engine;
@@ -482,6 +484,9 @@ fn terminate(pid: u32, started: &[Started], quit: bool) {
         std::thread::sleep(Duration::from_millis(50));
     }
     signal_all(libc::SIGKILL);
+    // On Linux the agent adopts what the side left behind; ended, those
+    // are its own children to reap.
+    reap(started);
 }
 
 /// A job object that ends every process in it when its handle closes,

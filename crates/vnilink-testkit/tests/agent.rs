@@ -568,13 +568,11 @@ fn a_build_script_drives_a_launched_side_through_the_bridge() -> TestResult {
         "the side read what was put"
     );
 
-    let started = std::fs::read_to_string(evidence.join("started.pid"))?;
-    let alive = || {
-        Command::new("kill")
-            .args(["-0", started.trim()])
-            .status()
-            .is_ok_and(|status| status.success())
-    };
+    let started: u32 = std::fs::read_to_string(evidence.join("started.pid"))?
+        .trim()
+        .parse()?;
+    // Running, not merely waiting to be reaped.
+    let alive = || runs(started);
     assert!(alive(), "the side's own process runs");
     let stopped = bridge.ask(serde_json::json!({ "op": "stop" }));
     assert_eq!(

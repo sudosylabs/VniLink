@@ -150,16 +150,29 @@ fn adopts_orphans() -> bool {
     false
 }
 
-/// Reaps `processes` that are this process's own children and ended, so an
-/// adopted orphan does not linger as a zombie.
+/// Reaps `processes` that are this process's own children, so an adopted
+/// orphan does not linger as a zombie. Called after they were killed: a
+/// child not yet gone is waited for briefly, as a kill lands a moment
+/// later.
 #[cfg(unix)]
 pub(crate) fn reap(processes: &[Started]) {
+    const REAP_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
     for process in processes {
-        if let Ok(pid) = libc::pid_t::try_from(process.pid) {
+        let Ok(pid) = libc::pid_t::try_from(process.pid) else {
+            continue;
+        };
+        let deadline = std::time::Instant::now() + REAP_WAIT;
+        loop {
             let mut status = 0;
             // SAFETY: WNOHANG never blocks; a pid that is not our child
             // only fails with ECHILD.
-            unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            let reaped = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            // Reaped, or not our child: nothing more to do. Zero: our child,
+            // not ended yet.
+            if reaped != 0 || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
 }
