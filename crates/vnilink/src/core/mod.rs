@@ -633,7 +633,8 @@ struct Shared {
     transfer_counters: crate::transfer::TransferCounters,
     /// Small files of receiving jobs fetched ahead of their turn, by job.
     job_prefetch: Mutex<HashMap<u64, jobs::Prefetch>>,
-    #[cfg(test)]
+    /// Set by tests that stop a job between two files.
+    #[cfg(any(test, feature = "test-probes"))]
     prefetch_off: AtomicBool,
     /// This computer's folders watched for the window, by watch id.
     folder_watches: Mutex<HashMap<u64, notify::RecommendedWatcher>>,

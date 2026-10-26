@@ -74,6 +74,12 @@ impl Engine {
         self.scratch.join("root")
     }
 
+    /// Its transfer folder: where incoming bytes stage and job records are
+    /// kept.
+    pub fn transfers(&self) -> PathBuf {
+        self.scratch.join("transfers")
+    }
+
     /// The id of [`Self::root`] among its file roots.
     pub fn root_id(&self) -> u64 {
         let root = self.root();

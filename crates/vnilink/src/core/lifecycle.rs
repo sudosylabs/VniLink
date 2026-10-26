@@ -353,7 +353,7 @@ impl Core {
             files_gate: Default::default(),
             transfer_counters: Default::default(),
             job_prefetch: Mutex::new(std::collections::HashMap::new()),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-probes"))]
             prefetch_off: AtomicBool::new(false),
             folder_watches: Mutex::new(std::collections::HashMap::new()),
             watch_next: std::sync::atomic::AtomicU64::new(1),

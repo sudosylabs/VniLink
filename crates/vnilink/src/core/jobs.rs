@@ -1885,7 +1885,7 @@ impl Core {
     /// already arriving, up to [`PREFETCH_FILES`] and [`PREFETCH_BYTES`]
     /// ahead. A file of more than one segment is left for its turn.
     fn prefetch_after(&self, id: u64, peer: &[u8; 32], wire_job: u64, current: usize) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-probes"))]
         if self.shared.prefetch_off.load(Ordering::Relaxed) {
             return;
         }
@@ -2161,10 +2161,11 @@ impl Core {
             .map_or(0, |prefetch| prefetch.files.len())
     }
 
-    /// Takes one file at a time, as tests that park a particular serve
-    /// expect.
-    #[cfg(test)]
-    pub(crate) fn fetch_one_file_at_a_time(&self) {
+    /// Takes one file at a time, fetching none ahead, for tests that stop
+    /// a job between two files.
+    #[cfg(any(test, feature = "test-probes"))]
+    pub fn fetch_one_file_at_a_time(&self) {
+        let _engine = self.engine();
         self.shared.prefetch_off.store(true, Ordering::Relaxed);
     }
 
