@@ -28,18 +28,6 @@ fn beside(engine: &Engine, name: &str) -> PathBuf {
         .join(name)
 }
 
-/// The lines of `story` that `engine` recorded.
-fn engine_story(story: &str, engine: &str) -> String {
-    let heading = format!("{engine}:");
-    story
-        .lines()
-        .skip_while(|line| *line != heading)
-        .skip(1)
-        .take_while(|line| line.starts_with(' '))
-        .map(|line| format!("{}\n", line.trim_start()))
-        .collect()
-}
-
 /// Polls `receiver`'s job until `done` files landed, within twenty polls:
 /// each poll advances a job by one step. It must not end first.
 fn poll_until_files_done(receiver: &Core, job: u64, done: u64) {
@@ -362,13 +350,14 @@ fn a_sender_restarted_with_its_root_rebound_fails_the_resume_and_says_why() -> T
     // When the receiver learns its sender stopped varies with when the
     // connection's end reaches it; the story is the sender's.
     expect![[r#"
-        files: job state from=preparing job=1 sender=true to=serving
-        files: file served ended=sent from=0 sent=512 size=512
-        files: file served ended=sent from=0 sent=512 size=512
-        files: job state from=serving job=1 sender=true to=interrupted
-        files: job state done_bytes=0 files_done=0 from=interrupted job=1 sender=true to=failed
-        files: the peer was not told: its side keeps the job as it was until it next asks change=resume failure=no session job=1
-    "#]].assert_eq(&engine_story(&trace.story(&["files"]), "host"));
+        host:
+          files: job state from=preparing job=1 sender=true to=serving
+          files: file served ended=sent from=0 sent=512 size=512
+          files: file served ended=sent from=0 sent=512 size=512
+          files: job state from=serving job=1 sender=true to=interrupted
+          files: job state done_bytes=0 files_done=0 from=interrupted job=1 sender=true to=failed
+          files: the peer was not told: its side keeps the job as it was until it next asks change=resume failure=no session job=1
+    "#]].assert_eq(&trace.engine_story("host", &["files"]));
     Ok(())
 }
 

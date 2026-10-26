@@ -105,6 +105,25 @@ impl Traced {
         self.told(areas, false, true)
     }
 
+    /// [`Traced::story`] as `engine` alone told it, for a scenario whose
+    /// other engine records at moments of its own, as a sender mirroring
+    /// its receiver when it next asks.
+    pub fn engine_story(&self, engine: &str, areas: &[&str]) -> String {
+        let heading = format!("{engine}:");
+        let story = self.told(areas, false, false);
+        let mut lines = story.lines().skip_while(|line| *line != heading);
+        let mut told = String::new();
+        if let Some(heading) = lines.next() {
+            told.push_str(heading);
+            told.push('\n');
+        }
+        for line in lines.take_while(|line| line.starts_with(' ')) {
+            told.push_str(line);
+            told.push('\n');
+        }
+        told
+    }
+
     fn told(&self, areas: &[&str], detailed: bool, concurrent: bool) -> String {
         // Each engine's lines, each with the message that starts it.
         let mut engines: Vec<(String, Vec<(String, String)>)> = Vec::new();

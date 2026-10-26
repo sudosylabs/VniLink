@@ -32,7 +32,7 @@ Rust tests follow the owning area's organization, including inline tests and reg
 A test is one scenario, named as the behaviour it proves (`a_key_after_control_is_withdrawn_is_discarded_and_says_why`). Behaviour across two engines belongs in the service's `vnilink-testkit` suite and takes engines, fakes and waits from the kit; a module's unit tests stay beside it. Existing tests move to this form when their service is next worked on.
 
 - Hold `traced()` for the whole test, so a failure prints the engines' records.
-- State the **story**: `expect![[…]].assert_eq(&trace.story(&["area"]))` with the `vnilink::trace` areas the scenario touches. `detailed_story` adds per-event `trace` records; `concurrent_story` sorts items that parallel work records in any order. Generate with `UPDATE_EXPECT=1`, run it several times to see it stable, and review a changed story as a behaviour change.
+- State the **story**: `expect![[…]].assert_eq(&trace.story(&["area"]))` with the `vnilink::trace` areas the scenario touches. `detailed_story` adds per-event `trace` records; `concurrent_story` sorts items that parallel work records in any order; `engine_story` states one engine's side when the other records at moments of its own. Generate with `UPDATE_EXPECT=1`, run it several times to see it stable, and review a changed story as a behaviour change.
 - Wait with bounded `wait_for` on state, then `trace.wait_for_records` for the story's last record: a service records just after it acts.
 - Each assert's message names the contract it guards. Values that vary between runs, as drop counts, are bounded outside the story.
 - Where a service handles user content, assert that `trace.events()` holds none of it.

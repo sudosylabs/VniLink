@@ -320,18 +320,25 @@ fn a_thousand_skipped_files_take_no_pass_each() -> TestResult {
         JobState::Complete,
         "the sender follows: {sent:?}"
     );
-    trace.wait_for_records("job state", 5);
+    // The receiver's story: the sender mirrors it whenever it next asks,
+    // through serving or straight to complete.
+    wait_for(
+        "the receiver to record its completion",
+        DEFAULT_WAIT,
+        || {
+            trace
+                .named("job state")
+                .iter()
+                .any(|event| event["engine"] == "host" && event["to"] == "complete")
+                .then_some(())
+        },
+    );
     expect![[r#"
-        controller:
-          files: job state from=preparing job=1 sender=true to=serving
-          files: job state from=serving job=1 sender=true to=waiting-decision
-          files: job state from=waiting-decision job=1 sender=true to=serving
-          files: job state done_bytes=1000 files_done=0 from=serving job=1 sender=true to=complete
         host:
           files: job state from=transferring job=1 sender=false to=waiting-decision
           files: job state from=waiting-decision job=1 sender=false to=transferring
           files: job state done_bytes=1000 files_done=0 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]].assert_eq(&trace.engine_story("host", &["files"]));
     Ok(())
 }
 
