@@ -103,7 +103,8 @@ fn an_agreed_still_reaches_the_viewer_outside_the_streams_codec() {
     for stream in [false, true] {
         let (host, _controller, desktop, remote) = open(true, true);
         if stream {
-            host.force_desktop_stream(remote.id, remote.generation);
+            host.force_desktop_stream(remote.id, remote.generation)
+                .unwrap();
         }
         let video = desktop.subscribe_video().unwrap();
         let publish = |frame| host.publish_desktop_video(remote.id, remote.generation, frame);

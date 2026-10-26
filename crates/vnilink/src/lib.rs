@@ -114,6 +114,16 @@ mod sidestream;
 pub mod system;
 pub mod terminal;
 pub mod trace;
+/// What tests reach in an engine that the application never does: hooks
+/// that park work at an exact point, and limits a test must know. Built
+/// for this crate's tests and the `test-probes` feature (the test kit's).
+#[cfg(any(test, feature = "test-probes"))]
+pub mod probes {
+    #[cfg(unix)]
+    pub use crate::core::PrestageHooks;
+    pub use crate::core::{MAX_ACTIVE_JOBS, SERVE_SOURCE_PROBE};
+    pub use crate::manifest::ScanHooks;
+}
 mod transfer;
 mod trust;
 mod video;

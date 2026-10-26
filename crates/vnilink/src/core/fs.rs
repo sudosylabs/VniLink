@@ -627,7 +627,19 @@ pub(super) async fn serve_aux_controller(
 
 /// Holds back each listing served to one controller, in milliseconds,
 /// so a test can play a slow host without slowing the others.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-probes"))]
+impl Core {
+    /// Holds back each listing this host serves `peer` by `millis`, or
+    /// none for `None`, so a test plays a slow host to one controller.
+    pub fn slow_listings_to(&self, peer: &str, millis: Option<u64>) -> Result<(), Error> {
+        let _engine = self.engine();
+        let peer = super::parse_endpoint_id(peer)?;
+        *lock(&LIST_DELAY) = millis.map(|millis| (peer, millis));
+        Ok(())
+    }
+}
+
+#[cfg(any(test, feature = "test-probes"))]
 pub(crate) static LIST_DELAY: Mutex<Option<([u8; 32], u64)>> = Mutex::new(None);
 
 pub(super) async fn handle_fs_request(
@@ -787,7 +799,7 @@ pub(super) async fn handle_fs_request(
             limit,
             ..
         } => {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-probes"))]
             {
                 let delay = *lock(&LIST_DELAY);
                 if let Some((_, millis)) = delay.filter(|(slow, _)| slow == peer) {

@@ -153,7 +153,7 @@ pub(super) struct DesktopRuntime {
     topology: Mutex<Vec<crate::DisplayInfo>>,
     pub(super) keyboard: Mutex<DesktopKeyboard>,
     pub(super) clipboard: super::desktop_clipboard::ClipboardState,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-probes"))]
     force_stream: std::sync::atomic::AtomicBool,
 }
 /// The window decoder's own report: whether it decodes in software, and
@@ -252,7 +252,7 @@ impl DesktopRuntime {
                 swap: false,
             }),
             clipboard: super::desktop_clipboard::ClipboardState::new(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-probes"))]
             force_stream: std::sync::atomic::AtomicBool::new(false),
         })
     }
@@ -2904,7 +2904,7 @@ async fn host_send(
             congestion.rtt(rtt);
             let body = crate::video::encode_video_body(&frame);
             let max = link.max_datagram_size();
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-probes"))]
             let max = if desktop
                 .force_stream
                 .load(std::sync::atomic::Ordering::Relaxed)
@@ -3096,13 +3096,17 @@ fn topology_bytes(shared: &Shared, desktop: &DesktopRuntime) -> Option<Vec<u8>> 
     Some(bytes)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-probes"))]
 impl Core {
-    pub(crate) fn force_desktop_stream(&self, id: u64, generation: u64) {
-        runtime(&*self.alive_state().unwrap(), id, generation, true)
-            .unwrap()
+    /// Sends hosted Desktop `id`'s pictures on its stream rather than as
+    /// datagrams, for tests of the stream path a link without datagrams
+    /// takes.
+    pub fn force_desktop_stream(&self, id: u64, generation: u64) -> Result<(), Error> {
+        let _engine = self.engine();
+        runtime(&*self.alive_state()?, id, generation, true)?
             .force_stream
             .store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
     }
 }
 

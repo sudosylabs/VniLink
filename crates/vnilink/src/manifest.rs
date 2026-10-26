@@ -91,14 +91,14 @@ pub struct Scan {
 /// (unit tests) rather than installed globally, so concurrent suites never
 /// observe them. Production passes [`ScanHooks::none`].
 #[derive(Clone, Copy, Default)]
-pub(crate) struct ScanHooks {
+pub struct ScanHooks {
     /// Called with index 0 before any filesystem access, then once per
     /// listed directory with 1-based indices. A probe that parks
     /// (controlled slow scan) must also watch `cancelled` and return
     /// promptly once it is set.
-    pub(crate) dir_probe: Option<fn(u64, &AtomicBool)>,
+    pub dir_probe: Option<fn(u64, &AtomicBool)>,
     /// Called once when the worker finishes; `true` reports cancellation.
-    pub(crate) finish_probe: Option<fn(bool)>,
+    pub finish_probe: Option<fn(bool)>,
 }
 
 impl ScanHooks {

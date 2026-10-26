@@ -97,7 +97,8 @@ impl MemoryStore {
     }
 
     /// The next [`InstallationStore::save`] returns `error` once.
-    pub(crate) fn fail_next_save(&self, error: Error) {
+    #[cfg(any(test, feature = "test-probes"))]
+    pub fn fail_next_save(&self, error: Error) {
         let fault = match error {
             Error::StoreLocked => StoreFault::Locked,
             Error::StoreUnavailable => StoreFault::Unavailable,

@@ -40,15 +40,15 @@ const STAGED_SEGMENTS: &str = "segments";
 /// (`probe`), the parent-mkdir phase (`mkdir_probe`) or the final stage
 /// sync (`sync_probe`) to prove global locks stay free.
 #[cfg(unix)]
-pub(crate) struct PrestageHooks {
+pub struct PrestageHooks {
     /// The engine the job belongs to ([`Core::prestage_key`]): job ids are
     /// per engine, and tests run several engines in one process.
-    pub(crate) engine: usize,
-    pub(crate) job_id: Option<u64>,
-    pub(crate) force_cross_volume: bool,
-    pub(crate) probe: Option<fn(u64, u64)>,
-    pub(crate) mkdir_probe: Option<fn(u64)>,
-    pub(crate) sync_probe: Option<fn(u64)>,
+    pub engine: usize,
+    pub job_id: Option<u64>,
+    pub force_cross_volume: bool,
+    pub probe: Option<fn(u64, u64)>,
+    pub mkdir_probe: Option<fn(u64)>,
+    pub sync_probe: Option<fn(u64)>,
 }
 
 #[cfg(unix)]
@@ -2137,27 +2137,29 @@ impl Core {
     /// Test hooks for cross-volume pre-staging; see [`PRESTAGE_HOOKS`].
     /// Production leaves them unset.
     #[cfg(unix)]
-    pub(crate) fn set_prestage_hooks(hooks: PrestageHooks) {
+    pub fn set_prestage_hooks(hooks: PrestageHooks) {
         *lock(&PRESTAGE_HOOKS) = hooks;
     }
 
     /// Identifies this engine to its test hooks: [`PrestageHooks`] on
     /// Unix, and [`PREPARE_SCAN_HOOKS`] everywhere.
-    #[cfg(any(unix, test))]
-    pub(crate) fn prestage_key(&self) -> usize {
+    #[cfg(any(unix, test, feature = "test-probes"))]
+    pub fn prestage_key(&self) -> usize {
+        let _engine = self.engine();
         Arc::as_ptr(&self.shared) as usize
     }
 
     /// Test probe for in-flight serve opens; see [`SERVE_SOURCE_PROBE`].
     /// Production leaves it unset.
-    #[cfg(test)]
-    pub(crate) fn set_serve_source_probe(probe: Option<fn(usize, u64)>) {
+    #[cfg(any(test, feature = "test-probes"))]
+    pub fn set_serve_source_probe(probe: Option<fn(usize, u64)>) {
         *lock(&SERVE_SOURCE_PROBE) = probe;
     }
 
     /// Files of job `id` being fetched ahead of their turn.
-    #[cfg(test)]
-    pub(crate) fn fetching_ahead(&self, id: u64) -> usize {
+    #[cfg(any(test, feature = "test-probes"))]
+    pub fn fetching_ahead(&self, id: u64) -> usize {
+        let _engine = self.engine();
         lock(&self.shared.job_prefetch)
             .get(&id)
             .map_or(0, |prefetch| prefetch.files.len())
@@ -2172,8 +2174,9 @@ impl Core {
     }
 
     /// Identifies this engine to [`SERVE_SOURCE_PROBE`].
-    #[cfg(test)]
-    pub(crate) fn engine_key(&self) -> usize {
+    #[cfg(any(test, feature = "test-probes"))]
+    pub fn engine_key(&self) -> usize {
+        let _engine = self.engine();
         Arc::as_ptr(&self.shared) as usize
     }
 
@@ -3005,7 +3008,7 @@ fn truncate_error(text: &str) -> String {
 /// Bounds staging disk (manifest-capped per job), memory and bulk traffic
 /// alongside desktop video/input. Paused (Interrupted) and terminal jobs do
 /// not count; explicit resume re-checks capacity.
-pub(crate) const MAX_ACTIVE_JOBS: usize = 8;
+pub const MAX_ACTIVE_JOBS: usize = 8;
 
 pub(super) const ACTIVE_STATES: &[JobState] = &[
     JobState::Preparing,
@@ -3311,7 +3314,7 @@ pub(super) fn sending_at(
 /// engine ([`Core::engine_key`]) and job after the source opens, before it
 /// is authorized. Production leaves it unset. The probe must return
 /// promptly for jobs it does not recognize: suites run in parallel.
-pub(crate) static SERVE_SOURCE_PROBE: std::sync::Mutex<Option<fn(usize, u64)>> =
+pub static SERVE_SOURCE_PROBE: std::sync::Mutex<Option<fn(usize, u64)>> =
     std::sync::Mutex::new(None);
 
 /// Opens file `file` of the peer's sending job `job` for serving, or says
@@ -4874,12 +4877,21 @@ fn finish_preparation(
 
 /// Scan probes for one engine's download preparations; production
 /// leaves them unset. Keyed by [`Core::prestage_key`].
-#[cfg(test)]
+#[cfg(any(test, feature = "test-probes"))]
+impl Core {
+    /// Scan probes for this engine's download preparations, or none.
+    pub fn set_prepare_scan_hooks(&self, hooks: Option<manifest::ScanHooks>) {
+        let _engine = self.engine();
+        *lock(&PREPARE_SCAN_HOOKS) = hooks.map(|hooks| (self.prestage_key(), hooks));
+    }
+}
+
+#[cfg(any(test, feature = "test-probes"))]
 pub(crate) static PREPARE_SCAN_HOOKS: std::sync::Mutex<Option<(usize, manifest::ScanHooks)>> =
     std::sync::Mutex::new(None);
 
 fn prepare_scan_hooks(shared: &Shared) -> manifest::ScanHooks {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-probes"))]
     if let Some((engine, hooks)) = *lock(&PREPARE_SCAN_HOOKS) {
         if engine == shared as *const Shared as usize {
             return hooks;

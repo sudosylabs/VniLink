@@ -288,8 +288,11 @@ impl Core {
         session.controller.clone().ok_or(Error::NoSession)
     }
 
-    #[cfg(test)]
-    pub(crate) fn drop_controller_link(&self, id: u64) -> Result<(), Error> {
+    /// Closes controller session `id`'s connection as a network would,
+    /// for tests of what a dropped link does.
+    #[cfg(any(test, feature = "test-probes"))]
+    pub fn drop_controller_link(&self, id: u64) -> Result<(), Error> {
+        let _engine = self.engine();
         let link = self
             .alive_state()?
             .outgoing
@@ -303,8 +306,9 @@ impl Core {
     /// Closes the live connection and leaves the stop signal unset.
     ///
     /// The controller treats that as a dropped link and dials again.
-    #[cfg(test)]
-    pub(crate) fn drop_link(&self) -> Result<(), Error> {
+    #[cfg(any(test, feature = "test-probes"))]
+    pub fn drop_link(&self) -> Result<(), Error> {
+        let _engine = self.engine();
         let link = {
             let state = self.alive_state()?;
             state
