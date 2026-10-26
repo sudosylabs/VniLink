@@ -28,12 +28,12 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 		await assert.rejects(execute(first, { type: 'setDesktopCodecDefault', codec: 'invalid' }), /InvalidSetting/);
 		await assert.rejects(execute(first, { type: 'setDesktopCodecDefault', codec: 'auto', extra: true }));
 		await assert.rejects(execute(first, { type: 'unsupportedCommand' }));
-		// The diagnostic snapshot crosses as the engine's own bounded JSON, schema version 4.
+		// The diagnostic snapshot crosses as the engine's own bounded JSON, schema version 5.
 		const diagnostics = await execute(first, { type: 'diagnosticSnapshot' });
 		assert.equal(diagnostics.type, 'diagnosticSnapshot');
 		assert.ok(Buffer.byteLength(diagnostics.snapshot) <= 64 * 1024);
 		const parsed = JSON.parse(diagnostics.snapshot);
-		assert.equal(parsed.version, 4);
+		assert.equal(parsed.version, 5);
 		assert.equal(parsed.last_end, null);
 		assert.ok(!diagnostics.snapshot.includes(JSON.parse(await first.execute(JSON.stringify({ type: 'endpoint' }))).endpointId));
 		await assert.rejects(execute(first, { type: 'diagnosticSnapshot', extra: true }));
