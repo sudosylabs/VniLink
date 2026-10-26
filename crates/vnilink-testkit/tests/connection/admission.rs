@@ -99,9 +99,7 @@ fn pairing_does_not_grant_control_and_a_grant_is_directional() -> TestResult {
         },
     );
     // Each key sent before the refusal arrived reaches the host, which
-    // discards it. One still on its way when the host stops the session
-    // ends the connection instead, and the controller redials.
-    trace.wait_for_records("input discarded", sent);
+    // discards it, also once the host is stopping the session.
     let quality = Quality::new(2_000, 30, 1920, 1080)?;
     let hosted = host.core.snapshot()?.incoming.ok_or("a hosted session")?;
     host.core

@@ -712,6 +712,15 @@ async fn check_authorized(
         {
             return discard("the desktop has stopped");
         }
+        // A session this computer is stopping closes cleanly: what its peer
+        // sent before it heard is late, not a reason to end it in error.
+        if state
+            .incoming
+            .values()
+            .any(|s| s.wire_stamp == stamp && s.phase == SessionPhase::Stopping)
+        {
+            return discard("the session is stopping");
+        }
         let active = state
             .incoming
             .values()
