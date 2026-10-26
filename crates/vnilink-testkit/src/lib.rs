@@ -38,3 +38,7 @@ pub use engine::{Engine, Pair, FILES};
 pub use scratch::Scratch;
 pub use trace::{traced, Traced};
 pub use wait::{wait_for, DEFAULT_WAIT};
+
+/// What a test returns: setup that fails with `?` fails the test with its
+/// error, and asserts state the contract.
+pub type TestResult = Result<(), Box<dyn std::error::Error>>;
