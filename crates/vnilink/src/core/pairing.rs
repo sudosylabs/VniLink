@@ -476,3 +476,25 @@ pub(super) async fn wait_for_control_approval(
     }
     ControlAnswer::Rejected(Error::Unauthorized)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, SystemTime};
+
+    use crate::error::Error;
+    use crate::test_support::loopback_core;
+
+    #[test]
+    fn an_expired_file_is_rejected() {
+        let host = loopback_core();
+        let controller = loopback_core();
+        let past = SystemTime::now() - Duration::from_secs(20 * 60);
+        let file = host
+            .export_pairing_file_at(Duration::from_secs(60), true, past)
+            .unwrap();
+        assert!(matches!(
+            controller.open_pairing_file(&file.bytes),
+            Err(Error::InvitationExpired)
+        ));
+    }
+}

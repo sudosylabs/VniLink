@@ -3298,9 +3298,9 @@ mod tests {
     }
     #[test]
     fn delayed_input_release_and_yield_cannot_touch_a_reacquired_grant() {
-        use crate::tests::support::{pair_for_control, start_direct, RecordingDesktop};
-        let host = start_direct();
-        let peer = start_direct();
+        use crate::test_support::{loopback_core, pair_for_control, RecordingDesktop};
+        let host = loopback_core();
+        let peer = loopback_core();
         let applied = Arc::new(Mutex::new(Vec::new()));
         host.set_desktop(Box::new(RecordingDesktop {
             events: applied.clone(),
@@ -3529,9 +3529,9 @@ mod v8_native_input_lock_probe {
         parked_input(true);
     }
     fn parked_input(stream: bool) {
-        use crate::tests::support::{pair_for_control, start_direct};
-        let host = start_direct();
-        let peer = start_direct();
+        use crate::test_support::{loopback_core, pair_for_control};
+        let host = loopback_core();
+        let peer = loopback_core();
         let (entered, ready) = std::sync::mpsc::sync_channel(1);
         let (proceed, wait) = std::sync::mpsc::channel();
         let applied = Arc::new(Mutex::new(Vec::new()));
@@ -3647,10 +3647,10 @@ mod v9_pointer_wait_probe {
         }
     }
     fn queued_pointer(change: u8) {
-        use crate::tests::support::{pair_for_control, start_direct, RecordingDesktop};
+        use crate::test_support::{loopback_core, pair_for_control, RecordingDesktop};
         use std::sync::atomic::Ordering;
-        let host = start_direct();
-        let peer = start_direct();
+        let host = loopback_core();
+        let peer = loopback_core();
         let applied = Arc::new(Mutex::new(Vec::new()));
         host.set_desktop(Box::new(RecordingDesktop {
             events: applied.clone(),
@@ -3778,10 +3778,10 @@ mod v10_cleanup_churn_probe {
     }
     #[test]
     fn v10_empty_desktop_churn_must_bound_retired_cleanup() {
-        use crate::tests::support::{pair_for_control, start_direct, RecordingDesktop};
+        use crate::test_support::{loopback_core, pair_for_control, RecordingDesktop};
         use std::sync::atomic::Ordering;
-        let host = start_direct();
-        let peer = start_direct();
+        let host = loopback_core();
+        let peer = loopback_core();
         host.set_desktop(Box::new(RecordingDesktop {
             events: Arc::new(Mutex::new(Vec::new())),
         }))
@@ -3836,10 +3836,10 @@ mod v10_cleanup_churn_probe {
     }
     #[test]
     fn v10_nonempty_retired_owners_keep_admission_slots() {
-        use crate::tests::support::{pair_for_control, start_direct};
+        use crate::test_support::{loopback_core, pair_for_control};
         use std::sync::atomic::Ordering;
-        let host = start_direct();
-        let peer = start_direct();
+        let host = loopback_core();
+        let peer = loopback_core();
         let calls = Arc::new(Mutex::new(Vec::new()));
         host.set_desktop(Box::new(CleanupDesktop(calls.clone())))
             .unwrap();

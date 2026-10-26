@@ -20,11 +20,11 @@ use std::time::{Duration, Instant};
 use iroh::RelayMode;
 use serde_json::{json, Value};
 
-use super::filesystem_location::FilesystemLocation;
 use crate::core::{Core, CoreConfig, Listen};
 use crate::job::JobState;
 use crate::manifest;
 use crate::relay::{CustomRelay, RelaySettings};
+use crate::test_support::{pair_for_transfer, FilesystemLocation};
 
 /// Sizes of one matrix run.
 struct Matrix {
@@ -233,24 +233,6 @@ fn write_cases(root: &Path, matrix: &Matrix) -> Vec<&'static str> {
     vec!["small", "large", "mixed"]
 }
 
-fn pair(host: &Core, controller: &Core) {
-    host.start_hosting().unwrap();
-    let token = host.create_invitation(Duration::from_secs(60)).unwrap();
-    controller.accept_invitation(&token).unwrap();
-    let back = controller
-        .create_invitation(Duration::from_secs(60))
-        .unwrap();
-    host.accept_invitation(&back).unwrap();
-    // The session that carries job control is admitted on a desktop grant.
-    host.set_desktop_sharing(crate::session::Grants {
-        view: true,
-        control: true,
-        clipboard: false,
-        transfer: true,
-    })
-    .unwrap();
-}
-
 /// Drives until the receiver record ends or `deadline` passes, and returns
 /// the receiver's snapshot with the time it was taken, and what QUIC saw on
 /// each core's files connections once a second meanwhile. A job still running at
@@ -393,7 +375,7 @@ fn run_matrix(matrix: &Matrix) -> Value {
         core.enable_filesystem_access().unwrap();
     }
     let cases = write_cases(&controller_scratch.0.join("root"), matrix);
-    pair(&host, &controller);
+    pair_for_transfer(&host, &controller);
     controller
         .set_desktop_sharing(crate::session::Grants {
             view: false,

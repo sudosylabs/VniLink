@@ -1,4 +1,3 @@
-#[path = "../../vnilink/src/tests/filesystem_location.rs"]
 pub(crate) mod filesystem_location;
 use crate::{new_quality, FfiKeyboardMode, FfiPointerButton, FfiSessionRole, VnilinkCore};
 use crate::{FfiError, FfiEvent, FfiVideoCodecCaps};

@@ -591,7 +591,7 @@ mod snapshot_tests {
 #[cfg(test)]
 mod selection_confinement_tests {
     use super::*;
-    use crate::tests::support::start_direct;
+    use crate::test_support::loopback_core;
 
     fn selection(path: &str) -> crate::clipboard::FileSelection {
         crate::clipboard::FileSelection {
@@ -605,7 +605,7 @@ mod selection_confinement_tests {
 
     #[test]
     fn malformed_selections_die_before_touching_state() {
-        let core = start_direct();
+        let core = loopback_core();
         for path in ["../outside.txt", "/etc/hosts", "a/../../b", ""] {
             let bad = selection(path);
             assert!(

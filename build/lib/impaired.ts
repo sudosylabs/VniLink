@@ -18,7 +18,7 @@ import { RELAY_PATH, applyProfile, createTopology, disposeTopology, linkStatisti
 import { ProcessRunner } from './processes.ts';
 
 export const SCENARIOS = Object.freeze({
-	transfer: Object.freeze({ crate: 'vnilink', test: 'tests::impaired_transfer_tests::impaired_transfer_matrix' }),
+	transfer: Object.freeze({ crate: 'vnilink', test: 'core::jobs::impaired_transfer_tests::impaired_transfer_matrix' }),
 	video: Object.freeze({ crate: 'vnilink-media', test: 'tests::impaired_video_tests::impaired_desktop_stream' }),
 	/** The desktop stream while the viewer uploads one large file to the host. */
 	combined: Object.freeze({ crate: 'vnilink-media', test: 'tests::impaired_video_tests::impaired_desktop_stream_during_upload' }),

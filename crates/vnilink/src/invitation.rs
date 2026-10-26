@@ -652,4 +652,52 @@ mod tests {
         extra[0] = 8;
         cache.remember(extra, now + 20_000, now + 5_000).unwrap();
     }
+
+    #[test]
+    fn a_loopback_invitation_carries_a_loopback_address() {
+        let host = crate::test_support::loopback_core();
+        let token = host.create_invitation(Duration::from_secs(60)).unwrap();
+        let (opened, _) = open(&token, SystemTime::now()).unwrap();
+        assert!(opened.relays.is_empty());
+        assert_eq!(opened.direct.len(), 1);
+        assert_eq!(
+            opened.direct[0].ip(),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
+        );
+        assert_ne!(opened.direct[0].port(), 0);
+        let key = host.endpoint_id().parse::<PublicKey>().unwrap();
+        assert_eq!(opened.endpoint_id, *key.as_bytes());
+    }
+
+    #[test]
+    fn a_custom_relay_url_is_advertised_without_contacting_it() {
+        use crate::core::{Core, CoreConfig, Listen};
+        use crate::relay::RelaySettings;
+
+        let relay = crate::relay::CustomRelay::new("https://relay.example.test")
+            .unwrap()
+            .with_auth_token("super-secret-token")
+            .unwrap();
+        let settings = RelaySettings::custom(vec![relay]).unwrap();
+        let urls = settings.relay_urls().unwrap();
+        let rendered = format!("{settings:?}");
+        assert!(rendered.contains("[redacted]"));
+        assert!(!rendered.contains("super-secret-token"));
+        let host = Core::boot(
+            CoreConfig {
+                relay: settings,
+                listen: Listen::Loopback,
+                ..CoreConfig::default()
+            },
+            iroh::RelayMode::Disabled,
+        )
+        .unwrap();
+        let snapshot = host.snapshot().unwrap();
+        assert!(!snapshot.public_relay);
+        assert_eq!(snapshot.relay_urls, urls);
+        let token = host.create_invitation(Duration::from_secs(60)).unwrap();
+        assert!(!token.contains("super-secret-token"));
+        let (opened, _) = open(&token, SystemTime::now()).unwrap();
+        assert_eq!(opened.relays, urls);
+    }
 }

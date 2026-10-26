@@ -1394,3 +1394,156 @@ pub(super) async fn serve(
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use crate::error::Error;
+    use crate::test_support::{loopback_core, pair_for_control, transfer_pair, FilesystemLocation};
+    use crate::{Core, ServiceKind, SessionInfo, SessionPhase};
+
+    fn wait(name: &str, mut condition: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while !condition() {
+            assert!(Instant::now() < deadline, "{name} timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn active(core: &Core, id: u64) -> SessionInfo {
+        wait("service condition", || {
+            core.controller_session(id).unwrap().phase == SessionPhase::Active
+        });
+        core.controller_session(id).unwrap()
+    }
+
+    fn owned_files(core: &Core, host: &Core) -> (crate::ServiceInfo, crate::RemoteFilesService) {
+        let session = active(core, core.begin_connect(&host.endpoint_id()).unwrap().id);
+        let owner = core
+            .attach_controller_service(session.id, session.generation, ServiceKind::Files)
+            .unwrap();
+        let pipe = core.open_files_service(owner.id, owner.generation).unwrap();
+        (owner, pipe)
+    }
+
+    #[test]
+    fn remote_service_negotiation_rejects_incompatible_or_stale_requests() {
+        let controller = loopback_core();
+        let host = loopback_core();
+        pair_for_control(&host, &controller);
+        let session = active(
+            &controller,
+            controller.begin_connect(&host.endpoint_id()).unwrap().id,
+        );
+        let incoming = host.snapshot().unwrap().incoming.unwrap();
+        let header = |version: u8, generation: u64, kind: u8| {
+            let mut bytes = vec![8, version, 1];
+            bytes.extend_from_slice(&incoming.id.to_be_bytes());
+            bytes.extend_from_slice(&generation.to_be_bytes());
+            bytes.extend_from_slice(&123u64.to_be_bytes());
+            bytes.push(kind);
+            bytes
+        };
+        for (bytes, expected) in [
+            (header(2, incoming.generation, 2), 5),
+            (header(1, incoming.generation + 1, 2), 3),
+            (header(1, incoming.generation, 3), 6),
+            (header(1, incoming.generation, 4), 6),
+            (header(1, incoming.generation, 255), 1),
+            (header(1, incoming.generation, 2), 2),
+        ] {
+            assert_eq!(
+                controller
+                    .test_service_frame(session.id, session.generation, bytes)
+                    .unwrap(),
+                vec![1, expected, 0]
+            );
+            assert!(host.hosted_services().unwrap().is_empty());
+            assert_eq!(controller.controller_session(session.id).unwrap(), session);
+        }
+        // Permission and backend availability are distinct. An explicit grant
+        // changes Denied to Unsupported without creating a shell/camera backend.
+        host.set_service_sharing(ServiceKind::Terminal, true)
+            .unwrap();
+        assert_eq!(
+            controller
+                .test_service_frame(
+                    session.id,
+                    session.generation,
+                    header(1, incoming.generation, 3)
+                )
+                .unwrap(),
+            vec![1, 1, 0]
+        );
+        assert_eq!(
+            controller
+                .test_service_frame(
+                    session.id,
+                    session.generation,
+                    header(1, incoming.generation, 4)
+                )
+                .unwrap(),
+            vec![1, 6, 0]
+        );
+        assert_eq!(
+            controller
+                .test_service_frame(
+                    session.id,
+                    session.generation,
+                    header(1, incoming.generation, 2)
+                )
+                .unwrap(),
+            vec![1, 2, 0]
+        );
+        host.set_service_sharing(ServiceKind::Camera, true).unwrap();
+        assert_eq!(
+            controller
+                .test_service_frame(
+                    session.id,
+                    session.generation,
+                    header(1, incoming.generation, 4)
+                )
+                .unwrap(),
+            vec![1, 1, 0]
+        );
+        assert!(host.hosted_services().unwrap().is_empty());
+        assert!(controller
+            .test_service_frame(session.id, session.generation, vec![8, 1])
+            .is_err());
+        assert!(
+            controller
+                .remote_service_support(session.id, session.generation)
+                .unwrap()
+                .files
+        );
+    }
+
+    /// A listing slower than its caller waits is that request's timeout: the
+    /// pipe stays open, reads the late answer to the end, and the next listing
+    /// gets its own answer. Transfers keep their owner.
+    #[test]
+    fn a_slow_listing_times_out_without_ending_the_files_service() {
+        let (host, controller, host_scratch, _controller_scratch) = transfer_pair("slowlist");
+        std::fs::write(host_scratch.join("root/a.txt"), b"a").unwrap();
+        let files = FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+        let (owner, pipe) = owned_files(&controller, &host);
+        let key = std::str::FromStr::from_str(&controller.endpoint_id())
+            .map(|key: iroh::PublicKey| *key.as_bytes())
+            .unwrap();
+        // Slower than the caller waits, quicker than a stuck host.
+        *crate::core::LIST_DELAY.lock().unwrap() = Some((key, 1_800));
+        assert!(matches!(
+            pipe.list(files.root, &files.path(""), 0, 100),
+            Err(Error::Timeout)
+        ));
+        *crate::core::LIST_DELAY.lock().unwrap() = None;
+        let page = pipe.list(files.root, &files.path(""), 0, 100).unwrap();
+        assert!(page.entries.iter().any(|entry| entry.name == "a.txt"));
+        assert!(!pipe.is_cancelled());
+        let service = controller.controller_service(owner.id).unwrap();
+        assert_eq!(service.phase, crate::ServicePhase::Active);
+        host.shutdown();
+        controller.shutdown();
+    }
+}

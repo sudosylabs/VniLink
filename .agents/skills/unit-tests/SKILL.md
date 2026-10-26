@@ -25,7 +25,7 @@ Run the smallest checks that actually cover the change, plus format/lint/type ch
 
 Assert complete behavior or non-obvious invariants. Prefer observable success, failure/recovery, isolation and teardown, and the story a service records, over snapshots of internal structure. Test changed limits/authorization and stale/disposed work where relevant. Avoid tests added solely to raise counts; reversible low-impact edits may be covered by existing checks.
 
-Rust tests follow the owning area's organization, including inline tests and registered `src/tests` modules. Node validators test exact fields, bounds and rejected extras. Browser scenarios are independent and selectable through maintained infrastructure (`build-test-infrastructure`), not selected by editing a runner or invoking unrelated areas under a tabs test.
+In `vnilink`, a test that starts an engine belongs in `vnilink-testkit` (see below); one that needs an engine internal the kit cannot reach, and every engine-free test, sits beside its module in `#[cfg(test)] mod tests` or a sibling test file. Other crates keep their own organization, including registered `src/tests` modules. Node validators test exact fields, bounds and rejected extras. Browser scenarios are independent and selectable through maintained infrastructure (`build-test-infrastructure`), not selected by editing a runner or invoking unrelated areas under a tabs test.
 
 ## Writing a Rust test
 

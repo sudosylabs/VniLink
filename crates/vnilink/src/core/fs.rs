@@ -1093,10 +1093,7 @@ mod listing_tests {
         )
         .expect("loopback core");
         host.enable_filesystem_access().unwrap();
-        let files = crate::tests::filesystem_location::FilesystemLocation::new(
-            host.file_roots().unwrap(),
-            &root,
-        );
+        let files = crate::test_support::FilesystemLocation::new(host.file_roots().unwrap(), &root);
         forge_transfer_session(&host, 41, 7);
 
         let parked_rt = tokio::runtime::Builder::new_current_thread()

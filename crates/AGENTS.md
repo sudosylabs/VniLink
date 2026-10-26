@@ -22,7 +22,7 @@ A layer earns its place through ownership, conversion, lifecycle or composition.
 ## File placement and invariants
 
 - Shared domain logic belongs in topical core modules; native OS implementation belongs in its platform crate. `core/` owns orchestration of shared state and service lifecycles.
-- Split modules at responsibility boundaries, not arbitrary line counts. Preserve the owning module's coherent test organization, including registered `src/tests` modules or inline tests.
+- Split modules at responsibility boundaries, not arbitrary line counts. Preserve the owning module's coherent test organization: tests beside their module, `vnilink-testkit` suites for engine behaviour, or a platform crate's registered `src/tests` modules.
 - New unsafe sites require a local explanation of the safety invariant. Preserve existing unsafe confinement; safe public wrappers own native resource teardown.
 - Vendor patches stay under `vendor/`. Read their `VNILINK.md` where present and preserve source/license/provenance requirements; consult manifests and native build inputs before changing toolchains.
 - Cross-language values follow `ffi-boundary`; background work follows `async-cancellation`; errors/docs follow `error-doc-voice`.

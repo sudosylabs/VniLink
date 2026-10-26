@@ -187,11 +187,11 @@ mod review_v11 {
     }
     #[test]
     fn legacy_two_peer_cursor_publish_preserves_each_consumers_latest_sample() {
-        let host = crate::tests::support::start_direct();
+        let host = crate::test_support::loopback_core();
         host.set_capture(Box::new(Capture)).unwrap();
         host.start_hosting().unwrap();
-        let first = crate::tests::support::start_direct();
-        let second = crate::tests::support::start_direct();
+        let first = crate::test_support::loopback_core();
+        let second = crate::test_support::loopback_core();
         for viewer in [&first, &second] {
             viewer.set_cursor_receiver(true).unwrap();
             viewer

@@ -336,7 +336,7 @@ mod metadata_tests {
     fn failed_first_hostname_save_preserves_signed_os_metadata() {
         let store = crate::installation::MemoryStore::empty();
         let host = Core::open_direct(Arc::new(store.clone()), RelaySettings::public_n0()).unwrap();
-        let peer = crate::tests::support::start_direct();
+        let peer = crate::test_support::loopback_core();
         host.accept_invitation(&peer.create_invitation(Duration::from_secs(60)).unwrap())
             .unwrap();
         let key = parse_endpoint_id(&peer.endpoint_id()).unwrap();
@@ -356,5 +356,182 @@ mod metadata_tests {
         let device = &host.snapshot().unwrap().devices[0];
         assert_eq!(device.hostname, None);
         assert_eq!(device.os, Some(crate::OperatingSystem::Windows));
+    }
+}
+
+#[cfg(test)]
+mod address_refresh_tests {
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use std::time::{Duration, SystemTime};
+
+    use iroh::SecretKey;
+
+    use crate::core::Core;
+    use crate::error::Error;
+    use crate::installation::MemoryStore;
+    use crate::invitation;
+    use crate::relay::RelaySettings;
+    use crate::session::{Grants, SessionPhase};
+    use crate::test_support::loopback_core;
+
+    fn open_stored(store: &MemoryStore) -> Core {
+        let core = Core::open_direct(Arc::new(store.clone()), RelaySettings::public_n0())
+            .expect("store opens");
+        core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+            .expect("flags");
+        core
+    }
+
+    fn stale() -> SocketAddr {
+        "203.0.113.9:9".parse().unwrap()
+    }
+
+    fn invitation_with(core: &Core, extra: Option<SocketAddr>) -> (String, Vec<SocketAddr>) {
+        let token = core.create_invitation(Duration::from_secs(60)).unwrap();
+        let (opened, _) = invitation::open(&token, SystemTime::now()).unwrap();
+        let real = opened.direct.clone();
+        let mut direct = real.clone();
+        if let Some(extra) = extra {
+            direct.push(extra);
+        }
+        let secret = SecretKey::from_bytes(&core.export_identity());
+        let (token, _) = invitation::issue(
+            &secret,
+            &opened.relays,
+            &direct,
+            Duration::from_secs(60),
+            SystemTime::now(),
+            opened.hostname,
+        )
+        .unwrap();
+        (token, real)
+    }
+
+    fn pair(host: &Core, controller: &Core, extra: Option<SocketAddr>) -> Vec<SocketAddr> {
+        host.start_hosting().unwrap();
+        let (host_token, host_direct) = invitation_with(host, extra);
+        controller.accept_invitation(&host_token).unwrap();
+        let (controller_token, _) = invitation_with(controller, extra);
+        host.accept_invitation(&controller_token).unwrap();
+        host.set_desktop_sharing(Grants {
+            view: true,
+            control: true,
+            clipboard: false,
+            transfer: false,
+        })
+        .unwrap();
+        host_direct
+    }
+
+    fn device(core: &Core, endpoint_id: &str) -> crate::DeviceInfo {
+        core.snapshot()
+            .unwrap()
+            .devices
+            .into_iter()
+            .find(|device| device.endpoint_id == endpoint_id)
+            .expect("paired device")
+    }
+
+    fn wait_until(mut ready: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if ready() {
+                return;
+            }
+            if std::time::Instant::now() > deadline {
+                panic!("condition was not met");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn a_session_replaces_stale_addresses_and_keeps_the_grant() {
+        let host = loopback_core();
+        let controller = loopback_core();
+        let host_direct = pair(&host, &controller, Some(stale()));
+        assert!(device(&controller, &host.endpoint_id())
+            .direct
+            .contains(&stale()));
+        controller.connect(&host.endpoint_id()).unwrap();
+        wait_until(|| {
+            let saved = device(&controller, &host.endpoint_id());
+            !saved.direct.contains(&stale()) && saved.direct == host_direct
+        });
+        wait_until(|| {
+            !device(&host, &controller.endpoint_id())
+                .direct
+                .contains(&stale())
+        });
+        // The controller never granted the host. The host's control bit must
+        // survive the address replacement, and the announcement must not add one.
+        let saved = device(&controller, &host.endpoint_id());
+        assert_eq!(saved.grants, Grants::default());
+        assert!(saved.relays.is_empty());
+        let granted = device(&host, &controller.endpoint_id());
+        assert!(granted.grants.control);
+        assert!(!granted.grants.clipboard);
+        assert!(!granted.grants.transfer);
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_previous_addresses() {
+        let host_store = MemoryStore::empty();
+        let controller_store = MemoryStore::empty();
+        let host = open_stored(&host_store);
+        let controller = open_stored(&controller_store);
+        pair(&host, &controller, Some(stale()));
+        controller_store.fail_next_save(Error::StoreLocked);
+        controller.connect(&host.endpoint_id()).unwrap();
+        wait_until(|| {
+            !device(&host, &controller.endpoint_id())
+                .direct
+                .contains(&stale())
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(device(&controller, &host.endpoint_id())
+            .direct
+            .contains(&stale()));
+        assert_eq!(
+            controller.snapshot().unwrap().outgoing.unwrap().phase,
+            SessionPhase::Active
+        );
+    }
+
+    #[test]
+    fn refreshed_addresses_survive_a_restart() {
+        let host_store = MemoryStore::empty();
+        let controller_store = MemoryStore::empty();
+        let host = open_stored(&host_store);
+        let controller = open_stored(&controller_store);
+        let host_direct = pair(&host, &controller, Some(stale()));
+        controller.connect(&host.endpoint_id()).unwrap();
+        wait_until(|| {
+            let saved = device(&controller, &host.endpoint_id());
+            !saved.direct.contains(&stale()) && saved.direct == host_direct
+        });
+        wait_until(|| {
+            !device(&host, &controller.endpoint_id())
+                .direct
+                .contains(&stale())
+        });
+        let saved = device(&controller, &host.endpoint_id());
+        let granted = device(&host, &controller.endpoint_id());
+        assert!(granted.grants.control);
+        drop(controller);
+        drop(host);
+        let controller = open_stored(&controller_store);
+        let restored = device(&controller, &saved.endpoint_id);
+        assert_eq!(restored.direct, saved.direct);
+        assert_eq!(restored.relays, saved.relays);
+        assert_eq!(restored.grants, Grants::default());
+        let host = open_stored(&host_store);
+        let restored_grant = device(&host, &granted.endpoint_id);
+        assert_eq!(restored_grant.direct, granted.direct);
+        assert_eq!(restored_grant.relays, granted.relays);
+        assert!(restored_grant.grants.control);
+        assert!(!restored_grant.grants.clipboard);
+        assert!(!restored_grant.grants.transfer);
     }
 }

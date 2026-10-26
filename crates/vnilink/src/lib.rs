@@ -194,9 +194,6 @@ pub use video_caps::{
 
 #[cfg(test)]
 pub(crate) mod test_support;
-#[cfg(test)]
-#[path = "tests.rs"]
-mod tests;
 
 mod cursor;
 pub use cursor::{CursorImage, CursorState, MAX_CURSOR_EDGE};

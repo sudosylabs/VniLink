@@ -5560,3 +5560,11 @@ mod served_job_tests {
         assert!(serving_job(&jobs, &[8; 32], 5).is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "jobs_resume_tests.rs"]
+mod resume_tests;
+
+#[cfg(test)]
+#[path = "jobs_impaired_tests.rs"]
+mod impaired_transfer_tests;

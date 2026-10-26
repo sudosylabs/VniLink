@@ -202,7 +202,7 @@ mod tests {
     /// poll that holds jobs and then takes state cannot deadlock with it.
     #[test]
     fn a_snapshot_waits_for_jobs_without_holding_state() {
-        let core = crate::tests::support::start_direct();
+        let core = crate::test_support::loopback_core();
         let jobs = lock(&core.shared.jobs);
         std::thread::scope(|scope| {
             let snapshot = scope.spawn(|| core.diagnostic_snapshot().map(|_| ()));

@@ -1624,8 +1624,8 @@ mod review_authority_tests {
     }
     #[test]
     fn review_queued_restart_rechecks_disabled_policy() {
-        let host = crate::tests::support::start_direct();
-        let controller = crate::tests::support::start_direct();
+        let host = crate::test_support::loopback_core();
+        let controller = crate::test_support::loopback_core();
         let (admission, _system) = admitted_system_owner(&host, &controller);
         let actions = Arc::new(Actions(std::sync::atomic::AtomicUsize::new(0)));
         host.set_system_actions(Some(actions.clone())).unwrap();
@@ -1665,7 +1665,7 @@ mod review_authority_tests {
 /// admission the serve loop would hand the worker. Test-only.
 #[cfg(test)]
 fn admitted_system_owner(host: &Core, controller: &Core) -> (Admission, RemoteSystemService) {
-    use crate::tests::support::pair_for_control;
+    use crate::test_support::pair_for_control;
     pair_for_control(host, controller);
     host.set_service_sharing(crate::ServiceKind::System, true)
         .unwrap();
@@ -1698,7 +1698,7 @@ fn admitted_system_owner(host: &Core, controller: &Core) -> (Admission, RemoteSy
 #[cfg(test)]
 mod worker_start_gate_tests {
     use super::*;
-    use crate::tests::support::{pair_for_control, start_direct};
+    use crate::test_support::{loopback_core, pair_for_control};
 
     struct Actions(std::sync::atomic::AtomicUsize);
     impl crate::HostSystemActions for Actions {
@@ -1762,8 +1762,8 @@ mod worker_start_gate_tests {
 
     #[test]
     fn rereview_queued_restart_must_stand_down_when_system_owner_closes() {
-        let host = start_direct();
-        let controller = start_direct();
+        let host = loopback_core();
+        let controller = loopback_core();
         pair_for_control(&host, &controller);
         let actions = Arc::new(Actions(std::sync::atomic::AtomicUsize::new(0)));
         host.set_system_actions(Some(actions.clone())).unwrap();
@@ -1822,8 +1822,8 @@ mod worker_start_gate_tests {
         // Adapted from the v3 probe: the admission now carries the exact
         // System owner, so the fixture opens a real owner (otherwise the
         // owner check, not the parent check, would fire).
-        let host = start_direct();
-        let controller = start_direct();
+        let host = loopback_core();
+        let controller = loopback_core();
         let (admission, _system) = admitted_system_owner(&host, &controller);
         let actions = Arc::new(Actions(std::sync::atomic::AtomicUsize::new(0)));
         host.set_system_actions(Some(actions.clone())).unwrap();
@@ -1858,8 +1858,8 @@ mod worker_start_gate_tests {
 
     #[test]
     fn queued_restart_stands_down_as_refused_on_policy_backend_and_grant_changes() {
-        let host = start_direct();
-        let controller = start_direct();
+        let host = loopback_core();
+        let controller = loopback_core();
         let (admission, _system) = admitted_system_owner(&host, &controller);
         let actions = Arc::new(Actions(std::sync::atomic::AtomicUsize::new(0)));
         host.set_system_actions(Some(actions.clone())).unwrap();
@@ -1942,8 +1942,8 @@ mod v7_privacy_admission_probe {
     }
     #[test]
     fn v7_stale_privacy_admission_after_revoke_must_not_apply() {
-        let host = crate::tests::support::start_direct();
-        let controller = crate::tests::support::start_direct();
+        let host = crate::test_support::loopback_core();
+        let controller = crate::test_support::loopback_core();
         let actions = Arc::new(Fake(AtomicBool::new(false), AtomicBool::new(false)));
         host.set_system_actions(Some(actions.clone())).unwrap();
         host.set_system_policy(crate::SystemPolicy {
@@ -2024,8 +2024,8 @@ mod v7_privacy_admission_probe {
                 HostSessionState::unknown("delayed")
             }
         }
-        let host = crate::tests::support::start_direct();
-        let controller = crate::tests::support::start_direct();
+        let host = crate::test_support::loopback_core();
+        let controller = crate::test_support::loopback_core();
         let (entered, ready) = std::sync::mpsc::sync_channel(1);
         let (proceed, wait) = std::sync::mpsc::channel();
         let actions = Arc::new(Delayed {
@@ -2103,8 +2103,8 @@ mod v7_privacy_admission_probe {
                 HostSessionState::unknown("delayed")
             }
         }
-        let host = crate::tests::support::start_direct();
-        let controller = crate::tests::support::start_direct();
+        let host = crate::test_support::loopback_core();
+        let controller = crate::test_support::loopback_core();
         let (entered, mut ready) = tokio::sync::mpsc::unbounded_channel();
         let (proceed, wait) = std::sync::mpsc::channel();
         let actions = Arc::new(Delayed {

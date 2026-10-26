@@ -89,3 +89,114 @@ impl FilesystemLocation {
         }
     }
 }
+
+/// Pairs both ways and grants `controller` view and control of `host`.
+pub(crate) fn pair_for_control(host: &crate::core::Core, controller: &crate::core::Core) {
+    // Negotiation needs an encoder on the host and a decoder on the
+    // controller. Tests that cover the unsupported paths set their own flags.
+    host.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .unwrap();
+    controller
+        .set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+        .unwrap();
+    pair_granting(
+        host,
+        controller,
+        crate::session::Grants {
+            view: true,
+            control: true,
+            clipboard: false,
+            transfer: false,
+        },
+    );
+}
+
+/// Pairs both ways and grants `controller` view, control and transfer on
+/// `host`: the session that carries job control is admitted on a desktop
+/// grant.
+pub(crate) fn pair_for_transfer(host: &crate::core::Core, controller: &crate::core::Core) {
+    pair_granting(
+        host,
+        controller,
+        crate::session::Grants {
+            view: true,
+            control: true,
+            clipboard: false,
+            transfer: true,
+        },
+    );
+}
+
+fn pair_granting(
+    host: &crate::core::Core,
+    controller: &crate::core::Core,
+    grants: crate::session::Grants,
+) {
+    host.start_hosting().unwrap();
+    let token = host
+        .create_invitation(std::time::Duration::from_secs(60))
+        .unwrap();
+    controller.accept_invitation(&token).unwrap();
+    let back = controller
+        .create_invitation(std::time::Duration::from_secs(60))
+        .unwrap();
+    host.accept_invitation(&back).unwrap();
+    host.set_desktop_sharing(grants).unwrap();
+}
+
+/// Two loopback engines paired for transfer both ways, with whole-filesystem
+/// access and their own scratch trees: `root` is the filesystem fixture,
+/// `blobs` the transfer directory.
+pub(crate) fn transfer_pair(tag: &str) -> (crate::core::Core, crate::core::Core, Scratch, Scratch) {
+    let host = transfer_core();
+    let controller = transfer_core();
+    let host_scratch = Scratch::tagged(&format!("{tag}-host"));
+    let controller_scratch = Scratch::tagged(&format!("{tag}-controller"));
+    for (core, scratch) in [(&host, &host_scratch), (&controller, &controller_scratch)] {
+        std::fs::create_dir_all(scratch.join("root")).unwrap();
+        core.set_transfer_directory(scratch.join("blobs")).unwrap();
+        core.enable_filesystem_access().unwrap();
+    }
+    pair_for_transfer(&host, &controller);
+    controller
+        .set_desktop_sharing(crate::session::Grants {
+            view: false,
+            control: false,
+            clipboard: false,
+            transfer: true,
+        })
+        .unwrap();
+    (host, controller, host_scratch, controller_scratch)
+}
+
+fn transfer_core() -> crate::core::Core {
+    let core = loopback_core();
+    // These correctness fixtures may live on a small /dev/shm volume. Resource
+    // admission has separate exact-boundary tests; don't require production
+    // free-space headroom for these small temporary fixtures.
+    core.set_file_resource_policy(crate::job::FileResourcePolicy {
+        minimum_free_bytes: 0,
+        ..Default::default()
+    })
+    .unwrap();
+    core
+}
+
+/// A host desktop that records what it is asked to apply.
+pub(crate) struct RecordingDesktop {
+    pub(crate) events: std::sync::Arc<std::sync::Mutex<Vec<crate::input::InputEvent>>>,
+}
+
+impl crate::input::HostDesktop for RecordingDesktop {
+    fn apply(&mut self, event: crate::input::InputEvent) -> Result<(), crate::error::Error> {
+        self.events
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .push(event);
+        Ok(())
+    }
+
+    fn monitor(&self) -> (u16, u16) {
+        (1920, 1080)
+    }
+}

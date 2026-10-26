@@ -1071,9 +1071,9 @@ mod review_v9_legacy_input {
     }
     fn run(mode: u8) {
         let text = mode == 1 || mode == 2;
-        let host = crate::tests::support::start_direct();
-        let peer = crate::tests::support::start_direct();
-        let sibling = crate::tests::support::start_direct();
+        let host = crate::test_support::loopback_core();
+        let peer = crate::test_support::loopback_core();
+        let sibling = crate::test_support::loopback_core();
         let (entered, ready) = std::sync::mpsc::sync_channel(1);
         let (proceed, wait) = std::sync::mpsc::channel();
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -1086,7 +1086,7 @@ mod review_v9_legacy_input {
             completed: completed.clone(),
         }))
         .unwrap();
-        crate::tests::support::pair_for_control(&host, &peer);
+        crate::test_support::pair_for_control(&host, &peer);
         let parent = peer.connect(&host.endpoint_id()).unwrap();
         if mode == 2 {
             peer.live_outbox(parent.id, parent.generation)
@@ -1123,7 +1123,7 @@ mod review_v9_legacy_input {
             host.capability_availability(None, crate::Capability::DesktopControl)
                 .unwrap();
             host.capture_displays().unwrap();
-            crate::tests::support::pair_for_control(&host, &sibling);
+            crate::test_support::pair_for_control(&host, &sibling);
             let sibling_parent = sibling.begin_connect_services(&host.endpoint_id()).unwrap();
             let until = Instant::now() + Duration::from_secs(3);
             while sibling.controller_session(sibling_parent.id).unwrap().phase
@@ -1232,10 +1232,10 @@ mod v11_legacy_cancel_probe {
     }
     #[test]
     fn v11_parent_stop_must_settle_while_native_ack_is_parked() {
-        use crate::tests::support::{pair_for_control, start_direct};
+        use crate::test_support::{loopback_core, pair_for_control};
         use std::time::{Duration, Instant};
-        let host = start_direct();
-        let peer = start_direct();
+        let host = loopback_core();
+        let peer = loopback_core();
         let (entered, ready) = std::sync::mpsc::sync_channel(1);
         let (proceed, wait) = std::sync::mpsc::channel();
         let applied = Arc::new(Mutex::new(Vec::new()));
@@ -1291,7 +1291,7 @@ mod v11_legacy_cancel_probe {
         }
         let mut replacements = Vec::new();
         for _ in 0..3 {
-            let replacement = start_direct();
+            let replacement = loopback_core();
             pair_for_control(&host, &replacement);
             replacement.connect(&host.endpoint_id()).unwrap();
             replacements.push(replacement);
@@ -1302,7 +1302,7 @@ mod v11_legacy_cancel_probe {
                 .load(Ordering::Acquire),
             4
         );
-        let rejected = start_direct();
+        let rejected = loopback_core();
         pair_for_control(&host, &rejected);
         assert!(rejected.connect(&host.endpoint_id()).is_err());
         proceed.send(()).unwrap();
@@ -1387,7 +1387,7 @@ mod v12_replacement_drop_probe {
     }
     #[test]
     fn v12_adapter_replacement_must_drop_old_backend_outside_core_state() {
-        let core = Arc::new(crate::tests::support::start_direct());
+        let core = Arc::new(crate::test_support::loopback_core());
         let (entered, ready) = std::sync::mpsc::sync_channel(1);
         let (proceed, wait) = std::sync::mpsc::channel();
         core.set_desktop(Box::new(Old {
@@ -1420,7 +1420,7 @@ mod v12_replacement_drop_probe {
     }
     #[test]
     fn v12_rejected_adapter_teardown_keeps_core_responsive() {
-        let core = Arc::new(crate::tests::support::start_direct());
+        let core = Arc::new(crate::test_support::loopback_core());
         core.set_desktop(Box::new(New)).unwrap();
         core.shared.input_cleanup.store(1, Ordering::Release);
         let (entered, ready) = std::sync::mpsc::sync_channel(1);

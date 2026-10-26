@@ -87,7 +87,7 @@ This is a local relay on the same Linux host as both engines, over netem. It say
 
 ## Scenarios
 
-**Transfer** (`crates/vnilink/src/tests/impaired_transfer.rs`) uploads three cases from the viewer's core to the host's core through the job engine:
+**Transfer** (`crates/vnilink/src/core/jobs_impaired_tests.rs`) uploads three cases from the viewer's core to the host's core through the job engine:
 
 - 1,000 files of 4 KiB;
 - one large file;
@@ -130,4 +130,4 @@ Every scenario runs as an ignored test through the harness. A small version of e
 
 ## Baseline tests
 
-`crates/vnilink/src/tests/keyframe_recovery.rs` pins the current keyframe-request behaviour of the reassembler and video queue under seeded fragment loss. It needs no network. Comments marked "Planned" show what the keyframe-discipline change is expected to tighten.
+`crates/vnilink/src/video/tests.rs` pins the current keyframe-request behaviour of the reassembler and video queue under seeded fragment loss. It needs no network. Comments marked "Planned" show what the keyframe-discipline change is expected to tighten.
