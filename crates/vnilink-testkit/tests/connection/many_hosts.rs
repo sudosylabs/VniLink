@@ -1,13 +1,13 @@
-//! One controller, several hosts at once: each session has its own handle
-//! and channels even when both hosts number theirs alike, one failing,
-//! cancelled, reconnecting or closing leaves the others, and the controller
-//! holds at most four.
+//! One controller, several hosts at once: each connection has its own
+//! handle and its Desktop its own channels even when both hosts number
+//! theirs alike, one failing, cancelled, reconnecting or closing leaves the
+//! others, and the controller holds at most four files-only sessions.
 
 use expect_test::expect;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use vnilink::{CoreEvent, Error, Grants, JobState, Quality, SessionPhase, SessionRole};
+use vnilink::{CoreEvent, Error, Grants, JobState, ServiceKind, SessionPhase, SessionRole};
 use vnilink_testkit::desktop::{
     keyframe, next_picture, InputLog, MonitorCapture, RecordingClipboard,
 };
@@ -18,10 +18,12 @@ use super::support::{cursor_at, INVITATION};
 /// The monitor of the desktops these scenarios install.
 const MONITOR: (u16, u16) = (1920, 1080);
 
-/// Two hosts number their sessions alike, yet the controller keeps two
-/// handles with their own video, cursor, quality and clipboard (each
-/// desktop's own keyboard settings are `desktop/control.rs`'s). Closing one leaves the other as it was, a live session cannot
-/// be forgotten, and the controller shutting down ends the other.
+/// Two hosts number their connections and Desktops alike, yet the
+/// controller keeps two handles whose Desktops have their own video,
+/// cursor and clipboard (each desktop's own keyboard settings are
+/// `desktop/control.rs`'s). Closing one leaves the other as it was, a live
+/// connection cannot be forgotten, and the controller shutting down ends
+/// the other.
 #[test]
 fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() -> TestResult {
     let _trace = traced();
@@ -55,11 +57,11 @@ fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() -> 
             .clone()
     };
     let events = controller.core.subscribe()?;
-    let pending_a = controller.core.begin_connect(&a.endpoint())?;
-    let pending_b = controller.core.begin_connect(&b.endpoint())?;
+    let pending_a = controller.core.begin_connect_services(&a.endpoint())?;
+    let pending_b = controller.core.begin_connect_services(&b.endpoint())?;
     assert_ne!(pending_a.id, pending_b.id, "each host has its own handle");
     let sa = controller.active(pending_a.id);
-    let mut sb = controller.active(pending_b.id);
+    let sb = controller.active(pending_b.id);
     let ha = a.core.snapshot()?.incoming.ok_or("host a's session")?;
     let hb = b.core.snapshot()?.incoming.ok_or("host b's session")?;
     assert_eq!(
@@ -70,120 +72,89 @@ fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() -> 
     assert_eq!(
         controller.core.controller_sessions()?.len(),
         2,
-        "the controller holds a session to each host"
+        "the controller holds a connection to each host"
     );
     assert!(
         controller.core.snapshot()?.outgoing.is_none(),
-        "two sessions are no single outgoing session"
+        "two connections are no single outgoing session"
     );
     assert!(
         matches!(controller.core.disconnect(), Err(Error::Busy)),
-        "a disconnect that does not name a session is ambiguous"
+        "a disconnect that does not name a connection is ambiguous"
     );
-    assert!(
-        matches!(
-            controller.core.begin_connect(&a.endpoint()),
-            Err(Error::Busy)
-        ),
-        "a second session to the same host is busy"
+    assert_eq!(
+        controller.core.begin_connect_services(&a.endpoint())?.id,
+        sa.id,
+        "connecting to the same host again reuses its connection"
     );
 
-    let va = controller
-        .core
-        .subscribe_session_video(sa.id, sa.generation)?;
-    let vb = controller
-        .core
-        .subscribe_session_video(sb.id, sb.generation)?;
-    assert!(
-        matches!(
-            controller
-                .core
-                .subscribe_session_video(sa.id, sa.generation),
-            Err(Error::Busy)
-        ),
-        "a session's video has one subscriber"
+    let da = controller.open_desktop(&sa)?;
+    let db = controller.open_desktop(&sb)?;
+    let ra = a.serving(ServiceKind::Desktop, &controller);
+    let rb = b.serving(ServiceKind::Desktop, &controller);
+    assert_eq!(
+        (ra.id, ra.generation),
+        (rb.id, rb.generation),
+        "both hosts number their Desktops alike"
     );
-    a.core.publish_video(ha.id, keyframe(11, vec![1, 1]))?;
-    b.core.publish_video(hb.id, keyframe(22, vec![2, 2]))?;
+    let va = da.subscribe_video()?;
+    let vb = db.subscribe_video()?;
+    assert!(
+        matches!(da.subscribe_video(), Err(Error::Busy)),
+        "a Desktop's video has one subscriber"
+    );
+    a.core
+        .publish_desktop_video(ra.id, ra.generation, keyframe(11, vec![1, 1]))?;
+    b.core
+        .publish_desktop_video(rb.id, rb.generation, keyframe(22, vec![2, 2]))?;
     assert_eq!(
         next_picture(&va, "host a's picture").payload,
         [1, 1],
-        "host a's video reaches its own session"
+        "host a's video reaches its own Desktop"
     );
     assert_eq!(
         next_picture(&vb, "host b's picture").payload,
         [2, 2],
-        "host b's video reaches its own session"
+        "host b's video reaches its own Desktop"
     );
 
     a.core
-        .publish_cursor(ha.id, ha.generation, cursor_at((11, 12)))?;
+        .publish_desktop_cursor(ra.id, ra.generation, cursor_at((11, 12)))?;
     b.core
-        .publish_cursor(hb.id, hb.generation, cursor_at((21, 22)))?;
-    let cursor = |session: &vnilink::SessionInfo| {
-        controller
-            .core
-            .cursor(session.id, session.generation)
-            .ok()
-            .flatten()
-    };
+        .publish_desktop_cursor(rb.id, rb.generation, cursor_at((21, 22)))?;
+    let cursor = |desktop: &vnilink::RemoteDesktopService| desktop.cursor().ok().flatten();
     wait_for("both cursors to arrive", DEFAULT_WAIT, || {
-        (cursor(&sa).is_some() && cursor(&sb).is_some()).then_some(())
+        (cursor(&da).is_some() && cursor(&db).is_some()).then_some(())
     });
     assert_eq!(
         (
-            cursor(&sa).ok_or("a cursor")?.position,
-            cursor(&sb).ok_or("a cursor")?.position
+            cursor(&da).ok_or("a cursor")?.position,
+            cursor(&db).ok_or("a cursor")?.position
         ),
         ((11, 12), (21, 22)),
-        "each host's cursor reaches its own session"
+        "each host's cursor reaches its own Desktop"
     );
 
-    let quality = Quality::new(1500, 30, 1280, 720)?;
-    controller
-        .core
-        .update_session_quality(sb.id, SessionRole::Controller, quality)?;
-    wait_for("host b to apply the quality", DEFAULT_WAIT, || {
-        (b.core.snapshot().ok()?.incoming?.quality == Some(quality)).then_some(())
-    });
-    assert_eq!(
-        controller.core.controller_session(sa.id)?.quality,
-        sa.quality,
-        "one session's quality leaves the other's"
-    );
-    sb = controller.core.controller_session(sb.id)?;
-
-    controller
-        .core
-        .submit_clipboard(sa.id, sa.generation, "to-a")?;
-    controller
-        .core
-        .submit_clipboard(sb.id, sb.generation, "to-b")?;
+    da.submit_clipboard("to-a")?;
+    db.submit_clipboard("to-b")?;
     assert_eq!(
         (clipped(0), clipped(1)),
         (vec!["to-a".to_owned()], vec!["to-b".to_owned()]),
-        "each session's clipboard reaches its own host"
+        "each Desktop's clipboard reaches its own host"
     );
-    a.core.publish_clipboard(ha.id, "from-a")?;
-    b.core.publish_clipboard(hb.id, "from-b")?;
-    let clipboard = |session: &vnilink::SessionInfo| {
-        controller
-            .core
-            .session_clipboard_text(session.id, session.generation)
-            .ok()
-            .flatten()
-    };
+    a.core
+        .publish_desktop_clipboard(ra.id, ra.generation, "from-a")?;
+    b.core
+        .publish_desktop_clipboard(rb.id, rb.generation, "from-b")?;
+    let clipboard =
+        |desktop: &vnilink::RemoteDesktopService| desktop.clipboard_text().ok().flatten();
     wait_for("both hosts' clipboards to arrive", DEFAULT_WAIT, || {
-        (clipboard(&sa).is_some() && clipboard(&sb).is_some()).then_some(())
+        (clipboard(&da).is_some() && clipboard(&db).is_some()).then_some(())
     });
     assert_eq!(
-        (clipboard(&sa), clipboard(&sb)),
+        (clipboard(&da), clipboard(&db)),
         (Some("from-a".to_owned()), Some("from-b".to_owned())),
-        "each host's clipboard reaches its own session"
-    );
-    assert!(
-        matches!(controller.core.clipboard_text(), Err(Error::Busy)),
-        "a clipboard that does not name a session is ambiguous"
+        "each host's clipboard reaches its own Desktop"
     );
     for session in [&sa, &sb] {
         assert!(
@@ -191,7 +162,7 @@ fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() -> 
                 .core
                 .controller_session_paths(session.id)?
                 .is_empty(),
-            "each session reports its own paths"
+            "each connection reports its own paths"
         );
     }
 
@@ -200,18 +171,19 @@ fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() -> 
     assert_eq!(
         controller.core.controller_session(sb.id)?,
         sb,
-        "closing one session leaves the other as it was"
+        "closing one connection leaves the other as it was"
     );
     assert_eq!(
-        clipboard(&sb).as_deref(),
+        clipboard(&db).as_deref(),
         Some("from-b"),
-        "closing one session leaves the other's clipboard"
+        "closing one connection leaves the other's clipboard"
     );
-    b.core.publish_video(hb.id, keyframe(33, vec![3]))?;
+    b.core
+        .publish_desktop_video(rb.id, rb.generation, keyframe(33, vec![3]))?;
     assert_eq!(
         next_picture(&vb, "host b's next picture").payload,
         [3],
-        "closing one session leaves the other's video"
+        "closing one connection leaves the other's video"
     );
     controller.core.forget_controller_session(sa.id)?;
     assert!(
@@ -219,14 +191,14 @@ fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() -> 
             controller.core.controller_session(sa.id),
             Err(Error::NoSession)
         ),
-        "a forgotten session is gone"
+        "a forgotten connection is gone"
     );
     assert!(
         matches!(
             controller.core.forget_controller_session(sb.id),
             Err(Error::Busy)
         ),
-        "a live session cannot be forgotten"
+        "a live connection cannot be forgotten"
     );
     let published: Vec<_> = std::iter::from_fn(|| events.try_recv()).collect();
     let closed = |wanted: u64| {
@@ -242,9 +214,13 @@ fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() -> 
             )
         })
     };
-    assert!(closed(sa.id), "the closed session is published closed");
-    assert!(!closed(sb.id), "the live session is not published closed");
+    assert!(closed(sa.id), "the closed connection is published closed");
+    assert!(
+        !closed(sb.id),
+        "the live connection is not published closed"
+    );
 
+    drop((va, vb, da, db));
     controller.core.shutdown();
     wait_for("host b's session to close", DEFAULT_WAIT, || {
         (b.core.snapshot().ok()?.incoming?.phase == SessionPhase::Closed).then_some(())
@@ -263,9 +239,9 @@ fn a_failed_connection_has_its_own_handle_and_can_be_forgotten() -> TestResult {
     let b = Engine::start("host-b");
     a.pair_for_control(&controller)?;
     b.pair_for_control(&controller)?;
-    let sa = controller.connect_control(&a)?;
+    let sa = controller.connect_services(&a)?;
     b.core.stop_hosting()?;
-    let pending = controller.core.begin_connect(&b.endpoint())?;
+    let pending = controller.core.begin_connect_services(&b.endpoint())?;
     wait_for("the connection to host b to fail", DEFAULT_WAIT, || {
         matches!(
             controller.core.controller_session(pending.id).ok()?.phase,
@@ -280,7 +256,7 @@ fn a_failed_connection_has_its_own_handle_and_can_be_forgotten() -> TestResult {
     );
     controller.core.forget_controller_session(pending.id)?;
     b.core.start_hosting()?;
-    let retry = controller.core.begin_connect(&b.endpoint())?;
+    let retry = controller.core.begin_connect_services(&b.endpoint())?;
     assert_ne!(retry.id, pending.id, "a retry gets a new handle");
     controller.active(retry.id);
     assert_eq!(
@@ -299,22 +275,24 @@ fn a_failed_connection_has_its_own_handle_and_can_be_forgotten() -> TestResult {
     Ok(())
 }
 
-/// Cancelling a connection while its host asks its owner, and one session
-/// reconnecting, leave the other session as it was; the reconnected
-/// session keeps its handle under a new generation whose video reaches
-/// only its new subscriber.
+/// Cancelling a connection while its host asks its owner, and one
+/// connection reconnecting, leave the other connection as it was; the
+/// reconnected connection keeps its handle under a new generation, the old
+/// Desktop handle is fenced, and the host's video reaches only the Desktop
+/// opened under the new generation.
 #[test]
 fn cancellation_during_approval_and_reconnect_do_not_stop_the_other_session() -> TestResult {
     let _trace = traced();
     let controller = Engine::start("controller");
     let a = Engine::start("host-a");
     let b = Engine::start("host-b");
+    InputLog::install(&a, MONITOR)?;
     a.pair_for_control(&controller)?;
     b.pair_for_control(&controller)?;
-    let sa = controller.connect_control(&a)?;
+    let sa = controller.connect_services(&a)?;
     b.core.unpair(&controller.endpoint())?;
     b.core.export_pairing_file(INVITATION, true)?;
-    let pending = controller.core.begin_connect(&b.endpoint())?;
+    let pending = controller.core.begin_connect_services(&b.endpoint())?;
     wait_for("host b to ask its owner", DEFAULT_WAIT, || {
         b.core.control_request().ok().flatten()
     });
@@ -323,7 +301,7 @@ fn cancellation_during_approval_and_reconnect_do_not_stop_the_other_session() ->
     assert_eq!(
         controller.core.controller_session(sa.id)?,
         sa,
-        "cancelling during approval leaves the other session"
+        "cancelling during approval leaves the other connection"
     );
     if b.core.control_request()?.is_some() {
         b.core.reject_control_request()?;
@@ -335,37 +313,55 @@ fn cancellation_during_approval_and_reconnect_do_not_stop_the_other_session() ->
         control: true,
         ..Grants::default()
     })?;
-    let sb = controller.connect_control(&b)?;
-    let old = controller
+    let sb = controller.connect_services(&b)?;
+    let owner =
+        controller
+            .core
+            .attach_controller_service(sa.id, sa.generation, ServiceKind::Desktop)?;
+    let old_desktop = controller
         .core
-        .subscribe_session_video(sa.id, sa.generation)?;
+        .open_desktop_service(owner.id, owner.generation)?;
+    let old = old_desktop.subscribe_video()?;
     // Only host a's link drops; the controller's handle survives the redial.
     controller.core.drop_controller_link(sa.id)?;
-    let next = wait_for("host a's session to reconnect", DEFAULT_WAIT, || {
+    let next = wait_for("host a's connection to reconnect", DEFAULT_WAIT, || {
         controller
             .core
             .controller_session(sa.id)
             .ok()
             .filter(|s| s.phase == SessionPhase::Active && s.generation > sa.generation)
     });
-    assert_eq!(next.id, sa.id, "a reconnect keeps the session's handle");
+    assert_eq!(next.id, sa.id, "a reconnect keeps the connection's handle");
     assert_eq!(
         controller.core.controller_session(sb.id)?,
         sb,
-        "one session reconnecting leaves the other"
+        "one connection reconnecting leaves the other"
     );
     assert!(
         matches!(
-            controller.core.select_displays(sa.id, sa.generation, &[1]),
+            controller
+                .core
+                .attach_controller_service(sa.id, sa.generation, ServiceKind::Files),
             Err(Error::StaleSession)
         ),
         "the old generation takes no command"
     );
-    let fresh = controller
+    assert!(
+        old_desktop.is_cancelled(),
+        "the old generation's Desktop is fenced"
+    );
+    let owner = controller.core.controller_service(owner.id)?;
+    let fresh_desktop = controller
         .core
-        .subscribe_session_video(next.id, next.generation)?;
-    let ha = a.core.snapshot()?.incoming.ok_or("host a's session")?;
-    a.core.publish_video(ha.id, keyframe(44, vec![4]))?;
+        .open_desktop_service(owner.id, owner.generation)?;
+    let fresh = fresh_desktop.subscribe_video()?;
+    let remote = wait_for("host a to serve the new Desktop", DEFAULT_WAIT, || {
+        a.hosted(Some(ServiceKind::Desktop))
+            .into_iter()
+            .find(|service| service.generation == next.generation)
+    });
+    a.core
+        .publish_desktop_video(remote.id, remote.generation, keyframe(44, vec![4]))?;
     assert_eq!(
         fresh
             .recv_timeout(Duration::from_secs(3))
@@ -383,7 +379,7 @@ fn cancellation_during_approval_and_reconnect_do_not_stop_the_other_session() ->
     assert_eq!(
         controller.core.controller_session(sb.id)?,
         sb,
-        "unpairing one host leaves the other's session"
+        "unpairing one host leaves the other's connection"
     );
     Ok(())
 }
@@ -509,9 +505,9 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() -> Te
     Ok(())
 }
 
-/// A controller holds four sessions; a fifth is busy and leaves no record,
-/// and once one closes the fifth host is reached while the rest stay
-/// active.
+/// A controller holds four files-only sessions; a fifth is busy and leaves
+/// no record, and once one closes the fifth host is reached while the rest
+/// stay active. (Presence links are bounded by the paired devices.)
 #[test]
 fn a_fifth_outgoing_connection_is_busy_until_one_closes() -> TestResult {
     let trace = traced();
@@ -520,11 +516,19 @@ fn a_fifth_outgoing_connection_is_busy_until_one_closes() -> TestResult {
         .map(|n| Engine::start(&format!("host-{n}")))
         .collect();
     for host in &hosts {
-        host.pair_for_control(&controller)?;
+        host.pair_with(&controller)?;
+        host.core.set_desktop_sharing(Grants {
+            transfer: true,
+            ..Grants::default()
+        })?;
     }
+    let files = |host: &Engine| -> Result<vnilink::SessionInfo, Error> {
+        let pending = controller.core.begin_connect_files(&host.endpoint())?;
+        Ok(controller.active(pending.id))
+    };
     let mut live = Vec::new();
     for host in &hosts[..4] {
-        live.push(controller.connect_control(host)?);
+        live.push(files(host)?);
     }
     assert_eq!(
         controller.core.controller_sessions()?.len(),
@@ -533,7 +537,7 @@ fn a_fifth_outgoing_connection_is_busy_until_one_closes() -> TestResult {
     );
     assert!(
         matches!(
-            controller.core.begin_connect(&hosts[4].endpoint()),
+            controller.core.begin_connect_files(&hosts[4].endpoint()),
             Err(Error::Busy)
         ),
         "a fifth outgoing session is busy"
@@ -545,7 +549,7 @@ fn a_fifth_outgoing_connection_is_busy_until_one_closes() -> TestResult {
     );
     controller.core.disconnect_session(live[0].id)?;
     controller.wait_phase(live[0].id, SessionPhase::Closed);
-    let fifth = controller.connect_control(&hosts[4])?;
+    let fifth = files(&hosts[4])?;
     assert_eq!(
         fifth.peer_id,
         hosts[4].endpoint(),

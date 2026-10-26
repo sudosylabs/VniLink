@@ -20,7 +20,7 @@ use super::support::device;
 const SETTLING: Duration = Duration::from_secs(5);
 
 /// The home relay a host was set up with is what its controller stores
-/// for it after a session, and the refresh changes no grant on either
+/// for it after a link, and the refresh changes no grant on either
 /// side.
 #[test]
 fn a_custom_home_relay_is_what_the_peer_stores() -> TestResult {
@@ -30,7 +30,7 @@ fn a_custom_home_relay_is_what_the_peer_stores() -> TestResult {
     let controller = Engine::start("controller");
     pair_cores_for_control(&host.core, &controller.core)?;
     let host_id = host.core.endpoint_id();
-    controller.core.connect(&host_id)?;
+    controller.connect_services_to(&host_id)?;
     let expected = host.core.snapshot()?.relay_urls;
     assert_eq!(
         expected,
@@ -144,18 +144,18 @@ fn stays_closed(pair: &Pair) {
 fn a_local_disconnect_does_not_dial_again() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_desktop();
-    pair.controller.core.connect(&pair.host.endpoint())?;
+    pair.connect_services();
     pair.controller.core.disconnect()?;
     stays_closed(&pair);
     Ok(())
 }
 
-/// A session the host closes is not dialled again.
+/// A link the host closes is not dialled again.
 #[test]
 fn the_host_closing_the_session_does_not_dial_again() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_desktop();
-    pair.controller.core.connect(&pair.host.endpoint())?;
+    pair.connect_services();
     pair.host.core.stop_hosted_session()?;
     stays_closed(&pair);
     Ok(())

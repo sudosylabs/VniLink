@@ -25,7 +25,7 @@ fn interrupted_transfers_leave_room_for_new_ones() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
     let controller = &pair.controller.core;
-    let session = pair.connect_control();
+    let session = pair.connect_services();
     let (lost, pipe) = pair.controller.open_files(&session)?;
     for index in 0..MAX_ACTIVE_JOBS {
         let name = format!("waiting-{index}.bin");
@@ -200,7 +200,7 @@ fn a_long_download_preparation_shows_and_finishes() -> TestResult {
     let bytes = payload(4096, 801);
     std::fs::write(pair.host.root().join("slow.bin"), &bytes)?;
     std::fs::write(pair.host.root().join("second.bin"), payload(4096, 802))?;
-    let session = pair.connect_control();
+    let session = pair.connect_services();
     let (owner, _pipe) = pair.controller.open_files(&session)?;
     let parked = ParkedPreparations::install(host);
     let download = |name: &str| {

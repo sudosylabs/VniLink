@@ -23,7 +23,7 @@ use napi_derive::napi;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use vnilink_app::{EventPoller, FfiError, VideoPoller, VnilinkCore};
+use vnilink_app::{EventPoller, FfiError, VnilinkCore};
 
 /// Largest accepted command body. Clipboard text reaches 256 KiB and encoded
 /// frames cross as base64, so this must clear a ~1 MiB frame plus JSON shape.
@@ -78,16 +78,6 @@ struct TransferPath {
     rtt_ms: String,
     tx_bytes: String,
     rx_bytes: String,
-}
-
-#[derive(Serialize)]
-struct TransferFrame {
-    codec: String,
-    keyframe: bool,
-    timestamp_us: String,
-    data: String,
-    display_id: String,
-    revision: String,
 }
 
 #[derive(Serialize)]
@@ -461,23 +451,8 @@ impl EventTransfer {
             vnilink_app::FfiEvent::HostedServiceChanged { service } => {
                 serde_json::json!({ "type": "hostedServiceChanged", "service": Self::service(service) })
             }
-            vnilink_app::FfiEvent::QualityUpdated { id, quality } => {
-                serde_json::json!({
-                    "type": "qualityUpdated",
-                    "id": id.to_string(),
-                    "quality": {
-                        "max_bitrate_kbps": quality.max_bitrate_kbps,
-                        "max_frame_rate": quality.max_frame_rate,
-                        "max_width": quality.max_width,
-                        "max_height": quality.max_height,
-                    },
-                })
-            }
             vnilink_app::FfiEvent::InputFailed { id, message } => {
                 serde_json::json!({ "type": "inputFailed", "id": id.to_string(), "message": message })
-            }
-            vnilink_app::FfiEvent::KeyframeRequested { id } => {
-                serde_json::json!({ "type": "keyframeRequested", "id": id.to_string() })
             }
             vnilink_app::FfiEvent::ClipboardReceived { id } => {
                 serde_json::json!({ "type": "clipboardReceived", "id": id.to_string() })
@@ -529,14 +504,6 @@ fn keyboard_mode_name(mode: vnilink_app::FfiKeyboardMode) -> &'static str {
         vnilink_app::FfiKeyboardMode::Character => "Character",
         vnilink_app::FfiKeyboardMode::Map => "Map",
         vnilink_app::FfiKeyboardMode::Translate => "Translate",
-    }
-}
-
-fn session_role(name: &str) -> Result<vnilink_app::FfiSessionRole> {
-    match name {
-        "Controller" => Ok(vnilink_app::FfiSessionRole::Controller),
-        "Host" => Ok(vnilink_app::FfiSessionRole::Host),
-        _ => Err(Error::new(Status::InvalidArg, "Invalid session role")),
     }
 }
 
@@ -616,7 +583,6 @@ enum Command {
         #[serde(rename = "subscriptionId")]
         subscription_id: String,
     },
-    SubscribeVideo,
     SharingPolicy,
     SetSharingPolicy {
         policy: vnilink_app::FfiSharingPolicyUpdate,
@@ -714,14 +680,6 @@ enum Command {
         endpoint_id: String,
         name: String,
     },
-    Connect {
-        #[serde(rename = "endpointId")]
-        endpoint_id: String,
-    },
-    BeginConnect {
-        #[serde(rename = "endpointId")]
-        endpoint_id: String,
-    },
     Disconnect,
     DisconnectSession {
         #[serde(rename = "sessionId")]
@@ -800,6 +758,14 @@ enum Command {
         #[serde(rename = "sessionId")]
         session_id: String,
         generation: String,
+    },
+    /// The display a desktop shows and its pointer lands on, sent on the
+    /// desktop's data channel in order with its input.
+    SelectDisplays {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        generation: String,
+        ids: Vec<String>,
     },
     StartNativeScreenSharing {
         #[serde(rename = "displayId")]
@@ -977,12 +943,6 @@ enum Command {
         session_id: String,
         generation: String,
     },
-    SelectDisplays {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-        ids: Vec<String>,
-    },
     CaptureDisplays,
     SetTopology {
         revision: String,
@@ -997,52 +957,7 @@ enum Command {
     SetDesktopQualityDefaults {
         quality: TransferQuality,
     },
-    UpdateSessionQuality {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-        role: String,
-        quality: TransferQuality,
-    },
-    SubscribeSessionVideo {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-    },
-    PollVideo {
-        #[serde(rename = "subscriptionId")]
-        subscription_id: String,
-    },
-    ReleaseVideo {
-        #[serde(rename = "subscriptionId")]
-        subscription_id: String,
-    },
-    PublishVideo {
-        #[serde(deserialize_with = "frame_codec")]
-        codec: vnilink_app::FfiVideoCodec,
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        keyframe: bool,
-        #[serde(rename = "timestampUs")]
-        timestamp_us: String,
-        data: String,
-    },
     Shutdown,
-}
-
-fn frame_codec<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> std::result::Result<vnilink_app::FfiVideoCodec, D::Error> {
-    use serde::de::Error;
-    let value = String::deserialize(deserializer)?;
-    match value.as_str() {
-        "h264" => Ok(vnilink_app::FfiVideoCodec::H264),
-        "h265" => Ok(vnilink_app::FfiVideoCodec::H265),
-        "vp8" => Ok(vnilink_app::FfiVideoCodec::Vp8),
-        "vp9" => Ok(vnilink_app::FfiVideoCodec::Vp9),
-        "av1" => Ok(vnilink_app::FfiVideoCodec::Av1),
-        _ => Err(D::Error::custom("unsupported video codec")),
-    }
 }
 
 #[derive(Serialize)]
@@ -1126,13 +1041,6 @@ enum Reply {
     },
     Relays {
         relays: Vec<TransferRelay>,
-    },
-    VideoSubscription {
-        #[serde(rename = "subscriptionId")]
-        subscription_id: String,
-    },
-    VideoFrame {
-        frame: Option<TransferFrame>,
     },
     Endpoint {
         #[serde(rename = "endpointId")]
@@ -1218,13 +1126,12 @@ enum Reply {
 
 // Commands serialize state mutations and installation saves. Shutdown marks the
 // instance closed; no later task can restart or mutate the old installation.
-// Video pollers stay here behind subscription ids because pollers cannot
+// Event pollers stay here behind subscription ids because pollers cannot
 // cross the JSON bridge; callers poll and release them by id.
 struct State {
     core: Arc<VnilinkCore>,
     closed: bool,
     native: native::NativeRuntimeState,
-    video: HashMap<u64, VideoPoller>,
     events: HashMap<u64, EventPoller>,
     /// The System service held on each connection this computer asked.
     systems: HashMap<(u64, u64), Arc<vnilink_app::SystemServiceHandle>>,
@@ -1326,7 +1233,6 @@ impl Task for OpenTask {
                     cameras,
                     opened.screen_grant,
                 ),
-                video: HashMap::new(),
                 events: HashMap::new(),
                 systems: HashMap::new(),
                 next_subscription: 1,
@@ -1395,7 +1301,7 @@ pub fn open_temporary_engine(
 }
 
 impl EngineBridge {
-    /// Commands that describe displays, tune quality, and move video frames.
+    /// Commands that describe displays and set desktop codec and quality defaults.
     fn media(state: &mut State, command: &Command) -> Result<Reply> {
         let reply: Reply = match command {
             Command::Topology => Reply::Displays {
@@ -1421,22 +1327,6 @@ impl EngineBridge {
                         .map(transfer_display)
                         .collect(),
                 }
-            }
-            Command::SelectDisplays {
-                session_id,
-                generation,
-                ids,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                let selected = ids
-                    .iter()
-                    .map(|value| parse_id(value, "Invalid display ID"))
-                    .collect::<Result<Vec<_>>>()?;
-                state
-                    .core
-                    .select_displays(id, gen, selected)
-                    .map_err(core_error)?;
-                Reply::Done
             }
             Command::CaptureDisplays => Reply::DisplayIds {
                 displays: state
@@ -1533,99 +1423,6 @@ impl EngineBridge {
                 state
                     .core
                     .set_desktop_quality_defaults(quality)
-                    .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::UpdateSessionQuality {
-                session_id,
-                generation,
-                role,
-                quality,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                let quality = vnilink_app::new_quality(
-                    quality.max_bitrate_kbps,
-                    quality.max_frame_rate,
-                    quality.max_width,
-                    quality.max_height,
-                )
-                .map_err(core_error)?;
-                state
-                    .core
-                    .update_session_quality_for_generation(id, gen, session_role(role)?, quality)
-                    .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubscribeSessionVideo {
-                session_id,
-                generation,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                let poller = state
-                    .core
-                    .subscribe_session_video(id, gen)
-                    .map_err(core_error)?;
-                let subscription = state.next_subscription;
-                state.next_subscription = subscription.saturating_add(1);
-                state.video.insert(subscription, poller);
-                Reply::VideoSubscription {
-                    subscription_id: subscription.to_string(),
-                }
-            }
-            Command::SubscribeVideo => {
-                let poller = state.core.subscribe_video().map_err(core_error)?;
-                let subscription = state.next_subscription;
-                state.next_subscription = subscription.saturating_add(1);
-                state.video.insert(subscription, poller);
-                Reply::VideoSubscription {
-                    subscription_id: subscription.to_string(),
-                }
-            }
-            Command::PollVideo { subscription_id } => {
-                let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
-                let poller = state
-                    .video
-                    .get(&subscription)
-                    .ok_or_else(|| Error::new(Status::InvalidArg, "Unknown video subscription"))?;
-                Reply::VideoFrame {
-                    frame: poller.try_recv().map(|frame| {
-                        use base64::Engine as _;
-                        TransferFrame {
-                            codec: frame.codec.label().into(),
-                            keyframe: frame.keyframe,
-                            timestamp_us: frame.timestamp_us.to_string(),
-                            data: base64::engine::general_purpose::STANDARD.encode(&frame.payload),
-                            display_id: frame.display_id.to_string(),
-                            revision: frame.revision.to_string(),
-                        }
-                    }),
-                }
-            }
-            Command::ReleaseVideo { subscription_id } => {
-                let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
-                state.video.remove(&subscription);
-                Reply::Done
-            }
-            Command::PublishVideo {
-                codec,
-                session_id,
-                keyframe,
-                timestamp_us,
-                data,
-            } => {
-                use base64::Engine as _;
-                let id = parse_id(session_id, "Invalid session ID")?;
-                let timestamp = parse_id(timestamp_us, "Invalid timestamp")?;
-                let payload = base64::engine::general_purpose::STANDARD
-                    .decode(data)
-                    .map_err(|_| Error::new(Status::InvalidArg, "Invalid video data"))?;
-                state
-                    .core
-                    .publish_video_frame(
-                        id,
-                        vnilink_app::FfiEncodedFrame::new(*codec, *keyframe, timestamp, payload)
-                            .map_err(|_| Error::new(Status::InvalidArg, "Invalid video frame"))?,
-                    )
                     .map_err(core_error)?;
                 Reply::Done
             }
@@ -1854,14 +1651,6 @@ impl EngineBridge {
             Command::BeginConnectServices { endpoint_id } => Reply::Session {
                 session: core
                     .begin_connect_services(endpoint_id.clone())
-                    .map_err(core_error)?,
-            },
-            Command::Connect { endpoint_id } => Reply::Session {
-                session: core.connect(endpoint_id.clone()).map_err(core_error)?,
-            },
-            Command::BeginConnect { endpoint_id } => Reply::Session {
-                session: core
-                    .begin_connect(endpoint_id.clone())
                     .map_err(core_error)?,
             },
             Command::Disconnect => {
@@ -2318,8 +2107,6 @@ impl EngineBridge {
                 Self::access(core, command)
             }
             Command::BeginConnectServices { .. }
-            | Command::Connect { .. }
-            | Command::BeginConnect { .. }
             | Command::Disconnect
             | Command::DisconnectSession { .. }
             | Command::ControllerSessions
@@ -2365,7 +2152,8 @@ impl EngineBridge {
             | Command::SubmitPreciseWheel { .. }
             | Command::SubmitText { .. }
             | Command::SubmitLocalKey { .. }
-            | Command::ReleaseSessionInput { .. } => Err(Error::new(
+            | Command::ReleaseSessionInput { .. }
+            | Command::SelectDisplays { .. } => Err(Error::new(
                 Status::InvalidArg,
                 "Desktop input goes on its data channel",
             )),
@@ -2404,18 +2192,11 @@ impl EngineBridge {
             | Command::EnableNativeInput => native::dispatch(state, command),
             Command::Topology
             | Command::SessionTopology { .. }
-            | Command::SelectDisplays { .. }
             | Command::CaptureDisplays
             | Command::SetTopology { .. }
             | Command::SetDesktopCodecDefault { .. }
             | Command::SetWindowDecoders { .. }
-            | Command::SetDesktopQualityDefaults { .. }
-            | Command::UpdateSessionQuality { .. }
-            | Command::PublishVideo { .. }
-            | Command::SubscribeSessionVideo { .. }
-            | Command::PollVideo { .. }
-            | Command::ReleaseVideo { .. }
-            | Command::SubscribeVideo => Self::media(state, command),
+            | Command::SetDesktopQualityDefaults { .. } => Self::media(state, command),
             Command::SubscribeEvents
             | Command::PollEvents { .. }
             | Command::ReleaseEvents { .. } => Self::events(state, command),
@@ -2539,8 +2320,7 @@ impl CommandShape {
             | "capabilities"
             | "videoCodecs"
             | "clipboardOwnerSession"
-            | "subscribeEvents"
-            | "subscribeVideo" => &["type"],
+            | "subscribeEvents" => &["type"],
             "beginConnectServices" => &["type", "endpointId"],
             "setVideoCodecs" => &["type", "codecs"],
             "saveCustomRelays" => &["type", "relays"],
@@ -2553,7 +2333,6 @@ impl CommandShape {
             "confirmPairing" => &["type", "previewId", "digits"],
             "revoke" | "unpair" => &["type", "endpointId"],
             "setPeerName" => &["type", "endpointId", "name"],
-            "connect" | "beginConnect" => &["type", "endpointId"],
             "disconnectSession" | "stopHostedPeer" => &["type", "sessionId"],
             "peerAvailability" => &["type", "endpointId"],
             "submitKey" => &["type", "sessionId", "generation", "usage", "down"],
@@ -2583,7 +2362,6 @@ impl CommandShape {
             "releaseSessionInput"
             | "sessionPointerSettings"
             | "sessionClipboardText"
-            | "subscribeSessionVideo"
             | "sessionKeyboardMode"
             | "sessionSwapControlAndCommand" => &["type", "sessionId", "generation"],
             "reportNativePermissions" => &["type", "screen", "input", "camera", "microphone"],
@@ -2697,9 +2475,6 @@ impl CommandShape {
             "setDesktopCodecDefault" => &["type", "codec"],
             "setWindowDecoders" => &["type", "decoders"],
             "setDesktopQualityDefaults" => &["type", "quality"],
-            "updateSessionQuality" => &["type", "sessionId", "generation", "role", "quality"],
-            "pollVideo" | "releaseVideo" => &["type", "subscriptionId"],
-            "publishVideo" => &["type", "sessionId", "keyframe", "timestampUs", "data"],
             _ => return false,
         };
         object.len() == expected.len() && expected.iter().all(|key| object.contains_key(*key))

@@ -26,7 +26,7 @@ fn peers_exchange_display_names_on_connect() -> TestResult {
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     let host_events = host.subscribe()?;
     let controller_events = controller.subscribe()?;
-    let session = controller.connect(&pair.host.endpoint())?;
+    let session = pair.connect_services();
     assert_eq!(session.phase, SessionPhase::Active);
     assert_eq!(
         controller.peer_hostname(&pair.host.endpoint())?.as_deref(),
@@ -89,7 +89,7 @@ fn unknown_devices_have_no_name() {
 fn names_survive_a_restart_in_the_current_record() -> TestResult {
     let _trace = traced();
     let mut pair = Pair::for_desktop();
-    pair.controller.core.connect(&pair.host.endpoint())?;
+    pair.connect_services();
     assert_eq!(
         pair.controller
             .core
@@ -117,7 +117,7 @@ fn unpairing_drops_the_name_with_the_device() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    controller.connect(&pair.host.endpoint())?;
+    pair.connect_services();
     assert_eq!(
         controller.peer_hostname(&pair.host.endpoint())?.as_deref(),
         Some("host")
@@ -182,7 +182,7 @@ fn pairing_learns_names_before_connect_and_local_names_survive_refresh() -> Test
         "an invitation brings the name it carries"
     );
     let events = host.core.subscribe()?;
-    controller.core.connect(&host.core.endpoint_id())?;
+    controller.connect_services_to(&host.core.endpoint_id())?;
     assert_eq!(
         host.core.peer_hostname(&id)?.as_deref(),
         Some("controller"),

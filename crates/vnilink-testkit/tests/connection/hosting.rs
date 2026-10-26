@@ -4,14 +4,15 @@
 //! releases the input the controller's desktop held.
 
 use expect_test::expect;
-use std::time::Duration;
 
 use vnilink::{
-    usage, DesktopControlState, Error, Grants, InputEvent, PointerButton, Quality, ServiceKind,
+    usage, DesktopControlState, Error, Grants, InputEvent, PointerButton, ServiceKind,
     SessionPhase, SessionRole,
 };
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
+
+use super::support::refusal;
 
 /// The monitor of the desktops these scenarios install.
 const MONITOR: (u16, u16) = (1920, 1080);
@@ -45,11 +46,9 @@ fn stopping_hosting_disables_new_sessions_even_when_none_is_active() -> TestResu
         !host.core.snapshot()?.hosting,
         "stopping hosting with no session stops hosting"
     );
-    assert!(
-        matches!(
-            controller.core.connect(&host.endpoint()),
-            Err(Error::NotHosting)
-        ),
+    assert_eq!(
+        refusal(&controller, &host)?,
+        Error::NotHosting.to_string(),
         "a host that stopped hosting turns a connect away"
     );
     assert!(
@@ -68,7 +67,7 @@ fn stopping_hosting_ends_the_active_session() -> TestResult {
     let controller = Engine::start("controller");
     InputLog::install(&host, MONITOR)?;
     host.pair_for_control(&controller)?;
-    controller.core.connect(&host.endpoint())?;
+    controller.connect_services(&host)?;
     host.core.stop_hosting()?;
     host.wait_closed(SessionRole::Host);
     controller.wait_closed(SessionRole::Controller);
@@ -78,16 +77,14 @@ fn stopping_hosting_ends_the_active_session() -> TestResult {
         snapshot.devices[0].grants.control,
         "stopping hosting keeps the controller's grant"
     );
-    assert!(
-        matches!(
-            controller.core.connect(&host.endpoint()),
-            Err(Error::NotHosting)
-        ),
+    assert_eq!(
+        refusal(&controller, &host)?,
+        Error::NotHosting.to_string(),
         "a host that stopped hosting turns a connect away"
     );
     host.core.start_hosting()?;
     assert_eq!(
-        controller.core.connect(&host.endpoint())?.phase,
+        controller.connect_services(&host)?.phase,
         SessionPhase::Active,
         "hosting again admits the controller"
     );
@@ -115,7 +112,7 @@ fn disconnect_closes_both_sides() -> TestResult {
     let controller = Engine::start("controller");
     InputLog::install(&host, MONITOR)?;
     host.pair_for_control(&controller)?;
-    controller.core.connect(&host.endpoint())?;
+    controller.connect_services(&host)?;
     controller.core.disconnect()?;
     host.wait_closed(SessionRole::Host);
     controller.wait_closed(SessionRole::Controller);
@@ -128,7 +125,7 @@ fn disconnect_closes_both_sides() -> TestResult {
         "there is nothing left to disconnect"
     );
     assert_eq!(
-        controller.core.connect(&host.endpoint())?.phase,
+        controller.connect_services(&host)?.phase,
         SessionPhase::Active,
         "the controller connects again"
     );
@@ -155,7 +152,7 @@ fn revoke_stops_the_session_and_blocks_reconnect() -> TestResult {
     let controller = Engine::start("controller");
     InputLog::install(&host, MONITOR)?;
     host.pair_for_control(&controller)?;
-    controller.core.connect(&host.endpoint())?;
+    controller.connect_services(&host)?;
     host.core.revoke(&controller.endpoint())?;
     host.wait_closed(SessionRole::Host);
     controller.wait_closed(SessionRole::Controller);
@@ -163,11 +160,9 @@ fn revoke_stops_the_session_and_blocks_reconnect() -> TestResult {
         host.core.snapshot()?.devices.is_empty(),
         "a revoked controller is forgotten"
     );
-    assert!(
-        matches!(
-            controller.core.connect(&host.endpoint()),
-            Err(Error::Unauthorized)
-        ),
+    assert_eq!(
+        refusal(&controller, &host)?,
+        Error::Unauthorized.to_string(),
         "a revoked controller is refused"
     );
     expect![[r#"
@@ -199,7 +194,7 @@ fn unpair_forgets_the_device_stops_the_session_and_blocks_reconnect() -> TestRes
     let controller = Engine::start("controller");
     InputLog::install(&host, MONITOR)?;
     host.pair_for_control(&controller)?;
-    controller.core.connect(&host.endpoint())?;
+    controller.connect_services(&host)?;
     host.core.unpair(&controller.endpoint())?;
     host.wait_closed(SessionRole::Host);
     controller.wait_closed(SessionRole::Controller);
@@ -207,11 +202,9 @@ fn unpair_forgets_the_device_stops_the_session_and_blocks_reconnect() -> TestRes
         host.core.snapshot()?.devices.is_empty(),
         "an unpaired controller is forgotten, not kept without grants"
     );
-    assert!(
-        matches!(
-            controller.core.connect(&host.endpoint()),
-            Err(Error::Unauthorized)
-        ),
+    assert_eq!(
+        refusal(&controller, &host)?,
+        Error::Unauthorized.to_string(),
         "the host refuses a controller it no longer knows"
     );
     expect![[r#"
@@ -250,7 +243,7 @@ fn unpairing_an_unknown_device_reports_not_paired() -> TestResult {
     );
     host.pair_for_control(&controller)?;
     assert_eq!(
-        controller.core.connect(&host.endpoint())?.phase,
+        controller.connect_services(&host)?.phase,
         SessionPhase::Active,
         "pairing still works afterwards"
     );
@@ -258,7 +251,7 @@ fn unpairing_an_unknown_device_reports_not_paired() -> TestResult {
     controller.wait_closed(SessionRole::Controller);
     assert!(
         matches!(
-            controller.core.connect(&host.endpoint()),
+            controller.core.begin_connect_services(&host.endpoint()),
             Err(Error::NotPaired)
         ),
         "a controller that forgot its host is refused before dialing"
@@ -275,7 +268,7 @@ fn a_controller_unpair_ends_its_outgoing_session() -> TestResult {
     let host = Engine::start("host");
     let controller = Engine::start("controller");
     host.pair_for_control(&controller)?;
-    controller.core.connect(&host.endpoint())?;
+    controller.connect_services(&host)?;
     controller.core.unpair(&host.endpoint())?;
     assert!(
         controller.core.snapshot()?.devices.is_empty(),
@@ -306,8 +299,8 @@ fn a_controller_unpair_ends_its_outgoing_session() -> TestResult {
     Ok(())
 }
 
-/// Withdrawing control mid-session keeps the session on both sides, to be
-/// seen, and it still carries quality changes.
+/// Withdrawing control mid-session keeps the connection on both sides and
+/// its Desktop open, to be seen.
 #[test]
 fn removing_control_mid_session_keeps_the_session_to_be_seen() -> TestResult {
     let trace = traced();
@@ -315,27 +308,20 @@ fn removing_control_mid_session_keeps_the_session_to_be_seen() -> TestResult {
     let controller = Engine::start("controller");
     InputLog::install(&host, MONITOR)?;
     host.pair_for_control(&controller)?;
-    let session = controller.core.connect(&host.endpoint())?;
+    let session = controller.connect_services(&host)?;
+    let desktop = controller.open_desktop(&session)?;
     host.core.set_desktop_sharing(Grants {
         view: true,
         control: false,
         clipboard: true,
         transfer: false,
     })?;
-    let quality = Quality {
-        max_bitrate_kbps: 1500,
-        max_frame_rate: 20,
-        max_width: 1280,
-        max_height: 720,
-    };
-    controller
-        .core
-        .update_session_quality(session.id, SessionRole::Controller, quality)?;
     wait_for(
-        "the host to apply the controller's quality",
-        Duration::from_secs(5),
-        || (host.core.snapshot().ok()?.incoming?.quality == Some(quality)).then_some(()),
+        "the desktop to learn it no longer controls",
+        DEFAULT_WAIT,
+        || (desktop.control_state().ok()? != DesktopControlState::Controlling).then_some(()),
     );
+    assert!(!desktop.is_cancelled(), "the Desktop stays open to be seen");
     assert_eq!(
         host.core
             .snapshot()?
@@ -350,7 +336,11 @@ fn removing_control_mid_session_keeps_the_session_to_be_seen() -> TestResult {
         SessionPhase::Active,
         "the controller keeps the session to see"
     );
-    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
+    expect![[r#"
+        controller:
+          input: control changed epoch=2 service=1 state=Viewing
+    "#]]
+    .assert_eq(&trace.story(&["input"]));
     Ok(())
 }
 
@@ -522,11 +512,9 @@ fn stop_hosting_cancels_live_owners_and_refuses_new_sessions() -> TestResult {
             desktop.is_cancelled().then_some(())
         });
     }
-    assert!(
-        matches!(
-            peers[0].core.connect(&host.endpoint()),
-            Err(Error::NotHosting)
-        ),
+    assert_eq!(
+        refusal(&peers[0], &host)?,
+        Error::NotHosting.to_string(),
         "a host that stopped hosting refuses a new session"
     );
     host.wait_released(Some(ServiceKind::Desktop));

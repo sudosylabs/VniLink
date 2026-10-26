@@ -1,4 +1,4 @@
-//! Publish one monitor into a hosted session.
+//! Publish one monitor into a hosted Desktop service.
 //!
 //! The generic [`HostSession`] opens the VideoToolbox encoder at the even size
 //! that fits the session quality. This module only pins that choice to
@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub use vnilink_media::HostSession;
 #[cfg(target_os = "macos")]
-use vnilink_media::{Error, FrameSource, FrameWait, PublishError, Quality, RawFrame};
+use vnilink_media::{Error, FrameSource, FrameWait, PublishError, RawFrame};
 
 #[cfg(target_os = "macos")]
 use crate::encode::MacVideoEncoder;
@@ -33,33 +33,6 @@ impl FrameSource for crate::capture::ScreenCapture {
     fn attested_at(&self) -> Option<std::time::Instant> {
         crate::capture::ScreenCapture::attested_at(self)
     }
-}
-
-/// Copy ScreenCaptureKit frames into `core` until `stop` is set or the hosted
-/// session ends.
-///
-/// The caller has already started `capture`. This function does not ask for
-/// Screen Recording permission. `stop` is read between frames, so a frame
-/// already being copied is finished first. The encoder profile follows the
-/// negotiated session codec.
-#[cfg(target_os = "macos")]
-pub fn serve_stream(
-    capture: &crate::capture::ScreenCapture,
-    core: &vnilink::Core,
-    session_id: u64,
-    quality: Quality,
-    stop: &AtomicBool,
-) -> Result<(), PublishError> {
-    let codec = core.host_codec(session_id).unwrap_or(vnilink::CODEC_H264);
-    let matrix = core.host_matrix(session_id).unwrap_or_default();
-    vnilink_media::serve_capture(
-        capture,
-        core,
-        session_id,
-        quality,
-        stop,
-        move |w, h, fps, bps| MacVideoEncoder::open(w, h, fps, bps, codec, matrix),
-    )
 }
 
 /// Encode every live viewer from one ScreenCaptureKit stream.

@@ -8,9 +8,10 @@
 //! authorized sessions inject keys and pointer events. Call
 //! [`Core::set_clipboard`] so a granted controller can paste text. Call
 //! [`Core::set_file_roots`] so a granted peer can browse and receive files.
-//! Call [`Core::publish_video`] with encoded H.264 frames and
-//! [`Core::subscribe_video`] to receive them. Input goes on a Desktop
-//! service ([`Core::open_desktop_service`]):
+//! A desktop is a Desktop service ([`Core::open_desktop_service`]) on a
+//! services connection: the host calls [`Core::publish_desktop_video`] with
+//! encoded frames, the viewer receives them from
+//! [`RemoteDesktopService::subscribe_video`], and input goes the other way:
 //! [`RemoteDesktopService::submit_local_key`] is the key path. The default
 //! mode inserts the character the controller produced. Map mode sends the
 //! physical HID position, and Translate mode asks the host to press the

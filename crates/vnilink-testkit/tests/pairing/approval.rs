@@ -6,7 +6,7 @@
 use expect_test::expect;
 use std::time::{Duration, Instant};
 
-use vnilink::{CoreEvent, Error, Grants, SessionPhase};
+use vnilink::{CoreEvent, Error, Grants, ServiceKind, SessionPhase};
 use vnilink_testkit::events::drain;
 use vnilink_testkit::session::wait_request;
 use vnilink_testkit::{holds, traced, wait_for, Engine, TestResult};
@@ -337,9 +337,22 @@ fn remembered_peer_denied_by_global_policy_never_prompts_again() -> TestResult {
 
     exchange(&host.core, &controller.core, true);
     host.core.start_hosting()?;
+    let session = controller.connect_services(&host)?;
+    assert_eq!(
+        session.phase,
+        SessionPhase::Active,
+        "the host's sharing admits a services connection"
+    );
+    let owner = controller.core.attach_controller_service(
+        session.id,
+        session.generation,
+        ServiceKind::Desktop,
+    )?;
     assert!(
         matches!(
-            controller.core.connect(&host.endpoint()),
+            controller
+                .core
+                .open_desktop_service(owner.id, owner.generation),
             Err(Error::Unauthorized)
         ),
         "a desktop the host does not share is refused"
@@ -347,12 +360,6 @@ fn remembered_peer_denied_by_global_policy_never_prompts_again() -> TestResult {
     assert!(
         host.core.control_request()?.is_none(),
         "a remembered controller is not asked about"
-    );
-    let session = controller.connect_services(&host)?;
-    assert_eq!(
-        session.phase,
-        SessionPhase::Active,
-        "the host's sharing admits a services connection"
     );
     let policy = host.core.sharing_policy()?;
     assert!(policy.clipboard, "the host still shares the clipboard");

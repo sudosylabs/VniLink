@@ -189,12 +189,15 @@ pub(crate) enum ControlMessage {
         version: u16,
         codec: u8,
         quality: Quality,
-        /// Whether the dialing controller can decode H.264. The host rejects
-        /// with `Unsupported` instead of admitting a desktop session the peer
-        /// could never display. Ignored for files-only sessions (no video).
+        /// Whether the dialing viewer can decode H.264. The host refuses a
+        /// Desktop the viewer could never display. A session's Hello, which
+        /// asks for no picture, leaves this and the other desktop fields at
+        /// their defaults.
         decode: bool,
-        /// Files-only session for roots/listings/transfers: Transfer-grant
-        /// admission, no video/input/portal. Desktop sessions set false.
+        /// A session's Hello sets this: files-only for roots, listings and
+        /// transfers (Transfer-grant admission), or with `services_only` a
+        /// presence link. A host refuses a session Hello without it. A
+        /// Desktop service's Hello, on its own stream, sets false.
         files_only: bool,
         /// Neutral transport admission, without granting any feature.
         /// Must also set files_only so no desktop transport is started.
@@ -251,9 +254,8 @@ pub(crate) enum ControlMessage {
         stamp: SessionStamp,
         text: KeyText,
     },
-    /// Agreed encoder limits for the live session. The controller sends this
-    /// when the quality changes; the host applies it and re-emits
-    /// `QualityUpdated` for its media layer.
+    /// Agreed encoder limits for a live Desktop. Its viewer sends this when
+    /// the quality changes; the host applies it to that Desktop's encoder.
     Quality {
         stamp: SessionStamp,
         quality: Quality,

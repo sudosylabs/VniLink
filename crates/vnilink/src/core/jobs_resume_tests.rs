@@ -78,7 +78,7 @@ fn a_partial_resumes_after_its_journaled_segments() {
     let unjournaled = payload(2 * 1024 * 1024 + 5, 22);
     std::fs::write(host_scratch.join("root/journaled.bin"), &journaled).unwrap();
     std::fs::write(host_scratch.join("root/unjournaled.bin"), &unjournaled).unwrap();
-    controller.connect(&host.endpoint_id()).unwrap();
+    controller.connect_files(&host.endpoint_id()).unwrap();
     controller
         .create_dir(controller_files.root, &controller_files.path(""), "got")
         .unwrap();

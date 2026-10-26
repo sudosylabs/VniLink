@@ -54,7 +54,10 @@ fn an_upload_lands_exactly() {
     drive(&pair);
     source_tree(&pair.controller.root().join("set"));
     std::fs::create_dir_all(pair.host.root().join("inbox")).unwrap();
-    pair.controller.core.connect(&pair.host.endpoint()).unwrap();
+    pair.controller
+        .core
+        .connect_files(&pair.host.endpoint())
+        .unwrap();
     let job = files::upload(&pair, "set", "inbox").unwrap();
     let sent = finished(&pair.controller.core, job, TRANSFER);
     assert_eq!(sent.state, JobState::Complete, "{sent:?}");
@@ -94,7 +97,10 @@ fn a_download_lands_exactly() {
     drive(&pair);
     source_tree(&pair.host.root().join("shared"));
     std::fs::create_dir_all(pair.controller.root().join("downloads")).unwrap();
-    pair.controller.core.connect(&pair.host.endpoint()).unwrap();
+    pair.controller
+        .core
+        .connect_files(&pair.host.endpoint())
+        .unwrap();
     let job = files::download(&pair, "shared", "downloads").unwrap();
     let got = finished(&pair.controller.core, job, TRANSFER);
     assert_eq!(got.state, JobState::Complete, "{got:?}");
@@ -120,7 +126,10 @@ fn conflicts_wait_for_a_choice_and_follow_it() {
     for name in ["a.txt", "b.txt", "c.txt"] {
         std::fs::write(destination.join(name), format!("old {name}")).unwrap();
     }
-    pair.controller.core.connect(&pair.host.endpoint()).unwrap();
+    pair.controller
+        .core
+        .connect_files(&pair.host.endpoint())
+        .unwrap();
     let job = files::upload(&pair, "set", "inbox").unwrap();
     let receiver = received(&pair.host.core);
     for (name, choice) in [
@@ -182,7 +191,10 @@ fn a_cancelled_upload_resumes_to_the_same_tree() {
     drive(&pair);
     source_tree(&pair.controller.root().join("set"));
     std::fs::create_dir_all(pair.host.root().join("inbox")).unwrap();
-    pair.controller.core.connect(&pair.host.endpoint()).unwrap();
+    pair.controller
+        .core
+        .connect_files(&pair.host.endpoint())
+        .unwrap();
     let job = files::upload(&pair, "set", "inbox").unwrap();
     let receiver = received(&pair.host.core);
     pair.controller.core.job_cancel(job).unwrap();
@@ -218,7 +230,10 @@ fn a_transfer_the_host_stops_sharing_is_interrupted_and_resumes() {
         &[("large.bin", 128 * 1024 * 1024)],
     );
     std::fs::create_dir_all(pair.host.root().join("inbox")).unwrap();
-    pair.controller.core.connect(&pair.host.endpoint()).unwrap();
+    pair.controller
+        .core
+        .connect_files(&pair.host.endpoint())
+        .unwrap();
     files::upload(&pair, "set", "inbox").unwrap();
     let receiver = received(&pair.host.core);
     wait_for("the first bytes to arrive", DEFAULT_WAIT, || {

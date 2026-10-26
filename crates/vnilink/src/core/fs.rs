@@ -1022,7 +1022,6 @@ mod listing_tests {
     /// Forges a live incoming transfer session plus its paired grant, so
     /// the real serve path (not the wire) is exercised without a peer.
     fn forge_transfer_session(host: &Core, session_id: u64, generation: u64) {
-        let desktop_stop = tokio::sync::watch::channel(false).0;
         let stop = tokio::sync::watch::channel(false).0;
         let session = LiveSession {
             id: session_id,
@@ -1033,23 +1032,9 @@ mod listing_tests {
             phase: crate::session::SessionPhase::Active,
             peer_id: String::new(),
             peer_key: STALE_PEER,
-            quality: None,
-            codec: 0,
-            matrix: crate::YuvMatrix::Bt709,
-            separate_cursor: false,
-            files_only: true,
             services_only: false,
-            desktop_stop,
-            cursor_outbox: tokio::sync::watch::channel(None).0,
-            desktop_owner: None,
-            monitor_width: 0,
-            monitor_height: 0,
             peer_topology: Vec::new(),
-            selected_displays: Vec::new(),
-            display_fault: None,
             stop,
-            outbox: None,
-            video: None,
             link: None,
             clipboard: None,
             clipboard_files: None,

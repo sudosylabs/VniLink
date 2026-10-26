@@ -348,7 +348,6 @@ impl Core {
                 service: record.info.clone(),
             });
         }
-        super::desktop_service::retire_owner(&mut state, id, generation, true);
         drop(state);
         super::service_jobs::interrupt_orphaned(&self.shared);
         Ok(())
@@ -523,148 +522,14 @@ impl Core {
         })
     }
 
-    /// Adopts desktop input/media already negotiated by this connection.
-    /// Neutral connections cannot start Desktop through this bridge.
+    /// Opens a Desktop service's own stream on its services connection.
     pub fn open_desktop_service(
         &self,
         id: u64,
         generation: u64,
     ) -> Result<RemoteDesktopService, Error> {
         let _engine = self.engine();
-        let neutral = {
-            let state = self.alive_state()?;
-            state
-                .services
-                .get(&id)
-                .and_then(|r| state.outgoing.get(&r.info.connection_id))
-                .is_some_and(|c| c.services_only)
-        };
-        if neutral {
-            return super::desktop_stream::open(self, id, generation);
-        }
-        let mut lease = self.service_lease(id, generation)?;
-        if lease.info().kind != ServiceKind::Desktop {
-            return Err(Error::InvalidSetting("this is not a Desktop service"));
-        }
-        let connection_id = lease.info().connection_id;
-        let (link, stamp) = self.service_link(connection_id, generation)?;
-        let stop = {
-            let mut state = self.alive_state()?;
-            let session = state
-                .outgoing
-                .get_mut(&connection_id)
-                .ok_or(Error::NoSession)?;
-            if session.generation != generation {
-                return Err(Error::StaleSession);
-            }
-            if session.files_only || *session.desktop_stop.borrow() {
-                return Err(Error::Unsupported("desktop service on this connection"));
-            }
-            if session.desktop_owner.is_some() {
-                return Err(Error::Busy);
-            }
-            session.desktop_owner = Some(id);
-            state
-                .services
-                .get(&id)
-                .ok_or(Error::NoSession)?
-                .stop
-                .clone()
-        };
-        let (ready, result) = std::sync::mpsc::sync_channel(1);
-        let shared = self.shared.clone();
-        self.runtime.spawn(async move {
-            let opened = lease
-                .run(async {
-                    tokio::time::timeout(TIMEOUT, async {
-                        let (mut send, mut recv) =
-                            link.open_bi().await.map_err(Error::network_debug)?;
-                        write(&mut send, preamble(stamp, id, OPEN, 1)).await?;
-                        status(&read(&mut recv).await?)?;
-                        Ok((send, recv))
-                    })
-                    .await
-                    .map_err(|_| Error::Timeout)?
-                })
-                .await;
-            match opened {
-                Ok((mut send, mut recv)) => {
-                    crate::ignored!(
-                        crate::trace::SERVICE,
-                        "the caller stopped waiting for its answer",
-                        ready.send(Ok(()))
-                    );
-                    let mut unexpected = [0u8; 1];
-                    tokio::select! {
-                        biased;
-                        _ = lease.cancelled() => {},
-                        _ = recv.read(&mut unexpected) => {},
-                    }
-                    crate::ignored!(
-                        crate::trace::SERVICE,
-                        "a stream that cannot finish is closed with its link",
-                        send.finish()
-                    );
-                    // A lost parent preserves the logical owner for reconnect.
-                    super::desktop_service::finish_controller(
-                        &shared,
-                        id,
-                        generation,
-                        link.close_reason().is_none(),
-                        if lease.is_cancelled() {
-                            CloseCause::OwnerClose
-                        } else {
-                            CloseCause::PeerClose
-                        },
-                    );
-                }
-                Err(error) => {
-                    if matches!(
-                        error,
-                        Error::Unsupported(_)
-                            | Error::Unauthorized
-                            | Error::Busy
-                            | Error::IncompatibleVersion
-                    ) {
-                        let mut state = lock(&shared.state);
-                        if let Some(session) = state
-                            .outgoing
-                            .get_mut(&connection_id)
-                            .filter(|s| s.generation == generation && s.desktop_owner == Some(id))
-                        {
-                            session.desktop_owner = None;
-                        }
-                    } else {
-                        // Admission may have committed before the reply was lost.
-                        super::desktop_service::finish_controller(
-                            &shared,
-                            id,
-                            generation,
-                            link.close_reason().is_none(),
-                            if lease.is_cancelled() {
-                                CloseCause::OwnerClose
-                            } else {
-                                CloseCause::PeerClose
-                            },
-                        );
-                    }
-                    crate::ignored!(
-                        crate::trace::SERVICE,
-                        "the caller stopped waiting for its answer",
-                        ready.send(Err(error))
-                    );
-                }
-            }
-        });
-        result
-            .recv_timeout(TIMEOUT + Duration::from_secs(1))
-            .map_err(|_| Error::Timeout)??;
-        Ok(RemoteDesktopService {
-            lease: self.service_lease(id, generation)?,
-            stop,
-            shared: Arc::downgrade(&self.shared),
-            desktop: None,
-        })
+        super::desktop_stream::open(self, id, generation)
     }
 }
 
@@ -829,7 +694,6 @@ impl Drop for HostedGuard {
     fn drop(&mut self) {
         let mut state = lock(&self.shared.state);
         if let Some(mut record) = state.hosted_services.remove(&self.id) {
-            super::desktop_service::retire_owner(&mut state, self.id, record.info.generation, true);
             record.stop.send_replace(true);
             if !record.info.phase.finished() {
                 // Backstop for a serve task that ended without an explicit
@@ -1165,10 +1029,7 @@ pub(super) async fn serve(
                 }))
             && !(kind == 3 && session.services_only && lock(&shared.terminal_factory).is_some())
             && !(kind == 7 && session.services_only)
-            && !(kind == 1 && !session.files_only && !*session.desktop_stop.borrow())
-            && !(kind == 8
-                && (session.services_only || !session.files_only)
-                && lock(&shared.snapshot_factory).is_some())
+            && !(kind == 8 && session.services_only && lock(&shared.snapshot_factory).is_some())
         {
             Err(1)
         } else if state.hosted_services.len() >= 16
@@ -1206,13 +1067,6 @@ pub(super) async fn serve(
                     span: shared.span.clone(),
                 },
             );
-            if kind == 1 {
-                state
-                    .incoming
-                    .get_mut(&connection_id)
-                    .ok_or(Error::NoSession)?
-                    .desktop_owner = Some(id);
-            }
             if kind == 8 {
                 super::snapshot::note_snapshot(&mut state, &peer, std::time::Instant::now());
             }
@@ -1240,10 +1094,9 @@ pub(super) async fn serve(
                 .incoming
                 .get(&connection_id)
                 .is_some_and(|s| {
-                    (s.services_only
+                    s.services_only
                         && lock(&shared.video_caps).can_encode()
-                        && monitor_size(&shared) != (0, 0))
-                        || (!s.files_only && !*s.desktop_stop.borrow())
+                        && monitor_size(&shared) != (0, 0)
                 });
             let terminal = lock(&shared.state)
                 .incoming
@@ -1342,26 +1195,6 @@ pub(super) async fn serve(
         return super::snapshot::serve(shared, peer, send, recv, parent_stop, service_stop).await;
     }
     write(&mut send, vec![VERSION, 0, 2]).await?;
-    if kind == 1 {
-        // This stream is the ownership lease. Input/media retain the existing
-        // negotiated transports; no filesystem or payload frames belong here.
-        let mut unexpected = [0u8; 1];
-        if !*parent_stop.borrow() && !*service_stop.borrow() {
-            tokio::select! {
-                biased;
-                _ = parent_stop.changed() => {},
-                _ = service_stop.changed() => {},
-                // The viewer ended its lease: it closed the service.
-                _ = recv.read(&mut unexpected) => close_hosted(&shared, id, CloseCause::PeerClose),
-            }
-        }
-        crate::ignored!(
-            crate::trace::SERVICE,
-            "a stream that cannot finish is closed with its link",
-            send.finish()
-        );
-        return Ok(());
-    }
     loop {
         if *parent_stop.borrow() || *service_stop.borrow() {
             break;
@@ -1419,7 +1252,10 @@ mod tests {
     }
 
     fn owned_files(core: &Core, host: &Core) -> (crate::ServiceInfo, crate::RemoteFilesService) {
-        let session = active(core, core.begin_connect(&host.endpoint_id()).unwrap().id);
+        let session = active(
+            core,
+            core.begin_connect_services(&host.endpoint_id()).unwrap().id,
+        );
         let owner = core
             .attach_controller_service(session.id, session.generation, ServiceKind::Files)
             .unwrap();
@@ -1434,7 +1270,10 @@ mod tests {
         pair_for_control(&host, &controller);
         let session = active(
             &controller,
-            controller.begin_connect(&host.endpoint_id()).unwrap().id,
+            controller
+                .begin_connect_services(&host.endpoint_id())
+                .unwrap()
+                .id,
         );
         let incoming = host.snapshot().unwrap().incoming.unwrap();
         let header = |version: u8, generation: u64, kind: u8| {

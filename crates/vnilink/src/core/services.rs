@@ -62,7 +62,7 @@ fn phase(session: &SessionPhase) -> ServicePhase {
 
 fn support(session: &LiveSession) -> ServiceSupport {
     ServiceSupport {
-        desktop: session.services_only || (!session.files_only && !*session.desktop_stop.borrow()),
+        desktop: session.services_only,
         files: true,
         terminal: session.services_only,
         camera: session.services_only,
@@ -177,7 +177,6 @@ impl Core {
         if finished(&session.phase) || session.phase == SessionPhase::Stopping {
             return Err(Error::NoSession);
         }
-        let services_only = session.services_only;
         if !support(session).supports(kind) {
             return Err(Error::Unsupported(match kind {
                 ServiceKind::Desktop => "desktop on a files-only connection",
@@ -202,14 +201,10 @@ impl Core {
                     && !r.info.phase.finished()
             })
             .count();
-        // Simultaneous monitor owners need the per-owner services
-        // transport; a legacy connection keeps the single-owner rule its
-        // shared session pipeline requires.
+        // Each monitor owner has its own Desktop stream.
         let allowed = match kind {
             ServiceKind::Terminal => usize::MAX,
-            ServiceKind::Desktop if services_only => {
-                super::desktop_stream::MAX_DESKTOP_OWNERS_PER_CONNECTION
-            }
+            ServiceKind::Desktop => super::desktop_stream::MAX_DESKTOP_OWNERS_PER_CONNECTION,
             _ => 1,
         };
         if live_same_kind >= allowed {
@@ -307,7 +302,6 @@ impl Core {
         if record.change(generation, ServicePhase::Closed(CloseCause::OwnerClose)) {
             publish(&self.shared.events, &record.info);
         }
-        super::desktop_service::retire_owner(&mut state, id, generation, false);
         drop(state);
         super::service_jobs::interrupt_orphaned(&self.shared);
         Ok(())

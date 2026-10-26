@@ -1,7 +1,7 @@
 //! Pace raw frames and ask the platform encoder for Annex-B.
 //!
-//! The first picture, a quality-size change, and [`vnilink::CoreEvent::KeyframeRequested`]
-//! all force a keyframe. Frames that arrive faster than the quality frame rate
+//! The first picture, a quality-size change, and a requested keyframe all
+//! force a keyframe. Frames that arrive faster than the quality frame rate
 //! are skipped, unless a keyframe is still owed.
 //!
 //! A requested keyframe answers a loss, so it is a recovery keyframe: the
@@ -10,7 +10,7 @@
 // trace: records every ignored failure
 
 use vnilink::Quality;
-use vnilink::{Core, CoreEvent, EncodedFrame, MAX_VIDEO_FRAME};
+use vnilink::{EncodedFrame, MAX_VIDEO_FRAME};
 
 use crate::annexb::parse_annex_b;
 use crate::colour::YuvMatrix;
@@ -388,17 +388,6 @@ impl<E: VideoEncoder> HostVideo<E> {
         self.pump.quality()
     }
 
-    /// A keyframe request forces the next encoded picture as a recovery
-    /// keyframe: the core asks for one when pictures were lost or dropped.
-    /// A quality update replaces the limits the encoder sees.
-    pub fn observe(&mut self, event: &CoreEvent) {
-        match event {
-            CoreEvent::KeyframeRequested { .. } => self.request_recovery_keyframe(),
-            CoreEvent::QualityUpdated { quality, .. } => self.set_quality(*quality),
-            _ => {}
-        }
-    }
-
     pub fn push(&mut self, frame: &RawFrame) -> Result<PumpOutput, Error> {
         self.pump.push(frame, &mut self.encoder)
     }
@@ -430,29 +419,8 @@ impl<E: VideoEncoder> HostVideo<E> {
     }
 }
 
-/// Where a paced frame is published. [`Core`] is one sink.
+/// Where a paced frame is published: a hosted Desktop service.
 pub trait FrameSink {
     fn publish_frame(&mut self, session_id: u64, frame: EncodedFrame)
         -> Result<(), vnilink::Error>;
-}
-
-/// Borrows a [`Core`] so [`HostVideo::publish_to`] can call [`Core::publish_video`].
-pub struct CoreSink<'a> {
-    core: &'a Core,
-}
-
-impl<'a> CoreSink<'a> {
-    pub fn new(core: &'a Core) -> Self {
-        Self { core }
-    }
-}
-
-impl FrameSink for CoreSink<'_> {
-    fn publish_frame(
-        &mut self,
-        session_id: u64,
-        frame: EncodedFrame,
-    ) -> Result<(), vnilink::Error> {
-        self.core.publish_video(session_id, frame)
-    }
 }

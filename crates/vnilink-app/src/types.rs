@@ -168,9 +168,6 @@ pub struct FfiSessionInfo {
     pub role: FfiSessionRole,
     pub phase: FfiSessionPhase,
     pub peer_id: String,
-    pub quality: Option<FfiQuality>,
-    pub monitor_width: u16,
-    pub monitor_height: u16,
 }
 
 /// One capability a paired computer reported, by stable name and coarse status.
@@ -573,16 +570,9 @@ pub enum FfiEvent {
     HostedServiceChanged {
         service: crate::FfiServiceInfo,
     },
-    QualityUpdated {
-        id: u64,
-        quality: FfiQuality,
-    },
     InputFailed {
         id: u64,
         message: String,
-    },
-    KeyframeRequested {
-        id: u64,
     },
     ClipboardReceived {
         id: u64,
@@ -658,13 +648,6 @@ pub(crate) fn session_role(role: vnilink::SessionRole) -> FfiSessionRole {
     }
 }
 
-pub(crate) fn to_session_role(role: FfiSessionRole) -> vnilink::SessionRole {
-    match role {
-        FfiSessionRole::Controller => vnilink::SessionRole::Controller,
-        FfiSessionRole::Host => vnilink::SessionRole::Host,
-    }
-}
-
 pub(crate) fn session_phase(phase: &vnilink::SessionPhase) -> FfiSessionPhase {
     match phase {
         vnilink::SessionPhase::Connecting => FfiSessionPhase::Connecting,
@@ -688,9 +671,6 @@ pub(crate) fn session_info(info: vnilink::SessionInfo) -> FfiSessionInfo {
         role: session_role(info.role),
         phase: session_phase(&info.phase),
         peer_id: info.peer_id,
-        quality: info.quality.as_ref().map(quality_record),
-        monitor_width: info.monitor_width,
-        monitor_height: info.monitor_height,
     }
 }
 
@@ -862,15 +842,10 @@ pub(crate) fn event(event: vnilink::CoreEvent) -> FfiEvent {
         vnilink::CoreEvent::HostedServiceChanged { service } => FfiEvent::HostedServiceChanged {
             service: service.into(),
         },
-        vnilink::CoreEvent::QualityUpdated { id, quality } => FfiEvent::QualityUpdated {
-            id,
-            quality: quality_record(&quality),
-        },
         vnilink::CoreEvent::InputFailed { id, message } => FfiEvent::InputFailed {
             id,
             message: message.to_string(),
         },
-        vnilink::CoreEvent::KeyframeRequested { id } => FfiEvent::KeyframeRequested { id },
         vnilink::CoreEvent::ClipboardReceived { id } => FfiEvent::ClipboardReceived { id },
         vnilink::CoreEvent::ClipboardFilesReceived { id } => {
             FfiEvent::ClipboardFilesReceived { id }
@@ -1041,9 +1016,6 @@ mod bridge_serialization_tests {
             role: FfiSessionRole::Controller,
             phase: FfiSessionPhase::Active,
             peer_id: "peer".into(),
-            quality: None,
-            monitor_width: 0,
-            monitor_height: 0,
         };
         let value = serde_json::to_value(session).unwrap();
         assert_eq!(value["id"], u64::MAX.to_string());

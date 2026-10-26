@@ -168,7 +168,7 @@ fn upload_root(pair: &Pair) -> Result<(u64, u64), Box<dyn std::error::Error>> {
         pair.controller.root().join("big.bin"),
         payload(200 * 1024, 7),
     )?;
-    pair.controller.core.connect(&pair.host.endpoint())?;
+    pair.controller.core.connect_files(&pair.host.endpoint())?;
     let job = pair.controller.core.job_submit_upload(
         &pair.host.endpoint(),
         pair.controller.root_id(),

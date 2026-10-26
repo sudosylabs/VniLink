@@ -132,10 +132,6 @@ fn neutral_desktop_reconnect_replaces_runtime_and_fences_old_handle() -> TestRes
         old.subscribe_video().is_err(),
         "the old handle cannot subscribe to pictures"
     );
-    assert!(
-        controller.controller_session(session.id)?.quality.is_none(),
-        "a services connection carries no picture quality of its own"
-    );
     let phases = |engine: &str| {
         trace
             .named("service phase")

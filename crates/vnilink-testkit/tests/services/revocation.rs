@@ -6,7 +6,7 @@ use expect_test::expect;
 use std::collections::BTreeSet;
 
 use vnilink::{CloseCause, Error, Grants, ServiceKind, ServicePhase, SessionPhase};
-use vnilink_testkit::desktop::MonitorCapture;
+use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::events::hosted_closes;
 use vnilink_testkit::files::whole_disk;
 use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
@@ -14,8 +14,7 @@ use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 use super::support::phase;
 
 /// A Files pipe beside a Desktop: refused until the host grants Transfer,
-/// opened once, carrying real operations without taking the connection's
-/// own file calls; the host closing it, its owner closing it, and the host
+/// opened once, carrying real operations; the host closing it, its owner closing it, and the host
 /// withdrawing Files each end it alone, while changing other services'
 /// sharing leaves it open.
 #[test]
@@ -24,7 +23,9 @@ fn a_files_pipe_carries_real_operations_and_closes_without_its_siblings() -> Tes
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     let (root, folder) = whole_disk(&pair.host, "")?;
-    let session = pair.connect_control();
+    // A host offers Desktop once it has a monitor and an encoder.
+    InputLog::install(&pair.host, (1920, 1080))?;
+    let session = pair.connect_services();
     let screen = pair.attach(&session, ServiceKind::Desktop);
     let screen_work = controller.service_lease(screen.id, screen.generation)?;
     let owner = pair.attach(&session, ServiceKind::Files);
@@ -88,22 +89,6 @@ fn a_files_pipe_carries_real_operations_and_closes_without_its_siblings() -> Tes
     assert!(
         !pair.host.root().join("original").exists(),
         "the old name is gone"
-    );
-    // A retained service pipe must not take or block the connection's own
-    // file streams.
-    let own = controller.fs_list(session.id, session.generation, root, &folder, 0, 20)?;
-    assert_eq!(
-        own.entries
-            .iter()
-            .map(|entry| entry.name.as_str())
-            .collect::<Vec<_>>(),
-        vec!["renamed"],
-        "the connection's own listing works beside the pipe"
-    );
-    #[cfg(unix)]
-    assert_eq!(
-        own.entries[0].token.ino, listing.entries[0].token.ino,
-        "both name the same object"
     );
     let hosted = pair.host.hosted(None);
     assert_eq!(hosted.len(), 1, "the host serves the pipe alone");

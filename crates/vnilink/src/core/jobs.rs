@@ -5052,7 +5052,7 @@ mod lifecycle_tests {
             transfer: true,
         };
         host.set_desktop_sharing(grants).unwrap();
-        controller.connect(&host.endpoint_id()).unwrap();
+        controller.connect_files(&host.endpoint_id()).unwrap();
         let (id, generation, epoch) = {
             let state = lock(&host.shared.state);
             let session = state.incoming_live().unwrap();

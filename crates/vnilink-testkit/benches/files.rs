@@ -22,7 +22,10 @@ fn upload(files: &[(&str, usize)]) -> Duration {
     drive(&pair);
     write_files(&pair.controller.root().join("set"), files);
     std::fs::create_dir_all(pair.host.root().join("inbox")).unwrap();
-    pair.controller.core.connect(&pair.host.endpoint()).unwrap();
+    pair.controller
+        .core
+        .connect_files(&pair.host.endpoint())
+        .unwrap();
     let started = Instant::now();
     pair.controller
         .core

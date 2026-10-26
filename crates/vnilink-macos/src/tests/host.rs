@@ -23,8 +23,6 @@ fn the_host_encoder_is_unavailable() {
 #[cfg(target_os = "macos")]
 #[test]
 fn the_platform_encoder_plugs_into_the_generic_session() {
-    use vnilink::CoreEvent;
-
     let quality = Quality::new(500, 30, 32, 32).unwrap();
     let mut session = HostSession::open(64, 64, quality, |w, h, fps, bps| {
         MacEncoder::open(w, h, fps, bps, false, vnilink::YuvMatrix::Bt709)
@@ -45,9 +43,7 @@ fn the_platform_encoder_plugs_into_the_generic_session() {
     assert_eq!(skipped, PumpOutput::Skipped);
     assert_eq!(sink.ids.len(), 1);
 
-    session
-        .observe(&CoreEvent::KeyframeRequested { id: 7 })
-        .unwrap();
+    session.request_recovery_keyframe();
     let forced = session
         .publish(&solid(64, 64, 2_000), &mut sink, 7)
         .unwrap();

@@ -384,7 +384,7 @@ fn run_matrix(matrix: &Matrix) -> Value {
             transfer: true,
         })
         .unwrap();
-    controller.connect(&host.endpoint_id()).unwrap();
+    controller.connect_files(&host.endpoint_id()).unwrap();
     let connected = json!({ "host": selected_paths(&host), "viewer": selected_paths(&controller) });
     if matrix.driver == Driver::Background {
         host.start_job_driver();

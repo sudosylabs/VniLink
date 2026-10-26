@@ -67,8 +67,6 @@ pub use plan::{WindowsPlan, SECURE_DESKTOP_SUPPORTED};
 pub use capture::WindowsCapture;
 #[cfg(windows)]
 mod snapshot;
-#[cfg(windows)]
-pub use host::serve_windows;
 pub use host::HostSession;
 #[cfg(windows)]
 pub use snapshot::WindowsSnapshot;

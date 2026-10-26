@@ -5,11 +5,11 @@
 //! - [`host`] — hosting and the accept loop
 //! - [`pairing`] — invitations, pairing files, control approval
 //! - [`connect`] — authorize, connect, disconnect, redial
-//! - [`keys`] — key, pointer, and keyboard mode
+//! - [`keys`] — the input adapter, input defaults, and a session's control stream on the host
 //! - [`link`] — the live link and the address refresh both roles share
 //! - [`clipboard`] — clipboard stream
 //! - [`files`] — file transfer stream
-//! - [`video`] — encoded frames
+//! - [`video`] — capture consumers and codec settings
 //! - [`wire`] — control frame read and write
 // trace: records every ignored failure
 
@@ -33,7 +33,7 @@ use crate::protocol::{Capabilities, Quality};
 use crate::relay::RelaySettings;
 use crate::session::{Grants, SessionInfo, SessionPhase, SessionRole};
 use crate::trust::{Device, Trust};
-use crate::video::{HostCapture, VideoInbox, VideoOutbox};
+use crate::video::HostCapture;
 
 mod activity;
 #[cfg(feature = "test-probes")]
@@ -45,7 +45,6 @@ mod availability;
 mod camera_stream;
 mod clipboard;
 mod connect;
-mod cursor;
 mod desktop_clipboard;
 mod desktop_service;
 mod desktop_stream;
@@ -78,7 +77,6 @@ mod service_jobs;
 mod service_permissions;
 pub(crate) mod service_stream;
 mod services;
-mod session_commands;
 mod sharing;
 pub(crate) mod snapshot;
 pub use audio_stream::RemoteAudioService;
@@ -237,39 +235,13 @@ struct LiveSession {
     phase: SessionPhase,
     peer_id: String,
     peer_key: [u8; 32],
-    quality: Option<Quality>,
-    /// Agreed H.264 codec id (`CODEC_H264` or `CODEC_H264_HIGH`). Decided in
-    /// Hello/Accept; the serve path opens the matching encoder profile.
-    /// `None` for files-only sessions (no video).
-    codec: u8,
-    /// The matrix the stream is converted and declared in: the viewer's
-    /// choice for the agreed codec.
-    matrix: crate::YuvMatrix,
-    separate_cursor: bool,
-    /// Files-only session (Transfer grant, no Control): suppresses desktop
-    /// video, cursor, input and automatic clipboard transport. File roots,
-    /// listings and transfers enforce Transfer per operation.
-    files_only: bool,
+    /// A presence link that services open on. Otherwise a files-only
+    /// session (Transfer grant): roots, listings and transfers, which
+    /// enforce Transfer per operation.
     services_only: bool,
-    /// A desktop may retire without ending its parent connection.
-    desktop_stop: tokio::sync::watch::Sender<bool>,
-    /// One latest sample for this exact owner generation, never another peer.
-    cursor_outbox: tokio::sync::watch::Sender<
-        Option<(crate::protocol::SessionStamp, Arc<crate::CursorState>)>,
-    >,
-    desktop_owner: Option<u64>,
-    monitor_width: u16,
-    monitor_height: u16,
     /// Topology last received from the host. Empty until the first snapshot.
     peer_topology: Vec<crate::input::DisplayInfo>,
-    /// Display this hosted session is allowed to control. Empty until selected.
-    selected_displays: Vec<u64>,
-    /// Set when a selected display disappears. Not cleared by a later pointer.
-    display_fault: Option<&'static str>,
     stop: tokio::sync::watch::Sender<bool>,
-    /// A controller's commands to its host: quality and display selection.
-    outbox: Option<Arc<session_commands::SessionCommands>>,
-    video: Option<Arc<VideoOutbox>>,
     /// Live connection. A test can close it without asking the session to stop.
     link: Option<iroh::endpoint::Connection>,
     clipboard: Option<ClipboardSender>,
@@ -330,9 +302,6 @@ impl LiveSession {
 
 /// All mutable controller channels belong to one session, including reconnects.
 struct ControllerState {
-    inbox: Arc<VideoInbox>,
-    subscriber: Mutex<Weak<()>>,
-    cursor: cursor::CursorInbox,
     clipboard: Mutex<Option<String>>,
     clipboard_files: Mutex<Option<crate::clipboard::StoredFileSelection>>,
     /// This core's own file offers on this session, for binding pastes to
@@ -343,19 +312,14 @@ struct ControllerState {
     /// Next own-offer revision minus one. Monotonic across clears and
     /// revokes so a revision is never reused within the session.
     published_rev: AtomicU64,
-    auto: Mutex<AutoState>,
 }
 impl ControllerState {
-    fn new(inbox: Arc<VideoInbox>) -> Self {
+    fn new() -> Self {
         Self {
-            inbox,
-            subscriber: Mutex::new(Weak::new()),
-            cursor: Arc::new(Mutex::new(None)),
             clipboard: Mutex::new(None),
             clipboard_files: Mutex::new(None),
             published_files: Mutex::new(None),
             published_rev: AtomicU64::new(0),
-            auto: Mutex::new(AutoState::default()),
         }
     }
 }
@@ -465,7 +429,7 @@ struct State {
     /// Capacity is enforced at admission (`MAX_LIVE_INCOMING`).
     incoming: HashMap<u64, LiveSession>,
     outgoing: HashMap<u64, LiveSession>,
-    /// Hosted session selected for legacy session-clipboard sync. Host OS
+    /// Hosted files-only session selected for session-clipboard sync. Host OS
     /// clipboard changes publish only to this session, and peer text applies
     /// to the OS clipboard only from it, so one peer's selection is never
     /// broadcast to another. Admission selects the new session; closing it
@@ -595,10 +559,8 @@ struct Shared {
     /// one; otherwise the operating system's.
     hostname: Mutex<Option<String>>,
     terminal_sessions: Mutex<HashMap<String, Arc<terminal_runtime::HostedTerminal>>>,
-    /// Latest text published by the controlled computer. Not logged.
-    video_inbox: Mutex<Option<Arc<VideoInbox>>>,
-    video_subscriber: Mutex<Weak<()>>,
-    /// One admitted host session at a time, including the release of held keys.
+    /// One host admission at a time: two Hellos cannot both pass the checks
+    /// that count live sessions.
     session_gate: tokio::sync::Mutex<()>,
     /// Held only while capture, input or the clipboard adapter is replaced.
     /// Live Desktop streams are counted separately so viewers do not exclude
@@ -628,6 +590,8 @@ struct Shared {
     /// Controller-only. How a local key becomes host input. Not saved.
     keyboard_mode: AtomicU8,
     pointer_defaults: Mutex<crate::PointerSettings>,
+    /// Controller-only. Whether Desktop owners ask for the cursor as its
+    /// own stream; see [`Core::set_cursor_receiver`].
     cursor_receiver: AtomicBool,
     /// Managed transfer directory: job journals and the partial files of
     /// arriving jobs. Empty until set.
@@ -682,11 +646,6 @@ struct Shared {
     /// serve loops. Read by the availability query; never guessed.
     backend_state:
         Mutex<HashMap<crate::availability::Capability, crate::availability::BackendState>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct AutoState {
-    manual_session: Option<(u64, u64)>,
 }
 
 /// Owns the Iroh endpoint and the session rules.
@@ -820,9 +779,6 @@ fn session_info(session: &LiveSession) -> SessionInfo {
         role: session.role,
         phase: session.phase.clone(),
         peer_id: session.peer_id.clone(),
-        quality: session.quality,
-        monitor_width: session.monitor_width,
-        monitor_height: session.monitor_height,
     }
 }
 
@@ -858,13 +814,6 @@ fn desktop_capabilities(shared: &Shared) -> Capabilities {
             && lock(&shared.video_caps).supports_encode(crate::VideoCodec::H264),
         h264_decode: lock(&shared.video_caps).supports_decode(crate::VideoCodec::H264),
     }
-}
-
-/// True when this host captures but has no usable H.264 encoder. The caller
-/// maps this to `Error::Unsupported` so the controller sees an explicit
-/// unsupported-desktop reject instead of an admitted session with no video.
-pub(super) fn video_unsupported(shared: &Shared) -> bool {
-    lock(&shared.capture).is_some() && !lock(&shared.video_caps).can_encode()
 }
 
 fn finished(phase: &SessionPhase) -> bool {

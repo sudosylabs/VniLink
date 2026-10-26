@@ -6,7 +6,9 @@ use super::host_input::{Facts, Holder, HostInputSession, InFlight, InputOutcome,
 use super::*;
 use crate::input::{HeldInput, Outbound};
 use crate::protocol::{ControlMessage, SessionStamp};
-use crate::video::{EncodedFrame, KeyframeFlag, VideoPush, VideoSubscription};
+use crate::video::{
+    EncodedFrame, KeyframeFlag, VideoInbox, VideoOutbox, VideoPush, VideoSubscription,
+};
 use crate::{CloseCause, CursorState, ServiceInfo, ServiceKind, ServicePhase};
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 
@@ -562,7 +564,7 @@ fn epoch(stamp: SessionStamp) -> [u8; PREFIX] {
 }
 
 /// Splits the 20-byte owner prefix (magic + stamp) from a datagram body.
-/// Unprefixed traffic belongs to the legacy session path, never an owner.
+/// Unprefixed traffic belongs to no owner and is dropped.
 fn split_datagram(bytes: &[u8]) -> Option<(SessionStamp, &[u8])> {
     if bytes.len() <= PREFIX || bytes[..4] != *MAGIC {
         return None;
@@ -962,26 +964,13 @@ pub(super) fn reconcile_grants(
             }
         }
     }
-    // A desktop session that may no longer be seen stops its pictures; it
-    // carries no input to release.
-    if !grants.view {
-        for id in incoming {
-            if let Some(session) = state.incoming.get_mut(&id) {
-                if !session.services_only && !session.files_only {
-                    session.desktop_stop.send_replace(true);
-                }
-            }
-        }
-    }
 }
 impl RemoteDesktopService {
     pub(super) fn active_desktop(&self) -> Result<&Arc<DesktopRuntime>, Error> {
         if self.lease.is_cancelled() {
             return Err(Error::NoSession);
         }
-        self.desktop.as_ref().ok_or(Error::Unsupported(
-            "scoped operations on a legacy Desktop bridge",
-        ))
+        Ok(&self.desktop)
     }
     /// Returns the latest host-confirmed state, not an optimistic local grant.
     pub fn control_state(&self) -> Result<DesktopControlState, Error> {
@@ -1056,9 +1045,7 @@ impl RemoteDesktopService {
     /// Why the picture stopped, once it did; `None` while it lives, or when
     /// this computer closed it. Readable after the service closed.
     pub fn end(&self) -> Option<crate::DesktopEnd> {
-        self.desktop
-            .as_ref()
-            .and_then(|desktop| *lock(&desktop.end))
+        *lock(&self.desktop.end)
     }
     /// The conditions held now, with since when and their evidence.
     pub fn conditions(&self) -> Result<Vec<crate::ConditionEntry>, Error> {
@@ -1542,7 +1529,7 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
         lease: core.service_lease(id, generation)?,
         stop,
         shared: Arc::downgrade(&core.shared),
-        desktop: Some(desktop),
+        desktop,
     })
 }
 

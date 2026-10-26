@@ -110,7 +110,7 @@ test('hosting follows the saved accept choice, names connected devices and disco
 	await settle();
 	assert.deepEqual(service.status.sessions, [{ id: '1', name: 'Work laptop', phase: 'Active' }, { id: '2', name: 'host-b', phase: 'Negotiating' }], 'Only sessions carrying a live service count; stopping ones are already leaving');
 	const reads = fake.calls.filter(type => type === 'snapshot').length;
-	fake.events.fire({ events: [{ type: 'keyframeRequested', id: '1' }], resync: false });
+	fake.events.fire({ events: [{ type: 'inputFailed', id: '1', message: 'denied' }], resync: false });
 	await settle();
 	assert.equal(fake.calls.filter(type => type === 'snapshot').length, reads, 'Unrelated events must not re-read the engine');
 	await service.disconnect('1');

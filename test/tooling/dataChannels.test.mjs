@@ -383,19 +383,6 @@ test('media channels require matching bounded source configuration and reject ex
 	assert(!isChannelRequest({ ...audio, media: { ...audio.media, sourceKind: 'output' } }));
 });
 
-test('video publication identifies its codec and refuses ambiguous packets', async () => {
-	const { isEngineCommand, isEngineReply } = await load('../../src/platform/engine/common/engine.ts');
-	for (const codec of ['h264', 'h265', 'vp8', 'vp9', 'av1']) {
-		const command = { type: 'publishVideo', codec, sessionId: '1', keyframe: true, timestampUs: '0', data: 'AQ==' };
-		assert(isEngineCommand(command));
-		const { codec: ignored, ...ambiguous } = command;
-		void ignored;
-		assert(!isEngineCommand(ambiguous));
-		assert(!isEngineCommand({ ...command, codec: 'other' }));
-		assert(isEngineReply({ type: 'videoFrame', frame: { codec, keyframe: true, timestamp_us: '0', data: 'AQ==', display_id: '1', revision: '1' } }));
-	}
-});
-
 test('desktop audio controls validate exact shapes and never carry decoded audio', async () => {
 	const { isDesktopAudioOperation, isDesktopAudioStatus } = await load('../../src/platform/engine/common/dataChannel.ts');
 	const status = { phase: 'unavailable', enabled: true, muted: false, error: { code: 'Unsupported', message: 'No output' } };

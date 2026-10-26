@@ -8,7 +8,6 @@ use super::keys::host_command_loop;
 use super::link::{remember_link, write_addresses};
 use super::pairing::{wait_for_control_approval, ControlAnswer};
 use super::transfer::{is_files_connection, serve_files_connection};
-use super::video::host_video_loop;
 use super::wire::{read_frame, write_frame};
 use crate::clipboard::ClipboardPayload;
 use crate::transfer::FILES_ALPN;
@@ -21,18 +20,13 @@ use iroh::{Endpoint, EndpointId, RelayMode, SecretKey};
 
 use crate::error::Error;
 use crate::events::CoreEvent;
-use crate::protocol::{error_code, ControlMessage, Quality, SessionStamp, ALPN};
+use crate::protocol::{error_code, ControlMessage, SessionStamp, ALPN};
 use crate::session::{self, Grant, SessionInfo, SessionPhase, SessionRole};
-use crate::video::VideoOutbox;
 
-/// Live hosted peer slots. Each hosted connection owns its session record,
-/// service owners, video/clipboard streams and input loop; the host
-/// clipboard sync selects exactly one session (see `clipboard_owner`).
-/// Four bounds concurrent task trees and per-connection queues while covering
-/// two viewers plus Files/Terminal work. Capture is shared: each consumer has
-/// its own encoder and bounded queue (`video_targets`). Native single-viewer
-/// callers still address one session via `Snapshot::incoming`; multi-session
-/// callers use `hosted_sessions()`.
+/// Live hosted files-only sessions. Each owns its session record, clipboard
+/// and file streams; the host clipboard sync selects exactly one session
+/// (see `clipboard_owner`). Presence links are bounded by the paired
+/// devices instead, one per peer, and their services by their own caps.
 const MAX_LIVE_INCOMING: usize = 4;
 
 impl Core {
@@ -299,22 +293,18 @@ pub(super) enum HostTurn {
     PeerShouldClose,
     /// The host ended the session and wrote a close frame.
     LocalStop,
-    /// The controlling session has ended and held keys were released.
+    /// The session has ended.
     Done,
 }
 
 /// One admission check for every Hello: before approval, after approval, and
-/// after the session gate. The rule lives in [`session::admit`]; this only
-/// reads the state it needs.
+/// after the session gate. The rule lives in [`session::admit`] and
+/// [`session::admit_services`]; this only reads the state it needs.
 fn admission(
     state: &State,
     peer: EndpointId,
     version: u16,
-    files_only: bool,
     services_only: bool,
-    video_unsupported: bool,
-    codec_supported: bool,
-    peer_decode_unsupported: bool,
 ) -> Result<(), Error> {
     if services_only {
         // One link per paired peer; a newer one replaces the older.
@@ -333,13 +323,8 @@ fn admission(
     session::admit(
         state.hosting,
         state.live_incoming_count() >= MAX_LIVE_INCOMING,
-        state.trust.granted(peer.as_bytes(), Grant::View),
         state.trust.granted(peer.as_bytes(), Grant::Transfer),
-        files_only,
         version,
-        video_unsupported,
-        codec_supported,
-        peer_decode_unsupported,
     )
 }
 
@@ -369,37 +354,17 @@ pub(super) async fn handle_host_request(
         }
     };
     match message {
+        // A session carries no picture: a Desktop service opens its own
+        // stream on a presence link. A Hello that asks for one is refused.
         ControlMessage::Hello {
             version,
-            codec,
-            quality,
-            decode,
-            files_only,
+            files_only: true,
             services_only,
-            separate_cursor: cursor_receiver,
-            bt601,
             hostname: hello_hostname,
             os: hello_os,
+            ..
         } => {
-            // Hello carries a decode bit, not a profile bit; every decoder we
-            // ship handles both profiles, so High is a host-encoder decision.
-            let caps = lock(&shared.video_caps).clone();
-            let agreed_codec = crate::video_caps::negotiate(codec, &caps);
-            let codec_supported = agreed_codec.is_some();
-            // The controller names its decoder in Hello. A peer that cannot
-            // decode gets an explicit reject, not a session with no
-            // displayable video.
-            let peer_decode_unsupported = !decode && lock(&shared.capture).is_some();
-            let decision = admission(
-                &lock(&shared.state),
-                peer,
-                version,
-                files_only,
-                services_only,
-                super::video_unsupported(&shared),
-                codec_supported,
-                peer_decode_unsupported,
-            );
+            let decision = admission(&lock(&shared.state), peer, version, services_only);
             let decision = match decision {
                 // The file already told the controller who this host is. The
                 // digits typed here tell the host who the controller is.
@@ -408,18 +373,9 @@ pub(super) async fn handle_host_request(
                     if lock(&shared.state).trust.get(peer.as_bytes()).is_none() =>
                 {
                     match wait_for_control_approval(shared, connection, peer, stop_rx).await {
-                        ControlAnswer::Approved => admission(
-                            &lock(&shared.state),
-                            peer,
-                            version,
-                            files_only,
-                            services_only,
-                            super::video_unsupported(&shared),
-                            codec_supported,
-                            // Re-read: the platform could report an encoder
-                            // while the approval was parked.
-                            !decode && lock(&shared.capture).is_some(),
-                        ),
+                        ControlAnswer::Approved => {
+                            admission(&lock(&shared.state), peer, version, services_only)
+                        }
                         ControlAnswer::Rejected(error) => Err(error),
                     }
                 }
@@ -435,19 +391,10 @@ pub(super) async fn handle_host_request(
                     HostTurn::PeerShouldClose
                 }
                 Ok(()) => {
-                    // The previous session, if this peer just dropped, releases
-                    // held keys before this Hello is admitted.
+                    // Admission counts live sessions: one Hello passes the
+                    // checks and registers before the next is decided.
                     let _gate = shared.session_gate.lock().await;
-                    let decision = admission(
-                        &lock(&shared.state),
-                        peer,
-                        version,
-                        files_only,
-                        services_only,
-                        super::video_unsupported(&shared),
-                        codec_supported,
-                        !decode && lock(&shared.capture).is_some(),
-                    );
+                    let decision = admission(&lock(&shared.state), peer, version, services_only);
                     if let Err(error) = decision {
                         crate::ignored!(
                             crate::trace::SESSION,
@@ -457,34 +404,7 @@ pub(super) async fn handle_host_request(
                         );
                         return HostTurn::PeerShouldClose;
                     }
-                    // Agree the encoder limits before admitting: the offer
-                    // clamped to this host's monitor and codec caps.
-                    let monitor = monitor_size(shared);
-                    let caps = lock(&shared.video_caps).clone();
-                    let codec_id = agreed_codec
-                        .map(|agreed| agreed.codec)
-                        .unwrap_or(crate::protocol::CODEC_H264);
-                    let agreed = session::start_quality(&quality, monitor, &caps, codec_id);
-                    let matrix = crate::VideoCodec::from_wire_id(codec_id)
-                        .map_or(crate::YuvMatrix::Bt709, |agreed| {
-                            crate::YuvMatrix::of_codec(bt601, agreed)
-                        });
-                    let separate_cursor = !files_only
-                        && cursor_receiver
-                        && lock(&shared.capture)
-                            .as_ref()
-                            .is_some_and(|capture| capture.separate_cursor());
-                    match register_incoming(
-                        shared,
-                        peer,
-                        stop,
-                        Some(agreed),
-                        codec_id,
-                        matrix,
-                        separate_cursor,
-                        files_only,
-                        services_only,
-                    ) {
+                    match register_incoming(shared, peer, stop, services_only) {
                         Ok(info) => {
                             *owned_session = Some(info.id);
                             remember_link(shared, info.id, connection.clone());
@@ -510,38 +430,6 @@ pub(super) async fn handle_host_request(
                                 "a peer's name and addresses are refreshed at the next connection",
                                 super::link::remember_peer_os(shared, peer.as_bytes(), hello_os)
                             );
-                            let desktop_stop = lock(&shared.state)
-                                .incoming
-                                .get(&info.id)
-                                .expect("admitted session")
-                                .desktop_stop
-                                .subscribe();
-                            let cursor_task = separate_cursor.then(|| {
-                                let mut desktop_stop = desktop_stop.clone();
-                                let connection = connection.clone();
-                                let cursor = lock(&shared.state)
-                                    .incoming
-                                    .get(&info.id)
-                                    .expect("admitted session")
-                                    .cursor_outbox
-                                    .subscribe();
-                                let stop = stop_rx.clone();
-                                tokio::spawn(async move {
-                                    if *desktop_stop.borrow() {
-                                        return;
-                                    }
-                                    tokio::select! {
-                                            biased;
-                                            _ = desktop_stop.changed() => {},
-                                            _ = super::cursor::send_cursor(
-                                        connection,
-                                        SessionStamp::new(info.id, info.generation),
-                                        cursor,
-                                        stop,
-                                    ) => {},
-                                        }
-                                })
-                            });
                             // Install reverse side-stream senders before Accept can
                             // make the controller's connect call return. In particular,
                             // a host file send immediately after connect must not race
@@ -553,28 +441,23 @@ pub(super) async fn handle_host_request(
                                 *peer.as_bytes(),
                                 tokio::sync::watch::Receiver::clone(stop_rx),
                             );
+                            // The desktop fields of the Accept, which a
+                            // Desktop service's own stream fills, stay at
+                            // their defaults.
                             let wrote = write_frame(
                                 &mut send,
                                 &ControlMessage::Accept {
                                     stamp: SessionStamp::new(info.id, info.generation),
-                                    monitor_width: info.monitor_width,
-                                    monitor_height: info.monitor_height,
-                                    codec: codec_id
-                                        | if separate_cursor {
-                                            crate::protocol::SEPARATE_CURSOR
-                                        } else {
-                                            0
-                                        },
-                                    quality: info.quality.unwrap_or(agreed),
+                                    monitor_width: 0,
+                                    monitor_height: 0,
+                                    codec: 0,
+                                    quality: session::controller_offer(),
                                     hostname: shared.local_hostname(),
                                     os: crate::OperatingSystem::local(),
                                 },
                             )
                             .await;
                             if wrote.is_err() || write_addresses(shared, &mut send).await.is_err() {
-                                if let Some(task) = cursor_task {
-                                    task.abort();
-                                }
                                 if let Some(task) = clipboard {
                                     task.abort();
                                 }
@@ -582,28 +465,6 @@ pub(super) async fn handle_host_request(
                                 finish_incoming(shared, info.id);
                                 return HostTurn::PeerShouldClose;
                             }
-                            let outbox = {
-                                let state = lock(&shared.state);
-                                state
-                                    .incoming
-                                    .get(&info.id)
-                                    .and_then(|session| session.video.clone())
-                            };
-                            let video = outbox.map(|outbox| {
-                                let connection = connection.clone();
-                                let mut stop_rx = stop_rx.clone();
-                                let mut desktop_stop = desktop_stop.clone();
-                                tokio::spawn(async move {
-                                    if *desktop_stop.borrow() {
-                                        return;
-                                    }
-                                    tokio::select! {
-                                        biased;
-                                        _ = desktop_stop.changed() => {},
-                                        _ = host_video_loop(connection, outbox, &mut stop_rx) => {},
-                                    }
-                                })
-                            });
                             let local_stop = host_command_loop(
                                 shared, info.id, peer, &mut send, &mut recv, stop_rx,
                             )
@@ -623,12 +484,6 @@ pub(super) async fn handle_host_request(
                                     );
                                 }
                                 Err(_) => files.abort(),
-                            }
-                            if let Some(task) = cursor_task {
-                                task.abort();
-                            }
-                            if let Some(video) = video {
-                                video.abort();
                             }
                             if local_stop {
                                 crate::ignored!(
@@ -681,18 +536,8 @@ pub(super) fn register_incoming(
     shared: &Shared,
     peer: EndpointId,
     stop: &tokio::sync::watch::Sender<bool>,
-    quality: Option<Quality>,
-    codec: u8,
-    matrix: crate::YuvMatrix,
-    separate_cursor: bool,
-    files_only: bool,
     services_only: bool,
 ) -> Result<SessionInfo, Error> {
-    let (monitor_width, monitor_height) = if services_only {
-        (0, 0)
-    } else {
-        monitor_size(shared)
-    };
     let mut state = lock(&shared.state);
     if state.shut_down {
         return Err(Error::ShutDown);
@@ -717,16 +562,12 @@ pub(super) fn register_incoming(
     state.next_session_id = state.next_session_id.saturating_add(1);
     let generation = state.generation;
     let peer_id = peer.to_string();
-    let quality = if services_only { None } else { quality };
     let info = SessionInfo {
         id,
         generation,
         role: SessionRole::Host,
         phase: session::phase_after_admit(),
         peer_id: peer_id.clone(),
-        quality,
-        monitor_width,
-        monitor_height,
     };
     state.incoming.insert(
         id,
@@ -739,27 +580,9 @@ pub(super) fn register_incoming(
             phase: session::phase_after_admit(),
             peer_id: peer_id.clone(),
             peer_key: *peer.as_bytes(),
-            quality,
-            codec,
-            matrix,
-            separate_cursor: separate_cursor && !files_only,
-            files_only,
             services_only,
-            desktop_stop: tokio::sync::watch::channel(false).0,
-            cursor_outbox: tokio::sync::watch::channel(None).0,
-            desktop_owner: None,
-            monitor_width,
-            monitor_height,
             peer_topology: Vec::new(),
-            selected_displays: Vec::new(),
-            display_fault: None,
             stop: stop.clone(),
-            outbox: None,
-            video: if files_only {
-                None
-            } else {
-                Some(Arc::new(VideoOutbox::new()))
-            },
             link: None,
             clipboard: None,
             clipboard_files: None,
@@ -795,7 +618,6 @@ pub(super) fn finish_incoming(shared: &Shared, session_id: u64) {
     let session = state.incoming.get_mut(&session_id).expect("checked");
     let info = session_info(session);
     session.enter(SessionPhase::Closed);
-    session.cursor_outbox.send_replace(None);
     // Hand clipboard selection to the lowest remaining live hosted session,
     // if any, so sync never points at a closed session.
     if state.clipboard_owner == Some(session_id) {
@@ -996,71 +818,5 @@ mod tests {
             .expect("the handshake ends");
             assert!(dialed.is_err(), "the agent's protocol is refused");
         });
-    }
-
-    /// A host capture of one pixel, which clamps any offered picture.
-    struct OnePixelCapture;
-
-    impl crate::video::HostCapture for OnePixelCapture {
-        fn monitor(&self) -> (u16, u16) {
-            (1, 1)
-        }
-    }
-
-    fn wait_closed(core: &Core, role: SessionRole) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            let snapshot = core.snapshot().unwrap();
-            let session = match role {
-                SessionRole::Host => snapshot.incoming,
-                SessionRole::Controller => snapshot.outgoing,
-            };
-            if session
-                .as_ref()
-                .is_some_and(|session| session.phase == SessionPhase::Closed)
-            {
-                return;
-            }
-            if std::time::Instant::now() > deadline {
-                panic!("session did not close: {session:?}");
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
-
-    #[test]
-    fn the_offer_and_agreed_quality_travel_with_the_session() {
-        use crate::test_support::{loopback_core, pair_for_control};
-
-        let host = loopback_core();
-        let controller = loopback_core();
-        host.set_capture(Box::new(OnePixelCapture)).unwrap();
-        pair_for_control(&host, &controller);
-        let session = controller.connect(&host.endpoint_id()).unwrap();
-        // The 1x1 capture clamps the 1920x1080 offer, and a picture of
-        // one pixel starts at the lowest rate, not the common start.
-        let agreed = Quality::new(crate::bitrate::FLOOR_KBPS, 30, 1, 1).unwrap();
-        assert_eq!(session.quality, Some(agreed));
-        assert_eq!(
-            host.snapshot().unwrap().incoming.unwrap().quality,
-            Some(agreed)
-        );
-        let updated = Quality::new(1_000, 15, 640, 480).unwrap();
-        controller
-            .update_session_quality(session.id, SessionRole::Controller, updated)
-            .unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            let current = host.snapshot().unwrap().incoming.map(|info| info.quality);
-            if current == Some(Some(updated)) {
-                break;
-            }
-            if std::time::Instant::now() > deadline {
-                panic!("host did not apply the propagated quality: {current:?}");
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        controller.disconnect().unwrap();
-        wait_closed(&controller, SessionRole::Controller);
     }
 }

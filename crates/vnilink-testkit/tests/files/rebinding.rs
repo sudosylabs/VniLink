@@ -41,7 +41,7 @@ fn a_receiving_root_rebound_mid_download_interrupts_without_writing() -> TestRes
     let two = payload(512, 1606);
     std::fs::write(host.root().join("one.txt"), &one)?;
     std::fs::write(host.root().join("two.txt"), &two)?;
-    controller.core.connect(&host.endpoint())?;
+    controller.core.connect_files(&host.endpoint())?;
     controller
         .core
         .create_dir(controller.root_id(), "", "got")?;
@@ -121,7 +121,7 @@ fn a_replace_choice_applies_only_under_the_root_it_was_made_for() -> TestResult 
     let got = controller.root().join("got");
     std::fs::create_dir_all(&got)?;
     std::fs::write(got.join("one.txt"), b"original-local-content")?;
-    controller.core.connect(&host.endpoint())?;
+    controller.core.connect_files(&host.endpoint())?;
     let job = files::download(&pair, "", "got")?;
     assert_eq!(
         controller.core.job_poll(job)?.state,
@@ -200,7 +200,7 @@ fn a_saved_replace_choice_refuses_a_root_replaced_at_the_same_path() -> TestResu
     std::fs::create_dir_all(root.join("got"))?;
     std::fs::write(root.join("got/one.txt"), b"original")?;
     let controller = &pair.controller.core;
-    controller.connect(&pair.host.endpoint())?;
+    controller.connect_files(&pair.host.endpoint())?;
     let job = files::download(&pair, "", "got")?;
     assert_eq!(
         controller.job_poll(job)?.state,
@@ -258,7 +258,7 @@ fn a_sender_restarted_with_its_root_rebound_fails_the_resume_and_says_why() -> T
     std::fs::write(pair.host.root().join("one.txt"), &one)?;
     std::fs::write(pair.host.root().join("two.txt"), &two)?;
     let controller = &pair.controller.core;
-    controller.connect(&pair.host.endpoint())?;
+    controller.connect_files(&pair.host.endpoint())?;
     controller.create_dir(pair.controller.root_id(), "", "got")?;
     let job = files::download(&pair, "", "got")?;
     files::poll_within(controller, job, 20, "the first file to land", |s| {
@@ -342,7 +342,7 @@ fn a_sending_root_rebound_mid_upload_interrupts_and_resumes_once_restored() -> T
     std::fs::create_dir_all(&source)?;
     std::fs::write(source.join("one.txt"), &one)?;
     std::fs::write(source.join("two.txt"), &two)?;
-    controller.connect(&pair.host.endpoint())?;
+    controller.connect_files(&pair.host.endpoint())?;
     let job = files::upload(&pair, "set", "arrived")?;
     let receiver = files::received(host);
     files::poll_within(host, receiver, 20, "the first file to land", |s| {
@@ -419,7 +419,7 @@ fn a_source_opened_before_a_rebind_serves_its_own_bytes() -> TestResult {
     let two = payload(512, 1602);
     std::fs::write(pair.controller.root().join("one.txt"), &one)?;
     std::fs::write(pair.controller.root().join("two.txt"), &two)?;
-    controller.connect(&pair.host.endpoint())?;
+    controller.connect_files(&pair.host.endpoint())?;
     let job = controller.job_submit_upload(
         &pair.host.endpoint(),
         pair.controller.root_id(),

@@ -32,7 +32,7 @@ fn a_waiting_service_closes_without_withdrawing_the_request() -> TestResult {
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     ask_before_admitting(&pair)?;
-    let pending = controller.begin_connect(&pair.host.endpoint())?;
+    let pending = controller.begin_connect_services(&pair.host.endpoint())?;
     pair.host.wait_request();
     let service = pair.attach(&pending, ServiceKind::Desktop);
     assert_eq!(
@@ -99,7 +99,7 @@ fn a_rejected_connection_fails_its_attached_services() -> TestResult {
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     ask_before_admitting(&pair)?;
-    let pending = controller.begin_connect(&pair.host.endpoint())?;
+    let pending = controller.begin_connect_services(&pair.host.endpoint())?;
     pair.host.wait_request();
     let service = pair.attach(&pending, ServiceKind::Desktop);
     host.reject_control_request()?;
@@ -138,7 +138,7 @@ fn a_rejected_connection_fails_its_attached_services() -> TestResult {
 }
 
 /// A services connection is admitted without any desktop grant or codec:
-/// it carries no input, video or Desktop, and Files opens only once the
+/// it opens no Desktop, and Files opens only once the
 /// host shares it, while the connection's own file calls stay refused; a
 /// redial moves the owner on, and withdrawing Files ends it and leaves the
 /// connection.
@@ -152,28 +152,6 @@ fn a_neutral_connection_grants_nothing_until_files_is_shared() -> TestResult {
     host.set_video_codecs(VideoCodecCaps::default())?;
     controller.set_video_codecs(VideoCodecCaps::default())?;
     let session = pair.connect_services();
-    let incoming = host.snapshot()?.incoming.ok_or("the host's session")?;
-    assert_eq!(
-        (session.monitor_width, session.monitor_height),
-        (0, 0),
-        "the controller sees no monitor"
-    );
-    assert_eq!(
-        (incoming.monitor_width, incoming.monitor_height),
-        (0, 0),
-        "the host offers no monitor"
-    );
-    assert!(
-        session.quality.is_none() && incoming.quality.is_none(),
-        "neither side has a picture quality"
-    );
-    assert!(
-        matches!(
-            controller.subscribe_session_video(session.id, session.generation),
-            Err(Error::Unsupported(_))
-        ),
-        "a neutral connection carries no video"
-    );
     let desktop = pair.attach(&session, ServiceKind::Desktop);
     assert!(
         matches!(
@@ -231,10 +209,6 @@ fn a_neutral_connection_grants_nothing_until_files_is_shared() -> TestResult {
         next.list(root, &folder, 0, 20)?.entries[0].name,
         "owned",
         "the owner's next pipe works after the old one closed"
-    );
-    assert!(
-        controller.controller_session(session.id)?.quality.is_none(),
-        "the redial stays neutral"
     );
     host.set_service_sharing(ServiceKind::Files, false)?;
     wait_for("withdrawing Files to end the pipe", DEFAULT_WAIT, || {

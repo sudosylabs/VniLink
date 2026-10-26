@@ -1,14 +1,14 @@
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import type { DataChannelRequest, DataPacket } from '../../../platform/engine/common/dataChannel.js';
-import { deviceName, engineErrorCategory, type DesktopInputCommand, type DisplayInfo, type QualityLimits, type RemoteStatus, type VideoCodec, type WindowDecoder } from '../../../platform/engine/common/engine.js';
+import { engineErrorCategory, type DesktopInputCommand, type RemoteStatus, type VideoCodec, type VideoCodecCaps, type WindowDecoder } from '../../../platform/engine/common/engine.js';
 import { DataChannelClient } from '../../../platform/engine/electron-browser/dataChannelClient.js';
 import { createWebCodecsDecoder, webCodecsSupport } from '../camera/webCodecsDecoder.js';
 import { activeControllerSession } from '../devices/controllerSession.js';
 import { IDeviceService } from '../devices/deviceService.js';
 import { EngineDesktopSession, type DesktopVideoChannel } from './engineDesktopSession.js';
 import { probeWindowDecoders, type DecoderSupport } from './windowDecoders.js';
-import { DesktopReadbackError, desktopTargetKey, isValidDesktopQuality, type DesktopFailure, type DesktopSession, type DesktopSettings, type DesktopTarget, type IDesktopSession, IRemoteDesktopService } from './remoteDesktopService.js';
+import { type DesktopFailure, type IDesktopSession, IRemoteDesktopService } from './remoteDesktopService.js';
 
 export type DesktopChannelOpener = (
 	request: Omit<DataChannelRequest, 'requestId'>,
@@ -42,7 +42,6 @@ export function desktopOpenFailure(error: unknown): DesktopFailure {
 
 export class RemoteDesktopService implements IRemoteDesktopService {
 	declare public readonly _serviceBrand: undefined;
-	private pending: Promise<unknown> = Promise.resolve();
 	protected openChannel: DesktopChannelOpener;
 	protected decoderSupport: DecoderSupport = webCodecsSupport;
 	/** What this window decodes, asked once. */
@@ -130,70 +129,15 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 		return this.engine.available;
 	}
 
-	public async load(): Promise<DesktopSettings> {
+	public async codecs(): Promise<Readonly<VideoCodecCaps>> {
 		if (!this.available) {
 			throw new Error('Desktop engine unavailable');
 		}
-		const [controllers, hosts, snapshot, codecs] = await Promise.all([
-			this.engine.execute({ type: 'controllerSessions' }), this.engine.execute({ type: 'hostedSessions' }), this.engine.execute({ type: 'snapshot' }), this.engine.execute({ type: 'videoCodecs' }),
-		]);
-		if (controllers.type !== 'sessions' || hosts.type !== 'sessions' || snapshot.type !== 'snapshot' || codecs.type !== 'videoCodecs') {
-			throw new Error('Invalid desktop settings reply');
+		const reply = await this.engine.execute({ type: 'videoCodecs' });
+		if (reply.type !== 'videoCodecs') {
+			throw new Error('Invalid video codecs reply');
 		}
-		const sessions: DesktopSession[] = [];
-		for (const session of [...controllers.sessions, ...hosts.sessions]) {
-			if (session.phase !== 'Active' || !session.quality || !isValidDesktopQuality(session.quality)) {
-				continue;
-			}
-			const peer = snapshot.snapshot.devices.find(device => device.endpoint_id === session.peer_id);
-			const name = peer ? deviceName(peer) : session.peer_id;
-			const quality = Object.freeze({ ...session.quality });
-			sessions.push(Object.freeze({ id: session.id, generation: session.generation, role: session.role, name, quality }));
-		}
-		return { sessions: Object.freeze(sessions), codecs: Object.freeze({ ...codecs.codecs }) };
-	}
-
-	private async target(target: DesktopTarget): Promise<DesktopSession> {
-		const session = (await this.load()).sessions.find(session => desktopTargetKey(session) === desktopTargetKey(target));
-		if (!session) {
-			throw new Error('Desktop session ended or reconnected');
-		}
-		return session;
-	}
-
-	public async displays(target: DesktopTarget): Promise<readonly DisplayInfo[]> {
-		await this.target(target);
-		const reply = await this.engine.execute(target.role === 'Controller' ? { type: 'sessionTopology', sessionId: target.id, generation: target.generation } : { type: 'topology' });
-		if (reply.type !== 'displays') {
-			throw new Error('Invalid display reply');
-		}
-		return Object.freeze(reply.displays.map(display => Object.freeze({ ...display })));
-	}
-
-	public apply(target: DesktopTarget, quality: QualityLimits): Promise<DesktopSettings> {
-		const owner = { ...target };
-		const draft = { ...quality };
-		const result = this.pending.then(async () => {
-			if (!isValidDesktopQuality(draft)) {
-				throw new Error('Invalid stream limits');
-			}
-			await this.target(owner);
-			const reply = await this.engine.execute({ type: 'updateSessionQuality', sessionId: owner.id, generation: owner.generation, role: owner.role, quality: draft });
-			if (reply.type !== 'done') {
-				throw new Error('Invalid quality update reply');
-			}
-			try {
-				const settings = await this.load();
-				if (!settings.sessions.some(session => desktopTargetKey(session) === desktopTargetKey(owner))) {
-					throw new Error('Session disappeared');
-				}
-				return settings;
-			} catch {
-				throw new DesktopReadbackError();
-			}
-		});
-		this.pending = result.catch(() => undefined);
-		return result;
+		return Object.freeze({ ...reply.codecs });
 	}
 }
 

@@ -1,5 +1,5 @@
 //! The shared clipboard alone: text and file selections copied on either
-//! computer reaching the other, over a control session or through the
+//! computer reaching the other, over a files-only session or through the
 //! Remote Desktop service, under the host's grant.
 
 #[path = "clipboard/desktops.rs"]
@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use expect_test::expect;
 
-use vnilink::{Error, Grants, MAX_CLIPBOARD_TEXT};
+use vnilink::{Error, Grants, SessionInfo, SessionPhase, MAX_CLIPBOARD_TEXT};
 use vnilink_testkit::desktop::{DesktopSession, RecordingClipboard, Script, ScriptedScreen};
 use vnilink_testkit::{traced, wait_for, Engine, Pair, DEFAULT_WAIT};
 
@@ -30,6 +30,15 @@ fn sharing(clipboard: bool) -> Grants {
     }
 }
 
+/// What a host shares with a files-only session: transfer, which admits
+/// the session, and its clipboard when `clipboard`.
+fn files_sharing(clipboard: bool) -> Grants {
+    Grants {
+        transfer: true,
+        ..sharing(clipboard)
+    }
+}
+
 /// What a controller shares: nothing.
 const NOTHING: Grants = Grants {
     view: false,
@@ -38,10 +47,33 @@ const NOTHING: Grants = Grants {
     transfer: false,
 };
 
-/// A host and a controller paired, the host sharing its clipboard when
-/// `clipboard`.
+/// A host and a controller paired for a files-only session, the host
+/// sharing its clipboard when `clipboard`.
 fn paired(clipboard: bool) -> Pair {
-    Pair::new(sharing(clipboard), NOTHING)
+    Pair::new(files_sharing(clipboard), NOTHING)
+}
+
+/// `controller`'s files-only session to `host`, the session that carries
+/// the session clipboard, once active; the refusal when it was refused.
+fn files_session(controller: &Engine, host: &Engine) -> Result<SessionInfo, Error> {
+    let pending = controller.core.begin_connect_files(&host.endpoint())?;
+    wait_for(
+        "the files-only session to open",
+        DEFAULT_WAIT,
+        || match controller.core.controller_session(pending.id) {
+            Ok(session) if session.phase == SessionPhase::Active => Some(Ok(session)),
+            Ok(session)
+                if matches!(
+                    session.phase,
+                    SessionPhase::Failed(_) | SessionPhase::Closed
+                ) =>
+            {
+                Some(Err(Error::Unauthorized))
+            }
+            Ok(_) => None,
+            Err(error) => Some(Err(error)),
+        },
+    )
 }
 
 /// The clipboard's records of what crossed and what was refused, without
@@ -218,7 +250,7 @@ fn the_largest_text_crosses_and_more_is_refused() {
     assert_eq!(texts.lock().unwrap().len(), 1);
 }
 
-/// A file selection offered on a control session reaches the host as names
+/// A file selection offered on a files-only session reaches the host as names
 /// and sizes, and the story is recorded on both sides, by the engine that
 /// lived it, without a single name.
 #[test]
@@ -228,7 +260,7 @@ fn a_file_selection_crosses_a_session_and_its_story_is_recorded() {
         view: true,
         control: true,
         clipboard: true,
-        transfer: false,
+        transfer: true,
     };
     let none = vnilink::Grants {
         view: false,
@@ -237,7 +269,7 @@ fn a_file_selection_crosses_a_session_and_its_story_is_recorded() {
         transfer: false,
     };
     let pair = vnilink_testkit::Pair::new(share, none);
-    let session = pair.controller.core.connect(&pair.host.endpoint()).unwrap();
+    let session = files_session(&pair.controller, &pair.host).unwrap();
     let offer = vnilink::FileSelection {
         entries: vec![vnilink::ClipboardFileEntry {
             path: "quarterly-report.pdf".into(),

@@ -53,7 +53,7 @@ fn run(files: usize, size: usize) {
             .collect();
         std::fs::write(source.join(format!("f{n:05}.bin")), bytes).unwrap();
     }
-    let _session = controller.connect(&host.endpoint_id()).unwrap();
+    let _session = controller.connect_files(&host.endpoint_id()).unwrap();
     let started = Instant::now();
     let job = controller
         .job_submit_upload(&host.endpoint_id(), 0, "set", 0, "")
@@ -102,7 +102,7 @@ fn pair(host: &Core, controller: &Core) {
         .create_invitation(Duration::from_secs(60))
         .unwrap();
     host.accept_invitation(&back).unwrap();
-    // A session opens under view and control; files move under transfer.
+    // A files-only session opens, and files move, under transfer.
     host.set_desktop_sharing(Grants {
         view: true,
         control: true,

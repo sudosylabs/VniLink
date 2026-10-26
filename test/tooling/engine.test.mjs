@@ -19,14 +19,13 @@ test('control commands reject privileged methods, malformed IDs and extra author
 	assert.equal(isEngineCommand({ type: 'createInvitation', ttlSeconds: NaN }), false);
 	assert.equal(isEngineCommand({ type: 'authorize', endpointId: 'peer', view: true, control: true, clipboard: false, transfer: false }), false);
 	assert.equal(isEngineCommand({ type: 'authorize', endpointId: 'peer', view: true, control: true, clipboard: false }), false);
-	assert.equal(isEngineCommand({ type: 'connect', endpointId: 'peer' }), true);
-	assert.equal(isEngineCommand({ type: 'beginConnect', endpointId: 'peer' }), true);
+	assert.equal(isEngineCommand({ type: 'connect', endpointId: 'peer' }), false, 'a desktop rides the services connection');
+	assert.equal(isEngineCommand({ type: 'beginConnect', endpointId: 'peer' }), false, 'a desktop rides the services connection');
 	assert.equal(isEngineCommand({ type: 'beginConnectServices', endpointId: 'peer' }), true);
 	assert.equal(isEngineCommand({ type: 'beginConnectServices' }), false);
 	assert.equal(isEngineCommand({ type: 'beginConnectServices', endpointId: 'peer', allowed: true }), false);
 	assert.equal(isEngineCommand({ type: 'setTerminalEnabled', enabled: true }), false);
 	assert.equal(isEngineCommand({ type: 'authorizeTerminal', endpointId: 'peer', allowed: true }), false);
-	assert.equal(isEngineCommand({ type: 'connect' }), false);
 	assert.equal(isEngineCommand({ type: 'disconnect' }), true);
 	assert.equal(isEngineCommand({ type: 'disconnectSession', sessionId: '1' }), true);
 	assert.equal(isEngineCommand({ type: 'disconnectSession', sessionId: '18446744073709551616' }), false);
@@ -41,7 +40,9 @@ test('identity, codecs, relays and session settings validate exactly', () => {
 	assert.equal(isEngineCommand({ type: 'videoCodecs' }), true);
 	assert.equal(isEngineCommand({ type: 'clipboardOwnerSession' }), true);
 	assert.equal(isEngineCommand({ type: 'subscribeEvents' }), true);
-	assert.equal(isEngineCommand({ type: 'subscribeVideo' }), true);
+	for (const type of ['subscribeVideo', 'subscribeSessionVideo', 'pollVideo', 'releaseVideo', 'publishVideo']) {
+		assert.equal(isEngineCommand({ type }), false, `${type}: pictures go on a desktop's data channel`);
+	}
 	const codecs = { encode_baseline: true, encode_high: false, decode_baseline: true, decode_high: false, max_width: 4096, max_height: 4096, hardware: true, device: 'test', chroma444: false };
 	assert.equal(isEngineCommand({ type: 'setVideoCodecs', codecs }), true);
 	assert.equal(isEngineCommand({ type: 'setVideoCodecs', codecs: { ...codecs, max_width: 65536 } }), false);
@@ -93,7 +94,8 @@ test('bridge events keep core names and lossless ids', () => {
 	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Failed' } } } }), false);
 	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Failed', failure: 'boredom' } } } }), false);
 	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Revoked', failure: 'encoder' } } } }), false);
-	assert.equal(isEngineEvent({ type: 'qualityUpdated', id: '1', quality: { max_bitrate_kbps: 1000, max_frame_rate: 30, max_width: 1920, max_height: 1080 } }), true);
+	assert.equal(isEngineEvent({ type: 'qualityUpdated', id: '1', quality: { max_bitrate_kbps: 1000, max_frame_rate: 30, max_width: 1920, max_height: 1080 } }), false, 'a session has no picture quality');
+	assert.equal(isEngineEvent({ type: 'keyframeRequested', id: '1' }), false, 'a session has no picture to refresh');
 	assert.equal(isEngineEvent({ type: 'inputFailed', id: '1', message: 'denied' }), true);
 	assert.equal(isEngineEvent({ type: 'topologyChanged', revision: '4' }), true);
 	assert.equal(isEngineEvent({ type: 'hostLocked', locked: true }), true);

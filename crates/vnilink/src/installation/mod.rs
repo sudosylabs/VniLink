@@ -164,7 +164,7 @@ mod tests {
     use super::*;
     use crate::core::Core;
     use crate::relay::RelaySettings;
-    use crate::test_support::{loopback_core, pair_for_control};
+    use crate::test_support::{connect_link, loopback_core, pair_for_control};
 
     fn open_loop(store: &MemoryStore, relay: RelaySettings) -> Core {
         let core = Core::open_direct(Arc::new(store.clone()), relay).expect("installation opens");
@@ -179,7 +179,7 @@ mod tests {
         let host = open_loop(&store, RelaySettings::public_n0());
         let controller = loopback_core();
         pair_for_control(&host, &controller);
-        controller.connect(&host.endpoint_id()).unwrap();
+        connect_link(&controller, &host);
         let own = crate::hostname::local_hostname();
         assert_eq!(controller.peer_hostname(&host.endpoint_id()).unwrap(), own);
 

@@ -73,12 +73,8 @@ fn pair(host: &VnilinkCore, controller: &VnilinkCore, clipboard: bool, transfer:
     host.start_hosting().unwrap();
 }
 
-/// `controller`'s services connection to `host`, once active, and a
-/// Desktop service on it: where a viewer's input goes.
-fn neutral_desktop(
-    host: &VnilinkCore,
-    controller: &VnilinkCore,
-) -> (crate::FfiSessionInfo, Arc<crate::services::DesktopService>) {
+/// `controller`'s services connection to `host`, once active.
+fn services_connection(host: &VnilinkCore, controller: &VnilinkCore) -> crate::FfiSessionInfo {
     let pending = controller
         .begin_connect_services(host.endpoint_id())
         .unwrap();
@@ -87,7 +83,16 @@ fn neutral_desktop(
         assert!(Instant::now() < until);
         std::thread::sleep(Duration::from_millis(10));
     }
-    let parent = controller.controller_session(pending.id).unwrap();
+    controller.controller_session(pending.id).unwrap()
+}
+
+/// `controller`'s services connection to `host`, once active, and a
+/// Desktop service on it: where a viewer's input goes.
+fn neutral_desktop(
+    host: &VnilinkCore,
+    controller: &VnilinkCore,
+) -> (crate::FfiSessionInfo, Arc<crate::services::DesktopService>) {
+    let parent = services_connection(host, controller);
     let owner = controller
         .attach_controller_service(parent.id, parent.generation, FfiServiceKind::Desktop)
         .unwrap();
@@ -119,7 +124,7 @@ fn service_handles_and_cancellation_cross_the_ffi_boundary() {
     std::fs::create_dir(&scratch.0).unwrap();
     host.inner.enable_filesystem_access().unwrap();
     let host_files = FilesystemLocation::new(host.inner.file_roots().unwrap(), &scratch.0);
-    let session = controller.connect(host.endpoint_id()).unwrap();
+    let session = services_connection(&host, &controller);
     let events = controller.subscribe_events().unwrap();
     let desktop = controller
         .attach_controller_service(session.id, session.generation, FfiServiceKind::Desktop)
@@ -165,22 +170,6 @@ fn service_handles_and_cancellation_cross_the_ffi_boundary() {
             .unwrap(),
         session
     );
-    assert!(matches!(
-        controller.attach_controller_service(
-            session.id,
-            session.generation,
-            FfiServiceKind::Terminal
-        ),
-        Err(FfiError::Unsupported { .. })
-    ));
-    assert!(matches!(
-        controller.attach_controller_service(
-            session.id,
-            session.generation,
-            FfiServiceKind::Camera
-        ),
-        Err(FfiError::Unsupported { .. })
-    ));
     controller
         .close_controller_service(desktop.id, desktop.generation)
         .unwrap();
@@ -292,7 +281,7 @@ fn native_desktop_contract_covers_shortcuts_clipboard_and_bidirectional_files() 
     }
     drop(desktop);
     controller.disconnect_session(keys.id).unwrap();
-    let session = controller.connect(host.endpoint_id()).unwrap();
+    let session = controller.connect_files(host.endpoint_id()).unwrap();
     controller
         .submit_clipboard(
             session.id,
@@ -384,16 +373,18 @@ fn native_clipboard_and_file_delivery_still_require_their_own_grants() {
     host.install_clipboard(Box::new(Pasteboard(pasteboard.clone())))
         .unwrap();
     pair(&host, &controller, false, false);
-    let session = controller.connect(host.endpoint_id()).unwrap();
+    // A files-only session is admitted on the Transfer grant alone.
+    assert_eq!(
+        controller.connect_files(host.endpoint_id()),
+        Err(FfiError::Unauthorized)
+    );
+    host.set_desktop_sharing(true, true, false, true).unwrap();
+    let session = controller.connect_files(host.endpoint_id()).unwrap();
     assert_eq!(
         controller.submit_clipboard(session.id, session.generation, "denied".into()),
         Err(FfiError::ClipboardDenied)
     );
     assert_eq!(*pasteboard.lock().unwrap(), None);
-    assert_eq!(
-        controller.fs_list(session.id, session.generation, 0, "".into(), 0, 20),
-        Err(FfiError::TransferDenied)
-    );
     controller.disconnect().unwrap();
     controller.shutdown();
     host.shutdown();
@@ -437,7 +428,7 @@ fn service_jobs_cross_the_ffi_boundary() {
     controller
         .set_desktop_sharing(false, false, false, true)
         .unwrap();
-    let session = controller.connect(host.endpoint_id()).unwrap();
+    let session = controller.connect_files(host.endpoint_id()).unwrap();
     let owner = controller
         .attach_controller_service(session.id, session.generation, FfiServiceKind::Files)
         .unwrap();
@@ -553,7 +544,8 @@ fn service_permissions_cross_ffi_without_enabling_missing_backends() {
     // Legacy native authorization only changes its three legacy fields.
     host.set_desktop_sharing(true, true, false, true).unwrap();
     assert!(host.service_permissions(id.clone()).unwrap().terminal);
-    let session = controller.connect(host.endpoint_id()).unwrap();
+    // A files-only session carries files and nothing else.
+    let session = controller.connect_files(host.endpoint_id()).unwrap();
     let support = controller
         .remote_service_support(session.id, session.generation)
         .unwrap();
@@ -590,7 +582,6 @@ fn neutral_connections_cross_ffi_without_desktop_or_transfer_grants() {
     loop {
         let session = controller.controller_session(pending.id).unwrap();
         if session.phase == FfiSessionPhase::Active {
-            assert!(session.quality.is_none());
             break;
         }
         assert!(
@@ -627,11 +618,11 @@ fn neutral_connections_cross_ffi_without_desktop_or_transfer_grants() {
 }
 
 #[test]
-fn adopted_desktop_lifetime_crosses_ffi_without_closing_connection() {
+fn desktop_lifetime_crosses_ffi_without_closing_connection() {
     let host = core();
     let controller = core();
     pair(&host, &controller, false, true);
-    let session = controller.connect(host.endpoint_id()).unwrap();
+    let session = services_connection(&host, &controller);
     let owner = controller
         .attach_controller_service(session.id, session.generation, FfiServiceKind::Desktop)
         .unwrap();
@@ -647,11 +638,6 @@ fn adopted_desktop_lifetime_crosses_ffi_without_closing_connection() {
         .unwrap();
     handle.close();
     assert!(handle.is_cancelled());
-    assert!(controller
-        .controller_session(session.id)
-        .unwrap()
-        .quality
-        .is_none());
     assert_eq!(
         controller.controller_service(owner.id).unwrap().phase,
         FfiServicePhase::Closed {
@@ -859,11 +845,6 @@ fn neutral_desktop_input_video_and_reopen_cross_ffi() {
         controller.controller_session(parent.id).unwrap().phase,
         FfiSessionPhase::Active
     );
-    assert!(controller
-        .controller_session(parent.id)
-        .unwrap()
-        .quality
-        .is_none());
 }
 
 #[test]
@@ -1586,7 +1567,7 @@ fn clipboard_files_cross_the_ffi_boundary() {
     controller
         .set_desktop_sharing(true, true, true, true)
         .unwrap();
-    let session = controller.connect(host.endpoint_id()).unwrap();
+    let session = controller.connect_files(host.endpoint_id()).unwrap();
     let incoming = host.snapshot().unwrap().incoming.unwrap();
     let offer = FfiFileSelection {
         entries: vec![FfiClipboardFileEntry {

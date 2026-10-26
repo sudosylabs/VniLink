@@ -24,7 +24,7 @@ fn a_source_in_transfer_cannot_be_renamed_until_its_job_ends() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
     std::fs::write(pair.controller.root().join("a.txt"), payload(512, 41))?;
-    pair.controller.core.connect(&pair.host.endpoint())?;
+    pair.controller.core.connect_files(&pair.host.endpoint())?;
     let job = files::upload(&pair, "a.txt", "dest")?;
     received(&pair.host.core);
     let root = pair.controller.root_id();
@@ -73,7 +73,7 @@ fn serving_refuses_a_parent_swapped_for_a_link() -> TestResult {
         .join("outside");
     std::fs::create_dir(&outside)?;
     std::fs::write(outside.join("public.txt"), b"secret")?;
-    pair.controller.core.connect(&pair.host.endpoint())?;
+    pair.controller.core.connect_files(&pair.host.endpoint())?;
     let job = files::upload(&pair, "docs/public.txt", "got")?;
     std::fs::remove_dir_all(&docs)?;
     std::os::unix::fs::symlink(&outside, &docs)?;
@@ -114,7 +114,7 @@ fn serving_refuses_a_source_replaced_after_its_offer() -> TestResult {
     let pair = Pair::for_files();
     let source = pair.controller.root().join("source.bin");
     std::fs::write(&source, payload(64 * 1024, 1701))?;
-    pair.controller.core.connect(&pair.host.endpoint())?;
+    pair.controller.core.connect_files(&pair.host.endpoint())?;
     let job = files::upload(&pair, "source.bin", "arrived")?;
     let decoy = payload(64 * 1024, 1702);
     let staged = pair.controller.root().join("staged.bin");
@@ -157,7 +157,7 @@ fn jobs_sharing_content_keep_serving_it_when_one_is_cancelled() -> TestResult {
     let bytes = payload(1024, 303);
     std::fs::write(pair.controller.root().join("a.txt"), &bytes)?;
     std::fs::write(pair.controller.root().join("b.txt"), &bytes)?;
-    pair.controller.core.connect(&pair.host.endpoint())?;
+    pair.controller.core.connect_files(&pair.host.endpoint())?;
     let first = files::upload(&pair, "a.txt", "got-a")?;
     let second = files::upload(&pair, "b.txt", "got-b")?;
     // A receiver takes its sender's id.
@@ -218,7 +218,7 @@ fn receivers_release_partials_once_finished_or_forgotten() -> TestResult {
     let pair = Pair::for_files();
     let bytes = payload(64 * 1024, 707);
     std::fs::write(pair.controller.root().join("payload.bin"), &bytes)?;
-    pair.controller.core.connect(&pair.host.endpoint())?;
+    pair.controller.core.connect_files(&pair.host.endpoint())?;
     let job = files::upload(&pair, "payload.bin", "")?;
     let receiver = received(&pair.host.core);
     let (_, got) = drive_to_end(
@@ -322,7 +322,7 @@ fn senders_keep_no_copy_of_their_sources() -> TestResult {
     let down = payload(2 * 1024 * 1024, 202);
     std::fs::write(pair.controller.root().join("up.bin"), &up)?;
     std::fs::write(pair.host.root().join("down.bin"), &down)?;
-    controller.connect(&pair.host.endpoint())?;
+    controller.connect_files(&pair.host.endpoint())?;
 
     // The controller uploads: it sends, the host receives.
     let upload = files::upload(&pair, "up.bin", "got-up")?;
@@ -409,7 +409,7 @@ fn windows_serve_holds_its_source_against_replacement() -> TestResult {
     // Windows shares whole disks, not folders.
     let (source_root, source_path) = whole_disk(&pair.controller, "folder/held.bin")?;
     let (destination_root, destination) = whole_disk(&pair.host, "arrived")?;
-    controller.connect(&pair.host.endpoint())?;
+    controller.connect_files(&pair.host.endpoint())?;
     let job = controller.job_submit_upload(
         &pair.host.endpoint(),
         source_root,
@@ -466,7 +466,7 @@ fn a_late_sender_is_retried_without_a_resume() -> TestResult {
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     let bytes = payload(64 * 1024, 1801);
     std::fs::write(pair.controller.root().join("late.bin"), &bytes)?;
-    controller.connect(&pair.host.endpoint())?;
+    controller.connect_files(&pair.host.endpoint())?;
     let job = files::upload(&pair, "late.bin", "arrived")?;
     let receiver = files::only_job(host)?;
 

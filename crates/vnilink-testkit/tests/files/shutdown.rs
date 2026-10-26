@@ -39,7 +39,7 @@ fn a_host_that_shuts_down_mid_download_interrupts_the_job_at_once() -> TestResul
     std::fs::write(pair.host.root().join("one.txt"), payload(512, 1801))?;
     std::fs::write(pair.host.root().join("two.txt"), payload(512, 1802))?;
     let controller = &pair.controller.core;
-    let session = controller.connect(&pair.host.endpoint())?;
+    let session = controller.connect_files(&pair.host.endpoint())?;
     controller.create_dir(pair.controller.root_id(), "", "got")?;
     let job = files::download(&pair, "", "got")?;
     files::poll_within(controller, job, 20, "the first file to land", |s| {
@@ -95,7 +95,7 @@ fn a_controller_that_shuts_down_mid_upload_leaves_the_receiver_retrying_and_says
     std::fs::create_dir_all(&source)?;
     std::fs::write(source.join("one.txt"), payload(512, 1803))?;
     std::fs::write(source.join("two.txt"), payload(512, 1804))?;
-    controller.connect(&pair.host.endpoint())?;
+    controller.connect_files(&pair.host.endpoint())?;
     files::upload(&pair, "set", "arrived")?;
     let job = received(host);
     files::poll_within(host, job, 20, "the first file to land", |s| {

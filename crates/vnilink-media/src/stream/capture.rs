@@ -324,7 +324,6 @@ mod capture_target_tests {
 
     fn target(width: u16, height: u16) -> VideoTarget {
         VideoTarget {
-            service: true,
             id: 1,
             generation: 1,
             quality: Quality::new(8_000, 60, width, height).unwrap(),

@@ -1,5 +1,5 @@
 pub(crate) mod filesystem_location;
-use crate::{new_quality, FfiKeyboardMode, FfiSessionRole, VnilinkCore};
+use crate::{new_quality, FfiKeyboardMode, VnilinkCore};
 use crate::{FfiError, FfiEvent, FfiVideoCodecCaps};
 use filesystem_location::FilesystemLocation;
 
@@ -93,13 +93,13 @@ fn unpaired_peers_fail_before_dialing() {
     let core = open_core();
     let other = open_core();
     assert!(matches!(
-        core.connect(other.endpoint_id()),
+        core.connect_files(other.endpoint_id()),
         Err(FfiError::NotPaired)
     ));
     assert!(matches!(core.disconnect(), Err(FfiError::NoSession)));
     core.set_desktop_sharing(true, true, false, false).unwrap();
     assert!(matches!(
-        core.connect(other.endpoint_id()),
+        core.connect_files(other.endpoint_id()),
         Err(FfiError::NotPaired)
     ));
     assert!(matches!(
@@ -113,27 +113,13 @@ fn unpaired_peers_fail_before_dialing() {
 }
 
 #[test]
-fn commands_clipboard_transfer_and_video_fail_without_a_session() {
+fn commands_clipboard_and_transfer_fail_without_a_session() {
     let core = open_core();
-    assert!(matches!(
-        core.select_displays(1, 1, vec![1]),
-        Err(FfiError::NoSession) | Err(FfiError::StaleSession)
-    ));
     assert!(core.submit_clipboard(1, 1, "hi".to_string()).is_err());
     assert!(core.clipboard_text().unwrap().is_none());
     assert!(core.fs_list(1, 1, 0, "".to_string(), 0, 20).is_err());
     assert!(core
         .job_submit_upload("bogus".to_string(), 0, "a.txt".into(), 0, "a.txt".into())
-        .is_err());
-    assert!(core
-        .publish_video(1, true, 0, vec![0, 0, 0, 1, 0x65, 0x00])
-        .is_err());
-    assert!(core
-        .update_session_quality(
-            1,
-            FfiSessionRole::Controller,
-            new_quality(2_000, 30, 1920, 1080).unwrap()
-        )
         .is_err());
     assert!(core.session_paths(1).is_err());
 }
@@ -144,12 +130,7 @@ fn subscriptions_poll_empty_and_report_lag() {
     let events = core.subscribe_events().unwrap();
     assert!(events.poll(16).is_empty());
     assert_eq!(events.lagged(), 0);
-    let video = core.subscribe_video().unwrap();
-    assert!(video.try_recv().is_none());
-    assert!(video.recv_timeout(10).unwrap().is_none());
-    assert_eq!(video.lagged(), 0);
-    // Second video subscription is busy; events allow several subscribers.
-    assert!(core.subscribe_video().is_err());
+    // Events allow several subscribers.
     let _ = core.subscribe_events().unwrap();
 }
 
@@ -195,8 +176,8 @@ fn independent_controller_handles_cross_the_ffi() {
             .unwrap();
         host.set_desktop_sharing(true, true, false, false).unwrap();
     }
-    let pending_a = controller.begin_connect(a.endpoint_id()).unwrap();
-    let pending_b = controller.begin_connect(b.endpoint_id()).unwrap();
+    let pending_a = controller.begin_connect_services(a.endpoint_id()).unwrap();
+    let pending_b = controller.begin_connect_services(b.endpoint_id()).unwrap();
     assert_ne!(pending_a.id, pending_b.id);
     let wait = |id, phase| {
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -216,28 +197,48 @@ fn independent_controller_handles_cross_the_ffi() {
     let sb = wait(pending_b.id, FfiSessionPhase::Active);
     assert_eq!(controller.controller_sessions().unwrap().len(), 2);
     assert!(controller.disconnect().is_err());
-    let va = controller
-        .subscribe_session_video(sa.id, sa.generation)
-        .unwrap();
-    let vb = controller
-        .subscribe_session_video(sb.id, sb.generation)
-        .unwrap();
-    a.publish_video(
-        a.snapshot().unwrap().incoming.unwrap().id,
-        true,
-        11,
-        vec![1],
-    )
-    .unwrap();
-    b.publish_video(
-        b.snapshot().unwrap().incoming.unwrap().id,
-        true,
-        22,
-        vec![2],
-    )
-    .unwrap();
+    // Each handle carries its own Desktop: a picture from one host reaches
+    // only the viewer of that host.
+    let desktop = |session: &crate::FfiSessionInfo| {
+        let owner = controller
+            .attach_controller_service(
+                session.id,
+                session.generation,
+                crate::FfiServiceKind::Desktop,
+            )
+            .unwrap();
+        controller
+            .open_desktop_service(owner.id, owner.generation)
+            .unwrap()
+    };
+    let (da, db) = (desktop(&sa), desktop(&sb));
+    let (va, vb) = (da.subscribe_video().unwrap(), db.subscribe_video().unwrap());
+    for (host, payload) in [(&a, 1u8), (&b, 2u8)] {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let hosted = loop {
+            if let Some(service) = host
+                .inner
+                .hosted_services()
+                .unwrap()
+                .into_iter()
+                .find(|service| service.kind == vnilink::ServiceKind::Desktop)
+            {
+                break service;
+            }
+            assert!(Instant::now() < deadline, "the host's Desktop");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        host.inner
+            .publish_desktop_video(
+                hosted.id,
+                hosted.generation,
+                vnilink::EncodedFrame::h264(true, u64::from(payload) * 11, vec![payload]).unwrap(),
+            )
+            .unwrap();
+    }
     assert_eq!(va.recv_timeout(3000).unwrap().unwrap().payload, vec![1]);
     assert_eq!(vb.recv_timeout(3000).unwrap().unwrap().payload, vec![2]);
+    drop((va, vb, da, db));
     controller.disconnect_session(sa.id).unwrap();
     wait(sa.id, FfiSessionPhase::Closed);
     controller.forget_controller_session(sa.id).unwrap();

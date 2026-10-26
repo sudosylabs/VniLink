@@ -160,39 +160,9 @@ fn concurrent_topology_publications_never_regress_revision_or_event_order() -> T
     Ok(())
 }
 
+/// Pictures are published only to a Desktop the engine serves.
 #[test]
-fn a_desktop_stream_selects_exactly_one_display() -> TestResult {
-    let _trace = traced();
-    let engine = Engine::start("engine");
-    let one_display = "a desktop stream shows one display";
-    assert!(
-        matches!(
-            engine.core.select_displays(1, 1, &[1, 2]),
-            Err(Error::InvalidSetting(message)) if message == one_display
-        ),
-        "two displays are refused"
-    );
-    assert!(
-        matches!(
-            engine.core.select_displays(1, 1, &[]),
-            Err(Error::InvalidSetting(message)) if message == one_display
-        ),
-        "no display is refused"
-    );
-    assert!(
-        matches!(
-            engine.core.select_displays(1, 1, &[0]),
-            Err(Error::InvalidSetting("a display id is invalid"))
-        ),
-        "display 0 is refused"
-    );
-    Ok(())
-}
-
-/// Pictures are published to a session the engine has, and one reader at
-/// a time receives them.
-#[test]
-fn video_api_rejects_a_second_subscriber_and_a_missing_session() -> TestResult {
+fn a_picture_for_a_desktop_the_engine_does_not_serve_is_refused() -> TestResult {
     let _trace = traced();
     let engine = Engine::start("engine");
     assert!(
@@ -203,20 +173,10 @@ fn video_api_rejects_a_second_subscriber_and_a_missing_session() -> TestResult {
         matches!(
             engine
                 .core
-                .publish_video(1, EncodedFrame::h264(true, 1, vec![1])?),
+                .publish_desktop_video(1, 1, EncodedFrame::h264(true, 1, vec![1])?),
             Err(Error::NoSession)
         ),
-        "a picture for a session the engine does not have is refused"
-    );
-    let first = engine.core.subscribe_video()?;
-    assert!(
-        matches!(engine.core.subscribe_video(), Err(Error::Busy)),
-        "a second reader is refused"
-    );
-    drop(first);
-    assert!(
-        engine.core.subscribe_video().is_ok(),
-        "a reader may subscribe once the first is gone"
+        "a picture for a Desktop the engine does not serve is refused"
     );
     Ok(())
 }

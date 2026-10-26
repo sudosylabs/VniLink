@@ -5,7 +5,7 @@
 use expect_test::expect;
 use std::time::Duration;
 
-use vnilink::{CoreConfig, CoreEvent, EncodedFrame, Error, Grants, Quality, SessionRole};
+use vnilink::{CoreConfig, CoreEvent, EncodedFrame, Error, Grants, Quality};
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::relay::LocalRelay;
 use vnilink_testkit::store::start_storeless;
@@ -49,7 +49,10 @@ fn shutdown_is_idempotent_and_later_calls_report_it() -> TestResult {
         core.accept_invitation(&token).map(drop),
         "accept_invitation",
     );
-    shut(core.connect(&other.endpoint()).map(drop), "connect");
+    shut(
+        core.begin_connect_services(&other.endpoint()).map(drop),
+        "begin_connect_services",
+    );
     shut(core.disconnect(), "disconnect");
     shut(InputLog::install(&engine, (0, 0)).map(drop), "set_desktop");
     shut(
@@ -58,14 +61,13 @@ fn shutdown_is_idempotent_and_later_calls_report_it() -> TestResult {
     );
     shut(core.revoke(&other.endpoint()), "revoke");
     shut(
-        core.update_session_quality(1, SessionRole::Host, Quality::new(1, 1, 1, 1)?),
-        "update_session_quality",
+        core.set_desktop_quality_defaults(Quality::new(1, 1, 1, 1)?),
+        "set_desktop_quality_defaults",
     );
     shut(
-        core.publish_video(1, EncodedFrame::h264(true, 0, vec![1])?),
-        "publish_video",
+        core.publish_desktop_video(1, 1, EncodedFrame::h264(true, 0, vec![1])?),
+        "publish_desktop_video",
     );
-    shut(core.subscribe_video().map(drop), "subscribe_video");
     shut(
         core.set_capture(Box::new(MonitorCapture::new((1, 1)))),
         "set_capture",
@@ -94,7 +96,10 @@ fn unknown_devices_and_garbage_ids_are_rejected() -> TestResult {
     );
     for id in ["", "not-a-key", "zzzz"] {
         assert!(
-            matches!(host.core.connect(id), Err(Error::InvalidSetting(_))),
+            matches!(
+                host.core.begin_connect_services(id),
+                Err(Error::InvalidSetting(_))
+            ),
             "connecting to {id:?} is refused"
         );
         assert!(

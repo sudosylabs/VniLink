@@ -3,7 +3,6 @@ use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
-use crate::protocol::Quality;
 use crate::session::{SessionPhase, SessionRole};
 
 pub(crate) const MAX_SUBSCRIBERS: usize = 8;
@@ -98,21 +97,11 @@ pub enum CoreEvent {
     HostedServiceChanged {
         service: crate::ServiceInfo,
     },
-    QualityUpdated {
-        id: u64,
-        quality: Quality,
-    },
     /// The host could not apply an input event, or the controller was told
     /// that input will not be applied. The message names the reason, not the key.
     InputFailed {
         id: u64,
         message: &'static str,
-    },
-    /// The host should encode a keyframe for this session.
-    ///
-    /// Predicted frames were dropped, or the controller asked for a keyframe.
-    KeyframeRequested {
-        id: u64,
     },
     /// The host published clipboard text. Read it with [`crate::Core::clipboard_text`].
     ///

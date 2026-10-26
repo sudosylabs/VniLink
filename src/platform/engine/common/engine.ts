@@ -65,7 +65,7 @@ export interface Capabilities {
 	audio: boolean; monitors: number; h264_encode: boolean; h264_decode: boolean;
 }
 
-export interface SessionInfo { id: string; generation: string; role: 'Controller' | 'Host'; phase: string | { Failed: { message: string } }; peer_id: string; quality?: QualityLimits | null; monitor_width?: number; monitor_height?: number; }
+export interface SessionInfo { id: string; generation: string; role: 'Controller' | 'Host'; phase: string | { Failed: { message: string } }; peer_id: string; }
 
 export interface PointerSettings { sensitivity_percent: number; reverse_wheel: boolean; swap_buttons: boolean; }
 
@@ -134,9 +134,8 @@ export type EngineEvent =
 	| { type: 'peerAvailabilityChanged'; endpoint_id: string }
 	| { type: 'sessionChanged'; id: string; generation: string; role: 'Controller' | 'Host'; phase: SessionPhase; peer_id: string }
 	| { type: 'serviceChanged' | 'hostedServiceChanged' | 'desktopClipboardReceived'; service: ServiceSummary }
-	| { type: 'qualityUpdated'; id: string; quality: QualityLimits }
 	| { type: 'inputFailed'; id: string; message: string }
-	| { type: 'keyframeRequested' | 'clipboardReceived' | 'clipboardFilesReceived'; id: string }
+	| { type: 'clipboardReceived' | 'clipboardFilesReceived'; id: string }
 	| { type: 'topologyChanged'; revision: string }
 	| { type: 'hostLocked'; locked: boolean };
 
@@ -167,8 +166,6 @@ function isWindowDecoders(value: unknown): value is WindowDecoder[] {
 			&& !value.slice(0, index).some((earlier: unknown) => record(earlier) && earlier.codec === decoder.codec));
 }
 
-export interface VideoFrame { codec: VideoCodec; keyframe: boolean; timestamp_us: string; data: string; display_id: string; revision: string; }
-
 export interface RelayInfo { url: string; authenticated: boolean; }
 
 export interface ControlRequestInfo { endpoint_id: string; check: string; }
@@ -197,7 +194,7 @@ export type EngineCommand =
 	| { type: 'setLogFilter'; directives: string | null }
 	/** The end of the engine's own log file. */
 	| { type: 'engineLogTail' }
-	| { type: 'endpoint' | 'capabilities' | 'videoCodecs' | 'clipboardOwnerSession' | 'subscribeEvents' | 'subscribeVideo' }
+	| { type: 'endpoint' | 'capabilities' | 'videoCodecs' | 'clipboardOwnerSession' | 'subscribeEvents' }
 	| { type: 'setVideoCodecs'; codecs: VideoCodecCaps }
 	| { type: 'saveCustomRelays'; relays: RelayInput[] }
 	| { type: 'peerHostname'; endpointId: string }
@@ -228,7 +225,6 @@ export type EngineCommand =
 	| { type: 'confirmPairing'; previewId: string; digits: string }
 	| { type: 'revoke' | 'unpair'; endpointId: string }
 	| { type: 'setPeerName'; endpointId: string; name: string }
-	| { type: 'connect' | 'beginConnect'; endpointId: string }
 	| { type: 'disconnect' }
 	| { type: 'disconnectSession'; sessionId: string }
 	| { type: 'stopHostedPeer'; sessionId: string }
@@ -276,18 +272,12 @@ export type EngineCommand =
 	| { type: 'sessionPaths'; sessionId: string }
 	| { type: 'topology' }
 	| { type: 'sessionTopology'; sessionId: string; generation: string }
-	| { type: 'selectDisplays'; sessionId: string; generation: string; ids: string[] }
 	| { type: 'captureDisplays' }
 	| { type: 'setTopology'; revision: string; displays: DisplayInfo[] }
 	| { type: 'setDesktopCodecDefault'; codec: CodecPreference }
 	/** The codecs this app's window decodes, each at most once; future screens offer only these. */
 	| { type: 'setWindowDecoders'; decoders: WindowDecoder[] }
-	| { type: 'setDesktopQualityDefaults'; quality: QualityLimits }
-	| { type: 'updateSessionQuality'; sessionId: string; generation: string; role: 'Controller' | 'Host'; quality: QualityLimits }
-	| { type: 'subscribeSessionVideo'; sessionId: string; generation: string }
-	| { type: 'pollVideo'; subscriptionId: string }
-	| { type: 'releaseVideo'; subscriptionId: string }
-	| { type: 'publishVideo'; codec: VideoCodec; sessionId: string; keyframe: boolean; timestampUs: string; data: string };
+	| { type: 'setDesktopQualityDefaults'; quality: QualityLimits };
 
 export type EngineReply =
 	| { type: 'restartRequired'; required: boolean }
@@ -322,8 +312,6 @@ export type EngineReply =
 	| { type: 'displayIds'; displays: string[] }
 	| { type: 'paths'; paths: SessionPath[] }
 	| { type: 'relays'; relays: RelayInfo[] }
-	| { type: 'videoSubscription'; subscriptionId: string }
-	| { type: 'videoFrame'; frame: VideoFrame | null }
 	| { type: 'endpoint'; endpointId: string }
 	| { type: 'capabilities'; capabilities: Capabilities }
 	| { type: 'videoCodecs'; codecs: VideoCodecCaps }
@@ -370,10 +358,6 @@ function base64(value: unknown): value is string {
 
 function longText(value: unknown): value is string {
 	return typeof value === 'string' && value.length <= 256 * 1024;
-}
-
-function frameData(value: unknown): value is string {
-	return typeof value === 'string' && value.length > 0 && value.length <= 1024 * 1024 && value.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(value);
 }
 
 function uint(value: unknown, max: number): boolean {
@@ -605,9 +589,8 @@ export function isEngineEvent(value: unknown): value is EngineEvent {
 				&& text(value.peer_id) && Object.keys(value).length === 6;
 		case 'serviceChanged': case 'hostedServiceChanged': case 'desktopClipboardReceived':
 			return serviceInfo(value.service) && Object.keys(value).length === 2;
-		case 'qualityUpdated': return decimal(value.id) && isQualityLimits(value.quality) && Object.keys(value).length === 3;
 		case 'inputFailed': return decimal(value.id) && text(value.message) && Object.keys(value).length === 3;
-		case 'keyframeRequested': case 'clipboardReceived': case 'clipboardFilesReceived':
+		case 'clipboardReceived': case 'clipboardFilesReceived':
 			return decimal(value.id) && Object.keys(value).length === 2;
 		case 'topologyChanged': return decimal(value.revision) && Object.keys(value).length === 2;
 		case 'hostLocked': return typeof value.locked === 'boolean' && Object.keys(value).length === 2;
@@ -618,11 +601,6 @@ export function isEngineEvent(value: unknown): value is EngineEvent {
 function sessionPath(value: unknown): value is SessionPath {
 	return record(value) && typeof value.relay === 'boolean' && typeof value.selected === 'boolean' && decimal(value.rtt_ms)
 		&& decimal(value.tx_bytes) && decimal(value.rx_bytes) && Object.keys(value).length === 5;
-}
-
-function videoFrame(value: unknown): value is VideoFrame {
-	return record(value) && ['h264', 'h265', 'vp8', 'vp9', 'av1'].includes(String(value.codec)) && typeof value.keyframe === 'boolean' && decimal(value.timestamp_us) && frameData(value.data)
-		&& decimal(value.display_id) && decimal(value.revision) && Object.keys(value).length === 6;
 }
 
 function relay(value: unknown): value is RelayInfo {
@@ -650,9 +628,7 @@ function capabilities(value: unknown): value is Capabilities {
 }
 
 function session(value: unknown): value is SessionInfo | null {
-	return value === null || (record(value) && decimal(value.id) && decimal(value.generation) && (value.role === 'Controller' || value.role === 'Host') && text(value.peer_id)
-		&& (!('quality' in value) || value.quality === null || isQualityLimits(value.quality))
-		&& (!('monitor_width' in value) || uint(value.monitor_width, 65535)) && (!('monitor_height' in value) || uint(value.monitor_height, 65535))
+	return value === null || (record(value) && Object.keys(value).length === 5 && decimal(value.id) && decimal(value.generation) && (value.role === 'Controller' || value.role === 'Host') && text(value.peer_id)
 		&& ((typeof value.phase === 'string' && ['Connecting', 'Authenticated', 'Authorized', 'Negotiating', 'Active', 'Reconnecting', 'Stopping', 'Closed'].includes(value.phase)) || (record(value.phase) && record(value.phase.Failed) && text(value.phase.Failed.message))));
 }
 
@@ -763,7 +739,7 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'logFilter': case 'engineLogTail': keys = []; valid = true; break;
 		case 'setLogFilter': keys = ['directives']; valid = logFilter(value.directives); break;
 		case 'endpoint': case 'capabilities': case 'videoCodecs': case 'clipboardOwnerSession':
-		case 'subscribeEvents': case 'subscribeVideo': keys = []; valid = true; break;
+		case 'subscribeEvents': keys = []; valid = true; break;
 		case 'setVideoCodecs': keys = ['codecs']; valid = videoCodecs(value.codecs); break;
 		case 'saveCustomRelays': keys = ['relays']; valid = relayInputs(value.relays); break;
 		case 'peerHostname': keys = ['endpointId']; valid = text(value.endpointId); break;
@@ -775,7 +751,6 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'confirmPairing': keys = ['previewId', 'digits']; valid = decimal(value.previewId) && typeof value.digits === 'string' && /^[0-9]{3}$/.test(value.digits); break;
 		case 'revoke': case 'unpair': keys = ['endpointId']; valid = text(value.endpointId); break;
 		case 'setPeerName': keys = ['endpointId', 'name']; valid = text(value.endpointId) && text(value.name) && value.name.length <= 256; break;
-		case 'connect': case 'beginConnect': keys = ['endpointId']; valid = text(value.endpointId); break;
 		case 'disconnect': keys = []; valid = true; break;
 		case 'disconnectSession': case 'stopHostedPeer': keys = ['sessionId']; valid = decimal(value.sessionId); break;
 		case 'submitClipboard': keys = ['sessionId', 'generation', 'text']; valid = decimal(value.sessionId) && decimal(value.generation) && longText(value.text); break;
@@ -840,16 +815,11 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'closeTerminalSession': keys = ['id']; valid = text(value.id); break;
 		case 'topology': keys = []; valid = true; break;
 		case 'sessionTopology': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
-		case 'selectDisplays': keys = ['sessionId', 'generation', 'ids']; valid = decimal(value.sessionId) && decimal(value.generation) && decimals(value.ids); break;
 		case 'captureDisplays': keys = []; valid = true; break;
 		case 'setTopology': keys = ['revision', 'displays']; valid = decimal(value.revision) && displays(value.displays); break;
 		case 'setDesktopCodecDefault': keys = ['codec']; valid = isCodecPreference(value.codec); break;
 		case 'setWindowDecoders': keys = ['decoders']; valid = isWindowDecoders(value.decoders); break;
 		case 'setDesktopQualityDefaults': keys = ['quality']; valid = isQualityLimits(value.quality); break;
-		case 'updateSessionQuality': keys = ['sessionId', 'generation', 'role', 'quality']; valid = decimal(value.sessionId) && decimal(value.generation) && sessionRole(value.role) && isQualityLimits(value.quality); break;
-		case 'subscribeSessionVideo': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
-		case 'pollVideo': case 'releaseVideo': keys = ['subscriptionId']; valid = decimal(value.subscriptionId); break;
-		case 'publishVideo': keys = ['codec', 'sessionId', 'keyframe', 'timestampUs', 'data']; valid = ['h264', 'h265', 'vp8', 'vp9', 'av1'].includes(String(value.codec)) && decimal(value.sessionId) && typeof value.keyframe === 'boolean' && decimal(value.timestampUs) && frameData(value.data); break;
 		default: return false;
 	}
 	return valid && Object.keys(value).length === keys.length + 1 && Object.keys(value).every(key => key === 'type' || keys.includes(key));
@@ -889,8 +859,6 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'paths': return Array.isArray(value.paths) && value.paths.every((item: unknown) => sessionPath(item)) && Object.keys(value).length === 2;
 		case 'restartRequired': return typeof value.required === 'boolean' && Object.keys(value).length === 2;
 		case 'relays': return Array.isArray(value.relays) && value.relays.every((item: unknown) => relay(item)) && Object.keys(value).length === 2;
-		case 'videoSubscription': return decimal(value.subscriptionId) && Object.keys(value).length === 2;
-		case 'videoFrame': return (value.frame === null || videoFrame(value.frame)) && Object.keys(value).length === 2;
 		case 'endpoint': return text(value.endpointId) && Object.keys(value).length === 2;
 		case 'capabilities': return capabilities(value.capabilities) && Object.keys(value).length === 2;
 		case 'videoCodecs': return videoCodecs(value.codecs) && Object.keys(value).length === 2;

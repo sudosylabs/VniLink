@@ -37,7 +37,7 @@ fn closing_a_service_ends_its_own_work_and_leaves_its_siblings() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let session = pair.connect_control();
+    let session = pair.connect_services();
     let events = controller.subscribe()?;
     let screen = pair.attach(&session, ServiceKind::Desktop);
     let files = pair.attach(&session, ServiceKind::Files);
@@ -53,11 +53,11 @@ fn closing_a_service_ends_its_own_work_and_leaves_its_siblings() -> TestResult {
             controller.attach_controller_service(
                 session.id,
                 session.generation,
-                ServiceKind::Desktop
+                ServiceKind::Files
             ),
             Err(Error::Busy)
         ),
-        "a connection has one open Desktop"
+        "a connection has one open Files"
     );
     assert!(
         matches!(
@@ -400,15 +400,6 @@ fn files_terminal_and_camera_start_without_capture_or_a_desktop_decoder() -> Tes
     host.set_camera_factory(Some(Arc::new(StandInCameras::default())))?;
 
     let parent = pair.connect_services();
-    assert_eq!(
-        (parent.monitor_width, parent.monitor_height),
-        (0, 0),
-        "a services connection has no monitor"
-    );
-    assert!(
-        parent.quality.is_none(),
-        "a services connection has no picture quality"
-    );
 
     let files_owner = pair.attach(&parent, ServiceKind::Files);
     let files = controller.open_files_service(files_owner.id, files_owner.generation)?;
@@ -484,10 +475,10 @@ fn files_only_and_terminal_only_connections_never_request_capture() -> TestResul
     );
     assert!(
         matches!(
-            controller.subscribe_session_video(files.id, files.generation),
+            controller.attach_controller_service(files.id, files.generation, ServiceKind::Desktop),
             Err(Error::Unsupported(_))
         ),
-        "a files connection carries no video"
+        "a files connection carries no Desktop"
     );
     assert!(
         pair.host.hosted(Some(ServiceKind::Desktop)).is_empty(),

@@ -5,8 +5,8 @@
 use expect_test::expect;
 
 use vnilink::{CloseCause, Error, ServiceKind, ServicePhase, SessionPhase};
-use vnilink_testkit::desktop::keyframe;
-use vnilink_testkit::{traced, Engine, Pair, TestResult, DEFAULT_WAIT, SEEN_AND_CONTROLLED};
+use vnilink_testkit::desktop::{keyframe, InputLog};
+use vnilink_testkit::{traced, Engine, Pair, TestResult, DEFAULT_WAIT};
 
 /// A redial carries an open Desktop to the next generation and cancels the
 /// old lease for good, keeps a closed Files closed, and leaves a service on
@@ -20,8 +20,8 @@ fn a_redial_never_revives_old_leases_or_closed_services() -> TestResult {
     let b = Engine::start("host-b");
     a.pair_for_control(&controller)?;
     b.pair_for_control(&controller)?;
-    let sa = controller.connect_control(&a)?;
-    let sb = controller.connect_control(&b)?;
+    let sa = controller.connect_services(&a)?;
+    let sb = controller.connect_services(&b)?;
     let core = &controller.core;
     let screen = core.attach_controller_service(sa.id, sa.generation, ServiceKind::Desktop)?;
     let other = core.attach_controller_service(sb.id, sb.generation, ServiceKind::Desktop)?;
@@ -106,13 +106,9 @@ fn a_redial_never_revives_old_leases_or_closed_services() -> TestResult {
 #[test]
 fn a_redial_keeps_the_files_owner_and_fences_its_old_pipe() -> TestResult {
     let trace = traced();
-    let pair = Pair::for_desktop();
+    let pair = Pair::for_services(&[ServiceKind::Files]);
     let controller = &pair.controller.core;
-    pair.host.core.set_desktop_sharing(vnilink::Grants {
-        transfer: true,
-        ..SEEN_AND_CONTROLLED
-    })?;
-    let session = pair.connect_control();
+    let session = pair.connect_services();
     let owner = pair.attach(&session, ServiceKind::Files);
     let old = controller.open_files_service(owner.id, owner.generation)?;
     controller.drop_controller_link(session.id)?;
@@ -173,15 +169,16 @@ fn a_redial_keeps_the_files_owner_and_fences_its_old_pipe() -> TestResult {
     Ok(())
 }
 
-/// An adopted Desktop across a redial: the old handle is fenced, closing it
-/// does not retire the replacement, which carries the host's pictures, and
-/// the old generation cannot close the owner.
+/// A Desktop across a redial: the old handle is fenced, closing it does not
+/// retire the replacement, which carries the host's pictures, and the old
+/// generation cannot close the owner.
 #[test]
 fn a_redial_fences_the_old_desktop_handle_without_retiring_its_replacement() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let session = controller.connect(&pair.host.endpoint())?;
+    InputLog::install(&pair.host, (1920, 1080))?;
+    let session = pair.connect_services();
     let owner = pair.attach(&session, ServiceKind::Desktop);
     let old = controller.open_desktop_service(owner.id, owner.generation)?;
     controller.drop_controller_link(session.id)?;
@@ -198,13 +195,9 @@ fn a_redial_fences_the_old_desktop_handle_without_retiring_its_replacement() -> 
         !replacement.is_cancelled(),
         "closing the old handle leaves the replacement"
     );
-    assert!(
-        controller.controller_session(session.id)?.quality.is_some(),
-        "the connection keeps its picture quality"
-    );
-    let incoming = host.snapshot()?.incoming.ok_or("the host's session")?;
-    let video = controller.subscribe_session_video(session.id, fresh.generation)?;
-    host.publish_video(incoming.id, keyframe(9, vec![9]))?;
+    let video = replacement.subscribe_video()?;
+    let remote = pair.host.serving(ServiceKind::Desktop, &pair.controller);
+    host.publish_desktop_video(remote.id, remote.generation, keyframe(9, vec![9]))?;
     assert_eq!(
         video
             .recv_timeout(std::time::Duration::from_secs(5))
@@ -222,7 +215,6 @@ fn a_redial_fences_the_old_desktop_handle_without_retiring_its_replacement() -> 
     );
     replacement.close();
     pair.host.wait_released(None);
-    trace.wait_for_records("service released", 2);
     assert_eq!(
         controller.controller_session(session.id)?.phase,
         SessionPhase::Active,

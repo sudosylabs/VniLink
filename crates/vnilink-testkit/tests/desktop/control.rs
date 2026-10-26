@@ -508,28 +508,3 @@ fn a_view_only_viewer_cannot_take_control_and_losing_control_keeps_its_pictures(
     );
     Ok(())
 }
-
-/// A desktop session carries pictures, not input: while another viewer's
-/// session is live, a Desktop service still opens controlling, and its
-/// keys apply.
-#[test]
-fn a_desktop_session_holds_no_control_over_a_desktop_service() -> TestResult {
-    let trace = traced();
-    let pair = Pair::for_desktop();
-    let applied = InputLog::install(&pair.host, SCREEN)?;
-    pair.connect_control();
-    let other = pair.add_viewer("other");
-    pair.host.pair_for_control(&other)?;
-    let desktop = other.open_desktop(&other.connect_services(&pair.host)?)?;
-    wait_for("the desktop to control", DEFAULT_WAIT, || {
-        (desktop.control_state().ok()? == Controlling).then_some(())
-    });
-    desktop.submit_input(InputEvent::key_down(usage::A))?;
-    assert_eq!(
-        applied.wait_for(1),
-        [InputEvent::key_down(usage::A)],
-        "the desktop's key applies beside a live desktop session"
-    );
-    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
-    Ok(())
-}

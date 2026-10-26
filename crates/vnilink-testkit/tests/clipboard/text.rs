@@ -1,10 +1,10 @@
-//! Text copied over a control session: the controller pastes onto the
+//! Text copied over a files-only session: the controller pastes onto the
 //! host, the host publishes to the session it selected, each under the
 //! host's grant and adapter.
 
 use expect_test::expect;
 
-use super::{paired, publish_once_open, sharing, Copied};
+use super::{files_sharing, paired, publish_once_open, Copied};
 use vnilink::{CoreEvent, Error, SessionPhase, MAX_CLIPBOARD_TEXT};
 use vnilink_testkit::desktop::{InputLog, RecordingClipboard};
 use vnilink_testkit::{traced, wait_for, TestResult, DEFAULT_WAIT};
@@ -30,7 +30,7 @@ fn a_paste_needs_the_grant_and_the_session_lives_without_it() -> TestResult {
         !host.capabilities().file_transfer,
         "a clipboard does not offer files"
     );
-    let session = pair.connect_control();
+    let session = super::files_session(&pair.controller, &pair.host)?;
     assert!(
         matches!(
             host.set_clipboard(Box::new(RecordingClipboard {
@@ -60,7 +60,7 @@ fn a_paste_needs_the_grant_and_the_session_lives_without_it() -> TestResult {
         ),
         "a paste for another generation is stale"
     );
-    host.set_desktop_sharing(sharing(true))?;
+    host.set_desktop_sharing(files_sharing(true))?;
     controller.submit_clipboard(session.id, session.generation, "secret-paste")?;
     controller.submit_clipboard(session.id, session.generation, "")?;
     assert_eq!(
@@ -102,7 +102,7 @@ fn text_over_the_limit_is_refused_before_it_is_sent() -> TestResult {
     let pair = paired(true);
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     let copied = Copied::install(&pair.host)?;
-    let session = pair.connect_control();
+    let session = super::files_session(&pair.controller, &pair.host)?;
     let too_big = "a".repeat(MAX_CLIPBOARD_TEXT + 1);
     assert!(
         matches!(
@@ -145,7 +145,7 @@ fn the_hosts_text_reaches_the_controller_under_the_grant() -> TestResult {
     let trace = traced();
     let pair = paired(false);
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let session = pair.connect_control();
+    let session = super::files_session(&pair.controller, &pair.host)?;
     let hosted = host.snapshot()?.incoming.ok_or("the host's session")?;
     let events = controller.subscribe()?;
     assert!(
@@ -159,7 +159,7 @@ fn the_hosts_text_reaches_the_controller_under_the_grant() -> TestResult {
         controller.clipboard_text()?.is_none(),
         "a refused publication does not arrive"
     );
-    host.set_desktop_sharing(sharing(true))?;
+    host.set_desktop_sharing(files_sharing(true))?;
     publish_once_open("the host's text to be sent", || {
         host.publish_clipboard(hosted.id, "secret-from-host")
     });
@@ -226,7 +226,7 @@ fn a_host_without_a_clipboard_refuses_a_paste_and_the_session_lives() -> TestRes
         !host.capabilities().clipboard,
         "no clipboard is installed, so none is offered"
     );
-    let session = pair.connect_control();
+    let session = super::files_session(&pair.controller, &pair.host)?;
     assert!(
         matches!(
             controller.submit_clipboard(session.id, session.generation, "secret-paste"),
@@ -272,7 +272,7 @@ fn the_clipboard_follows_the_hosts_session_from_one_controller_to_the_next() -> 
         "no session, no clipboard owner"
     );
 
-    let _one = first.connect_control(host)?;
+    let _one = super::files_session(first, host)?;
     let incoming_one = host.core.snapshot()?.incoming.ok_or("the first session")?;
     assert_eq!(
         host.core.clipboard_owner_session()?.ok_or("an owner")?.id,
@@ -313,7 +313,7 @@ fn the_clipboard_follows_the_hosts_session_from_one_controller_to_the_next() -> 
         "a closed session is gone, not merely deselected"
     );
 
-    let _two = second.connect_control(host)?;
+    let _two = super::files_session(&second, host)?;
     let incoming_two = host.core.snapshot()?.incoming.ok_or("the second session")?;
     assert_ne!(
         incoming_two.id, incoming_one.id,

@@ -112,8 +112,8 @@ pub(crate) fn pair_for_control(host: &crate::core::Core, controller: &crate::cor
 }
 
 /// Pairs both ways and grants `controller` view, control and transfer on
-/// `host`: the session that carries job control is admitted on a desktop
-/// grant.
+/// `host`: the files-only session that carries job control is admitted on
+/// the Transfer grant.
 pub(crate) fn pair_for_transfer(host: &crate::core::Core, controller: &crate::core::Core) {
     pair_granting(
         host,
@@ -125,6 +125,29 @@ pub(crate) fn pair_for_transfer(host: &crate::core::Core, controller: &crate::co
             transfer: true,
         },
     );
+}
+
+/// Opens a presence link from `controller` to `host`, paired, and waits
+/// until it is active.
+pub(crate) fn connect_link(
+    controller: &crate::core::Core,
+    host: &crate::core::Core,
+) -> crate::SessionInfo {
+    let pending = controller
+        .begin_connect_services(&host.endpoint_id())
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let session = controller.controller_session(pending.id).unwrap();
+        if session.phase == crate::SessionPhase::Active {
+            return session;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the link did not become active: {session:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 fn pair_granting(

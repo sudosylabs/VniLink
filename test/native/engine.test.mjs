@@ -110,8 +110,21 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 		assert.equal((await execute(first, { type: 'relayRestartRequired' })).required, false);
 		assert.equal((await execute(first, { type: 'setDesktopQualityDefaults', quality })).type, 'done');
 		await assert.rejects(execute(first, { type: 'setDesktopQualityDefaults', quality: { ...quality, max_frame_rate: 61 } }));
-		await assert.rejects(execute(first, { type: 'updateSessionQuality', sessionId: '1', generation: '1', role: 'Controller', quality }), /NoSession/);
-		await assert.rejects(execute(first, { type: 'updateSessionQuality', sessionId: '1', role: 'Controller', quality }));
+		// A session carries no picture: what a desktop session once took is no command now.
+		for (const removed of [
+			{ type: 'connect', endpointId: 'peer' },
+			{ type: 'beginConnect', endpointId: 'peer' },
+			{ type: 'updateSessionQuality', sessionId: '1', generation: '1', role: 'Controller', quality },
+			{ type: 'subscribeVideo' },
+			{ type: 'subscribeSessionVideo', sessionId: '1', generation: '1' },
+			{ type: 'pollVideo', subscriptionId: '1' },
+			{ type: 'releaseVideo', subscriptionId: '1' },
+			{ type: 'publishVideo', codec: 'h264', sessionId: '1', keyframe: true, timestampUs: '0', data: 'AQ==' },
+		]) {
+			await assert.rejects(execute(first, removed), /Invalid|unknown variant/, `${removed.type} is refused`);
+		}
+		// A display selection is Desktop input: only its data channel takes it.
+		await assert.rejects(execute(first, { type: 'selectDisplays', sessionId: '1', generation: '1', ids: ['1'] }), /data channel/);
 		const a = (await execute(first, { type: 'snapshot' })).snapshot;
 		const b = (await execute(second, { type: 'snapshot' })).snapshot;
 		assert.notEqual(a.endpoint_id, b.endpoint_id);

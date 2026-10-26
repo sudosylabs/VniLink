@@ -23,7 +23,7 @@ fn replace(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 fn setting_roots_is_refused_during_an_active_session() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_files();
-    pair.controller.core.connect(&pair.host.endpoint())?;
+    pair.controller.core.connect_files(&pair.host.endpoint())?;
     let other = pair.host.root().join("other");
     std::fs::create_dir(&other)?;
     let refused = pair.host.core.set_file_roots(vec![other]);
@@ -50,7 +50,7 @@ fn remote_browse_mkdir_and_rename_change_the_host_disk() -> TestResult {
     std::fs::write(root.join("report.txt"), b"report-bytes")?;
     let files = pair.host.root_id();
     let controller = &pair.controller.core;
-    let session = controller.connect(&pair.host.endpoint())?;
+    let session = controller.connect_files(&pair.host.endpoint())?;
 
     let page = controller.fs_list(session.id, session.generation, files, "", 0, 50)?;
     assert_eq!(page.total, 1, "the host's root holds one entry");
@@ -117,7 +117,7 @@ fn remote_requests_enforce_generation_grant_and_scope() -> TestResult {
     std::fs::write(root.join("kept.txt"), b"kept-bytes")?;
     let files = pair.host.root_id();
     let controller = &pair.controller.core;
-    let session = controller.connect(&pair.host.endpoint())?;
+    let session = controller.connect_files(&pair.host.endpoint())?;
     let kept = || std::fs::read(root.join("kept.txt")).ok();
 
     let stale = session.generation + 1;
@@ -214,7 +214,7 @@ fn remote_rename_conflict_and_stale_token_hold() -> TestResult {
     std::fs::write(root.join("a.txt"), b"a-bytes")?;
     let files = pair.host.root_id();
     let controller = &pair.controller.core;
-    let session = controller.connect(&pair.host.endpoint())?;
+    let session = controller.connect_files(&pair.host.endpoint())?;
     let (id, generation) = (session.id, session.generation);
 
     let page = controller.fs_list(id, generation, files, "", 0, 50)?;
@@ -286,7 +286,7 @@ fn files_only_needs_transfer_not_control_or_decoder() -> TestResult {
         none,
     );
     std::fs::write(pair.host.root().join("shared.txt"), b"shared-bytes")?;
-    // A desktop connection would need a decoder; files-only needs none.
+    // A files-only session needs no decoder.
     pair.controller
         .core
         .set_video_codecs(vnilink::VideoCodecCaps::default())?;
@@ -315,7 +315,7 @@ fn delete_during_active_transfer_is_refused() -> TestResult {
     let host = &pair.host.core;
     let root = pair.host.root();
     std::fs::write(root.join("a.txt"), b"transfer-bytes")?;
-    pair.controller.core.connect(&pair.host.endpoint())?;
+    pair.controller.core.connect_files(&pair.host.endpoint())?;
     let token = host
         .list_dir(pair.host.root_id(), "", 0, 50)?
         .entries
@@ -384,7 +384,7 @@ fn remote_delete_removes_the_host_entry_and_keeps_a_replacement() -> TestResult 
     std::fs::write(root.join("report.txt"), b"report-bytes")?;
     let files = pair.host.root_id();
     let controller = &pair.controller.core;
-    let session = controller.connect(&pair.host.endpoint())?;
+    let session = controller.connect_files(&pair.host.endpoint())?;
     let (id, generation) = (session.id, session.generation);
     let token_of = |page: &vnilink::DirPage, name: &str| {
         page.entries

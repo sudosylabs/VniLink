@@ -2,18 +2,8 @@ import type { Event } from '../../../base/common/event.js';
 import type { IDisposable } from '../../../base/common/lifecycle.js';
 import type { DesktopMediaStatus } from '../../../platform/engine/common/dataChannel.js';
 import { createDecorator } from '../../../platform/instantiation/common/instantiation.js';
-import type { DisplayInfo, QualityLimits, VideoCodecCaps } from '../../../platform/engine/common/engine.js';
+import type { DisplayInfo, VideoCodecCaps } from '../../../platform/engine/common/engine.js';
 import type { DesktopLatencySummary } from './desktopLatency.js';
-
-export interface DesktopTarget { readonly id: string; readonly generation: string; readonly role: 'Controller' | 'Host'; }
-
-export interface DesktopSession extends DesktopTarget { readonly name: string; readonly quality: Readonly<QualityLimits>; }
-
-export interface DesktopSettings { readonly sessions: readonly DesktopSession[]; readonly codecs: Readonly<VideoCodecCaps>; }
-
-export function desktopTargetKey(target: DesktopTarget): string {
-	return `${target.role}:${target.id}:${target.generation}`;
-}
 
 /**
  * The most bandwidth a stream may use. The engine follows the picture and the
@@ -27,12 +17,6 @@ export const bandwidthLimits = {
 
 /** Where the Maximum choice starts, until a limit is typed. */
 export const defaultMaximumBandwidth = 20000;
-
-export function isValidDesktopQuality(quality: QualityLimits): boolean {
-	return Number.isInteger(quality.max_bitrate_kbps) && quality.max_bitrate_kbps >= 1 && quality.max_bitrate_kbps <= 50000 &&
-		Number.isInteger(quality.max_frame_rate) && quality.max_frame_rate >= 1 && quality.max_frame_rate <= 60 &&
-		[quality.max_width, quality.max_height].every(value => Number.isInteger(value) && value >= 1 && value <= 7680);
-}
 
 /** Why a paired computer's screen can't be opened. */
 export type DesktopFailure =
@@ -177,15 +161,9 @@ export const IRemoteDesktopService = createDecorator<IRemoteDesktopService>('rem
 export interface IRemoteDesktopService {
 	readonly _serviceBrand: undefined;
 	readonly available: boolean;
-	load(): Promise<DesktopSettings>;
-	displays(target: DesktopTarget): Promise<readonly DisplayInfo[]>;
-	apply(target: DesktopTarget, quality: QualityLimits): Promise<DesktopSettings>;
+	/** The codecs this computer encodes and decodes. */
+	codecs(): Promise<Readonly<VideoCodecCaps>>;
 	/** Opens the screen of `deviceId`; with `control`, its keyboard and pointer too. */
 	open(deviceId: string, control: boolean): Promise<{ readonly failure: DesktopFailure } | { readonly session: IDesktopSession }>;
 }
 
-export class DesktopReadbackError extends Error {
-	constructor() {
-		super('Quality update accepted, but current session could not be reloaded');
-	}
-}

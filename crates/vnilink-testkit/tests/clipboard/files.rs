@@ -1,10 +1,10 @@
-//! File selections copied over a control session: names and sizes offered
+//! File selections copied over a files-only session: names and sizes offered
 //! for a later paste, each under the host's grant, each offer a new
 //! revision that is never reused.
 
 use expect_test::expect;
 
-use super::{paired, publish_once_open, sharing};
+use super::{files_sharing, paired, publish_once_open};
 use vnilink::{
     ClipboardFileEntry, CoreEvent, Error, FileSelection, SessionPhase, MAX_CLIPBOARD_FILES,
 };
@@ -51,7 +51,7 @@ fn a_selection_needs_the_grant_and_the_session_lives_without_it() -> TestResult 
     let trace = traced();
     let pair = paired(false);
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let session = pair.connect_control();
+    let session = super::files_session(&pair.controller, &pair.host)?;
     let hosted = host.snapshot()?.incoming.ok_or("the host's session")?;
     let offer = selection(vec![entry("report.pdf", 12_000)]);
     // No clipboard is installed: a file offer is stored, never handed to
@@ -90,7 +90,7 @@ fn a_selection_needs_the_grant_and_the_session_lives_without_it() -> TestResult 
         ),
         "an offer for another generation is stale"
     );
-    host.set_desktop_sharing(sharing(true))?;
+    host.set_desktop_sharing(files_sharing(true))?;
     controller.submit_clipboard_files(session.id, session.generation, &offer)?;
     let stored = host
         .incoming_clipboard_files(hosted.id)?
@@ -139,7 +139,7 @@ fn replacing_and_clearing_a_selection_keeps_its_revisions_rising() -> TestResult
     let trace = traced();
     let pair = paired(true);
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let session = pair.connect_control();
+    let session = super::files_session(&pair.controller, &pair.host)?;
     let hosted = host.snapshot()?.incoming.ok_or("the host's session")?;
     let first = selection(vec![entry("a.txt", 3)]);
     let second = selection(vec![
@@ -204,7 +204,7 @@ fn a_selection_out_of_bounds_is_refused_before_it_is_sent() -> TestResult {
     let trace = traced();
     let pair = paired(true);
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let session = pair.connect_control();
+    let session = super::files_session(&pair.controller, &pair.host)?;
     let hosted = host.snapshot()?.incoming.ok_or("the host's session")?;
     let too_many = FileSelection {
         entries: (0..MAX_CLIPBOARD_FILES + 1)
@@ -298,14 +298,14 @@ fn withdrawing_the_grant_drops_the_hosts_offer_and_the_session_lives() -> TestRe
     let trace = traced();
     let pair = paired(true);
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let session = pair.connect_control();
+    let session = super::files_session(&pair.controller, &pair.host)?;
     let hosted = host.snapshot()?.incoming.ok_or("the host's session")?;
     let from_controller = selection(vec![entry("up.bin", 8)]);
     let from_host = selection(vec![entry("down.bin", 9)]);
     controller.submit_clipboard_files(session.id, session.generation, &from_controller)?;
     publish_files(&pair.host, hosted.id, &from_host);
     wait_for_selection(&pair.controller, "the host's selection to arrive");
-    host.set_desktop_sharing(sharing(false))?;
+    host.set_desktop_sharing(files_sharing(false))?;
     assert!(
         host.incoming_clipboard_files(hosted.id)?.is_none(),
         "a selection is a live paste capability, withdrawn with the grant"
@@ -323,7 +323,7 @@ fn withdrawing_the_grant_drops_the_hosts_offer_and_the_session_lives() -> TestRe
         from_host,
         "the controller keeps the names it was sent"
     );
-    host.set_desktop_sharing(sharing(true))?;
+    host.set_desktop_sharing(files_sharing(true))?;
     controller.submit_clipboard_files(session.id, session.generation, &from_controller)?;
     assert_eq!(
         host.incoming_clipboard_files(hosted.id)?
@@ -357,7 +357,7 @@ fn a_revoked_peer_loses_its_offer() -> TestResult {
     let trace = traced();
     let pair = paired(true);
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let session = pair.connect_control();
+    let session = super::files_session(&pair.controller, &pair.host)?;
     let hosted = host.snapshot()?.incoming.ok_or("the host's session")?;
     controller.submit_clipboard_files(
         session.id,
@@ -403,8 +403,8 @@ fn the_hosts_selection_reaches_only_the_newest_session() -> TestResult {
     let pair = paired(true);
     let (host, first) = (&pair.host, &pair.controller);
     let second = pair.add_viewer("other-controller");
-    let _one = first.connect_control(host)?;
-    let _two = second.connect_control(host)?;
+    let _one = super::files_session(first, host)?;
+    let _two = super::files_session(&second, host)?;
     let hosted = host.core.hosted_sessions()?;
     assert_eq!(hosted.len(), 2, "the host serves both controllers");
     let (older, newer) = (hosted[0].id, hosted[1].id);
@@ -449,10 +449,10 @@ fn a_controller_of_two_hosts_reads_selections_by_session() -> TestResult {
     let b = Engine::start("other-host");
     for host in [&a, &b] {
         host.pair_with(&controller)?;
-        host.core.set_desktop_sharing(sharing(true))?;
+        host.core.set_desktop_sharing(files_sharing(true))?;
     }
-    let to_a = controller.connect_control(&a)?;
-    let to_b = controller.connect_control(&b)?;
+    let to_a = super::files_session(&controller, &a)?;
+    let to_b = super::files_session(&controller, &b)?;
     assert!(
         matches!(controller.core.clipboard_files(), Err(Error::Busy)),
         "with two sessions the controller refuses to guess"
@@ -497,7 +497,7 @@ fn each_side_is_told_a_selection_arrived_without_its_names() -> TestResult {
     let trace = traced();
     let pair = paired(true);
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let session = pair.connect_control();
+    let session = super::files_session(&pair.controller, &pair.host)?;
     let hosted = host.snapshot()?.incoming.ok_or("the host's session")?;
     let host_events = host.subscribe()?;
     let controller_events = controller.subscribe()?;

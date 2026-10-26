@@ -12,21 +12,19 @@ use std::sync::Arc;
 
 use iroh::EndpointId;
 
-use super::session_commands::{SessionCommand, SessionCommands};
 use crate::address::Announcement;
 use crate::error::Error;
 use crate::events::CoreEvent;
 use crate::input::{self, HostDesktop};
 use crate::keyboard::KeyboardMode;
 use crate::os_input::OsInput;
-use crate::protocol::{error_code, ControlMessage, SessionStamp};
-use crate::session::{self, Grant, SessionPhase};
+use crate::protocol::{error_code, ControlMessage};
 
 impl Core {
     /// Installs the adapter that applies keyboard and pointer events on this host.
     ///
-    /// An idle neutral connection may configure its adapter before Desktop Open.
-    /// Refused while Desktop is active or releasing held input.
+    /// A connection may configure its adapter before Desktop Open. Refused
+    /// while Desktop is active or releasing held input.
     pub fn set_desktop(&self, desktop: Box<dyn HostDesktop>) -> Result<(), Error> {
         let _engine = self.engine();
         let monitor = desktop.monitor();
@@ -34,13 +32,8 @@ impl Core {
         // destroys native resources only after the global State guard is gone.
         let mut candidate = Some(desktop);
         let (_gate, _adapter, old) = (|| {
-            let state = self.alive_state()?;
-            if state
-                .incoming
-                .values()
-                .any(|session| !finished(&session.phase) && !session.services_only)
-                || self.shared.desktop_streams.load(Ordering::Acquire) != 0
-            {
+            let _state = self.alive_state()?;
+            if self.shared.desktop_streams.load(Ordering::Acquire) != 0 {
                 return Err(Error::Busy);
             }
             let gate = self
@@ -114,22 +107,6 @@ impl Core {
         Ok(())
     }
 
-    /// Choose the one display this legacy desktop stream shows.
-    ///
-    /// The id must be in the host topology. A later removal clears the
-    /// selection instead of substituting another display.
-    pub fn select_displays(
-        &self,
-        session_id: u64,
-        generation: u64,
-        ids: &[u64],
-    ) -> Result<(), Error> {
-        let _engine = self.engine();
-        let ids = super::topology::normalize_selection(ids)?;
-        self.session_commands(session_id, generation)?
-            .push(SessionCommand::Displays(ids))
-    }
-
     /// Exchanges Control and Command on what the desktops this controller
     /// opens from now on send.
     ///
@@ -178,37 +155,14 @@ impl Core {
             self.shared.keyboard_mode.load(Ordering::Relaxed),
         ))
     }
-
-    /// The commands of the active controlling session.
-    fn session_commands(
-        &self,
-        session_id: u64,
-        generation: u64,
-    ) -> Result<Arc<SessionCommands>, Error> {
-        let state = self.alive_state()?;
-        let session = state.outgoing.get(&session_id).ok_or(Error::NoSession)?;
-        if session.phase != SessionPhase::Active || session.id != session_id {
-            return Err(Error::NoSession);
-        }
-        if session.generation != generation {
-            return Err(Error::StaleSession);
-        }
-        if session.files_only || *session.desktop_stop.borrow() {
-            return Err(Error::Unsupported(
-                "desktop commands on a service connection",
-            ));
-        }
-        session.outbox.clone().ok_or(Error::NoSession)
-    }
 }
 
 /// How often a host re-evaluates what it reports to a linked peer.
 const AVAILABILITY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// The host's side of a session's control stream: the peer's addresses,
-/// and what a desktop session's viewer asks of its pictures (a keyframe, a
-/// quality, a display); the host's topology, and on a presence link what it
-/// allows, go the other way. Input goes on a Desktop service's own stream.
+/// The host's side of a session's control stream: the peer's addresses
+/// come in; the host's topology, and on a presence link what it allows, go
+/// out. A Desktop service's pictures and input go on its own stream.
 pub(super) async fn host_command_loop(
     shared: &Arc<Shared>,
     session_id: u64,
@@ -223,10 +177,8 @@ pub(super) async fn host_command_loop(
         .map(|session| session.wire_stamp);
     let mut topology_rx = shared.topology_watch.subscribe();
     if let Some(stamp) = stamp {
-        if super::topology::write_topology(shared, send, stamp)
-            .await
-            .is_err()
-        {
+        if let Err(error) = super::topology::write_topology(shared, send, stamp).await {
+            control_stream_ended(session_id, &error);
             return false;
         }
     }
@@ -254,10 +206,11 @@ pub(super) async fn host_command_loop(
             _ = availability_tick.tick(), if link => {
                 let report = super::availability::remote_report(shared, peer.as_bytes());
                 if report != reported {
-                    if write_frame(send, &ControlMessage::Availability { entries: report.clone() })
-                        .await
-                        .is_err()
+                    if let Err(error) =
+                        write_frame(send, &ControlMessage::Availability { entries: report.clone() })
+                            .await
                     {
+                        control_stream_ended(session_id, &error);
                         break false;
                     }
                     reported = report;
@@ -272,10 +225,8 @@ pub(super) async fn host_command_loop(
                     .get(&session_id)
                     .map(|session| session.wire_stamp);
                 if let Some(stamp) = stamp {
-                    if super::topology::write_topology(shared, send, stamp)
-                        .await
-                        .is_err()
-                    {
+                    if let Err(error) = super::topology::write_topology(shared, send, stamp).await {
+                        control_stream_ended(session_id, &error);
                         break false;
                     }
                 }
@@ -289,7 +240,7 @@ pub(super) async fn host_command_loop(
                         break false;
                     }
                     Err(error) => {
-                        tracing::debug!(target: crate::trace::SESSION, session = session_id, error = error.name(), "the session's control stream ended");
+                        control_stream_ended(session_id, &error);
                         break false;
                     }
                 };
@@ -306,51 +257,6 @@ pub(super) async fn host_command_loop(
                         );
                     }
                     ControlMessage::Close => break false,
-                    ControlMessage::Keyframe { stamp } => {
-                        match check_authorized(shared, send, stamp, "keyframe request").await {
-                            Some(true) => {},
-                            None => continue,
-                            Some(false) => break false,
-                        }
-                        shared
-                            .events
-                            .publish(CoreEvent::KeyframeRequested { id: session_id });
-                    }
-                    ControlMessage::Quality { stamp, quality } => {
-                        match check_authorized(shared, send, stamp, "quality").await {
-                            Some(true) => {},
-                            None => continue,
-                            Some(false) => break false,
-                        }
-                        let mut state = lock(&shared.state);
-                        if let Some(session) = state.incoming.get_mut(&session_id).filter(|s| s.phase == SessionPhase::Active && !*s.desktop_stop.borrow()) {
-                            session.quality = Some(quality);
-                            shared.events.publish(CoreEvent::QualityUpdated { id: session_id, quality });
-                        }
-                    }
-                    ControlMessage::SelectDisplays { stamp, displays } => {
-                        match check_authorized(shared, send, stamp, "display selection").await {
-                            Some(true) => {},
-                            None => continue,
-                            Some(false) => break false,
-                        }
-                        let snapshot = lock(&shared.topology).clone();
-                        match super::topology::apply_selection(&snapshot.displays, &displays) {
-                            Ok(ids) => {
-                                let mut state = lock(&shared.state);
-                                if let Some(session) = state.incoming.get_mut(&session_id) {
-                                    if session.wire_stamp == stamp && !*session.desktop_stop.borrow()
-                                    {
-                                        session.selected_displays = ids;
-                                        session.display_fault = None;
-                                    }
-                                }
-                            }
-                            Err(error) => {
-                                note_input_failure(shared, session_id, &error);
-                            }
-                        }
-                    }
                     _ => {
                         tracing::info!(target: crate::trace::SESSION, session = session_id, "an unexpected control message ended the session");
                         crate::ignored!(crate::trace::SESSION, "the session ends whether the peer hears why", write_frame(send, &ControlMessage::Reject(error_code(&Error::Malformed))).await);
@@ -360,6 +266,18 @@ pub(super) async fn host_command_loop(
             }
         }
     }
+}
+
+/// Records that a session's control stream ended under `error`, whether a
+/// read or a write met it first: a peer that leaves while the host is
+/// writing ends the stream as surely as one that leaves while it reads.
+fn control_stream_ended(session_id: u64, error: &Error) {
+    tracing::debug!(
+        target: crate::trace::SESSION,
+        session = session_id,
+        error = error.name(),
+        "the session's control stream ended"
+    );
 }
 
 pub(super) fn note_input_failure(shared: &Shared, session_id: u64, error: &Error) {
@@ -374,71 +292,6 @@ pub(super) fn note_input_failure(shared: &Shared, session_id: u64, error: &Error
         id: session_id,
         message,
     });
-}
-
-/// Generation-check one control message. Every keyframe, quality and
-/// display selection passes here before it is applied. None discards late
-/// desktop messages after retirement; Some(false) ends the connection for
-/// a bad stamp.
-async fn check_authorized(
-    shared: &Shared,
-    send: &mut iroh::endpoint::SendStream,
-    stamp: SessionStamp,
-    what: &'static str,
-) -> Option<bool> {
-    let discard = |why: &'static str| {
-        tracing::debug!(target: crate::trace::SESSION, stamp = stamp.id, what, why, "command discarded");
-        None
-    };
-    let decision = {
-        let state = lock(&shared.state);
-        if !state
-            .incoming
-            .values()
-            .any(|session| session.wire_stamp == stamp)
-        {
-            tracing::info!(target: crate::trace::SESSION, stamp = stamp.id, what, "a control message named no session; the connection ends");
-            return Some(false);
-        }
-        if state
-            .incoming
-            .values()
-            .any(|s| s.wire_stamp == stamp && *s.desktop_stop.borrow())
-        {
-            return discard("the desktop has stopped");
-        }
-        // A session this computer is stopping closes cleanly: what its peer
-        // sent before it heard is late, not a reason to end it in error.
-        if state
-            .incoming
-            .values()
-            .any(|s| s.wire_stamp == stamp && s.phase == SessionPhase::Stopping)
-        {
-            return discard("the session is stopping");
-        }
-        let active = state
-            .incoming
-            .values()
-            .filter(|session| {
-                session.phase == SessionPhase::Active
-                    && !session.files_only
-                    && !*session.desktop_stop.borrow()
-                    && state.trust.granted(&session.peer_key, Grant::View)
-            })
-            .map(|session| session.wire_stamp)
-            .find(|active| session::check_input(Some(*active), stamp).is_ok());
-        session::check_input(active, stamp)
-    };
-    if let Err(error) = decision {
-        tracing::info!(target: crate::trace::SESSION, stamp = stamp.id, what, refused = error.name(), "a control message was refused; the connection ends");
-        crate::ignored!(
-            crate::trace::SESSION,
-            "the session ends whether the peer hears why",
-            write_frame(send, &ControlMessage::Reject(error_code(&error))).await
-        );
-        return Some(false);
-    }
-    Some(true)
 }
 
 #[cfg(test)]

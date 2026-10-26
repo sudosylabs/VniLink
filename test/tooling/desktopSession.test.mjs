@@ -135,7 +135,7 @@ test('the input channel takes keys with their composing state and the display th
 	assert(!isDesktopInputCommand({ type: 'submitKey', ...target, usage: 4, down: true, extra: 1 }), 'an input with an extra field is refused');
 });
 
-test('input is no engine command: it goes on the desktop\'s data channel, and a session still selects its display', () => {
+test('input and display selection are no engine commands: they go on the desktop\'s data channel', () => {
 	const target = { sessionId: '4', generation: '2' };
 	for (const command of [
 		{ type: 'submitKey', ...target, usage: 4, down: true },
@@ -147,11 +147,11 @@ test('input is no engine command: it goes on the desktop\'s data channel, and a 
 		{ type: 'submitText', ...target, text: 'a' },
 		{ type: 'submitLocalKey', ...target, usage: 4, down: true, text: 'a', composing: false },
 		{ type: 'releaseSessionInput', ...target },
+		{ type: 'selectDisplays', ...target, ids: ['7'] },
 	]) {
 		assert(isDesktopInputCommand(command), `${command.type} is desktop input`);
 		assert(!isEngineCommand(command), `${command.type} is not an engine command`);
 	}
-	assert(isEngineCommand({ type: 'selectDisplays', ...target, ids: ['7'] }), 'a session selects its display by command');
 	assert(isEngineCommand({ type: 'submitClipboard', ...target, text: 'a' }), 'a session pastes by command');
 });
 

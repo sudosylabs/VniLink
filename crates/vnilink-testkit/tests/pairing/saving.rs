@@ -168,7 +168,7 @@ fn a_failed_save_keeps_the_previous_record() -> TestResult {
     controller
         .core
         .accept_invitation(&host.core.create_invitation(LIFETIME)?)?;
-    let session = controller.core.connect(&host.core.endpoint_id())?;
+    let session = controller.connect_services_to(&host.core.endpoint_id())?;
     assert_eq!(
         session.phase,
         SessionPhase::Active,

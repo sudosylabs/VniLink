@@ -4,12 +4,11 @@
 use expect_test::expect;
 
 use vnilink::{
-    CodecSupport, CoreEvent, EncodedFrame, Error, EventSubscription, Quality, ServiceKind,
-    SessionRole, VideoCodec, VideoCodecCaps,
+    CodecSupport, EncodedFrame, Error, Quality, RemoteDesktopService, ServiceKind, VideoCodec,
+    VideoCodecCaps,
 };
 use vnilink_testkit::desktop::{next_picture, MonitorCapture};
-use vnilink_testkit::events::next_picked;
-use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
+use vnilink_testkit::{traced, Engine, Pair, TestResult};
 
 use super::streams::SCREEN;
 
@@ -26,21 +25,14 @@ fn pair_with_screen(monitor: (u16, u16)) -> Result<Pair, Error> {
     Ok(pair)
 }
 
-/// The next quality update `events` brings: the session it names and the
-/// quality.
-fn quality_update(events: &EventSubscription) -> (u64, Quality) {
-    next_picked(
-        events,
-        "a quality update",
-        DEFAULT_WAIT,
-        |event| match event {
-            CoreEvent::QualityUpdated { id, quality } => Some((id, quality)),
-            _ => None,
-        },
-    )
+/// A viewer's Desktop service on a new services connection to the
+/// pair's host.
+fn open_desktop(pair: &Pair) -> Result<RemoteDesktopService, Error> {
+    let connection = pair.connect_services();
+    pair.controller.open_desktop(&connection)
 }
 
-/// A 1080p monitor with 640x480 codec limits admits the session, and both
+/// A 1080p monitor with 640x480 codec limits admits the Desktop, and both
 /// sides record the quality clamped to them.
 #[test]
 fn admission_clamps_quality_to_host_codec_caps() -> TestResult {
@@ -48,22 +40,20 @@ fn admission_clamps_quality_to_host_codec_caps() -> TestResult {
     let pair = pair_with_screen(SCREEN)?;
     let host = &pair.host.core;
     host.set_video_codecs(VideoCodecCaps::h264_full(640, 480, "test"))?;
-    let session = pair.connect_control();
-    // The session starts at the dialled rate, held to what the picture can
+    let desktop = open_desktop(&pair)?;
+    // The Desktop starts at the dialled rate, held to what the picture can
     // use: the 1080p monitor's proportions inside 640x480 are 640x360,
     // which at 30 fps is 1,105 kb/s as H.264. It is not the viewer's limit.
     let agreed = Quality::new(1_105, 30, 640, 480)?;
     assert_eq!(
-        session.quality,
-        Some(agreed),
+        desktop.desktop_info()?.quality,
+        agreed,
         "the viewer records the clamped quality"
     );
+    let (id, generation) = hosted_desktop(&pair);
     assert_eq!(
-        host.snapshot()?
-            .incoming
-            .ok_or("the host's session")?
-            .quality,
-        Some(agreed),
+        host.hosted_desktop_info(id, generation)?.quality,
+        agreed,
         "the host records the clamped quality"
     );
     assert_eq!(
@@ -79,86 +69,20 @@ fn admission_clamps_quality_to_host_codec_caps() -> TestResult {
         controller:
           session: session phase from=connecting generation=1 role=Controller session=1 to=active
     "#]]
-    .assert_eq(&trace.story(&["session", "stream", "encode"]));
+    .assert_eq(&trace.story(&["session", "service"]));
     Ok(())
 }
 
-/// A quality edit for a stale generation is refused on either side and
-/// changes nothing; for the current one it applies.
-#[test]
-fn quality_edit_rejects_stale_generation_without_changing_live_limits() -> TestResult {
-    let trace = traced();
-    let pair = pair_with_screen(SCREEN)?;
-    let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let session = pair.connect_control();
-    let chosen = Quality::new(1000, 20, 1280, 720)?;
-    assert!(
-        matches!(
-            controller.update_session_quality_for_generation(
-                session.id,
-                session.generation + 1,
-                SessionRole::Controller,
-                chosen,
-            ),
-            Err(Error::StaleSession)
-        ),
-        "the viewer refuses an edit for a stale generation"
-    );
-    assert_eq!(
-        controller.controller_session(session.id)?.quality,
-        session.quality,
-        "a refused edit leaves the viewer's quality"
-    );
-    let incoming = host.snapshot()?.incoming.ok_or("the host's session")?;
-    assert!(
-        matches!(
-            host.update_session_quality_for_generation(
-                incoming.id,
-                incoming.generation + 1,
-                SessionRole::Host,
-                chosen,
-            ),
-            Err(Error::StaleSession)
-        ),
-        "the host refuses an edit for a stale generation"
-    );
-    assert_eq!(
-        host.snapshot()?
-            .incoming
-            .ok_or("the host's session")?
-            .quality,
-        incoming.quality,
-        "a refused edit leaves the host's quality"
-    );
-    host.update_session_quality_for_generation(
-        incoming.id,
-        incoming.generation,
-        SessionRole::Host,
-        chosen,
-    )?;
-    controller.update_session_quality_for_generation(
-        session.id,
-        session.generation,
-        SessionRole::Controller,
-        chosen,
-    )?;
-    assert_eq!(
-        controller.controller_session(session.id)?.quality,
-        Some(chosen),
-        "an edit for the current generation applies"
-    );
-    expect![[r#"
-        controller:
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-    "#]]
-    .assert_eq(&trace.story(&["session", "stream", "encode"]));
-    Ok(())
+/// The host's Desktop service for the pair's viewer: its id and generation.
+fn hosted_desktop(pair: &Pair) -> (u64, u64) {
+    let service = pair.host.serving(ServiceKind::Desktop, &pair.controller);
+    (service.id, service.generation)
 }
 
-/// Saved quality defaults start the connections opened afterwards, on both
-/// sides, and leave an open connection's quality as it was.
+/// Saved quality defaults start the Desktops opened afterwards, on both
+/// sides, and leave an open Desktop's quality as it was.
 #[test]
-fn saved_quality_defaults_start_new_connections_and_leave_live_limits_alone() -> TestResult {
+fn saved_quality_defaults_start_new_desktops_and_leave_live_limits_alone() -> TestResult {
     let trace = traced();
     let controller = Engine::start("controller");
     let hosts = [Engine::start("host"), Engine::start("second-host")];
@@ -167,28 +91,28 @@ fn saved_quality_defaults_start_new_connections_and_leave_live_limits_alone() ->
             .set_capture(Box::new(MonitorCapture::new(SCREEN)))?;
         host.pair_for_control(&controller)?;
     }
-    let first = controller.connect_control(&hosts[0])?;
+    let first = controller.open_desktop(&controller.connect_services(&hosts[0])?)?;
+    let started = first.desktop_info()?.quality;
     let defaults = Quality::new(1500, 24, 1280, 720)?;
     controller.core.set_desktop_quality_defaults(defaults)?;
     assert_eq!(
-        controller.core.controller_session(first.id)?.quality,
-        first.quality,
-        "new defaults leave an open connection's quality"
+        first.desktop_info()?.quality,
+        started,
+        "new defaults leave an open Desktop's quality"
     );
-    let second = controller.connect_control(&hosts[1])?;
+    let second = controller.open_desktop(&controller.connect_services(&hosts[1])?)?;
     assert_eq!(
-        second.quality,
-        Some(defaults),
-        "a connection opened afterwards starts at the defaults"
+        second.desktop_info()?.quality,
+        defaults,
+        "a Desktop opened afterwards starts at the defaults"
     );
+    let hosted = hosts[1].serving(ServiceKind::Desktop, &controller);
     assert_eq!(
         hosts[1]
             .core
-            .snapshot()?
-            .incoming
-            .ok_or("the second host's session")?
+            .hosted_desktop_info(hosted.id, hosted.generation)?
             .quality,
-        Some(defaults),
+        defaults,
         "its host starts at the defaults too"
     );
     expect![[r#"
@@ -196,86 +120,7 @@ fn saved_quality_defaults_start_new_connections_and_leave_live_limits_alone() ->
           session: session phase from=connecting generation=1 role=Controller session=1 to=active
           session: session phase from=connecting generation=1 role=Controller session=2 to=active
     "#]]
-    .assert_eq(&trace.story(&["session", "stream", "encode"]));
-    Ok(())
-}
-
-/// The quality the viewer chooses reaches the host, the host may set its
-/// own, each side tells its application, and an edit for no session is
-/// refused.
-#[test]
-fn quality_updates_propagate_from_controller_to_host() -> TestResult {
-    let trace = traced();
-    let pair = Pair::for_desktop();
-    let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let host_events = host.subscribe()?;
-    let controller_events = controller.subscribe()?;
-    let session = pair.connect_control();
-    let incoming = host.snapshot()?.incoming.ok_or("the host's session")?;
-    assert!(
-        session.quality.is_some(),
-        "negotiation agrees a quality at connect"
-    );
-    assert_eq!(
-        incoming.quality, session.quality,
-        "both sides record the agreed quality"
-    );
-    let quality = Quality::new(1_500, 30, 1280, 720)?;
-    controller.update_session_quality(session.id, SessionRole::Controller, quality)?;
-    assert_eq!(
-        controller
-            .snapshot()?
-            .outgoing
-            .ok_or("the viewer's session")?
-            .quality,
-        Some(quality),
-        "the viewer applies its own edit at once"
-    );
-    // The viewer queues the change; the host applies it on receipt.
-    wait_for(
-        "the host to apply the viewer's quality",
-        DEFAULT_WAIT,
-        || (host.snapshot().ok()?.incoming?.quality == Some(quality)).then_some(()),
-    );
-    let host_quality = Quality::new(800, 15, 640, 480)?;
-    host.update_session_quality(incoming.id, SessionRole::Host, host_quality)?;
-    assert_eq!(
-        host.snapshot()?
-            .incoming
-            .ok_or("the host's session")?
-            .quality,
-        Some(host_quality),
-        "the host applies its own edit at once"
-    );
-    assert!(
-        matches!(
-            host.update_session_quality(incoming.id + 1, SessionRole::Host, quality),
-            Err(Error::NoSession)
-        ),
-        "the host refuses an edit for no session"
-    );
-    assert!(
-        matches!(
-            controller.update_session_quality(0, SessionRole::Controller, quality),
-            Err(Error::NoSession)
-        ),
-        "the viewer refuses an edit for no session"
-    );
-    assert_eq!(
-        quality_update(&host_events),
-        (incoming.id, quality),
-        "the host tells its application the viewer's quality"
-    );
-    assert_eq!(
-        quality_update(&controller_events),
-        (session.id, quality),
-        "the viewer tells its application its quality"
-    );
-    expect![[r#"
-        controller:
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-    "#]]
-    .assert_eq(&trace.story(&["session", "stream", "encode"]));
+    .assert_eq(&trace.story(&["session", "service"]));
     Ok(())
 }
 
@@ -343,7 +188,7 @@ fn auto_and_explicit_codec_survive_owned_desktop_transport_and_reject_mismatched
             let target = host
                 .video_targets()?
                 .into_iter()
-                .find(|target| target.service)
+                .next()
                 .ok_or("the host's Desktop service is a video target")?;
             assert!(
                 matches!(
@@ -392,11 +237,11 @@ fn auto_and_explicit_codec_survive_owned_desktop_transport_and_reject_mismatched
     Ok(())
 }
 
-/// A viewer's explicit codec governs a desktop session too: the host
-/// encodes what the viewer chose, and a codec the host cannot encode
-/// refuses the session.
+/// A viewer's explicit codec governs its Desktop even where the host has
+/// H.264 in hardware: the host encodes what the viewer chose, and a codec
+/// the host cannot encode refuses the Desktop.
 #[test]
-fn explicit_codec_also_controls_direct_desktop_connections() -> TestResult {
+fn explicit_codec_controls_the_desktop_and_one_the_host_cannot_encode_refuses_it() -> TestResult {
     let trace = traced();
     for codec in VideoCodec::ALL {
         let pair = pair_with_screen(SMALL)?;
@@ -415,7 +260,7 @@ fn explicit_codec_also_controls_direct_desktop_connections() -> TestResult {
         host.set_video_codecs(caps.clone())?;
         viewer.set_video_codecs(caps)?;
         viewer.set_desktop_codec_default(Some(codec))?;
-        pair.connect_control();
+        let desktop = open_desktop(&pair)?;
         assert_eq!(
             host.video_targets()?
                 .first()
@@ -423,6 +268,8 @@ fn explicit_codec_also_controls_direct_desktop_connections() -> TestResult {
             Some(codec),
             "the host encodes the viewer's explicit codec"
         );
+        desktop.close();
+        pair.host.wait_released(Some(ServiceKind::Desktop));
     }
     let pair = pair_with_screen(SMALL)?;
     let (host, viewer) = (&pair.host.core, &pair.controller.core);
@@ -436,33 +283,27 @@ fn explicit_codec_also_controls_direct_desktop_connections() -> TestResult {
     viewer.set_video_codecs(caps)?;
     viewer.set_desktop_codec_default(Some(VideoCodec::Vp9))?;
     assert!(
-        pair.controller.connect_control(&pair.host).is_err(),
-        "a codec the host cannot encode refuses the session"
+        open_desktop(&pair).is_err(),
+        "a codec the host cannot encode refuses the Desktop"
     );
     assert!(
         host.video_targets()?.is_empty(),
-        "a refused session leaves the host nothing to encode"
+        "a refused Desktop leaves the host nothing to encode"
     );
     expect![[r#"
         controller:
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-          session: session phase from=active generation=1 role=Controller session=1 to=closed
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-          session: session phase from=active generation=1 role=Controller session=1 to=closed
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-          session: session phase from=active generation=1 role=Controller session=1 to=closed
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-          session: session phase from=active generation=1 role=Controller session=1 to=closed
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-          session: session phase from=active generation=1 role=Controller session=1 to=closed
-          session: session failed failure=unsupported reason=the host cannot share its desktop session=1
-          session: session phase from=connecting generation=0 role=Controller session=1 to=failed
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
         host:
-          session: session phase from=active generation=1 role=Host session=1 to=closed
-          session: session phase from=active generation=1 role=Host session=1 to=closed
-          session: session phase from=active generation=1 role=Host session=1 to=closed
-          session: session phase from=active generation=1 role=Host session=1 to=closed
-          session: session phase from=active generation=1 role=Host session=1 to=closed
-    "#]].assert_eq(&trace.story(&["session"]));
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
+    "#]]
+    .assert_eq(&trace.story(&["service"]));
     Ok(())
 }

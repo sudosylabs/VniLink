@@ -26,9 +26,7 @@ pub(crate) use datagram::{
     FRAG_HEADER, MAX_PROTECTION,
 };
 pub(crate) use frame::micros_since;
-pub(crate) use frame::{
-    check_video_len, decode_video_body, encode_video_body, VideoBody, VIDEO_HEADER,
-};
+pub(crate) use frame::{decode_video_body, encode_video_body, VideoBody, VIDEO_HEADER};
 pub use frame::{EncodedFrame, FrameRole, FrameTiming, Region, MAX_REGIONS};
 pub(crate) use in_flight::InFlight;
 pub(crate) use queue::{KeyframeFlag, QueueTelemetry, VideoInbox, VideoOutbox, VideoPush};
@@ -105,7 +103,8 @@ pub(crate) fn still_payload(
 /// Monitor size advertised for capture.
 ///
 /// The platform owns capture and encoding and passes bytes to
-/// [`crate::Core::publish_video`]. `monitor` must not call back into [`crate::Core`].
+/// [`crate::Core::publish_desktop_video`]. `monitor` must not call back into
+/// [`crate::Core`].
 pub trait HostCapture: Send {
     fn monitor(&self) -> (u16, u16);
     /// True when the source can provide a lossless cursor outside video.

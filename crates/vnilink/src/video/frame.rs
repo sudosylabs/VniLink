@@ -23,8 +23,8 @@ use super::VideoCodec;
 
 /// One encoded H.264 frame. Construct it with [`EncodedFrame::h264`].
 ///
-/// Fields stay visible so a caller can replace the payload. [`crate::Core::publish_video`]
-/// checks the payload again.
+/// Fields stay visible so a caller can replace the payload.
+/// [`crate::Core::publish_desktop_video`] checks the payload again.
 ///
 /// `display_id`/`revision` name the captured source: the topology display
 /// id and the topology revision the producer captured under. Zero means

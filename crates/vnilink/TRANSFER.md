@@ -47,7 +47,7 @@ transfer stream were removed; all movement goes through jobs.
    by what changed; a step that changes nothing writes nothing.
 6. Jobs are peer-scoped: one peer cannot resume, list or adopt another
    peer's job. Job control rides the connection of the Files service
-   that owns the job, else the peer's control session. Revoking Files
+   that owns the job, else the peer's files-only session. Revoking Files
    interrupts that peer's jobs, and a session that ends interrupts its
    jobs rather than replaying them. A failure that may clear on its own (a
    connection lost or redialing, a stalled stream, a sender that answers

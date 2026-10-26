@@ -8,6 +8,7 @@ use std::time::Duration;
 use vnilink::{
     Capability, Core, CoreEvent, DevicePresence, Error, Grants, RemoteStatus, SessionPhase,
 };
+use vnilink_testkit::desktop::MonitorCapture;
 use vnilink_testkit::events::drain;
 use vnilink_testkit::{holds, traced, wait_for, Engine, Pair, TestResult};
 
@@ -219,11 +220,14 @@ fn unpairing_ends_the_link_for_good() -> TestResult {
 }
 
 /// Idle links do not count toward the host's cap on live sessions: a
-/// desktop still opens beside five of them.
+/// desktop still opens on one of five of them.
 #[test]
 fn links_stay_outside_the_live_session_cap() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_desktop();
+    pair.host
+        .core
+        .set_capture(Box::new(MonitorCapture::new((1920, 1080))))?;
     let mut controllers = vec![&pair.controller];
     let viewers: Vec<Engine> = (1..5)
         .map(|index| pair.add_viewer(&format!("viewer-{index}")))
@@ -240,17 +244,15 @@ fn links_stay_outside_the_live_session_cap() -> TestResult {
         5,
         "the host holds five links"
     );
-    // A desktop session still fits beside five idle links.
-    let session = pair.controller.core.begin_connect(&pair.host.endpoint())?;
-    wait_for("the desktop to be admitted", FOLLOWING, || {
-        (pair
-            .controller
-            .core
-            .controller_session(session.id)
-            .expect("the controller's session")
-            .phase
-            == SessionPhase::Active)
-            .then_some(())
-    });
+    // A desktop still opens beside five idle links, on the controller's own.
+    let link = pair
+        .controller
+        .core
+        .controller_sessions()?
+        .into_iter()
+        .find(|session| session.phase == SessionPhase::Active)
+        .ok_or("the controller's link")?;
+    let desktop = pair.controller.open_desktop(&link)?;
+    assert!(!desktop.is_cancelled(), "the desktop is admitted");
     Ok(())
 }

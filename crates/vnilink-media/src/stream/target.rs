@@ -3,11 +3,11 @@
 // trace: records every ignored failure
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::ScopedJoinHandle;
 use std::time::{Duration, Instant};
 
-use vnilink::{Core, CoreEvent, StreamFailure, VideoTarget};
+use vnilink::{Core, StreamFailure, VideoTarget};
 
 use super::capture::{capture_target, PictureSlot, Reader, Sample};
 use super::changes::{pointer_bounds, small_change, TargetSink};
@@ -22,25 +22,18 @@ use crate::FrameSource;
 struct Control {
     cancel: AtomicBool,
     finished: AtomicBool,
-    keyframe: AtomicBool,
-    quality: Mutex<Option<vnilink::Quality>>,
 }
 
 struct Running<'scope> {
-    key: (bool, u64, u64, u64),
+    key: (u64, u64, u64),
     control: Arc<Control>,
     /// Joined when this value drops, including shutdown and a departed consumer.
     #[allow(dead_code)]
     handle: ScopedJoinHandle<'scope, ()>,
 }
 
-fn target_key(target: &VideoTarget) -> (bool, u64, u64, u64) {
-    (
-        target.service,
-        target.id,
-        target.generation,
-        target.display_id,
-    )
+fn target_key(target: &VideoTarget) -> (u64, u64, u64) {
+    (target.id, target.generation, target.display_id)
 }
 
 fn serves(target: &VideoTarget, capture_display: u64, default: Option<u64>) -> bool {
@@ -76,8 +69,7 @@ fn named_publish(error: &PublishError) -> (&'static str, Option<&'static str>) {
 }
 
 /// Ends one consumer because its producer failed, recording `why` and what
-/// failed: a desktop service tells its viewer what failed; a legacy session
-/// peer is stopped.
+/// failed: the desktop service tells its viewer what failed.
 fn fail_target(
     core: &Core,
     target: &VideoTarget,
@@ -94,19 +86,11 @@ fn fail_target(
         reason = error.and_then(|(_, reason)| reason),
         "the picture stream failed"
     );
-    if target.service {
-        vnilink::ignored!(
-            vnilink::trace::STREAM,
-            "a viewer already gone needs no failure",
-            core.fail_hosted_service(target.id, target.generation, failure)
-        );
-    } else {
-        vnilink::ignored!(
-            vnilink::trace::STREAM,
-            "a peer already gone needs no stop",
-            core.stop_hosted_peer(target.id)
-        );
-    }
+    vnilink::ignored!(
+        vnilink::trace::STREAM,
+        "a viewer already gone needs no failure",
+        core.fail_hosted_service(target.id, target.generation, failure)
+    );
 }
 
 fn consume<E, F>(
@@ -145,7 +129,6 @@ fn consume<E, F>(
     };
     let mut sink = TargetSink {
         core,
-        service: target.service,
         generation: target.generation,
         capture_display,
         capture_revision,
@@ -160,81 +143,43 @@ fn consume<E, F>(
     // The encoder as last reported: at open, at every reopen, and whenever
     // a picture took another input than the one before.
     let mut reported = session.implementation();
-    if target.service {
-        vnilink::ignored!(
-            vnilink::trace::STREAM,
-            "a report about an ended service is not needed",
-            core.report_desktop_encoder(target.id, target.generation, reported)
-        );
-    }
+    vnilink::ignored!(
+        vnilink::trace::STREAM,
+        "a report about an ended service is not needed",
+        core.report_desktop_encoder(target.id, target.generation, reported)
+    );
     let mut applied_quality = target.quality;
     let mut seen = 0u64;
     let mut stills = Stills::new(target.id, Instant::now());
     while !control.cancel.load(Ordering::Acquire) {
         let reopens = session.reopens();
-        if let Some(quality) = control
-            .quality
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .take()
-        {
-            if let Err(error) = session.observe(&CoreEvent::QualityUpdated {
-                id: target.id,
-                quality,
-            }) {
-                fail_target(
-                    core,
-                    &target,
-                    StreamFailure::Encoder,
-                    "the encoder did not take the new quality",
-                    Some(named(&error)),
-                );
-                return;
-            }
-            applied_quality = quality;
-        }
-        if target.service {
-            match core.hosted_desktop_info(target.id, target.generation) {
-                Ok(info) => {
-                    stills.agreed = info.stills;
-                    if info.quality != applied_quality {
-                        if let Err(error) = session.observe(&CoreEvent::QualityUpdated {
-                            id: target.id,
-                            quality: info.quality,
-                        }) {
-                            fail_target(
-                                core,
-                                &target,
-                                StreamFailure::Encoder,
-                                "the encoder did not take the viewer's quality",
-                                Some(named(&error)),
-                            );
-                            return;
-                        }
-                        applied_quality = info.quality;
+        match core.hosted_desktop_info(target.id, target.generation) {
+            Ok(info) => {
+                stills.agreed = info.stills;
+                if info.quality != applied_quality {
+                    if let Err(error) = session.set_quality(info.quality) {
+                        fail_target(
+                            core,
+                            &target,
+                            StreamFailure::Encoder,
+                            "the encoder did not take the viewer's quality",
+                            Some(named(&error)),
+                        );
+                        return;
                     }
+                    applied_quality = info.quality;
                 }
-                // The owner ended, or the core shut down: nobody to tell.
-                Err(_) => return,
             }
-            if core
-                .take_desktop_keyframe_request(target.id, target.generation)
-                .unwrap_or(false)
-            {
-                vnilink::ignored!(
-                    vnilink::trace::STREAM,
-                    "a keyframe the encoder could not start comes at the next request",
-                    session.observe(&CoreEvent::KeyframeRequested { id: target.id })
-                );
-            }
-        } else if control.keyframe.swap(false, Ordering::AcqRel) {
-            vnilink::ignored!(
-                vnilink::trace::STREAM,
-                "a keyframe the encoder could not start comes at the next request",
-                session.observe(&CoreEvent::KeyframeRequested { id: target.id })
-            );
+            // The owner ended, or the core shut down: nobody to tell.
+            Err(_) => return,
         }
-        if target.service && session.reopens() != reopens {
+        if core
+            .take_desktop_keyframe_request(target.id, target.generation)
+            .unwrap_or(false)
+        {
+            session.request_recovery_keyframe();
+        }
+        if session.reopens() != reopens {
             tracing::info!(target: vnilink::trace::ENCODE, service = target.id, "encoder reopened");
             vnilink::ignored!(
                 vnilink::trace::STREAM,
@@ -363,12 +308,7 @@ fn consume<E, F>(
                             return;
                         }
                     };
-                let published = if target.service {
-                    core.publish_desktop_cursor(target.id, target.generation, cursor)
-                } else {
-                    core.publish_cursor(target.id, target.generation, cursor)
-                };
-                match published {
+                match core.publish_desktop_cursor(target.id, target.generation, cursor) {
                     Ok(()) => {}
                     Err(error) if ended(&error) => return,
                     Err(error) => {
@@ -408,7 +348,7 @@ fn consume<E, F>(
         let encode_started = Instant::now();
         match session.publish(&frame, &mut sink, target.id) {
             Ok(crate::PumpOutput::Encoded(_)) => {
-                if target.service && session.implementation() != reported {
+                if session.implementation() != reported {
                     reported = session.implementation();
                     vnilink::ignored!(
                         vnilink::trace::STREAM,
@@ -416,18 +356,16 @@ fn consume<E, F>(
                         core.report_desktop_encoder(target.id, target.generation, reported)
                     );
                 }
-                if target.service {
-                    vnilink::ignored!(
-                        vnilink::trace::STREAM,
-                        "a report about an ended service is not needed",
-                        core.report_desktop_producer_duration(
-                            target.id,
-                            target.generation,
-                            capture_us,
-                            encode_started.elapsed().as_micros().min(5_000_000) as u64,
-                        )
-                    );
-                }
+                vnilink::ignored!(
+                    vnilink::trace::STREAM,
+                    "a report about an ended service is not needed",
+                    core.report_desktop_producer_duration(
+                        target.id,
+                        target.generation,
+                        capture_us,
+                        encode_started.elapsed().as_micros().min(5_000_000) as u64,
+                    )
+                );
             }
             Ok(_) => {}
             Err(PublishError::Session(error)) if ended(&error) => return,
@@ -451,7 +389,7 @@ fn consume<E, F>(
 /// Selected consumers bind their exact source; unselected consumers follow
 /// the lowest requested display once anyone selected, and every capture
 /// while nothing is selected (bootstrap). A zero `capture_display` is the
-/// legacy whole-desktop singleton and serves every consumer.
+/// whole-desktop singleton and serves every consumer.
 ///
 /// The caller has already opened `capture`. This function does not open a
 /// second capture and does not draw. When `exit_when_idle` is set, it returns
@@ -477,7 +415,6 @@ where
     let _engine = engine.enter();
     let open_encoder = Arc::new(open_encoder);
     let slot = PictureSlot::new();
-    let events = core.subscribe().ok();
     let mut noted: Vec<VideoTarget> = Vec::new();
     let mut reader = Reader::new();
     // A size the source would not deliver is not asked for again.
@@ -506,33 +443,6 @@ where
             if !same_membership(&noted, &targets) {
                 note_targets(&targets);
                 noted = targets.clone();
-            }
-            if let Some(events) = &events {
-                while let Some(event) = events.try_recv() {
-                    match event {
-                        CoreEvent::QualityUpdated { id, quality } => {
-                            if let Some(worker) = running
-                                .iter()
-                                .find(|worker| !worker.key.0 && worker.key.1 == id)
-                            {
-                                *worker
-                                    .control
-                                    .quality
-                                    .lock()
-                                    .unwrap_or_else(|poison| poison.into_inner()) = Some(quality);
-                            }
-                        }
-                        CoreEvent::KeyframeRequested { id } => {
-                            if let Some(worker) = running
-                                .iter()
-                                .find(|worker| !worker.key.0 && worker.key.1 == id)
-                            {
-                                worker.control.keyframe.store(true, Ordering::Release);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
             }
             // Before any consumer opens at the size the source delivers now:
             // those that read another size end and open again at the new one.
@@ -572,8 +482,6 @@ where
                 let control = Arc::new(Control {
                     cancel: AtomicBool::new(false),
                     finished: AtomicBool::new(false),
-                    keyframe: AtomicBool::new(false),
-                    quality: Mutex::new(None),
                 });
                 let worker_control = Arc::clone(&control);
                 let worker_slot = &slot;
@@ -627,7 +535,6 @@ mod display_filter {
 
     fn target(display_id: u64) -> VideoTarget {
         VideoTarget {
-            service: false,
             id: 1,
             generation: 1,
             quality: Quality::new(1_000, 30, 1280, 720).unwrap(),
@@ -655,7 +562,7 @@ mod display_filter {
         assert!(serves(&unselected, 4, Some(4)));
         assert!(!serves(&unselected, 5, Some(4)));
         assert!(!serves(&unselected, 4, Some(5)));
-        // The legacy whole-desktop capture still serves every consumer.
+        // The whole-desktop capture serves every consumer.
         assert!(serves(&unselected, 0, Some(4)));
         assert!(serves(&left, 0, Some(5)));
     }

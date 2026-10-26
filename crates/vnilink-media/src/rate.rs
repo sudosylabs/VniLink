@@ -9,8 +9,6 @@
 //! path) plug in here when the transport reports them; the pacing modules
 //! keep reading the decided settings through this interface.
 
-use vnilink::CoreEvent;
-
 use crate::error::Error;
 use crate::frame::encoded_size;
 use crate::Quality;
@@ -72,14 +70,11 @@ impl RateController {
         (self.settings.width, self.settings.height)
     }
 
-    /// Apply a core event, and say what the encoder must do to follow
-    /// [`Self::settings`]. Events other than a quality update change nothing.
-    pub fn observe(&mut self, event: &CoreEvent) -> Result<RateChange, Error> {
-        let CoreEvent::QualityUpdated { quality, .. } = event else {
-            return Ok(RateChange::Same);
-        };
-        let settings = settings_for(self.capture_width, self.capture_height, *quality)?;
-        self.quality = *quality;
+    /// Take the viewer's new limits, and say what the encoder must do to
+    /// follow [`Self::settings`].
+    pub fn update(&mut self, quality: Quality) -> Result<RateChange, Error> {
+        let settings = settings_for(self.capture_width, self.capture_height, quality)?;
+        self.quality = quality;
         let previous = std::mem::replace(&mut self.settings, settings);
         Ok(if settings == previous {
             RateChange::Same

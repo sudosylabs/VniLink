@@ -294,6 +294,7 @@ impl Reassembler {
     /// finishes a frame, else `None`, in the order frames complete: whether
     /// one came too late is the picture number's to say. Malformed
     /// datagrams are ignored.
+    #[cfg(any(test, feature = "fuzzing"))]
     pub(crate) fn push(&mut self, datagram: &[u8]) -> Option<Vec<u8>> {
         self.push_at(datagram, Instant::now())
     }

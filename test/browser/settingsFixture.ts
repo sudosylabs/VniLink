@@ -2,7 +2,7 @@ import { Emitter } from '../../src/base/common/event.js';
 import { Disposable } from '../../src/base/common/lifecycle.js';
 import { ConfigurationTarget, type IConfigurationChangeEvent, type IConfigurationData, type IConfigurationValue } from '../../src/platform/configuration/common/configuration.js';
 import { settingDefaults, settingKeys, settingSource, type ConfigurationSource } from '../../src/platform/configuration/common/configurationSchema.js';
-import type { NativeDevice, TerminalShells } from '../../src/platform/engine/common/engine.js';
+import type { NativeDevice, TerminalShells, VideoCodecCaps } from '../../src/platform/engine/common/engine.js';
 import { InstantiationService } from '../../src/platform/instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
 import { permissionKinds, type PermissionCommand, type PermissionSnapshot } from '../../src/platform/permissions/common/permissions.js';
@@ -14,7 +14,7 @@ import { IConnectionService, type RunningRelays } from '../../src/workbench/serv
 import { IWorkbenchConfigurationService } from '../../src/workbench/services/configuration/configurationService.js';
 import { INativeRuntimeService } from '../../src/workbench/services/nativeRuntime/nativeRuntimeService.js';
 import { IPermissionService } from '../../src/workbench/services/permissions/permissionService.js';
-import { IRemoteDesktopService, type DesktopSettings } from '../../src/workbench/services/remoteDesktop/remoteDesktopService.js';
+import { IRemoteDesktopService } from '../../src/workbench/services/remoteDesktop/remoteDesktopService.js';
 import { ITerminalHostService } from '../../src/workbench/services/terminal/terminalHostService.js';
 
 export function assert(value: unknown, message: string): asserts value {
@@ -170,14 +170,12 @@ export class FakePermissionService implements IPermissionService {
 
 export const devices: readonly NativeDevice[] = [{ id: 'camera-one', name: 'Camera <one>', kind: 'camera' }, { id: 'mic-one', name: 'Microphone', kind: 'microphone' }];
 
-export const desktopSettings: DesktopSettings = {
-	sessions: [], codecs: {
-		encode_baseline: false, encode_high: false, decode_baseline: true, decode_high: false, max_width: 3840, max_height: 2160, hardware: true, device: 'test', chroma444: false, additional: [
-			{ codec: 'Vp9', encode: true, decode: true, hardware: false },
-			{ codec: 'Av1', encode: false, decode: true, hardware: false },
-			{ codec: 'H265', encode: true, decode: false, hardware: true },
-		],
-	},
+export const desktopCodecs: VideoCodecCaps = {
+	encode_baseline: false, encode_high: false, decode_baseline: true, decode_high: false, max_width: 3840, max_height: 2160, hardware: true, device: 'test', chroma444: false, additional: [
+		{ codec: 'Vp9', encode: true, decode: true, hardware: false },
+		{ codec: 'Av1', encode: false, decode: true, hardware: false },
+		{ codec: 'H265', encode: true, decode: false, hardware: true },
+	],
 };
 
 /** Builds Home's settings pages over fake services, as the workbench would. */
@@ -208,7 +206,7 @@ export class SettingsFixture extends Disposable {
 			[IPermissionService, this.permissions],
 			[INativeRuntimeService, runtime],
 			[IRemoteDesktopService, {
-				_serviceBrand: undefined, available: true, load: () => Promise.resolve(desktopSettings), displays: () => Promise.resolve([]), apply: unused,
+				_serviceBrand: undefined, available: true, codecs: () => Promise.resolve(desktopCodecs),
 			}],
 			[IApplicationService, {
 				_serviceBrand: undefined, restartRequired: false, onDidChangeRestartRequired: restart.event, restart: () => Promise.resolve(),

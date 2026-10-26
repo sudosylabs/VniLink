@@ -67,9 +67,9 @@ pub use encode::LinuxEncoder;
 pub fn video_codec_caps() -> vnilink::VideoCodecCaps {
     vnilink::VideoCodecCaps::default()
 }
-pub use host::HostSession;
 #[cfg(target_os = "linux")]
-pub use host::{serve_desktop, serve_portal};
+pub use host::serve_desktop;
+pub use host::HostSession;
 pub use owners::{
     stale_owners, topology_signature, wanted_owners, GeometryFingerprint, SourceOwner, SourceOwners,
 };

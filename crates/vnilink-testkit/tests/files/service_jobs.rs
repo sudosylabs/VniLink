@@ -1,4 +1,4 @@
-//! Transfers that ride the Files service rather than a desktop session: both
+//! Transfers that ride the Files service rather than a files-only session: both
 //! directions, closing, admission and adoption, and restarts of either computer.
 //!
 //! Jobs here are driven by hand (`drive_to_end`, `job_poll`): each scenario
@@ -29,19 +29,21 @@ fn last_received(trace: &Traced, engine: &str) -> serde_json::Value {
         .expect("a file received whole")
 }
 
-/// An upload and a download on a desktop connection's Files service both
-/// land exactly and leave their sources, and closing a desktop service on
+/// An upload and a download on a services connection's Files service both
+/// land exactly and leave their sources, and closing a Desktop service on
 /// the same connection does not disturb them.
 #[test]
 fn files_service_jobs_complete_both_ways_and_keep_their_sources() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
     let (host, controller) = (&pair.host, &pair.controller);
+    // The host offers a Desktop only with a screen to show.
+    vnilink_testkit::desktop::install_screen(&host.core)?;
     let upload = payload(8192, 113);
     let download = payload(16384, 117);
     std::fs::write(controller.root().join("up.bin"), &upload)?;
     std::fs::write(host.root().join("down.bin"), &download)?;
-    let connection = pair.connect_control();
+    let connection = pair.connect_services();
     let (files, _pipe) = pair.controller.open_files(&connection)?;
     let up = controller.core.files_service_upload(
         files.id,
@@ -143,10 +145,6 @@ fn a_services_connection_without_a_desktop_moves_files_both_ways() -> TestResult
     std::fs::write(controller.root().join("up.bin"), &upload)?;
     std::fs::write(host.root().join("down.bin"), &download)?;
     let connection = pair.connect_services();
-    assert!(
-        connection.quality.is_none(),
-        "a services connection carries no picture quality: {connection:?}"
-    );
     let (files, _pipe) = pair.controller.open_files(&connection)?;
     let up = controller.core.files_service_upload(
         files.id,
@@ -226,8 +224,9 @@ fn a_services_connection_without_a_desktop_moves_files_both_ways() -> TestResult
 }
 
 /// Closing a Files service interrupts its own job on both sides, which it
-/// can no longer resume, and leaves a session job of the same file, the
-/// desktop service and the connection running.
+/// can no longer resume, and leaves a session job of the same file (on a
+/// files-only session beside the link), the Desktop owner and the
+/// connection running.
 #[test]
 fn closing_a_files_service_interrupts_its_job_and_keeps_a_session_job_of_the_same_file(
 ) -> TestResult {
@@ -236,9 +235,11 @@ fn closing_a_files_service_interrupts_its_job_and_keeps_a_session_job_of_the_sam
     let (host, controller) = (&pair.host, &pair.controller);
     let bytes = payload(32768, 123);
     std::fs::write(controller.root().join("same.bin"), &bytes)?;
-    let connection = pair.connect_control();
+    let connection = pair.connect_services();
     let (files, pipe) = pair.controller.open_files(&connection)?;
     let desktop = pair.attach(&connection, ServiceKind::Desktop);
+    // A job no service owns rides a files-only session.
+    controller.core.connect_files(&host.endpoint())?;
     let scoped = controller.core.files_service_upload(
         files.id,
         files.generation,
@@ -342,7 +343,7 @@ fn a_host_closing_the_files_service_interrupts_a_download_and_refuses_new_work()
     let pair = Pair::for_files();
     let (host, controller) = (&pair.host, &pair.controller);
     std::fs::write(host.root().join("a.bin"), payload(8192, 137))?;
-    let connection = pair.connect_control();
+    let connection = pair.connect_services();
     let (files, pipe) = pair.controller.open_files(&connection)?;
     let job = controller.core.files_service_download(
         files.id,
@@ -416,7 +417,7 @@ fn files_service_jobs_need_an_admitted_service_and_one_to_resume_after_a_restart
     std::fs::write(pair.controller.root().join("a.bin"), payload(4096, 139))?;
     let (host_root, controller_root) = (pair.host.root_id(), pair.controller.root_id());
     let controller = &pair.controller.core;
-    let session = controller.connect(&pair.host.endpoint())?;
+    let session = controller.connect_files(&pair.host.endpoint())?;
     let unopened = pair.attach(&session, ServiceKind::Files);
     assert!(
         controller
@@ -498,9 +499,9 @@ fn closing_one_computers_files_service_keeps_another_computers_transfer() -> Tes
     second.core.set_desktop_sharing(sharing)?;
     let bytes = payload(65536, 149);
     std::fs::write(controller.root().join("shared.bin"), &bytes)?;
-    let one = pair.connect_control();
+    let one = pair.connect_services();
     let (one, _one_pipe) = pair.controller.open_files(&one)?;
-    let two = controller.connect_control(&second)?;
+    let two = controller.connect_services(&second)?;
     let (two, _two_pipe) = pair.controller.open_files(&two)?;
     let cancelled = controller.core.files_service_upload(
         one.id,
@@ -637,11 +638,11 @@ fn closing_one_computers_files_service_keeps_another_computers_transfer() -> Tes
           files: job state from=preparing job=2 sender=true to=serving
           files: job state from=serving job=1 sender=true to=interrupted
           files: job state done_bytes=0 files_done=0 from=interrupted job=1 sender=true to=cancelled
+          files: the peer was not told: its side keeps the job as it was until it next asks change=cancel failure=network job=1
           files: file served ended=sent from=0 sent=65536 size=65536
           files: job state done_bytes=65536 files_done=1 from=serving job=2 sender=true to=complete
         host:
           files: job state from=transferring job=1 sender=false to=interrupted
-          files: job state done_bytes=0 files_done=0 from=interrupted job=1 sender=false to=cancelled
         second:
           files: file received outcome=received resumed_at=0 size=65536 took=65536
           files: job state done_bytes=65536 files_done=1 from=transferring job=1 sender=false to=complete
@@ -659,7 +660,7 @@ fn a_new_files_service_adopts_a_closed_ones_job_and_fences_the_old_one() -> Test
     let (host, controller) = (&pair.host, &pair.controller);
     let bytes = payload(1024 * 1024, 903);
     std::fs::write(controller.root().join("adopt.bin"), &bytes)?;
-    let session = controller.core.connect(&host.endpoint())?;
+    let session = controller.core.connect_files(&host.endpoint())?;
     let (old, pipe) = pair.controller.open_files(&session)?;
     let job = controller.core.files_service_upload(
         old.id,
@@ -1028,7 +1029,7 @@ fn a_file_past_the_receivers_budget_fails_before_any_fetch() -> TestResult {
             max_reserved_bytes: 3 * bytes.len() as u64 - 1,
             minimum_free_bytes: 0,
         })?;
-    controller.core.connect(&host.endpoint())?;
+    controller.core.connect_files(&host.endpoint())?;
     let sent = files::upload(&pair, "set", "arrived")?;
     let receiver = job_on(&host.core, false)?;
     let failed = host.core.job_poll(receiver)?;
@@ -1083,7 +1084,7 @@ fn a_restart_removes_orphaned_staging_and_keeps_an_interrupted_jobs() -> TestRes
         pair.controller.root().join("source.bin"),
         b"source survives crash",
     )?;
-    pair.controller.core.connect(&pair.host.endpoint())?;
+    pair.controller.core.connect_files(&pair.host.endpoint())?;
     files::upload(&pair, "", "received")?;
     let receiver = job_on(&pair.host.core, false)?;
     pair.host.core.shutdown();

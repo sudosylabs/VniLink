@@ -1,4 +1,4 @@
-//! A control session whose link drops: the controller dials again, and what
+//! A files-only session whose link drops: the controller dials again, and what
 //! was copied on the lost generation is never replayed on the new one.
 
 use expect_test::expect;
@@ -42,7 +42,7 @@ fn a_dropped_session_does_not_replay_clipboard_text() -> TestResult {
     let pair = paired(true);
     let controller = &pair.controller.core;
     let copied = Copied::install(&pair.host)?;
-    let session = pair.connect_control();
+    let session = super::files_session(&pair.controller, &pair.host)?;
     controller.submit_clipboard(session.id, session.generation, "one")?;
     controller.drop_link()?;
     wait_dropped(controller);
@@ -101,7 +101,7 @@ fn a_dropped_session_does_not_replay_a_selection() -> TestResult {
     let trace = traced();
     let pair = paired(true);
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let session = pair.connect_control();
+    let session = super::files_session(&pair.controller, &pair.host)?;
     controller.submit_clipboard_files(session.id, session.generation, &selection("one.txt", 3))?;
     let events = controller.subscribe()?;
     controller.drop_link()?;

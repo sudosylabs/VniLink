@@ -1,12 +1,10 @@
-//! The link between two paired computers: the path a session takes, the
-//! picture preset it keeps, and a cursor sent beside the picture when both
-//! sides can.
+//! The link between two paired computers: the path it takes, and a
+//! Desktop's cursor sent beside the picture when both sides can.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use vnilink::{CursorImage, CursorState, HostCapture, Quality, SessionRole};
-use vnilink_testkit::session::wait_closed;
+use vnilink::{CursorImage, CursorState, HostCapture, ServiceKind};
 use vnilink_testkit::{traced, wait_for, Pair, TestResult};
 
 /// A host's capture of a 1920×1080 display that draws its cursor apart
@@ -23,14 +21,14 @@ impl HostCapture for CursorCapture {
     }
 }
 
-/// A live session's two ends each report a selected direct path, over
-/// which the handshake already moved bytes.
+/// A live link's two ends each report a selected direct path, over which
+/// the handshake already moved bytes.
 #[test]
 fn a_live_session_reports_its_selected_direct_path() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let session = controller.connect(&pair.host.endpoint())?;
+    let session = pair.connect_services();
     let paths = controller.session_paths(session.id)?;
     assert!(
         paths.iter().any(|path| path.selected && !path.relay),
@@ -53,45 +51,30 @@ fn a_live_session_reports_its_selected_direct_path() -> TestResult {
     Ok(())
 }
 
-/// A picture preset the viewer chose is the session's.
-#[test]
-fn manual_picture_preset_persists_on_the_session() -> TestResult {
-    let _trace = traced();
-    let pair = Pair::for_desktop();
-    let controller = &pair.controller.core;
-    let session = controller.connect(&pair.host.endpoint())?;
-    let chosen = Quality::new(1500, 15, 1280, 720)?;
-    controller.update_session_quality(session.id, SessionRole::Controller, chosen)?;
-    assert_eq!(
-        controller
-            .snapshot()?
-            .outgoing
-            .ok_or("the session")?
-            .quality,
-        Some(chosen),
-        "the session keeps the chosen preset"
-    );
-    Ok(())
-}
-
 /// When the host draws its cursor apart and the viewer can show it, each
-/// cursor change reaches the viewer with no picture sent, and a cursor of
-/// another generation is refused on either side, and after the session.
+/// cursor change reaches the viewer's Desktop with no picture sent; the
+/// host refuses a cursor of another generation, and a closed Desktop gives
+/// none.
 #[test]
 fn cursor_delivery_is_independent_of_video_and_fenced_by_generation() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_desktop();
-    let (host, controller) = (&pair.host.core, &pair.controller.core);
+    let host = &pair.host.core;
     host.set_capture(Box::new(CursorCapture(true)))?;
-    controller.set_cursor_receiver(true)?;
-    let remote = controller.connect(&pair.host.endpoint())?;
-    let local = host.snapshot()?.incoming.ok_or("the host's session")?;
+    pair.controller.core.set_cursor_receiver(true)?;
+    let connection = pair.connect_services();
+    let desktop = pair.controller.open_desktop(&connection)?;
+    let local = pair
+        .host
+        .hosted_for(ServiceKind::Desktop, &pair.controller)
+        .ok_or("the host serves the Desktop")?;
     assert!(
-        host.separate_cursor(local.id, SessionRole::Host)?,
+        host.hosted_desktop_info(local.id, local.generation)?
+            .separate_cursor,
         "the host sends its cursor apart"
     );
     assert!(
-        controller.separate_cursor(remote.id, SessionRole::Controller)?,
+        desktop.desktop_info()?.separate_cursor,
         "the viewer receives the cursor apart"
     );
     let image = Arc::new(CursorImage::new(1, 1, (0, 0), vec![20, 30, 40, 255])?);
@@ -106,14 +89,14 @@ fn cursor_delivery_is_independent_of_video_and_fenced_by_generation() -> TestRes
             visible,
             image: Some(image.clone()),
         };
-        host.publish_cursor(local.id, local.generation, state.clone())?;
+        host.publish_desktop_cursor(local.id, local.generation, state.clone())?;
         wait_for(
             "the cursor to arrive without video",
             Duration::from_secs(3),
             || {
-                (controller
-                    .cursor(remote.id, remote.generation)
-                    .expect("the live session's cursor")
+                (desktop
+                    .cursor()
+                    .expect("the live Desktop's cursor")
                     .as_deref()
                     == Some(&state))
                 .then_some(())
@@ -126,19 +109,14 @@ fn cursor_delivery_is_independent_of_video_and_fenced_by_generation() -> TestRes
         image: Some(image),
     };
     assert!(
-        host.publish_cursor(local.id, local.generation + 1, stale)
+        host.publish_desktop_cursor(local.id, local.generation + 1, stale)
             .is_err(),
         "the host refuses a cursor of another generation"
     );
+    desktop.close();
     assert!(
-        controller.cursor(remote.id, remote.generation + 1).is_err(),
-        "the viewer gives no cursor of another generation"
-    );
-    controller.disconnect()?;
-    wait_closed(controller, SessionRole::Controller, Duration::from_secs(5));
-    assert!(
-        controller.cursor(remote.id, remote.generation).is_err(),
-        "a closed session gives no cursor"
+        desktop.cursor().is_err(),
+        "a closed Desktop gives no cursor"
     );
     Ok(())
 }
@@ -150,21 +128,27 @@ fn independent_cursor_requires_both_capture_and_viewer_support() -> TestResult {
     let _trace = traced();
     for (capture, viewer) in [(true, false), (false, true), (false, false)] {
         let pair = Pair::for_desktop();
-        let (host, controller) = (&pair.host.core, &pair.controller.core);
+        let host = &pair.host.core;
         host.set_capture(Box::new(CursorCapture(capture)))?;
-        controller.set_cursor_receiver(viewer)?;
-        let remote = controller.connect(&pair.host.endpoint())?;
-        let local = host.snapshot()?.incoming.ok_or("the host's session")?;
+        pair.controller.core.set_cursor_receiver(viewer)?;
+        let connection = pair.connect_services();
+        let desktop = pair.controller.open_desktop(&connection)?;
+        let local = pair
+            .host
+            .hosted_for(ServiceKind::Desktop, &pair.controller)
+            .ok_or("the host serves the Desktop")?;
         assert!(
-            !host.separate_cursor(local.id, SessionRole::Host)?,
+            !host
+                .hosted_desktop_info(local.id, local.generation)?
+                .separate_cursor,
             "capture {capture}, viewer {viewer}: the host keeps its cursor in the picture"
         );
         assert!(
-            !controller.separate_cursor(remote.id, SessionRole::Controller)?,
+            !desktop.desktop_info()?.separate_cursor,
             "capture {capture}, viewer {viewer}: the viewer receives no cursor apart"
         );
         assert!(
-            host.publish_cursor(
+            host.publish_desktop_cursor(
                 local.id,
                 local.generation,
                 CursorState {

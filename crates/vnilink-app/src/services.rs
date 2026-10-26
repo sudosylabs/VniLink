@@ -201,11 +201,6 @@ impl VnilinkCore {
             .transfer_desktop_control(from_id, from_generation, to_id, to_generation)
             .map_err(map_error)
     }
-    pub fn host_desktop_active(&self, id: u64, generation: u64) -> Result<bool, FfiError> {
-        self.inner
-            .host_desktop_active(id, generation)
-            .map_err(map_error)
-    }
     pub fn begin_connect_services(&self, endpoint_id: String) -> Result<FfiSessionInfo, FfiError> {
         self.inner
             .begin_connect_services(&endpoint_id)

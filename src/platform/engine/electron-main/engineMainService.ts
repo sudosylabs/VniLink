@@ -22,11 +22,11 @@ const noEvents: Event<EngineEventBatch> = () => Disposable.None;
 const maxPendingRequests = 64;
 
 function timeoutFor(command: EngineCommand | { type: 'shutdown' }): number {
-	// Core dials block up to 75 seconds; every other call answers quickly.
+	// No call waits for a dial; these two wait for the operating system.
 	if (command.type === 'shutdown' || command.type === 'startNativeScreenSharing') {
 		return 30000;
 	}
-	return command.type === 'connect' ? 90000 : 10000;
+	return 10000;
 }
 
 /** Owns the engine utility process, its request lanes and its lifetime. */

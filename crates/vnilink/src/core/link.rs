@@ -454,7 +454,7 @@ mod address_refresh_tests {
         assert!(device(&controller, &host.endpoint_id())
             .direct
             .contains(&stale()));
-        controller.connect(&host.endpoint_id()).unwrap();
+        crate::test_support::connect_link(&controller, &host);
         wait_until(|| {
             let saved = device(&controller, &host.endpoint_id());
             !saved.direct.contains(&stale()) && saved.direct == host_direct
@@ -483,7 +483,7 @@ mod address_refresh_tests {
         let controller = open_stored(&controller_store);
         pair(&host, &controller, Some(stale()));
         controller_store.fail_next_save(Error::StoreLocked);
-        controller.connect(&host.endpoint_id()).unwrap();
+        crate::test_support::connect_link(&controller, &host);
         wait_until(|| {
             !device(&host, &controller.endpoint_id())
                 .direct
@@ -506,7 +506,7 @@ mod address_refresh_tests {
         let host = open_stored(&host_store);
         let controller = open_stored(&controller_store);
         let host_direct = pair(&host, &controller, Some(stale()));
-        controller.connect(&host.endpoint_id()).unwrap();
+        crate::test_support::connect_link(&controller, &host);
         wait_until(|| {
             let saved = device(&controller, &host.endpoint_id());
             !saved.direct.contains(&stale()) && saved.direct == host_direct

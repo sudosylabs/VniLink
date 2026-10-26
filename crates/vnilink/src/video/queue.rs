@@ -134,6 +134,7 @@ impl VideoQueue {
         self.frames.drain(..).map(|(frame, _)| frame).collect()
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.frames.len()
     }
@@ -197,18 +198,6 @@ impl VideoOutbox {
     /// The oldest queued frame, for a sender that paces what it writes.
     pub(crate) fn pop(&self) -> Option<EncodedFrame> {
         lock(&self.queue).pop()
-    }
-
-    /// Queued frames waiting for the network task. Poll with
-    /// `session_paths` RTT/relay to drive adaptive quality.
-    pub(crate) fn queued(&self) -> usize {
-        lock(&self.queue).len()
-    }
-
-    /// Cumulative P-frames dropped on full queue. Rising fast means the
-    /// encoder outruns the path: lower bitrate/fps via quality update.
-    pub(crate) fn dropped(&self) -> u64 {
-        lock(&self.queue).dropped()
     }
 
     pub(crate) fn telemetry(&self) -> QueueTelemetry {
@@ -293,14 +282,6 @@ impl VideoInbox {
         lock(&self.queue).lost();
     }
 
-    pub(crate) fn reset(&self) {
-        self.closed.store(true, Ordering::Release);
-        self.close_taps();
-        let mut queue = lock(&self.queue);
-        *queue = inbox_queue();
-        self.closed.store(false, Ordering::Release);
-    }
-
     pub(crate) fn close(&self) {
         self.set_ready(None);
         self.closed.store(true, Ordering::Release);
@@ -338,12 +319,6 @@ impl VideoInbox {
 
     pub(crate) fn try_pop(&self) -> Option<EncodedFrame> {
         lock(&self.queue).pop()
-    }
-
-    /// Frames waiting for the UI. Rising means the UI drains slower than the
-    /// network delivers: used as the controller-side `queued` signal.
-    pub(crate) fn len(&self) -> usize {
-        lock(&self.queue).len()
     }
 
     pub(crate) fn telemetry(&self) -> QueueTelemetry {
@@ -610,9 +585,6 @@ mod recording_tests {
             inbox.recording_tap(),
             Err(crate::Error::NoSession)
         ));
-        inbox.reset();
-        assert!(inbox.recording_tap().is_ok());
-        assert!(taps.iter().all(RecordingVideoTap::is_closed));
     }
 }
 

@@ -55,15 +55,6 @@ fn a_desktop_reopens_on_its_connection_and_releases_held_input_each_time() -> Te
         SCREEN,
         "the desktop learns the host's monitor"
     );
-    assert!(
-        controller.controller_session(session.id)?.quality.is_none(),
-        "a services connection carries no picture quality of its own"
-    );
-    let incoming = host.snapshot()?.incoming.ok_or("the host's connection")?;
-    assert!(
-        !host.host_desktop_active(incoming.id, remote.generation)?,
-        "a Desktop service does not make the connection a desktop session"
-    );
     let video = first.subscribe_video()?;
     assert!(
         matches!(first.subscribe_video(), Err(Error::Busy)),

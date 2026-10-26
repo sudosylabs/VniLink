@@ -1,6 +1,6 @@
 use crate::error::Error;
 use crate::events::{CoreEvent, EventHub};
-use crate::protocol::{Quality, SessionStamp};
+use crate::protocol::Quality;
 
 /// Which side of a session this installation is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,10 +32,6 @@ pub struct SessionInfo {
     pub role: SessionRole,
     pub phase: SessionPhase,
     pub peer_id: String,
-    pub quality: Option<Quality>,
-    /// Pixel size of the one host monitor. Zero when the host has not reported it.
-    pub monitor_width: u16,
-    pub monitor_height: u16,
 }
 
 /// Separate grants. Pairing does not set any of them.
@@ -58,20 +54,14 @@ pub(crate) enum Grant {
     Transfer,
 }
 
-/// Host admission. Iroh has already authenticated the peer key.
-/// Files-only sessions (Transfer grant without Control) are admitted without
-/// video requirements and without screen-capture permission beyond hosting:
-/// file roots/listings/transfers enforce the Transfer grant per operation.
+/// Host admission of a files-only session. Iroh has already authenticated
+/// the peer key. The Transfer grant admits it; file roots, listings and
+/// transfers enforce that grant per operation.
 pub(crate) fn admit(
     hosting: bool,
     session_open: bool,
-    control_granted: bool,
     transfer_granted: bool,
-    files_only: bool,
     version: u16,
-    video_unsupported: bool,
-    codec_supported: bool,
-    peer_decode_unsupported: bool,
 ) -> Result<(), Error> {
     if !hosting {
         return Err(Error::NotHosting);
@@ -82,25 +72,8 @@ pub(crate) fn admit(
     if session_open {
         return Err(Error::Busy);
     }
-    if files_only {
-        // Files-only: Transfer grant suffices, no Control, video, input or
-        // screen sharing required.
-        if !transfer_granted {
-            return Err(Error::Unauthorized);
-        }
-        return Ok(());
-    }
-    if !control_granted {
+    if !transfer_granted {
         return Err(Error::Unauthorized);
-    }
-    if video_unsupported {
-        return Err(Error::Unsupported("no H.264 encoder is available"));
-    }
-    if !codec_supported {
-        return Err(Error::Unsupported("no video codec both computers support"));
-    }
-    if peer_decode_unsupported {
-        return Err(Error::Unsupported("the controller cannot decode video"));
     }
     Ok(())
 }
@@ -179,23 +152,14 @@ pub(crate) fn start_quality(
     }
 }
 
-/// Input is accepted only for the generation that owns the active session.
-pub(crate) fn check_input(active: Option<SessionStamp>, stamp: SessionStamp) -> Result<(), Error> {
-    match active {
-        Some(current) if current == stamp => Ok(()),
-        Some(_) | None => Err(Error::StaleSession),
-    }
-}
-
 pub(crate) fn phase_after_admit() -> SessionPhase {
-    // Admission agrees version, monitor, codec, and encoder limits, so the
-    // session lands active with the negotiated quality already stored.
+    // Admission agrees the version and grants in one exchange, so the
+    // session lands active.
     SessionPhase::Active
 }
 
 /// Emit the progression both roles synthesize after admission. The phases are
-/// identical on host and controller today; the agreed version, monitor,
-/// codec, and quality land in the session beside it.
+/// identical on host and controller.
 pub(crate) fn announce_progression(
     events: &EventHub,
     id: u64,
@@ -275,181 +239,30 @@ mod tests {
     #[test]
     fn admission_checks_hosting_version_capacity_and_grant() {
         assert!(matches!(
-            admit(
-                false,
-                false,
-                true,
-                false,
-                false,
-                PROTOCOL_VERSION,
-                false,
-                true,
-                false
-            ),
+            admit(false, false, true, PROTOCOL_VERSION),
             Err(Error::NotHosting)
         ));
+        for version in [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
+            assert!(matches!(
+                admit(true, false, true, version),
+                Err(Error::IncompatibleVersion)
+            ));
+        }
         assert!(matches!(
-            admit(
-                true,
-                false,
-                true,
-                false,
-                false,
-                PROTOCOL_VERSION + 1,
-                false,
-                true,
-                false
-            ),
-            Err(Error::IncompatibleVersion)
-        ));
-        assert!(matches!(
-            admit(
-                true,
-                false,
-                true,
-                false,
-                false,
-                PROTOCOL_VERSION - 1,
-                false,
-                true,
-                false
-            ),
-            Err(Error::IncompatibleVersion)
-        ));
-        // Files-only admission refuses another version just the same.
-        assert!(matches!(
-            admit(
-                true,
-                false,
-                false,
-                true,
-                true,
-                PROTOCOL_VERSION + 1,
-                false,
-                true,
-                false
-            ),
-            Err(Error::IncompatibleVersion)
-        ));
-        assert!(matches!(
-            admit(
-                true,
-                true,
-                true,
-                false,
-                false,
-                PROTOCOL_VERSION,
-                false,
-                true,
-                false
-            ),
+            admit(true, true, true, PROTOCOL_VERSION),
             Err(Error::Busy)
         ));
         assert!(matches!(
-            admit(
-                true,
-                false,
-                false,
-                false,
-                false,
-                PROTOCOL_VERSION,
-                false,
-                true,
-                false
-            ),
+            admit(true, false, false, PROTOCOL_VERSION),
             Err(Error::Unauthorized)
         ));
-        // Files-only: Transfer without Control is admitted without video checks.
-        assert!(admit(
-            true,
-            false,
-            false,
-            true,
-            true,
-            PROTOCOL_VERSION,
-            true,
-            false,
-            true
-        )
-        .is_ok());
-        assert!(matches!(
-            admit(
-                true,
-                false,
-                true,
-                false,
-                false,
-                PROTOCOL_VERSION,
-                true,
-                true,
-                false
-            ),
-            Err(Error::Unsupported(_))
-        ));
-        assert!(matches!(
-            admit(
-                true,
-                false,
-                true,
-                false,
-                false,
-                PROTOCOL_VERSION,
-                false,
-                true,
-                true
-            ),
-            Err(Error::Unsupported(_))
-        ));
-        assert!(matches!(
-            admit(
-                true,
-                false,
-                true,
-                false,
-                false,
-                PROTOCOL_VERSION,
-                false,
-                false,
-                false
-            ),
-            Err(Error::Unsupported("no video codec both computers support"))
-        ));
-        assert!(admit(
-            true,
-            false,
-            true,
-            false,
-            false,
-            PROTOCOL_VERSION,
-            false,
-            true,
-            false
-        )
-        .is_ok());
-    }
-
-    #[test]
-    fn input_from_an_old_generation_is_rejected() {
-        let current = SessionStamp::new(4, 2);
-        assert!(check_input(Some(current), current).is_ok());
-        assert!(matches!(
-            check_input(Some(SessionStamp::new(4, 3)), current),
-            Err(Error::StaleSession)
-        ));
-        assert!(matches!(
-            check_input(None, current),
-            Err(Error::StaleSession)
-        ));
-        assert!(matches!(
-            check_input(Some(current), SessionStamp::new(9, 2)),
-            Err(Error::StaleSession)
-        ));
+        assert!(admit(true, false, true, PROTOCOL_VERSION).is_ok());
     }
 
     #[test]
     fn admission_order_prefers_hosting_and_the_control_channel_is_active() {
         assert!(matches!(
-            admit(false, false, true, false, false, 0, false, true, false),
+            admit(false, false, false, 0),
             Err(Error::NotHosting)
         ));
         assert_eq!(phase_after_admit(), SessionPhase::Active);

@@ -2,21 +2,20 @@
 //!
 //! [`HostSession`] opens the platform encoder at the settings its
 //! [`RateController`] derives from the session quality, then paces pictures
-//! through [`HostVideo`]. [`serve_capture`] reads a capture that is already
-//! open. It does not ask for capture permission and does not draw. Frame bytes
-//! are not logged. Stop is noticed between bounded reads, even before the
-//! first picture. A session that is no
+//! through [`HostVideo`]. [`serve_desktop_capture`] reads a capture that is
+//! already open for one hosted Desktop service. It does not ask for capture
+//! permission and does not draw. Frame bytes are not logged. Stop is noticed
+//! between bounded reads, even before the first picture. A Desktop that is no
 //! longer active ends the loop.
 // trace: records every ignored failure
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use vnilink::Core;
-use vnilink::CoreEvent;
 
 use crate::error::{Error, PublishError};
 use crate::frame::RawFrame;
-use crate::pump::{CoreSink, FrameSink, HostVideo, PumpOutput, VideoEncoder};
+use crate::pump::{FrameSink, HostVideo, PumpOutput, VideoEncoder};
 use crate::rate::{RateChange, RateController};
 use crate::Quality;
 
@@ -169,43 +168,40 @@ impl<E: VideoEncoder> HostSession<E> {
         self.control.encoded_size()
     }
 
-    /// A keyframe request forces the next picture. A quality change at the
-    /// same size retunes the running encoder, without a keyframe; a new size,
-    /// or an encoder that cannot retune, opens it again.
-    pub fn observe(&mut self, event: &CoreEvent) -> Result<(), Error> {
-        match event {
-            CoreEvent::QualityUpdated { quality, .. } => {
-                self.capped_bps = None;
-                let reopen = match self.control.observe(event)? {
-                    RateChange::Same => false,
-                    RateChange::Retune => {
-                        let next = self.control.settings();
-                        !self.video.retune(next.bitrate_bps, next.frame_rate)?
-                    }
-                    RateChange::Reopen => true,
-                };
-                if reopen {
-                    let settings = self.control.settings();
-                    self.video = HostVideo::new(
-                        *quality,
-                        (self.open_encoder)(
-                            settings.width,
-                            settings.height,
-                            settings.frame_rate,
-                            settings.bitrate_bps,
-                        )?,
-                    );
-                    self.reopens += 1;
-                } else {
-                    self.video.set_quality(*quality);
-                }
-                Ok(())
+    /// The viewer lost pictures: the next one is a recovery keyframe.
+    pub fn request_recovery_keyframe(&mut self) {
+        self.video.request_recovery_keyframe();
+    }
+
+    /// Follows the viewer's new limits. A change at the same size retunes
+    /// the running encoder, without a keyframe; a new size, or an encoder
+    /// that cannot retune, opens it again.
+    pub fn set_quality(&mut self, quality: Quality) -> Result<(), Error> {
+        self.capped_bps = None;
+        let reopen = match self.control.update(quality)? {
+            RateChange::Same => false,
+            RateChange::Retune => {
+                let next = self.control.settings();
+                !self.video.retune(next.bitrate_bps, next.frame_rate)?
             }
-            other => {
-                self.video.observe(other);
-                Ok(())
-            }
+            RateChange::Reopen => true,
+        };
+        if reopen {
+            let settings = self.control.settings();
+            self.video = HostVideo::new(
+                quality,
+                (self.open_encoder)(
+                    settings.width,
+                    settings.height,
+                    settings.frame_rate,
+                    settings.bitrate_bps,
+                )?,
+            );
+            self.reopens += 1;
+        } else {
+            self.video.set_quality(quality);
         }
+        Ok(())
     }
 
     /// Pace `frame` and publish it when it is due.
@@ -258,26 +254,6 @@ impl<E: VideoEncoder> HostSession<E> {
     }
 }
 
-/// The session an event belongs to, when it belongs to one. Events without
-/// an owner (hosting changes, pairing, address updates) are observed by
-/// every serve loop.
-pub(crate) fn event_session(event: &CoreEvent) -> Option<u64> {
-    match event {
-        CoreEvent::QualityUpdated { id, .. }
-        | CoreEvent::KeyframeRequested { id }
-        | CoreEvent::InputFailed { id, .. }
-        | CoreEvent::ClipboardReceived { id }
-        | CoreEvent::ClipboardFilesReceived { id } => Some(*id),
-        CoreEvent::SessionChanged { id, .. } => Some(*id),
-        _ => None,
-    }
-}
-
-/// Copy capture frames into `core` until `stop` is set or the hosted session ends.
-///
-/// The caller has already started `capture`. This function does not open a
-/// capture. `stop` is read between frames, so a frame already being copied is
-/// finished first.
 /// Records a screen read that failed, which ends the pipeline reading it.
 fn read_failed(error: &Error) {
     tracing::warn!(
@@ -286,95 +262,6 @@ fn read_failed(error: &Error) {
         reason = vnilink::trace::Failure::failure_reason(error),
         "the screen could not be read: capture ends"
     );
-}
-
-pub fn serve_capture<C, E>(
-    capture: &C,
-    core: &Core,
-    session_id: u64,
-    quality: Quality,
-    stop: &AtomicBool,
-    open_encoder: impl Fn(u16, u16, u8, u32) -> Result<E, Error> + Send + 'static,
-) -> Result<(), PublishError>
-where
-    C: FrameSource,
-    E: VideoEncoder,
-{
-    let _engine = core.trace_span().entered();
-    let mut session = HostSession::open(capture.size().0, capture.size().1, quality, open_encoder)?;
-    let events = core.subscribe()?;
-    let mut sink = CoreSink::new(core);
-    let separate_cursor = core.separate_cursor(session_id, vnilink::SessionRole::Host)?;
-    let generation = core
-        .snapshot()?
-        .incoming
-        .filter(|s| s.id == session_id)
-        .ok_or(vnilink::Error::NoSession)?
-        .generation;
-    let started = std::time::Instant::now();
-    loop {
-        if stop.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-        match core.host_desktop_active(session_id, generation) {
-            Ok(true) => {}
-            Ok(false) | Err(vnilink::Error::ShutDown) => return Ok(()),
-            Err(error) => return Err(error.into()),
-        }
-        while let Some(event) = events.try_recv() {
-            // One installation can host while it controls another: a quality
-            // or keyframe event for the outgoing session must not reconfigure
-            // this hosted one.
-            if event_session(&event).is_some_and(|id| id != session_id) {
-                continue;
-            }
-            session.observe(&event)?;
-        }
-        let capture_started = std::time::Instant::now();
-        let frame_period = std::time::Duration::from_micros(
-            1_000_000 / u64::from(session.control.settings().frame_rate),
-        );
-        let timestamp_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
-        let Some(mut frame) = capture.poll_frame(timestamp_us).inspect_err(read_failed)? else {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            continue;
-        };
-        offer_snapshot(core, capture, &frame);
-        if let Some(cursor) = capture.cursor() {
-            if separate_cursor {
-                match core.publish_cursor(session_id, generation, cursor) {
-                    Ok(()) => {}
-                    Err(
-                        vnilink::Error::NoSession
-                        | vnilink::Error::StaleSession
-                        | vnilink::Error::ShutDown,
-                    ) => return Ok(()),
-                    Err(error) => return Err(error.into()),
-                }
-            } else {
-                frame = crate::cursor::composite(&frame, &cursor).inspect_err(|error| {
-                    tracing::warn!(
-                        target: vnilink::trace::CAPTURE,
-                        failure = vnilink::trace::Failure::failure_name(error),
-                        reason = vnilink::trace::Failure::failure_reason(error),
-                        "the pointer could not be drawn into the picture: capture ends"
-                    );
-                })?;
-            }
-        }
-        match session.publish(&frame, &mut sink, session_id) {
-            Ok(_) => {}
-            Err(PublishError::Session(
-                vnilink::Error::NoSession | vnilink::Error::StaleSession | vnilink::Error::ShutDown,
-            )) => return Ok(()),
-            Err(err) => return Err(err),
-        }
-        // A cached idle picture can be returned immediately. Pace requests,
-        // rather than copying and discarding that picture in a busy loop.
-        if let Some(remaining) = frame_period.checked_sub(capture_started.elapsed()) {
-            std::thread::sleep(remaining);
-        }
-    }
 }
 
 fn offer_snapshot(core: &Core, capture: &impl FrameSource, frame: &RawFrame) {
@@ -445,17 +332,14 @@ where
             Err(error) => return Err(error.into()),
         };
         if current.quality != info.quality {
-            session.observe(&CoreEvent::QualityUpdated {
-                id: service_id,
-                quality: current.quality,
-            })?;
+            session.set_quality(current.quality)?;
             info = current;
         }
         if core
             .take_desktop_keyframe_request(service_id, generation)
             .unwrap_or(false)
         {
-            session.observe(&CoreEvent::KeyframeRequested { id: service_id })?;
+            session.request_recovery_keyframe();
         }
         let capture_started = std::time::Instant::now();
         let timestamp = started.elapsed().as_micros().try_into().unwrap_or(u64::MAX);

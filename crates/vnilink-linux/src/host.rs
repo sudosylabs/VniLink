@@ -1,4 +1,4 @@
-//! Publish one monitor into a hosted session.
+//! Publish one monitor into a hosted Desktop service.
 //!
 //! The generic [`HostSession`] opens the VA-API encoder at the even size that
 //! fits the session quality. This module only pins that choice to
@@ -11,7 +11,7 @@ use std::sync::atomic::AtomicBool;
 
 pub use vnilink_media::HostSession;
 #[cfg(target_os = "linux")]
-use vnilink_media::{Error, FrameSource, FrameWait, PublishError, Quality, RawFrame};
+use vnilink_media::{Error, FrameSource, FrameWait, PublishError, RawFrame};
 
 #[cfg(target_os = "linux")]
 use crate::encode::LinuxEncoder;
@@ -37,32 +37,6 @@ impl FrameSource for crate::pipewire::PortalCapture {
     fn attested_display(&self) -> &str {
         "portal"
     }
-}
-
-/// Copy portal frames into `core` until `stop` is set or the hosted session ends.
-///
-/// The caller has already started `capture`. This function does not open a
-/// portal. `stop` is read between frames, so a frame already being copied is
-/// finished first. The encoder profile follows the negotiated session codec:
-/// High when Hello/Accept agreed it, else Constrained Baseline.
-#[cfg(target_os = "linux")]
-pub fn serve_portal(
-    capture: &crate::pipewire::PortalCapture,
-    core: &vnilink::Core,
-    session_id: u64,
-    quality: Quality,
-    stop: &AtomicBool,
-) -> Result<(), PublishError> {
-    let codec = core.host_codec(session_id).unwrap_or(vnilink::CODEC_H264);
-    let matrix = core.host_matrix(session_id).unwrap_or_default();
-    vnilink_media::serve_capture(
-        capture,
-        core,
-        session_id,
-        quality,
-        stop,
-        move |w, h, fps, bps| LinuxEncoder::open_codec(w, h, fps, bps, codec, matrix),
-    )
 }
 
 /// Encode an existing X11/portal source for one admitted Desktop owner.

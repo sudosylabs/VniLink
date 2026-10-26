@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
+use vnilink::EncodedFrame;
 use vnilink::Quality;
-use vnilink::{CoreEvent, EncodedFrame};
 
 use crate::annexb::{to_annex_b, AvccAccessUnit};
 use crate::error::{Error, PublishError};
@@ -142,15 +142,11 @@ fn frames_inside_the_interval_are_skipped_until_a_keyframe_is_requested() {
         assert!(!log.calls[1].force_keyframe);
     }
 
-    host.observe(&CoreEvent::InputFailed {
-        id: 1,
-        message: "input was rejected",
-    });
     assert!(matches!(
         host.push(&picture(32, 32, 33_400)).unwrap(),
         PumpOutput::Skipped
     ));
-    host.observe(&CoreEvent::KeyframeRequested { id: 9 });
+    host.request_recovery_keyframe();
     let forced = encoded(host.push(&picture(32, 32, 33_500)).unwrap());
     assert!(forced.keyframe);
     assert!(log.lock().unwrap().calls.last().unwrap().force_keyframe);
@@ -163,20 +159,17 @@ fn only_a_requested_keyframe_is_a_recovery_keyframe() {
     let (encoder, log) = Scripted::honoring();
     let mut host = HostVideo::new(quality(30, 32, 32), encoder);
     host.push(&picture(32, 32, 0)).unwrap();
-    host.observe(&CoreEvent::KeyframeRequested { id: 1 });
+    host.request_recovery_keyframe();
     host.push(&picture(32, 32, 1_000)).unwrap();
     host.push(&picture(32, 32, 40_000)).unwrap();
-    host.observe(&CoreEvent::KeyframeRequested { id: 1 });
+    host.request_recovery_keyframe();
     host.request_keyframe();
     host.push(&picture(32, 32, 41_000)).unwrap();
     host.request_keyframe();
     host.request_recovery_keyframe();
     host.push(&picture(32, 32, 42_000)).unwrap();
-    host.observe(&CoreEvent::KeyframeRequested { id: 1 });
-    host.observe(&CoreEvent::QualityUpdated {
-        id: 1,
-        quality: quality(30, 16, 16),
-    });
+    host.request_recovery_keyframe();
+    host.set_quality(quality(30, 16, 16));
     host.push(&picture(32, 32, 43_000)).unwrap();
     let calls: Vec<_> = log
         .lock()
@@ -206,11 +199,11 @@ fn a_recovery_keyframe_is_refreshed_at_full_quality_once_the_link_is_quiet() {
     let (encoder, log) = Scripted::honoring();
     let mut host = HostVideo::new(quality(30, 32, 32), encoder);
     host.push(&picture(32, 32, 0)).unwrap();
-    host.observe(&CoreEvent::KeyframeRequested { id: 1 });
+    host.request_recovery_keyframe();
     host.push(&picture(32, 32, 100_000)).unwrap();
     // Another loss before the refresh: a new recovery keyframe, and the
     // refresh is put off from it.
-    host.observe(&CoreEvent::KeyframeRequested { id: 1 });
+    host.request_recovery_keyframe();
     host.push(&picture(32, 32, 1_000_000)).unwrap();
     host.push(&picture(32, 32, 100_000 + refresh)).unwrap();
     host.push(&picture(32, 32, 1_000_000 + refresh)).unwrap();
@@ -247,7 +240,7 @@ fn a_refining_encoder_gets_the_still_picture_again_instead_of_a_refresh() {
     let mut host = HostVideo::new(quality(30, 32, 32), Refining(encoder));
     host.push(&picture(32, 32, 0)).unwrap();
     assert!(host.refining());
-    host.observe(&CoreEvent::KeyframeRequested { id: 1 });
+    host.request_recovery_keyframe();
     host.push(&picture(32, 32, 100_000)).unwrap();
     assert!(host.refining());
     host.push(&picture(32, 32, 100_000 + refine)).unwrap();
@@ -331,10 +324,7 @@ fn oversized_input_is_scaled_and_a_size_change_forces_a_keyframe() {
     host.push(&picture(320, 180, 0)).unwrap();
     assert_eq!(log.lock().unwrap().sizes[0], (160, 90));
     let updated = quality(10, 80, 60);
-    host.observe(&CoreEvent::QualityUpdated {
-        id: 3,
-        quality: updated,
-    });
+    host.set_quality(updated);
     assert_eq!(host.quality(), updated);
     host.push(&picture(320, 180, 1_000)).unwrap();
     let log = log.lock().unwrap();

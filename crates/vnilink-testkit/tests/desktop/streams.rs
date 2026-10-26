@@ -1,6 +1,6 @@
 //! The pictures themselves: capture fenced to its consumers, pressure that
 //! adapts one owner, twin sources, conditions the viewer learns, why a
-//! picture ended, pictures reaching a session's viewer, and the size a
+//! picture ended, pictures reaching a Desktop's viewer, and the size a
 //! host serves.
 
 use expect_test::expect;
@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use vnilink::{
     AdaptationReason, Condition, DesktopControlState, DesktopEnd, DisplayInfo, EncodedFrame,
-    EncoderImplementation, Error, InputEvent, ServiceInfo, ServiceKind, SessionPhase, StreamEnd,
-    StreamFailure, VideoCodecCaps,
+    EncoderImplementation, Error, InputEvent, ServiceInfo, ServiceKind, StreamEnd, StreamFailure,
+    VideoCodecCaps,
 };
 use vnilink_testkit::desktop::{input_failed, keyframe, next_picture, InputLog, MonitorCapture};
 use vnilink_testkit::drops::{DropPoint, SeededDrops};
@@ -328,7 +328,6 @@ fn twin_sources_stream_independently_with_exact_stamps() -> TestResult {
     let mut targets: Vec<_> = host
         .video_targets()?
         .into_iter()
-        .filter(|target| target.service)
         .map(|target| (target.display_id, target.revision))
         .collect();
     targets.sort_unstable();
@@ -694,16 +693,16 @@ fn a_picture_the_viewer_closed_has_no_host_end() -> TestResult {
     Ok(())
 }
 
-/// Pictures a host publishes to a viewer's session reach it in order,
+/// Pictures a host publishes to a viewer's Desktop reach it in order,
 /// keyframe and delta as published, a burst of them too. What the host
 /// advertises follows its adapters: a capture alone offers no input, a
-/// desktop adds it. Empty pictures and pictures for no session are refused,
+/// desktop adds it. Empty pictures and pictures for no Desktop are refused,
 /// as are pictures once the viewer left.
 #[test]
 fn encoded_frames_reach_the_controller_in_order() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
-    let (host, controller) = (&pair.host.core, &pair.controller.core);
+    let host = &pair.host.core;
     // The kit's engines share a folder; this host offers only its screen.
     host.set_file_roots(Vec::new())?;
     host.set_capture(Box::new(MonitorCapture::new((1280, 720))))?;
@@ -729,17 +728,18 @@ fn encoded_frames_reach_the_controller_in_order() -> TestResult {
         "a desktop adds keyboard and pointer: {with_desktop:?}"
     );
 
-    let video = controller.subscribe_video()?;
-    let session = controller.connect(&pair.host.endpoint())?;
-    assert_eq!(session.phase, SessionPhase::Active, "the session opens");
+    let desktop = pair.controller.open_desktop(&pair.connect_services())?;
+    let video = desktop.subscribe_video()?;
+    let info = desktop.desktop_info()?;
     assert_eq!(
-        (session.monitor_width, session.monitor_height),
+        (info.monitor_width, info.monitor_height),
         (1280, 720),
         "the viewer learns the capture's size, not the desktop's"
     );
-    let incoming = host.snapshot()?.incoming.ok_or("a hosted session")?;
+    let remote = pair.host.serving(ServiceKind::Desktop, &pair.controller);
+    let served = host.hosted_desktop_info(remote.id, remote.generation)?;
     assert_eq!(
-        (incoming.monitor_width, incoming.monitor_height),
+        (served.monitor_width, served.monitor_height),
         (1280, 720),
         "the host serves the capture's size"
     );
@@ -748,11 +748,12 @@ fn encoded_frames_reach_the_controller_in_order() -> TestResult {
             host.set_capture(Box::new(MonitorCapture::new((1, 1)))),
             Err(Error::Busy)
         ),
-        "the capture is not swapped during a session"
+        "the capture is not swapped during a Desktop"
     );
-
-    host.publish_video(session.id, EncodedFrame::h264(true, 1, vec![1])?)?;
-    host.publish_video(session.id, EncodedFrame::h264(false, 2, vec![2])?)?;
+    let publish =
+        |frame: EncodedFrame| host.publish_desktop_video(remote.id, remote.generation, frame);
+    publish(EncodedFrame::h264(true, 1, vec![1])?)?;
+    publish(EncodedFrame::h264(false, 2, vec![2])?)?;
     let first = next_picture(&video, "the keyframe");
     assert_eq!(
         (first.keyframe, first.timestamp_us, first.payload),
@@ -766,9 +767,9 @@ fn encoded_frames_reach_the_controller_in_order() -> TestResult {
         "the delta follows, as published"
     );
     for index in 0..30u64 {
-        host.publish_video(session.id, EncodedFrame::h264(false, 100 + index, vec![3])?)?;
+        publish(EncodedFrame::h264(false, 100 + index, vec![3])?)?;
     }
-    host.publish_video(session.id, EncodedFrame::h264(true, 999, vec![9, 9])?)?;
+    publish(EncodedFrame::h264(true, 999, vec![9, 9])?)?;
     // The sender may drain the burst or drop part of it; the core's
     // bounded-queue tests own overflow. The burst's keyframe arrives last.
     let last = wait_for("the burst's keyframe", Duration::from_secs(5), || {
@@ -790,43 +791,35 @@ fn encoded_frames_reach_the_controller_in_order() -> TestResult {
     empty.payload.clear();
     assert!(
         matches!(
-            host.publish_video(session.id, empty),
+            publish(empty),
             Err(Error::InvalidSetting("encoded frame is empty"))
         ),
         "an empty picture is refused"
     );
     assert!(
         matches!(
-            host.publish_video(session.id + 1, EncodedFrame::h264(true, 1, vec![1])?),
+            host.publish_desktop_video(
+                remote.id + 1,
+                remote.generation,
+                EncodedFrame::h264(true, 1, vec![1])?
+            ),
             Err(Error::NoSession)
         ),
-        "a picture for no session is refused"
+        "a picture for no Desktop is refused"
     );
-    controller.disconnect()?;
-    wait_for("the host's session to close", DEFAULT_WAIT, || {
-        host.snapshot()
-            .ok()?
-            .incoming
-            .is_some_and(|session| session.phase == SessionPhase::Closed)
-            .then_some(())
-    });
+    desktop.close();
+    pair.host.wait_released(Some(ServiceKind::Desktop));
     assert!(
-        matches!(
-            host.publish_video(session.id, EncodedFrame::h264(true, 1, vec![1])?),
-            Err(Error::NoSession)
-        ),
+        publish(EncodedFrame::h264(true, 1, vec![1])?).is_err(),
         "a picture after the viewer left is refused"
     );
     expect![[r#"
         controller:
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-          session: session phase from=active generation=1 role=Controller session=1 to=stopping
-          session: session phase from=stopping generation=1 role=Controller session=1 to=closed
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
         host:
-          session: the session's control stream ended error=network session=1
-          session: session phase from=active generation=1 role=Host session=1 to=closed
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
     "#]]
-    .assert_eq(&trace.story(&["session", "input"]));
+    .assert_eq(&trace.story(&["service", "input"]));
     Ok(())
 }
 
@@ -845,9 +838,10 @@ fn a_zero_capture_size_falls_back_to_the_desktop() -> TestResult {
         capabilities.desktop_capture && capabilities.keyboard && capabilities.monitors == 1,
         "the host still offers its one monitor: {capabilities:?}"
     );
-    let session = pair.controller.core.connect(&pair.host.endpoint())?;
+    let desktop = pair.controller.open_desktop(&pair.connect_services())?;
+    let info = desktop.desktop_info()?;
     assert_eq!(
-        (session.monitor_width, session.monitor_height),
+        (info.monitor_width, info.monitor_height),
         (100, 80),
         "the viewer learns the desktop's size"
     );

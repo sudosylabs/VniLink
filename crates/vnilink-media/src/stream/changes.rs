@@ -13,7 +13,6 @@ use crate::pump::FrameSink;
 
 pub(super) struct TargetSink<'a> {
     pub(super) core: &'a Core,
-    pub(super) service: bool,
     pub(super) generation: u64,
     pub(super) capture_display: u64,
     pub(super) capture_revision: Arc<AtomicU64>,
@@ -131,11 +130,7 @@ impl FrameSink for TargetSink<'_> {
             regions = frame.regions.as_ref().map(Vec::len),
             "picture sent"
         );
-        if self.service {
-            self.core.publish_desktop_video(id, self.generation, frame)
-        } else {
-            self.core.publish_video(id, frame)
-        }
+        self.core.publish_desktop_video(id, self.generation, frame)
     }
 }
 

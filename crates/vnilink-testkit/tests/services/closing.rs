@@ -38,7 +38,7 @@ fn every_close_names_its_cause_on_the_controller() -> TestResult {
     // the parent's loss. Replaced covers only the race before adoption,
     // which no ordered sequence reaches.
     host_a.pair_for_control(&controller)?;
-    let session = controller.connect_control(&host_a)?;
+    let session = controller.connect_services(&host_a)?;
     let follower =
         core.attach_controller_service(session.id, session.generation, ServiceKind::Files)?;
     core.drop_controller_link(session.id)?;
@@ -57,7 +57,7 @@ fn every_close_names_its_cause_on_the_controller() -> TestResult {
     );
     // The record shares the closing connection's generation.
     host_b.pair_for_control(&controller)?;
-    let session = controller.connect_control(&host_b)?;
+    let session = controller.connect_services(&host_b)?;
     let orphaned =
         core.attach_controller_service(session.id, session.generation, ServiceKind::Desktop)?;
     core.disconnect_session(session.id)?;
@@ -71,7 +71,7 @@ fn every_close_names_its_cause_on_the_controller() -> TestResult {
     let live = Engine::start("live");
     let last_host = Engine::start("last-host");
     last_host.pair_for_control(&live)?;
-    let session = live.connect_control(&last_host)?;
+    let session = live.connect_services(&last_host)?;
     let owned =
         live.core
             .attach_controller_service(session.id, session.generation, ServiceKind::Files)?;
@@ -329,7 +329,7 @@ fn a_stalled_camera_open_cancels_cleanly_and_adopts_nothing_late() -> TestResult
     Ok(())
 }
 
-/// How a test ends an adopted Desktop.
+/// How a test ends a Desktop.
 #[derive(Clone, Copy, Debug)]
 enum DesktopClose {
     HandleClose,
@@ -339,13 +339,12 @@ enum DesktopClose {
     HandleDropped,
 }
 
-/// Every way an adopted Desktop ends stops its pictures, names who closed
+/// Every way a Desktop service ends stops its pictures, names who closed
 /// it, and leaves the connection and its Files service; a redial after it
-/// stays neutral and keeps the first close's cause. (An adopted Desktop
-/// carries no input; what a Desktop service's close releases is
+/// keeps the first close's cause. (What the close releases is
 /// [`a_desktop_close_releases_what_it_held_for_every_close`].)
 #[test]
-fn an_adopted_desktop_close_keeps_files_for_every_close() -> TestResult {
+fn a_desktop_close_keeps_files_for_every_close() -> TestResult {
     for close in [
         DesktopClose::HandleClose,
         DesktopClose::OwnerClose,
@@ -353,19 +352,19 @@ fn an_adopted_desktop_close_keeps_files_for_every_close() -> TestResult {
         DesktopClose::HostStopsSharing,
         DesktopClose::HandleDropped,
     ] {
-        close_adopted_desktop(close)?;
+        close_desktop_beside_files(close)?;
     }
     Ok(())
 }
 
-fn close_adopted_desktop(close: DesktopClose) -> TestResult {
+fn close_desktop_beside_files(close: DesktopClose) -> TestResult {
     let _trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     let (root, folder) = whole_disk(&pair.host, "")?;
     InputLog::install(&pair.host, (1920, 1080))?;
     host.set_service_sharing(ServiceKind::Files, true)?;
-    let session = controller.connect(&pair.host.endpoint())?;
+    let session = pair.connect_services();
     let incoming = host.snapshot()?.incoming.ok_or("the host's session")?;
     let desktop = pair.attach(&session, ServiceKind::Desktop);
     let handle = controller.open_desktop_service(desktop.id, desktop.generation)?;
@@ -377,12 +376,9 @@ fn close_adopted_desktop(close: DesktopClose) -> TestResult {
         "{close:?}: a Desktop owner opens once"
     );
     let (files, pipe) = pair.controller.open_files(&session)?;
-    let subscription = controller.subscribe_session_video(session.id, session.generation)?;
-    assert!(
-        host.host_desktop_active(incoming.id, incoming.generation)?,
-        "{close:?}: the host's desktop is active"
-    );
-    host.publish_video(incoming.id, keyframe(7, vec![7]))?;
+    let subscription = handle.subscribe_video()?;
+    let remote = pair.host.serving(ServiceKind::Desktop, &pair.controller);
+    host.publish_desktop_video(remote.id, remote.generation, keyframe(7, vec![7]))?;
     assert_eq!(
         subscription
             .recv_timeout(Duration::from_secs(5))
@@ -391,10 +387,6 @@ fn close_adopted_desktop(close: DesktopClose) -> TestResult {
         vec![7],
         "{close:?}: the Desktop carries the host's pictures"
     );
-    let remote = pair
-        .host
-        .hosted_for(ServiceKind::Desktop, &pair.controller)
-        .ok_or("the host serves the Desktop")?;
     match close {
         DesktopClose::HandleClose => handle.close(),
         DesktopClose::OwnerClose => {
@@ -416,20 +408,11 @@ fn close_adopted_desktop(close: DesktopClose) -> TestResult {
         || (phase(&pair.controller, &desktop) == expected).then_some(()),
     );
     // The host ends its side of the desktop just after the controller's.
-    wait_for(
-        &format!("{close:?}: the host's desktop to end"),
-        DEFAULT_WAIT,
-        || {
-            (!host
-                .host_desktop_active(incoming.id, incoming.generation)
-                .unwrap_or(false))
-            .then_some(())
-        },
-    );
+    pair.host.wait_released(Some(ServiceKind::Desktop));
     assert!(
         matches!(
-            host.publish_video(incoming.id, keyframe(8, vec![8])),
-            Err(Error::NoSession)
+            host.publish_desktop_video(remote.id, remote.generation, keyframe(8, vec![8])),
+            Err(Error::NoSession | Error::StaleSession)
         ),
         "{close:?}: a closed Desktop takes no pictures"
     );
@@ -437,27 +420,15 @@ fn close_adopted_desktop(close: DesktopClose) -> TestResult {
         subscription.try_recv().is_none(),
         "{close:?}: no picture follows the close"
     );
-    assert!(
-        controller.controller_session(session.id)?.quality.is_none(),
-        "{close:?}: the controller's connection has no picture quality"
-    );
     let incoming_now = host.snapshot()?.incoming.ok_or("the host's session")?;
-    assert!(
-        incoming_now.quality.is_none(),
-        "{close:?}: the host's session has no picture quality"
-    );
-    assert!(
-        !host.host_desktop_active(incoming.id, incoming.generation)?,
-        "{close:?}: the host's desktop is no longer active"
-    );
     assert_eq!(
         controller.controller_session(session.id)?.phase,
         SessionPhase::Active,
         "{close:?}: the controller's connection stays"
     );
     assert_eq!(
-        incoming_now.phase,
-        SessionPhase::Active,
+        (incoming_now.id, incoming_now.phase),
+        (incoming.id, SessionPhase::Active),
         "{close:?}: the host's session stays"
     );
     pipe.mkdir(root, &folder, "after-desktop-close")?;
@@ -472,25 +443,8 @@ fn close_adopted_desktop(close: DesktopClose) -> TestResult {
         ServicePhase::Active,
         "{close:?}: Files stays active"
     );
-    assert!(
-        !controller
-            .remote_service_support(session.id, session.generation)?
-            .desktop,
-        "{close:?}: the connection no longer offers its Desktop"
-    );
-    // A redial after the Desktop closed stays neutral rather than resuming
-    // capture.
     controller.drop_controller_link(session.id)?;
-    let fresh = pair.controller.redialed(&session);
-    assert!(
-        fresh.quality.is_none(),
-        "{close:?}: the redial has no picture quality"
-    );
-    assert_eq!(
-        (fresh.monitor_width, fresh.monitor_height),
-        (0, 0),
-        "{close:?}: the redial has no monitor"
-    );
+    pair.controller.redialed(&session);
     assert_eq!(
         phase(&pair.controller, &desktop),
         expected,

@@ -2,11 +2,10 @@
 //! displays that disappear under one viewer or owner but not another.
 
 use expect_test::expect;
-use std::time::Duration;
 
 use vnilink::{
     usage, CoreEvent, DesktopControlState, DisplayInfo, Error, EventSubscription, InputEvent,
-    Quality, ServiceKind, SessionInfo, SessionPhase, SessionRole,
+    ServiceKind, SessionPhase,
 };
 use vnilink_testkit::desktop::{input_failed, keyframe, next_picture, InputLog, MonitorCapture};
 use vnilink_testkit::events::next_event;
@@ -93,6 +92,20 @@ fn one_connection_streams_two_selected_monitors_independently() -> TestResult {
         ),
         "an owner shows one display, refused at once otherwise"
     );
+    assert!(
+        matches!(
+            desktop_a.select_displays(&[]),
+            Err(Error::InvalidSetting("a desktop stream shows one display"))
+        ),
+        "no display is refused"
+    );
+    assert!(
+        matches!(
+            desktop_a.select_displays(&[0]),
+            Err(Error::InvalidSetting("a display id is invalid"))
+        ),
+        "display 0 is refused"
+    );
     desktop_a.select_displays(&[1])?;
     desktop_b.select_displays(&[2])?;
     let remote_a = hosted_showing(&pair.host, 1);
@@ -100,7 +113,6 @@ fn one_connection_streams_two_selected_monitors_independently() -> TestResult {
     let mut targets: Vec<_> = host
         .video_targets()?
         .into_iter()
-        .filter(|target| target.service)
         .map(|target| target.display_id)
         .collect();
     targets.sort_unstable();
@@ -251,173 +263,6 @@ fn one_connection_streams_two_selected_monitors_independently() -> TestResult {
     Ok(())
 }
 
-/// Two viewers' sessions each show their own display. When the first
-/// viewer's display goes, it alone loses its selection and says why, and
-/// both streams are asked for a keyframe; a display that returns is not
-/// selected again by itself, and the viewer moves to the display that
-/// remains. The second viewer's display and its quality stay its own.
-/// (Pointers refused for each reason are the Desktop service's, in
-/// [`two_desktop_owners_fail_only_the_removed_display`]: a session carries
-/// no input.)
-#[test]
-fn two_viewers_keep_their_own_displays_when_one_disappears() -> TestResult {
-    let trace = traced();
-    let pair = Pair::for_desktop();
-    let host = &pair.host.core;
-    InputLog::install(&pair.host, SCREEN)?;
-    let (first, second) = (&pair.controller, &pair.add_viewer("second"));
-    let left = placed(1, 0, (1920, 1080), 0, 100);
-    let right = placed(2, -1920, (1280, 800), 90, 200);
-    host.set_topology(1, &[left, right])?;
-
-    let first_session = first.core.connect(&pair.host.endpoint())?;
-    let second_session = second.core.connect(&pair.host.endpoint())?;
-    wait_for(
-        "the first viewer to learn the displays",
-        DEFAULT_WAIT,
-        || {
-            first
-                .core
-                .session_topology(first_session.id, first_session.generation)
-                .ok()
-                .filter(|displays| displays.len() == 2 && displays[1].rotation_deg == 90)
-        },
-    );
-    wait_for(
-        "the second viewer to learn the displays",
-        DEFAULT_WAIT,
-        || {
-            second
-                .core
-                .session_topology(second_session.id, second_session.generation)
-                .ok()
-                .filter(|displays| displays.iter().any(|display| display.origin_x == -1920))
-        },
-    );
-    first
-        .core
-        .select_displays(first_session.id, first_session.generation, &[1])?;
-    second
-        .core
-        .select_displays(second_session.id, second_session.generation, &[2])?;
-    let first_host = pair.host.hosted_session(first).ok_or(Error::NoSession)?;
-    let second_host = pair.host.hosted_session(second).ok_or(Error::NoSession)?;
-    assert!(
-        first_host.id < second_host.id,
-        "the host numbers sessions in the order they arrived"
-    );
-    let selected = |session: &SessionInfo| {
-        host.incoming_display_selection(session.id, session.generation)
-            .ok()
-    };
-    wait_for("the viewers to select their displays", DEFAULT_WAIT, || {
-        (selected(&first_host)? == [1] && selected(&second_host)? == [2]).then_some(())
-    });
-    assert_eq!(
-        host.capture_displays()?,
-        vec![1, 2],
-        "the host captures both selected displays"
-    );
-
-    let events = host.subscribe()?;
-    let resized = placed(2, -1920, (1000, 800), 90, 200);
-    host.set_topology(2, &[resized])?;
-    assert_eq!(
-        (
-            host.incoming_display_selection(first_host.id, first_host.generation)?,
-            host.incoming_display_fault(first_host.id, first_host.generation)?
-        ),
-        (Vec::new(), Some("the selected display is gone")),
-        "the first viewer loses its display and says why"
-    );
-    assert_eq!(
-        (
-            host.incoming_display_selection(second_host.id, second_host.generation)?,
-            host.incoming_display_fault(second_host.id, second_host.generation)?
-        ),
-        (vec![2], None),
-        "the second viewer keeps its display"
-    );
-    assert_eq!(
-        host.capture_displays()?,
-        vec![2],
-        "the host captures only the display still shown"
-    );
-    let targets = host.video_targets()?;
-    let shows = |id: u64| {
-        targets
-            .iter()
-            .find(|target| target.id == id)
-            .map(|target| target.display_id)
-    };
-    assert_eq!(
-        (shows(first_host.id), shows(second_host.id)),
-        (Some(0), Some(2)),
-        "the first viewer's stream follows the capture; the second shows its display"
-    );
-    let mut keyframes = Vec::new();
-    wait_for(
-        "both streams to ask for a keyframe",
-        Duration::from_secs(2),
-        || {
-            if let Some(CoreEvent::KeyframeRequested { id }) =
-                events.recv_timeout(Duration::from_millis(20))
-            {
-                keyframes.push(id);
-            }
-            (keyframes.len() >= 2).then_some(())
-        },
-    );
-    keyframes.sort_unstable();
-    assert_eq!(
-        keyframes,
-        vec![first_host.id, second_host.id],
-        "a changed topology asks each stream for a keyframe"
-    );
-
-    let restored = placed(1, 0, (1920, 1080), 0, 100);
-    host.set_topology(3, &[restored, resized])?;
-    assert_eq!(
-        (
-            host.incoming_display_selection(first_host.id, first_host.generation)?,
-            host.incoming_display_selection(second_host.id, second_host.generation)?
-        ),
-        (Vec::new(), vec![2]),
-        "a display that returns is not selected again by itself"
-    );
-    first
-        .core
-        .select_displays(first_session.id, first_session.generation, &[2])?;
-    wait_for(
-        "the first viewer to move to the remaining display",
-        DEFAULT_WAIT,
-        || {
-            (selected(&first_host)? == [2]
-                && host
-                    .incoming_display_fault(first_host.id, first_host.generation)
-                    .ok()?
-                    .is_none())
-            .then_some(())
-        },
-    );
-    let marker = Quality::new(4_000, 24, 1600, 900)?;
-    second
-        .core
-        .update_session_quality(second_session.id, SessionRole::Controller, marker)?;
-    wait_for(
-        "the second viewer's quality to arrive",
-        DEFAULT_WAIT,
-        || (pair.host.hosted_session(second)?.quality == Some(marker)).then_some(()),
-    );
-    assert_eq!(
-        host.capture_displays()?,
-        vec![2],
-        "both viewers now show the remaining display"
-    );
-    expect![[r#""#]].assert_eq(&trace.story(&["topology", "input"]));
-    Ok(())
-}
-
 /// Two Desktop owners on two computers' connections each show their own
 /// display. When the first owner's display goes, it alone loses its
 /// selection and says why, both are owed a keyframe, both viewers learn the
@@ -500,6 +345,18 @@ fn two_desktop_owners_fail_only_the_removed_display() -> TestResult {
         vec![2],
         "the host captures only the display still shown"
     );
+    let targets = host.video_targets()?;
+    let shows = |id: u64| {
+        targets
+            .iter()
+            .find(|target| target.id == id)
+            .map(|target| target.display_id)
+    };
+    assert_eq!(
+        (shows(first_remote.id), shows(second_remote.id)),
+        (Some(0), Some(2)),
+        "the faulted owner's stream follows the capture; the other shows its display"
+    );
     assert!(
         host.take_desktop_keyframe_request(first_remote.id, first_remote.generation)?,
         "the faulted owner is owed a keyframe"
@@ -558,6 +415,22 @@ fn two_desktop_owners_fail_only_the_removed_display() -> TestResult {
         );
     }
 
+    let restored = placed(1, 0, (1920, 1080), 0, 100);
+    host.set_topology(3, &[restored, resized])?;
+    assert_eq!(
+        (
+            host.hosted_display_selection(first_remote.id, first_remote.generation)?,
+            host.hosted_display_fault(first_remote.id, first_remote.generation)?
+        ),
+        (Vec::new(), Some("the selected display is gone")),
+        "a display that returns is not selected again by itself"
+    );
+    wait_for(
+        "the first owner to learn the returned display",
+        DEFAULT_WAIT,
+        || (first_desktop.topology().ok()?.len() == 2).then_some(()),
+    );
+
     first_desktop.select_displays(&[2])?;
     wait_for(
         "the first owner to select the remaining display",
@@ -571,7 +444,7 @@ fn two_desktop_owners_fail_only_the_removed_display() -> TestResult {
             .then_some(())
         },
     );
-    let landed = InputEvent::pointer(-1900, 10, 2, 2);
+    let landed = InputEvent::pointer(-1900, 10, 2, 3);
     send(landed);
     wait_for(
         "the pointer to land on the remaining display",
@@ -581,7 +454,7 @@ fn two_desktop_owners_fail_only_the_removed_display() -> TestResult {
 
     // The second owner does not control: its pointer is discarded, and a
     // selection of no display, sent after it, fences that it was decided.
-    let other = InputEvent::pointer(-1800, 20, 2, 2);
+    let other = InputEvent::pointer(-1800, 20, 2, 3);
     second_desktop.submit_input(other)?;
     second_desktop.select_displays(&[9])?;
     next_event(

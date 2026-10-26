@@ -119,7 +119,7 @@ async fn keep_link(shared: Arc<Shared>, handle: tokio::runtime::Handle, peer: [u
         if !reached && failures == 0 {
             set_presence(&shared, &display_id, DevicePresence::Connecting);
         }
-        match start_outgoing(&shared, &handle, &display_id, true, true, false) {
+        match start_outgoing(&shared, &handle, &display_id, true, false) {
             Ok((info, _ready, _stop)) => {
                 if watch_link(&shared, info.id, &peer, &display_id).await {
                     reached = true;

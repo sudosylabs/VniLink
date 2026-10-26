@@ -41,7 +41,7 @@ fn a_small_file_completes_promptly_on_its_own() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_files();
     drive(&pair);
-    pair.controller.core.connect(&pair.host.endpoint())?;
+    pair.controller.core.connect_files(&pair.host.endpoint())?;
     for name in ["first.bin", "second.bin"] {
         std::fs::write(pair.controller.root().join(name), vec![7u8; 2500])?;
         // Submitting scans and offers the file: it counts.
@@ -79,7 +79,7 @@ fn a_new_files_owner_resumes_what_a_lost_one_left() -> TestResult {
     let (controller, host) = (&pair.controller.core, &pair.host.core);
     let bytes = payload(512 * 1024, 917);
     std::fs::write(pair.controller.root().join("carry.bin"), &bytes)?;
-    let session = pair.connect_control();
+    let session = pair.connect_services();
     let (lost, pipe) = pair.controller.open_files(&session)?;
     let job = controller.files_service_upload(
         lost.id,
@@ -165,7 +165,7 @@ fn a_new_files_owner_resumes_what_a_lost_one_left() -> TestResult {
 fn the_other_computers_folder_says_when_it_changes() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_files();
-    let (_owner, pipe) = pair.controller.open_files(&pair.connect_control())?;
+    let (_owner, pipe) = pair.controller.open_files(&pair.connect_services())?;
     let root = pair.host.root_id();
     pipe.watch(Some((root, String::new())));
     // The watch's first answer is the folder as it is, and only a change
@@ -221,7 +221,7 @@ fn a_thousand_skipped_files_take_no_pass_each() -> TestResult {
             std::fs::write(folder.join(format!("f-{index:04}.txt")), b"x")?;
         }
     }
-    pair.controller.core.connect(&pair.host.endpoint())?;
+    pair.controller.core.connect_files(&pair.host.endpoint())?;
     drive(&pair);
     let job = files::upload(&pair, "many", "")?;
     let receiver = received(&pair.host.core);
@@ -285,7 +285,7 @@ fn a_waiting_transfer_does_not_wake_itself() -> TestResult {
     let (controller, host) = (&pair.controller.core, &pair.host.core);
     std::fs::write(pair.controller.root().join("same.txt"), b"theirs")?;
     std::fs::write(pair.host.root().join("same.txt"), b"mine")?;
-    controller.connect(&pair.host.endpoint())?;
+    controller.connect_files(&pair.host.endpoint())?;
     drive(&pair);
     let job = files::upload(&pair, "same.txt", "")?;
     wait_for(
@@ -353,8 +353,8 @@ fn a_waiting_transfer_does_not_wake_itself() -> TestResult {
     Ok(())
 }
 
-/// A controller may hold both a control session and a services-only link
-/// with one peer. Control of a job no Files service owns rides the control
+/// A controller may hold both a files-only session and a services-only link
+/// with one peer. Control of a job no Files service owns rides the files-only
 /// session every time, the only one that accepts it, and a Files job rides
 /// its own service's link, whichever the sessions were stored first.
 #[test]
@@ -362,7 +362,7 @@ fn job_control_rides_the_session_that_carries_the_job() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_files();
     let (controller, host) = (&pair.controller.core, &pair.host.core);
-    controller.connect(&pair.host.endpoint())?;
+    controller.connect_files(&pair.host.endpoint())?;
     let (owner, _pipe) = pair.controller.open_files(&pair.connect_services())?;
     let receiver_of = |name: &str| {
         wait_for("the host's job", DEFAULT_WAIT, || {
@@ -382,7 +382,7 @@ fn job_control_rides_the_session_that_carries_the_job() -> TestResult {
         assert_eq!(
             (sender.state, got.state),
             (JobState::Complete, JobState::Complete),
-            "a job no Files service owns is driven over the control session"
+            "a job no Files service owns is driven over the files-only session"
         );
         assert_eq!(
             std::fs::read(pair.host.root().join(&name))?,
@@ -432,7 +432,7 @@ fn a_selection_is_one_transfer_both_ways() -> TestResult {
     std::fs::write(pick.join("Photos/one.jpg"), payload(900, 502))?;
     std::fs::write(pick.join("Photos/two.jpg"), payload(1100, 503))?;
     std::fs::write(pick.join("left.txt"), b"not chosen")?;
-    let (owner, _pipe) = pair.controller.open_files(&pair.connect_control())?;
+    let (owner, _pipe) = pair.controller.open_files(&pair.connect_services())?;
     let names = ["a.txt".to_owned(), "Photos".to_owned()];
     assert!(
         controller
@@ -578,7 +578,7 @@ fn diagnostics_count_a_finished_transfer() -> TestResult {
     let pair = Pair::for_files();
     let bytes = payload(200 * 1024, 1901);
     std::fs::write(pair.controller.root().join("counted.bin"), &bytes)?;
-    pair.controller.core.connect(&pair.host.endpoint())?;
+    pair.controller.core.connect_files(&pair.host.endpoint())?;
     let job = files::upload(&pair, "counted.bin", "arrived")?;
     let receiver = received(&pair.host.core);
     let (sender, got) = drive_to_end(
@@ -645,7 +645,7 @@ fn small_files_arrive_ahead_and_land_in_order() -> TestResult {
         .map(|n| (format!("many/f{n:02}.bin"), 3000))
         .collect();
     write_named(&pair.controller.root(), &many, 2000);
-    controller.connect(&pair.host.endpoint())?;
+    controller.connect_files(&pair.host.endpoint())?;
     let job = files::upload(&pair, "many", "")?;
     let receiver = files::only_job(host)?;
 

@@ -48,7 +48,7 @@ export class CodecSettingControl extends Disposable implements ISettingControl {
 
 	private async load(): Promise<void> {
 		try {
-			const { codecs } = await this.desktopService.load();
+			const codecs = await this.desktopService.codecs();
 			if (this.isDisposed()) {
 				return;
 			}

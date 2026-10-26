@@ -51,7 +51,10 @@ fn files_cross_the_relay_exactly() {
         &[("a.txt", 1024), ("b/c.bin", 3 * 1024 * 1024 + 11)],
     );
     std::fs::create_dir_all(pair.host.root().join("inbox")).unwrap();
-    pair.controller.core.connect(&pair.host.endpoint()).unwrap();
+    pair.controller
+        .core
+        .connect_files(&pair.host.endpoint())
+        .unwrap();
     pair.controller
         .core
         .job_submit_upload(

@@ -160,13 +160,6 @@ impl Engine {
         self.settled(pending.id, "the services connection to be admitted")
     }
 
-    /// This engine's control session to `host`, the one a desktop opens,
-    /// once active; the refusal when it was refused.
-    pub fn connect_control(&self, host: &Engine) -> Result<SessionInfo, Error> {
-        let pending = self.core.begin_connect(&host.endpoint())?;
-        self.settled(pending.id, "the control session to open")
-    }
-
     fn settled(&self, session: u64, what: &str) -> Result<SessionInfo, Error> {
         wait_for(what, DEFAULT_WAIT, || {
             match self.core.controller_session(session) {
@@ -407,13 +400,6 @@ impl Pair {
         self.controller
             .connect_services(&self.host)
             .expect("an admitted connection")
-    }
-
-    /// The controller's control session to the host, once active.
-    pub fn connect_control(&self) -> SessionInfo {
-        self.controller
-            .connect_control(&self.host)
-            .expect("an active control session")
     }
 
     /// Another viewer named `name`, paired with the host as the controller

@@ -2,48 +2,14 @@
 use super::*;
 use crate::{CloseCause, ServiceInfo, ServiceLease, ServicePhase};
 
-/// Retires desktop resources while retaining the connection and Files work.
-/// Called under state; old-generation cleanup cannot touch a replacement.
-pub(super) fn retire_owner(state: &mut State, id: u64, generation: u64, hosted: bool) {
-    let session = if hosted {
-        state
-            .incoming
-            .values_mut()
-            .find(|s| s.desktop_owner == Some(id))
-    } else {
-        state
-            .outgoing
-            .values_mut()
-            .find(|s| s.desktop_owner == Some(id))
-    };
-    let Some(session) =
-        session.filter(|s| s.desktop_owner == Some(id) && s.generation == generation)
-    else {
-        return;
-    };
-    session.desktop_stop.send_replace(true);
-    session.quality = None;
-    session.video = None;
-    session.separate_cursor = false;
-    if let Some(outbox) = &session.outbox {
-        outbox.clear();
-        outbox.fail(&Error::Unsupported("the Desktop service has ended"));
-    }
-    if let Some(controller) = &session.controller {
-        controller.inbox.close();
-        *lock(&controller.cursor) = None;
-    }
-}
-
-/// A viewer's Desktop: on a services connection, its own stream carrying
-/// pictures one way and input the other; adopted on a desktop session, a
-/// lifetime handle for the session's pictures, which carries no input. It
-/// does not own or disconnect the parent connection.
+/// A viewer's Desktop: its own stream on a services connection, carrying
+/// pictures one way and input the other. It does not own or disconnect the
+/// parent connection.
 pub struct RemoteDesktopService {
     pub(super) lease: ServiceLease,
     pub(super) stop: tokio::sync::watch::Sender<bool>,
     pub(super) shared: Weak<Shared>,
-    pub(super) desktop: Option<Arc<super::desktop_stream::DesktopRuntime>>,
+    pub(super) desktop: Arc<super::desktop_stream::DesktopRuntime>,
 }
 impl RemoteDesktopService {
     pub fn info(&self) -> &ServiceInfo {
@@ -80,7 +46,6 @@ pub(super) fn finish_controller(
 ) {
     let mut state = lock(&shared.state);
     if retire {
-        retire_owner(&mut state, id, generation, false);
         if let Some(record) = state.services.get_mut(&id) {
             if record.info.generation == generation
                 && record.change(generation, ServicePhase::Closed(cause))

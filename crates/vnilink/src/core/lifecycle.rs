@@ -7,7 +7,7 @@ use super::host::{accept_loop, bind_endpoint};
 
 use std::sync::atomic::Ordering;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize};
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use iroh::{RelayMode, SecretKey};
@@ -328,8 +328,6 @@ impl Core {
             hostname: Mutex::new(None),
             terminal_sessions: Mutex::new(HashMap::new()),
             clipboard_available: AtomicBool::new(false),
-            video_inbox: Mutex::new(None),
-            video_subscriber: Mutex::new(Weak::new()),
             session_gate: tokio::sync::Mutex::new(()),
             desktop_gate: tokio::sync::Mutex::new(()),
             desktop_streams: AtomicUsize::new(0),

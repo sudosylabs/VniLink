@@ -1,17 +1,21 @@
-//! Who a host admits: pairing alone grants nothing, a grant runs one way,
-//! invitations are bounded and never widen or narrow what was granted, and
-//! a session opens only between a hosting host that can encode and a
-//! controller that can decode, beside at most four others.
+//! Who a host admits: pairing alone admits a connection and grants
+//! nothing, a grant runs one way, invitations are bounded and never widen
+//! or narrow what was granted, a connection opens only to a hosting host,
+//! a Desktop opens only between a host that can encode and a controller
+//! that can decode, and a files-only session beside at most four others.
 
 use expect_test::expect;
 use std::time::Duration;
 
-use vnilink::{CoreEvent, Error, Grants, Quality, SessionPhase, SessionRole, VideoCodecCaps};
+use vnilink::{CoreEvent, Error, Grants, SessionPhase, SessionRole, VideoCodecCaps};
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::events::next_event;
-use vnilink_testkit::{traced, Engine, TestResult, DEFAULT_WAIT, SEEN_AND_CONTROLLED};
+use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT, SEEN_AND_CONTROLLED};
 
-use super::support::{introduce, INVITATION};
+use super::support::{introduce, refusal, INVITATION};
+
+/// The monitor of the desktops these scenarios install.
+const MONITOR: (u16, u16) = (1920, 1080);
 
 /// Only clipboard: what a host shares that admits no session.
 const CLIPBOARD_ONLY: Grants = Grants {
@@ -22,15 +26,22 @@ const CLIPBOARD_ONLY: Grants = Grants {
 };
 
 /// Pairing grants no control, an invitation is accepted once, and a grant
-/// runs one way: the controller's grant lets it reach the host, never the
-/// host it. Clipboard alone admits nothing; once admitted, the host sets
-/// its session's quality, and a session the host stopped or a revoked peer
-/// reaches nothing.
+/// runs one way: the controller's grant lets it see the host's desktop,
+/// never the host the controller's. Pairing admits a connection, but
+/// clipboard alone opens no Desktop; a connection the host stopped opens
+/// nothing, and a revoked peer is refused.
 #[test]
 fn pairing_does_not_grant_control_and_a_grant_is_directional() -> TestResult {
     let trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
+    let capabilities = host.core.capabilities();
+    assert!(
+        !capabilities.desktop_capture && !capabilities.keyboard,
+        "a host without adapters reports neither capture nor keyboard"
+    );
+    InputLog::install(&host, MONITOR)?;
+    InputLog::install(&controller, MONITOR)?;
     host.core.start_hosting()?;
     let token = host.core.create_invitation(INVITATION)?;
     let paired = controller.core.accept_invitation(&token)?;
@@ -44,105 +55,81 @@ fn pairing_does_not_grant_control_and_a_grant_is_directional() -> TestResult {
     );
     host.core
         .accept_invitation(&controller.core.create_invitation(INVITATION)?)?;
-    let denied = controller.core.connect(&host.endpoint());
+    let connection = controller.connect_services(&host)?;
+    let denied = controller.open_desktop(&connection);
     assert!(
         matches!(denied, Err(Error::Unauthorized)),
-        "a paired controller without a grant is refused: {denied:?}"
+        "a paired controller without a grant sees no desktop: {:?}",
+        denied.err()
     );
 
     controller.core.start_hosting()?;
+    let back = host.connect_services(&controller)?;
     assert!(
-        matches!(
-            host.core.connect(&controller.endpoint()),
-            Err(Error::Unauthorized)
-        ),
-        "a grant runs one way: the host may not reach the controller"
+        matches!(host.open_desktop(&back), Err(Error::Unauthorized)),
+        "a grant runs one way: the host may not see the controller"
     );
 
     host.core.set_desktop_sharing(CLIPBOARD_ONLY)?;
     assert!(
         matches!(
-            controller.core.connect(&host.endpoint()),
+            controller.open_desktop(&connection),
             Err(Error::Unauthorized)
         ),
-        "clipboard alone admits no session"
+        "clipboard alone opens no Desktop"
     );
 
     host.core.set_desktop_sharing(SEEN_AND_CONTROLLED)?;
-    let session = controller.core.connect(&host.endpoint())?;
-    assert_eq!(
-        session.phase,
-        SessionPhase::Active,
-        "view and control admit a session"
-    );
-    let quality = Quality::new(2_000, 30, 1920, 1080)?;
-    let hosted = host.core.snapshot()?.incoming.ok_or("a hosted session")?;
-    host.core
-        .update_session_quality(hosted.id, SessionRole::Host, quality)?;
-    assert_eq!(
-        host.core
-            .snapshot()?
-            .incoming
-            .ok_or("a hosted session")?
-            .quality,
-        Some(quality),
-        "the host sets its own session's quality"
-    );
+    let desktop = controller.open_desktop(&connection)?;
+    assert!(!desktop.is_cancelled(), "view and control open a Desktop");
+    desktop.close();
+    host.wait_released(Some(vnilink::ServiceKind::Desktop));
 
     host.core.stop_hosted_session()?;
     host.wait_closed(SessionRole::Host);
     controller.wait_closed(SessionRole::Controller);
     assert!(
-        matches!(
-            controller
-                .core
-                .select_displays(session.id, session.generation, &[1]),
-            Err(Error::NoSession | Error::StaleSession)
-        ),
-        "a stopped session takes no command"
+        controller.open_desktop(&connection).is_err(),
+        "a stopped connection opens nothing"
     );
 
     host.core.revoke(&controller.endpoint())?;
-    assert!(
-        matches!(
-            controller.core.connect(&host.endpoint()),
-            Err(Error::Unauthorized)
-        ),
+    // Revoking also ends the host's own connection to the controller.
+    controller.wait_closed(SessionRole::Host);
+    assert_eq!(
+        refusal(&controller, &host)?,
+        Error::Unauthorized.to_string(),
         "a revoked controller is refused"
-    );
-    let capabilities = host.core.capabilities();
-    assert!(
-        !capabilities.desktop_capture && !capabilities.keyboard,
-        "a host without adapters reports neither capture nor keyboard"
     );
     expect![[r#"
         controller:
           pairing: invitation accepted
           pairing: invitation accepted refused=invitation replayed
           pairing: invitation issued direct=1 relays=0 ttl_s=60
-          session: session failed failure=unauthorized session=1
-          session: session phase from=connecting generation=0 role=Controller session=1 to=failed
-          session: session failed failure=unauthorized session=2
-          session: session phase from=connecting generation=0 role=Controller session=2 to=failed
-          session: session phase from=connecting generation=1 role=Controller session=3 to=active
-          session: session phase from=active generation=1 role=Controller session=3 to=closed
-          session: session failed failure=unauthorized session=4
-          session: session phase from=connecting generation=0 role=Controller session=4 to=failed
+          session: session phase from=connecting generation=1 role=Controller session=1 to=active
+          session: session phase from=active generation=1 role=Controller session=1 to=closed
+          session: the session's control stream ended error=network session=2
+          session: session phase from=active generation=1 role=Host session=2 to=closed
+          session: session failed failure=unauthorized session=3
+          session: session phase from=connecting generation=0 role=Controller session=3 to=failed
         host:
           pairing: invitation issued direct=1 relays=0 ttl_s=60
           pairing: invitation accepted
-          session: session failed failure=unauthorized session=1
-          session: session phase from=connecting generation=0 role=Controller session=1 to=failed
-          session: session phase from=active generation=1 role=Host session=2 to=stopping
-          session: session phase from=stopping generation=1 role=Host session=2 to=closed
+          session: session phase from=connecting generation=1 role=Controller session=2 to=active
+          session: session phase from=active generation=1 role=Host session=1 to=stopping
+          session: session phase from=stopping generation=1 role=Host session=1 to=closed
           pairing: unpair requested
+          session: session phase from=active generation=1 role=Controller session=2 to=stopping
+          session: session phase from=stopping generation=1 role=Controller session=2 to=closed
     "#]]
     .assert_eq(&trace.story(&["session", "hosting", "pairing"]));
     Ok(())
 }
 
-/// Four controllers are hosted at once; a fifth is refused as busy, and the
-/// refusal leaves the four sessions as they were.
+/// Four files-only sessions are hosted at once; a fifth is refused as
+/// busy, and the refusal leaves the four sessions as they were. (Presence
+/// links are bounded by the paired devices instead, and their Desktops by
+/// their own caps.)
 #[test]
 fn peers_past_capacity_are_rejected_while_live_sessions_stay_active() -> TestResult {
     let trace = traced();
@@ -151,11 +138,15 @@ fn peers_past_capacity_are_rejected_while_live_sessions_stay_active() -> TestRes
         .map(|n| Engine::start(&format!("controller-{n}")))
         .collect();
     for controller in &peers {
-        host.pair_for_control(controller)?;
+        host.pair_with(controller)?;
     }
+    host.core.set_desktop_sharing(Grants {
+        transfer: true,
+        ..Grants::default()
+    })?;
     let mut sessions = Vec::new();
     for controller in &peers[..4] {
-        let session = controller.core.connect(&host.endpoint())?;
+        let session = controller.core.connect_files(&host.endpoint())?;
         assert_eq!(
             session.phase,
             SessionPhase::Active,
@@ -168,7 +159,7 @@ fn peers_past_capacity_are_rejected_while_live_sessions_stay_active() -> TestRes
         4,
         "four controllers are hosted"
     );
-    let busy = peers[4].core.connect(&host.endpoint());
+    let busy = peers[4].core.connect_files(&host.endpoint());
     assert!(
         matches!(busy, Err(Error::Busy)),
         "a fifth concurrent controller is refused as busy: {busy:?}"
@@ -270,12 +261,13 @@ fn accepting_a_new_invitation_neither_adds_nor_removes_grants() -> TestResult {
         !device.grants.control && device.grants.clipboard,
         "the host's record keeps clipboard without control"
     );
+    let connection = controller.connect_services(&host)?;
     assert!(
         matches!(
-            controller.core.connect(&host.endpoint()),
+            controller.open_desktop(&connection),
             Err(Error::Unauthorized)
         ),
-        "the new invitation admits no session"
+        "the new invitation opens no Desktop"
     );
     Ok(())
 }
@@ -287,6 +279,7 @@ fn re_pairing_uses_unchanged_global_consent() -> TestResult {
     let _trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
+    InputLog::install(&host, MONITOR)?;
     host.pair_for_control(&controller)?;
     host.core.revoke(&controller.endpoint())?;
     let info = host
@@ -309,17 +302,17 @@ fn re_pairing_uses_unchanged_global_consent() -> TestResult {
         .find(|device| device.endpoint_id == controller.endpoint())
         .ok_or("the controller is known again")?;
     assert!(device.grants.control, "the host's record grants control");
-    assert_eq!(
-        controller.core.connect(&host.endpoint())?.phase,
-        SessionPhase::Active,
-        "the re-paired controller is admitted"
+    let connection = controller.connect_services(&host)?;
+    assert!(
+        !controller.open_desktop(&connection)?.is_cancelled(),
+        "the re-paired controller opens a Desktop"
     );
     Ok(())
 }
 
-/// A controller must be paired and the host hosting before a session opens;
-/// a host without a desktop reports a zero-sized monitor, and a second
-/// session from the same controller is busy.
+/// A controller must be paired and the host hosting before a connection
+/// opens; a host without a desktop offers no Desktop, and connecting again
+/// reuses the live connection.
 #[test]
 fn connect_requires_pairing_and_hosting() -> TestResult {
     let trace = traced();
@@ -336,7 +329,7 @@ fn connect_requires_pairing_and_hosting() -> TestResult {
     );
     assert!(
         matches!(
-            controller.core.connect(&host.endpoint()),
+            controller.core.begin_connect_services(&host.endpoint()),
             Err(Error::NotPaired)
         ),
         "an unpaired controller is refused before dialing"
@@ -344,29 +337,30 @@ fn connect_requires_pairing_and_hosting() -> TestResult {
     introduce(&host, &controller)?;
     host.core.set_desktop_sharing(SEEN_AND_CONTROLLED)?;
     for attempt in ["first", "second"] {
-        assert!(
-            matches!(
-                controller.core.connect(&host.endpoint()),
-                Err(Error::NotHosting)
-            ),
+        assert_eq!(
+            refusal(&controller, &host)?,
+            Error::NotHosting.to_string(),
             "a host that is not hosting refuses the {attempt} attempt"
         );
     }
     host.core.start_hosting()?;
-    let session = controller.core.connect(&host.endpoint())?;
+    let session = controller.connect_services(&host)?;
     assert_eq!(
         session.phase,
         SessionPhase::Active,
         "a paired controller of a hosting host is admitted"
     );
-    assert_eq!(
-        (session.monitor_width, session.monitor_height),
-        (0, 0),
-        "a host without a desktop reports no monitor"
-    );
     assert!(
-        matches!(controller.core.connect(&host.endpoint()), Err(Error::Busy)),
-        "a controller's second session is busy"
+        !controller
+            .core
+            .remote_service_support(session.id, session.generation)?
+            .desktop,
+        "a host without a desktop offers no Desktop"
+    );
+    assert_eq!(
+        controller.core.begin_connect_services(&host.endpoint())?.id,
+        session.id,
+        "connecting again reuses the live connection"
     );
     expect![[r#"
         controller:
@@ -380,34 +374,40 @@ fn connect_requires_pairing_and_hosting() -> TestResult {
     Ok(())
 }
 
-/// The host's desktop is fixed while a session uses it, and its monitor
-/// size reaches the controller; after the session a desktop with no
+/// The host's desktop is fixed while a Desktop uses it, and its monitor
+/// size reaches the controller; after the Desktop a desktop with no
 /// picture is input only.
 #[test]
 fn the_desktop_adapter_cannot_change_during_a_session() -> TestResult {
     let _trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    InputLog::install(&host, (1920, 1080))?;
+    InputLog::install(&host, MONITOR)?;
     assert_eq!(
         host.core.capabilities().monitors,
         1,
         "a desktop with a monitor is one monitor"
     );
     host.pair_for_control(&controller)?;
-    let session = controller.core.connect(&host.endpoint())?;
+    let connection = controller.connect_services(&host)?;
+    let desktop = controller.open_desktop(&connection)?;
+    let info = desktop.desktop_info()?;
     assert_eq!(
-        (session.monitor_width, session.monitor_height),
-        (1920, 1080),
+        (info.monitor_width, info.monitor_height),
+        MONITOR,
         "the host's monitor size reaches the controller"
     );
     assert!(
         matches!(InputLog::install(&host, (0, 0)), Err(Error::Busy)),
-        "the desktop does not change during a session"
+        "the desktop does not change while a Desktop uses it"
     );
-    host.core.stop_hosted_session()?;
-    host.wait_closed(SessionRole::Host);
-    InputLog::install(&host, (100, 0))?;
+    desktop.close();
+    host.wait_released(Some(vnilink::ServiceKind::Desktop));
+    wait_for(
+        "the ended Desktop to free the desktop",
+        DEFAULT_WAIT,
+        || InputLog::install(&host, (100, 0)).ok(),
+    );
     let capabilities = host.core.capabilities();
     assert!(
         capabilities.keyboard && capabilities.pointer,
@@ -478,7 +478,7 @@ fn admission_publishes_the_session_lifecycle() -> TestResult {
         },
         "the host publishes the controller authorized"
     );
-    let session = controller.core.connect(&host.endpoint())?;
+    let session = controller.connect_services(&host)?;
     let mut host_phases = Vec::new();
     while host_phases.last() != Some(&SessionPhase::Active) {
         match next_event(
@@ -584,9 +584,9 @@ fn admission_publishes_the_session_lifecycle() -> TestResult {
     Ok(())
 }
 
-/// A host whose capture has no encoder refuses a session as unsupported
-/// instead of admitting one with no video; once it reports an encoder, the
-/// same host admits it.
+/// A host whose capture has no encoder refuses a Desktop as unsupported
+/// instead of opening one with no video; once it reports an encoder, the
+/// same host opens it.
 #[test]
 fn a_host_without_an_encoder_reports_unsupported_instead_of_admitting() -> TestResult {
     let _trace = traced();
@@ -604,12 +604,13 @@ fn a_host_without_an_encoder_reports_unsupported_instead_of_admitting() -> TestR
         "no codecs, no encoder"
     );
     host.pair_for_control(&controller)?;
+    let connection = controller.connect_services(&host)?;
     assert!(
         matches!(
-            controller.core.connect(&host.endpoint()),
+            controller.open_desktop(&connection),
             Err(Error::Unsupported(_))
         ),
-        "a host that cannot encode refuses the session as unsupported"
+        "a host that cannot encode refuses the Desktop as unsupported"
     );
     host.core
         .set_video_codecs(VideoCodecCaps::encode_only(4096, 4096, "test"))?;
@@ -618,13 +619,13 @@ fn a_host_without_an_encoder_reports_unsupported_instead_of_admitting() -> TestR
         capabilities.h264_encode && !capabilities.h264_decode,
         "an encoder alone is reported as one"
     );
-    assert_eq!(
-        controller.core.connect(&host.endpoint())?.phase,
-        SessionPhase::Active,
-        "a host that can encode admits the session"
+    let desktop = controller.open_desktop(&connection)?;
+    assert!(
+        !desktop.is_cancelled(),
+        "a host that can encode opens the Desktop"
     );
-    controller.core.disconnect()?;
-    controller.wait_closed(SessionRole::Controller);
+    desktop.close();
+    host.wait_released(Some(vnilink::ServiceKind::Desktop));
     Ok(())
 }
 
@@ -651,23 +652,29 @@ fn controller_decode_availability_is_visible_in_capabilities() -> TestResult {
     Ok(())
 }
 
-/// A controller that cannot decode is refused as unsupported before it
-/// dials.
+/// A controller that cannot decode is refused a Desktop as unsupported
+/// before it asks the host.
 #[test]
 fn a_controller_without_a_decoder_is_rejected_before_dialing() -> TestResult {
     let _trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
+    InputLog::install(&host, MONITOR)?;
     host.pair_for_control(&controller)?;
+    let connection = controller.connect_services(&host)?;
     controller
         .core
         .set_video_codecs(VideoCodecCaps::default())?;
     assert!(
         matches!(
-            controller.core.connect(&host.endpoint()),
+            controller.open_desktop(&connection),
             Err(Error::Unsupported(_))
         ),
         "a controller without a decoder is refused as unsupported"
+    );
+    assert!(
+        host.hosted(None).is_empty(),
+        "the host was never asked for the Desktop"
     );
     Ok(())
 }

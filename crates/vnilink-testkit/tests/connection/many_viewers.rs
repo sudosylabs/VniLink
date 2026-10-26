@@ -1,30 +1,51 @@
-//! One host, several peers at once: each has its own session, a viewer
-//! that never reads slows no other, and what ends one peer's session leaves
-//! the others'. Which desktop holds control is the desktop suite's
+//! One host, several peers at once: each has its own connection, a viewer
+//! that never reads slows no other, and what ends one peer's connection
+//! leaves the others'. Which desktop holds control is the desktop suite's
 //! (`desktop/control.rs`).
 
 use expect_test::expect;
 use std::time::Duration;
 
-use vnilink::{Error, Grants, Quality, ServiceKind, SessionPhase, SessionRole};
+use vnilink::{Error, Grants, RemoteDesktopService, ServiceInfo, ServiceKind, SessionPhase};
 use vnilink_testkit::desktop::{delta, keyframe, InputLog, MonitorCapture};
 use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
+
+/// `viewer`'s Desktop on a services connection to `host`, its pictures, and
+/// the host's side of it.
+fn desktop_for(
+    viewer: &Engine,
+    host: &Engine,
+) -> Result<
+    (
+        RemoteDesktopService,
+        vnilink::VideoSubscription,
+        ServiceInfo,
+    ),
+    Error,
+> {
+    let connection = viewer.connect_services(host)?;
+    let desktop = viewer.open_desktop(&connection)?;
+    let video = desktop.subscribe_video()?;
+    let remote = host.serving(ServiceKind::Desktop, viewer);
+    Ok((desktop, video, remote))
+}
 
 /// The monitor of the desktops these scenarios install.
 const MONITOR: (u16, u16) = (1920, 1080);
 
-/// Two viewers and a files peer are hosted at once with their own records,
-/// only the viewers consuming the capture, and the files peer works
-/// alongside. A fifth peer is busy, and revoking a peer ends only its
-/// session.
+/// Two viewers on services connections and a files peer are hosted at once
+/// with their own records, only the viewers' Desktops consuming the
+/// capture, and the files peer works alongside. Another peer joining and
+/// leaving, a viewer leaving, and revoking a peer each end only that peer's
+/// connection.
 #[test]
-fn concurrent_peers_operate_independently_within_capacity() -> TestResult {
+fn concurrent_peers_operate_independently() -> TestResult {
     let trace = traced();
     let host = Engine::start("host");
     let viewers = [Engine::start("viewer-a"), Engine::start("viewer-b")];
     let worker = Engine::start("worker");
-    let extra = [Engine::start("extra-a"), Engine::start("extra-b")];
-    for peer in viewers.iter().chain([&worker]).chain(extra.iter()) {
+    let extra = Engine::start("extra");
+    for peer in viewers.iter().chain([&worker, &extra]) {
         host.pair_for_control(peer)?;
     }
     InputLog::install(&host, MONITOR)?;
@@ -36,8 +57,14 @@ fn concurrent_peers_operate_independently_within_capacity() -> TestResult {
         transfer: true,
     })?;
 
-    viewers[0].core.connect(&host.endpoint())?;
-    let vb = viewers[1].core.connect(&host.endpoint())?;
+    let (_da, _va, _) = desktop_for(&viewers[0], &host)?;
+    let (_db, _vb, _) = desktop_for(&viewers[1], &host)?;
+    let vb = viewers[1]
+        .core
+        .controller_sessions()?
+        .into_iter()
+        .next()
+        .ok_or("viewer b's connection")?;
     let files_session = worker.core.connect_files(&host.endpoint())?;
     let hosted = host.core.hosted_sessions()?;
     let mut peers: Vec<String> = hosted.iter().map(|s| s.peer_id.clone()).collect();
@@ -49,24 +76,26 @@ fn concurrent_peers_operate_independently_within_capacity() -> TestResult {
     ];
     expected.sort();
     assert_eq!(peers, expected, "each peer has its own hosted session");
-    let targets = host.core.video_targets()?;
+    let mut target_ids: Vec<u64> = host
+        .core
+        .video_targets()?
+        .iter()
+        .map(|target| target.id)
+        .collect();
+    target_ids.sort_unstable();
+    let desktops = host.hosted(Some(ServiceKind::Desktop));
+    let mut desktop_ids: Vec<u64> = desktops.iter().map(|service| service.id).collect();
+    desktop_ids.sort_unstable();
     assert_eq!(
-        targets.len(),
-        2,
-        "a files session is not a capture consumer"
+        target_ids, desktop_ids,
+        "the viewers' Desktops, and no files session, consume the capture"
     );
     assert!(
-        targets.iter().all(|target| !target.service),
-        "the viewers' sessions are the capture's targets"
+        desktops
+            .iter()
+            .all(|service| service.peer_id != worker.endpoint()),
+        "the files peer consumes no capture"
     );
-    let target_ids: Vec<u64> = targets.iter().map(|target| target.id).collect();
-    for session in &hosted {
-        assert_eq!(
-            target_ids.contains(&session.id),
-            session.peer_id != worker.endpoint(),
-            "only the viewers' sessions consume the capture"
-        );
-    }
 
     worker.core.fs_mkdir(
         files_session.id,
@@ -80,23 +109,14 @@ fn concurrent_peers_operate_independently_within_capacity() -> TestResult {
         "the files peer works alongside the viewers"
     );
 
-    let vd = extra[0].core.connect(&host.endpoint())?;
-    assert_eq!(vd.phase, SessionPhase::Active, "a fourth peer is admitted");
+    let joined = extra.connect_services(&host)?;
     assert_eq!(
-        host.core.hosted_sessions()?.len(),
-        4,
-        "four peers are hosted"
+        joined.phase,
+        SessionPhase::Active,
+        "a fourth peer is admitted"
     );
-    assert!(
-        matches!(extra[1].core.connect(&host.endpoint()), Err(Error::Busy)),
-        "a fifth peer is busy"
-    );
-    assert_eq!(
-        host.core.hosted_sessions()?.len(),
-        4,
-        "the busy peer leaves the live sessions"
-    );
-    extra[0].core.disconnect()?;
+    host.wait_hosted(4);
+    extra.core.disconnect()?;
     host.wait_hosted(3);
 
     viewers[0].core.disconnect()?;
@@ -107,7 +127,7 @@ fn concurrent_peers_operate_independently_within_capacity() -> TestResult {
     assert_eq!(
         viewers[1].core.controller_session(vb.id)?.phase,
         SessionPhase::Active,
-        "revoking one peer leaves another's session"
+        "revoking one peer leaves another's connection"
     );
     assert_eq!(
         host.core.hosted_sessions()?[0].peer_id,
@@ -118,68 +138,39 @@ fn concurrent_peers_operate_independently_within_capacity() -> TestResult {
     Ok(())
 }
 
-/// With each engine hosting the other, a quality change for one role
-/// changes only that direction's session.
+/// With each engine hosting the other, an engine's handles stay unique
+/// across its two roles.
 #[test]
-fn quality_updates_select_the_role_with_both_directions_active() -> TestResult {
+fn handles_are_unique_across_roles_with_both_directions_active() -> TestResult {
     let _trace = traced();
     let a = Engine::start("a");
     let b = Engine::start("b");
     a.pair_for_control(&b)?;
     b.pair_for_control(&a)?;
-    let b_out = b.core.connect(&a.endpoint())?;
-    let a_out = a.core.connect(&b.endpoint())?;
-    let a_host_id = a.core.snapshot()?.incoming.ok_or("a hosts b")?.id;
+    let b_out = b.connect_services(&a)?;
+    let a_out = a.connect_services(&b)?;
+    let a_hosted = wait_for("a to host b", DEFAULT_WAIT, || a.hosted_session(&b));
+    let b_hosted = wait_for("b to host a", DEFAULT_WAIT, || b.hosted_session(&a));
     assert_ne!(
-        a_host_id, a_out.id,
+        a_hosted.id, a_out.id,
         "an engine's handles are unique across roles"
     );
     assert_ne!(
-        b.core.snapshot()?.incoming.ok_or("b hosts a")?.id,
-        b_out.id,
+        b_hosted.id, b_out.id,
         "an engine's handles are unique across roles"
-    );
-
-    let controller_quality = Quality::new(1_500, 30, 1280, 720)?;
-    a.core
-        .update_session_quality(a_out.id, SessionRole::Controller, controller_quality)?;
-    let snapshot = a.core.snapshot()?;
-    assert_eq!(
-        snapshot.outgoing.ok_or("a controls b")?.quality,
-        Some(controller_quality),
-        "the controller role's quality changes the outgoing session"
-    );
-    assert_ne!(
-        snapshot.incoming.ok_or("a hosts b")?.quality,
-        Some(controller_quality),
-        "the hosted session keeps the negotiated limits"
-    );
-
-    let host_quality = Quality::new(800, 15, 640, 480)?;
-    a.core
-        .update_session_quality(a_host_id, SessionRole::Host, host_quality)?;
-    let snapshot = a.core.snapshot()?;
-    assert_eq!(
-        snapshot.incoming.ok_or("a hosts b")?.quality,
-        Some(host_quality),
-        "the host role's quality changes the hosted session"
-    );
-    assert_eq!(
-        snapshot.outgoing.ok_or("a controls b")?.quality,
-        Some(controller_quality),
-        "the outgoing session keeps its quality"
     );
     Ok(())
 }
 
 /// A viewer that never reads its video, flooded past its outbox, does not
-/// delay a fresh keyframe to another viewer, and neither session ends.
+/// delay a fresh keyframe to another viewer, and neither connection ends.
 #[test]
 fn a_saturated_viewer_does_not_slow_another_viewer() -> TestResult {
     let _trace = traced();
     let host = Engine::start("host");
     let slow = Engine::start("slow");
     let fast = Engine::start("fast");
+    InputLog::install(&host, MONITOR)?;
     for viewer in [&slow, &fast] {
         host.pair_for_control(viewer)?;
         host.core.set_desktop_sharing(Grants {
@@ -187,23 +178,31 @@ fn a_saturated_viewer_does_not_slow_another_viewer() -> TestResult {
             ..Grants::default()
         })?;
     }
-    let sa = slow.connect_control(&host)?;
-    let sb = fast.connect_control(&host)?;
+    let sa = slow.connect_services(&host)?;
+    let _slow_desktop = slow.open_desktop(&sa)?;
+    let ha = host.serving(ServiceKind::Desktop, &slow);
     // Only the fast viewer subscribes; the slow viewer never reads video.
-    let vb = fast.core.subscribe_session_video(sb.id, sb.generation)?;
+    let (_fast_desktop, vb, hb) = desktop_for(&fast, &host)?;
+    let sb = fast
+        .core
+        .controller_sessions()?
+        .into_iter()
+        .next()
+        .ok_or("the fast viewer's connection")?;
     assert_eq!(
         host.core.hosted_sessions()?.len(),
         2,
         "both viewers are hosted"
     );
-    let ha = host.hosted_id(&slow);
-    let hb = host.hosted_id(&fast);
     // Past the slow viewer's outbox of eight frames.
-    host.core.publish_video(ha, keyframe(1, vec![7]))?;
+    host.core
+        .publish_desktop_video(ha.id, ha.generation, keyframe(1, vec![7]))?;
     for stamp in 2..=41 {
-        host.core.publish_video(ha, delta(stamp, vec![7]))?;
+        host.core
+            .publish_desktop_video(ha.id, ha.generation, delta(stamp, vec![7]))?;
     }
-    host.core.publish_video(hb, keyframe(777, vec![9]))?;
+    host.core
+        .publish_desktop_video(hb.id, hb.generation, keyframe(777, vec![9]))?;
     let fresh = vb
         .recv_timeout(Duration::from_secs(3))
         .ok_or("the fast viewer's keyframe within 3 s")?;
@@ -227,9 +226,9 @@ fn a_saturated_viewer_does_not_slow_another_viewer() -> TestResult {
 /// One host serves four peers at once: a viewer that reads, a viewer that
 /// never reads, a files peer whose upload completes, and a services peer
 /// with two shells. Withdrawing the terminal closes both shells and the
-/// slow viewer reconnecting goes unnoticed by the fast one; the host
-/// stopping then leaves no peer's session active, and each is closed and
-/// forgotten from its side.
+/// slow viewer reconnecting, and opening its Desktop again, goes unnoticed
+/// by the fast one; the host stopping then leaves no peer's session
+/// active, and each is closed and forgotten from its side.
 #[cfg(unix)]
 #[test]
 fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
@@ -251,8 +250,8 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
         .set_terminal_factory(Some(shell(&std::env::temp_dir())))?;
     std::fs::write(files.root().join("note.txt"), b"combined-scenario")?;
 
-    // The viewers open sessions under the view grant; the services peers
-    // connect neutrally and are authorized per feature.
+    // The viewers open Desktops under the view grant; every peer but the
+    // files one connects neutrally and is authorized per feature.
     for peer in [&fast, &slow, &files, &term] {
         host.pair_for_control(peer)?;
     }
@@ -267,8 +266,8 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
     })?;
     host.core.set_service_sharing(ServiceKind::Terminal, true)?;
 
-    let sa = fast.connect_control(&host)?;
-    let sb = slow.connect_control(&host)?;
+    let sa = fast.connect_services(&host)?;
+    let sb = slow.connect_services(&host)?;
     let sc = files.active(files.core.begin_connect_files(&host.endpoint())?.id);
     let sd = term.connect_services(&host)?;
     assert_eq!(
@@ -279,13 +278,17 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
 
     // Only the fast viewer reads; the slow one's outbox floods past eight
     // frames.
-    let va = fast.core.subscribe_session_video(sa.id, sa.generation)?;
-    let _vb = slow.core.subscribe_session_video(sb.id, sb.generation)?;
-    let ha = host.hosted_id(&fast);
-    let hb = host.hosted_id(&slow);
-    host.core.publish_video(hb, keyframe(1, vec![7]))?;
+    let fast_desktop = fast.open_desktop(&sa)?;
+    let va = fast_desktop.subscribe_video()?;
+    let slow_desktop = slow.open_desktop(&sb)?;
+    let _vb = slow_desktop.subscribe_video()?;
+    let ha = host.serving(ServiceKind::Desktop, &fast);
+    let hb = host.serving(ServiceKind::Desktop, &slow);
+    host.core
+        .publish_desktop_video(hb.id, hb.generation, keyframe(1, vec![7]))?;
     for stamp in 2..=41u64 {
-        host.core.publish_video(hb, delta(stamp, vec![7]))?;
+        host.core
+            .publish_desktop_video(hb.id, hb.generation, delta(stamp, vec![7]))?;
     }
 
     let open_shell = || -> Result<vnilink::RemoteTerminalService, Error> {
@@ -372,7 +375,8 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
     wait_for("both shells to close", DEFAULT_WAIT, || {
         (first.is_cancelled() && second.is_cancelled()).then_some(())
     });
-    host.core.publish_video(ha, keyframe(777, vec![9]))?;
+    host.core
+        .publish_desktop_video(ha.id, ha.generation, keyframe(777, vec![9]))?;
     assert_eq!(
         va.recv_timeout(Duration::from_secs(3))
             .ok_or("the fast viewer's keyframe within 3 s")?
@@ -389,7 +393,8 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
             .filter(|s| s.phase == SessionPhase::Active && s.generation > sb.generation)
     });
     assert_eq!(sb2.id, sb.id, "a reconnect keeps the session's handle");
-    host.core.publish_video(ha, keyframe(778, vec![9]))?;
+    host.core
+        .publish_desktop_video(ha.id, ha.generation, keyframe(778, vec![9]))?;
     assert_eq!(
         va.recv_timeout(Duration::from_secs(3))
             .ok_or("the fast viewer's keyframe within 3 s")?
@@ -397,9 +402,29 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
         778,
         "the slow viewer reconnecting leaves the fast viewer streaming"
     );
-    let vb2 = slow.core.subscribe_session_video(sb2.id, sb2.generation)?;
+    let owner = slow
+        .core
+        .controller_services()?
+        .into_iter()
+        .find(|service| service.kind == ServiceKind::Desktop)
+        .ok_or("the slow viewer's Desktop")?;
+    assert_eq!(
+        owner.generation, sb2.generation,
+        "the slow viewer's Desktop follows its connection"
+    );
+    drop(slow_desktop);
+    let slow_desktop = slow.core.open_desktop_service(owner.id, owner.generation)?;
+    let vb2 = slow_desktop.subscribe_video()?;
+    let hb2 = wait_for(
+        "the host to serve the reopened Desktop",
+        DEFAULT_WAIT,
+        || {
+            host.hosted_for(ServiceKind::Desktop, &slow)
+                .filter(|service| service.generation == sb2.generation)
+        },
+    );
     host.core
-        .publish_video(host.hosted_id(&slow), keyframe(779, vec![8]))?;
+        .publish_desktop_video(hb2.id, hb2.generation, keyframe(779, vec![8]))?;
     assert_eq!(
         vb2.recv_timeout(Duration::from_secs(3))
             .ok_or("the reconnected viewer's keyframe within 3 s")?

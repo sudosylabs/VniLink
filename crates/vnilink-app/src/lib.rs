@@ -498,28 +498,12 @@ impl VnilinkCore {
         self.inner.reject_control_request().map_err(map_error)
     }
 
-    /// Dials a paired device. Blocks up to 75 seconds; call off the UI thread.
-    pub fn connect(&self, endpoint_id: String) -> Result<FfiSessionInfo, FfiError> {
-        self.inner
-            .connect(&endpoint_id)
-            .map(types::session_info)
-            .map_err(map_error)
-    }
-
     /// Dials for file roots/listings/transfers only, without requiring a
     /// video decoder or host screen sharing. Host admission needs Transfer
     /// (Control not required).
     pub fn connect_files(&self, endpoint_id: String) -> Result<FfiSessionInfo, FfiError> {
         self.inner
             .connect_files(&endpoint_id)
-            .map(types::session_info)
-            .map_err(map_error)
-    }
-
-    /// Nonblocking start for a tab. Its local id exists before peer approval.
-    pub fn begin_connect(&self, endpoint_id: String) -> Result<FfiSessionInfo, FfiError> {
-        self.inner
-            .begin_connect(&endpoint_id)
             .map(types::session_info)
             .map_err(map_error)
     }
@@ -579,17 +563,6 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
-    pub fn subscribe_session_video(
-        &self,
-        session_id: u64,
-        generation: u64,
-    ) -> Result<VideoPoller, FfiError> {
-        self.inner
-            .subscribe_session_video(session_id, generation)
-            .map(VideoPoller::new)
-            .map_err(map_error)
-    }
-
     pub fn controller_session_paths(
         &self,
         session_id: u64,
@@ -643,17 +616,6 @@ impl VnilinkCore {
         self.inner
             .session_topology(session_id, generation)
             .map(|displays| displays.iter().map(types::display_record).collect())
-            .map_err(map_error)
-    }
-
-    pub fn select_displays(
-        &self,
-        session_id: u64,
-        generation: u64,
-        ids: Vec<u64>,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .select_displays(session_id, generation, &ids)
             .map_err(map_error)
     }
 
@@ -715,38 +677,6 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
-    pub fn update_session_quality_for_generation(
-        &self,
-        session_id: u64,
-        generation: u64,
-        role: FfiSessionRole,
-        quality: FfiQuality,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .update_session_quality_for_generation(
-                session_id,
-                generation,
-                types::to_session_role(role),
-                types::to_quality(quality)?,
-            )
-            .map_err(map_error)
-    }
-
-    pub fn update_session_quality(
-        &self,
-        session_id: u64,
-        role: FfiSessionRole,
-        quality: FfiQuality,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .update_session_quality(
-                session_id,
-                types::to_session_role(role),
-                types::to_quality(quality)?,
-            )
-            .map_err(map_error)
-    }
-
     pub fn submit_clipboard(
         &self,
         session_id: u64,
@@ -762,42 +692,10 @@ impl VnilinkCore {
         self.inner.clipboard_text().map_err(map_error)
     }
 
-    pub fn publish_video(
-        &self,
-        session_id: u64,
-        keyframe: bool,
-        timestamp_us: u64,
-        payload: Vec<u8>,
-    ) -> Result<(), FfiError> {
-        let frame =
-            vnilink::EncodedFrame::h264(keyframe, timestamp_us, payload).map_err(map_error)?;
-        self.inner
-            .publish_video(session_id, frame)
-            .map_err(map_error)
-    }
-
-    /// Publish a typed packet without assuming the negotiated codec is H.264.
-    pub fn publish_video_frame(
-        &self,
-        session_id: u64,
-        frame: FfiEncodedFrame,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .publish_video(session_id, frame.into_core()?)
-            .map_err(map_error)
-    }
-
     pub fn subscribe_events(&self) -> Result<EventPoller, FfiError> {
         self.inner
             .subscribe()
             .map(EventPoller::new)
-            .map_err(map_error)
-    }
-
-    pub fn subscribe_video(&self) -> Result<VideoPoller, FfiError> {
-        self.inner
-            .subscribe_video()
-            .map(VideoPoller::new)
             .map_err(map_error)
     }
 }
