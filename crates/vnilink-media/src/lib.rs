@@ -22,11 +22,11 @@ mod controller;
 mod cursor;
 mod desktop;
 mod error;
-mod fanout;
 mod frame;
 mod host;
 mod nv12;
 mod pixels;
+mod stream;
 pub use pixels::{NativePicture, Pixels};
 mod pump;
 mod rate;
@@ -58,7 +58,6 @@ pub use channel::{ChannelSlot, FrameChannel};
 pub use controller::{serve_controller, ControllerOutput, ControllerVideo, DecodedFrame};
 pub use desktop::{CapturePlan, CursorPolicy, DesktopKind, MonitorSize};
 pub use error::{Error, PublishError, FRAME_DROPPED};
-pub use fanout::serve_shared_capture;
 pub use frame::{changed_tiles, encoded_size, scale_bgra, Changes, RawFrame};
 pub use host::{
     serve_capture, serve_desktop_capture, FrameSource, FrameWait, HostSession, OpenEncoder,
@@ -69,6 +68,7 @@ pub use pump::{
     VideoDecoder, VideoEncoder,
 };
 pub use rate::{EncoderSettings, RateChange, RateController};
+pub use stream::serve_shared_capture;
 pub use vnilink::Quality;
 
 #[cfg(test)]
