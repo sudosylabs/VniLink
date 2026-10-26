@@ -44,7 +44,8 @@ fn the_platform_encoder_plugs_into_the_generic_session() {
         )
     }) {
         Ok(session) => session,
-        Err(Error::Unsupported("VA-API H.264")) => return,
+        // No hardware encoder on this computer: nothing to exercise.
+        Err(Error::Unsupported(_)) => return,
         Err(err) => panic!("VA-API failed to open: {err}"),
     };
     assert_eq!(session.capture_size(), (64, 64));

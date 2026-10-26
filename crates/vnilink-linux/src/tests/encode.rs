@@ -62,7 +62,8 @@ fn vaapi_encodes_a_synthetic_picture_when_a_render_node_is_open() {
         vnilink::YuvMatrix::Bt709,
     ) {
         Ok(encoder) => encoder,
-        Err(Error::Unsupported("VA-API H.264")) => return,
+        // No hardware encoder on this computer: nothing to exercise.
+        Err(Error::Unsupported(_)) => return,
         Err(err) => panic!("VA-API failed to open: {err}"),
     };
     let params = vnilink_media::EncodeParams {
@@ -162,7 +163,8 @@ fn higher_bitrate_changes_the_hardware_output_budget() {
             vnilink::YuvMatrix::Bt709,
         ) {
             Ok(encoder) => encoder,
-            Err(Error::Unsupported("VA-API H.264")) => return None,
+            // No hardware encoder on this computer: nothing to exercise.
+            Err(Error::Unsupported(_)) => return None,
             Err(error) => panic!("encoder failed: {error}"),
         };
         let mut total = 0;
