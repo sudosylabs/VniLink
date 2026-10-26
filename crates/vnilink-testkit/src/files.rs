@@ -149,3 +149,83 @@ pub fn drive_to_end(
             .then(|| (sent.clone(), got.clone()))
     })
 }
+
+/// The controller sends `from`, a path in its root, to `to` in the host's.
+pub fn upload(pair: &Pair, from: &str, to: &str) -> Result<u64, vnilink::Error> {
+    pair.controller.core.job_submit_upload(
+        &pair.host.endpoint(),
+        pair.controller.root_id(),
+        from,
+        pair.host.root_id(),
+        to,
+    )
+}
+
+/// The controller fetches `from`, a path in the host's root, to `to` in its
+/// own.
+pub fn download(pair: &Pair, from: &str, to: &str) -> Result<u64, vnilink::Error> {
+    pair.controller.core.job_submit_download(
+        &pair.host.endpoint(),
+        pair.host.root_id(),
+        from,
+        pair.controller.root_id(),
+        to,
+    )
+}
+
+/// The one job `core` holds, as the peer's side of a job just submitted.
+pub fn only_job(core: &Core) -> Result<u64, vnilink::Error> {
+    let jobs = core.job_list()?;
+    assert_eq!(jobs.len(), 1, "the peer holds exactly this job: {jobs:?}");
+    Ok(jobs[0].id)
+}
+
+/// The job `core` holds that sends, or that receives.
+pub fn job_on(core: &Core, sender: bool) -> Result<u64, vnilink::Error> {
+    Ok(core
+        .job_list()?
+        .into_iter()
+        .find(|job| job.sender == sender)
+        .unwrap_or_else(|| panic!("a job that {}", if sender { "sends" } else { "receives" }))
+        .id)
+}
+
+/// Polls `job` until `reached` holds, within `polls` polls, since each poll
+/// advances a job one step: a job that needs more fails naming `what`.
+/// A job that ends first fails too, unless `reached` holds for it.
+pub fn poll_within(
+    core: &Core,
+    job: u64,
+    polls: usize,
+    what: &str,
+    mut reached: impl FnMut(&JobSnapshot) -> bool,
+) -> JobSnapshot {
+    for _ in 0..polls {
+        let snapshot = core.job_poll(job).expect("a poll");
+        if reached(&snapshot) {
+            return snapshot;
+        }
+        assert!(
+            !snapshot.state.is_terminal(),
+            "the job ended before {what}: {snapshot:?}"
+        );
+    }
+    panic!("{what} did not happen within {polls} polls");
+}
+
+/// Every file under `folder` whose contents are `bytes`.
+pub fn files_with_bytes(folder: &Path, bytes: &[u8]) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(files_with_bytes(&path, bytes));
+        } else if std::fs::read(&path).is_ok_and(|contents| contents == bytes) {
+            found.push(path);
+        }
+    }
+    found
+}

@@ -36,7 +36,7 @@ mod wait;
 
 pub use engine::{Engine, Pair, FILES};
 pub use scratch::Scratch;
-pub use trace::{traced, Traced};
+pub use trace::{traced, Story, Traced};
 pub use wait::{holds, wait_for, DEFAULT_WAIT};
 
 /// What a test returns: setup that fails with `?` fails the test with its

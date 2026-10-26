@@ -87,111 +87,190 @@ impl Traced {
     /// `area: message key=value…`, warnings and errors marked. Ignored
     /// failures are left out, since teardown races change them and their
     /// counts are in the diagnostic snapshot, and so are `trace` records
-    /// and times (`…_ms`, `…_us`).
+    /// and times (`…_ms`, `…_us`). [`Traced::tell`] chooses otherwise.
     pub fn story(&self, areas: &[&str]) -> String {
-        self.told(areas, false, false)
+        self.tell(areas).to_string()
     }
 
-    /// [`Traced::story`] with the `trace` records too: what a service
-    /// records of every event it handles, as each key applied.
+    /// [`Story::detailed`]: what a service records of every event it
+    /// handles, as each key applied.
     pub fn detailed_story(&self, areas: &[&str]) -> String {
-        self.told(areas, true, false)
+        self.tell(areas).detailed().to_string()
     }
 
-    /// [`Traced::story`] for work a service does at once, as files sent
-    /// side by side: a run of events with the same message is sorted, since
-    /// their order differs between runs and is not part of the story.
+    /// [`Story::concurrent`]: for work a service does at once.
     pub fn concurrent_story(&self, areas: &[&str]) -> String {
-        self.told(areas, false, true)
+        self.tell(areas).concurrent().to_string()
     }
 
-    /// [`Traced::story`] as `engine` alone told it, for a scenario whose
-    /// other engine records at moments of its own, as a sender mirroring
-    /// its receiver when it next asks.
+    /// [`Story::of`]: one engine's side.
     pub fn engine_story(&self, engine: &str, areas: &[&str]) -> String {
-        let heading = format!("{engine}:");
-        let story = self.told(areas, false, false);
-        let mut lines = story.lines().skip_while(|line| *line != heading);
-        let mut told = String::new();
-        if let Some(heading) = lines.next() {
-            told.push_str(heading);
-            told.push('\n');
-        }
-        for line in lines.take_while(|line| line.starts_with(' ')) {
-            told.push_str(line);
-            told.push('\n');
-        }
-        told
+        self.tell(areas).of(engine).to_string()
     }
 
-    fn told(&self, areas: &[&str], detailed: bool, concurrent: bool) -> String {
-        // Each engine's lines, each with the message that starts it.
+    /// The story of `areas`, to tell as [`Traced::story`] does or as its
+    /// options choose.
+    pub fn tell<'a>(&'a self, areas: &[&str]) -> Story<'a> {
+        Story {
+            traced: self,
+            areas: areas.iter().map(|area| (*area).to_owned()).collect(),
+            detailed: false,
+            concurrent: false,
+            engine: None,
+            messages: None,
+            masks: Vec::new(),
+        }
+    }
+}
+
+/// A story of some areas and how to tell it: made by [`Traced::tell`],
+/// told by `to_string`.
+pub struct Story<'a> {
+    traced: &'a Traced,
+    areas: Vec<String>,
+    detailed: bool,
+    concurrent: bool,
+    engine: Option<String>,
+    messages: Option<Vec<String>>,
+    masks: Vec<Mask<'a>>,
+}
+
+/// Fields whose values are shown as `…` on the events `when` picks.
+struct Mask<'a> {
+    fields: Vec<String>,
+    when: Box<dyn Fn(&serde_json::Value) -> bool + 'a>,
+}
+
+impl<'a> Story<'a> {
+    /// With the `trace` records too.
+    pub fn detailed(mut self) -> Self {
+        self.detailed = true;
+        self
+    }
+
+    /// For work a service does at once, as files sent side by side: a run
+    /// of events with the same message is sorted, since their order differs
+    /// between runs and is not part of the story.
+    pub fn concurrent(mut self) -> Self {
+        self.concurrent = true;
+        self
+    }
+
+    /// As `engine` alone told it, for a scenario whose other engine records
+    /// at moments of its own, as a sender mirroring its receiver when it
+    /// next asks.
+    pub fn of(mut self, engine: &str) -> Self {
+        self.engine = Some(engine.to_owned());
+        self
+    }
+
+    /// Only the events whose message is one of `messages`, as a job's
+    /// states without the files that moved between them.
+    pub fn only(mut self, messages: &[&str]) -> Self {
+        self.messages = Some(
+            messages
+                .iter()
+                .map(|message| (*message).to_owned())
+                .collect(),
+        );
+        self
+    }
+
+    /// Shows `fields` as `…` on the events `when` picks, where their values
+    /// differ between runs, as how far a cancelled file got; bound those
+    /// values in an assert instead.
+    pub fn masking(
+        mut self,
+        fields: &[&str],
+        when: impl Fn(&serde_json::Value) -> bool + 'a,
+    ) -> Self {
+        self.masks.push(Mask {
+            fields: fields.iter().map(|field| (*field).to_owned()).collect(),
+            when: Box::new(when),
+        });
+        self
+    }
+
+    /// The story's line for `event`, and the part that starts it, or
+    /// `None` when the story leaves it out.
+    fn line(&self, event: &serde_json::Value) -> Option<(String, String)> {
+        let area = event["target"]
+            .as_str()
+            .and_then(|target| target.strip_prefix("vnilink::"))
+            .filter(|area| self.areas.iter().any(|wanted| wanted == area))?;
+        let mark = match event["level"].as_str().unwrap_or_default() {
+            "WARN" => "warn ",
+            "ERROR" => "error ",
+            "INFO" | "DEBUG" => "",
+            "TRACE" if self.detailed => "",
+            _ => return None,
+        };
+        let message = event["message"].as_str().unwrap_or_default();
+        if message == "ignored"
+            || self
+                .messages
+                .as_ref()
+                .is_some_and(|messages| !messages.iter().any(|wanted| wanted == message))
+        {
+            return None;
+        }
+        let masked: Vec<&str> = self
+            .masks
+            .iter()
+            .filter(|mask| (mask.when)(event))
+            .flat_map(|mask| mask.fields.iter().map(String::as_str))
+            .collect();
+        let said = format!("{mark}{area}: {message}");
+        let mut line = said.clone();
+        for (key, value) in event.as_object().into_iter().flatten() {
+            if UNSTORIED.contains(&key.as_str()) || key.ends_with("_ms") || key.ends_with("_us") {
+                continue;
+            }
+            match value {
+                _ if masked.contains(&key.as_str()) => line.push_str(&format!(" {key}=…")),
+                serde_json::Value::String(text) => line.push_str(&format!(" {key}={text}")),
+                other => line.push_str(&format!(" {key}={other}")),
+            }
+        }
+        Some((said, line))
+    }
+}
+
+impl std::fmt::Display for Story<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Each engine's lines, each with the part that starts it.
         let mut engines: Vec<(String, Vec<(String, String)>)> = Vec::new();
         for event in self
+            .traced
             .events()
             .iter()
             .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         {
-            let Some(area) = event["target"]
-                .as_str()
-                .and_then(|target| target.strip_prefix("vnilink::"))
-                .filter(|area| areas.contains(area))
-            else {
-                continue;
-            };
-            let level = event["level"].as_str().unwrap_or_default();
-            let mark = match level {
-                "WARN" => "warn ",
-                "ERROR" => "error ",
-                "INFO" | "DEBUG" => "",
-                "TRACE" if detailed => "",
-                _ => continue,
-            };
-            if event["message"] == "ignored" {
-                continue;
-            }
-            let said = format!(
-                "{mark}{area}: {}",
-                event["message"].as_str().unwrap_or_default()
-            );
-            let mut line = said.clone();
-            if let Some(fields) = event.as_object() {
-                for (key, value) in fields {
-                    if UNSTORIED.contains(&key.as_str())
-                        || key.ends_with("_ms")
-                        || key.ends_with("_us")
-                    {
-                        continue;
-                    }
-                    match value {
-                        serde_json::Value::String(text) => line.push_str(&format!(" {key}={text}")),
-                        other => line.push_str(&format!(" {key}={other}")),
-                    }
-                }
-            }
             let engine = event["engine"].as_str().unwrap_or("?").to_owned();
+            if self.engine.as_ref().is_some_and(|wanted| *wanted != engine) {
+                continue;
+            }
+            let Some(told) = self.line(&event) else {
+                continue;
+            };
             match engines.iter_mut().find(|(name, _)| *name == engine) {
-                Some((_, lines)) => lines.push((said, line)),
-                None => engines.push((engine, vec![(said, line)])),
+                Some((_, lines)) => lines.push(told),
+                None => engines.push((engine, vec![told])),
             }
         }
         engines.sort_by(|a, b| a.0.cmp(&b.0));
-        let mut story = String::new();
         for (engine, mut lines) in engines {
-            if concurrent {
+            if self.concurrent {
                 for run in lines.chunk_by_mut(|a, b| a.0 == b.0) {
                     run.sort();
                 }
             }
-            story.push_str(&engine);
-            story.push_str(":\n");
+            writeln!(formatter, "{engine}:")?;
             for (_, line) in lines {
-                story.push_str("  ");
-                story.push_str(&line);
-                story.push('\n');
+                writeln!(formatter, "  {line}")?;
             }
         }
-        story
+        Ok(())
     }
 }
 

@@ -376,3 +376,102 @@ impl Drop for DesktopSession {
         }
     }
 }
+
+/// What a host's desktop applied, in order and when: the log of a desktop
+/// [`InputLog::install`] puts on an engine.
+#[derive(Clone, Default)]
+pub struct InputLog(Arc<Mutex<Vec<(Instant, InputEvent)>>>);
+
+impl InputLog {
+    /// Installs on `host` a desktop of one `monitor`-sized display that
+    /// applies input by logging it, and gives the log.
+    pub fn install(host: &crate::Engine, monitor: (u16, u16)) -> Result<Self, vnilink::Error> {
+        let log = Self::default();
+        host.core.set_desktop(Box::new(LoggingDesktop {
+            log: log.clone(),
+            monitor,
+        }))?;
+        Ok(log)
+    }
+
+    /// Every event applied so far.
+    pub fn events(&self) -> Vec<InputEvent> {
+        self.timed().into_iter().map(|(_, event)| event).collect()
+    }
+
+    /// Every event applied so far, with when.
+    pub fn timed(&self) -> Vec<(Instant, InputEvent)> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+
+    /// Waits until at least `count` events were applied, and gives them.
+    pub fn wait_for(&self, count: usize) -> Vec<InputEvent> {
+        crate::wait_for(
+            &format!("the host to apply {count} input events"),
+            crate::DEFAULT_WAIT,
+            || {
+                let events = self.events();
+                (events.len() >= count).then_some(events)
+            },
+        )
+    }
+
+    /// Waits until `count` events were applied, which must be all there
+    /// are: a duplicated release fails here.
+    pub fn exactly(&self, count: usize) -> Vec<InputEvent> {
+        let events = self.wait_for(count);
+        assert_eq!(
+            events.len(),
+            count,
+            "the host applied exactly {count} input events: {events:?}"
+        );
+        events
+    }
+}
+
+struct LoggingDesktop {
+    log: InputLog,
+    monitor: (u16, u16),
+}
+
+impl HostDesktop for LoggingDesktop {
+    fn apply(&mut self, event: InputEvent) -> Result<(), vnilink::Error> {
+        self.log
+            .0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .push((Instant::now(), event));
+        Ok(())
+    }
+
+    fn monitor(&self) -> (u16, u16) {
+        self.monitor
+    }
+}
+
+/// A host's capture of one display of this size, set up as adapters are
+/// before a session; it offers no still pictures.
+pub struct MonitorCapture(pub (u16, u16));
+
+impl HostCapture for MonitorCapture {
+    fn monitor(&self) -> (u16, u16) {
+        self.0
+    }
+}
+
+/// A keyframe stamped `timestamp_us`, carrying `payload`, as a host's
+/// encoder hands one over.
+pub fn keyframe(timestamp_us: u64, payload: Vec<u8>) -> EncodedFrame {
+    EncodedFrame::h264(true, timestamp_us, payload).expect("an H.264 keyframe")
+}
+
+/// The next picture `video` brings, within the kit's wait, failing naming
+/// `what`.
+pub fn next_picture(video: &vnilink::VideoSubscription, what: &str) -> EncodedFrame {
+    crate::wait_for(what, crate::DEFAULT_WAIT, || {
+        video.recv_timeout(Duration::from_millis(20))
+    })
+}
