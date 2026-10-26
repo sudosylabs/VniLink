@@ -66,16 +66,18 @@ impl Core {
     pub fn unpair(&self, endpoint_id: &str) -> Result<(), Error> {
         let _engine = self.engine();
         let key = parse_endpoint_id(endpoint_id)?;
-        tracing::info!(
-            target: crate::trace::PAIRING,
-            peer = crate::diagnostics::fingerprint(&key),
-            "unpair requested"
-        );
         let mut incoming_stop = Vec::new();
         let mut outgoing_stop = None;
         {
             let mut state = self.alive_state()?;
-            forget_device(&self.shared, &mut state, &key)?;
+            let forgotten = forget_device(&self.shared, &mut state, &key);
+            tracing::info!(
+                target: crate::trace::PAIRING,
+                peer = crate::diagnostics::fingerprint(&key),
+                refused = forgotten.as_ref().err().map(Error::name),
+                "unpair requested"
+            );
+            forgotten?;
             let live: Vec<u64> = state
                 .incoming
                 .values()
