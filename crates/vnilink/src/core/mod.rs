@@ -49,14 +49,14 @@ mod desktop_stream;
 mod diagnostics;
 mod file_resources;
 mod fs;
-#[cfg(any(test, feature = "test-probes"))]
+#[cfg(test)]
 pub(crate) use fs::LIST_DELAY;
 mod host;
 mod job_journal;
 mod jobs;
 #[cfg(all(unix, any(test, feature = "test-probes")))]
 pub use jobs::PrestageHooks;
-#[cfg(any(test, feature = "test-probes"))]
+#[cfg(test)]
 pub(crate) use jobs::PREPARE_SCAN_HOOKS;
 #[cfg(any(test, feature = "test-probes"))]
 pub use jobs::{MAX_ACTIVE_JOBS, SERVE_SOURCE_PROBE};

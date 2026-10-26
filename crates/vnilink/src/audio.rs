@@ -110,6 +110,10 @@ impl AudioSource {
         self.notify.notify_one();
         Ok(())
     }
+    /// Packets published and not yet taken to send.
+    pub fn queued(&self) -> usize {
+        self.queue.lock().unwrap_or_else(|e| e.into_inner()).len()
+    }
     /// Packets dropped so far because nobody took them in time.
     pub fn dropped(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)

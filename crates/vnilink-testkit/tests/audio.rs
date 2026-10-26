@@ -338,7 +338,10 @@ fn packets_a_slow_viewer_misses_are_counted() {
     for _ in 0..200 {
         source.publish(packet(&mut encoding)).unwrap();
     }
-    std::thread::sleep(Duration::from_millis(300));
+    // Every packet that was kept has gone to the viewer, who reads none.
+    wait_for("the host to send what it kept", DEFAULT_WAIT, || {
+        (source.queued() == 0).then_some(())
+    });
     system.close();
     let ended = wait_for("the audio to end", DEFAULT_WAIT, || {
         let ended = trace.named("audio ended");
